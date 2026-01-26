@@ -1815,3 +1815,883 @@ CodePlane is:
 - A convergence enforcer
 
 It turns AI coding from slow and chaotic into fast, predictable, and auditable by fixing the system, not the model.
+
+---
+
+## 20. MCP API Specification
+
+### 20.1 Design Principles
+
+The MCP API is the primary interface for AI agents to interact with CodePlane.
+
+Core design choices:
+
+| Dimension | Choice | Rationale |
+|-----------|--------|-----------|
+| Protocol | **Hybrid**: MCP (tools) + REST (admin) | MCP for agents, REST for operators |
+| Granularity | **Domain-clustered**: 12 tools | Balance between discoverability and precision |
+| Streaming | **Selective SSE**: long operations only | Progress visibility without overhead |
+| Naming | **Prefixed**: `codeplane_*` | Namespace safety, grep-friendly |
+| State | **Session-aware with explicit override** | Automatic context with escape hatch |
+
+### 20.2 Protocol Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        MCP Clients                               │
+│  (Claude, Cursor, Copilot, Continue, custom agents)             │
+└─────────────────────┬───────────────────────────────────────────┘
+                      │ MCP/JSON-RPC 2.0 over HTTP/SSE
+                      ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    CodePlane Daemon                              │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
+│  │   MCP Handler   │  │  REST Handler   │  │  SSE Handler    │  │
+│  │   (12 tools)    │  │  (/health, etc) │  │  (streaming)    │  │
+│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘  │
+│           │                    │                    │           │
+│           └────────────────────┼────────────────────┘           │
+│                                ▼                                │
+│  ┌─────────────────────────────────────────────────────────────┐│
+│  │                    Session Manager                          ││
+│  │  - Auto-create on connect                                   ││
+│  │  - Track task state, budgets, fingerprints                  ││
+│  │  - Include session context in all responses                 ││
+│  └─────────────────────────────────────────────────────────────┘│
+│                                │                                │
+│           ┌────────────────────┼────────────────────┐           │
+│           ▼                    ▼                    ▼           │
+│  ┌─────────────┐      ┌─────────────┐      ┌─────────────┐      │
+│  │   Index     │      │  Refactor   │      │   Mutation  │      │
+│  │   Engine    │      │   Engine    │      │   Engine    │      │
+│  └─────────────┘      └─────────────┘      └─────────────┘      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 20.3 Session Model
+
+Sessions provide automatic context correlation without requiring explicit management.
+
+**Session lifecycle:**
+
+1. **Auto-creation**: Session created on first tool call from a connection
+2. **Task binding**: Session creates an implicit task envelope for convergence tracking
+3. **State tracking**: All operations within session share counters and fingerprints
+4. **Timeout**: Idle sessions close after 30 minutes (configurable)
+5. **Explicit control**: Client can create/close/switch sessions via `codeplane_task`
+
+**Session state (included in every response):**
+
+```json
+{
+  "_session": {
+    "session_id": "sess_a1b2c3d4e5f6",
+    "task_id": "task_x9y8z7w6v5u4",
+    "task_state": "OPEN",
+    "counters": {
+      "mutations": 3,
+      "mutations_budget": 20,
+      "test_runs": 1,
+      "test_runs_budget": 10
+    },
+    "fingerprints": {
+      "last_mutation": "abc123",
+      "last_failure": null
+    },
+    "timing": {
+      "started_at": "2026-01-26T15:30:00.000Z",
+      "last_op_at": "2026-01-26T15:32:15.123Z",
+      "idle_timeout_at": "2026-01-26T16:02:15.123Z"
+    }
+  }
+}
+```
+
+**Explicit session override:**
+
+Any tool can accept optional `session_id` parameter to:
+- Join an existing session from another connection
+- Resume a session after reconnect
+- Run operations in a specific task context
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "codeplane_mutate",
+    "arguments": {
+      "session_id": "sess_a1b2c3d4e5f6",
+      "edits": [...]
+    }
+  }
+}
+```
+
+**Debugging session state:**
+
+- Every log line includes `session_id`
+- `codeplane_status` returns full session details
+- Error responses include session snapshot
+- SSE events carry session context
+
+### 20.4 Tool Catalog
+
+#### Core Tools (Always Available)
+
+| Tool | Purpose | Streaming |
+|------|---------|-----------|
+| `codeplane_search` | Lexical, symbol, and reference search | No |
+| `codeplane_map` | Repository structure and mental model | No |
+| `codeplane_read` | Read files with optional line ranges | No |
+| `codeplane_mutate` | Atomic file edits | No |
+| `codeplane_git` | Git operations (status, diff, blame, stage) | No |
+| `codeplane_status` | Daemon health, index state, session info | No |
+
+#### Refactor Tools (Requires LSP)
+
+| Tool | Purpose | Streaming |
+|------|---------|-----------|
+| `codeplane_refactor` | Semantic refactor (rename/move/delete) | Optional |
+
+#### Test Tools
+
+| Tool | Purpose | Streaming |
+|------|---------|-----------|
+| `codeplane_test` | Discover and run tests | Optional |
+
+#### Task/Session Tools
+
+| Tool | Purpose | Streaming |
+|------|---------|-----------|
+| `codeplane_task` | Session/task lifecycle management | No |
+
+#### Streaming Tools (Long Operations)
+
+| Tool | Purpose | Always Streaming |
+|------|---------|------------------|
+| `codeplane_refactor_stream` | Refactor with progress events | Yes |
+| `codeplane_test_stream` | Test execution with live results | Yes |
+| `codeplane_reindex_stream` | Full reindex with progress | Yes |
+
+**Total: 12 tools**
+
+### 20.5 Tool Specifications
+
+---
+
+#### `codeplane_search`
+
+Unified search across lexical index, symbols, and references.
+
+**Parameters:**
+
+```typescript
+{
+  query: string;                    // Search query
+  mode: "lexical" | "symbol" | "references" | "definitions";
+  scope?: {
+    paths?: string[];               // Limit to paths (glob patterns)
+    languages?: string[];           // Limit to languages
+    kinds?: string[];               // Symbol kinds: function, class, variable, etc.
+  };
+  limit?: number;                   // Max results (default 20, max 100)
+  include_snippets?: boolean;       // Include code snippets (default true)
+  session_id?: string;              // Optional session override
+}
+```
+
+**Response:**
+
+```typescript
+{
+  results: Array<{
+    path: string;
+    line: number;
+    column: number;
+    snippet: string;
+    symbol?: {
+      name: string;
+      kind: string;
+      container?: string;
+    };
+    score: number;
+    match_type: "exact" | "fuzzy" | "semantic";
+  }>;
+  total_matches: number;
+  truncated: boolean;
+  query_time_ms: number;
+  _session: SessionState;
+}
+```
+
+---
+
+#### `codeplane_map`
+
+Repository mental model — structure, languages, entry points, dependencies.
+
+**Parameters:**
+
+```typescript
+{
+  include?: Array<"structure" | "languages" | "entry_points" | "dependencies" | "test_layout" | "public_api">;
+  depth?: number;                   // Directory depth (default 3)
+  session_id?: string;
+}
+```
+
+**Response:**
+
+```typescript
+{
+  structure: {
+    root: string;
+    tree: DirectoryNode[];          // Nested directory structure
+    file_count: number;
+    total_lines: number;
+  };
+  languages: Array<{
+    language: string;
+    file_count: number;
+    line_count: number;
+    percentage: number;
+  }>;
+  entry_points: Array<{
+    path: string;
+    kind: "main" | "cli" | "api" | "test" | "config";
+    language: string;
+  }>;
+  dependencies: {
+    direct: string[];
+    dev: string[];
+    package_manager: string;
+  };
+  test_layout: {
+    framework: string;
+    test_dirs: string[];
+    test_count: number;
+  };
+  public_api: Array<{
+    symbol: string;
+    kind: string;
+    path: string;
+    exported: boolean;
+  }>;
+  _session: SessionState;
+}
+```
+
+---
+
+#### `codeplane_read`
+
+Read file contents with optional line ranges.
+
+**Parameters:**
+
+```typescript
+{
+  paths: string | string[];         // Single path or array
+  ranges?: Array<{                  // Optional line ranges per file
+    path: string;
+    start_line: number;
+    end_line: number;
+  }>;
+  include_metadata?: boolean;       // Include file stats (default false)
+  session_id?: string;
+}
+```
+
+**Response:**
+
+```typescript
+{
+  files: Array<{
+    path: string;
+    content: string;
+    language: string;
+    line_count: number;
+    range?: { start: number; end: number };
+    metadata?: {
+      size_bytes: number;
+      modified_at: string;
+      git_status: "clean" | "modified" | "untracked";
+      hash: string;
+    };
+  }>;
+  _session: SessionState;
+}
+```
+
+---
+
+#### `codeplane_mutate`
+
+Atomic file edits with structured delta response.
+
+**Parameters:**
+
+```typescript
+{
+  edits: Array<{
+    path: string;
+    action: "create" | "update" | "delete";
+    content?: string;               // Full content for create/update
+    patches?: Array<{               // Or line-level patches
+      range: { start: number; end: number };
+      replacement: string;
+    }>;
+  }>;
+  dry_run?: boolean;                // Preview only (default false)
+  session_id?: string;
+}
+```
+
+**Response:**
+
+```typescript
+{
+  applied: boolean;
+  dry_run: boolean;
+  delta: {
+    mutation_id: string;
+    files_changed: number;
+    insertions: number;
+    deletions: number;
+    files: Array<{
+      path: string;
+      action: "created" | "updated" | "deleted";
+      old_hash?: string;
+      new_hash?: string;
+      diff_stats: { insertions: number; deletions: number };
+    }>;
+  };
+  affected_symbols?: string[];
+  affected_tests?: string[];
+  repo_fingerprint: string;
+  _session: SessionState;
+}
+```
+
+---
+
+#### `codeplane_git`
+
+Git operations — read and stage only, no commits.
+
+**Parameters:**
+
+```typescript
+{
+  action: "status" | "diff" | "blame" | "stage" | "unstage" | "log";
+  paths?: string[];                 // Scope to paths
+  options?: {
+    // For diff
+    base?: string;                  // Commit/ref to diff against
+    staged?: boolean;               // Diff staged changes
+    // For blame
+    line_range?: { start: number; end: number };
+    // For log
+    limit?: number;
+    since?: string;
+  };
+  session_id?: string;
+}
+```
+
+**Response (varies by action):**
+
+```typescript
+// status
+{
+  action: "status";
+  result: {
+    branch: string;
+    head: string;
+    clean: boolean;
+    staged: string[];
+    modified: string[];
+    untracked: string[];
+    conflicts: string[];
+  };
+  _session: SessionState;
+}
+
+// diff
+{
+  action: "diff";
+  result: {
+    files: Array<{
+      path: string;
+      status: "added" | "modified" | "deleted" | "renamed";
+      old_path?: string;
+      hunks: Array<{
+        old_start: number;
+        old_count: number;
+        new_start: number;
+        new_count: number;
+        content: string;
+      }>;
+    }>;
+    stats: { files: number; insertions: number; deletions: number };
+  };
+  _session: SessionState;
+}
+```
+
+---
+
+#### `codeplane_refactor`
+
+Semantic refactoring via LSP.
+
+**Parameters:**
+
+```typescript
+{
+  action: "rename" | "move" | "delete" | "preview" | "apply" | "cancel";
+  
+  // For rename
+  symbol?: string;                  // Symbol name or path:line:col
+  new_name?: string;
+  
+  // For move
+  from_path?: string;
+  to_path?: string;
+  
+  // For delete
+  target?: string;                  // Symbol or path
+  
+  // For apply/cancel
+  refactor_id?: string;             // From preview response
+  
+  // Options
+  include_comments?: boolean;       // Sweep comments/docs (default true)
+  contexts?: string[];              // Specific contexts (default all)
+  session_id?: string;
+}
+```
+
+**Response:**
+
+```typescript
+{
+  refactor_id: string;
+  status: "previewed" | "applied" | "cancelled" | "divergence";
+  preview?: {
+    files_affected: number;
+    edits: Array<{
+      path: string;
+      hunks: Array<{ old: string; new: string; line: number }>;
+      semantic: boolean;            // LSP-driven vs comment sweep
+    }>;
+    contexts_used: string[];
+  };
+  applied?: {
+    delta: MutationDelta;           // Same as codeplane_mutate
+    validation?: {
+      diagnostics_before: number;
+      diagnostics_after: number;
+    };
+  };
+  divergence?: {
+    conflicting_hunks: Array<{
+      path: string;
+      contexts: string[];
+      hunks: Array<{ context: string; content: string }>;
+    }>;
+    resolution_options: string[];
+  };
+  _session: SessionState;
+}
+```
+
+---
+
+#### `codeplane_test`
+
+Test discovery and execution.
+
+**Parameters:**
+
+```typescript
+{
+  action: "discover" | "run" | "status" | "cancel";
+  
+  // For discover
+  paths?: string[];                 // Scope discovery
+  
+  // For run
+  targets?: string[];               // Specific targets (default all)
+  filter?: {
+    pattern?: string;               // Test name pattern
+    tags?: string[];                // Test tags/markers
+    failed_only?: boolean;          // Re-run failures
+  };
+  parallelism?: number;             // Worker count (default auto)
+  timeout_sec?: number;             // Per-target timeout
+  fail_fast?: boolean;              // Stop on first failure
+  
+  // For status/cancel
+  run_id?: string;
+  
+  session_id?: string;
+}
+```
+
+**Response:**
+
+```typescript
+{
+  action: "discover" | "run" | "status" | "cancel";
+  
+  // discover
+  targets?: Array<{
+    target_id: string;
+    path: string;
+    language: string;
+    runner: string;
+    estimated_cost: number;
+    test_count?: number;
+  }>;
+  
+  // run / status
+  run_id?: string;
+  status?: "running" | "completed" | "cancelled" | "failed";
+  progress?: {
+    total: number;
+    completed: number;
+    passed: number;
+    failed: number;
+    skipped: number;
+  };
+  results?: Array<{
+    target_id: string;
+    status: "passed" | "failed" | "skipped" | "error";
+    duration_ms: number;
+    failure?: {
+      message: string;
+      stack?: string;
+      output?: string;
+    };
+  }>;
+  summary?: {
+    total_duration_ms: number;
+    flaky: string[];
+    new_failures: string[];
+    fixed: string[];
+  };
+  
+  _session: SessionState;
+}
+```
+
+---
+
+#### `codeplane_task`
+
+Session and task lifecycle management.
+
+**Parameters:**
+
+```typescript
+{
+  action: "status" | "new" | "close" | "configure";
+  
+  // For new
+  limits?: {
+    max_mutations?: number;
+    max_test_runs?: number;
+    max_duration_sec?: number;
+  };
+  
+  // For close
+  reason?: "success" | "failed" | "abandoned";
+  
+  // For configure (update limits mid-task)
+  limits_delta?: {
+    add_mutations?: number;
+    add_test_runs?: number;
+  };
+  
+  session_id?: string;
+}
+```
+
+**Response:**
+
+```typescript
+{
+  action: "status" | "new" | "close" | "configure";
+  task: {
+    task_id: string;
+    state: "OPEN" | "CLOSED_SUCCESS" | "CLOSED_FAILED" | "CLOSED_INTERRUPTED";
+    limits: {
+      max_mutations: number;
+      max_test_runs: number;
+      max_duration_sec: number;
+    };
+    counters: {
+      mutations: number;
+      test_runs: number;
+      elapsed_sec: number;
+    };
+    fingerprints: {
+      last_mutation: string | null;
+      last_failure: string | null;
+      repeated_failure_count: number;
+    };
+    timeline: Array<{
+      timestamp: string;
+      op_type: string;
+      success: boolean;
+      fingerprint?: string;
+    }>;
+  };
+  _session: SessionState;
+}
+```
+
+---
+
+#### `codeplane_status`
+
+Daemon health, index state, and session info.
+
+**Parameters:**
+
+```typescript
+{
+  include?: Array<"daemon" | "index" | "session" | "lsp" | "config">;
+  session_id?: string;
+}
+```
+
+**Response:**
+
+```typescript
+{
+  daemon: {
+    version: string;
+    uptime_sec: number;
+    pid: number;
+    port: number;
+    memory_mb: number;
+  };
+  index: {
+    version: number;
+    commit: string;
+    file_count: number;
+    symbol_count: number;
+    last_updated: string;
+    overlay_files: number;
+    healthy: boolean;
+  };
+  session: SessionState;
+  lsp: {
+    languages: Array<{
+      language: string;
+      server: string;
+      status: "running" | "stopped" | "crashed" | "not_installed";
+      memory_mb?: number;
+    }>;
+    pending_install: string[];
+  };
+  config: {
+    repo_root: string;
+    config_sources: string[];
+    active_contexts: string[];
+  };
+  _session: SessionState;
+}
+```
+
+---
+
+### 20.6 Streaming Tools (SSE)
+
+For long-running operations, streaming variants provide real-time progress.
+
+#### SSE Event Format
+
+```typescript
+// Progress event
+{
+  "event": "progress",
+  "data": {
+    "op_id": "op_abc123",
+    "phase": "planning" | "applying" | "validating",
+    "progress": { "current": 5, "total": 20 },
+    "message": "Processing file 5/20: src/utils.ts",
+    "_session": SessionState
+  }
+}
+
+// Result event (final)
+{
+  "event": "result",
+  "data": {
+    "op_id": "op_abc123",
+    "status": "completed" | "failed" | "cancelled",
+    "result": { ... },              // Same as non-streaming response
+    "_session": SessionState
+  }
+}
+
+// Error event
+{
+  "event": "error",
+  "data": {
+    "op_id": "op_abc123",
+    "code": 4002,
+    "error": "REFACTOR_LSP_TIMEOUT",
+    "message": "LSP timeout for Java",
+    "retryable": true,
+    "_session": SessionState
+  }
+}
+```
+
+#### `codeplane_refactor_stream`
+
+Same parameters as `codeplane_refactor`, returns SSE stream.
+
+Progress events include:
+- Context initialization
+- Per-file LSP processing
+- Patch generation
+- Validation results
+
+#### `codeplane_test_stream`
+
+Same parameters as `codeplane_test`, returns SSE stream.
+
+Progress events include:
+- Target discovery
+- Per-target start/complete
+- Real-time pass/fail updates
+- Final summary
+
+#### `codeplane_reindex_stream`
+
+**Parameters:**
+
+```typescript
+{
+  mode: "incremental" | "full";
+  session_id?: string;
+}
+```
+
+Progress events include:
+- File scanning
+- Parsing progress
+- Symbol extraction
+- Graph construction
+
+---
+
+### 20.7 REST Endpoints (Operator)
+
+Non-MCP endpoints for operators and monitoring.
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/health` | GET | Liveness check (returns 200 if alive) |
+| `/ready` | GET | Readiness check (returns 200 if index loaded) |
+| `/metrics` | GET | Prometheus-format metrics |
+| `/status` | GET | JSON status (same as `codeplane_status`) |
+
+**Authentication:** Same bearer token as MCP.
+
+**Example:**
+
+```bash
+curl -H "Authorization: Bearer $(cat .codeplane/token)" \
+     http://127.0.0.1:$(cat .codeplane/port)/health
+```
+
+---
+
+### 20.8 Error Handling
+
+All MCP tools use the error schema defined in section 4.2.
+
+**MCP-specific error wrapping:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32000,
+    "message": "CodePlane error",
+    "data": {
+      "code": 4001,
+      "error": "REFACTOR_DIVERGENCE",
+      "message": "Contexts disagree on rename target",
+      "retryable": false,
+      "details": { ... },
+      "_session": { ... }
+    }
+  }
+}
+```
+
+**Budget exceeded handling:**
+
+When task budget is exceeded, all subsequent mutating operations return:
+
+```json
+{
+  "code": 6001,
+  "error": "TASK_BUDGET_EXCEEDED",
+  "message": "Mutation budget exceeded (20/20)",
+  "retryable": false,
+  "details": {
+    "budget_type": "mutations",
+    "limit": 20,
+    "current": 20
+  },
+  "_session": { ... }
+}
+```
+
+Client must close task and open new one, or configure additional budget.
+
+---
+
+### 20.9 MCP Server Configuration
+
+CodePlane registers as an MCP server. Client configuration example:
+
+**Claude Desktop / Cursor:**
+
+```json
+{
+  "mcpServers": {
+    "codeplane": {
+      "transport": "http",
+      "url": "http://127.0.0.1:${port}",
+      "headers": {
+        "Authorization": "Bearer ${token}"
+      }
+    }
+  }
+}
+```
+
+**Dynamic discovery:**
+
+Clients can read `.codeplane/port` and `.codeplane/token` to configure automatically.
+
+---
+
+### 20.10 Versioning
+
+- API version included in `/status` response
+- Breaking changes increment major version
+- Tools may gain optional parameters without version bump
+- Deprecated tools return warning in `_session.warnings`
+
+Current version: `1.0.0`
