@@ -8,50 +8,43 @@ version = "0.1.0"
 description = "Local repository control plane for AI coding agents"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.11"
-authors = [
-    { name = "Dave Finson" }
-]
+requires-python = ">=3.12"
 classifiers = [
     "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
 dependencies = [
     # CLI
-    "typer>=0.9.0",
-    "rich>=13.0.0",
+    "typer>=0.21.0",
+    "rich>=14.0.0",
     
     # HTTP Server
-    "starlette>=0.34.0",
-    "uvicorn>=0.25.0",
+    "starlette>=0.52.0",
+    "uvicorn>=0.40.0",
     
     # Config & Validation
-    "pydantic>=2.5.0",
-    "pydantic-settings>=2.1.0",
-    "tomli>=2.0.0;python_version<'3.11'",
+    "pydantic>=2.12.0",
+    "pydantic-settings>=2.12.0",
     
     # Index
-    "tantivy>=0.21.0",
+    "tantivy>=0.25.0",
     
     # Git
-    "pygit2>=1.13.0",
+    "pygit2>=1.19.0",
     
     # Logging
-    "structlog>=24.1.0",
+    "structlog>=25.5.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.4.0",
-    "pytest-asyncio>=0.23.0",
-    "pytest-cov>=4.1.0",
-    "ruff>=0.1.0",
-    "mypy>=1.8.0",
+    "pytest>=9.0.0",
+    "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.14.0",
+    "mypy>=1.19.0",
 ]
 
 [project.scripts]
@@ -65,7 +58,7 @@ Repository = "https://github.com/davidfinson/codeplane"
 packages = ["src/codeplane"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 100
 src = ["src"]
 
@@ -89,7 +82,7 @@ ignore = [
 known-first-party = ["codeplane"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 strict = true
 warn_return_any = true
 warn_unused_ignores = true
