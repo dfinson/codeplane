@@ -1,17 +1,10 @@
-name: Enhancement Tracking Issue
-description: Provide supporting details for a feature in development
-labels: kind/feature
+name: Feature Request
+description: Suggest an enhancement
+labels: enhancement
 body:
   - type: textarea
-    id: feature
+    id: description
     attributes:
-      label: What would you like to be added?
-    validations:
-      required: true
-
-  - type: textarea
-    id: rationale
-    attributes:
-      label: Why is this needed?
+      label: Description
     validations:
       required: true
