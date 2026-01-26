@@ -128,6 +128,14 @@ Daemon model:
   - Cross-platform with identical code (no socket vs named pipe divergence).
   - MCP clients can connect directly via HTTP/SSE transport (no stdio proxy needed).
   - Debugging trivial: `curl -H "Authorization: Bearer $(cat .codeplane/token)" http://127.0.0.1:$(cat .codeplane/port)/status`
+- Authentication:
+  - **Session token**: 32 cryptographically random bytes, hex-encoded (64 characters).
+  - Generated fresh on each `cpl up` (not persisted across restarts).
+  - Written to `.codeplane/token` with mode `0600` (owner read/write only).
+  - All HTTP requests must include `Authorization: Bearer <token>` header.
+  - Requests without valid token receive `401 Unauthorized`.
+  - Token mismatch (e.g., stale client) receives `401` with error code `AUTH_TOKEN_INVALID`.
+  - Rationale: Defense in depth. Any process that can read the token can already read source code, but token prevents accidental cross-repo requests and prepares for future remote access.
 - Isolation rationale:
   - Failure in one repo cannot affect another.
   - Version skew between repos is not a problem.
@@ -154,9 +162,41 @@ Daemon startup includes:
 
 Daemon shutdown:
 
+- Graceful shutdown timeout: 5 seconds (configurable)
+- In-flight HTTP requests: allowed to complete until timeout, then aborted
+- Active refactor/mutation operations: 
+  - If in planning phase → abort immediately (no side effects)
+  - If in apply phase → complete current file, abort remainder, rollback partial batch
+- Connected SSE clients: receive `shutdown` event, then disconnect
 - Flushes writes
 - Releases locks
+- Deletes `port` and `token` files
 - Leaves repo unchanged
+
+Logging:
+
+- Format: Structured JSON lines (one JSON object per line)
+- Location: `.codeplane/daemon.log`
+- Rotation: 3 files max, 10 MB each, oldest deleted on rotation
+- Levels: `debug`, `info`, `warn`, `error`
+- Required fields per entry:
+  - `ts`: ISO 8601 timestamp with milliseconds
+  - `level`: log level
+  - `msg`: human-readable message
+- Optional correlation fields:
+  - `op_id`: operation identifier (for tracing a single request)
+  - `task_id`: task envelope identifier
+  - `req_id`: HTTP request identifier
+- Example entries:
+  ```json
+  {"ts":"2026-01-26T15:30:00.123Z","level":"info","msg":"daemon started","port":54321}
+  {"ts":"2026-01-26T15:30:01.456Z","level":"debug","op_id":"abc123","msg":"refactor planning started","symbol":"MyClass"}
+  {"ts":"2026-01-26T15:30:02.789Z","level":"error","op_id":"abc123","msg":"LSP timeout","lang":"java","timeout_ms":30000}
+  ```
+- Access via CLI:
+  - `cpl status --verbose`: last 50 lines
+  - `cpl status --follow`: tail -f equivalent
+  - `cpl doctor --logs`: full log bundle for diagnostics
 
 Installation and upgrades:
 
@@ -203,6 +243,54 @@ Config precedence:
 4. Built-in defaults
 
 No dedicated config CLI in v1. Edit files directly.
+
+Error response schema:
+
+All API errors return a consistent JSON structure:
+
+```json
+{
+  "code": 4001,
+  "error": "INDEX_CORRUPT",
+  "message": "Index checksum mismatch; rebuild required",
+  "retryable": false,
+  "details": {
+    "expected_hash": "abc123",
+    "actual_hash": "def456"
+  }
+}
+```
+
+Fields:
+- `code`: Numeric error code (for programmatic handling)
+- `error`: String error identifier (for logging and display)
+- `message`: Human-readable description
+- `retryable`: Boolean hint — `true` if retry may succeed without intervention
+- `details`: Optional object with error-specific context
+
+Error code ranges:
+
+| Range | Category | Examples |
+|-------|----------|----------|
+| 1xxx | Auth | `1001 AUTH_TOKEN_MISSING`, `1002 AUTH_TOKEN_INVALID` |
+| 2xxx | Config | `2001 CONFIG_PARSE_ERROR`, `2002 CONFIG_INVALID_VALUE` |
+| 3xxx | Index | `3001 INDEX_CORRUPT`, `3002 INDEX_SCHEMA_MISMATCH`, `3003 INDEX_BUILD_FAILED` |
+| 4xxx | Refactor | `4001 REFACTOR_DIVERGENCE`, `4002 REFACTOR_LSP_TIMEOUT`, `4003 REFACTOR_NO_CONTEXT` |
+| 5xxx | Mutation | `5001 MUTATION_SCOPE_VIOLATION`, `5002 MUTATION_PRECONDITION_FAILED`, `5003 MUTATION_LOCK_TIMEOUT` |
+| 6xxx | Task | `6001 TASK_BUDGET_EXCEEDED`, `6002 TASK_NOT_FOUND`, `6003 TASK_ALREADY_CLOSED` |
+| 7xxx | Test | `7001 TEST_RUNNER_NOT_FOUND`, `7002 TEST_TIMEOUT`, `7003 TEST_PARSE_FAILED` |
+| 8xxx | LSP | `8001 LSP_NOT_INSTALLED`, `8002 LSP_CRASH`, `8003 LSP_LANGUAGE_UNSUPPORTED` |
+| 9xxx | Internal | `9001 INTERNAL_ERROR`, `9002 INTERNAL_TIMEOUT` |
+
+Retryable errors (examples):
+- `MUTATION_LOCK_TIMEOUT` — another operation holds lock, retry after delay
+- `LSP_CRASH` — LSP restarted, retry may succeed
+- `INTERNAL_TIMEOUT` — transient resource pressure
+
+Non-retryable errors (examples):
+- `INDEX_CORRUPT` — requires rebuild
+- `REFACTOR_DIVERGENCE` — requires user decision
+- `CONFIG_PARSE_ERROR` — requires config fix
 
 Defaults prevent footguns:
 
@@ -625,21 +713,128 @@ Targeted lexical search is indexed, scoped, structured, deterministic.
 
 (Interface details are deferred; these are capabilities.)
 
-### 7.11 Startup Wizard & Extensibility
+### 7.11 LSP Management & Language Support
 
-Initial `codeplane init` prompts:
+#### Acquisition Model
 
-- Detect dominant languages
-- Offer to download language-specific LSPs
-- Set preferences for grammar overrides and expansion heuristics
+CodePlane does not bundle LSPs. LSPs are downloaded on-demand and cached globally.
 
-Dynamic grammar management update:
+- Cache location: `~/.codeplane/lsp/{language}-{server}-{version}/`
+- Manifest: `~/.codeplane/lsp/manifest.json` tracks installed LSPs and their checksums
+- Downloads are SHA256-verified against a signed manifest fetched from CodePlane's release infrastructure
 
-- Not just init: detect new language usage during incremental updates or file additions
-- Dynamically download/register grammars and/or LSPs as needed on-the-fly
-- Update grammar registry in cache without requiring full reinit
+#### Init-Time Discovery
 
-Future: language packs via versioned plugin registry (no wheel bloat).
+`cpl init` performs language detection and prompts for LSP installation:
+
+1. Scan repository for language indicators (file extensions, config files)
+2. Present detected languages and recommended LSPs
+3. User confirms which LSPs to install
+4. Download, verify, and register confirmed LSPs
+5. Write selections to `.codeplane/config.yaml`
+
+Example prompt:
+```
+Detected languages:
+  ✓ Python (3847 files) — recommended: pyright
+  ✓ TypeScript (1203 files) — recommended: typescript-language-server
+  ✓ Go (892 files) — recommended: gopls
+  ○ Java (12 files) — recommended: jdtls (optional, 200MB)
+
+Install LSPs for [Python, TypeScript, Go]? [Y/n]
+Include Java? [y/N]
+```
+
+#### Runtime Language Discovery
+
+If incremental reindexing detects a new language not covered by installed LSPs:
+
+1. Daemon logs warning: `LSP_LANGUAGE_DISCOVERED`
+2. Daemon sets status flag: `pending_lsp_install: true`
+3. Refactor operations for that language return error `8003 LSP_LANGUAGE_UNSUPPORTED`
+4. `cpl status` shows: `New language detected: Rust. Run 'cpl lsp install' or configure exclusion.`
+5. MCP API continues serving all other operations normally
+6. User runs `cpl lsp install` to interactively install missing LSPs, or configures exclusion
+7. After LSP install, user must restart daemon (`cpl down && cpl up`) to activate new LSP
+
+This design:
+- Never blocks the user silently
+- Never auto-downloads without consent
+- Keeps daemon running for languages already supported
+- Makes the gap visible and actionable
+
+#### LSP Lifecycle
+
+- LSPs are started lazily on first refactor operation for that language
+- LSPs persist for daemon lifetime (warm cache)
+- LSP crash triggers automatic restart (max 3 retries, then mark language unavailable)
+- `cpl down` terminates all LSPs
+
+#### LSP CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `cpl lsp list` | Show installed LSPs and their status |
+| `cpl lsp install` | Interactive install for detected but missing languages |
+| `cpl lsp install <language>` | Install LSP for specific language |
+| `cpl lsp remove <language>` | Remove LSP for specific language |
+| `cpl lsp update` | Check for and install LSP updates |
+
+#### LSP Configuration
+
+```yaml
+lsp:
+  # Per-language overrides
+  python:
+    server: pyright  # or pylsp, jedi-language-server
+    version: pinned  # or latest, or specific version
+    args: ["--stdio"]
+  typescript:
+    server: typescript-language-server
+  
+  # Languages to exclude from LSP support entirely
+  exclude:
+    - markdown
+    - plaintext
+  
+  # Global settings
+  startup_timeout_ms: 30000
+  request_timeout_ms: 60000
+  max_restart_attempts: 3
+```
+
+#### Supported LSP Sources
+
+CodePlane maintains a registry of known-good LSP configurations:
+
+| Language | Recommended Server | Acquisition |
+|----------|-------------------|-------------|
+| Python | pyright | npm package or standalone binary |
+| TypeScript/JavaScript | typescript-language-server | npm package |
+| Go | gopls | Go install or binary release |
+| Java | jdtls (Eclipse) | Eclipse download |
+| Rust | rust-analyzer | GitHub releases |
+| C# | OmniSharp | GitHub releases |
+| C/C++ | clangd | LLVM releases |
+| Ruby | solargraph | gem or binary |
+| PHP | intelephense | npm package |
+| Kotlin | kotlin-language-server | GitHub releases |
+| Swift | sourcekit-lsp | Xcode or Swift toolchain |
+| Scala | metals | Coursier |
+| Elixir | elixir-ls | GitHub releases |
+| Haskell | haskell-language-server | GHCup or binary |
+| Zig | zls | GitHub releases |
+| Lua | lua-language-server | GitHub releases |
+
+This list is not exhaustive. Users can configure any LSP that implements the Language Server Protocol.
+
+#### Tree-sitter Grammar Management
+
+Separate from LSPs, Tree-sitter grammars for parsing are:
+- Bundled for common languages (~15 grammars, ~15MB total)
+- Downloadable for additional languages via `cpl grammar install <language>`
+- Stored in `~/.codeplane/grammars/`
+- Required for indexing; optional if only using LSP refactors
 
 ---
 
@@ -1127,7 +1322,97 @@ Fast deterministic test execution across large suites by parallelizing at test *
    - detect retries
    - label flaky outcomes
 
-### 11.5 Language-Specific Targeting Rules
+### 11.5 Test Runner Discovery
+
+CodePlane uses a three-tier resolution strategy: explicit config → marker detection → language defaults.
+
+#### Resolution Order (First Match Wins)
+
+1. **Explicit config** in `.codeplane/config.yaml`
+2. **Marker file detection** (see table below)
+3. **Language default** (fallback)
+
+#### Marker File Detection
+
+| Marker | Runner | Priority |
+|--------|--------|----------|
+| `pytest.ini` | pytest | High |
+| `pyproject.toml` with `[tool.pytest]` | pytest | High |
+| `setup.cfg` with `[tool:pytest]` | pytest | Medium |
+| `jest.config.js`, `jest.config.ts`, `jest.config.json` | jest | High |
+| `package.json` with `"jest"` key | jest | Medium |
+| `vitest.config.js`, `vitest.config.ts` | vitest | High |
+| `go.mod` | go test | High |
+| `Cargo.toml` | cargo test | High |
+| `*.csproj` with test references | dotnet test | High |
+| `pom.xml` | mvn test | Medium |
+| `build.gradle`, `build.gradle.kts` | gradle test | Medium |
+| `Gemfile` with rspec | rspec | Medium |
+| `mix.exs` | mix test | High |
+
+#### Language Defaults (When No Marker Found)
+
+| Language | Default Runner |
+|----------|---------------|
+| Python | pytest |
+| JavaScript/TypeScript | jest |
+| Go | go test |
+| Rust | cargo test |
+| Java | mvn test |
+| C# | dotnet test |
+| Ruby | rspec |
+| Elixir | mix test |
+
+#### Config Override
+
+```yaml
+tests:
+  runners:
+    # Override detected runner
+    python: pytest
+    typescript: vitest  # Use vitest instead of detected jest
+    
+  # Custom runners for specific patterns
+  custom:
+    - pattern: "e2e/**/*.spec.ts"
+      runner: playwright
+      cmd: ["npx", "playwright", "test", "{path}"]
+    - pattern: "integration/**/*.test.py"
+      runner: pytest
+      cmd: ["pytest", "--integration", "{path}"]
+      timeout_sec: 120
+      
+  # Exclude patterns from test discovery
+  exclude:
+    - "**/fixtures/**"
+    - "**/mocks/**"
+```
+
+#### Multiple Runners in Same Repo
+
+When multiple test frameworks are detected:
+- Each is registered independently
+- Test targets are tagged with their runner
+- Parallel execution respects runner boundaries
+- Results are merged with runner attribution
+
+Example: repo with jest (unit) + playwright (e2e) + pytest (backend):
+```json
+[
+  {"target_id": "src/__tests__/utils.test.ts", "runner": "jest"},
+  {"target_id": "e2e/login.spec.ts", "runner": "playwright"},
+  {"target_id": "tests/test_api.py", "runner": "pytest"}
+]
+```
+
+#### Runner Not Found
+
+If a runner is configured but not available in PATH:
+- `cpl doctor` reports: `Test runner 'pytest' not found in PATH`
+- Test operations return error `7001 TEST_RUNNER_NOT_FOUND`
+- CodePlane does not install test runners (user responsibility)
+
+### 11.6 Language-Specific Targeting Rules
 
 Target rules depend on language + available runner; supports any language with:
 
@@ -1142,7 +1427,9 @@ Target rules depend on language + available runner; supports any language with:
 | JS/TS | File (`*.test.ts`) | `src/__tests__/foo.test.ts` | `jest {path}` |
 | Java | Class or module | `com.example.FooTest` | `mvn -Dtest=FooTest test` |
 | .NET | Project or class | `MyProject.Tests.csproj` | `dotnet test {path}` |
-| Rust, Ruby, etc. | File/Module/Project | Language-dependent | Custom adapter logic |
+| Rust | File or module | `tests/integration_test.rs` | `cargo test --test {name}` |
+| Ruby | File (`*_spec.rb`) | `spec/models/user_spec.rb` | `rspec {path}` |
+| Elixir | File (`*_test.exs`) | `test/my_app_test.exs` | `mix test {path}` |
 
 ### 11.6 Defaults
 
