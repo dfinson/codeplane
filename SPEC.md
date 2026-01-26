@@ -268,8 +268,10 @@ RepoVersion = (HEAD SHA, .git/index stat metadata, submodule SHAs)
 | Type | Defined By | Tracked In | Checked During Reconcile? | Indexed? |
 |---|---|---|---|---|
 | 1. Git-tracked | Git | Git index | Yes (stat + hash fallback) | Yes (shared and local) |
-| 2. CPL-tracked (Git-ignored) | `.cplignore` opt-in | CPL overlay index | Yes (stat + hash) | Yes (local only) |
+| 2. CPL-tracked (Git-ignored) | `.cplignore` opt-in via negation patterns (e.g., `!.env.local`) | CPL overlay index | Yes (stat + hash) | Yes (local only) |
 | 3. Ignored | `.cplignore` hard-excluded | None | No | No |
+
+**Note:** To include a Git-ignored file in the local overlay index, add a negation pattern to `.cplignore`. For example, `!.env.local` will opt that file into CPL tracking even though it's Git-ignored.
 
 ### 5.4 Change Detection Strategy
 
@@ -474,12 +476,12 @@ These files are never indexed even locally.
 - Operation history is append-only (SQLite-backed).
 - No automatic retries or implicit mutations.
 
-### 6.10 Documented Contradiction: Overlay may include `.env` vs `.cplignore` default blocks `.env`
+### 6.10 `.env` Overlay Indexing: Resolved
 
-One source explicitly states local overlay may include `.env` and local config.
-Another source’s `.cplignore` default explicitly blocks `.env` from indexing even locally.
+One source explicitly stated local overlay may include `.env` and local config.
+Another source's `.cplignore` default explicitly blocks `.env` from indexing even locally.
 
-This is preserved as a design contradiction and is tracked in the risk register. Until resolved, implementations must choose a safe default (security posture suggests default-blocking `.env`), but the contradiction remains an explicit open item.
+**Resolution:** Default-blocked in `.cplignore` for security. Users who need `.env` indexed locally can explicitly whitelist via negation pattern (e.g., `!.env` or `!.env.local`) in `.cplignore`. This preserves security-first defaults while allowing explicit opt-in.
 
 ---
 
@@ -490,7 +492,7 @@ This is preserved as a design contradiction and is tracked in the risk register.
 CodePlane builds a deterministic, incrementally updated hybrid index with:
 
 - Fast lexical search engine (Tantivy) for identifiers, paths, tokens.
-- Structured metadata store (SQLite; “preferred” mentioned alongside DuckDB in one place).
+- Structured metadata store (SQLite).
 - Dependency and symbol graph for bounded, explainable expansions.
 
 Indexing split:
@@ -653,16 +655,55 @@ This subsystem is narrowly scoped: a high-correctness refactor planner and execu
 
 ### 8.3 Supported Operations
 
-- Rename symbol
-- Rename/move file or module
-- Safe delete symbol
+- `rename_symbol(from, to, at)`
+- `rename_file(from_path, to_path)`
+- `move_file(from_path, to_path)`
+- `delete_symbol(at)`
 - Change signature (where supported by LSP)
 
-Each supports:
+All operations:
+- Return **structured diff output** with `files_changed`, `edits`, `symbol`, `new_name`, etc.
+- Provide **preview → apply → rollback** semantics
+- Are **atomic** at the patching level
+- Operate across **tracked and untracked (overlay) files**
+- Apply LSP-driven semantics across **all languages**
+- Trigger deterministic re-indexing after apply
 
-- Plan → preview → apply → rollback
-- Structured diff output
-- Deterministic re-indexing after apply
+### 8.3a Architecture Overview
+
+#### LSP-Only Execution
+
+- All refactor planning (rename, move, delete) is handled via LSP (`textDocument/rename`, `workspace/willRenameFiles`, etc.)
+- No fallback to CodePlane index logic
+- CodePlane maintains full control of edit application, version tracking, and reindexing
+
+#### Persistent LSP Daemons
+
+- One subprocess per supported language
+- Launched at daemon startup (`cpl up`) based on static config
+- Not started dynamically
+- Restart of daemon required to support new languages
+
+#### File State Virtualization
+
+- CodePlane injects file contents into LSP via `didOpen` and `didChange`
+- No LSP reads files directly from disk
+- File versioning is maintained in memory by CodePlane
+
+#### Edit Application and Reindexing
+
+- `WorkspaceEdit` results from LSP are transformed into structured diffs
+- File edits are applied atomically
+- All affected files are reindexed into lexical index, structural metadata, and symbol/reference graph
+- Overlay/untracked files are updated as first-class citizens
+
+### 8.3b Language Support Model
+
+- **All languages use LSPs exclusively**
+- Language support is statically declared at project init
+- Unsupported languages cannot execute refactor operations
+- No runtime auto-detection or fallback logic
+- LSPs persist for the daemon's lifecycle
 
 ### 8.4 Definitions
 
@@ -805,35 +846,65 @@ defaults:
 
 ### 8.10 Git-Aware File Moves
 
-- Tracked files: `git mv` equivalent
-- Untracked/ignored files: filesystem move only
+- If a file rename or move affects a Git-tracked file:
+  - CodePlane will perform a `git mv`-equivalent operation
+  - This updates Git's index to reflect the move (preserving history)
+  - Only performed if the file is clean and tracked
+  - Fails safely if the working tree state is inconsistent (e.g. modified, unstaged)
+- If the file is untracked or ignored (e.g. overlay files):
+  - CodePlane performs a normal filesystem move only
+- This ensures Git rename detection and downstream agent operations remain correct
 - Preserves history; never commits
+
+Structured diff will reflect:
+```json
+{
+  "file_moved": true,
+  "from": "src/old_path.py",
+  "to": "src/new_path.py",
+  "git_mv": true
+}
+```
 
 ### 8.11 Comments and Documentation References
 
-LSP refactors do not modify:
+LSP-based renames **do not affect** comments, docstrings, or markdown files.
 
-- Comments
-- Docstrings
-- Markdown / docs
+Examples of unaffected references:
+- `# MyClassA` (comment)
+- `"""Used in MyClassA."""` (docstring)
+- `README.md` references to `MyClassA`
 
-CodePlane performs a separate non-semantic sweep:
+To maintain coherence, CodePlane performs a **post-refactor sweep**:
+- Searches for exact string matches of the original symbol name
+- Scans:
+  - Comments in source code (from structural index)
+  - Markdown and text files (README, docs, etc.)
+  - Overlay files, if applicable
+- Generates a separate, deterministic patch set for these changes
+- Annotates these as **non-semantic edits**, separate from LSP edits
+- User or agent may preview, accept, or reject them
 
-- Exact string matches
-- Reported as optional previewable patch set
-- Never mixed with semantic edits
+This ensures textual references to renamed symbols are coherently updated without being conflated with semantic LSP-backed mutations.
 
 ### 8.12 Optional Subsystem Toggle
 
-Enabled by default. Disable via config:
+The deterministic LSP-backed refactor engine is **enabled by default**, but may be disabled via configuration or CLI for environments with limited resources.
 
+**Why disable:**
+- LSPs are persistent subprocesses and consume non-trivial memory per language
+- On large, multi-language repos, total steady-state memory may exceed 2–4 GB
+- Some users may prefer to delegate refactors to agents or external tools
+
+**How to disable:**
+
+Via config:
 ```yaml
 refactor:
   enabled: false
 ```
 
 Or CLI:
-
 ```bash
 cpl up --no-refactor
 ```
@@ -844,14 +915,26 @@ When disabled:
 - No refactor endpoints
 - Indexing and generic mutation remain
 
-### 8.13 Guarantees + Result Types (Pre-API Concept)
+### 8.13 Refactor Out of Scope
+
+- Git commits, staging, revert, or history manipulation
+- Test execution or build validation
+- Refactor logs beyond structured diff response
+- Dynamic language inference (e.g., `eval`, `getattr`)
+- Partial or speculative refactors
+- Multi-symbol refactors
+
+### 8.14 Guarantees + Result Types (Pre-API Concept)
 
 Always:
-
+- **Deterministic**: Same refactor input → same result
+- **Isolated**: Edits are applied only to confirmed, LSP-authorized files
+- **Audit-safe**: Git-aware moves preserve index correctness
+- **Overlay-compatible**: Untracked files handled equally
+- **Agent-delegated commit control**: CodePlane never stages or commits
 - No working tree mutation during planning
 - Single atomic apply
 - Explicit divergence reporting
-- Deterministic outputs
 
 Best-effort:
 
@@ -1190,10 +1273,22 @@ Guarantees:
 
 ### 12.5 Operation Ledger
 
-Purpose:
+#### v1 vs v1.5 Scope
 
-- Mechanical accountability: what happened, order, limits, effects
-- Not observability, not surveillance
+CodePlane deliberately distinguishes between **v1 (minimal, SQLite-only)** logging and **v1.5 (optional artifact expansion)**.
+
+- v1 focuses on *mechanical accountability* only.
+- v1.5 exists solely to improve developer ergonomics if real pain appears.
+
+#### Purpose
+
+The ledger provides **mechanical accountability**, not observability or surveillance.
+
+It exists to answer:
+- what happened
+- in what order
+- under what limits
+- with what effects
 
 Primary persistence:
 
@@ -1280,21 +1375,22 @@ Explicitly does not do:
 
 ---
 
-## 13. “Deterministic Refactoring Primitives” (Summary-Level Capability List)
+## 13. "Deterministic Refactoring Primitives" (Summary-Level Capability List)
 
-This section preserves the explicit capability list and notes its relationship to the refactor engine constraints.
+This section preserves the explicit capability list for quick reference.
 
 Refactors described as tool operations:
 
-- Rename symbol
-- Rename file
-- Move file/module
-- Delete element safely
+- `rename_symbol(from, to, at)`
+- `rename_file(from_path, to_path)`
+- `move_file(from_path, to_path)`
+- `delete_symbol(at)`
 
-Implementation statement (as authored in one source):
+Implementation:
 
-- Prefer LSP (`textDocument/rename`) where available
-- Fallback to structured lexical edits
+- All semantic refactors use LSP (`textDocument/rename`, etc.) as the sole authority
+- CodePlane never guesses or speculatively resolves bindings
+- Non-semantic operations (exact-match comment/docstring sweeps, mechanical file renames) are handled separately and reported as optional, previewable patches
 
 All refactors:
 
@@ -1302,15 +1398,6 @@ All refactors:
 - Provide previews
 - Apply via CodePlane patch system
 - Return full structured context
-
-Conflict note:
-
-- The refactor-engine spec requires LSP-only semantics for semantic refactors and forbids semantic guessing.
-- Therefore any “structured lexical edits” fallback must be interpreted as:
-  - non-semantic edits, or
-  - explicit opt-in mechanical transformations, or
-  - documentation/comment sweep (exact string match), or
-  - otherwise treated as an unresolved contradiction (tracked in risks).
 
 ---
 
