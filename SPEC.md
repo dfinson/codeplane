@@ -120,7 +120,14 @@ Daemon model:
 - Default: **repo-scoped daemon** — one daemon per repository.
 - `cpl up` in a repo directory starts/ensures a daemon for that repo only.
 - No global multi-repo daemon in v1. Cross-repo features are out of scope; if added later, architecture will be revisited.
-- Transport: Unix domain socket at `.codeplane/daemon.sock` (Linux/macOS) or named pipe (Windows). No port allocation conflicts.
+- Transport: **HTTP localhost** with ephemeral port.
+  - Daemon binds to `127.0.0.1:0` (OS-assigned port).
+  - Port written to `.codeplane/port` on startup.
+  - Bearer token written to `.codeplane/token` (random per session).
+  - Clients read both files to connect.
+  - Cross-platform with identical code (no socket vs named pipe divergence).
+  - MCP clients can connect directly via HTTP/SSE transport (no stdio proxy needed).
+  - Debugging trivial: `curl -H "Authorization: Bearer $(cat .codeplane/token)" http://127.0.0.1:$(cat .codeplane/port)/status`
 - Isolation rationale:
   - Failure in one repo cannot affect another.
   - Version skew between repos is not a problem.
@@ -130,7 +137,8 @@ Daemon model:
 Repo activation:
 
 - Repo must be initialized via `cpl init`.
-- Creates `.codeplane/`, repo UUID, config, socket path.
+- Creates `.codeplane/`, repo UUID, config.
+- On `cpl up`: writes `port` and `token` files, starts HTTP server.
 - Index is lazily built or fetched.
 
 Auto-start options (optional):
@@ -168,7 +176,7 @@ Diagnostics and introspection:
   - Daemon reachable
   - Index integrity (shared + overlay)
   - Commit hash matches Git HEAD
-  - Port/socket availability
+  - Port/token file validity
   - Config sanity
   - Git clean state
 - `cpl doctor --logs`: bundled diagnostic report including recent logs
@@ -208,15 +216,15 @@ Failure recovery playbooks:
 |---|---|---|
 | Corrupt index | `cpl doctor` fails hash check | Automatic rebuild (or `cpl debug index-rebuild`) |
 | Schema mismatch | Startup error | Automatic rebuild on `cpl up` |
-| Stale socket | `cpl up` error (socket exists but daemon unreachable) | Automatic cleanup and restart on `cpl up` |
+| Stale port/token | `cpl up` error (port file exists but daemon unreachable) | Automatic cleanup and restart on `cpl up` |
 | Stale revision | `cpl status` shows mismatch | Automatic re-fetch/rebuild on `cpl up` |
 | Daemon crash | Daemon auto-exits | `cpl up` (restarts daemon) |
 
 Platform constraints:
 
-- Sockets:
-  - Unix: domain socket default
-  - Windows: named pipe fallback
+- Transport:
+  - HTTP localhost on all platforms (identical implementation)
+  - No platform-specific IPC code
 - Filesystem:
   - No background watchers (see reconciliation)
   - Hash-based change detection
