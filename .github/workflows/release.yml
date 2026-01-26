@@ -1,0 +1,122 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    # checkov:skip=CKV_GHA_7:Release workflow requires user inputs to select release type
+    inputs:
+      release_type:
+        description: "Release Type: 'major', 'minor', or 'patch'."
+        required: true
+        type: choice
+        options:
+          - "patch"
+          - "minor"
+          - "major"
+      dry_run:
+        description: "Build only (do not publish)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Validate release from main branch
+        if: github.ref_name != 'main' && inputs.dry_run != 'true'
+        run: |
+          echo "ERROR: Releases can only be created from the 'main' branch."
+          echo "Current branch: ${{ github.ref_name }}"
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # We need a token with write permissions to push tags
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      # --- VERSION CALCULATION ---
+      - name: Calculate Version
+        id: calc_version
+        env:
+          INPUT_RELEASE_TYPE: ${{ github.event.inputs.release_type }}
+        run: python .github/tools/calculate_version.py
+
+      # --- CREATE TAG ---
+      - name: Create and Push Tag
+        if: github.event.inputs.dry_run != 'true'
+        run: |
+          TAG_NAME="${{ steps.calc_version.outputs.tag_name }}"
+          
+          # Check if tag already exists
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Error: Tag $TAG_NAME already exists!"
+            exit 1
+          fi
+
+          echo "Creating tag: $TAG_NAME"
+          git tag "$TAG_NAME"
+          git push origin "$TAG_NAME"
+
+      # --- BUILD ---
+      - name: Build all wheels
+        run: make build
+
+      # --- VERIFY ---
+      - name: Verify all package versions match
+        run: |
+          EVEE_VERSION=$(uvx -q hatch version)
+          EVEE_MLFLOW_VERSION=$(cd packages/evee-mlflow && uvx -q hatch version)
+          EVEE_AZUREML_VERSION=$(cd packages/evee-azureml && uvx -q hatch version)
+
+          echo "evee-ms-core    : $EVEE_VERSION"
+          echo "evee-ms-mlflow  : $EVEE_MLFLOW_VERSION"
+          echo "evee-azureml: $EVEE_AZUREML_VERSION"
+
+          if [ "$EVEE_VERSION" != "$EVEE_MLFLOW_VERSION" ] || [ "$EVEE_VERSION" != "$EVEE_AZUREML_VERSION" ]; then
+            echo "ERROR: Version mismatch between packages"
+            exit 1
+          fi
+          
+          echo "RELEASE_VERSION=$EVEE_VERSION" >> $GITHUB_ENV
+
+      # --- PUBLISH ARTIFACTS ---
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: wheels
+          path: |
+            dist/*.whl
+
+      # --- GITHUB RELEASE ---
+      - name: Create GitHub Release
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${{ steps.calc_version.outputs.tag_name }}"
+          
+          mkdir -p release_assets
+          cp dist/*.whl release_assets/
+
+          gh release create "$TAG_NAME" \
+            release_assets/* \
+            --title "Release $TAG_NAME" \
+            --generate-notes

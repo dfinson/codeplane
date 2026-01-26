@@ -1,0 +1,132 @@
+name: "Integration Tests"
+
+# Allow manual trigger on any branch
+on:
+  pull_request:
+    branches: 
+      - main
+  
+  workflow_dispatch:
+
+permissions:
+  id-token: write # Require write permission to Fetch an OIDC token.
+  contents: read 
+
+jobs:
+  # Prerequisite job to open Azure Storage to public network (it get closed every day due to firewall restrictions in tenant)
+  setup-azure:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Open Azure Storage to public network
+        run: |
+          az storage account update --name ${{ secrets.AZURE_ML_STORAGE_ACCOUNT_NAME }} --resource-group ${{ secrets.AZURE_ML_RESOURCE_GROUP }} --public-network-access Enabled --default-action Allow
+
+      - name: Wait for storage network access to propagate
+        run: sleep 10
+
+  # Job to run integration tests in parallel
+  integration-tests:
+    needs: setup-azure
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.timeout }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: cli
+            env_name: evee-example-core
+            make_alias: core
+            test_file: tests/evee/integration/test_cli.py
+            timeout: 5
+          - name: evaluate-local
+            env_name: evee-example-core
+            make_alias: core
+            test_file: tests/evee/integration/test_example_evaluate_locally_core.py
+            timeout: 20
+          - name: evaluate-mlflow
+            env_name: evee-example-mlflow
+            make_alias: mlflow
+            test_file: tests/evee/integration/test_example_evaluate_locally_mlflow.py
+            timeout: 20
+          - name: evaluate-remote-azureml
+            env_name: evee-example-azureml
+            make_alias: azureml
+            test_file: tests/evee/integration/test_example_evaluate_submission_remote_azureml.py
+            timeout: 20
+    
+    steps:
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Create env file for AzureML
+        if: matrix.name == 'evaluate-remote-azureml'
+        run: |
+          cat > example/.env << EOF
+          AZURE_OPENAI_ENDPOINT=${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          DEFAULT_IDENTITY_CLIENT_ID=${{ secrets.AZURE_OPENAI_CLIENT_ID }}
+          AZURE_ML_TENANT_ID=${{ secrets.AZURE_ML_TENANT_ID }}
+          AZURE_ML_SUBSCRIPTION_ID=${{ secrets.AZURE_ML_SUBSCRIPTION_ID }}
+          AZURE_ML_RESOURCE_GROUP=${{ secrets.AZURE_ML_RESOURCE_GROUP }}
+          AZURE_ML_WORKSPACE_NAME=${{ secrets.AZURE_ML_WORKSPACE_NAME }}
+          EOF
+
+      - name: Run integration tests (${{ matrix.name }})
+        id: integration_tests
+        env:
+          # Azure OpenAI Configuration
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_CLIENT_ID: ${{ secrets.AZURE_OPENAI_CLIENT_ID }}
+          DEFAULT_IDENTITY_CLIENT_ID: ${{ secrets.AZURE_OPENAI_CLIENT_ID }}
+          # Azure ML Configuration
+          AZURE_ML_SUBSCRIPTION_ID: ${{ secrets.AZURE_ML_SUBSCRIPTION_ID }}
+          AZURE_ML_RESOURCE_GROUP: ${{ secrets.AZURE_ML_RESOURCE_GROUP }}
+          AZURE_ML_WORKSPACE_NAME: ${{ secrets.AZURE_ML_WORKSPACE_NAME }}
+          AZURE_ML_TENANT_ID: ${{ secrets.AZURE_ML_TENANT_ID }}
+          # GitHub Configuration
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Logging Configuration
+          LOG_LEVEL: ${{ vars.LOG_LEVEL || 'INFO' }}
+          LOG_PATH: experiment/output/${{ matrix.name }}/logs
+          # Performance Configuration
+          MAX_WORKERS: ""
+        run: |
+          # Configure git to use gh for authentication (GH_TOKEN is picked up automatically)
+          gh auth setup-git
+
+          # Run only integration tests with verbose output
+          echo "Running integration tests for ${{ matrix.name }}..."
+
+          # Create Virtual Environment and install dependencies
+          cd example
+          make setup-${{ matrix.make_alias }}
+
+          VENV_DIR="${VENV_BASE:-$HOME/.venvs}/${{ matrix.env_name }}"
+          source "${VENV_DIR}/bin/activate"
+          cd "${{ github.workspace }}"
+          pytest ${{ matrix.test_file }} -v -s --tb=short -m integration
+        shell: bash
