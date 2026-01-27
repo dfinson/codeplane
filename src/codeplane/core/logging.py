@@ -1,8 +1,4 @@
-"""Structured logging with request correlation.
-
-Supports multiple simultaneous outputs with independent formats and levels.
-All entries within a request share a correlation ID.
-"""
+"""Structured logging with request correlation and multi-output support."""
 
 from __future__ import annotations
 
@@ -18,24 +14,21 @@ import structlog
 if TYPE_CHECKING:
     from codeplane.config.models import LoggingConfig
 
-# Context variable for request correlation
 _request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
 
 
 def get_request_id() -> str | None:
-    """Get current request correlation ID."""
     return _request_id.get()
 
 
 def set_request_id(request_id: str | None = None) -> str:
-    """Set request correlation ID. Generates one if not provided."""
+    """Set or generate request correlation ID."""
     rid = request_id or uuid4().hex[:12]
     _request_id.set(rid)
     return rid
 
 
 def clear_request_id() -> None:
-    """Clear request correlation ID."""
     _request_id.set(None)
 
 
@@ -44,7 +37,6 @@ def _add_request_id(
     _method_name: str,
     event_dict: dict[str, Any],
 ) -> dict[str, Any]:
-    """Processor that adds request_id to log entries."""
     if rid := get_request_id():
         event_dict["request_id"] = rid
     return event_dict
@@ -65,16 +57,7 @@ def configure_logging(
     json_format: bool = False,
     level: str = "INFO",
 ) -> None:
-    """Configure structlog for CodePlane.
-
-    For simple cases, use json_format and level directly.
-    For multi-output or advanced config, pass a LoggingConfig object.
-
-    Args:
-        config: Full logging configuration. If provided, other args are ignored.
-        json_format: Output JSON lines (True) or console format (False).
-        level: Log level (DEBUG, INFO, WARN, ERROR).
-    """
+    """Configure structlog. Pass config for multi-output, or use simple params."""
     from codeplane.config.models import LoggingConfig, LogOutputConfig
 
     if config is None:
@@ -121,12 +104,21 @@ def configure_logging(
         _configure_multi_output(config, shared_processors, default_level)
 
 
-def _get_output_file(destination: str) -> Any:
-    """Get file object for destination."""
+def _create_handler(destination: str) -> logging.Handler:
+    """Create handler for stderr, stdout, or file path."""
     if destination == "stderr":
-        return sys.stderr
+        return logging.StreamHandler(sys.stderr)
     if destination == "stdout":
-        return sys.stdout
+        return logging.StreamHandler(sys.stdout)
+    path = Path(destination)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return logging.FileHandler(path, mode="a")
+
+
+def _get_output_file(destination: str) -> Any:
+    """Get file object for PrintLoggerFactory."""
+    if destination in ("stderr", "stdout"):
+        return sys.stderr if destination == "stderr" else sys.stdout
     path = Path(destination)
     path.parent.mkdir(parents=True, exist_ok=True)
     return path.open("a")  # noqa: SIM115
@@ -137,8 +129,7 @@ def _configure_multi_output(
     shared_processors: list[structlog.types.Processor],
     default_level: int,
 ) -> None:
-    """Configure logging with multiple outputs via stdlib logging."""
-    # Use structlog's stdlib integration for multi-output
+    """Configure multiple outputs via stdlib logging."""
     structlog.configure(
         processors=[
             *shared_processors,
@@ -176,19 +167,7 @@ def _configure_multi_output(
         root_logger.addHandler(handler)
 
 
-def _create_handler(destination: str) -> logging.Handler:
-    """Create appropriate handler for destination."""
-    if destination == "stderr":
-        return logging.StreamHandler(sys.stderr)
-    if destination == "stdout":
-        return logging.StreamHandler(sys.stdout)
-    path = Path(destination)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return logging.FileHandler(path, mode="a")
-
-
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
-    """Get a logger instance, optionally bound to a name."""
     logger = structlog.get_logger()
     if name:
         logger = logger.bind(logger=name)

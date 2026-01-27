@@ -160,15 +160,3 @@ class TestLoggingConfiguration:
         content = log_file.read_text()
         assert "debug only" in content
         assert "info msg" in content
-
-    def test_given_json_format_key_in_dict_when_load_then_converts_to_outputs(self) -> None:
-        """YAML with json_format key converts to outputs config for migration."""
-        # Given
-        data = {"level": "DEBUG", "json_format": True}
-
-        # When
-        config = LoggingConfig.model_validate(data)
-
-        # Then
-        assert len(config.outputs) == 1
-        assert config.outputs[0].format == "json"

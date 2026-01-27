@@ -257,6 +257,10 @@ Config precedence:
 3. Global: `~/.config/codeplane/config.yaml`
 4. Built-in defaults
 
+Environment variables use `CODEPLANE__` prefix with double underscore delimiter for nesting:
+- `CODEPLANE__LOGGING__LEVEL=DEBUG`
+- `CODEPLANE__DAEMON__PORT=8080`
+
 No dedicated config CLI in v1. Edit files directly.
 
 Error response schema:

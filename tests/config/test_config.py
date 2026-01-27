@@ -9,6 +9,7 @@ import yaml
 from pydantic import ValidationError
 
 from codeplane.config import CodePlaneConfig, load_config
+from codeplane.config.models import LoggingConfig
 from codeplane.core.errors import ConfigError
 
 
@@ -23,8 +24,8 @@ def temp_repo(tmp_path: Path) -> Generator[Path, None, None]:
 
 @pytest.fixture(autouse=True)
 def clean_env() -> Generator[None, None, None]:
-    """Remove CODEPLANE_* env vars for clean tests."""
-    orig = {k: v for k, v in os.environ.items() if k.startswith("CODEPLANE_")}
+    """Remove CODEPLANE__* env vars for clean tests."""
+    orig = {k: v for k, v in os.environ.items() if k.startswith("CODEPLANE__")}
     for k in orig:
         del os.environ[k]
     yield
@@ -35,29 +36,18 @@ class TestConfigModels:
     """Configuration model validation tests."""
 
     @pytest.mark.parametrize(
-        ("level", "valid"),
-        [
-            ("DEBUG", True),
-            ("INFO", True),
-            ("WARN", True),
-            ("ERROR", True),
-            ("INVALID", False),
-        ],
+        "level",
+        ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
     )
-    def test_given_log_level_when_validated_then_accepts_only_valid(
-        self, level: str, valid: bool
-    ) -> None:
-        """Log level accepts only valid values (DEBUG, INFO, WARN, ERROR)."""
-        # Given
-        logging_config = {"level": level}
+    def test_given_log_level_when_validated_then_accepts_standard_levels(self, level: str) -> None:
+        """Log level accepts standard Python logging levels."""
+        config = CodePlaneConfig(logging={"level": level})
+        assert config.logging.level == level
 
-        # When / Then
-        if valid:
-            config = CodePlaneConfig(logging=logging_config)
-            assert config.logging.level == level.upper()
-        else:
-            with pytest.raises(ValidationError):
-                CodePlaneConfig(logging=logging_config)
+    def test_given_invalid_log_level_when_validated_then_rejects(self) -> None:
+        """Invalid log level is rejected."""
+        with pytest.raises(ValidationError):
+            CodePlaneConfig(logging={"level": "INVALID"})
 
     @pytest.mark.parametrize(
         ("port", "valid"),
@@ -121,7 +111,7 @@ class TestConfigLoading:
         config_dir.mkdir()
         with (config_dir / "config.yaml").open("w") as f:
             yaml.dump({"logging": {"level": "DEBUG"}}, f)
-        os.environ["CODEPLANE_LOGGING_LEVEL"] = "ERROR"
+        os.environ["CODEPLANE__LOGGING__LEVEL"] = "ERROR"
 
         # When
         config = load_config(repo_root=temp_repo)
@@ -129,19 +119,16 @@ class TestConfigLoading:
         # Then
         assert config.logging.level == "ERROR"
 
-    def test_given_explicit_overrides_when_load_then_highest_precedence(
-        self, temp_repo: Path
-    ) -> None:
-        """Explicit overrides take highest precedence."""
+    def test_given_explicit_kwargs_when_load_then_highest_precedence(self, temp_repo: Path) -> None:
+        """Explicit kwargs take highest precedence."""
         # Given
-        os.environ["CODEPLANE_LOGGING_LEVEL"] = "ERROR"
-        overrides = {"logging.level": "WARN"}
+        os.environ["CODEPLANE__LOGGING__LEVEL"] = "ERROR"
 
         # When
-        config = load_config(repo_root=temp_repo, overrides=overrides)
+        config = load_config(repo_root=temp_repo, logging=LoggingConfig(level="WARNING"))
 
         # Then
-        assert config.logging.level == "WARN"
+        assert config.logging.level == "WARNING"
 
     def test_given_invalid_yaml_when_load_then_raises_config_error(self, temp_repo: Path) -> None:
         """Invalid YAML raises ConfigError with parse error code."""

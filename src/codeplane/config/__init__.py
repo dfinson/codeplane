@@ -1,8 +1,7 @@
 """Config module exports."""
 
-from codeplane.config.loader import load_config
+from codeplane.config.loader import CodePlaneConfig, CodePlaneSettings, load_config
 from codeplane.config.models import (
-    CodePlaneConfig,
     DaemonConfig,
     IndexConfig,
     LoggingConfig,
@@ -11,6 +10,7 @@ from codeplane.config.models import (
 __all__ = [
     "load_config",
     "CodePlaneConfig",
+    "CodePlaneSettings",
     "DaemonConfig",
     "IndexConfig",
     "LoggingConfig",
