@@ -14,6 +14,7 @@ from codeplane.git import (
     BranchNotFoundError,
     CommitInfo,
     DiffInfo,
+    DiffSummary,
     GitOps,
     NotARepositoryError,
     NothingToCommitError,
@@ -76,6 +77,102 @@ class TestDiff:
         diff = ops.diff(staged=True)
         assert isinstance(diff, DiffInfo)
         assert diff.files_changed == 1
+
+
+class TestDiffSummary:
+    """Tests for diff_summary() method."""
+
+    def test_given_uncommitted_changes_when_diff_summary_then_returns_stats_only(
+        self, repo_with_uncommitted: pygit2.Repository
+    ) -> None:
+        """Default diff_summary returns stats only (fast path)."""
+        ops = GitOps(repo_with_uncommitted.workdir)
+
+        summary = ops.diff_summary()
+
+        assert isinstance(summary, DiffSummary)
+        assert summary.files_changed >= 1
+        assert summary.total_additions >= 0
+        assert summary.total_deletions >= 0
+        assert summary.total_lines == summary.total_additions + summary.total_deletions
+        # Fast path: no per_file, no word_count
+        assert summary.per_file is None
+        assert summary.total_word_count is None
+        assert summary.file_paths == ()
+
+    def test_given_staged_changes_when_include_per_file_then_returns_per_file_stats(
+        self, repo_with_uncommitted: pygit2.Repository
+    ) -> None:
+        """diff_summary with include_per_file=True returns per-file breakdown."""
+        ops = GitOps(repo_with_uncommitted.workdir)
+
+        summary = ops.diff_summary(staged=True, include_per_file=True)
+
+        assert isinstance(summary, DiffSummary)
+        assert summary.files_changed == 1
+        assert summary.per_file is not None
+        assert len(summary.per_file) == 1
+        assert summary.per_file[0].path == "staged.txt"
+        # Medium path: per_file but no word_count
+        assert summary.per_file[0].word_count is None
+        assert summary.total_word_count is None
+        assert "staged.txt" in summary.file_paths
+
+    def test_given_multiple_files_when_include_word_count_then_returns_word_counts(
+        self, temp_repo: pygit2.Repository
+    ) -> None:
+        """diff_summary with include_word_count=True returns word counts (slow path)."""
+        workdir = Path(temp_repo.workdir)
+        ops = GitOps(workdir)
+
+        # Create and stage files with known content
+        (workdir / "small.txt").write_text("one two three")
+        (workdir / "medium.txt").write_text("word " * 50)
+        (workdir / "large.txt").write_text("token " * 200)
+        ops.stage(["small.txt", "medium.txt", "large.txt"])
+
+        summary = ops.diff_summary(staged=True, include_word_count=True)
+
+        assert summary.files_changed == 3
+        assert summary.total_word_count is not None
+        assert summary.total_word_count > 0
+        assert summary.per_file is not None
+
+        # Verify per-file word counts
+        paths = {f.path for f in summary.per_file}
+        assert paths == {"small.txt", "medium.txt", "large.txt"}
+        for file_summary in summary.per_file:
+            assert file_summary.word_count is not None
+            assert file_summary.word_count >= 0
+
+    def test_given_ref_range_when_diff_summary_then_returns_range_stats(
+        self, repo_with_history: pygit2.Repository
+    ) -> None:
+        """diff_summary with base/target refs returns range stats."""
+        ops = GitOps(repo_with_history.workdir)
+        log = ops.log(limit=3)
+
+        summary = ops.diff_summary(base=log[2].sha, target=log[0].sha)
+
+        assert isinstance(summary, DiffSummary)
+        assert summary.files_changed >= 0
+        assert summary.total_lines >= 0
+
+    def test_given_no_changes_when_diff_summary_then_returns_zeros(
+        self, temp_repo: pygit2.Repository
+    ) -> None:
+        """diff_summary on clean working tree returns zeros."""
+        ops = GitOps(temp_repo.workdir)
+
+        summary = ops.diff_summary()
+
+        assert summary.files_changed == 0
+        assert summary.total_additions == 0
+        assert summary.total_deletions == 0
+        assert summary.total_lines == 0
+        assert summary.per_file is None
+        assert summary.total_word_count is None
+        assert summary.file_paths == ()
 
 
 class TestLog:

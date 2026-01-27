@@ -148,6 +148,113 @@ class DiffInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class FileDiffSummary:
+    """Per-file diff statistics."""
+
+    path: str
+    status: DeltaStatus
+    additions: int
+    deletions: int
+    word_count: int | None = None  # Only populated if include_word_count=True
+
+
+def _count_words(text: str) -> int:
+    """Count words in text."""
+    return len(text.split())
+
+
+@dataclass(frozen=True, slots=True)
+class DiffSummary:
+    """
+    Diff statistics with progressive detail levels.
+
+    Cost tiers (use minimal detail needed):
+    - Fast (default): diff.stats only, no iteration
+    - Medium (include_per_file): iterate patches for per-file adds/dels
+    - Slow (include_word_count): parse patch text for word counts
+    """
+
+    files_changed: int
+    total_additions: int
+    total_deletions: int
+    total_lines: int
+    per_file: tuple[FileDiffSummary, ...] | None = None  # Only if include_per_file
+    total_word_count: int | None = None  # Only if include_word_count
+
+    @property
+    def file_paths(self) -> tuple[str, ...]:
+        """List of changed file paths (empty if per_file not requested)."""
+        return tuple(f.path for f in self.per_file) if self.per_file else ()
+
+    @classmethod
+    def from_pygit2(
+        cls,
+        diff: pygit2.Diff,
+        *,
+        include_per_file: bool = False,
+        include_word_count: bool = False,
+    ) -> DiffSummary:
+        stats = diff.stats
+
+        # Fast path: stats only
+        if not include_per_file and not include_word_count:
+            return cls(
+                files_changed=stats.files_changed,
+                total_additions=stats.insertions,
+                total_deletions=stats.deletions,
+                total_lines=stats.insertions + stats.deletions,
+            )
+
+        # Medium/slow path: iterate patches
+        per_file: list[FileDiffSummary] = []
+        total_words = 0 if include_word_count else None
+
+        for patch in diff:
+            if patch is None:
+                continue
+            delta = patch.delta
+            path = delta.new_file.path if delta.new_file else delta.old_file.path
+            if not path:
+                continue
+
+            # Word count only if requested (slow)
+            words: int | None = None
+            if include_word_count:
+                patch_text = patch.text or ""
+                words = _count_words(patch_text)
+                total_words = (total_words or 0) + words
+
+            # Per-file adds/dels from hunks
+            adds = 0
+            dels = 0
+            for hunk in patch.hunks:
+                for line in hunk.lines:
+                    if line.origin == "+":
+                        adds += 1
+                    elif line.origin == "-":
+                        dels += 1
+
+            per_file.append(
+                FileDiffSummary(
+                    path=path,
+                    status=_DELTA_STATUS_MAP.get(delta.status, "unknown"),
+                    additions=adds,
+                    deletions=dels,
+                    word_count=words,
+                )
+            )
+
+        return cls(
+            files_changed=stats.files_changed,
+            total_additions=stats.insertions,
+            total_deletions=stats.deletions,
+            total_lines=stats.insertions + stats.deletions,
+            per_file=tuple(per_file),
+            total_word_count=total_words,
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class BlameHunk:
     """A hunk in blame output."""
 

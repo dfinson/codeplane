@@ -54,6 +54,7 @@ from codeplane.git.models import (
     BranchInfo,
     CommitInfo,
     DiffInfo,
+    DiffSummary,
     MergeAnalysis,
     MergeResult,
     OperationResult,
@@ -136,6 +137,29 @@ class GitOps:
         plan = self._diff_planner.plan(base, target, staged)
         raw = self._diff_planner.execute(plan)
         return DiffInfo.from_pygit2(raw, include_patch)
+
+    def diff_summary(
+        self,
+        base: str | None = None,
+        target: str | None = None,
+        staged: bool = False,
+        *,
+        include_per_file: bool = False,
+        include_word_count: bool = False,
+    ) -> DiffSummary:
+        """
+        Get diff statistics with progressive detail levels.
+
+        Cost tiers (use minimal detail needed):
+        - Default: diff.stats only (fast, no iteration)
+        - include_per_file: per-file adds/dels (iterates patches)
+        - include_word_count: word counts for token estimation (parses patch text)
+        """
+        plan = self._diff_planner.plan(base, target, staged)
+        raw = self._diff_planner.execute(plan)
+        return DiffSummary.from_pygit2(
+            raw, include_per_file=include_per_file, include_word_count=include_word_count
+        )
 
     def blame(
         self, path: str, min_line: int | None = None, max_line: int | None = None
