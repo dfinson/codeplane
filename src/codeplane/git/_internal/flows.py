@@ -27,8 +27,11 @@ class WriteFlows:
 
     def extract_conflict_paths(self) -> tuple[str, ...]:
         """Extract unique conflict paths from index."""
+        conflicts = self._access.index.conflicts
+        if not conflicts:
+            return ()
         paths: set[str] = set()
-        for ancestor, ours, theirs in self._access.index.conflicts:
+        for ancestor, ours, theirs in conflicts:
             for entry in (ancestor, ours, theirs):
                 if entry:
                     paths.add(entry.path)

@@ -391,3 +391,62 @@ class TestWorktreeUnlockEdgeCases:
         worktrees = ops.worktrees()
         wt = next(wt for wt in worktrees if wt.name == "feature-wt")
         assert wt.is_locked is False
+
+
+class TestWorktreeRemovePathResolution:
+    """Tests for worktree_remove path handling (fixes #119)."""
+
+    def test_given_worktree_when_remove_then_uses_path_not_name(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """
+        worktree_remove should resolve the worktree path before calling git.
+        This test verifies the fix for passing path (not name) to subprocess.
+        """
+        repo_path, ops = git_repo_with_commit
+
+        # Create branch and worktree
+        ops.create_branch("feature")
+        wt_path = repo_path.parent / "feature-wt"
+        ops.worktree_add(wt_path, "feature")
+
+        # Verify worktree exists
+        worktrees = ops.worktrees()
+        assert len(worktrees) == 2
+
+        # Remove worktree by name (internally should resolve to path)
+        ops.worktree_remove("feature-wt")
+
+        # Verify worktree is gone
+        worktrees = ops.worktrees()
+        assert len(worktrees) == 1
+        assert worktrees[0].is_main is True
+
+    def test_given_worktree_with_different_path_when_remove_then_succeeds(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """
+        Worktree name is derived from path basename. This test creates a worktree
+        where the name matches but verifies removal works via proper path resolution.
+        """
+        repo_path, ops = git_repo_with_commit
+
+        # Create branch and worktree with specific path
+        ops.create_branch("work")
+        # Path basename (name) will be "my-worktree"
+        wt_path = repo_path.parent / "my-worktree"
+        ops.worktree_add(wt_path, "work")
+
+        # Verify worktree was added
+        worktrees = ops.worktrees()
+        wt = next((w for w in worktrees if w.name == "my-worktree"), None)
+        assert wt is not None
+        assert str(wt_path) in wt.path
+
+        # Remove using name - should work because we resolve path first
+        ops.worktree_remove("my-worktree", force=True)
+
+        # Verify removed
+        worktrees = ops.worktrees()
+        names = {w.name for w in worktrees}
+        assert "my-worktree" not in names

@@ -241,6 +241,10 @@ class RepoAccess:
     def set_head_target(self, oid: pygit2.Oid) -> None:
         self._repo.head.set_target(oid)
 
+    def set_head(self, refname: str | pygit2.Oid) -> None:
+        """Set HEAD to a ref name (e.g., 'refs/heads/main') or oid."""
+        self._repo.set_head(refname)
+
     def merge_analysis(self, their_oid: pygit2.Oid) -> tuple[int, int]:
         return self._repo.merge_analysis(their_oid)
 
@@ -451,11 +455,15 @@ class RepoAccess:
         """Remove worktree using git subprocess for correctness."""
         import subprocess
 
+        # Resolve actual path since git expects path, not name
+        wt = self.lookup_worktree(name)
+        wt_path = wt.path
+
         cmd = ["git", "worktree", "remove"]
         if force:
             # Need --force twice: once for dirty, once for locked
             cmd.extend(["--force", "--force"])
-        cmd.append(name)
+        cmd.append(wt_path)
 
         result = subprocess.run(
             cmd,

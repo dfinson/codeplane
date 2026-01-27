@@ -38,6 +38,7 @@ from codeplane.git.credentials import SystemCredentialCallback, get_default_call
 from codeplane.git.errors import (
     BranchExistsError,
     BranchNotFoundError,
+    GitError,
     RefNotFoundError,
     StashNotFoundError,
     SubmoduleError,
@@ -311,12 +312,12 @@ class GitOps:
             return MergeResult(True, None)
 
         if analysis & MERGE_FASTFORWARD:
+            current = self._access.current_branch_name()  # Capture BEFORE detach
             self._access.checkout_detached(their_oid)
-            current = self._access.current_branch_name()
             if current:
                 branch = self._access.must_local_branch(current)
                 self._access.set_branch_target(branch, their_oid)
-            self._access.set_head_target(their_oid)
+                self._access.set_head(f"refs/heads/{current}")  # Reattach to branch
             return MergeResult(True, str(their_oid))
 
         # Non-fastforward merge with guaranteed cleanup
@@ -471,7 +472,7 @@ class GitOps:
             result.append(
                 WorktreeInfo(
                     name="main",
-                    path=main_path.rstrip("/"),
+                    path=Path(main_path).as_posix(),
                     head_ref=head.shorthand if not self._access.is_detached else "HEAD",
                     head_sha=str(self._access.head_target) if not self._access.is_unborn else "",
                     is_main=True,
@@ -513,7 +514,7 @@ class GitOps:
                     )
                 )
             except (pygit2.GitError, OSError):
-                # Worktree may be prunable/missing
+                # Worktree dir missing/corrupt - return placeholder so it shows as prunable
                 result.append(
                     WorktreeInfo(
                         name=name,
@@ -570,7 +571,7 @@ class GitOps:
                 if Path(wt.path).resolve() == path.resolve():
                     raise WorktreeError(f"Path already in use by worktree '{wt_name}'")
             except pygit2.GitError:
-                pass
+                pass  # Worktree corrupt/missing - safe to ignore for path collision check
 
         branch_ref = self._access.repo.references.get(f"refs/heads/{ref}")
         self._access.add_worktree(name, str(path), branch_ref)
@@ -650,7 +651,7 @@ class GitOps:
                     wt.prune(False)
                     pruned.append(name)
             except pygit2.GitError:
-                pass
+                pass  # Worktree already gone or corrupt - nothing to prune
         return pruned
 
     def is_worktree(self) -> bool:
@@ -709,6 +710,7 @@ class GitOps:
                     )
                 )
             except pygit2.GitError:
+                # Submodule config exists but repo is missing/corrupt - report as missing
                 result.append(
                     SubmoduleInfo(
                         name=name,
@@ -760,7 +762,7 @@ class GitOps:
         """
         try:
             sm = self._access.lookup_submodule_by_path(path)
-        except Exception:
+        except (pygit2.GitError, KeyError, GitError):
             raise SubmoduleNotFoundError(path) from None
 
         # Build SubmoduleInfo for this submodule
@@ -810,7 +812,7 @@ class GitOps:
                     if flags & pygit2.GIT_STATUS_WT_NEW:
                         untracked_count += 1
             except pygit2.GitError:
-                pass
+                pass  # Can't open submodule repo - dirty state unknown, defaults apply
 
         return SubmoduleStatus(
             info=info,
@@ -841,7 +843,7 @@ class GitOps:
                     sm = self._access.lookup_submodule(name)
                     initialized.append(sm.path)
                 except pygit2.GitError:
-                    pass
+                    pass  # Already initialized or config corrupt - skip silently
         else:
             # Initialize specific submodules by path
             for path in paths:
@@ -852,7 +854,7 @@ class GitOps:
                     self._access.init_submodule(sm_name)
                     initialized.append(path)
                 except pygit2.GitError:
-                    pass
+                    pass  # Already initialized or config corrupt - skip silently
 
         return initialized
 
@@ -1028,7 +1030,7 @@ class GitOps:
             self._access.index.remove(path)
             self._access.index.write()
         except pygit2.GitError:
-            pass
+            pass  # Not in index - already removed or never added
 
         # Remove directory (use path)
         sm_path = Path(self._access.path) / path

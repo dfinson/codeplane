@@ -33,6 +33,7 @@ class RebaseState:
     """Persisted rebase state for recovery."""
 
     original_head: str
+    original_branch: str | None  # Branch name before detach (None if already detached)
     onto: str
     steps: list[dict[str, str | None]]  # Serialized RebaseStep
     current_step: int
@@ -105,8 +106,9 @@ class RebaseFlow:
         if self.has_rebase_in_progress():
             raise RebaseInProgressError()
 
-        # Save original HEAD for abort
+        # Save original HEAD and branch for abort/finalize
         original_head = str(self._access.must_head_target())
+        original_branch = self._access.current_branch_name()  # None if already detached
 
         # Resolve onto commit
         try:
@@ -120,6 +122,7 @@ class RebaseFlow:
         # Initialize state
         state = RebaseState(
             original_head=original_head,
+            original_branch=original_branch,
             onto=plan.onto,
             steps=[
                 {"action": s.action, "commit_sha": s.commit_sha, "message": s.message}
@@ -191,6 +194,11 @@ class RebaseFlow:
         # Restore original HEAD
         original_oid = self._access.resolve_ref_oid(state.original_head)
         self._access.reset(original_oid, RESET_HARD)
+
+        # Restore original branch ref if we were on one
+        if state.original_branch:
+            self._access.set_head(f"refs/heads/{state.original_branch}")
+
         self._access.state_cleanup()
 
         # Clean up state file
@@ -366,7 +374,14 @@ class RebaseFlow:
 
     def _finalize(self, state: RebaseState) -> RebaseResult:
         """Finalize the rebase - update branch ref if on a branch."""
-        new_head = str(self._access.must_head_target())
+        new_head_oid = self._access.must_head_target()
+        new_head = str(new_head_oid)
+
+        # Update original branch to point to new head and reattach
+        if state.original_branch:
+            branch = self._access.must_local_branch(state.original_branch)
+            self._access.set_branch_target(branch, new_head_oid)
+            self._access.set_head(f"refs/heads/{state.original_branch}")
 
         # Clean up state file
         self._state_path.unlink(missing_ok=True)
@@ -384,6 +399,7 @@ class RebaseFlow:
         """Persist rebase state to disk."""
         data = {
             "original_head": state.original_head,
+            "original_branch": state.original_branch,
             "onto": state.onto,
             "steps": state.steps,
             "current_step": state.current_step,
@@ -399,6 +415,7 @@ class RebaseFlow:
             data = json.loads(self._state_path.read_text())
             return RebaseState(
                 original_head=data["original_head"],
+                original_branch=data.get("original_branch"),  # May be None or missing
                 onto=data["onto"],
                 steps=data["steps"],
                 current_step=data["current_step"],

@@ -955,3 +955,63 @@ class TestUnbornRepoEdgeCases:
 
         status = ops.status()
         assert "file.txt" in status
+
+
+class TestMergeBranchRestoration:
+    """Tests verifying merge properly handles branch refs (fixes #119)."""
+
+    def test_given_ff_merge_when_complete_then_branch_reattached(
+        self, repo_with_branches: pygit2.Repository
+    ) -> None:
+        """
+        Fast-forward merge should update branch ref and keep HEAD attached.
+        Regression test: branch was captured AFTER detaching HEAD.
+        """
+        ops = GitOps(repo_with_branches.workdir)
+        workdir = Path(repo_with_branches.workdir)
+
+        # Create "behind" branch at current position
+        ops.create_branch("behind")
+
+        # Stay on main and make a new commit (advance main)
+        (workdir / "advance.txt").write_text("advance main")
+        ops.stage(["advance.txt"])
+        ops.commit("advance main")
+        main_tip = ops.head().target_sha
+
+        # Switch to "behind" - it's now behind main
+        ops.checkout("behind")
+        original_behind_sha = ops.head().target_sha
+        assert original_behind_sha != main_tip, "behind should be behind main"
+
+        result = ops.merge("main")
+
+        # Merge should succeed
+        assert result.success
+
+        # Key fix verification: should still be on "behind" branch (not detached)
+        assert ops.current_branch() == "behind", "Branch should remain checked out"
+        assert not ops.head().is_detached, "HEAD should not be detached after FF merge"
+
+        # Branch should have advanced to main's tip
+        assert ops.head().target_sha == main_tip
+
+
+class TestExtractConflictPaths:
+    """Tests for WriteFlows.extract_conflict_paths (fixes #119)."""
+
+    def test_given_no_conflicts_when_extract_then_returns_empty_tuple(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """extract_conflict_paths should return empty tuple when no conflicts."""
+        from codeplane.git._internal import RepoAccess, WriteFlows
+
+        repo_path, _ = git_repo_with_commit
+        access = RepoAccess(repo_path)
+        flows = WriteFlows(access)
+
+        # No merge in progress, index.conflicts should be None
+        result = flows.extract_conflict_paths()
+
+        assert result == ()
+        assert isinstance(result, tuple)

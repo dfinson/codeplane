@@ -434,3 +434,73 @@ class TestRebaseActions:
         # Clean up if still in progress
         if ops.rebase_in_progress():
             ops.rebase_abort()
+
+
+class TestRebaseBranchRestoration:
+    """Tests verifying rebase properly restores/updates branch refs (fixes #119)."""
+
+    def test_given_successful_rebase_when_finalize_then_branch_updated_and_reattached(
+        self, git_repo_with_branch: tuple[Path, GitOps, str]
+    ) -> None:
+        """
+        After successful rebase, the original branch should point to new HEAD
+        and HEAD should be reattached (not detached).
+        """
+        repo_path, ops, _ = git_repo_with_branch
+        default_branch = ops.current_branch()
+
+        # Checkout feature and rebase onto default
+        ops.checkout("feature")
+        original_feature_sha = ops.head().target_sha
+
+        plan = ops.rebase_plan(default_branch)
+        result = ops.rebase_execute(plan)
+
+        # Verify rebase succeeded
+        assert result.success
+        assert result.state == "done"
+
+        # Key fix verification: HEAD should be reattached to feature branch
+        assert ops.current_branch() == "feature", "HEAD should be reattached to original branch"
+        assert not ops.head().is_detached, "Should not be detached after rebase"
+
+        # Branch should point to new commit (not original)
+        assert ops.head().target_sha == result.new_head
+        assert ops.head().target_sha != original_feature_sha
+
+    def test_given_rebase_with_conflict_when_abort_then_branch_restored(
+        self, git_repo_with_branch: tuple[Path, GitOps, str]
+    ) -> None:
+        """
+        After aborting a conflicted rebase, HEAD should be reattached to the
+        original branch at its original commit.
+        """
+        repo_path, ops, _ = git_repo_with_branch
+        default_branch = ops.current_branch()
+
+        # Create conflicting changes
+        ops.checkout(default_branch)
+        (repo_path / "conflict.txt").write_text("default version")
+        ops.stage(["conflict.txt"])
+        ops.commit("add conflict on default")
+
+        ops.checkout("feature")
+        (repo_path / "conflict.txt").write_text("feature version")
+        ops.stage(["conflict.txt"])
+        feature_with_conflict_sha = ops.commit("add conflict on feature")
+
+        # Start rebase (will conflict)
+        plan = ops.rebase_plan(default_branch)
+        result = ops.rebase_execute(plan)
+
+        assert result.state == "conflict"
+
+        # Abort rebase
+        ops.rebase_abort()
+
+        # Key fix verification: HEAD should be reattached to feature
+        assert ops.current_branch() == "feature", "HEAD should be reattached after abort"
+        assert not ops.head().is_detached, "Should not be detached after abort"
+
+        # Should be at the commit before rebase was attempted
+        assert ops.head().target_sha == feature_with_conflict_sha
