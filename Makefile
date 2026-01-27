@@ -29,6 +29,7 @@ install: $(VENV)/bin/activate
 
 dev: $(VENV)/bin/activate
 	$(VENV)/bin/pip install -e ".[dev]"
+	$(VENV)/bin/pre-commit install
 
 lint:
 	$(VENV)/bin/ruff check src tests

@@ -6,7 +6,7 @@ Local repository control plane for AI coding agents. Exposes repository operatio
 
 ## Technology Stack
 
-- **CLI:** Typer
+- **CLI:** Click
 - **HTTP:** Starlette + Uvicorn
 - **Index:** Tantivy + SQLite + Symbol Graph
 - **Refactor:** LSP-only (no regex, no guessing)
@@ -80,6 +80,45 @@ Examples:
 - Tests must be reviewable — no thousands of LOC that humans will never read
 - Test behavior and outcomes, not implementation details
 
+### 7. Comment Policy
+
+Comments are a maintenance liability. Apply these rules strictly:
+
+- **Minimize comments** — Code should be self-documenting through clear naming and structure
+- **Never use comments as a changelog** — Git history exists; comments like "Added 2026-01-15" or "Changed per review" are forbidden
+- **No commented-out code** — Delete it; Git remembers
+- **Acceptable comments:**
+  - Non-obvious "why" explanations (not "what")
+  - Regulatory/compliance references
+  - Links to external specs or RFCs
+  - TODO with issue number: `# TODO(#123): handle edge case`
+
+### 8. Anti-Overengineering Rules
+
+**Default posture: Write less code.**
+
+Before writing any abstraction, validator, or helper, ask: "Does a library already do this?"
+
+**Forbidden patterns:**
+
+- **Reimplementing library features** — If pydantic-settings handles env vars, don't write custom env parsing. If structlog has processors, don't wrap them. Read the library docs first.
+- **Custom validators for standard types** — Use `Literal["A", "B", "C"]` not a custom normalizer. Use `Field(ge=0, le=65535)` not a validator method.
+- **Migration/compatibility shorthands** — No `json_format: bool` that "converts to" the real config. Users can write the real config.
+- **Verbose docstrings** — If the function is `_load_yaml(path) -> dict`, don't write "Load YAML file, returning empty dict if missing." The code is obvious.
+- **Field descriptions that repeat the field name** — `port: int = Field(description="The port number")` adds nothing. Delete it.
+- **Factory methods for simple constructors** — If `Error(code, message, details={...})` works, don't add `Error.from_x()` methods.
+
+**Docstring rules:**
+
+- One-line docstrings only, unless explaining non-obvious behavior
+- No Args/Returns sections for obvious signatures
+- No docstrings on private helpers with self-documenting names
+- Class docstrings: one line stating purpose, not restating field names
+
+**Test for overengineering:**
+
+If you can delete code and tests still pass with equivalent coverage, the code was unnecessary.
+
 ---
 
 ## B. Code Review Guidance
@@ -130,6 +169,34 @@ Copilot performs well on narrow, locally-visible issues. It struggles with archi
 - Suggesting changes that violate spec invariants
 - Overengineering suggestions for spike/prototype branches
 - Context-free "best practice" recommendations
+
+---
+
+## C. Pull Request Creation
+
+When creating pull requests:
+
+### 1. Template Usage
+
+- **Always check for PR templates** in `.github/PULL_REQUEST_TEMPLATE.md` or `.github/PULL_REQUEST_TEMPLATE/`
+- **Use the template structure** — do not discard or reformat it
+- **Be context-sensitive with checkboxes** — only check boxes that actually apply to this PR
+  - If a checkbox doesn't apply, leave it unchecked or mark N/A
+  - Do not blindly check all boxes
+  - Each checked box is a commitment
+
+### 2. Description Guidelines
+
+- **Stay high-level** — PR descriptions summarize intent, not implementation details
+- **Link to issues** — Use `Closes #123` or `Relates to #123`
+- **Avoid code in descriptions** — The diff is the code; the description is the context
+- **State what changed and why** — not how (the diff shows how)
+
+### 3. Scope Discipline
+
+- One logical change per PR
+- If a PR touches unrelated areas, split it
+- Refactors and features should not mix
 
 ---
 

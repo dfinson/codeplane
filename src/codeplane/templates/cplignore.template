@@ -1,0 +1,193 @@
+# CodePlane ignore patterns
+# Syntax follows .gitignore
+
+# =============================================================================
+# Dependencies and caches
+# =============================================================================
+node_modules/
+vendor/
+.venv/
+venv/
+env/
+.env/
+__pycache__/
+*.pyc
+.tox/
+.nox/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.hypothesis/
+.bundle/
+vendor/bundle/
+go.sum
+
+# =============================================================================
+# Build outputs
+# =============================================================================
+dist/
+build/
+out/
+target/
+bin/
+obj/
+*.egg-info/
+*.egg
+*.whl
+*.tar.gz
+*.zip
+
+# Java/Kotlin/Scala
+*.jar
+*.war
+*.ear
+*.class
+Cargo.lock
+
+# .NET
+*.dll
+*.exe
+*.pdb
+
+# Native
+*.so
+*.dylib
+*.a
+*.o
+*.obj
+
+# =============================================================================
+# IDE and editor
+# =============================================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+.spyproject/
+
+# =============================================================================
+# Secrets and credentials (NEVER index)
+# =============================================================================
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+**/secrets/
+**/credentials/
+**/.secrets/
+*.credentials
+*.keystore
+service-account*.json
+
+# =============================================================================
+# Large and binary files
+# =============================================================================
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+*.rar
+*.7z
+*.tar
+*.gz
+*.bz2
+*.iso
+*.dmg
+*.pkg
+*.deb
+*.rpm
+*.msi
+
+# Media
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.ico
+*.svg
+*.mp3
+*.mp4
+*.avi
+*.mov
+*.wmv
+*.flv
+*.webm
+*.wav
+*.ogg
+
+# Fonts
+*.ttf
+*.otf
+*.woff
+*.woff2
+*.eot
+
+# =============================================================================
+# Database and data files
+# =============================================================================
+*.sqlite
+*.sqlite3
+*.db
+*.sql
+*.dump
+*.bak
+
+# =============================================================================
+# Logs and temporary files
+# =============================================================================
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.temp
+*.cache
+
+# =============================================================================
+# OS generated
+# =============================================================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# =============================================================================
+# Package manager locks (usually not useful for semantic understanding)
+# =============================================================================
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+composer.lock
+Gemfile.lock
+poetry.lock
+Pipfile.lock
+
+# =============================================================================
+# Generated code (often not useful to index)
+# =============================================================================
+**/generated/
+**/*_generated.*
+**/*.gen.*
+**/*.pb.go
+**/*.pb.h
+**/*.pb.cc
+**/node_modules/.cache/

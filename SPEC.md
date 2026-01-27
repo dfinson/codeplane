@@ -175,23 +175,38 @@ Daemon shutdown:
 
 Logging:
 
-- Format: Structured JSON lines (one JSON object per line)
-- Location: `.codeplane/daemon.log`
-- Rotation: 3 files max, 10 MB each, oldest deleted on rotation
+- Multi-output support: logs can be sent to multiple destinations simultaneously
+- Each output specifies format, destination, and optional level override
+- Formats: `json` (structured JSON lines) or `console` (human-readable)
+- Destinations: `stderr`, `stdout`, or absolute file path
+- Default: single console output to stderr at INFO level
+- Rotation (file outputs only): 3 files max, 10 MB each, oldest deleted on rotation
 - Levels: `debug`, `info`, `warn`, `error`
-- Required fields per entry:
+- Required fields per JSON entry:
   - `ts`: ISO 8601 timestamp with milliseconds
   - `level`: log level
-  - `msg`: human-readable message
+  - `event`: human-readable message
 - Optional correlation fields:
+  - `request_id`: request correlation identifier
   - `op_id`: operation identifier (for tracing a single request)
   - `task_id`: task envelope identifier
-  - `req_id`: HTTP request identifier
-- Example entries:
+- Configuration example:
+  ```yaml
+  logging:
+    level: DEBUG
+    outputs:
+      - format: console
+        destination: stderr
+        level: INFO        # Show INFO+ on console
+      - format: json
+        destination: /var/log/codeplane.jsonl
+                            # Inherits DEBUG from parent
+  ```
+- JSON output example:
   ```json
-  {"ts":"2026-01-26T15:30:00.123Z","level":"info","msg":"daemon started","port":54321}
-  {"ts":"2026-01-26T15:30:01.456Z","level":"debug","op_id":"abc123","msg":"refactor planning started","symbol":"MyClass"}
-  {"ts":"2026-01-26T15:30:02.789Z","level":"error","op_id":"abc123","msg":"LSP timeout","lang":"java","timeout_ms":30000}
+  {"ts":"2026-01-26T15:30:00.123Z","level":"info","event":"daemon started","port":54321}
+  {"ts":"2026-01-26T15:30:01.456Z","level":"debug","op_id":"abc123","event":"refactor planning started","symbol":"MyClass"}
+  {"ts":"2026-01-26T15:30:02.789Z","level":"error","op_id":"abc123","event":"LSP timeout","lang":"java","timeout_ms":30000}
   ```
 - Access via CLI:
   - `cpl status --verbose`: last 50 lines
@@ -241,6 +256,10 @@ Config precedence:
 2. Per-repo: `.codeplane/config.yaml`
 3. Global: `~/.config/codeplane/config.yaml`
 4. Built-in defaults
+
+Environment variables use `CODEPLANE__` prefix with double underscore delimiter for nesting:
+- `CODEPLANE__LOGGING__LEVEL=DEBUG`
+- `CODEPLANE__DAEMON__PORT=8080`
 
 No dedicated config CLI in v1. Edit files directly.
 
@@ -2279,7 +2298,53 @@ Any tool can accept optional `session_id` parameter to:
 
 **Total: 12 tools**
 
-### 22.5 Tool Specifications
+### 22.5 Pagination
+
+Tools returning collections support cursor-based pagination for large result sets.
+
+#### Request Parameters
+
+```typescript
+{
+  // ... tool-specific parameters ...
+  cursor?: string;  // Opaque continuation token from previous response
+  limit?: number;   // Results per page (default 20, max 100)
+}
+```
+
+#### Response Schema
+
+```typescript
+{
+  results: Array<T>;
+  pagination: {
+    next_cursor?: string;      // Present if more results available
+    total_estimate?: number;   // Approximate total (optional, may be expensive)
+  };
+  // ... other tool-specific fields ...
+}
+```
+
+#### Pagination Behavior
+
+1. **Cursor opacity** — Cursors are opaque strings; clients must not parse or construct them
+2. **Cursor lifetime** — Cursors remain valid for the session lifetime or 1 hour, whichever is shorter
+3. **Consistency model** — Pagination uses snapshot isolation; concurrent writes do not affect in-flight pagination
+4. **Exhaustion** — When `next_cursor` is absent, all results have been returned
+
+#### Paginated Tools
+
+| Tool | Paginates | Notes |
+|------|-----------|-------|
+| `codeplane_search` | Yes | All search modes |
+| `codeplane_map` (structure) | Yes | File tree only |
+| `codeplane_symbols` | Yes | When listing all symbols in scope |
+| `codeplane_references` | Yes | Reference locations |
+| `codeplane_read` | No | Uses explicit line ranges |
+| `codeplane_mutate` | No | Single operation |
+| `codeplane_git` | Partial | Log/blame commands only |
+
+### 22.6 Tool Specifications
 
 ---
 
@@ -2321,8 +2386,10 @@ Unified search across lexical index, symbols, and references.
     score: number;
     match_type: "exact" | "fuzzy" | "semantic";
   }>;
-  total_matches: number;
-  truncated: boolean;
+  pagination: {
+    next_cursor?: string;      // Present if more results available
+    total_estimate?: number;   // Approximate match count
+  };
   query_time_ms: number;
   _session: SessionState;
 }
