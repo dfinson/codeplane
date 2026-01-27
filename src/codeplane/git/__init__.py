@@ -9,13 +9,24 @@ from codeplane.git.errors import (
     DetachedHeadError,
     DirtyWorkingTreeError,
     GitError,
+    NoRebaseInProgressError,
     NoStashEntriesError,
     NotARepositoryError,
     NothingToCommitError,
+    RebaseConflictError,
+    RebaseError,
+    RebaseInProgressError,
     RefNotFoundError,
     RemoteError,
     StashNotFoundError,
+    SubmoduleError,
+    SubmoduleNotFoundError,
+    SubmoduleNotInitializedError,
     UnmergedBranchError,
+    WorktreeError,
+    WorktreeExistsError,
+    WorktreeLockedError,
+    WorktreeNotFoundError,
 )
 from codeplane.git.models import (
     BlameHunk,
@@ -27,11 +38,21 @@ from codeplane.git.models import (
     MergeAnalysis,
     MergeResult,
     OperationResult,
+    RebaseAction,
+    RebasePlan,
+    RebaseResult,
+    RebaseState,
+    RebaseStep,
     RefInfo,
     RemoteInfo,
     Signature,
     StashEntry,
+    SubmoduleInfo,
+    SubmoduleState,
+    SubmoduleStatus,
+    SubmoduleUpdateResult,
     TagInfo,
+    WorktreeInfo,
 )
 from codeplane.git.ops import GitOps
 
@@ -53,6 +74,19 @@ __all__ = [
     "MergeResult",
     "MergeAnalysis",
     "OperationResult",
+    # Worktree models
+    "WorktreeInfo",
+    # Submodule models
+    "SubmoduleInfo",
+    "SubmoduleState",
+    "SubmoduleStatus",
+    "SubmoduleUpdateResult",
+    # Rebase models
+    "RebaseAction",
+    "RebasePlan",
+    "RebaseStep",
+    "RebaseResult",
+    "RebaseState",
     # Credentials
     "SystemCredentialCallback",
     "get_default_callbacks",
@@ -71,4 +105,18 @@ __all__ = [
     "NoStashEntriesError",
     "DetachedHeadError",
     "UnmergedBranchError",
+    # Worktree errors
+    "WorktreeError",
+    "WorktreeNotFoundError",
+    "WorktreeExistsError",
+    "WorktreeLockedError",
+    # Submodule errors
+    "SubmoduleError",
+    "SubmoduleNotFoundError",
+    "SubmoduleNotInitializedError",
+    # Rebase errors
+    "RebaseError",
+    "RebaseInProgressError",
+    "NoRebaseInProgressError",
+    "RebaseConflictError",
 ]

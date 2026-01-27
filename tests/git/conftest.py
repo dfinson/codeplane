@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 import pygit2
 import pytest
 
+from codeplane.git import GitOps
+
 if TYPE_CHECKING:
     from collections.abc import Generator
 
@@ -162,3 +164,73 @@ def repo_with_history(temp_repo: pygit2.Repository) -> pygit2.Repository:
         temp_repo.create_commit("HEAD", sig, sig, f"Commit {i}", tree, [temp_repo.head.target])
 
     return temp_repo
+
+
+# --- GitOps-returning fixtures ---
+
+
+@pytest.fixture
+def git_repo(tmp_path: Path) -> Generator[tuple[Path, GitOps], None, None]:
+    """GitOps wrapper around a fresh repository with initial commit."""
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    repo = pygit2.init_repository(repo_path)
+    sig = pygit2.Signature("Test", "test@example.com")
+    (repo_path / "README.md").write_text("# Test\n")
+    repo.index.add("README.md")
+    repo.index.write()
+    tree = repo.index.write_tree()
+    repo.create_commit("HEAD", sig, sig, "Initial commit", tree, [])
+    yield repo_path, GitOps(repo_path)
+
+
+@pytest.fixture
+def git_repo_with_commit(git_repo: tuple[Path, GitOps]) -> tuple[Path, GitOps]:
+    """GitOps repo with one additional commit beyond initial."""
+    repo_path, ops = git_repo
+    (repo_path / "file.txt").write_text("content\n")
+    ops.stage(["file.txt"])
+    ops.commit("Add file")
+    return repo_path, ops
+
+
+@pytest.fixture
+def git_repo_with_commits(git_repo: tuple[Path, GitOps]) -> tuple[Path, GitOps, list[str]]:
+    """GitOps repo with multiple commits for rebase testing."""
+    repo_path, ops = git_repo
+    shas = []
+    for i in range(5):
+        (repo_path / f"file{i}.txt").write_text(f"content {i}\n")
+        ops.stage([f"file{i}.txt"])
+        sha = ops.commit(f"Commit {i}")
+        shas.append(sha)
+    return repo_path, ops, shas
+
+
+@pytest.fixture
+def git_repo_with_branch(git_repo: tuple[Path, GitOps]) -> tuple[Path, GitOps, str]:
+    """GitOps repo with a feature branch diverged from default branch."""
+    repo_path, ops = git_repo
+    # Get current branch name (could be master or main depending on git config)
+    default_branch = ops.current_branch()
+
+    # Add a commit on default branch
+    (repo_path / "default.txt").write_text("default content\n")
+    ops.stage(["default.txt"])
+    ops.commit("Default branch commit")
+    default_head = ops.head()
+
+    # Create feature branch from initial commit
+    initial_sha = ops.log()[1].sha  # second commit is initial
+    ops.create_branch("feature", initial_sha)
+    ops.checkout("feature")
+
+    # Add commits on feature
+    (repo_path / "feature.txt").write_text("feature content\n")
+    ops.stage(["feature.txt"])
+    ops.commit("Feature commit")
+
+    # Return to default branch
+    ops.checkout(default_branch)
+
+    return repo_path, ops, default_head.target_sha

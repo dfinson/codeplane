@@ -16,10 +16,13 @@ from codeplane.git._internal.preconditions import (
     require_not_current_branch,
     require_not_unborn,
 )
+from codeplane.git._internal.rebase import RebaseFlow, RebasePlanner
 
 __all__ = [
     "CheckoutPlanner",
     "DiffPlanner",
+    "RebaseFlow",
+    "RebasePlanner",
     "RepoAccess",
     "WriteFlows",
     "check_nothing_to_commit",

@@ -116,3 +116,102 @@ class NoStashEntriesError(StashError):
 
     def __init__(self) -> None:
         super().__init__("No stash entries")
+
+
+# =============================================================================
+# Worktree Errors
+# =============================================================================
+
+
+class WorktreeError(GitError):
+    """Worktree operation failed."""
+
+    pass
+
+
+class WorktreeNotFoundError(WorktreeError):
+    """Worktree not found."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"Worktree not found: {name}")
+        self.name = name
+
+
+class WorktreeExistsError(WorktreeError):
+    """Worktree already exists."""
+
+    def __init__(self, name: str) -> None:
+        super().__init__(f"Worktree already exists: {name}")
+        self.name = name
+
+
+class WorktreeLockedError(WorktreeError):
+    """Worktree is locked."""
+
+    def __init__(self, name: str, reason: str | None = None) -> None:
+        reason_part = f": {reason}" if reason else ""
+        super().__init__(f"Worktree is locked: {name}{reason_part}")
+        self.name = name
+        self.reason = reason
+
+
+# =============================================================================
+# Submodule Errors
+# =============================================================================
+
+
+class SubmoduleError(GitError):
+    """Submodule operation failed."""
+
+    pass
+
+
+class SubmoduleNotFoundError(SubmoduleError):
+    """Submodule not found."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(f"Submodule not found: {path}")
+        self.path = path
+
+
+class SubmoduleNotInitializedError(SubmoduleError):
+    """Submodule is not initialized."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(f"Submodule not initialized: {path}")
+        self.path = path
+
+
+# =============================================================================
+# Rebase Errors
+# =============================================================================
+
+
+class RebaseError(GitError):
+    """Rebase operation failed."""
+
+    pass
+
+
+class RebaseInProgressError(RebaseError):
+    """A rebase is already in progress."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "A rebase is already in progress. Use rebase_continue, rebase_skip, or rebase_abort."
+        )
+
+
+class NoRebaseInProgressError(RebaseError):
+    """No rebase is in progress."""
+
+    def __init__(self) -> None:
+        super().__init__("No rebase in progress")
+
+
+class RebaseConflictError(RebaseError):
+    """Rebase resulted in conflicts."""
+
+    def __init__(self, paths: list[str]) -> None:
+        super().__init__(f"Rebase conflict in: {', '.join(paths)}")
+        self.paths = paths

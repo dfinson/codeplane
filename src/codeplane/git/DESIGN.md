@@ -55,6 +55,8 @@ pygit2 provides comprehensive bindings to libgit2. Key capabilities:
 | Remotes | ✅ Full | fetch/push with `RemoteCallbacks` |
 | Stash | ⚠️ Partial | libgit2 supports, pygit2 bindings may be limited |
 | Rebase | ⚠️ Manual | Must be built from lower-level operations |
+| Submodules | ⚠️ Partial | pygit2 read support; writes via subprocess fallback |
+| Worktrees | ✅ Full | `repo.list_worktrees()`, `repo.add_worktree()` |
 
 ### Credential Handling
 
@@ -779,19 +781,271 @@ class SystemCredentialCallback(pygit2.RemoteCallbacks):
 ## Open Questions
 
 1. **pygit2 stash completeness?**
-   - **Action:** Test pygit2 stash bindings; if incomplete, implement via commits to `refs/stash`
+   - **Resolved:** pygit2 stash bindings work; implemented in M1
 
 2. **Thread safety?**
    - **Recommendation:** One GitOps instance per thread; pygit2.Repository is not thread-safe
 
 3. **Detached HEAD handling?**
-   - **Recommendation:** `head.branch = None`, all operations work, explicit in types
+   - **Resolved:** `head.branch = None`, all operations work, explicit in types
 
 4. **Submodule support?**
-   - **Recommendation:** Detect presence, report in status, but don't manage (M1 scope)
+   - **Resolved:** Full management via pygit2 + subprocess fallback (Issue #122)
 
 5. **Worktree support?**
-   - **Recommendation:** Defer to future milestone
+   - **Resolved:** GitOps-returning worktree operations (Issue #120)
+
+---
+
+## Interactive Rebase
+
+**Issue:** #121
+
+### Design: Hybrid Plan-Based
+
+Combines batch efficiency with `edit` action flexibility:
+
+1. Agent requests a rebase plan (commits to be rebased)
+2. Agent modifies plan (reorder, change actions, edit messages)
+3. CodePlane executes plan atomically
+4. For `edit` actions, execution pauses for agent modifications
+5. Agent continues or aborts
+
+### Interface
+
+```python
+class GitOps:
+    def rebase_plan(self, upstream: str, onto: str | None = None) -> RebasePlan:
+        """Generate default plan (all picks). Agent can modify before execute."""
+    
+    def rebase_execute(self, plan: RebasePlan) -> RebaseResult:
+        """Execute plan. On conflict or edit-pause, returns partial result."""
+    
+    def rebase_continue(self) -> RebaseResult:
+        """Resume after conflict resolution or edit completion."""
+    
+    def rebase_abort(self) -> None:
+        """Abort and restore original state."""
+    
+    def rebase_skip(self) -> RebaseResult:
+        """Skip current commit and continue."""
+```
+
+### Types
+
+```python
+@dataclass
+class RebasePlan:
+    upstream: str
+    onto: str
+    steps: list[RebaseStep]
+
+@dataclass
+class RebaseStep:
+    action: Literal["pick", "reword", "edit", "squash", "fixup", "drop"]
+    commit_sha: str
+    message: str | None = None  # For reword/squash
+
+@dataclass
+class RebaseResult:
+    success: bool
+    completed_steps: int
+    total_steps: int
+    state: Literal["done", "conflict", "edit_pause", "aborted"]
+    conflict_paths: list[str] | None = None
+    current_commit: str | None = None  # For edit_pause
+    new_head: str | None = None
+```
+
+### Implementation
+
+| Component | Description | Est. LOC |
+|-----------|-------------|----------|
+| `RebasePlanner` | Generate plan from commit range | ~150 |
+| `RebaseFlow` | State machine, execute steps, handle conflicts | ~250 |
+| Types | `RebasePlan`, `RebaseStep`, `RebaseResult` | ~80 |
+| Tests | Edge cases, conflicts, all action types | ~400 |
+
+---
+
+## Submodule Management
+
+**Issue:** #122
+
+### Design: Full Management with Subprocess Fallback
+
+Use pygit2 where bindings exist; fall back to `git submodule` subprocess for gaps.
+
+### Interface
+
+```python
+class GitOps:
+    def submodules(self) -> list[SubmoduleInfo]:
+        """List all submodules with status."""
+    
+    def submodule_status(self, path: str) -> SubmoduleStatus:
+        """Detailed status for one submodule."""
+    
+    def submodule_init(self, paths: list[str] | None = None) -> list[str]:
+        """Initialize submodules. Returns initialized paths."""
+    
+    def submodule_update(
+        self, 
+        paths: list[str] | None = None,
+        recursive: bool = False,
+        init: bool = True,
+    ) -> SubmoduleUpdateResult:
+        """Update submodules to recorded commits."""
+    
+    def submodule_sync(self, paths: list[str] | None = None) -> None:
+        """Sync submodule URLs from .gitmodules to .git/config."""
+    
+    def submodule_add(
+        self,
+        url: str,
+        path: str,
+        branch: str | None = None,
+    ) -> SubmoduleInfo:
+        """Add new submodule."""
+    
+    def submodule_deinit(self, path: str, force: bool = False) -> None:
+        """Deinitialize submodule."""
+    
+    def submodule_remove(self, path: str) -> None:
+        """Fully remove submodule."""
+```
+
+### Types
+
+```python
+@dataclass
+class SubmoduleInfo:
+    name: str
+    path: str
+    url: str
+    branch: str | None
+    head_sha: str | None
+    status: SubmoduleState
+
+class SubmoduleState(Enum):
+    UNINITIALIZED = "uninitialized"
+    CLEAN = "clean"
+    DIRTY = "dirty"
+    OUTDATED = "outdated"
+    MISSING = "missing"
+
+@dataclass
+class SubmoduleStatus:
+    info: SubmoduleInfo
+    workdir_dirty: bool
+    index_dirty: bool
+    untracked_files: int
+    recorded_sha: str
+    actual_sha: str | None
+
+@dataclass
+class SubmoduleUpdateResult:
+    updated: list[str]
+    failed: list[tuple[str, str]]  # (path, error)
+    already_current: list[str]
+```
+
+### Implementation Strategy
+
+| Operation | Implementation | Rationale |
+|-----------|---------------|----------|
+| `submodules()` | pygit2 | Native support |
+| `submodule_status()` | pygit2 | Native support |
+| `submodule_init()` | pygit2 | Native support |
+| `submodule_update()` | subprocess | Recursive, credential handling |
+| `submodule_sync()` | subprocess | Simpler than manual config edit |
+| `submodule_add()` | subprocess | Complex (.gitmodules edit + clone) |
+| `submodule_deinit()` | subprocess | Config cleanup |
+| `submodule_remove()` | hybrid | Subprocess deinit + pygit2 staging |
+
+---
+
+## Worktree Support
+
+**Issue:** #120
+
+### Design: GitOps-Returning Worktrees
+
+Worktree operations return ready-to-use `GitOps` instances for seamless parallel workflows.
+
+### Interface
+
+```python
+class GitOps:
+    def worktrees(self) -> list[WorktreeInfo]:
+        """List all worktrees (including main working directory)."""
+    
+    def worktree_add(
+        self,
+        path: Path,
+        ref: str,
+        checkout: bool = True,
+    ) -> "GitOps":
+        """Add worktree at path for ref. Returns GitOps for new worktree."""
+    
+    def worktree_open(self, name: str) -> "GitOps":
+        """Get GitOps instance for existing worktree by name."""
+    
+    def worktree_remove(self, name: str, force: bool = False) -> None:
+        """Remove worktree. force=True removes even if dirty."""
+    
+    def worktree_lock(self, name: str, reason: str | None = None) -> None:
+        """Lock worktree to prevent pruning."""
+    
+    def worktree_unlock(self, name: str) -> None:
+        """Unlock worktree."""
+    
+    def worktree_prune(self) -> list[str]:
+        """Remove stale worktree entries. Returns pruned names."""
+    
+    def is_worktree(self) -> bool:
+        """True if this GitOps is for a worktree (not main working directory)."""
+    
+    def worktree_info(self) -> WorktreeInfo | None:
+        """Get info about this worktree, or None if main working directory."""
+```
+
+### Types
+
+```python
+@dataclass
+class WorktreeInfo:
+    name: str
+    path: Path
+    head_ref: str      # Branch name or "HEAD" if detached
+    head_sha: str
+    is_main: bool      # True for main working directory
+    is_bare: bool
+    is_locked: bool
+    lock_reason: str | None
+    is_prunable: bool  # True if worktree directory is missing
+```
+
+### Usage Pattern
+
+```python
+# Agent working on two branches simultaneously
+ops = GitOps(repo_path)
+
+# Create worktree for feature branch
+feature_ops = ops.worktree_add(Path("/tmp/feature-work"), "feature/new-api")
+
+# Work on main
+ops.stage(["src/main.py"])
+ops.commit("fix: typo")
+
+# Simultaneously work on feature branch (separate GitOps)
+feature_ops.stage(["src/api.py"])
+feature_ops.commit("feat: new endpoint")
+
+# Clean up
+ops.worktree_remove("feature-work")
+```
 
 ---
 
@@ -811,6 +1065,9 @@ tests/git/
 ├── test_stash.py        # Stash operations
 ├── test_remotes.py      # Fetch, push (with mock server)
 ├── test_credentials.py  # Credential callback
+├── test_rebase.py       # Interactive rebase operations
+├── test_submodules.py   # Submodule management
+├── test_worktrees.py    # Worktree operations
 └── fixtures/
     └── sample_repo/     # Pre-built test repository
 ```

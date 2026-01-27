@@ -6,6 +6,8 @@ import pygit2
 
 # Commit walking
 SORT_TIME = pygit2.GIT_SORT_TIME
+SORT_TOPOLOGICAL = pygit2.GIT_SORT_TOPOLOGICAL
+SORT_REVERSE = pygit2.GIT_SORT_REVERSE
 
 # Working tree status flags
 STATUS_WT_NEW = pygit2.GIT_STATUS_WT_NEW

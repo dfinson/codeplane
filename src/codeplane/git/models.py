@@ -221,3 +221,108 @@ class OperationResult:
 
     success: bool
     conflict_paths: tuple[str, ...] = field(default_factory=tuple)
+
+
+# =============================================================================
+# Worktree Types
+# =============================================================================
+
+
+@dataclass(frozen=True, slots=True)
+class WorktreeInfo:
+    """Git worktree information."""
+
+    name: str
+    path: str
+    head_ref: str  # Branch name or "HEAD" if detached
+    head_sha: str
+    is_main: bool  # True for main working directory
+    is_bare: bool
+    is_locked: bool
+    lock_reason: str | None
+    is_prunable: bool  # True if worktree directory is missing
+
+
+# =============================================================================
+# Submodule Types
+# =============================================================================
+
+SubmoduleState = Literal[
+    "uninitialized",  # In .gitmodules but not cloned
+    "clean",  # Initialized, at recorded commit
+    "dirty",  # Has local modifications
+    "outdated",  # Behind recorded commit
+    "missing",  # Directory missing
+]
+
+
+@dataclass(frozen=True, slots=True)
+class SubmoduleInfo:
+    """Git submodule information."""
+
+    name: str
+    path: str
+    url: str
+    branch: str | None
+    head_sha: str | None
+    status: SubmoduleState
+
+
+@dataclass(frozen=True, slots=True)
+class SubmoduleStatus:
+    """Detailed submodule status."""
+
+    info: SubmoduleInfo
+    workdir_dirty: bool
+    index_dirty: bool
+    untracked_count: int
+    recorded_sha: str
+    actual_sha: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SubmoduleUpdateResult:
+    """Result of submodule update operation."""
+
+    updated: tuple[str, ...]
+    failed: tuple[tuple[str, str], ...]  # (path, error)
+    already_current: tuple[str, ...]
+
+
+# =============================================================================
+# Rebase Types
+# =============================================================================
+
+RebaseAction = Literal["pick", "reword", "edit", "squash", "fixup", "drop"]
+RebaseState = Literal["done", "conflict", "edit_pause", "aborted"]
+
+
+@dataclass(frozen=True, slots=True)
+class RebaseStep:
+    """A single step in a rebase plan."""
+
+    action: RebaseAction
+    commit_sha: str
+    message: str | None = None  # Original message, or override for reword/squash
+
+
+@dataclass(frozen=True, slots=True)
+class RebasePlan:
+    """A rebase plan ready for execution."""
+
+    upstream: str
+    onto: str
+    steps: tuple[RebaseStep, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RebaseResult:
+    """Result of a rebase operation."""
+
+    success: bool
+    completed_steps: int
+    total_steps: int
+    state: RebaseState
+    conflict_paths: tuple[str, ...] = field(default_factory=tuple)
+    current_commit: str | None = None  # For edit_pause
+    new_head: str | None = None  # Final HEAD after successful rebase

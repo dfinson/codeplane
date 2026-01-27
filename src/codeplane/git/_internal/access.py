@@ -406,3 +406,69 @@ class RepoAccess:
             if "authentication" in msg or "credential" in msg:
                 raise AuthenticationError(remote_name, op_name) from e
             raise RemoteError(remote_name, f"{op_name} failed: {e}") from e
+
+    # =========================================================================
+    # Worktree Operations
+    # =========================================================================
+
+    def list_worktrees(self) -> list[str]:
+        """List worktree names (excluding main)."""
+        return list(self._repo.list_worktrees())
+
+    def lookup_worktree(self, name: str) -> Any:
+        """Get worktree by name. Returns pygit2.Worktree or raises."""
+        return self._repo.lookup_worktree(name)
+
+    def add_worktree(self, name: str, path: str, ref: pygit2.Reference | None = None) -> Any:
+        """Add a new worktree. Returns pygit2.Worktree."""
+        if ref is not None:
+            return self._repo.add_worktree(name, path, ref)
+        # For detached HEAD worktrees, we need to pass a commit reference
+        return self._repo.add_worktree(name, path)
+
+    def is_worktree(self) -> bool:
+        """True if this repository is a worktree (not the main working directory)."""
+        # pygit2 may not have this attribute in all versions
+        return bool(getattr(self._repo, "is_worktree", False))
+
+    @property
+    def workdir(self) -> str | None:
+        """Working directory path, or None for bare repos."""
+        return self._repo.workdir
+
+    # =========================================================================
+    # Submodule Operations
+    # =========================================================================
+
+    def listall_submodules(self) -> list[str]:
+        """List submodule names."""
+        return list(self._repo.listall_submodules())
+
+    def lookup_submodule(self, name: str) -> Any:
+        """Get submodule by name."""
+        # pygit2.Repository.lookup_submodule is not typed
+        lookup_fn = getattr(self._repo, "lookup_submodule", None)
+        if lookup_fn is None:
+            raise GitError("Submodule operations not supported in this pygit2 version")
+        return lookup_fn(name)
+
+    def init_submodule(self, name: str, overwrite: bool = False) -> None:
+        """Initialize a submodule."""
+        submodule = self.lookup_submodule(name)
+        submodule.init(overwrite)
+
+    def open_submodule_repo(self, name: str) -> pygit2.Repository:
+        """Open the repository for an initialized submodule."""
+        submodule = self.lookup_submodule(name)
+        return submodule.open()  # type: ignore[no-any-return]
+
+    # =========================================================================
+    # Merge Base
+    # =========================================================================
+
+    def merge_base(self, oid1: pygit2.Oid, oid2: pygit2.Oid) -> pygit2.Oid | None:
+        """Find merge base of two commits. Returns None if unrelated."""
+        try:
+            return self._repo.merge_base(oid1, oid2)
+        except pygit2.GitError:
+            return None

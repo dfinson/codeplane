@@ -11,6 +11,8 @@ import pygit2
 from codeplane.git._internal import (
     CheckoutPlanner,
     DiffPlanner,
+    RebaseFlow,
+    RebasePlanner,
     RepoAccess,
     WriteFlows,
     check_nothing_to_commit,
@@ -38,7 +40,12 @@ from codeplane.git.errors import (
     BranchExistsError,
     RefNotFoundError,
     StashNotFoundError,
+    SubmoduleError,
+    SubmoduleNotFoundError,
     UnmergedBranchError,
+    WorktreeExistsError,
+    WorktreeLockedError,
+    WorktreeNotFoundError,
 )
 from codeplane.git.models import (
     BlameInfo,
@@ -48,11 +55,18 @@ from codeplane.git.models import (
     MergeAnalysis,
     MergeResult,
     OperationResult,
+    RebasePlan,
+    RebaseResult,
     RefInfo,
     RemoteInfo,
     Signature,
     StashEntry,
+    SubmoduleInfo,
+    SubmoduleState,
+    SubmoduleStatus,
+    SubmoduleUpdateResult,
     TagInfo,
+    WorktreeInfo,
 )
 
 
@@ -64,6 +78,8 @@ class GitOps:
         self._flows = WriteFlows(self._access)
         self._diff_planner = DiffPlanner(self._access)
         self._checkout_planner = CheckoutPlanner(self._access)
+        self._rebase_planner = RebasePlanner(self._access)
+        self._rebase_flow = RebaseFlow(self._access)
 
     def _head_oid(self) -> pygit2.Oid:
         """Get HEAD target Oid, raising if unborn."""
@@ -419,3 +435,497 @@ class GitOps:
         self._access.run_remote_operation(
             remote, "push", partial(pygit2.Remote.push, specs=[refspec], callbacks=cbs)
         )
+
+    # =========================================================================
+    # Worktree Operations
+    # =========================================================================
+
+    def worktrees(self) -> list[WorktreeInfo]:
+        """List all worktrees including main working directory."""
+        result: list[WorktreeInfo] = []
+
+        # Main working directory
+        main_path = self._access.workdir
+        if main_path:
+            head = self._access.head_ref
+            result.append(
+                WorktreeInfo(
+                    name="main",
+                    path=main_path.rstrip("/"),
+                    head_ref=head.shorthand if not self._access.is_detached else "HEAD",
+                    head_sha=str(self._access.head_target) if not self._access.is_unborn else "",
+                    is_main=True,
+                    is_bare=False,
+                    is_locked=False,
+                    lock_reason=None,
+                    is_prunable=False,
+                )
+            )
+
+        # Additional worktrees
+        for name in self._access.list_worktrees():
+            try:
+                wt = self._access.lookup_worktree(name)
+                # Open the worktree repo to get HEAD info
+                wt_path = wt.path
+                wt_repo = pygit2.Repository(wt_path)
+                head_sha = str(wt_repo.head.target) if not wt_repo.head_is_unborn else ""
+                head_ref = wt_repo.head.shorthand if not wt_repo.head_is_detached else "HEAD"
+
+                # Check lock status via .git/worktrees/<name>/locked file
+                git_dir = Path(self._access.repo.path)
+                lock_file = git_dir / "worktrees" / name / "locked"
+                is_locked = lock_file.exists()
+                lock_reason = lock_file.read_text().strip() if is_locked else None
+
+                result.append(
+                    WorktreeInfo(
+                        name=name,
+                        path=wt_path,
+                        head_ref=head_ref,
+                        head_sha=head_sha,
+                        is_main=False,
+                        is_bare=False,
+                        is_locked=is_locked,
+                        lock_reason=lock_reason or None,
+                        is_prunable=wt.is_prunable,
+                    )
+                )
+            except (pygit2.GitError, OSError):
+                # Worktree may be prunable/missing
+                result.append(
+                    WorktreeInfo(
+                        name=name,
+                        path="",
+                        head_ref="",
+                        head_sha="",
+                        is_main=False,
+                        is_bare=False,
+                        is_locked=False,
+                        lock_reason=None,
+                        is_prunable=True,
+                    )
+                )
+
+        return result
+
+    def worktree_add(self, path: Path, ref: str, checkout: bool = True) -> GitOps:  # noqa: ARG002
+        """Add worktree at path for ref. Returns GitOps for new worktree."""
+        name = path.name
+        # Check if worktree already exists
+        if name in self._access.list_worktrees():
+            raise WorktreeExistsError(name)
+
+        # Resolve the ref to a branch if it exists
+        branch_ref = None
+        if self._access.has_local_branch(ref):
+            branch_ref = self._access.repo.references.get(f"refs/heads/{ref}")
+
+        self._access.add_worktree(name, str(path), branch_ref)
+
+        return GitOps(path)
+
+    def worktree_open(self, name: str) -> GitOps:
+        """Get GitOps instance for existing worktree by name."""
+        if name not in self._access.list_worktrees():
+            raise WorktreeNotFoundError(name)
+
+        wt = self._access.lookup_worktree(name)
+        return GitOps(wt.path)
+
+    def worktree_remove(self, name: str, force: bool = False) -> None:
+        """Remove worktree. force=True removes even if dirty."""
+        if name not in self._access.list_worktrees():
+            raise WorktreeNotFoundError(name)
+
+        # Check lock status via file system
+        git_dir = Path(self._access.repo.path)
+        lock_file = git_dir / "worktrees" / name / "locked"
+        if lock_file.exists() and not force:
+            raise WorktreeLockedError(name)
+
+        wt = self._access.lookup_worktree(name)
+        wt_path = Path(wt.path)
+
+        # For valid worktrees, remove the working directory first
+        if wt_path.exists():
+            import shutil
+
+            shutil.rmtree(wt_path)
+
+        # Then prune the worktree entry
+        wt.prune(force)
+
+    def worktree_lock(self, name: str, reason: str | None = None) -> None:
+        """Lock worktree to prevent pruning."""
+        if name not in self._access.list_worktrees():
+            raise WorktreeNotFoundError(name)
+
+        # Lock via .git/worktrees/<name>/locked file (git standard)
+        git_dir = Path(self._access.repo.path)
+        lock_file = git_dir / "worktrees" / name / "locked"
+        if lock_file.exists():
+            raise WorktreeLockedError(name)
+        lock_file.write_text(reason or "")
+
+    def worktree_unlock(self, name: str) -> None:
+        """Unlock worktree."""
+        if name not in self._access.list_worktrees():
+            raise WorktreeNotFoundError(name)
+
+        git_dir = Path(self._access.repo.path)
+        lock_file = git_dir / "worktrees" / name / "locked"
+        if lock_file.exists():
+            lock_file.unlink()
+
+    def worktree_prune(self) -> list[str]:
+        """Remove stale worktree entries. Returns pruned names."""
+        pruned = []
+        for name in self._access.list_worktrees():
+            try:
+                wt = self._access.lookup_worktree(name)
+                if wt.is_prunable:
+                    wt.prune(False)
+                    pruned.append(name)
+            except pygit2.GitError:
+                pass
+        return pruned
+
+    def is_worktree(self) -> bool:
+        """True if this GitOps is for a worktree (not main working directory)."""
+        return self._access.is_worktree()
+
+    def worktree_info(self) -> WorktreeInfo | None:
+        """Get info about this worktree, or None if main working directory."""
+        if not self.is_worktree():
+            return None
+
+        head = self._access.head_ref
+        return WorktreeInfo(
+            name=self._access.path.name,
+            path=str(self._access.path),
+            head_ref=head.shorthand if not self._access.is_detached else "HEAD",
+            head_sha=str(self._access.head_target) if not self._access.is_unborn else "",
+            is_main=False,
+            is_bare=False,
+            is_locked=False,  # Can't easily determine from inside worktree
+            lock_reason=None,
+            is_prunable=False,
+        )
+
+    # =========================================================================
+    # Submodule Operations
+    # =========================================================================
+
+    def submodules(self) -> list[SubmoduleInfo]:
+        """List all submodules with status."""
+        result = []
+        for name in self._access.listall_submodules():
+            try:
+                sm = self._access.lookup_submodule(name)
+                status = self._determine_submodule_status(sm)
+                result.append(
+                    SubmoduleInfo(
+                        name=sm.name,
+                        path=sm.path,
+                        url=sm.url or "",
+                        branch=getattr(sm, "branch", None),
+                        head_sha=str(sm.head_id) if sm.head_id else None,
+                        status=status,
+                    )
+                )
+            except pygit2.GitError:
+                result.append(
+                    SubmoduleInfo(
+                        name=name,
+                        path=name,
+                        url="",
+                        branch=None,
+                        head_sha=None,
+                        status="missing",
+                    )
+                )
+        return result
+
+    def _determine_submodule_status(self, sm: object) -> SubmoduleState:
+        """Determine submodule status from pygit2.Submodule."""
+        # Check if workdir exists
+        sm_path = Path(self._access.path) / getattr(sm, "path", "")
+        if not sm_path.exists():
+            return "uninitialized"
+
+        # Check if .git exists in submodule
+        if not (sm_path / ".git").exists() and not (sm_path / ".git").is_file():
+            return "uninitialized"
+
+        try:
+            sm_repo = pygit2.Repository(str(sm_path))
+            # Check if dirty
+            if sm_repo.status():
+                return "dirty"
+
+            # Check if at recorded commit
+            head_id = getattr(sm, "head_id", None)
+            if head_id and not sm_repo.head_is_unborn and sm_repo.head.target != head_id:
+                return "outdated"
+
+            return "clean"
+        except pygit2.GitError:
+            return "missing"
+
+    def submodule_status(self, path: str) -> SubmoduleStatus:
+        """Detailed status for one submodule."""
+        submodules = {sm.path: sm for sm in self.submodules()}
+        if path not in submodules:
+            raise SubmoduleNotFoundError(path)
+
+        info = submodules[path]
+        sm = self._access.lookup_submodule(info.name)
+
+        # Get detailed status
+        sm_path = Path(self._access.path) / path
+        workdir_dirty = False
+        index_dirty = False
+        untracked_count = 0
+        actual_sha = None
+
+        if sm_path.exists():
+            try:
+                sm_repo = pygit2.Repository(str(sm_path))
+                actual_sha = str(sm_repo.head.target) if not sm_repo.head_is_unborn else None
+                status = sm_repo.status()
+                for flags in status.values():
+                    if flags & (pygit2.GIT_STATUS_WT_MODIFIED | pygit2.GIT_STATUS_WT_DELETED):
+                        workdir_dirty = True
+                    if flags & (
+                        pygit2.GIT_STATUS_INDEX_MODIFIED
+                        | pygit2.GIT_STATUS_INDEX_DELETED
+                        | pygit2.GIT_STATUS_INDEX_NEW
+                    ):
+                        index_dirty = True
+                    if flags & pygit2.GIT_STATUS_WT_NEW:
+                        untracked_count += 1
+            except pygit2.GitError:
+                pass
+
+        return SubmoduleStatus(
+            info=info,
+            workdir_dirty=workdir_dirty,
+            index_dirty=index_dirty,
+            untracked_count=untracked_count,
+            recorded_sha=str(sm.head_id) if sm.head_id else "",
+            actual_sha=actual_sha,
+        )
+
+    def submodule_init(self, paths: Sequence[str] | None = None) -> list[str]:
+        """Initialize submodules. Returns initialized paths."""
+        initialized = []
+        all_submodules = self._access.listall_submodules()
+
+        targets = paths if paths else all_submodules
+        for name in targets:
+            if name not in all_submodules:
+                raise SubmoduleNotFoundError(name)
+            try:
+                self._access.init_submodule(name)
+                initialized.append(name)
+            except pygit2.GitError:
+                pass
+        return initialized
+
+    def submodule_update(
+        self,
+        paths: Sequence[str] | None = None,
+        recursive: bool = False,
+        init: bool = True,
+    ) -> SubmoduleUpdateResult:
+        """Update submodules to recorded commits. Uses subprocess for full functionality."""
+        import subprocess
+
+        cmd = ["git", "submodule", "update"]
+        if init:
+            cmd.append("--init")
+        if recursive:
+            cmd.append("--recursive")
+        if paths:
+            cmd.append("--")
+            cmd.extend(paths)
+
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=str(self._access.path),
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+
+            if result.returncode == 0:
+                # Parse output to determine what was updated
+                updated = []
+                for line in result.stdout.splitlines():
+                    if line.startswith("Submodule path"):
+                        # Extract path from "Submodule path 'foo': checked out 'abc123'"
+                        parts = line.split("'")
+                        if len(parts) >= 2:
+                            updated.append(parts[1])
+                return SubmoduleUpdateResult(
+                    updated=tuple(updated),
+                    failed=(),
+                    already_current=(),
+                )
+            else:
+                return SubmoduleUpdateResult(
+                    updated=(),
+                    failed=(("*", result.stderr.strip()),),
+                    already_current=(),
+                )
+        except subprocess.TimeoutExpired:
+            return SubmoduleUpdateResult(
+                updated=(),
+                failed=(("*", "Operation timed out"),),
+                already_current=(),
+            )
+
+    def submodule_sync(self, paths: Sequence[str] | None = None) -> None:
+        """Sync submodule URLs from .gitmodules to .git/config."""
+        import subprocess
+
+        cmd = ["git", "submodule", "sync"]
+        if paths:
+            cmd.append("--")
+            cmd.extend(paths)
+
+        subprocess.run(
+            cmd,
+            cwd=str(self._access.path),
+            capture_output=True,
+            timeout=60,
+            check=True,
+        )
+
+    def submodule_add(self, url: str, path: str, branch: str | None = None) -> SubmoduleInfo:
+        """Add new submodule."""
+        import subprocess
+
+        cmd = ["git", "submodule", "add"]
+        if branch:
+            cmd.extend(["-b", branch])
+        cmd.extend([url, path])
+
+        result = subprocess.run(
+            cmd,
+            cwd=str(self._access.path),
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+
+        if result.returncode != 0:
+            raise SubmoduleError(f"Failed to add submodule: {result.stderr.strip()}")
+
+        # Return info about the new submodule
+        sm = self._access.lookup_submodule(path)
+        return SubmoduleInfo(
+            name=sm.name,
+            path=sm.path,
+            url=sm.url or url,
+            branch=branch,
+            head_sha=str(sm.head_id) if sm.head_id else None,
+            status="clean",
+        )
+
+    def submodule_deinit(self, path: str, force: bool = False) -> None:
+        """Deinitialize submodule (remove from working tree)."""
+        import subprocess
+
+        cmd = ["git", "submodule", "deinit"]
+        if force:
+            cmd.append("--force")
+        cmd.append(path)
+
+        result = subprocess.run(
+            cmd,
+            cwd=str(self._access.path),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        if result.returncode != 0:
+            raise SubmoduleError(f"Failed to deinit submodule: {result.stderr.strip()}")
+
+    def submodule_remove(self, path: str) -> None:
+        """Fully remove submodule (deinit + remove from .gitmodules + delete dir)."""
+        import shutil
+        import subprocess
+
+        # Deinit first
+        self.submodule_deinit(path, force=True)
+
+        # Remove from .gitmodules
+        subprocess.run(
+            ["git", "config", "--file", ".gitmodules", "--remove-section", f"submodule.{path}"],
+            cwd=str(self._access.path),
+            capture_output=True,
+            timeout=30,
+        )
+
+        # Stage .gitmodules change
+        gitmodules_path = Path(self._access.path) / ".gitmodules"
+        if gitmodules_path.exists():
+            self._access.index.add(".gitmodules")
+            self._access.index.write()
+
+        # Remove from .git/config
+        subprocess.run(
+            ["git", "config", "--remove-section", f"submodule.{path}"],
+            cwd=str(self._access.path),
+            capture_output=True,
+            timeout=30,
+        )
+
+        # Remove from index
+        try:
+            self._access.index.remove(path)
+            self._access.index.write()
+        except pygit2.GitError:
+            pass
+
+        # Remove directory
+        sm_path = Path(self._access.path) / path
+        if sm_path.exists():
+            shutil.rmtree(sm_path)
+
+        # Remove .git/modules/<path>
+        modules_path = Path(self._access.repo.path) / "modules" / path
+        if modules_path.exists():
+            shutil.rmtree(modules_path)
+
+    # =========================================================================
+    # Rebase Operations
+    # =========================================================================
+
+    def rebase_plan(self, upstream: str, onto: str | None = None) -> RebasePlan:
+        """Generate default rebase plan (all picks). Agent can modify before execute."""
+        return self._rebase_planner.plan(upstream, onto)
+
+    def rebase_execute(self, plan: RebasePlan) -> RebaseResult:
+        """Execute rebase plan. On conflict or edit-pause, returns partial result."""
+        return self._rebase_flow.execute(plan)
+
+    def rebase_continue(self) -> RebaseResult:
+        """Resume after conflict resolution or edit completion."""
+        return self._rebase_flow.continue_rebase()
+
+    def rebase_abort(self) -> None:
+        """Abort and restore original state."""
+        self._rebase_flow.abort()
+
+    def rebase_skip(self) -> RebaseResult:
+        """Skip current commit and continue."""
+        return self._rebase_flow.skip()
+
+    def rebase_in_progress(self) -> bool:
+        """Check if a rebase is in progress."""
+        return self._rebase_flow.has_rebase_in_progress()
