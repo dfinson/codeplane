@@ -49,10 +49,13 @@ class SystemCredentialCallback(pygit2.RemoteCallbacks):
         See: https://git-scm.com/docs/git-credential
         """
         parsed = urlparse(url)
+        host = parsed.hostname or parsed.netloc
         input_lines = [
             f"protocol={parsed.scheme}",
-            f"host={parsed.netloc}",
+            f"host={host}",
         ]
+        if parsed.port is not None:
+            input_lines.append(f"port={parsed.port}")
         if parsed.path:
             input_lines.append(f"path={parsed.path.lstrip('/')}")
         input_lines.append("")  # Empty line terminates input
@@ -79,6 +82,8 @@ class SystemCredentialCallback(pygit2.RemoteCallbacks):
             if "username" in creds and "password" in creds:
                 return creds
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            # Credential helper unavailable or failed - fall through to return None
+            # This is expected when git isn't installed or credential helper isn't configured
             pass
 
         return None

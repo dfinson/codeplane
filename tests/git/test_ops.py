@@ -159,14 +159,17 @@ class TestMerge:
     def test_merge_fastforward(self, repo_with_branches: pygit2.Repository) -> None:
         ops = GitOps(repo_with_branches.workdir)
         ops.checkout("feature")
-        success, oid = ops.merge("main")
+        success, oid, conflicts = ops.merge("main")
         assert success
+        assert conflicts == []
 
     def test_merge_conflict(self, repo_with_conflict: tuple[pygit2.Repository, str]) -> None:
         repo, branch = repo_with_conflict
         ops = GitOps(repo.workdir)
-        success, oid = ops.merge(branch)
+        success, oid, conflicts = ops.merge(branch)
         assert not success
+        assert len(conflicts) > 0
+        assert "conflict.txt" in conflicts
 
     def test_abort_merge(self, repo_with_conflict: tuple[pygit2.Repository, str]) -> None:
         repo, branch = repo_with_conflict
@@ -177,6 +180,27 @@ class TestMerge:
 
 
 class TestStash:
+    def test_unstage_preserves_working_tree(self, repo_with_uncommitted: pygit2.Repository) -> None:
+        """Verify unstage keeps working tree changes."""
+        workdir = Path(repo_with_uncommitted.workdir)
+        ops = GitOps(repo_with_uncommitted.workdir)
+
+        # staged.txt is staged - verify it exists
+        assert (workdir / "staged.txt").exists()
+        original_content = (workdir / "staged.txt").read_text()
+
+        # Unstage it
+        ops.unstage(["staged.txt"])
+
+        # Working tree file should still exist with same content
+        assert (workdir / "staged.txt").exists()
+        assert (workdir / "staged.txt").read_text() == original_content
+
+        # But it should no longer be staged
+        status = ops.status()
+        staged_flags = status.get("staged.txt", 0)
+        assert not (staged_flags & pygit2.GIT_STATUS_INDEX_NEW)
+
     def test_stash_push_pop(self, repo_with_uncommitted: pygit2.Repository) -> None:
         ops = GitOps(repo_with_uncommitted.workdir)
         ops.unstage(["staged.txt"])

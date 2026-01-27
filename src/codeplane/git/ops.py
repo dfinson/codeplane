@@ -14,6 +14,7 @@ from codeplane.git.errors import (
     BranchExistsError,
     BranchNotFoundError,
     DetachedHeadError,
+    GitError,
     NotARepositoryError,
     NothingToCommitError,
     RefNotFoundError,
@@ -77,6 +78,9 @@ class GitOps:
             return self._repo.index.diff_to_tree(self._repo.head.peel(pygit2.Tree))  # type: ignore[no-any-return]
         if base is None and target is None:
             return self._repo.diff()
+        # Handle unborn HEAD when target is specified without base
+        if base is None and self._repo.head_is_unborn:
+            raise RefNotFoundError("HEAD (unborn)")
         base_obj = self.resolve_commit(base) if base else self._repo.head.peel(pygit2.Commit)
         if target is None:
             return self._repo.diff(base_obj.id)
@@ -134,13 +138,16 @@ class GitOps:
         return self._repo.state()
 
     def current_branch(self) -> str | None:
-        """Current branch name, or None if detached."""
+        """Current branch name, or None if detached or unborn."""
         if self._repo.head_is_unborn:
             try:
-                target = self._repo.references["HEAD"].target
-                return target.replace("refs/heads/", "") if isinstance(target, str) else None
-            except (KeyError, AttributeError):
-                return "main"
+                ref = self._repo.references["HEAD"]
+                target = getattr(ref, "target", None)
+                if isinstance(target, str) and target.startswith("refs/heads/"):
+                    return target[len("refs/heads/") :]
+            except KeyError:
+                pass
+            return None
         if self._repo.head_is_detached:
             return None
         return self._repo.head.shorthand
@@ -154,7 +161,7 @@ class GitOps:
         index = self._repo.index
         status = self._repo.status()
         for path in paths:
-            p = str(path)
+            p = self._normalize_path(path)
             flags = status.get(p, 0)
             if flags & (pygit2.GIT_STATUS_WT_NEW | pygit2.GIT_STATUS_WT_MODIFIED):
                 index.add(p)
@@ -162,17 +169,36 @@ class GitOps:
                 index.remove(p)
         index.write()
 
+    def _normalize_path(self, path: str | Path) -> str:
+        """Normalize path to repo-relative string."""
+        p = Path(path)
+        if p.is_absolute():
+            with contextlib.suppress(ValueError):
+                p = p.relative_to(self.path)
+        return str(p)
+
     def unstage(self, paths: Sequence[str | Path]) -> None:
-        """Unstage files."""
+        """Unstage files (keeps working tree changes)."""
+        index = self._repo.index
         if self._repo.head_is_unborn:
-            index = self._repo.index
             for p in paths:
                 with contextlib.suppress(pygit2.GitError):
                     index.remove(str(p))
             index.write()
             return
-        head_tree = self._repo.head.peel(pygit2.Tree)
-        self._repo.checkout_tree(head_tree, paths=[str(p) for p in paths])  # type: ignore[no-untyped-call]
+        # Reset index entries to HEAD without touching working tree
+        head_commit = self._repo.head.peel(pygit2.Commit)
+        head_tree = head_commit.tree
+        for p in paths:
+            path_str = self._normalize_path(p)
+            try:
+                entry = head_tree[path_str]
+                index.add(pygit2.IndexEntry(path_str, entry.id, entry.filemode))
+            except KeyError:
+                # File not in HEAD - remove from index
+                with contextlib.suppress(pygit2.GitError):
+                    index.remove(path_str)
+        index.write()
 
     def commit(self, message: str, allow_empty: bool = False) -> pygit2.Oid:
         """Create commit from staged changes."""
@@ -190,6 +216,23 @@ class GitOps:
         sig = self._repo.default_signature
         parents = [] if self._repo.head_is_unborn else [self._repo.head.target]
         return self._repo.create_commit("HEAD", sig, sig, message, tree_id, parents)
+
+    def amend(self, message: str | None = None) -> pygit2.Oid:
+        """Amend the most recent commit."""
+        if self._repo.head_is_unborn:
+            raise GitError("Cannot amend: no commits yet")
+        head_commit = self._repo.head.peel(pygit2.Commit)
+        index = self._repo.index
+        tree_id = index.write_tree()
+        new_message = message if message is not None else head_commit.message
+        return self._repo.create_commit(
+            "HEAD",
+            head_commit.author,
+            self._repo.default_signature,
+            new_message,
+            tree_id,
+            head_commit.parent_ids,
+        )
 
     def create_branch(self, name: str, ref: str = "HEAD") -> pygit2.Branch:
         """Create branch."""
@@ -222,10 +265,20 @@ class GitOps:
             raise BranchNotFoundError(name)
         branch = self._repo.branches.local[name]
         if name == self.current_branch():
-            raise BranchNotFoundError(f"Cannot delete current branch: {name}")
+            raise GitError(f"Cannot delete current branch: {name}")
         if not force and not self._repo.descendant_of(self._repo.head.target, branch.target):
             raise UnmergedBranchError(name)
         branch.delete()
+
+    def rename_branch(self, old_name: str, new_name: str) -> pygit2.Branch:
+        """Rename a branch."""
+        if old_name not in self._repo.branches.local:
+            raise BranchNotFoundError(old_name)
+        if new_name in self._repo.branches.local:
+            raise BranchExistsError(new_name)
+        branch = self._repo.branches.local[old_name]
+        branch.rename(new_name)
+        return self._repo.branches.local[new_name]
 
     def reset(self, ref: str, mode: str = "mixed") -> None:
         """Reset HEAD. mode: 'soft', 'mixed', or 'hard'."""
@@ -234,15 +287,19 @@ class GitOps:
             "mixed": pygit2.GIT_RESET_MIXED,
             "hard": pygit2.GIT_RESET_HARD,
         }
+        if mode not in modes:
+            raise ValueError(
+                f"Invalid reset mode {mode!r}. Expected one of: {', '.join(sorted(modes))}"
+            )
         self._repo.reset(self.resolve_ref(ref), modes[mode])  # type: ignore[arg-type]
 
-    def merge(self, ref: str) -> tuple[bool, pygit2.Oid | None]:
-        """Merge ref. Returns (success, merge_commit_oid or None)."""
+    def merge(self, ref: str) -> tuple[bool, pygit2.Oid | None, list[str]]:
+        """Merge ref. Returns (success, merge_commit_oid or None, conflict_paths)."""
         their_oid = self.resolve_ref(ref)
         analysis, _ = self._repo.merge_analysis(their_oid)
 
         if analysis & pygit2.GIT_MERGE_ANALYSIS_UP_TO_DATE:
-            return True, None
+            return True, None, []
         if analysis & pygit2.GIT_MERGE_ANALYSIS_FASTFORWARD:
             self._repo.checkout_tree(self._repo.get(their_oid))  # type: ignore[no-untyped-call]
             current = self.current_branch()
@@ -250,11 +307,17 @@ class GitOps:
                 branch = self._repo.branches.local[current]
                 branch.set_target(their_oid)
             self._repo.head.set_target(their_oid)
-            return True, their_oid
+            return True, their_oid, []
 
         self._repo.merge(their_oid)
         if self._repo.index.conflicts:
-            return False, None
+            # conflicts yields (ancestor, ours, theirs) entries; extract unique paths
+            paths: set[str] = set()
+            for ancestor, ours, theirs in self._repo.index.conflicts:
+                for entry in (ancestor, ours, theirs):
+                    if entry:
+                        paths.add(entry.path)
+            return False, None, sorted(paths)
 
         tree_id = self._repo.index.write_tree()
         sig = self._repo.default_signature
@@ -262,12 +325,58 @@ class GitOps:
             "HEAD", sig, sig, f"Merge {ref}", tree_id, [self._repo.head.target, their_oid]
         )
         self._repo.state_cleanup()
-        return True, oid
+        return True, oid, []
 
     def abort_merge(self) -> None:
         """Abort in-progress merge."""
         self._repo.state_cleanup()
         self._repo.reset(self._repo.head.target, pygit2.GIT_RESET_HARD)  # type: ignore[arg-type]
+
+    def merge_analysis(self, ref: str) -> tuple[bool, bool, bool]:
+        """Analyze potential merge. Returns (up_to_date, fastforward_possible, conflicts_likely)."""
+        their_oid = self.resolve_ref(ref)
+        analysis, _ = self._repo.merge_analysis(their_oid)
+        up_to_date = bool(analysis & pygit2.GIT_MERGE_ANALYSIS_UP_TO_DATE)
+        fastforward = bool(analysis & pygit2.GIT_MERGE_ANALYSIS_FASTFORWARD)
+        normal = bool(analysis & pygit2.GIT_MERGE_ANALYSIS_NORMAL)
+        return up_to_date, fastforward, normal  # normal means potential conflicts
+
+    def cherrypick(self, ref: str) -> tuple[bool, list[str]]:
+        """Cherry-pick a commit. Returns (success, conflict_paths)."""
+        commit = self.resolve_commit(ref)
+        self._repo.cherrypick(commit.id)
+        if self._repo.index.conflicts:
+            conflict_paths = list({path for path, _ in self._repo.index.conflicts})
+            return False, conflict_paths
+        # Auto-commit if no conflicts
+        tree_id = self._repo.index.write_tree()
+        sig = self._repo.default_signature
+        self._repo.create_commit(
+            "HEAD", commit.author, sig, commit.message, tree_id, [self._repo.head.target]
+        )
+        self._repo.state_cleanup()
+        return True, []
+
+    def revert(self, ref: str) -> tuple[bool, list[str]]:
+        """Revert a commit. Returns (success, conflict_paths)."""
+        commit = self.resolve_commit(ref)
+        self._repo.revert_commit(commit, self._repo.head.peel(pygit2.Commit))
+        if self._repo.index.conflicts:
+            conflict_paths = list({path for path, _ in self._repo.index.conflicts})
+            return False, conflict_paths
+        # Auto-commit if no conflicts
+        tree_id = self._repo.index.write_tree()
+        sig = self._repo.default_signature
+        self._repo.create_commit(
+            "HEAD",
+            sig,
+            sig,
+            f'Revert "{commit.message.splitlines()[0]}"',
+            tree_id,
+            [self._repo.head.target],
+        )
+        self._repo.state_cleanup()
+        return True, []
 
     def stash_push(self, message: str | None = None, include_untracked: bool = False) -> pygit2.Oid:
         """Stash changes."""
