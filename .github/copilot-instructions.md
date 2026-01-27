@@ -6,7 +6,7 @@ Local repository control plane for AI coding agents. Exposes repository operatio
 
 ## Technology Stack
 
-- **CLI:** Typer
+- **CLI:** Click
 - **HTTP:** Starlette + Uvicorn
 - **Index:** Tantivy + SQLite + Symbol Graph
 - **Refactor:** LSP-only (no regex, no guessing)
@@ -79,6 +79,19 @@ Examples:
 - **Parametrize** tests where possible — one test with 10 cases beats 10 copy-paste tests
 - Tests must be reviewable — no thousands of LOC that humans will never read
 - Test behavior and outcomes, not implementation details
+
+### 7. Comment Policy
+
+Comments are a maintenance liability. Apply these rules strictly:
+
+- **Minimize comments** — Code should be self-documenting through clear naming and structure
+- **Never use comments as a changelog** — Git history exists; comments like "Added 2026-01-15" or "Changed per review" are forbidden
+- **No commented-out code** — Delete it; Git remembers
+- **Acceptable comments:**
+  - Non-obvious "why" explanations (not "what")
+  - Regulatory/compliance references
+  - Links to external specs or RFCs
+  - TODO with issue number: `# TODO(#123): handle edge case`
 
 ---
 
