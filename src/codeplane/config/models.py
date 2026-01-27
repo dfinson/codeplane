@@ -19,7 +19,9 @@ class LogOutputConfig(BaseModel):
 
     format: Literal["json", "console"] = Field(default="console", description="Output format")
     destination: str = Field(default="stderr", description="stderr, stdout, or file path")
-    level: str | None = Field(default=None, description="Level override (inherits from parent if None)")
+    level: str | None = Field(
+        default=None, description="Level override (inherits from parent if None)"
+    )
 
     @field_validator("level")
     @classmethod
@@ -98,7 +100,9 @@ class CodePlaneConfig(BaseModel):
     index: IndexConfig = Field(default_factory=IndexConfig)
 
     @classmethod
-    def with_overrides(cls, base: "CodePlaneConfig", overrides: dict[str, Any]) -> "CodePlaneConfig":
+    def with_overrides(
+        cls, base: "CodePlaneConfig", overrides: dict[str, Any]
+    ) -> "CodePlaneConfig":
         """Create config with dotted-path overrides (e.g., 'logging.level': 'DEBUG')."""
         data = base.model_dump()
         for key, value in overrides.items():

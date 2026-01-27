@@ -88,9 +88,7 @@ class TestConfigModels:
 class TestConfigLoading:
     """Configuration loading and precedence tests."""
 
-    def test_given_no_config_files_when_load_then_uses_defaults(
-        self, temp_repo: Path
-    ) -> None:
+    def test_given_no_config_files_when_load_then_uses_defaults(self, temp_repo: Path) -> None:
         """Defaults are used when no config files exist."""
         # Given
         repo = temp_repo  # no .codeplane/config.yaml
@@ -102,9 +100,7 @@ class TestConfigLoading:
         assert config.logging.level == "INFO"
         assert config.daemon.port == 0
 
-    def test_given_repo_config_when_load_then_overrides_defaults(
-        self, temp_repo: Path
-    ) -> None:
+    def test_given_repo_config_when_load_then_overrides_defaults(self, temp_repo: Path) -> None:
         """Repo config file overrides defaults."""
         # Given
         config_dir = temp_repo / ".codeplane"
@@ -118,9 +114,7 @@ class TestConfigLoading:
         # Then
         assert config.logging.level == "DEBUG"
 
-    def test_given_env_var_when_load_then_overrides_file(
-        self, temp_repo: Path
-    ) -> None:
+    def test_given_env_var_when_load_then_overrides_file(self, temp_repo: Path) -> None:
         """Environment variable overrides file config."""
         # Given
         config_dir = temp_repo / ".codeplane"
@@ -149,9 +143,7 @@ class TestConfigLoading:
         # Then
         assert config.logging.level == "WARN"
 
-    def test_given_invalid_yaml_when_load_then_raises_config_error(
-        self, temp_repo: Path
-    ) -> None:
+    def test_given_invalid_yaml_when_load_then_raises_config_error(self, temp_repo: Path) -> None:
         """Invalid YAML raises ConfigError with parse error code."""
         # Given
         config_dir = temp_repo / ".codeplane"
@@ -163,9 +155,7 @@ class TestConfigLoading:
             load_config(repo_root=temp_repo)
         assert exc_info.value.code.name == "CONFIG_PARSE_ERROR"
 
-    def test_given_invalid_value_when_load_then_raises_config_error(
-        self, temp_repo: Path
-    ) -> None:
+    def test_given_invalid_value_when_load_then_raises_config_error(self, temp_repo: Path) -> None:
         """Invalid config value raises ConfigError with field info."""
         # Given
         config_dir = temp_repo / ".codeplane"
@@ -178,4 +168,3 @@ class TestConfigLoading:
             load_config(repo_root=temp_repo)
         assert exc_info.value.code.name == "CONFIG_INVALID_VALUE"
         assert "port" in exc_info.value.details.get("field", "")
-

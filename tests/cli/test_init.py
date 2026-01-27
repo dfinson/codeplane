@@ -87,7 +87,9 @@ class TestInitCommand:
         assert result.exit_code == 1
         assert "Not inside a git repository" in result.output
 
-    def test_given_initialized_repo_when_init_again_then_idempotent(self, temp_git_repo: Path) -> None:
+    def test_given_initialized_repo_when_init_again_then_idempotent(
+        self, temp_git_repo: Path
+    ) -> None:
         """Init without --force is idempotent on already initialized repo."""
         # Given
         repo = temp_git_repo
@@ -100,7 +102,9 @@ class TestInitCommand:
         assert result.exit_code == 0
         assert "Already initialized" in result.output
 
-    def test_given_initialized_repo_when_init_force_then_reinitializes(self, temp_git_repo: Path) -> None:
+    def test_given_initialized_repo_when_init_force_then_reinitializes(
+        self, temp_git_repo: Path
+    ) -> None:
         """Init with --force overwrites existing config."""
         # Given
         repo = temp_git_repo

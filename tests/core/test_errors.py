@@ -83,7 +83,11 @@ class TestConfigError:
         ("factory", "kwargs", "expected_code"),
         [
             ("parse_error", {"path": "/foo", "reason": "bad yaml"}, ErrorCode.CONFIG_PARSE_ERROR),
-            ("invalid_value", {"field": "port", "value": -1, "reason": "negative"}, ErrorCode.CONFIG_INVALID_VALUE),
+            (
+                "invalid_value",
+                {"field": "port", "value": -1, "reason": "negative"},
+                ErrorCode.CONFIG_INVALID_VALUE,
+            ),
             ("missing_required", {"field": "api_key"}, ErrorCode.CONFIG_MISSING_REQUIRED),
             ("file_not_found", {"path": "/missing"}, ErrorCode.CONFIG_FILE_NOT_FOUND),
         ],
