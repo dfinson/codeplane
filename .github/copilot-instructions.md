@@ -93,6 +93,32 @@ Comments are a maintenance liability. Apply these rules strictly:
   - Links to external specs or RFCs
   - TODO with issue number: `# TODO(#123): handle edge case`
 
+### 8. Anti-Overengineering Rules
+
+**Default posture: Write less code.**
+
+Before writing any abstraction, validator, or helper, ask: "Does a library already do this?"
+
+**Forbidden patterns:**
+
+- **Reimplementing library features** — If pydantic-settings handles env vars, don't write custom env parsing. If structlog has processors, don't wrap them. Read the library docs first.
+- **Custom validators for standard types** — Use `Literal["A", "B", "C"]` not a custom normalizer. Use `Field(ge=0, le=65535)` not a validator method.
+- **Migration/compatibility shorthands** — No `json_format: bool` that "converts to" the real config. Users can write the real config.
+- **Verbose docstrings** — If the function is `_load_yaml(path) -> dict`, don't write "Load YAML file, returning empty dict if missing." The code is obvious.
+- **Field descriptions that repeat the field name** — `port: int = Field(description="The port number")` adds nothing. Delete it.
+- **Factory methods for simple constructors** — If `Error(code, message, details={...})` works, don't add `Error.from_x()` methods.
+
+**Docstring rules:**
+
+- One-line docstrings only, unless explaining non-obvious behavior
+- No Args/Returns sections for obvious signatures
+- No docstrings on private helpers with self-documenting names
+- Class docstrings: one line stating purpose, not restating field names
+
+**Test for overengineering:**
+
+If you can delete code and tests still pass with equivalent coverage, the code was unnecessary.
+
 ---
 
 ## B. Code Review Guidance
