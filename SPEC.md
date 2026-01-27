@@ -707,8 +707,49 @@ Pipeline:
    - graph distance
    - file role (test vs src)
    - optional recency
+4. External symbol enrichment (see §7.9.1)
 
 This replaces repeated grep and file opening.
+
+### 7.9.1 External Symbol Enrichment
+
+Query responses that reference symbols from external libraries (dependencies, stdlib) are automatically enriched with signature and docstring information via LSP.
+
+**Rationale:** Agents need library function signatures when refactoring code that calls them. Without this, agents guess or rely on training data (which may be stale for the installed version).
+
+**Mechanism:**
+
+1. Scan query results for unresolved symbols (calls/references not in indexed codebase)
+2. Issue LSP `textDocument/hover` at each symbol position
+3. Parse hover response for signature and docstring
+4. Attach enrichment to response
+
+**Response schema:**
+
+```json
+{
+  "results": [...],
+  "external_symbols": {
+    "requests.get": {
+      "signature": "get(url: str | bytes, params: ..., **kwargs) -> Response",
+      "docstring": "Sends a GET request.",
+      "source": "site-packages/requests/api.py"
+    }
+  }
+}
+```
+
+**Performance:**
+
+- LSP hover requests batched per unique symbol
+- Cached for session duration
+- Adds ~50-100ms when external symbols present
+- If LSP unavailable, enrichment omitted (degraded but functional)
+
+**Scope:**
+
+- Only symbols in returned snippets enriched (not pre-indexed)
+- Works for any language with LSP support
 
 ### 7.10 Mental Map Endpoints (Embedding Replacement, Pre-API Concept)
 
