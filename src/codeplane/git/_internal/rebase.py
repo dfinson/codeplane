@@ -316,12 +316,15 @@ class RebaseFlow:
         else:
             message = prev_commit.message
 
-        # Create new commit with same tree but combined parents
+        # Create new commit with current tree (includes squashed changes) and
+        # the same parent as the previous commit (replacing it in history)
         tree_id = self._access.index.write_tree()
         parent_oid = prev_commit.parent_ids[0] if prev_commit.parent_ids else prev_oid
 
+        # Use ref=None because HEAD doesn't point to parent_oid
+        # (pygit2 requires first parent == current HEAD when ref is set)
         new_oid = self._access.create_commit(
-            "HEAD",
+            None,  # Don't update any ref directly
             prev_commit.author,
             self._access.default_signature,
             message,
@@ -332,7 +335,7 @@ class RebaseFlow:
         # Replace the previous completed commit
         state.completed_commits[-1] = str(new_oid)
 
-        # Reset HEAD to new commit
+        # Update HEAD to point to the new squashed commit
         self._access.reset(new_oid, RESET_HARD)
 
         return RebaseResult(

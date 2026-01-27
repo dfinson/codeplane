@@ -326,7 +326,6 @@ class TestRebaseActions:
         elif result.state == "conflict":
             ops.rebase_abort()
 
-    @pytest.mark.xfail(reason="squash_into_previous has parent calculation bug")
     def test_rebase_with_squash_action(
         self, git_repo_with_commits: tuple[Path, GitOps, list[str]]
     ) -> None:
@@ -362,7 +361,6 @@ class TestRebaseActions:
         elif result.state == "conflict":
             ops.rebase_abort()
 
-    @pytest.mark.xfail(reason="squash_into_previous has parent calculation bug")
     def test_rebase_with_fixup_action(
         self, git_repo_with_commits: tuple[Path, GitOps, list[str]]
     ) -> None:
