@@ -536,16 +536,21 @@ class GitOps:
 
         Raises:
             BranchNotFoundError: If ref is not an existing local branch.
-            WorktreeExistsError: If a worktree with the same name already exists,
-                or if path is already used by another worktree.
+            WorktreeExistsError: If a worktree with the same name already exists.
+            WorktreeError: If path already exists or is used by another worktree.
 
         Note:
             The worktree name (used internally by git) is derived from path.name.
+            This is consistent with git's behavior when no explicit --name is given.
             To create a worktree from a commit SHA or tag, first create a branch.
         """
         # Enforce: ref must be a local branch (not a SHA, tag, or remote branch)
         if not self._access.has_local_branch(ref):
             raise BranchNotFoundError(ref)
+
+        # Enforce: path must not exist
+        if path.exists():
+            raise WorktreeError(f"Path already exists: {path}")
 
         # Git worktree name is derived from path basename
         name = path.name
@@ -558,7 +563,7 @@ class GitOps:
             try:
                 wt = self._access.lookup_worktree(wt_name)
                 if Path(wt.path).resolve() == path.resolve():
-                    raise WorktreeExistsError(f"path already in use by worktree '{wt_name}'")
+                    raise WorktreeError(f"Path already in use by worktree '{wt_name}'")
             except pygit2.GitError:
                 pass
 
@@ -609,14 +614,14 @@ class GitOps:
 
         # Use worktree's actual admin dir
         gitdir = self._access.worktree_gitdir(name)
-        lock_file = gitdir / "locked"
+        if not gitdir.exists():
+            raise WorktreeError(f"Invalid worktree gitdir (missing): {gitdir}")
 
+        lock_file = gitdir / "locked"
         if lock_file.exists():
             raise WorktreeLockedError(name)
 
         try:
-            # Ensure parent exists (should always exist for valid worktree, but be safe)
-            gitdir.mkdir(parents=True, exist_ok=True)
             lock_file.write_text(reason or "", encoding="utf-8")
         except OSError as e:
             raise WorktreeError(f"Failed to lock worktree {name}: {e}") from e
@@ -648,7 +653,14 @@ class GitOps:
         return self._access.is_worktree()
 
     def worktree_info(self) -> WorktreeInfo | None:
-        """Get info about this worktree, or None if main working directory."""
+        """
+        Get info about this worktree, or None if main working directory.
+
+        Note:
+            The returned name is the directory basename (self._access.path.name),
+            which may differ from the git worktree ID in edge cases.
+            For operations requiring the git ID, use worktrees() on the main repo.
+        """
         if not self.is_worktree():
             return None
 
@@ -959,12 +971,17 @@ class GitOps:
         import shutil
         import subprocess
 
-        # Deinit first
+        # Resolve submodule name (may differ from path)
+        name = self._access.submodule_name_for_path(path)
+        if name is None:
+            raise SubmoduleNotFoundError(path)
+
+        # Deinit first (uses path)
         self.submodule_deinit(path, force=True)
 
-        # Remove from .gitmodules
+        # Remove from .gitmodules (use name for section key)
         subprocess.run(
-            ["git", "config", "--file", ".gitmodules", "--remove-section", f"submodule.{path}"],
+            ["git", "config", "--file", ".gitmodules", "--remove-section", f"submodule.{name}"],
             cwd=str(self._access.path),
             capture_output=True,
             timeout=30,
@@ -976,28 +993,28 @@ class GitOps:
             self._access.index.add(".gitmodules")
             self._access.index.write()
 
-        # Remove from .git/config
+        # Remove from .git/config (use name for section key)
         subprocess.run(
-            ["git", "config", "--remove-section", f"submodule.{path}"],
+            ["git", "config", "--remove-section", f"submodule.{name}"],
             cwd=str(self._access.path),
             capture_output=True,
             timeout=30,
         )
 
-        # Remove from index
+        # Remove from index (use path)
         try:
             self._access.index.remove(path)
             self._access.index.write()
         except pygit2.GitError:
             pass
 
-        # Remove directory
+        # Remove directory (use path)
         sm_path = Path(self._access.path) / path
         if sm_path.exists():
             shutil.rmtree(sm_path)
 
-        # Remove .git/modules/<path>
-        modules_path = Path(self._access.repo.path) / "modules" / path
+        # Remove .git/modules/<name> (name is used for module storage)
+        modules_path = Path(self._access.repo.path) / "modules" / name
         if modules_path.exists():
             shutil.rmtree(modules_path)
 

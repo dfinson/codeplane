@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from codeplane.git import GitOps, WorktreeExistsError, WorktreeNotFoundError
+from codeplane.git import GitOps, WorktreeError, WorktreeExistsError, WorktreeNotFoundError
 
 
 class TestWorktreesList:
@@ -61,19 +61,38 @@ class TestWorktreeAdd:
         assert isinstance(wt_ops, GitOps)
         assert wt_ops.path == wt_path
 
-    def test_given_existing_worktree_when_add_again_then_raises(
+    def test_given_existing_path_when_add_worktree_then_raises_worktree_error(
         self, git_repo_with_commit: tuple[Path, GitOps]
     ) -> None:
-        """Adding a worktree with existing name should raise."""
+        """Adding a worktree to existing path should raise WorktreeError."""
         repo_path, ops = git_repo_with_commit
 
         ops.create_branch("feature")
         wt_path = repo_path.parent / "feature-wt"
         ops.worktree_add(wt_path, "feature")
 
-        # Try to add again with same name
+        # Try to add again to same path - raises WorktreeError (path exists)
+        ops.create_branch("another")
+        with pytest.raises(WorktreeError, match="Path already exists"):
+            ops.worktree_add(wt_path, "another")
+
+    def test_given_existing_worktree_name_when_add_then_raises_worktree_exists(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """Adding a worktree with existing name should raise WorktreeExistsError."""
+        repo_path, ops = git_repo_with_commit
+
+        ops.create_branch("feature")
+        ops.create_branch("another")
+
+        # Add first worktree
+        wt_path1 = repo_path.parent / "feature-wt"
+        ops.worktree_add(wt_path1, "feature")
+
+        # Try to add another worktree with same basename (name collision)
+        wt_path2 = repo_path.parent / "other" / "feature-wt"
         with pytest.raises(WorktreeExistsError):
-            ops.worktree_add(wt_path, "feature")
+            ops.worktree_add(wt_path2, "another")
 
 
 class TestWorktreeOpen:
@@ -167,6 +186,79 @@ class TestWorktreeLockUnlock:
         wt = next(wt for wt in worktrees if wt.name == "feature-wt")
         assert wt.is_locked is False
 
+    def test_given_nonexistent_worktree_when_lock_then_raises(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """Locking a nonexistent worktree should raise."""
+        _, ops = git_repo_with_commit
+
+        with pytest.raises(WorktreeNotFoundError):
+            ops.worktree_lock("nonexistent")
+
+    def test_given_already_locked_worktree_when_lock_again_then_raises(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """Locking an already locked worktree should raise."""
+        repo_path, ops = git_repo_with_commit
+
+        ops.create_branch("feature")
+        wt_path = repo_path.parent / "feature-wt"
+        ops.worktree_add(wt_path, "feature")
+        ops.worktree_lock("feature-wt")
+
+        from codeplane.git import WorktreeLockedError
+
+        with pytest.raises(WorktreeLockedError):
+            ops.worktree_lock("feature-wt")
+
+    def test_given_locked_worktree_when_remove_without_force_then_raises(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """Removing a locked worktree without force should raise."""
+        repo_path, ops = git_repo_with_commit
+
+        ops.create_branch("feature")
+        wt_path = repo_path.parent / "feature-wt"
+        ops.worktree_add(wt_path, "feature")
+        ops.worktree_lock("feature-wt")
+
+        from codeplane.git import WorktreeLockedError
+
+        with pytest.raises(WorktreeLockedError):
+            ops.worktree_remove("feature-wt")
+
+    def test_given_locked_worktree_when_remove_with_force_then_succeeds(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """Removing a locked worktree with force should succeed."""
+        repo_path, ops = git_repo_with_commit
+
+        ops.create_branch("feature")
+        wt_path = repo_path.parent / "feature-wt"
+        ops.worktree_add(wt_path, "feature")
+        ops.worktree_lock("feature-wt")
+
+        ops.worktree_remove("feature-wt", force=True)
+
+        worktrees = ops.worktrees()
+        names = {wt.name for wt in worktrees}
+        assert "feature-wt" not in names
+
+    def test_given_lock_with_reason_when_list_then_reason_visible(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """Lock reason should be visible in worktree listing."""
+        repo_path, ops = git_repo_with_commit
+
+        ops.create_branch("feature")
+        wt_path = repo_path.parent / "feature-wt"
+        ops.worktree_add(wt_path, "feature")
+        ops.worktree_lock("feature-wt", "Do not delete: in use by CI")
+
+        worktrees = ops.worktrees()
+        wt = next(wt for wt in worktrees if wt.name == "feature-wt")
+        assert wt.lock_reason == "Do not delete: in use by CI"
+
 
 class TestIsWorktree:
     """Tests for is_worktree() method."""
@@ -192,3 +284,78 @@ class TestIsWorktree:
         # This test may need adjustment based on pygit2 capabilities
         # assert wt_ops.is_worktree() is True
         pass  # Skip assertion for now due to pygit2 version variance
+
+
+class TestWorktreeInfo:
+    """Tests for worktree_info() method."""
+
+    def test_given_main_repo_when_worktree_info_then_returns_none(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """Main repository should return None for worktree_info."""
+        _, ops = git_repo_with_commit
+        assert ops.worktree_info() is None
+
+
+class TestWorktreePrune:
+    """Tests for worktree_prune() method."""
+
+    def test_given_no_stale_worktrees_when_prune_then_returns_empty(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """Pruning without stale worktrees should return empty list."""
+        _, ops = git_repo_with_commit
+        pruned = ops.worktree_prune()
+        assert pruned == []
+
+
+class TestWorktreeAddValidation:
+    """Tests for worktree_add() validation edge cases."""
+
+    def test_given_nonexistent_branch_when_add_worktree_then_raises(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """Adding worktree for nonexistent branch should raise."""
+        repo_path, ops = git_repo_with_commit
+        wt_path = repo_path.parent / "feature-wt"
+
+        from codeplane.git import BranchNotFoundError
+
+        with pytest.raises(BranchNotFoundError):
+            ops.worktree_add(wt_path, "nonexistent-branch")
+
+    def test_given_remote_branch_when_add_worktree_then_raises(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """Adding worktree for remote branch name should raise."""
+        repo_path, ops = git_repo_with_commit
+        wt_path = repo_path.parent / "feature-wt"
+
+        from codeplane.git import BranchNotFoundError
+
+        # Remote branch notation should not be accepted
+        with pytest.raises(BranchNotFoundError):
+            ops.worktree_add(wt_path, "origin/main")
+
+    def test_given_multiple_worktrees_when_list_then_all_present(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """Multiple worktrees should all appear in listing."""
+        repo_path, ops = git_repo_with_commit
+
+        ops.create_branch("feature1")
+        ops.create_branch("feature2")
+        ops.create_branch("feature3")
+
+        ops.worktree_add(repo_path.parent / "wt1", "feature1")
+        ops.worktree_add(repo_path.parent / "wt2", "feature2")
+        ops.worktree_add(repo_path.parent / "wt3", "feature3")
+
+        worktrees = ops.worktrees()
+        names = {wt.name for wt in worktrees}
+
+        assert "main" in names
+        assert "wt1" in names
+        assert "wt2" in names
+        assert "wt3" in names
+        assert len(worktrees) == 4

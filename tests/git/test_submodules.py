@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
-from codeplane.git import GitOps, SubmoduleNotFoundError
+from codeplane.git import GitOps, SubmoduleError, SubmoduleNotFoundError
+
+# Submodule tests that clone require file:// protocol (disabled by default in modern git)
+# Skip these on CI if protocol is not allowed
+_file_protocol_allowed = os.environ.get("GIT_ALLOW_FILE_PROTOCOL", "0") == "1"
+requires_file_protocol = pytest.mark.skipif(
+    not _file_protocol_allowed,
+    reason="Requires GIT_ALLOW_FILE_PROTOCOL=1 (git config protocol.file.allow=always)",
+)
 
 
 class TestSubmodulesList:
@@ -49,7 +58,121 @@ class TestSubmoduleStatus:
             ops.submodule_status("nonexistent")
 
 
-# Note: Full submodule tests require creating a separate repository
-# to use as a submodule source, which adds complexity.
-# These tests verify basic error handling.
-# Integration tests with actual submodules would be in tests/integration/
+class TestSubmoduleAdd:
+    """Tests for submodule_add() method."""
+
+    @requires_file_protocol
+    def test_given_valid_repo_when_add_submodule_then_returns_info(
+        self, git_repo_pair: tuple[tuple[Path, GitOps], tuple[Path, GitOps]]
+    ) -> None:
+        """Adding a submodule should return SubmoduleInfo."""
+        (main_path, main_ops), (sub_path, _) = git_repo_pair
+
+        info = main_ops.submodule_add(str(sub_path), "libs/mylib")
+
+        assert info.path == "libs/mylib"
+        assert info.url == str(sub_path)
+
+    @requires_file_protocol
+    def test_given_submodule_added_when_list_then_appears(
+        self, git_repo_pair: tuple[tuple[Path, GitOps], tuple[Path, GitOps]]
+    ) -> None:
+        """Added submodule should appear in list."""
+        (main_path, main_ops), (sub_path, _) = git_repo_pair
+
+        main_ops.submodule_add(str(sub_path), "libs/mylib")
+
+        submodules = main_ops.submodules()
+        assert len(submodules) == 1
+        assert submodules[0].path == "libs/mylib"
+
+    def test_given_invalid_url_when_add_submodule_then_raises(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """Adding submodule with invalid URL should raise."""
+        _, ops = git_repo_with_commit
+
+        with pytest.raises(SubmoduleError):
+            ops.submodule_add("/nonexistent/path", "libs/bad")
+
+
+class TestSubmoduleDeinit:
+    """Tests for submodule_deinit() method."""
+
+    @requires_file_protocol
+    def test_given_initialized_submodule_when_deinit_then_removes_workdir(
+        self, git_repo_pair: tuple[tuple[Path, GitOps], tuple[Path, GitOps]]
+    ) -> None:
+        """Deinit should remove submodule working directory."""
+        (main_path, main_ops), (sub_path, _) = git_repo_pair
+
+        main_ops.submodule_add(str(sub_path), "libs/mylib")
+        main_ops.submodule_deinit("libs/mylib", force=True)
+
+        # The submodule directory should still exist but be empty
+        # (git submodule deinit removes working tree but keeps gitlink)
+        submod_path = main_path / "libs" / "mylib"
+        # After deinit, working tree is removed
+        assert not (submod_path / "lib.py").exists()
+
+
+class TestSubmoduleRemove:
+    """Tests for submodule_remove() method."""
+
+    @requires_file_protocol
+    def test_given_submodule_when_remove_then_fully_removed(
+        self, git_repo_pair: tuple[tuple[Path, GitOps], tuple[Path, GitOps]]
+    ) -> None:
+        """Remove should fully clean up submodule."""
+        (main_path, main_ops), (sub_path, _) = git_repo_pair
+
+        main_ops.submodule_add(str(sub_path), "libs/mylib")
+        main_ops.submodule_remove("libs/mylib")
+
+        # Submodule should be gone from list
+        assert main_ops.submodules() == []
+
+        # Directory should be removed
+        assert not (main_path / "libs" / "mylib").exists()
+
+    def test_given_nonexistent_path_when_remove_then_raises(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """Remove nonexistent submodule should raise."""
+        _, ops = git_repo_with_commit
+
+        with pytest.raises(SubmoduleNotFoundError):
+            ops.submodule_remove("nonexistent")
+
+
+class TestSubmoduleSync:
+    """Tests for submodule_sync() method."""
+
+    @requires_file_protocol
+    def test_given_submodule_when_sync_then_succeeds(
+        self, git_repo_pair: tuple[tuple[Path, GitOps], tuple[Path, GitOps]]
+    ) -> None:
+        """Sync should succeed for existing submodule."""
+        (_, main_ops), (sub_path, _) = git_repo_pair
+
+        main_ops.submodule_add(str(sub_path), "libs/mylib")
+        # Should not raise
+        main_ops.submodule_sync(["libs/mylib"])
+
+
+class TestSubmoduleUpdate:
+    """Tests for submodule_update() method."""
+
+    @requires_file_protocol
+    def test_given_submodule_when_update_then_returns_result(
+        self, git_repo_pair: tuple[tuple[Path, GitOps], tuple[Path, GitOps]]
+    ) -> None:
+        """Update should return result with updated submodules."""
+        (_, main_ops), (sub_path, _) = git_repo_pair
+
+        main_ops.submodule_add(str(sub_path), "libs/mylib")
+        result = main_ops.submodule_update(["libs/mylib"])
+
+        # libs/mylib should be in updated (already initialized by add)
+        # or skipped if already at correct commit
+        assert result is not None

@@ -447,7 +447,8 @@ class RepoAccess:
 
         cmd = ["git", "worktree", "remove"]
         if force:
-            cmd.append("--force")
+            # Need --force twice: once for dirty, once for locked
+            cmd.extend(["--force", "--force"])
         cmd.append(name)
 
         result = subprocess.run(
@@ -470,11 +471,14 @@ class RepoAccess:
 
     def lookup_submodule(self, name: str) -> Any:
         """Get submodule by name."""
-        # pygit2.Repository.lookup_submodule is not typed
-        lookup_fn = getattr(self._repo, "lookup_submodule", None)
-        if lookup_fn is None:
+        # Use repo.submodules collection (pygit2 >= 1.12)
+        submodules = getattr(self._repo, "submodules", None)
+        if submodules is None:
             raise GitError("Submodule operations not supported in this pygit2 version")
-        return lookup_fn(name)
+        sm = submodules.get(name)
+        if sm is None:
+            raise GitError(f"Submodule not found: {name}")
+        return sm
 
     def init_submodule(self, name: str, overwrite: bool = False) -> None:
         """Initialize a submodule."""

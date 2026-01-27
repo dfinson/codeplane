@@ -175,7 +175,12 @@ def git_repo(tmp_path: Path) -> Generator[tuple[Path, GitOps], None, None]:
     repo_path = tmp_path / "repo"
     repo_path.mkdir()
     repo = pygit2.init_repository(repo_path)
-    sig = pygit2.Signature("Test", "test@example.com")
+
+    # Configure user for default_signature
+    repo.config["user.name"] = "Test User"
+    repo.config["user.email"] = "test@example.com"
+
+    sig = pygit2.Signature("Test User", "test@example.com")
     (repo_path / "README.md").write_text("# Test\n")
     repo.index.add("README.md")
     repo.index.write()
@@ -234,3 +239,41 @@ def git_repo_with_branch(git_repo: tuple[Path, GitOps]) -> tuple[Path, GitOps, s
     ops.checkout(default_branch)
 
     return repo_path, ops, default_head.target_sha
+
+
+@pytest.fixture
+def git_repo_pair(
+    tmp_path: Path,
+) -> Generator[tuple[tuple[Path, GitOps], tuple[Path, GitOps]], None, None]:
+    """Two separate repos for testing operations requiring multiple repositories.
+
+    Note: Enables file:// protocol for submodule tests (required by modern git).
+    """
+    # First repo (main)
+    main_path = tmp_path / "main_repo"
+    main_path.mkdir()
+    main_repo = pygit2.init_repository(main_path)
+    main_repo.config["user.name"] = "Test User"
+    main_repo.config["user.email"] = "test@example.com"
+    # Enable file:// protocol for submodule operations
+    main_repo.config["protocol.file.allow"] = "always"
+    sig = pygit2.Signature("Test User", "test@example.com")
+    (main_path / "README.md").write_text("# Main Repo\n")
+    main_repo.index.add("README.md")
+    main_repo.index.write()
+    tree = main_repo.index.write_tree()
+    main_repo.create_commit("HEAD", sig, sig, "Initial commit", tree, [])
+
+    # Second repo (to be used as submodule source)
+    sub_path = tmp_path / "sub_repo"
+    sub_path.mkdir()
+    sub_repo = pygit2.init_repository(sub_path)
+    sub_repo.config["user.name"] = "Test User"
+    sub_repo.config["user.email"] = "test@example.com"
+    (sub_path / "lib.py").write_text("# Library\n")
+    sub_repo.index.add("lib.py")
+    sub_repo.index.write()
+    tree = sub_repo.index.write_tree()
+    sub_repo.create_commit("HEAD", sig, sig, "Initial lib commit", tree, [])
+
+    yield (main_path, GitOps(main_path)), (sub_path, GitOps(sub_path))
