@@ -314,7 +314,7 @@ class TestPull:
         clone.index.add("remote-change.txt")
         clone.index.write()
         tree = clone.index.write_tree()
-        sig = clone.default_signature
+        sig = pygit2.Signature("Test", "test@example.com")
         clone.create_commit("HEAD", sig, sig, "Remote commit", tree, [clone.head.target])
         clone.remotes["origin"].push(["refs/heads/main:refs/heads/main"])
 
