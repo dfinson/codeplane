@@ -20,9 +20,9 @@ CodePlane executes safe, deterministic operations for AI coding agents. It owns 
 
 ## Status
 
-🚧 **Pre-alpha** — Design phase complete, implementation starting.
+🚧 **Pre-alpha** — M0 + M1 complete, M2 in progress.
 
-No working code yet. See the [roadmap](#roadmap) for progress.
+Core infrastructure and Git operations are implemented. See the [roadmap](#roadmap) for progress.
 
 ## Vision
 
@@ -40,18 +40,18 @@ CodePlane provides this via MCP (Model Context Protocol) tools, exposing capabil
 
 Track progress via [GitHub Milestones](https://github.com/dfinson/codeplane/milestones):
 
-| Milestone | Description |
-|-----------|-------------|
-| M0: Foundation | Core types, errors, logging, configuration |
-| M1: Git Operations | Status, staging, commits, branches, diffs |
-| M2: Index Engine | Full-text search, symbol lookup, relationships |
-| M3: Mutation Engine | Atomic file changes with rollback |
-| M4: Ledger & Task Model | Operation history, convergence metrics |
-| M5: Daemon & CLI | HTTP daemon, `cpl` CLI commands |
-| M6: Core MCP Tools | File ops, search, git tools for agents |
-| M7: Test Runner | Framework detection, parallel execution |
-| M8: LSP & Refactor | Rename, extract, inline, move via LSP |
-| M9: Polish & Hardening | Docs, benchmarks, security, packaging |
+| Milestone | Description | Status |
+|-----------|-------------|--------|
+| M0: Foundation | Core types, errors, logging, configuration | ✅ Complete |
+| M1: Git Operations | Status, staging, commits, branches, diffs | ✅ Complete |
+| M2: Index Engine | Full-text search, symbol lookup, relationships | 🚧 In Progress |
+| M3: Mutation Engine | Atomic file changes with rollback | |
+| M4: Ledger & Task Model | Operation history, convergence metrics | |
+| M5: Daemon & CLI | HTTP daemon, `cpl` CLI commands | |
+| M6: Core MCP Tools | File ops, search, git tools for agents | |
+| M7: Test Runner | Framework detection, parallel execution | |
+| M8: LSP & Refactor | Rename, extract, inline, move via LSP | |
+| M9: Polish & Hardening | Docs, benchmarks, security, packaging | |
 
 ## Development
 
