@@ -167,11 +167,25 @@ class TestReset:
 
 class TestMerge:
     def test_merge_fastforward(self, repo_with_branches: pygit2.Repository) -> None:
+        """Test fast-forward merge: merging an ancestor into a descendant."""
         ops = GitOps(repo_with_branches.workdir)
-        ops.checkout("feature")
+        # Create a new branch from current main, then advance main
+        ops.create_branch("ff-test")
+        ops.checkout("ff-test")
+        # ff-test is now at same commit as main's parent
+        # main is ahead, so merging main into ff-test is a fast-forward
+        ops.checkout("main")
+        # main is already ahead of ff-test (main has "main.txt" commit)
+        main_tip = ops.head().target_sha
+        ops.checkout("ff-test")
         result = ops.merge("main")
         assert result.success
         assert result.conflict_paths == ()
+        # Verify fast-forward semantics: still on branch, not detached
+        assert ops.current_branch() == "ff-test"
+        assert not ops.head().is_detached
+        # Verify branch advanced to main's tip
+        assert ops.head().target_sha == main_tip
 
     def test_merge_conflict(self, repo_with_conflict: tuple[pygit2.Repository, str]) -> None:
         repo, branch = repo_with_conflict

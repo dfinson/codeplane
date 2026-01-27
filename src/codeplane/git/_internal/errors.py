@@ -15,14 +15,14 @@ class ErrorMapper:
 
     @staticmethod
     @contextmanager
-    def guard(operation: str, *, remote: str | None = None) -> Iterator[None]:  # noqa: ARG004
+    def guard(operation: str, *, remote: str | None = None) -> Iterator[None]:
         """Context manager for consistent exception translation."""
         try:
             yield
         except pygit2.GitError as e:
             msg = str(e).lower()
-            if "authentication" in msg and remote:
-                raise AuthenticationError(remote) from e
+            if ("authentication" in msg or "credential" in msg) and remote:
+                raise AuthenticationError(remote, operation) from e
             if remote:
                 raise RemoteError(remote, str(e)) from e
             raise GitError(str(e)) from e

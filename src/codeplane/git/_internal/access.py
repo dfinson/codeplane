@@ -87,6 +87,7 @@ class RepoAccess:
                 if isinstance(target, str) and target.startswith("refs/heads/"):
                     return target[len("refs/heads/") :]
             except KeyError:
+                # HEAD reference missing in unborn repo; no branch name available
                 pass
             return None
         if self.is_detached:

@@ -223,7 +223,8 @@ class GitOps:
     def unstage(self, paths: Sequence[str | Path]) -> None:
         """Unstage files (keeps working tree changes)."""
         if self._access.is_unborn:
-            self._access.best_effort_index_remove(str(p) for p in paths)
+            normalized = (self._access.normalize_path(p) for p in paths)
+            self._access.best_effort_index_remove(normalized)
             return
 
         head_tree = self._access.must_head_tree()
