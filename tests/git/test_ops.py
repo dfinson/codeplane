@@ -20,6 +20,7 @@ from codeplane.git import (
     NothingToCommitError,
     OperationResult,
     RefInfo,
+    RefNotFoundError,
     RemoteInfo,
     StashNotFoundError,
     TagInfo,
@@ -290,6 +291,69 @@ class TestMerge:
         ops.merge(branch)
         ops.abort_merge()
         assert ops.state() == pygit2.GIT_REPOSITORY_STATE_NONE
+
+
+class TestPull:
+    """Tests for pull() method (fetch + merge)."""
+
+    def test_pull_fastforward(self, repo_with_remote: pygit2.Repository) -> None:
+        """Pull when remote is ahead should fast-forward."""
+        from codeplane.git import PullResult
+
+        workdir = Path(repo_with_remote.workdir)
+        ops = GitOps(workdir)
+
+        # Push current state
+        ops.push()
+
+        # Simulate remote advancing: clone, commit, push back
+        bare_path = Path(repo_with_remote.remotes["origin"].url)
+        with_clone = workdir.parent / "clone"
+        clone = pygit2.clone_repository(str(bare_path), str(with_clone), checkout_branch="main")
+        (with_clone / "remote-change.txt").write_text("from remote")
+        clone.index.add("remote-change.txt")
+        clone.index.write()
+        tree = clone.index.write_tree()
+        sig = clone.default_signature
+        clone.create_commit("HEAD", sig, sig, "Remote commit", tree, [clone.head.target])
+        clone.remotes["origin"].push(["refs/heads/main:refs/heads/main"])
+
+        # Now pull from our original repo
+        before_sha = ops.head().target_sha
+        result = ops.pull()
+
+        assert isinstance(result, PullResult)
+        assert result.success is True
+        assert result.up_to_date is False
+        assert result.conflict_paths == ()
+        assert ops.head().target_sha != before_sha
+        assert (workdir / "remote-change.txt").exists()
+
+    def test_pull_up_to_date(self, repo_with_remote: pygit2.Repository) -> None:
+        """Pull when already up-to-date should indicate so."""
+        from codeplane.git import PullResult
+
+        ops = GitOps(repo_with_remote.workdir)
+        ops.push()
+        ops.fetch()  # Ensure we have remote refs
+
+        result = ops.pull()
+
+        assert isinstance(result, PullResult)
+        assert result.success is True
+        assert result.up_to_date is True
+        assert result.commit_sha is None
+
+    def test_pull_nonexistent_remote_branch_raises(
+        self, repo_with_remote: pygit2.Repository
+    ) -> None:
+        """Pull from non-existent remote branch should raise RefNotFoundError."""
+        ops = GitOps(repo_with_remote.workdir)
+        ops.push()
+        ops.fetch()
+
+        with pytest.raises(RefNotFoundError, match="origin/nonexistent"):
+            ops.pull(branch="nonexistent")
 
 
 class TestCherrypick:

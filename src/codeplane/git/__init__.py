@@ -40,6 +40,7 @@ from codeplane.git.models import (
     MergeAnalysis,
     MergeResult,
     OperationResult,
+    PullResult,
     RebaseAction,
     RebasePlan,
     RebaseResult,
@@ -78,6 +79,7 @@ __all__ = [
     "MergeResult",
     "MergeAnalysis",
     "OperationResult",
+    "PullResult",
     # Worktree models
     "WorktreeInfo",
     # Submodule models

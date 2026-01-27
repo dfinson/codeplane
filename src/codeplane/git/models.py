@@ -318,6 +318,16 @@ class MergeResult:
 
 
 @dataclass(frozen=True, slots=True)
+class PullResult:
+    """Result of a pull (fetch + merge) operation."""
+
+    success: bool
+    commit_sha: str | None
+    up_to_date: bool = False
+    conflict_paths: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True, slots=True)
 class MergeAnalysis:
     """Result of merge analysis."""
 

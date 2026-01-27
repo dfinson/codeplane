@@ -58,6 +58,7 @@ from codeplane.git.models import (
     MergeAnalysis,
     MergeResult,
     OperationResult,
+    PullResult,
     RebasePlan,
     RebaseResult,
     RefInfo,
@@ -477,6 +478,49 @@ class GitOps:
         # Use lambda to avoid pygit2 version differences in keyword arg names
         self._access.run_remote_operation(
             remote, "push", lambda r: r.push([refspec], callbacks=cbs)
+        )
+
+    def pull(
+        self,
+        remote: str = "origin",
+        branch: str | None = None,
+        callbacks: SystemCredentialCallback | None = None,
+    ) -> PullResult:
+        """
+        Fetch from remote and merge into current branch.
+
+        Args:
+            remote: Remote name to pull from.
+            branch: Remote branch to merge. Defaults to current branch name.
+            callbacks: Credential callbacks for authentication.
+
+        Returns:
+            PullResult with success status, commit sha, and any conflicts.
+        """
+        # Fetch first
+        self.fetch(remote, callbacks)
+
+        # Determine which branch to merge
+        current = require_current_branch(self._access, "pull")
+        merge_branch = branch or current
+        remote_ref = f"{remote}/{merge_branch}"
+
+        # Check if remote ref exists
+        if not self._access.has_reference(f"refs/remotes/{remote_ref}"):
+            raise RefNotFoundError(remote_ref)
+
+        # Analyze merge
+        analysis = self.merge_analysis(remote_ref)
+        if analysis.up_to_date:
+            return PullResult(success=True, commit_sha=None, up_to_date=True)
+
+        # Merge
+        result = self.merge(remote_ref)
+        return PullResult(
+            success=result.success,
+            commit_sha=result.commit_sha,
+            up_to_date=False,
+            conflict_paths=result.conflict_paths,
         )
 
     # =========================================================================
