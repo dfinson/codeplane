@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from functools import partial
 from pathlib import Path
 
 import pygit2
@@ -38,11 +37,13 @@ from codeplane.git._internal.constants import (
 from codeplane.git.credentials import SystemCredentialCallback, get_default_callbacks
 from codeplane.git.errors import (
     BranchExistsError,
+    BranchNotFoundError,
     RefNotFoundError,
     StashNotFoundError,
     SubmoduleError,
     SubmoduleNotFoundError,
     UnmergedBranchError,
+    WorktreeError,
     WorktreeExistsError,
     WorktreeLockedError,
     WorktreeNotFoundError,
@@ -417,9 +418,8 @@ class GitOps:
     ) -> None:
         """Fetch from remote."""
         cbs = callbacks or get_default_callbacks()
-        self._access.run_remote_operation(
-            remote, "fetch", partial(pygit2.Remote.fetch, callbacks=cbs)
-        )
+        # Use lambda to avoid pygit2 version differences in keyword arg names
+        self._access.run_remote_operation(remote, "fetch", lambda r: r.fetch(callbacks=cbs))
 
     def push(
         self,
@@ -427,13 +427,21 @@ class GitOps:
         force: bool = False,
         callbacks: SystemCredentialCallback | None = None,
     ) -> None:
-        """Push to remote."""
+        """
+        Push current branch to remote.
+
+        Note:
+            Always pushes the current local branch to the same-named branch
+            on the remote. Does not resolve upstream tracking configuration.
+            For tracking-aware push, use git CLI directly.
+        """
         branch = require_current_branch(self._access, "push")
         prefix = "+" if force else ""
         refspec = f"{prefix}refs/heads/{branch}:refs/heads/{branch}"
         cbs = callbacks or get_default_callbacks()
+        # Use lambda to avoid pygit2 version differences in keyword arg names
         self._access.run_remote_operation(
-            remote, "push", partial(pygit2.Remote.push, specs=[refspec], callbacks=cbs)
+            remote, "push", lambda r: r.push([refspec], callbacks=cbs)
         )
 
     # =========================================================================
@@ -441,7 +449,13 @@ class GitOps:
     # =========================================================================
 
     def worktrees(self) -> list[WorktreeInfo]:
-        """List all worktrees including main working directory."""
+        """
+        List all worktrees including main working directory.
+
+        Note:
+            Lock status detection is best-effort (checks .git/worktrees/<name>/locked).
+            For unusual gitdir layouts, lock status may be incorrectly reported as False.
+        """
         result: list[WorktreeInfo] = []
 
         # Main working directory
@@ -466,7 +480,8 @@ class GitOps:
         for name in self._access.list_worktrees():
             try:
                 wt = self._access.lookup_worktree(name)
-                # Open the worktree repo to get HEAD info
+                # pygit2.Repository() handles worktree .git file resolution
+                # (worktree dirs contain a .git file pointing to the real gitdir)
                 wt_path = wt.path
                 wt_repo = pygit2.Repository(wt_path)
                 head_sha = str(wt_repo.head.target) if not wt_repo.head_is_unborn else ""
@@ -510,17 +525,43 @@ class GitOps:
         return result
 
     def worktree_add(self, path: Path, ref: str, checkout: bool = True) -> GitOps:  # noqa: ARG002
-        """Add worktree at path for ref. Returns GitOps for new worktree."""
+        """
+        Add worktree at path for ref. Returns GitOps for new worktree.
+
+        Args:
+            path: Directory path for the new worktree. Must not exist.
+            ref: Local branch name to checkout. Must be an existing local branch.
+            checkout: Ignored (pygit2 always checks out). Kept for API compatibility.
+
+        Raises:
+            BranchNotFoundError: If ref is not an existing local branch.
+            WorktreeExistsError: If a worktree with the same name already exists,
+                or if path is already used by another worktree.
+
+        Note:
+            The worktree name (used internally by git) is derived from path.name.
+            To create a worktree from a commit SHA or tag, first create a branch.
+        """
+        # Enforce: ref must be a local branch (not a SHA, tag, or remote branch)
+        if not self._access.has_local_branch(ref):
+            raise BranchNotFoundError(ref)
+
+        # Git worktree name is derived from path basename
         name = path.name
-        # Check if worktree already exists
-        if name in self._access.list_worktrees():
+        existing_names = self._access.list_worktrees()
+        if name in existing_names:
             raise WorktreeExistsError(name)
 
-        # Resolve the ref to a branch if it exists
-        branch_ref = None
-        if self._access.has_local_branch(ref):
-            branch_ref = self._access.repo.references.get(f"refs/heads/{ref}")
+        # Also check that path isn't already used by another worktree
+        for wt_name in existing_names:
+            try:
+                wt = self._access.lookup_worktree(wt_name)
+                if Path(wt.path).resolve() == path.resolve():
+                    raise WorktreeExistsError(f"path already in use by worktree '{wt_name}'")
+            except pygit2.GitError:
+                pass
 
+        branch_ref = self._access.repo.references.get(f"refs/heads/{ref}")
         self._access.add_worktree(name, str(path), branch_ref)
 
         return GitOps(path)
@@ -534,47 +575,57 @@ class GitOps:
         return GitOps(wt.path)
 
     def worktree_remove(self, name: str, force: bool = False) -> None:
-        """Remove worktree. force=True removes even if dirty."""
+        """
+        Remove worktree.
+
+        Args:
+            name: Worktree name (as returned by worktrees()).
+            force: If True, removes even if dirty or locked.
+
+        Note:
+            Uses `git worktree remove` subprocess for correctness.
+            This ensures git metadata is always consistent, even if
+            directory removal fails (e.g., file locks on Windows).
+        """
         if name not in self._access.list_worktrees():
             raise WorktreeNotFoundError(name)
 
-        # Check lock status via file system
-        git_dir = Path(self._access.repo.path)
-        lock_file = git_dir / "worktrees" / name / "locked"
+        # Check lock status via file system (for better error message)
+        lock_file = self._access.worktree_gitdir(name) / "locked"
         if lock_file.exists() and not force:
             raise WorktreeLockedError(name)
 
-        wt = self._access.lookup_worktree(name)
-        wt_path = Path(wt.path)
-
-        # For valid worktrees, remove the working directory first
-        if wt_path.exists():
-            import shutil
-
-            shutil.rmtree(wt_path)
-
-        # Then prune the worktree entry
-        wt.prune(force)
+        try:
+            self._access.remove_worktree(name, force)
+        except Exception as e:
+            # Map generic errors to domain error
+            raise WorktreeError(f"Failed to remove worktree '{name}': {e}") from e
 
     def worktree_lock(self, name: str, reason: str | None = None) -> None:
         """Lock worktree to prevent pruning."""
         if name not in self._access.list_worktrees():
             raise WorktreeNotFoundError(name)
 
-        # Lock via .git/worktrees/<name>/locked file (git standard)
-        git_dir = Path(self._access.repo.path)
-        lock_file = git_dir / "worktrees" / name / "locked"
+        # Use worktree's actual admin dir
+        gitdir = self._access.worktree_gitdir(name)
+        lock_file = gitdir / "locked"
+
         if lock_file.exists():
             raise WorktreeLockedError(name)
-        lock_file.write_text(reason or "")
+
+        try:
+            # Ensure parent exists (should always exist for valid worktree, but be safe)
+            gitdir.mkdir(parents=True, exist_ok=True)
+            lock_file.write_text(reason or "", encoding="utf-8")
+        except OSError as e:
+            raise WorktreeError(f"Failed to lock worktree {name}: {e}") from e
 
     def worktree_unlock(self, name: str) -> None:
         """Unlock worktree."""
         if name not in self._access.list_worktrees():
             raise WorktreeNotFoundError(name)
 
-        git_dir = Path(self._access.repo.path)
-        lock_file = git_dir / "worktrees" / name / "locked"
+        lock_file = self._access.worktree_gitdir(name) / "locked"
         if lock_file.exists():
             lock_file.unlink()
 
@@ -648,14 +699,18 @@ class GitOps:
         return result
 
     def _determine_submodule_status(self, sm: object) -> SubmoduleState:
-        """Determine submodule status from pygit2.Submodule."""
+        """
+        Determine submodule status from pygit2.Submodule.
+
+        Note: "dirty" includes any working tree changes OR untracked files.
+        """
         # Check if workdir exists
         sm_path = Path(self._access.path) / getattr(sm, "path", "")
         if not sm_path.exists():
             return "uninitialized"
 
-        # Check if .git exists in submodule
-        if not (sm_path / ".git").exists() and not (sm_path / ".git").is_file():
+        # Check if .git exists in submodule (can be file or directory)
+        if not (sm_path / ".git").exists():
             return "uninitialized"
 
         try:
@@ -674,13 +729,27 @@ class GitOps:
             return "missing"
 
     def submodule_status(self, path: str) -> SubmoduleStatus:
-        """Detailed status for one submodule."""
-        submodules = {sm.path: sm for sm in self.submodules()}
-        if path not in submodules:
-            raise SubmoduleNotFoundError(path)
+        """
+        Detailed status for one submodule.
 
-        info = submodules[path]
-        sm = self._access.lookup_submodule(info.name)
+        Args:
+            path: The submodule path (relative to repo root).
+        """
+        try:
+            sm = self._access.lookup_submodule_by_path(path)
+        except Exception:
+            raise SubmoduleNotFoundError(path) from None
+
+        # Build SubmoduleInfo for this submodule
+        status = self._determine_submodule_status(sm)
+        info = SubmoduleInfo(
+            name=sm.name,
+            path=sm.path,
+            url=sm.url or "",
+            branch=getattr(sm, "branch", None),
+            head_sha=str(sm.head_id) if sm.head_id else None,
+            status=status,
+        )
 
         # Get detailed status
         sm_path = Path(self._access.path) / path
@@ -693,8 +762,8 @@ class GitOps:
             try:
                 sm_repo = pygit2.Repository(str(sm_path))
                 actual_sha = str(sm_repo.head.target) if not sm_repo.head_is_unborn else None
-                status = sm_repo.status()
-                for flags in status.values():
+                repo_status = sm_repo.status()
+                for flags in repo_status.values():
                     if flags & (pygit2.GIT_STATUS_WT_MODIFIED | pygit2.GIT_STATUS_WT_DELETED):
                         workdir_dirty = True
                     if flags & (
@@ -718,19 +787,38 @@ class GitOps:
         )
 
     def submodule_init(self, paths: Sequence[str] | None = None) -> list[str]:
-        """Initialize submodules. Returns initialized paths."""
-        initialized = []
-        all_submodules = self._access.listall_submodules()
+        """
+        Initialize submodules.
 
-        targets = paths if paths else all_submodules
-        for name in targets:
-            if name not in all_submodules:
-                raise SubmoduleNotFoundError(name)
-            try:
-                self._access.init_submodule(name)
-                initialized.append(name)
-            except pygit2.GitError:
-                pass
+        Args:
+            paths: Submodule paths to initialize. If None, initializes all.
+
+        Returns:
+            List of successfully initialized submodule paths.
+        """
+        initialized = []
+
+        if paths is None:
+            # Initialize all submodules
+            for name in self._access.listall_submodules():
+                try:
+                    self._access.init_submodule(name)
+                    sm = self._access.lookup_submodule(name)
+                    initialized.append(sm.path)
+                except pygit2.GitError:
+                    pass
+        else:
+            # Initialize specific submodules by path
+            for path in paths:
+                sm_name = self._access.submodule_name_for_path(path)
+                if sm_name is None:
+                    raise SubmoduleNotFoundError(path)
+                try:
+                    self._access.init_submodule(sm_name)
+                    initialized.append(path)
+                except pygit2.GitError:
+                    pass
+
         return initialized
 
     def submodule_update(
@@ -739,7 +827,17 @@ class GitOps:
         recursive: bool = False,
         init: bool = True,
     ) -> SubmoduleUpdateResult:
-        """Update submodules to recorded commits. Uses subprocess for full functionality."""
+        """
+        Update submodules to recorded commits.
+
+        Uses subprocess for full credential and recursive support.
+
+        Note:
+            Result parsing is best-effort based on git output format.
+            - `updated`: paths successfully updated (parsed from stdout)
+            - `failed`: ("*", error_message) on failure (not path-specific)
+            - `already_current`: always empty (git doesn't report this separately)
+        """
         import subprocess
 
         cmd = ["git", "submodule", "update"]
@@ -824,8 +922,8 @@ class GitOps:
         if result.returncode != 0:
             raise SubmoduleError(f"Failed to add submodule: {result.stderr.strip()}")
 
-        # Return info about the new submodule
-        sm = self._access.lookup_submodule(path)
+        # Lookup by path (name may differ from path in some configurations)
+        sm = self._access.lookup_submodule_by_path(path)
         return SubmoduleInfo(
             name=sm.name,
             path=sm.path,

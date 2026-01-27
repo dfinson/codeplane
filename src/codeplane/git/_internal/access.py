@@ -436,6 +436,29 @@ class RepoAccess:
         """Working directory path, or None for bare repos."""
         return self._repo.workdir
 
+    def worktree_gitdir(self, name: str) -> Path:
+        """Get the git admin directory for a worktree (.git/worktrees/<name>)."""
+        return Path(self._repo.path) / "worktrees" / name
+
+    def remove_worktree(self, name: str, force: bool = False) -> None:
+        """Remove worktree using git subprocess for correctness."""
+        import subprocess
+
+        cmd = ["git", "worktree", "remove"]
+        if force:
+            cmd.append("--force")
+        cmd.append(name)
+
+        result = subprocess.run(
+            cmd,
+            cwd=str(self.path),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            raise GitError(f"Failed to remove worktree: {result.stderr.strip()}")
+
     # =========================================================================
     # Submodule Operations
     # =========================================================================
@@ -461,6 +484,24 @@ class RepoAccess:
         """Open the repository for an initialized submodule."""
         submodule = self.lookup_submodule(name)
         return submodule.open()  # type: ignore[no-any-return]
+
+    def submodule_name_for_path(self, path: str) -> str | None:
+        """Get submodule name for a given path, or None if not found."""
+        for name in self.listall_submodules():
+            try:
+                sm = self.lookup_submodule(name)
+                if sm.path == path:
+                    return name
+            except pygit2.GitError:
+                continue
+        return None
+
+    def lookup_submodule_by_path(self, path: str) -> Any:
+        """Get submodule by path. Raises GitError if not found."""
+        name = self.submodule_name_for_path(path)
+        if name is None:
+            raise GitError(f"Submodule not found at path: {path}")
+        return self.lookup_submodule(name)
 
     # =========================================================================
     # Merge Base
