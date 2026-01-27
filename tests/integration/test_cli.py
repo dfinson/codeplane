@@ -21,6 +21,8 @@ from codeplane.core.logging import (
     set_request_id,
 )
 
+pytestmark = pytest.mark.integration
+
 runner = CliRunner()
 
 

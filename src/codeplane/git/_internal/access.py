@@ -218,6 +218,12 @@ class RepoAccess:
             return self._repo.diff(base_id)
         return self._repo.diff(base_id, target_id)
 
+    def get_empty_tree(self) -> pygit2.Tree:
+        """Get an empty tree for diff operations (e.g., staged diff on unborn repo)."""
+        builder = self._repo.TreeBuilder()
+        empty_tree_oid = builder.write()
+        return self._repo.get(empty_tree_oid)  # type: ignore[return-value]
+
     def checkout_branch(self, branch: pygit2.Branch) -> None:
         self._repo.checkout(branch)
         self._repo.set_head(branch.name)

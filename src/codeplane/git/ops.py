@@ -171,10 +171,12 @@ class GitOps:
             for n in self._access.branches.local
         ]
         if include_remote:
-            result.extend(
-                BranchInfo.from_pygit2(self._access.branches.remote[n])
-                for n in self._access.branches.remote
-            )
+            for n in self._access.branches.remote:
+                branch = self._access.branches.remote[n]
+                # Skip symbolic refs like origin/HEAD (target is str, not Oid)
+                if isinstance(branch.target, str):
+                    continue
+                result.append(BranchInfo.from_pygit2(branch))
         return result
 
     def tags(self) -> list[TagInfo]:

@@ -71,7 +71,9 @@ class DiffPlanner:
             return self._access.diff_working_tree()
 
         if plan.diff_type == DiffType.STAGED_UNBORN:
-            return self._access.index.diff_to_tree()  # type: ignore[call-arg]
+            # For unborn repos, diff staged against empty tree
+            empty_tree = self._access.get_empty_tree()
+            return empty_tree.diff_to_index(self._access.index)
 
         if plan.diff_type == DiffType.STAGED_NORMAL:
             return self._access.index.diff_to_tree(self._access.must_head_tree())

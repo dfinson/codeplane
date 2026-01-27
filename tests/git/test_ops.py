@@ -157,15 +157,6 @@ class TestCommit:
         assert len(sha) == 40
 
 
-class TestReset:
-    def test_reset_hard(self, repo_with_history: pygit2.Repository) -> None:
-        ops = GitOps(repo_with_history.workdir)
-        ops.reset("HEAD~1", "hard")
-        # Check we moved back
-        log = ops.log(limit=10)
-        assert len(log) == 5  # Was 6, now 5
-
-
 class TestMerge:
     def test_merge_fastforward(self, repo_with_branches: pygit2.Repository) -> None:
         """Test fast-forward merge: merging an ancestor into a descendant."""
@@ -504,6 +495,26 @@ class TestTags:
         assert "v1.0.0" in names
         assert "v2.0.0" in names
 
+    def test_delete_tag(self, temp_repo: pygit2.Repository) -> None:
+        """Deleting existing tag should succeed."""
+
+        ops = GitOps(temp_repo.workdir)
+        ops.create_tag("v1.0.0")
+
+        ops.delete_tag("v1.0.0")
+
+        tags = ops.tags()
+        assert all(t.name != "v1.0.0" for t in tags)
+
+    def test_delete_nonexistent_tag_raises(self, temp_repo: pygit2.Repository) -> None:
+        """Deleting nonexistent tag should raise."""
+        from codeplane.git import RefNotFoundError
+
+        ops = GitOps(temp_repo.workdir)
+
+        with pytest.raises(RefNotFoundError):
+            ops.delete_tag("nonexistent")
+
 
 class TestBlame:
     def test_blame_file(self, temp_repo: pygit2.Repository) -> None:
@@ -511,6 +522,267 @@ class TestBlame:
         blame = ops.blame("README.md")
         assert isinstance(blame, BlameInfo)
         assert len(blame.hunks) >= 1
+
+    def test_blame_with_line_range(self, temp_repo: pygit2.Repository) -> None:
+        """Blame with line range should work."""
+        workdir = Path(temp_repo.workdir)
+        ops = GitOps(temp_repo.workdir)
+
+        # Create multi-line file
+        (workdir / "multiline.txt").write_text("line1\nline2\nline3\nline4\nline5\n")
+        ops.stage(["multiline.txt"])
+        ops.commit("add multiline")
+
+        blame = ops.blame("multiline.txt", min_line=2, max_line=4)
+
+        assert isinstance(blame, BlameInfo)
+
+
+class TestLogEdgeCases:
+    """Additional edge case tests for log."""
+
+    def test_log_nonexistent_ref_returns_empty(self, temp_repo: pygit2.Repository) -> None:
+        """Log with nonexistent ref should return empty list."""
+        ops = GitOps(temp_repo.workdir)
+
+        log = ops.log(ref="nonexistent-branch")
+
+        assert log == []
+
+
+class TestStageUnstage:
+    """Tests for staging and unstaging."""
+
+    def test_stage_new_file(self, temp_repo: pygit2.Repository) -> None:
+        """Staging new file should work."""
+        workdir = Path(temp_repo.workdir)
+        ops = GitOps(temp_repo.workdir)
+
+        (workdir / "new.txt").write_text("content")
+        ops.stage(["new.txt"])
+
+        status = ops.status()
+        assert "new.txt" in status
+
+    def test_stage_deleted_file(self, temp_repo: pygit2.Repository) -> None:
+        """Staging deleted file should work."""
+        workdir = Path(temp_repo.workdir)
+        ops = GitOps(temp_repo.workdir)
+
+        # Delete README.md
+        (workdir / "README.md").unlink()
+        ops.stage(["README.md"])
+
+        status = ops.status()
+        assert status.get("README.md", 0) & pygit2.GIT_STATUS_INDEX_DELETED
+
+    def test_unstage_file(self, repo_with_uncommitted: pygit2.Repository) -> None:
+        """Unstaging file should work."""
+        ops = GitOps(repo_with_uncommitted.workdir)
+
+        ops.unstage(["staged.txt"])
+
+        status = ops.status()
+        # Should no longer be in index
+        flags = status.get("staged.txt", 0)
+        assert not (flags & pygit2.GIT_STATUS_INDEX_NEW)
+
+
+class TestReset:
+    """Tests for reset operations."""
+
+    def test_reset_soft(self, repo_with_history: pygit2.Repository) -> None:
+        """Soft reset should move HEAD but keep changes staged."""
+        ops = GitOps(repo_with_history.workdir)
+        log = ops.log(limit=2)
+        target_sha = log[1].sha
+
+        ops.reset(target_sha, mode="soft")
+
+        assert ops.head_commit().sha == target_sha
+
+    def test_reset_mixed(self, repo_with_history: pygit2.Repository) -> None:
+        """Mixed reset should move HEAD and unstage."""
+        ops = GitOps(repo_with_history.workdir)
+        log = ops.log(limit=2)
+        target_sha = log[1].sha
+
+        ops.reset(target_sha, mode="mixed")
+
+        assert ops.head_commit().sha == target_sha
+
+    def test_reset_hard(self, repo_with_history: pygit2.Repository) -> None:
+        """Hard reset should move HEAD and discard changes."""
+        ops = GitOps(repo_with_history.workdir)
+        log = ops.log(limit=2)
+        target_sha = log[1].sha
+
+        ops.reset(target_sha, mode="hard")
+
+        assert ops.head_commit().sha == target_sha
+
+
+class TestMergeOperations:
+    """Tests for merge operations."""
+
+    def test_merge_fast_forward(self, repo_with_branches: pygit2.Repository) -> None:
+        """Fast-forward merge should succeed."""
+        workdir = Path(repo_with_branches.workdir)
+        ops = GitOps(repo_with_branches.workdir)
+
+        # feature is ahead, this should fast-forward
+        # But fixture has both diverged, so create a proper scenario
+        ops.create_branch("ff-target")
+        ops.checkout("ff-target")
+        (workdir / "ff.txt").write_text("ff content")
+        ops.stage(["ff.txt"])
+        ops.commit("ff commit")
+        ops.checkout("main")
+
+        result = ops.merge("ff-target")
+
+        assert result.success is True
+
+    def test_merge_up_to_date(self, temp_repo: pygit2.Repository) -> None:
+        """Merge with HEAD should be up-to-date."""
+        ops = GitOps(temp_repo.workdir)
+
+        result = ops.merge("HEAD")
+
+        assert result.success is True
+
+
+class TestDiffEdgeCases:
+    """Additional edge case tests for diff."""
+
+    def test_diff_between_refs(self, repo_with_history: pygit2.Repository) -> None:
+        """Diff between two refs should work."""
+        ops = GitOps(repo_with_history.workdir)
+        log = ops.log(limit=3)
+
+        diff = ops.diff(base=log[2].sha, target=log[0].sha)
+
+        assert isinstance(diff, DiffInfo)
+
+    def test_diff_from_ref_to_working_tree(self, repo_with_uncommitted: pygit2.Repository) -> None:
+        """Diff from ref to working tree should work."""
+        ops = GitOps(repo_with_uncommitted.workdir)
+
+        diff = ops.diff(base="HEAD")
+
+        assert isinstance(diff, DiffInfo)
+
+
+class TestCheckoutEdgeCases:
+    """Additional edge case tests for checkout."""
+
+    def test_checkout_detached_head(self, temp_repo: pygit2.Repository) -> None:
+        """Checkout by SHA should result in detached HEAD."""
+        ops = GitOps(temp_repo.workdir)
+        head_sha = ops.head_commit().sha
+
+        ops.checkout(head_sha)
+
+        assert ops.current_branch() is None  # Detached
+
+    def test_checkout_create_and_switch(self, temp_repo: pygit2.Repository) -> None:
+        """Checkout with create=True should create and switch."""
+        ops = GitOps(temp_repo.workdir)
+
+        ops.checkout("new-branch", create=True)
+
+        assert ops.current_branch() == "new-branch"
+
+
+class TestBranchEdgeCases:
+    """Additional edge case tests for branch operations."""
+
+    def test_delete_branch(self, repo_with_branches: pygit2.Repository) -> None:
+        """Deleting branch should work."""
+        ops = GitOps(repo_with_branches.workdir)
+
+        # Force delete since feature has unmerged changes
+        ops.delete_branch("feature", force=True)
+
+        branches = ops.branches(include_remote=False)
+        assert all(b.short_name != "feature" for b in branches)
+
+    def test_delete_current_branch_raises(self, temp_repo: pygit2.Repository) -> None:
+        """Deleting current branch should raise."""
+        from codeplane.git._internal.errors import GitError
+
+        ops = GitOps(temp_repo.workdir)
+
+        # Can't delete current branch - need to be on another branch first
+        # Create and switch to another branch, then try to delete that
+        ops.create_branch("to-delete")
+        ops.checkout("to-delete")
+
+        # Try to delete the branch we're on
+        with pytest.raises(GitError, match="Cannot delete current branch"):
+            ops.delete_branch("to-delete")
+
+    def test_rename_branch(self, repo_with_branches: pygit2.Repository) -> None:
+        """Renaming branch should work."""
+        ops = GitOps(repo_with_branches.workdir)
+
+        ops.rename_branch("feature", "renamed-feature")
+
+        branches = ops.branches(include_remote=False)
+        names = {b.short_name for b in branches}
+        assert "renamed-feature" in names
+        assert "feature" not in names
+
+
+class TestShowCommit:
+    """Tests for show() method."""
+
+    def test_show_head(self, temp_repo: pygit2.Repository) -> None:
+        """Show HEAD should return commit info."""
+        ops = GitOps(temp_repo.workdir)
+
+        commit = ops.show("HEAD")
+
+        assert isinstance(commit, CommitInfo)
+
+    def test_show_by_sha(self, repo_with_history: pygit2.Repository) -> None:
+        """Show by SHA should work."""
+        ops = GitOps(repo_with_history.workdir)
+        log = ops.log(limit=2)
+
+        commit = ops.show(log[1].sha)
+
+        assert commit.sha == log[1].sha
+
+
+class TestUnbornRepo:
+    """Tests for unborn repo state (no commits yet)."""
+
+    def test_unstage_on_unborn_repo(self, tmp_path: Path) -> None:
+        """Unstaging on unborn repo should work."""
+        import subprocess
+
+        repo_path = tmp_path / "unborn"
+        repo_path.mkdir()
+        subprocess.run(["git", "init"], cwd=repo_path, capture_output=True, check=True)
+
+        ops = GitOps(repo_path)
+
+        # Stage a file
+        (repo_path / "new.txt").write_text("content\n")
+        ops.stage(["new.txt"])
+
+        # Verify it's staged
+        status_before = ops.status()
+        assert "new.txt" in status_before
+
+        # Unstage should work even without any commits
+        ops.unstage(["new.txt"])
+
+        # File should be untracked now
+        status_after = ops.status()
+        # After unstaging, file should still show in status but as untracked
+        assert "new.txt" in status_after
 
 
 class TestRemotes:

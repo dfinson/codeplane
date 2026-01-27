@@ -69,8 +69,12 @@ class BranchInfo:
     @classmethod
     def from_pygit2(cls, branch: pygit2.Branch) -> BranchInfo:
         upstream = None
-        if hasattr(branch, "upstream") and branch.upstream:
-            upstream = branch.upstream.shorthand
+        try:
+            if hasattr(branch, "upstream") and branch.upstream:
+                upstream = branch.upstream.shorthand
+        except ValueError:
+            # Remote branches don't have upstreams
+            pass
         return cls(
             name=branch.name,
             short_name=branch.shorthand,
