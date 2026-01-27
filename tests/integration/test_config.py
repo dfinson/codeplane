@@ -9,6 +9,8 @@ import yaml
 
 from codeplane.config import load_config
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture(autouse=True)
 def clean_env() -> Generator[None, None, None]:

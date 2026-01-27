@@ -200,6 +200,18 @@ When creating pull requests:
 
 ---
 
+## D. GitHub Remote Operations
+
+> **⚠️ CRITICAL: No Substitutions**
+>
+> When asked to perform a specific GitHub remote action (resolve threads, merge PR, create release, etc.):
+> - Do **exactly** what was requested, or
+> - Say "I cannot do that with the available tools"
+>
+> **Never** substitute a different action. If asked to resolve review threads and you can't, say so. Do not add a comment instead. Do not do something "close enough." Either perform the exact operation or report that it's not possible.
+
+---
+
 ## Dev Commands
 
 ```bash

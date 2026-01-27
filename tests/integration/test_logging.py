@@ -16,6 +16,8 @@ from codeplane.core.logging import (
     set_request_id,
 )
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture(autouse=True)
 def reset_logging() -> Generator[None, None, None]:

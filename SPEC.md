@@ -1453,12 +1453,19 @@ All Git operations via `pygit2` (libgit2 bindings):
   - Stash: push, pop, apply, drop, list
   - Tags: create, delete
   - Remotes: fetch, push, pull
+  - Rebase: plan, execute, continue, abort, skip (interactive rebase support)
+  - Submodules: list, status, init, update, sync, add, deinit, remove
+  - Worktrees: list, add, open, remove, lock, unlock, prune
+
+Note: Some submodule operations (update, sync, add, deinit, remove) and worktree
+remove use subprocess fallbacks to `git` CLI for completeness and credential
+support where pygit2 bindings are incomplete.
 
 Credentials for remote operations:
 - SSH: via `KeypairFromAgent` (uses system SSH agent)
 - HTTPS: via credential helper callback that invokes `git credential fill`
 
-Agents never run git shell commands directly.
+Agents never run git shell commands directly (except for the subprocess fallbacks noted above).
 
 File operations:
 
@@ -2278,7 +2285,7 @@ Any tool can accept optional `session_id` parameter to:
 | `codeplane_map` | Repository structure and mental model | No |
 | `codeplane_read` | Read files with optional line ranges | No |
 | `codeplane_mutate` | Atomic file edits | No |
-| `codeplane_git` | Full Git operations (status, diff, commits, branches, merge, stash, remotes) | No |
+| `codeplane_git` | Full Git operations (status, diff, commits, branches, merge, stash, remotes, rebase, submodules, worktrees) | No |
 | `codeplane_status` | Daemon health, index state, session info | No |
 
 #### Refactor Tools (Requires LSP)
@@ -2559,7 +2566,7 @@ Atomic file edits with structured delta response.
 
 #### `codeplane_git`
 
-Comprehensive Git operations — status, diff, staging, commits, branches, merges, stash, and remote operations.
+Comprehensive Git operations — status, diff, staging, commits, branches, merges, stash, remote operations, interactive rebase, submodule management, and worktrees.
 
 **Parameters:**
 
@@ -2582,7 +2589,15 @@ Comprehensive Git operations — status, diff, staging, commits, branches, merge
     // Write operations - Tags
     | "create_tag" | "delete_tag"
     // Write operations - Remotes
-    | "fetch" | "push" | "pull";
+    | "fetch" | "push" | "pull"
+    // Write operations - Rebase (Interactive)
+    | "rebase_plan" | "rebase_execute" | "rebase_continue" | "rebase_abort" | "rebase_skip"
+    // Write operations - Submodules
+    | "submodules" | "submodule_status" | "submodule_init" | "submodule_update"
+    | "submodule_sync" | "submodule_add" | "submodule_deinit" | "submodule_remove"
+    // Write operations - Worktrees
+    | "worktrees" | "worktree_add" | "worktree_open" | "worktree_remove"
+    | "worktree_lock" | "worktree_unlock" | "worktree_prune" | "is_worktree" | "worktree_info";
   
   paths?: string[];                 // Scope to paths (for status, stage, diff, blame)
   
@@ -2650,6 +2665,40 @@ Comprehensive Git operations — status, diff, staging, commits, branches, merge
     refspecs?: string[];
     force?: boolean;                // For push
     prune?: boolean;                // For fetch
+    
+    // For rebase_plan
+    upstream?: string;              // Upstream ref to rebase onto
+    onto?: string;                  // Optional: rebase onto different base
+    
+    // For rebase_execute
+    plan?: {                        // Modified rebase plan
+      upstream: string;
+      onto: string;
+      steps: Array<{
+        action: "pick" | "reword" | "edit" | "squash" | "fixup" | "drop";
+        commit_sha: string;
+        message?: string;           // For reword/squash
+      }>;
+    };
+    
+    // For submodule operations
+    submodule_paths?: string[];     // Scope to specific submodules
+    recursive?: boolean;            // For submodule_update
+    init?: boolean;                 // Initialize before update (default true)
+    
+    // For submodule_add
+    url?: string;
+    path?: string;
+    branch?: string;
+    
+    // For worktree_add
+    worktree_path?: string;         // Path for new worktree
+    worktree_ref?: string;          // Branch/ref to checkout
+    checkout?: boolean;             // Checkout after add (default true)
+    
+    // For worktree_lock/unlock/remove/open
+    worktree_name?: string;
+    lock_reason?: string;           // For worktree_lock
   };
   
   session_id?: string;
@@ -2749,6 +2798,90 @@ Comprehensive Git operations — status, diff, staging, commits, branches, merge
   result: {
     remote: string;
     updated_refs: Array<{ ref: string; old_oid?: string; new_oid: string }>;
+  };
+  _session: SessionState;
+}
+
+// rebase_plan
+{
+  action: "rebase_plan";
+  result: {
+    upstream: string;
+    onto: string;
+    steps: Array<{
+      action: "pick";
+      commit_sha: string;
+      message: string;
+    }>;
+  };
+  _session: SessionState;
+}
+
+// rebase_execute / rebase_continue / rebase_skip
+{
+  action: "rebase_execute" | "rebase_continue" | "rebase_skip";
+  result: {
+    success: boolean;
+    completed_steps: number;
+    total_steps: number;
+    state: "done" | "conflict" | "edit_pause" | "aborted";
+    conflict_paths?: string[];
+    current_commit?: string;        // For edit_pause
+    new_head?: string;              // Final HEAD after success
+  };
+  _session: SessionState;
+}
+
+// submodules
+{
+  action: "submodules";
+  result: Array<{
+    name: string;
+    path: string;
+    url: string;
+    branch?: string;
+    head_sha?: string;
+    status: "uninitialized" | "clean" | "dirty" | "outdated" | "missing";
+  }>;
+  _session: SessionState;
+}
+
+// submodule_update
+{
+  action: "submodule_update";
+  result: {
+    updated: string[];
+    failed: Array<{ path: string; error: string }>;
+    already_current: string[];
+  };
+  _session: SessionState;
+}
+
+// worktrees
+{
+  action: "worktrees";
+  result: Array<{
+    name: string;
+    path: string;
+    head_ref: string;
+    head_sha: string;
+    is_main: boolean;
+    is_bare: boolean;
+    is_locked: boolean;
+    lock_reason?: string;
+    is_prunable: boolean;
+  }>;
+  _session: SessionState;
+}
+
+// worktree_add
+{
+  action: "worktree_add";
+  result: {
+    name: string;
+    path: string;
+    head_ref: string;
+    head_sha: string;
   };
   _session: SessionState;
 }

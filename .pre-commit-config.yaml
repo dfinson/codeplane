@@ -16,4 +16,5 @@ repos:
           - pydantic-settings>=2.0.0
           - structlog>=25.5.0
           - click>=8.3.0
+          - pygit2>=1.19.0
         args: [--config-file=pyproject.toml]

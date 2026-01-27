@@ -100,4 +100,4 @@ jobs:
 
       - name: Run tests
         if: steps.check-tests.outputs.has_tests == 'true'
-        run: pytest --cov=codeplane --cov-report=term-missing
+        run: pytest
