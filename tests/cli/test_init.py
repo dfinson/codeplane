@@ -1,0 +1,119 @@
+"""Tests for cpl init command."""
+
+from collections.abc import Generator
+from pathlib import Path
+
+import pytest
+import yaml
+from click.testing import CliRunner
+
+from codeplane.cli.main import cli
+
+runner = CliRunner()
+
+
+@pytest.fixture
+def temp_git_repo(tmp_path: Path) -> Generator[Path, None, None]:
+    """Create a temporary git repository."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    yield repo
+
+
+@pytest.fixture
+def temp_non_git(tmp_path: Path) -> Generator[Path, None, None]:
+    """Create a temporary non-git directory."""
+    non_git = tmp_path / "not-a-repo"
+    non_git.mkdir()
+    yield non_git
+
+
+class TestInitCommand:
+    """cpl init command tests."""
+
+    def test_init_creates_codeplane_dir(self, temp_git_repo: Path) -> None:
+        """Init creates .codeplane/ directory with config."""
+        # Given
+        repo = temp_git_repo
+
+        # When
+        result = runner.invoke(cli, ["init", str(repo)])
+
+        # Then
+        assert result.exit_code == 0
+        assert (repo / ".codeplane").is_dir()
+        assert (repo / ".codeplane" / "config.yaml").exists()
+
+    def test_init_creates_cplignore(self, temp_git_repo: Path) -> None:
+        """Init creates .cplignore with default patterns."""
+        # Given
+        repo = temp_git_repo
+
+        # When
+        runner.invoke(cli, ["init", str(repo)])
+
+        # Then
+        ignore_path = repo / ".cplignore"
+        assert ignore_path.exists()
+        content = ignore_path.read_text()
+        assert "node_modules/" in content
+        assert ".env" in content
+
+    def test_init_config_is_valid_yaml(self, temp_git_repo: Path) -> None:
+        """Init creates valid YAML config with expected sections."""
+        # Given
+        repo = temp_git_repo
+
+        # When
+        runner.invoke(cli, ["init", str(repo)])
+
+        # Then
+        config_path = repo / ".codeplane" / "config.yaml"
+        with config_path.open() as f:
+            config = yaml.safe_load(f)
+        assert "logging" in config
+        assert "daemon" in config
+
+    def test_init_fails_outside_git_repo(self, temp_non_git: Path) -> None:
+        """Init fails with error when run outside git repository."""
+        # Given
+        non_git_dir = temp_non_git
+
+        # When
+        result = runner.invoke(cli, ["init", str(non_git_dir)])
+
+        # Then
+        assert result.exit_code == 1
+        assert "Not inside a git repository" in result.output
+
+    def test_init_idempotent_without_force(self, temp_git_repo: Path) -> None:
+        """Init without --force is idempotent on already initialized repo."""
+        # Given
+        repo = temp_git_repo
+        runner.invoke(cli, ["init", str(repo)])
+
+        # When
+        result = runner.invoke(cli, ["init", str(repo)])
+
+        # Then
+        assert result.exit_code == 0
+        assert "Already initialized" in result.output
+
+    def test_init_force_reinitializes(self, temp_git_repo: Path) -> None:
+        """Init with --force overwrites existing config."""
+        # Given
+        repo = temp_git_repo
+        runner.invoke(cli, ["init", str(repo)])
+        config_path = repo / ".codeplane" / "config.yaml"
+        config_path.write_text("custom: true")
+
+        # When
+        result = runner.invoke(cli, ["init", "--force", str(repo)])
+
+        # Then
+        assert result.exit_code == 0
+        assert "Initialized CodePlane" in result.output
+        with config_path.open() as f:
+            config = yaml.safe_load(f)
+        assert "custom" not in config
