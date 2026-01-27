@@ -1442,12 +1442,23 @@ Global:
 
 Git:
 
-- Local operations via `pygit2`:
-  - status, diff, blame, staging
-- Remote operations via system git subprocess:
-  - fetch, pull, push (credential compatibility)
+All Git operations via `pygit2` (libgit2 bindings):
 
-Agents never run git commands directly.
+- **Read operations:** status, diff, blame, log, branches, tags, remotes, merge analysis
+- **Write operations:**
+  - Index: stage, unstage, discard
+  - Commits: commit, amend
+  - Branches: create, checkout, delete, rename
+  - History: reset (soft/mixed/hard), merge, cherry-pick, revert
+  - Stash: push, pop, apply, drop, list
+  - Tags: create, delete
+  - Remotes: fetch, push, pull
+
+Credentials for remote operations:
+- SSH: via `KeypairFromAgent` (uses system SSH agent)
+- HTTPS: via credential helper callback that invokes `git credential fill`
+
+Agents never run git shell commands directly.
 
 File operations:
 
@@ -2267,7 +2278,7 @@ Any tool can accept optional `session_id` parameter to:
 | `codeplane_map` | Repository structure and mental model | No |
 | `codeplane_read` | Read files with optional line ranges | No |
 | `codeplane_mutate` | Atomic file edits | No |
-| `codeplane_git` | Git operations (status, diff, blame, stage) | No |
+| `codeplane_git` | Full Git operations (status, diff, commits, branches, merge, stash, remotes) | No |
 | `codeplane_status` | Daemon health, index state, session info | No |
 
 #### Refactor Tools (Requires LSP)
@@ -2548,24 +2559,99 @@ Atomic file edits with structured delta response.
 
 #### `codeplane_git`
 
-Git operations — read and stage only, no commits.
+Comprehensive Git operations — status, diff, staging, commits, branches, merges, stash, and remote operations.
 
 **Parameters:**
 
 ```typescript
 {
-  action: "status" | "diff" | "blame" | "stage" | "unstage" | "log";
-  paths?: string[];                 // Scope to paths
+  action: 
+    // Read operations
+    | "status" | "diff" | "blame" | "log" | "show" | "branches" | "tags" | "remotes"
+    | "merge_analysis" | "describe"
+    // Write operations - Index
+    | "stage" | "unstage" | "discard"
+    // Write operations - Commits
+    | "commit" | "amend"
+    // Write operations - Branches
+    | "create_branch" | "checkout" | "delete_branch" | "rename_branch"
+    // Write operations - History
+    | "reset" | "merge" | "cherrypick" | "revert" | "abort_merge"
+    // Write operations - Stash
+    | "stash_push" | "stash_pop" | "stash_apply" | "stash_drop" | "stash_list"
+    // Write operations - Tags
+    | "create_tag" | "delete_tag"
+    // Write operations - Remotes
+    | "fetch" | "push" | "pull";
+  
+  paths?: string[];                 // Scope to paths (for status, stage, diff, blame)
+  
   options?: {
     // For diff
     base?: string;                  // Commit/ref to diff against
+    target?: string;                // Target ref (default: working tree)
     staged?: boolean;               // Diff staged changes
+    
     // For blame
     line_range?: { start: number; end: number };
+    
     // For log
-    limit?: number;
-    since?: string;
+    ref?: string;                   // Starting ref (default: HEAD)
+    limit?: number;                 // Max commits (default: 50)
+    since?: string;                 // ISO date
+    until?: string;                 // ISO date
+    
+    // For show
+    ref?: string;                   // Commit to show
+    
+    // For commit/amend
+    message?: string;
+    author?: { name: string; email: string };
+    allow_empty?: boolean;
+    
+    // For create_branch
+    name?: string;
+    ref?: string;                   // Base ref (default: HEAD)
+    
+    // For checkout
+    ref?: string;
+    create?: boolean;               // Create branch if not exists
+    
+    // For delete_branch
+    name?: string;
+    force?: boolean;
+    
+    // For reset
+    ref?: string;
+    mode?: "soft" | "mixed" | "hard";
+    
+    // For merge
+    ref?: string;
+    message?: string;
+    
+    // For cherrypick/revert
+    commit?: string;
+    
+    // For stash_push
+    message?: string;
+    include_untracked?: boolean;
+    keep_index?: boolean;
+    
+    // For stash_pop/apply/drop
+    index?: number;                 // Stash index (default: 0)
+    
+    // For create_tag
+    name?: string;
+    ref?: string;
+    message?: string;               // If provided, creates annotated tag
+    
+    // For fetch/push/pull
+    remote?: string;                // Default: "origin"
+    refspecs?: string[];
+    force?: boolean;                // For push
+    prune?: boolean;                // For fetch
   };
+  
   session_id?: string;
 }
 ```
@@ -2577,13 +2663,14 @@ Git operations — read and stage only, no commits.
 {
   action: "status";
   result: {
-    branch: string;
-    head: string;
-    clean: boolean;
-    staged: string[];
-    modified: string[];
+    branch: string | null;          // null if detached HEAD
+    head_commit: string;
+    is_clean: boolean;
+    staged: Array<{ path: string; status: string; old_path?: string }>;
+    modified: Array<{ path: string; status: string }>;
     untracked: string[];
-    conflicts: string[];
+    conflicts: Array<{ path: string; ancestor_oid?: string; ours_oid?: string; theirs_oid?: string }>;
+    state: "none" | "merge" | "revert" | "cherrypick" | "rebase" | "bisect";
   };
   _session: SessionState;
 }
@@ -2594,20 +2681,78 @@ Git operations — read and stage only, no commits.
   result: {
     files: Array<{
       path: string;
-      status: "added" | "modified" | "deleted" | "renamed";
+      status: "added" | "modified" | "deleted" | "renamed" | "copied";
       old_path?: string;
+      binary: boolean;
       hunks: Array<{
         old_start: number;
-        old_count: number;
+        old_lines: number;
         new_start: number;
-        new_count: number;
-        content: string;
+        new_lines: number;
+        header: string;
+        lines: Array<{ origin: "+" | "-" | " "; content: string; old_lineno?: number; new_lineno?: number }>;
       }>;
     }>;
-    stats: { files: number; insertions: number; deletions: number };
+    stats: { files_changed: number; insertions: number; deletions: number };
   };
   _session: SessionState;
 }
+
+// commit/amend
+{
+  action: "commit" | "amend";
+  result: {
+    oid: string;
+    short_oid: string;
+  };
+  _session: SessionState;
+}
+
+// merge
+{
+  action: "merge";
+  result: {
+    success: boolean;
+    fastforward: boolean;
+    commit?: string;
+    conflicts: Array<{ path: string; ancestor_oid?: string; ours_oid?: string; theirs_oid?: string }>;
+  };
+  _session: SessionState;
+}
+
+// stash_push
+{
+  action: "stash_push";
+  result: {
+    commit: string;
+    message: string;
+  };
+  _session: SessionState;
+}
+
+// branches
+{
+  action: "branches";
+  result: Array<{
+    name: string;
+    commit: string;
+    is_current: boolean;
+    is_remote: boolean;
+    upstream?: string;
+  }>;
+  _session: SessionState;
+}
+
+// fetch
+{
+  action: "fetch";
+  result: {
+    remote: string;
+    updated_refs: Array<{ ref: string; old_oid?: string; new_oid: string }>;
+  };
+  _session: SessionState;
+}
+```
 ```
 
 ---
