@@ -48,10 +48,10 @@ def init_command(path: Path, force: bool) -> None:
     with config_path.open("w") as f:
         yaml.dump(config.model_dump(), f, default_flow_style=False, sort_keys=False)
 
-    ignore_path = repo_root / ".cplignore"
+    ignore_path = codeplane_dir / "ignore"
     if not ignore_path.exists() or force:
         ignore_path.write_text(get_cplignore_template())
 
     click.echo(f"Initialized CodePlane in {repo_root}")
-    click.echo(f"  Config: {config_path}")
-    click.echo(f"  Ignore: {ignore_path}")
+    click.echo(f"  Config: {config_path.relative_to(repo_root)}")
+    click.echo(f"  Ignore: {ignore_path.relative_to(repo_root)}")
