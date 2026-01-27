@@ -713,7 +713,77 @@ Targeted lexical search is indexed, scoped, structured, deterministic.
 
 (Interface details are deferred; these are capabilities.)
 
-### 7.11 LSP Management & Language Support
+### 7.11 Documentation Awareness
+
+CodePlane indexes documentation files as first-class citizens alongside code, enabling agents to find explanations, examples, and references coherently.
+
+#### Supported Documentation Formats
+
+| Format | Extensions | Structure Extraction |
+|--------|------------|---------------------|
+| Markdown | `.md`, `.markdown` | Headings, code blocks, links |
+| reStructuredText | `.rst` | Headings, code blocks, directives |
+| AsciiDoc | `.adoc`, `.asciidoc` | Headings, code blocks, links |
+| Plain text | `.txt`, `README`, `CHANGELOG` | Paragraph boundaries only |
+
+#### Documentation Structure Index
+
+For each documentation file, CodePlane extracts:
+
+- **Headings**: Title, level, anchor slug, line span
+- **Code blocks**: Language tag, content, line span, referenced symbols (best-effort)
+- **Links**: Internal (relative paths), external (URLs), anchor references
+- **Front matter**: YAML/TOML metadata blocks (common in static site generators)
+
+This enables:
+- Navigation by heading ("jump to Installation section")
+- Finding code examples for a symbol
+- Detecting broken internal links
+
+#### Doc-Code Linking (Best-Effort)
+
+CodePlane attempts to link documentation references to code symbols:
+
+1. **Code blocks**: Parse code blocks using Tree-sitter (when language tagged) and extract symbol references
+2. **Inline code**: Match backtick-wrapped identifiers (`` `MyClass` ``) against known symbols
+3. **Import statements in examples**: Link to actual module definitions
+
+Linking is best-effort and heuristic-based:
+- Exact symbol name matches are linked with high confidence
+- Partial matches (e.g., `MyClass` in prose without backticks) are flagged but not auto-linked
+- Ambiguous references (multiple symbols with same name) are not linked
+
+#### Search Ranking for Documentation
+
+Documentation files receive adjusted ranking based on query intent signals:
+
+| Query Pattern | Doc Weight | Code Weight |
+|---------------|------------|-------------|
+| "how to", "example", "usage" | Higher | Lower |
+| "where is", "definition", "implementation" | Lower | Higher |
+| Symbol name (exact) | Equal | Equal |
+| General keyword | Equal | Equal |
+
+Agents can also explicitly scope searches:
+- `scope:docs` — documentation files only
+- `scope:code` — source files only
+- `scope:all` — default, both
+
+#### Docstring Extraction
+
+Docstrings are extracted as part of symbol metadata:
+
+- Python: `"""..."""` immediately following `def`/`class`
+- JavaScript/TypeScript: JSDoc `/** ... */` preceding functions/classes
+- Go: `//` comment blocks preceding exported symbols
+- Rust: `///` doc comments
+
+Docstrings are:
+- Stored with their parent symbol in the structural index
+- Searchable via lexical index
+- Returned as part of symbol search results
+
+### 7.12 LSP Management & Language Support
 
 #### Acquisition Model
 
@@ -1077,18 +1147,81 @@ Examples of unaffected references:
 - `# MyClassA` (comment)
 - `"""Used in MyClassA."""` (docstring)
 - `README.md` references to `MyClassA`
+- Code examples in documentation
+- Inline code references (`` `MyClassA` ``)
 
-To maintain coherence, CodePlane performs a **post-refactor sweep**:
-- Searches for exact string matches of the original symbol name
-- Scans:
-  - Comments in source code (from structural index)
-  - Markdown and text files (README, docs, etc.)
-  - Overlay files, if applicable
-- Generates a separate, deterministic patch set for these changes
-- Annotates these as **non-semantic edits**, separate from LSP edits
-- User or agent may preview, accept, or reject them
+#### Auto-Update with Warning
 
-This ensures textual references to renamed symbols are coherently updated without being conflated with semantic LSP-backed mutations.
+CodePlane performs a **post-refactor documentation sweep** that:
+
+1. **Scans** for textual references to the renamed symbol:
+   - Comments in source code (from structural index)
+   - Documentation files (markdown, RST, AsciiDoc, plain text)
+   - Docstrings (extracted during indexing)
+   - Code blocks in documentation (parsed for symbol references)
+   - Inline code spans (`` `SymbolName` ``)
+
+2. **Categorizes** matches by confidence:
+   - **High confidence**: Exact match in backticks, code blocks, or import statements
+   - **Medium confidence**: Exact match in prose near code context
+   - **Low confidence**: Partial match or ambiguous context
+
+3. **Auto-applies** changes but **flags for review**:
+   - All documentation edits are applied in the same atomic patch
+   - The response includes a `doc_updates_applied` field with:
+     - Files changed
+     - Matches found (with confidence levels)
+     - Line numbers and context
+   - A `review_recommended: true` flag when any low/medium confidence matches exist
+
+4. **Structured response** includes both semantic and documentation edits:
+
+```json
+{
+  "refactor": "rename_symbol",
+  "semantic_edits": {
+    "files_changed": 12,
+    "edits": [...]
+  },
+  "doc_edits": {
+    "files_changed": 3,
+    "review_recommended": true,
+    "matches": [
+      {
+        "file": "README.md",
+        "line": 45,
+        "confidence": "high",
+        "context": "See `MyClassA` for details"
+      },
+      {
+        "file": "docs/guide.md", 
+        "line": 123,
+        "confidence": "medium",
+        "context": "The MyClassA handles authentication"
+      }
+    ]
+  }
+}
+```
+
+The agent receives the full diff and can verify documentation updates make sense in context. Since the operation is atomic, rollback reverts both semantic and documentation changes together.
+
+#### Configuration
+
+```yaml
+refactor:
+  doc_sweep:
+    enabled: true           # default
+    auto_apply: true        # apply doc changes automatically
+    min_confidence: medium  # only auto-apply medium+ confidence
+    scan_extensions:
+      - .md
+      - .rst
+      - .adoc
+      - .txt
+```
+
+This ensures textual references to renamed symbols are coherently updated without being conflated with semantic LSP-backed mutations, while giving agents visibility into what changed and why.
 
 ### 8.12 Optional Subsystem Toggle
 
