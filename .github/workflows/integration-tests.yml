@@ -33,6 +33,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@codeplane.dev"
+          git config --global user.name "CodePlane CI"
+
       # Generate ephemeral token for private repo access
       # Requires: CODEPLANE_TEST_APP_ID and CODEPLANE_TEST_APP_PRIVATE_KEY secrets
       - name: Generate GitHub App token
