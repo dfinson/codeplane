@@ -32,7 +32,7 @@ def temp_non_git(tmp_path: Path) -> Generator[Path, None, None]:
 class TestInitCommand:
     """cpl init command tests."""
 
-    def test_init_creates_codeplane_dir(self, temp_git_repo: Path) -> None:
+    def test_given_git_repo_when_init_then_creates_codeplane_dir(self, temp_git_repo: Path) -> None:
         """Init creates .codeplane/ directory with config."""
         # Given
         repo = temp_git_repo
@@ -45,7 +45,7 @@ class TestInitCommand:
         assert (repo / ".codeplane").is_dir()
         assert (repo / ".codeplane" / "config.yaml").exists()
 
-    def test_init_creates_cplignore(self, temp_git_repo: Path) -> None:
+    def test_given_git_repo_when_init_then_creates_cplignore(self, temp_git_repo: Path) -> None:
         """Init creates .cplignore with default patterns."""
         # Given
         repo = temp_git_repo
@@ -60,7 +60,7 @@ class TestInitCommand:
         assert "node_modules/" in content
         assert ".env" in content
 
-    def test_init_config_is_valid_yaml(self, temp_git_repo: Path) -> None:
+    def test_given_git_repo_when_init_then_config_is_valid_yaml(self, temp_git_repo: Path) -> None:
         """Init creates valid YAML config with expected sections."""
         # Given
         repo = temp_git_repo
@@ -75,7 +75,7 @@ class TestInitCommand:
         assert "logging" in config
         assert "daemon" in config
 
-    def test_init_fails_outside_git_repo(self, temp_non_git: Path) -> None:
+    def test_given_non_git_dir_when_init_then_fails(self, temp_non_git: Path) -> None:
         """Init fails with error when run outside git repository."""
         # Given
         non_git_dir = temp_non_git
@@ -87,7 +87,7 @@ class TestInitCommand:
         assert result.exit_code == 1
         assert "Not inside a git repository" in result.output
 
-    def test_init_idempotent_without_force(self, temp_git_repo: Path) -> None:
+    def test_given_initialized_repo_when_init_again_then_idempotent(self, temp_git_repo: Path) -> None:
         """Init without --force is idempotent on already initialized repo."""
         # Given
         repo = temp_git_repo
@@ -100,7 +100,7 @@ class TestInitCommand:
         assert result.exit_code == 0
         assert "Already initialized" in result.output
 
-    def test_init_force_reinitializes(self, temp_git_repo: Path) -> None:
+    def test_given_initialized_repo_when_init_force_then_reinitializes(self, temp_git_repo: Path) -> None:
         """Init with --force overwrites existing config."""
         # Given
         repo = temp_git_repo

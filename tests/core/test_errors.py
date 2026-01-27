@@ -22,7 +22,9 @@ class TestErrorCode:
             (ErrorCode.INTERNAL_TIMEOUT, 9000),
         ],
     )
-    def test_error_codes_in_correct_range(self, code: ErrorCode, expected_range: int) -> None:
+    def test_given_error_code_when_checked_then_in_correct_range(
+        self, code: ErrorCode, expected_range: int
+    ) -> None:
         """Error codes fall within their designated numeric range."""
         # Given
         error_code = code
@@ -37,7 +39,7 @@ class TestErrorCode:
 class TestCodePlaneError:
     """Base error behavior tests."""
 
-    def test_to_dict_serialization(self) -> None:
+    def test_given_error_when_to_dict_then_serializes_all_fields(self) -> None:
         """Error serializes to dict with all required fields."""
         # Given
         error = CodePlaneError(
@@ -59,7 +61,7 @@ class TestCodePlaneError:
             "details": {"key": "value"},
         }
 
-    def test_str_representation(self) -> None:
+    def test_given_error_when_str_then_human_readable(self) -> None:
         """Error string representation is human readable."""
         # Given
         error = CodePlaneError(
@@ -86,7 +88,7 @@ class TestConfigError:
             ("file_not_found", {"path": "/missing"}, ErrorCode.CONFIG_FILE_NOT_FOUND),
         ],
     )
-    def test_factory_methods_set_correct_code(
+    def test_given_factory_when_called_then_correct_code(
         self, factory: str, kwargs: dict, expected_code: ErrorCode
     ) -> None:
         """Factory methods produce errors with correct error codes."""
@@ -99,7 +101,7 @@ class TestConfigError:
         # Then
         assert error.code == expected_code
 
-    def test_parse_error_includes_path_in_details(self) -> None:
+    def test_given_parse_error_when_created_then_path_in_details(self) -> None:
         """Parse error includes file path in details."""
         # Given
         path = "/config.yaml"
@@ -116,7 +118,7 @@ class TestConfigError:
 class TestInternalError:
     """InternalError tests."""
 
-    def test_unexpected_includes_extra_details(self) -> None:
+    def test_given_unexpected_error_when_created_then_includes_extras(self) -> None:
         """Unexpected error captures arbitrary extra details."""
         # Given
         message = "boom"

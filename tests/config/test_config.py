@@ -44,7 +44,9 @@ class TestConfigModels:
             ("INVALID", False),
         ],
     )
-    def test_log_level_validation(self, level: str, valid: bool) -> None:
+    def test_given_log_level_when_validated_then_accepts_only_valid(
+        self, level: str, valid: bool
+    ) -> None:
         """Log level accepts only valid values (DEBUG, INFO, WARN, ERROR)."""
         # Given
         logging_config = {"level": level}
@@ -67,7 +69,9 @@ class TestConfigModels:
             (65536, False),
         ],
     )
-    def test_port_validation(self, port: int, valid: bool) -> None:
+    def test_given_port_when_validated_then_accepts_only_valid_range(
+        self, port: int, valid: bool
+    ) -> None:
         """Port accepts only valid range (0-65535)."""
         # Given
         daemon_config = {"port": port}
@@ -84,7 +88,9 @@ class TestConfigModels:
 class TestConfigLoading:
     """Configuration loading and precedence tests."""
 
-    def test_defaults_when_no_config_files(self, temp_repo: Path) -> None:
+    def test_given_no_config_files_when_load_then_uses_defaults(
+        self, temp_repo: Path
+    ) -> None:
         """Defaults are used when no config files exist."""
         # Given
         repo = temp_repo  # no .codeplane/config.yaml
@@ -96,7 +102,9 @@ class TestConfigLoading:
         assert config.logging.level == "INFO"
         assert config.daemon.port == 0
 
-    def test_repo_config_overrides_defaults(self, temp_repo: Path) -> None:
+    def test_given_repo_config_when_load_then_overrides_defaults(
+        self, temp_repo: Path
+    ) -> None:
         """Repo config file overrides defaults."""
         # Given
         config_dir = temp_repo / ".codeplane"
@@ -110,7 +118,9 @@ class TestConfigLoading:
         # Then
         assert config.logging.level == "DEBUG"
 
-    def test_env_overrides_file(self, temp_repo: Path) -> None:
+    def test_given_env_var_when_load_then_overrides_file(
+        self, temp_repo: Path
+    ) -> None:
         """Environment variable overrides file config."""
         # Given
         config_dir = temp_repo / ".codeplane"
@@ -125,7 +135,9 @@ class TestConfigLoading:
         # Then
         assert config.logging.level == "ERROR"
 
-    def test_explicit_overrides_highest_precedence(self, temp_repo: Path) -> None:
+    def test_given_explicit_overrides_when_load_then_highest_precedence(
+        self, temp_repo: Path
+    ) -> None:
         """Explicit overrides take highest precedence."""
         # Given
         os.environ["CODEPLANE_LOGGING_LEVEL"] = "ERROR"
@@ -137,7 +149,9 @@ class TestConfigLoading:
         # Then
         assert config.logging.level == "WARN"
 
-    def test_invalid_yaml_raises_config_error(self, temp_repo: Path) -> None:
+    def test_given_invalid_yaml_when_load_then_raises_config_error(
+        self, temp_repo: Path
+    ) -> None:
         """Invalid YAML raises ConfigError with parse error code."""
         # Given
         config_dir = temp_repo / ".codeplane"
@@ -149,7 +163,9 @@ class TestConfigLoading:
             load_config(repo_root=temp_repo)
         assert exc_info.value.code.name == "CONFIG_PARSE_ERROR"
 
-    def test_invalid_value_raises_config_error(self, temp_repo: Path) -> None:
+    def test_given_invalid_value_when_load_then_raises_config_error(
+        self, temp_repo: Path
+    ) -> None:
         """Invalid config value raises ConfigError with field info."""
         # Given
         config_dir = temp_repo / ".codeplane"

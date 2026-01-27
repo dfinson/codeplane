@@ -6,45 +6,7 @@ import click
 import yaml
 
 from codeplane.config.models import CodePlaneConfig
-
-_DEFAULT_CPLIGNORE = """\
-# CodePlane ignore patterns
-# Syntax follows .gitignore
-
-# Dependencies
-node_modules/
-vendor/
-.venv/
-venv/
-__pycache__/
-
-# Build outputs
-dist/
-build/
-*.egg-info/
-target/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-
-# Secrets (never index)
-.env
-.env.*
-*.pem
-*.key
-**/secrets/
-
-# Large/binary files
-*.zip
-*.tar.gz
-*.jar
-*.whl
-*.so
-*.dll
-*.dylib
-"""
+from codeplane.templates import get_cplignore_template
 
 
 def _find_git_root(start: Path) -> Path | None:
@@ -79,19 +41,16 @@ def init_command(path: Path, force: bool) -> None:
         click.echo("Use --force to reinitialize")
         return
 
-    # Create directory structure
     codeplane_dir.mkdir(exist_ok=True)
 
-    # Write default config
     config = CodePlaneConfig()
     config_path = codeplane_dir / "config.yaml"
     with config_path.open("w") as f:
         yaml.dump(config.model_dump(), f, default_flow_style=False, sort_keys=False)
 
-    # Write .cplignore
     ignore_path = repo_root / ".cplignore"
     if not ignore_path.exists() or force:
-        ignore_path.write_text(_DEFAULT_CPLIGNORE)
+        ignore_path.write_text(get_cplignore_template())
 
     click.echo(f"Initialized CodePlane in {repo_root}")
     click.echo(f"  Config: {config_path}")
