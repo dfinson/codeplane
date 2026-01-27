@@ -70,10 +70,10 @@ class BranchInfo:
     def from_pygit2(cls, branch: pygit2.Branch) -> BranchInfo:
         upstream = None
         try:
-            if hasattr(branch, "upstream") and branch.upstream:
+            if branch.upstream:
                 upstream = branch.upstream.shorthand
         except ValueError:
-            # Remote branches don't have upstreams
+            # Remote branches raise ValueError when accessing .upstream
             pass
         return cls(
             name=branch.name,

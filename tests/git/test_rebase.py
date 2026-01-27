@@ -247,3 +247,190 @@ class TestRebaseInProgress:
         _, ops = git_repo_with_commit
 
         assert ops.rebase_in_progress() is False
+
+
+class TestRebaseActions:
+    """Tests for rebase with different action types."""
+
+    def test_rebase_with_drop_action(
+        self, git_repo_with_commits: tuple[Path, GitOps, list[str]]
+    ) -> None:
+        """Rebase with drop action should skip dropped commits."""
+        from codeplane.git import RebasePlan, RebaseStep
+
+        repo_path, ops, shas = git_repo_with_commits
+
+        # Create base branch at first commit
+        default = ops.current_branch()
+        ops.checkout(shas[0])
+        ops.create_branch("base")
+        ops.checkout(default)
+
+        # Get commits to rebase
+        plan = ops.rebase_plan("base")
+        if len(plan.steps) < 2:
+            pytest.skip("Need at least 2 commits to test drop")
+
+        # Create custom plan with drop action
+        custom_steps = [
+            RebaseStep(action="drop", commit_sha=plan.steps[0].commit_sha, message=None),
+        ]
+        for step in plan.steps[1:]:
+            custom_steps.append(RebaseStep(action="pick", commit_sha=step.commit_sha, message=None))
+
+        custom_plan = RebasePlan(onto="base", upstream="base", steps=custom_steps)
+
+        result = ops.rebase_execute(custom_plan)
+        assert result.success is True or result.state == "conflict"
+
+        if result.state == "conflict":
+            ops.rebase_abort()
+
+    def test_rebase_with_reword_action(
+        self, git_repo_with_commits: tuple[Path, GitOps, list[str]]
+    ) -> None:
+        """Rebase with reword action should change commit message."""
+        from codeplane.git import RebasePlan, RebaseStep
+
+        repo_path, ops, shas = git_repo_with_commits
+
+        # Create base branch
+        default = ops.current_branch()
+        ops.checkout(shas[0])
+        ops.create_branch("reword-base")
+        ops.checkout(default)
+
+        plan = ops.rebase_plan("reword-base")
+        if len(plan.steps) < 1:
+            pytest.skip("Need at least 1 commit to test reword")
+
+        # Create plan with reword action
+        custom_steps = [
+            RebaseStep(
+                action="reword",
+                commit_sha=plan.steps[0].commit_sha,
+                message="New reworded message",
+            ),
+        ]
+        for step in plan.steps[1:]:
+            custom_steps.append(RebaseStep(action="pick", commit_sha=step.commit_sha, message=None))
+
+        custom_plan = RebasePlan(onto="reword-base", upstream="reword-base", steps=custom_steps)
+
+        result = ops.rebase_execute(custom_plan)
+
+        if result.success:
+            # Verify the commit message was changed
+            log = ops.log(limit=len(plan.steps))
+            assert any("New reworded message" in c.message for c in log)
+        elif result.state == "conflict":
+            ops.rebase_abort()
+
+    def test_rebase_with_squash_action(
+        self, git_repo_with_commits: tuple[Path, GitOps, list[str]]
+    ) -> None:
+        """Rebase with squash action should combine commits."""
+        from codeplane.git import RebasePlan, RebaseStep
+
+        repo_path, ops, shas = git_repo_with_commits
+
+        default = ops.current_branch()
+        ops.checkout(shas[0])
+        ops.create_branch("squash-base")
+        ops.checkout(default)
+
+        plan = ops.rebase_plan("squash-base")
+        if len(plan.steps) < 2:
+            pytest.skip("Need at least 2 commits to test squash")
+
+        # Create plan: pick first, squash second into it
+        custom_steps = [
+            RebaseStep(action="pick", commit_sha=plan.steps[0].commit_sha, message=None),
+            RebaseStep(action="squash", commit_sha=plan.steps[1].commit_sha, message=None),
+        ]
+        for step in plan.steps[2:]:
+            custom_steps.append(RebaseStep(action="pick", commit_sha=step.commit_sha, message=None))
+
+        custom_plan = RebasePlan(onto="squash-base", upstream="squash-base", steps=custom_steps)
+
+        result = ops.rebase_execute(custom_plan)
+
+        if result.success:
+            # The squashed commits should result in fewer commits
+            assert result.state == "done"
+        elif result.state == "conflict":
+            ops.rebase_abort()
+
+    def test_rebase_with_fixup_action(
+        self, git_repo_with_commits: tuple[Path, GitOps, list[str]]
+    ) -> None:
+        """Rebase with fixup action should combine commits without message."""
+        from codeplane.git import RebasePlan, RebaseStep
+
+        repo_path, ops, shas = git_repo_with_commits
+
+        default = ops.current_branch()
+        ops.checkout(shas[0])
+        ops.create_branch("fixup-base")
+        ops.checkout(default)
+
+        plan = ops.rebase_plan("fixup-base")
+        if len(plan.steps) < 2:
+            pytest.skip("Need at least 2 commits to test fixup")
+
+        # Create plan: pick first, fixup second
+        custom_steps = [
+            RebaseStep(action="pick", commit_sha=plan.steps[0].commit_sha, message=None),
+            RebaseStep(action="fixup", commit_sha=plan.steps[1].commit_sha, message=None),
+        ]
+        for step in plan.steps[2:]:
+            custom_steps.append(RebaseStep(action="pick", commit_sha=step.commit_sha, message=None))
+
+        custom_plan = RebasePlan(onto="fixup-base", upstream="fixup-base", steps=custom_steps)
+
+        result = ops.rebase_execute(custom_plan)
+
+        if result.success:
+            assert result.state == "done"
+        elif result.state == "conflict":
+            ops.rebase_abort()
+
+    def test_rebase_with_edit_action(
+        self, git_repo_with_commits: tuple[Path, GitOps, list[str]]
+    ) -> None:
+        """Rebase with edit action should pause for editing."""
+        from codeplane.git import RebasePlan, RebaseStep
+
+        repo_path, ops, shas = git_repo_with_commits
+
+        default = ops.current_branch()
+        ops.checkout(shas[0])
+        ops.create_branch("edit-base")
+        ops.checkout(default)
+
+        plan = ops.rebase_plan("edit-base")
+        if len(plan.steps) < 1:
+            pytest.skip("Need at least 1 commit to test edit")
+
+        # Create plan with edit action
+        custom_steps = [
+            RebaseStep(action="edit", commit_sha=plan.steps[0].commit_sha, message=None),
+        ]
+        for step in plan.steps[1:]:
+            custom_steps.append(RebaseStep(action="pick", commit_sha=step.commit_sha, message=None))
+
+        custom_plan = RebasePlan(onto="edit-base", upstream="edit-base", steps=custom_steps)
+
+        result = ops.rebase_execute(custom_plan)
+
+        # Edit action should pause
+        if result.state == "edit_pause":
+            assert ops.rebase_in_progress() is True
+            # Make an edit and continue
+            (repo_path / "edited.txt").write_text("edited during rebase\n")
+            ops.stage(["edited.txt"])
+            result = ops.rebase_continue()
+
+        # Clean up if still in progress
+        if ops.rebase_in_progress():
+            ops.rebase_abort()

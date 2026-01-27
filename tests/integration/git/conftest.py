@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -17,6 +18,14 @@ PRIVATE_REPO = "https://github.com/dfinson/codeplane-test-private.git"
 
 PUBLIC_REPO_SSH = "git@github.com:dfinson/codeplane-test-public.git"
 PRIVATE_REPO_SSH = "git@github.com:dfinson/codeplane-test-private.git"
+
+
+def _get_private_repo_url() -> str:
+    """Get private repo URL, with token embedded if available from CI."""
+    token = os.environ.get("CODEPLANE_TEST_PRIVATE_TOKEN")
+    if token:
+        return f"https://x-access-token:{token}@github.com/dfinson/codeplane-test-private.git"
+    return PRIVATE_REPO
 
 
 def _can_access_repo(url: str, timeout: int = 10) -> bool:
@@ -41,7 +50,7 @@ def public_repo_accessible() -> bool:
 @pytest.fixture(scope="session")
 def private_repo_accessible() -> bool:
     """Check if private test repo is accessible (requires auth)."""
-    return _can_access_repo(PRIVATE_REPO)
+    return _can_access_repo(_get_private_repo_url())
 
 
 @pytest.fixture
@@ -69,7 +78,7 @@ def cloned_private_repo(
 
     repo_path = tmp_path / "private-clone"
     subprocess.run(
-        ["git", "clone", PRIVATE_REPO, str(repo_path)],
+        ["git", "clone", _get_private_repo_url(), str(repo_path)],
         capture_output=True,
         check=True,
     )
