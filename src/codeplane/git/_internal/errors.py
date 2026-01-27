@@ -25,7 +25,7 @@ class ErrorMapper:
                 raise AuthenticationError(remote, operation) from e
             if remote:
                 raise RemoteError(remote, str(e)) from e
-            raise GitError(str(e)) from e
+            raise GitError(f"{operation} failed: {e}") from e
 
 
 def git_operation(operation: str, *, remote: str | None = None) -> AbstractContextManager[None]:

@@ -400,18 +400,22 @@ class GitOps:
 
     def create_tag(self, name: str, ref: str = "HEAD", message: str | None = None) -> str:
         """Create tag. Returns target sha."""
-        target = self._access.resolve_ref_oid(ref)
+        target_oid = self._access.resolve_ref_oid(ref)
         if message:
+            # Resolve target object to get correct type (commit, tree, blob, or tag)
+            target_obj = self._access.repo.get(target_oid)
+            if target_obj is None:
+                raise RefNotFoundError(ref)
             oid = self._access.create_tag(
                 name,
-                target,
-                pygit2.enums.ObjectType.COMMIT,
+                target_oid,
+                pygit2.enums.ObjectType(target_obj.type),
                 self._access.default_signature,
                 message,
             )
             return str(oid)
-        self._access.create_reference(make_tag_ref(name), target)
-        return str(target)
+        self._access.create_reference(make_tag_ref(name), target_oid)
+        return str(target_oid)
 
     def delete_tag(self, name: str) -> None:
         """Delete tag."""

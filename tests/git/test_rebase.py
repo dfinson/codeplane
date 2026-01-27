@@ -429,7 +429,7 @@ class TestRebaseActions:
             # Make an edit and continue
             (repo_path / "edited.txt").write_text("edited during rebase\n")
             ops.stage(["edited.txt"])
-            result = ops.rebase_continue()
+            _ = ops.rebase_continue()  # Result checked by rebase_in_progress below
 
         # Clean up if still in progress
         if ops.rebase_in_progress():

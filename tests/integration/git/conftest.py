@@ -20,12 +20,28 @@ PUBLIC_REPO_SSH = "git@github.com:dfinson/codeplane-test-public.git"
 PRIVATE_REPO_SSH = "git@github.com:dfinson/codeplane-test-private.git"
 
 
-def _get_private_repo_url() -> str:
-    """Get private repo URL, with token embedded if available from CI."""
+def _configure_ci_credentials() -> None:
+    """Configure git credential helper for CI environment if token is available."""
     token = os.environ.get("CODEPLANE_TEST_PRIVATE_TOKEN")
-    if token:
-        return f"https://x-access-token:{token}@github.com/dfinson/codeplane-test-private.git"
-    return PRIVATE_REPO
+    if not token:
+        return
+    # Use git credential store to avoid embedding token in URLs (security)
+    # This writes credentials to a temporary file that git can read
+    subprocess.run(
+        ["git", "config", "--global", "credential.helper", "store"],
+        capture_output=True,
+        check=False,
+    )
+    # Write credentials in git credential store format
+    cred_file = Path.home() / ".git-credentials"
+    cred_line = f"https://x-access-token:{token}@github.com\n"
+    # Append if file exists, create if not
+    with open(cred_file, "a") as f:
+        f.write(cred_line)
+
+
+# Configure credentials once at module load for CI
+_configure_ci_credentials()
 
 
 def _can_access_repo(url: str, timeout: int = 10) -> bool:
@@ -49,8 +65,8 @@ def public_repo_accessible() -> bool:
 
 @pytest.fixture(scope="session")
 def private_repo_accessible() -> bool:
-    """Check if private test repo is accessible (requires auth)."""
-    return _can_access_repo(_get_private_repo_url())
+    """Check if private test repo is accessible (requires auth via credential helper)."""
+    return _can_access_repo(PRIVATE_REPO)
 
 
 @pytest.fixture
@@ -72,13 +88,13 @@ def cloned_public_repo(tmp_path: Path, public_repo_accessible: bool) -> Generato
 def cloned_private_repo(
     tmp_path: Path, private_repo_accessible: bool
 ) -> Generator[Path, None, None]:
-    """Clone private test repo to temp directory (requires auth)."""
+    """Clone private test repo to temp directory (requires auth via credential helper)."""
     if not private_repo_accessible:
         pytest.skip("Private test repo not accessible (auth required)")
 
     repo_path = tmp_path / "private-clone"
     subprocess.run(
-        ["git", "clone", _get_private_repo_url(), str(repo_path)],
+        ["git", "clone", PRIVATE_REPO, str(repo_path)],
         capture_output=True,
         check=True,
     )
