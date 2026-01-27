@@ -439,8 +439,11 @@ class RepoAccess:
 
     def is_worktree(self) -> bool:
         """True if this repository is a worktree (not the main working directory)."""
-        # pygit2 may not have this attribute in all versions
-        return bool(getattr(self._repo, "is_worktree", False))
+        if hasattr(self._repo, "is_worktree"):
+            return bool(self._repo.is_worktree)
+        # Fallback: in a linked worktree, .git is a file, not a directory
+        git_path = self.path / ".git"
+        return git_path.is_file()
 
     @property
     def workdir(self) -> str | None:

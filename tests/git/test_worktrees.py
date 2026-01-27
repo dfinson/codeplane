@@ -280,12 +280,8 @@ class TestIsWorktree:
         wt_path = repo_path.parent / "feature-wt"
         wt_ops = ops.worktree_add(wt_path, "feature")
 
-        # is_worktree detection depends on pygit2 version exposing worktree info
-        # Only assert when the underlying capability exists
-        if hasattr(wt_ops.repo, "is_worktree"):
-            assert wt_ops.is_worktree() is True
-        else:
-            pytest.skip("pygit2 version does not expose is_worktree capability")
+        # Fallback detection via .git file check works regardless of pygit2 version
+        assert wt_ops.is_worktree() is True
 
 
 class TestWorktreeInfo:
