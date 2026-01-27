@@ -645,7 +645,10 @@ class GitOps:
             except pygit2.GitError:
                 pass  # Worktree corrupt/missing - safe to ignore for path collision check
 
-        branch_ref = self._access.repo.references.get(f"refs/heads/{ref}")
+        refname = f"refs/heads/{ref}"
+        if refname not in self._access.repo.references:
+            raise BranchNotFoundError(ref)
+        branch_ref = self._access.repo.references[refname]
         self._access.add_worktree(name, str(path), branch_ref)
 
         return GitOps(path)
@@ -1003,13 +1006,18 @@ class GitOps:
             cmd.append("--")
             cmd.extend(paths)
 
-        subprocess.run(
-            cmd,
-            cwd=str(self._access.path),
-            capture_output=True,
-            timeout=60,
-            check=True,
-        )
+        try:
+            subprocess.run(
+                cmd,
+                cwd=str(self._access.path),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr or ""
+            raise SubmoduleError(f"Failed to sync submodules: {stderr.strip()}") from exc
 
     def submodule_add(self, url: str, path: str, branch: str | None = None) -> SubmoduleInfo:
         """Add new submodule."""

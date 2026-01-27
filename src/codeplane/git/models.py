@@ -127,16 +127,29 @@ class DiffInfo:
 
     @classmethod
     def from_pygit2(cls, diff: pygit2.Diff, include_patch: bool = False) -> DiffInfo:
-        files = tuple(
-            DiffFile(
-                old_path=delta.old_file.path if delta.old_file else None,
-                new_path=delta.new_file.path if delta.new_file else None,
-                status=_DELTA_STATUS_MAP.get(delta.status, "unknown"),
-                additions=0,
-                deletions=0,
+        files_list: list[DiffFile] = []
+        for patch in diff:
+            if patch is None:
+                continue
+            additions = 0
+            deletions = 0
+            for hunk in patch.hunks:
+                for line in hunk.lines:
+                    if line.origin == "+":
+                        additions += 1
+                    elif line.origin == "-":
+                        deletions += 1
+            delta = patch.delta
+            files_list.append(
+                DiffFile(
+                    old_path=delta.old_file.path if delta.old_file else None,
+                    new_path=delta.new_file.path if delta.new_file else None,
+                    status=_DELTA_STATUS_MAP.get(delta.status, "unknown"),
+                    additions=additions,
+                    deletions=deletions,
+                )
             )
-            for delta in diff.deltas
-        )
+        files = tuple(files_list)
         stats = diff.stats
         return cls(
             files=files,
