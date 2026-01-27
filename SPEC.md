@@ -713,7 +713,77 @@ Targeted lexical search is indexed, scoped, structured, deterministic.
 
 (Interface details are deferred; these are capabilities.)
 
-### 7.11 LSP Management & Language Support
+### 7.11 Documentation Awareness
+
+CodePlane indexes documentation files as first-class citizens alongside code, enabling agents to find explanations, examples, and references coherently.
+
+#### Supported Documentation Formats
+
+| Format | Extensions | Structure Extraction |
+|--------|------------|---------------------|
+| Markdown | `.md`, `.markdown` | Headings, code blocks, links |
+| reStructuredText | `.rst` | Headings, code blocks, directives |
+| AsciiDoc | `.adoc`, `.asciidoc` | Headings, code blocks, links |
+| Plain text | `.txt`, `README`, `CHANGELOG` | Paragraph boundaries only |
+
+#### Documentation Structure Index
+
+For each documentation file, CodePlane extracts:
+
+- **Headings**: Title, level, anchor slug, line span
+- **Code blocks**: Language tag, content, line span, referenced symbols (best-effort)
+- **Links**: Internal (relative paths), external (URLs), anchor references
+- **Front matter**: YAML/TOML metadata blocks (common in static site generators)
+
+This enables:
+- Navigation by heading ("jump to Installation section")
+- Finding code examples for a symbol
+- Detecting broken internal links
+
+#### Doc-Code Linking (Best-Effort)
+
+CodePlane attempts to link documentation references to code symbols:
+
+1. **Code blocks**: Parse code blocks using Tree-sitter (when language tagged) and extract symbol references
+2. **Inline code**: Match backtick-wrapped identifiers (`` `MyClass` ``) against known symbols
+3. **Import statements in examples**: Link to actual module definitions
+
+Linking is best-effort and heuristic-based:
+- Exact symbol name matches are linked with high confidence
+- Partial matches (e.g., `MyClass` in prose without backticks) are flagged but not auto-linked
+- Ambiguous references (multiple symbols with same name) are not linked
+
+#### Search Ranking for Documentation
+
+Documentation files receive adjusted ranking based on query intent signals:
+
+| Query Pattern | Doc Weight | Code Weight |
+|---------------|------------|-------------|
+| "how to", "example", "usage" | Higher | Lower |
+| "where is", "definition", "implementation" | Lower | Higher |
+| Symbol name (exact) | Equal | Equal |
+| General keyword | Equal | Equal |
+
+Agents can also explicitly scope searches:
+- `scope:docs` — documentation files only
+- `scope:code` — source files only
+- `scope:all` — default, both
+
+#### Docstring Extraction
+
+Docstrings are extracted as part of symbol metadata:
+
+- Python: `"""..."""` immediately following `def`/`class`
+- JavaScript/TypeScript: JSDoc `/** ... */` preceding functions/classes
+- Go: `//` comment blocks preceding exported symbols
+- Rust: `///` doc comments
+
+Docstrings are:
+- Stored with their parent symbol in the structural index
+- Searchable via lexical index
+- Returned as part of symbol search results
+
+### 7.12 LSP Management & Language Support
 
 #### Acquisition Model
 
@@ -1077,18 +1147,81 @@ Examples of unaffected references:
 - `# MyClassA` (comment)
 - `"""Used in MyClassA."""` (docstring)
 - `README.md` references to `MyClassA`
+- Code examples in documentation
+- Inline code references (`` `MyClassA` ``)
 
-To maintain coherence, CodePlane performs a **post-refactor sweep**:
-- Searches for exact string matches of the original symbol name
-- Scans:
-  - Comments in source code (from structural index)
-  - Markdown and text files (README, docs, etc.)
-  - Overlay files, if applicable
-- Generates a separate, deterministic patch set for these changes
-- Annotates these as **non-semantic edits**, separate from LSP edits
-- User or agent may preview, accept, or reject them
+#### Auto-Update with Warning
 
-This ensures textual references to renamed symbols are coherently updated without being conflated with semantic LSP-backed mutations.
+CodePlane performs a **post-refactor documentation sweep** that:
+
+1. **Scans** for textual references to the renamed symbol:
+   - Comments in source code (from structural index)
+   - Documentation files (markdown, RST, AsciiDoc, plain text)
+   - Docstrings (extracted during indexing)
+   - Code blocks in documentation (parsed for symbol references)
+   - Inline code spans (`` `SymbolName` ``)
+
+2. **Categorizes** matches by confidence:
+   - **High confidence**: Exact match in backticks, code blocks, or import statements
+   - **Medium confidence**: Exact match in prose near code context
+   - **Low confidence**: Partial match or ambiguous context
+
+3. **Auto-applies** changes but **flags for review**:
+   - All documentation edits are applied in the same atomic patch
+   - The response includes a `doc_updates_applied` field with:
+     - Files changed
+     - Matches found (with confidence levels)
+     - Line numbers and context
+   - A `review_recommended: true` flag when any low/medium confidence matches exist
+
+4. **Structured response** includes both semantic and documentation edits:
+
+```json
+{
+  "refactor": "rename_symbol",
+  "semantic_edits": {
+    "files_changed": 12,
+    "edits": [...]
+  },
+  "doc_edits": {
+    "files_changed": 3,
+    "review_recommended": true,
+    "matches": [
+      {
+        "file": "README.md",
+        "line": 45,
+        "confidence": "high",
+        "context": "See `MyClassA` for details"
+      },
+      {
+        "file": "docs/guide.md", 
+        "line": 123,
+        "confidence": "medium",
+        "context": "The MyClassA handles authentication"
+      }
+    ]
+  }
+}
+```
+
+The agent receives the full diff and can verify documentation updates make sense in context. Since the operation is atomic, rollback reverts both semantic and documentation changes together.
+
+#### Configuration
+
+```yaml
+refactor:
+  doc_sweep:
+    enabled: true           # default
+    auto_apply: true        # apply doc changes automatically
+    min_confidence: medium  # only auto-apply medium+ confidence
+    scan_extensions:
+      - .md
+      - .rst
+      - .adoc
+      - .txt
+```
+
+This ensures textual references to renamed symbols are coherently updated without being conflated with semantic LSP-backed mutations, while giving agents visibility into what changed and why.
 
 ### 8.12 Optional Subsystem Toggle
 
@@ -1670,7 +1803,136 @@ Explicitly does not do:
 
 ---
 
-## 13. "Deterministic Refactoring Primitives" (Summary-Level Capability List)
+## 13. Observability and Operator Insight
+
+### 13.1 Why Observability
+
+CodePlane is infrastructure. Infrastructure requires visibility.
+
+Operators need to answer:
+
+- Is the daemon healthy?
+- Are agents making progress or spinning?
+- Which operations are slow, failing, or succeeding?
+- Is the index fresh or stale?
+- Are LSP servers responsive or degraded?
+
+Without observability, operators debug blind.
+
+### 13.2 Scope and Principles
+
+Observability in CodePlane serves **operators and tool authors**, not surveillance or model training.
+
+Principles:
+
+1. **Visibility without overhead**: Observability is always-on, not sampled or opt-in.
+2. **Structured and queryable**: Telemetry is structured data, not log grep.
+3. **Bundled and self-contained**: No external dependencies required. Dashboard ships with daemon.
+4. **Standards-based**: OpenTelemetry for traces and metrics. Exportable but not required.
+
+### 13.3 What CodePlane Monitors
+
+Observability covers three categories:
+
+#### Operations (Request-Level)
+
+Every MCP operation emits a trace with spans:
+
+- Operation type, parameters, and outcome
+- Duration and timing breakdown
+- Task correlation (if within a task envelope)
+- Files touched, symbols resolved, tests run
+- Error codes and failure fingerprints
+
+Purpose: Understand what agents are doing, how long it takes, and what fails.
+
+#### System Health (Daemon-Level)
+
+The daemon exposes continuous health metrics:
+
+| Metric | What It Measures |
+|--------|------------------|
+| Index staleness | Time since last reconciliation; drift from Git HEAD |
+| LSP status | Per-language availability, response times, error rates |
+| Resource usage | Memory, CPU, open file handles |
+| Reconciliation rate | Reconciliations per minute; duration histogram |
+| Task throughput | Tasks opened/closed per interval; budget exhaustion rate |
+
+Purpose: Know if the daemon is healthy before problems compound.
+
+#### Convergence Signals (Agent-Level)
+
+Observability surfaces agent progress signals:
+
+| Signal | What It Measures |
+|--------|------------------|
+| Mutation fingerprint repetition | Same fingerprint after mutation → no progress |
+| Failure fingerprint repetition | Same failure after mutation → non-converging |
+| Budget utilization | Percentage of task budget consumed |
+| Operation cadence | Operations per minute; pauses and bursts |
+
+Purpose: Detect spinning agents and non-convergent loops without CodePlane making decisions.
+
+### 13.4 How Operators Access Observability
+
+#### Dashboard Endpoint
+
+The daemon exposes a unified dashboard at `/dashboard`:
+
+- Bundled with daemon; no external setup
+- Accessible via browser at `http://127.0.0.1:<port>/dashboard`
+- Unified view of traces, metrics, and health
+
+Dashboard capabilities:
+
+- Filter operations by task, operation type, outcome, time range
+- View individual traces with span breakdowns
+- Monitor real-time health metrics
+- Identify slow or failing operations
+
+#### Metrics Endpoint
+
+The daemon exposes a Prometheus-compatible metrics endpoint at `/metrics`:
+
+- Scrapeable by external monitoring systems
+- Useful for fleet-level aggregation (optional, not required)
+- Includes all health metrics from section 13.3
+
+#### Programmatic Access
+
+- Traces: Available via OpenTelemetry export (optional configuration)
+- Metrics: Available via `/metrics` endpoint
+- Ledger: Remains the authoritative record (section 12.5)
+
+### 13.5 Relationship to Ledger
+
+The ledger (section 12) and observability serve different purposes:
+
+| Aspect | Ledger | Observability |
+|--------|--------|---------------|
+| Purpose | Mechanical accountability | Operational insight |
+| Retention | Days to weeks | Real-time + short-term |
+| Audience | Post-hoc audit | Live debugging |
+| Format | SQLite, append-only | Traces, metrics, dashboards |
+| Scope | Task and operation records | System-wide health |
+
+They complement, not replace, each other.
+
+### 13.6 What Observability Does Not Do
+
+Observability does not:
+
+- Make decisions for agents
+- Trigger alerts or automated responses
+- Persist indefinitely (traces are ephemeral; ledger is durable)
+- Phone home or transmit externally (unless explicitly configured)
+- Require external infrastructure to function
+
+Observability is passive visibility, not active control.
+
+---
+
+## 15. "Deterministic Refactoring Primitives" (Summary-Level Capability List)
 
 This section preserves the explicit capability list for quick reference.
 
@@ -1696,7 +1958,7 @@ All refactors:
 
 ---
 
-## 14. Embeddings Policy
+## 16. Embeddings Policy
 
 Embeddings are intentionally excluded from the core design.
 
@@ -1715,7 +1977,7 @@ If added later:
 
 ---
 
-## 15. Subsystem Ownership Boundaries (Who Owns What)
+## 17. Subsystem Ownership Boundaries (Who Owns What)
 
 ### 15.1 CodePlane Owns
 
@@ -1753,7 +2015,7 @@ If added later:
 
 ---
 
-## 16. Resolved Conflicts (Previously Open)
+## 18. Resolved Conflicts (Previously Open)
 
 The following contradictions have been resolved:
 
@@ -1767,7 +2029,7 @@ The following contradictions have been resolved:
 
 ---
 
-## 17. Risk Register (Remaining Design Points)
+## 19. Risk Register (Remaining Design Points)
 
 Items 1-3 from the original register have been resolved (see section 16). Remaining items:
 
@@ -1785,7 +2047,7 @@ Items 1-3 from the original register have been resolved (see section 16). Remain
 
 ---
 
-## 18. Readiness Note: What Is Stable Enough for API Surfacing Next
+## 20. Readiness Note: What Is Stable Enough for API Surfacing Next
 
 Stable enough that API design should be mechanical:
 
@@ -1800,12 +2062,13 @@ Stable enough that API design should be mechanical:
 - CLI lifecycle and operability checks
 - Shared index artifact fetch and verification rules
 - Config layering and defaults framework
+- Observability model, trace/metric categories, and dashboard scope
 
 All previously-open contradictions have been resolved. API surfacing can proceed.
 
 ---
 
-## 19. What CodePlane Is (Canonical Summary)
+## 21. What CodePlane Is (Canonical Summary)
 
 CodePlane is:
 
@@ -1818,9 +2081,9 @@ It turns AI coding from slow and chaotic into fast, predictable, and auditable b
 
 ---
 
-## 20. MCP API Specification
+## 22. MCP API Specification
 
-### 20.1 Design Principles
+### 22.1 Design Principles
 
 The MCP API is the primary interface for AI agents to interact with CodePlane.
 
@@ -1834,7 +2097,7 @@ Core design choices:
 | Naming | **Prefixed**: `codeplane_*` | Namespace safety, grep-friendly |
 | State | **Session-aware with explicit override** | Automatic context with escape hatch |
 
-### 20.2 Protocol Architecture
+### 22.2 Protocol Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -1868,7 +2131,7 @@ Core design choices:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 20.3 Session Model
+### 22.3 Session Model
 
 Sessions provide automatic context correlation without requiring explicit management.
 
@@ -1934,7 +2197,7 @@ Any tool can accept optional `session_id` parameter to:
 - Error responses include session snapshot
 - SSE events carry session context
 
-### 20.4 Tool Catalog
+### 22.4 Tool Catalog
 
 #### Core Tools (Always Available)
 
@@ -1975,7 +2238,7 @@ Any tool can accept optional `session_id` parameter to:
 
 **Total: 12 tools**
 
-### 20.5 Tool Specifications
+### 22.5 Tool Specifications
 
 ---
 
@@ -2508,7 +2771,7 @@ Daemon health, index state, and session info.
 
 ---
 
-### 20.6 Streaming Tools (SSE)
+### 22.6 Streaming Tools (SSE)
 
 For long-running operations, streaming variants provide real-time progress.
 
@@ -2591,7 +2854,7 @@ Progress events include:
 
 ---
 
-### 20.7 REST Endpoints (Operator)
+### 22.7 REST Endpoints (Operator)
 
 Non-MCP endpoints for operators and monitoring.
 
@@ -2599,8 +2862,9 @@ Non-MCP endpoints for operators and monitoring.
 |----------|--------|---------|
 | `/health` | GET | Liveness check (returns 200 if alive) |
 | `/ready` | GET | Readiness check (returns 200 if index loaded) |
-| `/metrics` | GET | Prometheus-format metrics |
+| `/metrics` | GET | Prometheus-format metrics (see section 13) |
 | `/status` | GET | JSON status (same as `codeplane_status`) |
+| `/dashboard` | GET | Observability dashboard (see section 13) |
 
 **Authentication:** Same bearer token as MCP.
 
@@ -2613,7 +2877,7 @@ curl -H "Authorization: Bearer $(cat .codeplane/token)" \
 
 ---
 
-### 20.8 Error Handling
+### 22.8 Error Handling
 
 All MCP tools use the error schema defined in section 4.2.
 
@@ -2661,7 +2925,7 @@ Client must close task and open new one, or configure additional budget.
 
 ---
 
-### 20.9 MCP Server Configuration
+### 22.9 MCP Server Configuration
 
 CodePlane registers as an MCP server. Client configuration example:
 
@@ -2687,7 +2951,7 @@ Clients can read `.codeplane/port` and `.codeplane/token` to configure automatic
 
 ---
 
-### 20.10 Versioning
+### 22.10 Versioning
 
 - API version included in `/status` response
 - Breaking changes increment major version
