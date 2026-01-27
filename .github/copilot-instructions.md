@@ -55,6 +55,8 @@ Examples:
 **Always evaluate 2-3 design options before writing code.**
 
 - Present tradeoffs explicitly
+- **Treat LOC as a first-class cost** — More code means more review, more tests, more maintenance
+- Prefer concise and elegant over verbose and explicit
 - Ask which approach to proceed with
 - If spec is silent or ambiguous, propose spec amendments before implementing
 
@@ -69,6 +71,14 @@ Examples:
 - Atomic commits with clear messages
 - Prefix: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`
 - Reference issue numbers: `feat: add otel traces (#115)`
+
+### 6. Testing Discipline
+
+- Target 90%+ coverage, but **quality over quantity**
+- Use **Given/When/Then** (BDD) or **Arrange/Act/Assert** (AAA) structure
+- **Parametrize** tests where possible — one test with 10 cases beats 10 copy-paste tests
+- Tests must be reviewable — no thousands of LOC that humans will never read
+- Test behavior and outcomes, not implementation details
 
 ---
 
