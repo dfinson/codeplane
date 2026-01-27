@@ -359,3 +359,35 @@ class TestWorktreeAddValidation:
         assert "wt2" in names
         assert "wt3" in names
         assert len(worktrees) == 4
+
+
+class TestWorktreeUnlockEdgeCases:
+    """Tests for worktree_unlock edge cases."""
+
+    def test_given_nonexistent_worktree_when_unlock_then_raises(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """Unlocking nonexistent worktree should raise."""
+        _, ops = git_repo_with_commit
+
+        from codeplane.git import WorktreeNotFoundError
+
+        with pytest.raises(WorktreeNotFoundError):
+            ops.worktree_unlock("nonexistent")
+
+    def test_given_unlocked_worktree_when_unlock_then_no_error(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """Unlocking already-unlocked worktree should be idempotent."""
+        repo_path, ops = git_repo_with_commit
+
+        ops.create_branch("feature")
+        wt_path = repo_path.parent / "feature-wt"
+        ops.worktree_add(wt_path, "feature")
+
+        # Unlock without prior lock - should not raise
+        ops.worktree_unlock("feature-wt")
+
+        worktrees = ops.worktrees()
+        wt = next(wt for wt in worktrees if wt.name == "feature-wt")
+        assert wt.is_locked is False

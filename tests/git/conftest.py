@@ -63,6 +63,49 @@ def repo_with_remote(
 
 
 @pytest.fixture
+def repo_with_remote_branch(
+    temp_repo: pygit2.Repository,
+    bare_repo: pygit2.Repository,
+) -> pygit2.Repository:
+    """Repository with a remote tracking branch that doesn't exist locally."""
+    workdir = Path(temp_repo.workdir)
+    sig = temp_repo.default_signature
+
+    # Add remote
+    temp_repo.remotes.create("origin", str(Path(bare_repo.path).resolve()))
+
+    # Push main
+    remote = temp_repo.remotes["origin"]
+    remote.push(["refs/heads/main:refs/heads/main"])
+
+    # Create a branch locally, push it, then delete it locally
+    head_commit = temp_repo.head.peel(pygit2.Commit)
+    temp_repo.branches.local.create("remote-only", head_commit)
+
+    # Add a commit on this branch
+    temp_repo.checkout(temp_repo.branches.local["remote-only"])
+    (workdir / "remote-only.txt").write_text("remote only content\n")
+    temp_repo.index.add("remote-only.txt")
+    temp_repo.index.write()
+    tree = temp_repo.index.write_tree()
+    temp_repo.create_commit(
+        "HEAD", sig, sig, "Commit on remote-only branch", tree, [temp_repo.head.target]
+    )
+
+    # Push the branch
+    remote.push(["refs/heads/remote-only:refs/heads/remote-only"])
+
+    # Go back to main and delete the local branch
+    temp_repo.checkout(temp_repo.branches.local["main"])
+    temp_repo.branches.local["remote-only"].delete()
+
+    # Fetch to get remote tracking ref
+    remote.fetch()
+
+    return temp_repo
+
+
+@pytest.fixture
 def repo_with_branches(temp_repo: pygit2.Repository) -> pygit2.Repository:
     """Repository with multiple branches."""
     workdir = Path(temp_repo.workdir)

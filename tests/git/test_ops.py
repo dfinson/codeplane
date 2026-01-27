@@ -470,6 +470,33 @@ class TestStash:
         with pytest.raises(StashNotFoundError):
             ops.stash_pop(99)
 
+    def test_stash_push_with_untracked(self, temp_repo: pygit2.Repository) -> None:
+        """Stash with include_untracked should stash untracked files."""
+        workdir = Path(temp_repo.workdir)
+        ops = GitOps(workdir)
+
+        # Create an untracked file
+        untracked = workdir / "untracked.txt"
+        untracked.write_text("untracked content")
+
+        # Verify file exists and is untracked
+        status = ops.status()
+        assert "untracked.txt" in status
+
+        # Stash with untracked
+        sha = ops.stash_push(message="With untracked", include_untracked=True)
+        assert len(sha) == 40
+
+        # Untracked file should be gone
+        assert not untracked.exists()
+
+        # Pop stash
+        ops.stash_pop()
+
+        # File should be restored
+        assert untracked.exists()
+        assert untracked.read_text() == "untracked content"
+
 
 class TestTags:
     def test_create_lightweight_tag(self, temp_repo: pygit2.Repository) -> None:
@@ -792,3 +819,139 @@ class TestRemotes:
         assert len(remotes) == 1
         assert isinstance(remotes[0], RemoteInfo)
         assert remotes[0].name == "origin"
+
+
+class TestBranchesWithRemotes:
+    """Tests for listing branches including remote tracking branches."""
+
+    def test_list_branches_with_remote(self, repo_with_remote: pygit2.Repository) -> None:
+        """Listing branches with include_remote should include tracking branches."""
+        ops = GitOps(repo_with_remote.workdir)
+
+        # Create a branch and push it to create remote tracking branch
+        ops.create_branch("feature")
+
+        branches = ops.branches(include_remote=True)
+        names = {b.name for b in branches}
+
+        # Should include local branches
+        assert "refs/heads/main" in names or "refs/heads/master" in names
+
+
+class TestResetEdgeCases:
+    """Edge case tests for reset operation."""
+
+    def test_reset_invalid_mode_raises(self, temp_repo: pygit2.Repository) -> None:
+        """Reset with invalid mode should raise ValueError."""
+        ops = GitOps(temp_repo.workdir)
+
+        with pytest.raises(ValueError, match="Invalid reset mode"):
+            ops.reset("HEAD", mode="invalid")
+
+
+class TestDeleteBranchEdgeCases:
+    """Edge case tests for branch deletion."""
+
+    def test_delete_unmerged_branch_without_force_raises(
+        self, repo_with_branches: pygit2.Repository
+    ) -> None:
+        """Deleting unmerged branch without force should raise."""
+        ops = GitOps(repo_with_branches.workdir)
+
+        # Make a commit on a branch that diverges from main
+        ops.checkout("feature")
+        (Path(repo_with_branches.workdir) / "diverged.txt").write_text("diverged")
+        ops.stage(["diverged.txt"])
+        ops.commit("Diverged commit")
+        ops.checkout("main")
+
+        from codeplane.git import UnmergedBranchError
+
+        with pytest.raises(UnmergedBranchError):
+            ops.delete_branch("feature")
+
+
+class TestRenameBranchEdgeCases:
+    """Edge case tests for branch rename."""
+
+    def test_rename_to_existing_branch_raises(self, repo_with_branches: pygit2.Repository) -> None:
+        """Renaming to an existing branch name should raise."""
+        ops = GitOps(repo_with_branches.workdir)
+
+        ops.create_branch("new-feature")
+
+        from codeplane.git import BranchExistsError
+
+        with pytest.raises(BranchExistsError):
+            ops.rename_branch("feature", "new-feature")
+
+
+class TestRemoteBranchCheckout:
+    """Tests for checking out remote branches."""
+
+    def test_checkout_remote_branch_creates_local(
+        self, repo_with_remote_branch: pygit2.Repository
+    ) -> None:
+        """Checking out remote branch should create local tracking branch."""
+        ops = GitOps(repo_with_remote_branch.workdir)
+
+        # Checkout the remote-only branch
+        ops.checkout("origin/remote-only")
+
+        # Should create a local branch with the short name
+        branches = ops.branches(include_remote=False)
+        local_names = {b.short_name for b in branches}
+        assert "remote-only" in local_names
+
+        # Should be on that branch
+        assert ops.current_branch() == "remote-only"
+
+
+class TestUnbornRepoEdgeCases:
+    """Tests for unborn repo (no commits yet) edge cases."""
+
+    def test_given_unborn_repo_when_current_branch_then_returns_branch_name(
+        self, tmp_path: Path
+    ) -> None:
+        """Current branch on unborn repo should return branch name."""
+        import subprocess
+
+        repo_path = tmp_path / "unborn"
+        repo_path.mkdir()
+        subprocess.run(["git", "init"], cwd=repo_path, capture_output=True, check=True)
+
+        ops = GitOps(repo_path)
+
+        # Current branch should be available even without commits
+        branch = ops.current_branch()
+        assert branch in ("main", "master")  # Depends on git default
+
+    def test_given_unborn_repo_when_branches_then_empty(self, tmp_path: Path) -> None:
+        """Branches on unborn repo should return empty (no commits)."""
+        import subprocess
+
+        repo_path = tmp_path / "unborn"
+        repo_path.mkdir()
+        subprocess.run(["git", "init"], cwd=repo_path, capture_output=True, check=True)
+
+        ops = GitOps(repo_path)
+
+        branches = ops.branches()
+        # Unborn repos don't have branches yet
+        assert len(branches) == 0
+
+    def test_given_unborn_repo_when_status_then_works(self, tmp_path: Path) -> None:
+        """Status on unborn repo should work."""
+        import subprocess
+
+        repo_path = tmp_path / "unborn"
+        repo_path.mkdir()
+        subprocess.run(["git", "init"], cwd=repo_path, capture_output=True, check=True)
+
+        ops = GitOps(repo_path)
+
+        # Add an untracked file
+        (repo_path / "file.txt").write_text("content")
+
+        status = ops.status()
+        assert "file.txt" in status

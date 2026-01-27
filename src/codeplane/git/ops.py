@@ -765,11 +765,23 @@ class GitOps:
 
         # Build SubmoduleInfo for this submodule
         status = self._determine_submodule_status(sm)
+
+        # Handle NULL fields in pygit2 (raises RuntimeError if accessed when NULL)
+        try:
+            url = sm.url or ""
+        except RuntimeError:
+            url = ""
+
+        try:
+            branch = sm.branch
+        except RuntimeError:
+            branch = None
+
         info = SubmoduleInfo(
             name=sm.name,
             path=sm.path,
-            url=sm.url or "",
-            branch=getattr(sm, "branch", None),
+            url=url,
+            branch=branch,
             head_sha=str(sm.head_id) if sm.head_id else None,
             status=status,
         )
