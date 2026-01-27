@@ -110,20 +110,19 @@ def local_bare_remote(tmp_path: Path) -> Generator[tuple[Path, Path], None, None
         ["git", "remote", "add", "origin", str(bare)], cwd=work, capture_output=True, check=True
     )
 
+    # Configure user for commits
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"], cwd=work, capture_output=True, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"], cwd=work, capture_output=True, check=True
+    )
+
     # Seed with initial commit
     (work / "README.md").write_text("# Test Repo\n")
     subprocess.run(["git", "add", "-A"], cwd=work, capture_output=True, check=True)
     subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.email=test@test.com",
-            "-c",
-            "user.name=Test",
-            "commit",
-            "-m",
-            "Initial",
-        ],
+        ["git", "commit", "-m", "Initial"],
         cwd=work,
         capture_output=True,
         check=True,
@@ -139,16 +138,7 @@ def local_bare_remote(tmp_path: Path) -> Generator[tuple[Path, Path], None, None
     (work / "feature.txt").write_text("feature content\n")
     subprocess.run(["git", "add", "-A"], cwd=work, capture_output=True, check=True)
     subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.email=test@test.com",
-            "-c",
-            "user.name=Test",
-            "commit",
-            "-m",
-            "Add feature",
-        ],
+        ["git", "commit", "-m", "Add feature"],
         cwd=work,
         capture_output=True,
         check=True,
