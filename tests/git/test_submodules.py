@@ -2,20 +2,11 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
 from codeplane.git import GitOps, SubmoduleError, SubmoduleNotFoundError
-
-# Submodule tests that clone require file:// protocol (disabled by default in modern git)
-# Skip these on CI if protocol is not allowed
-_file_protocol_allowed = os.environ.get("GIT_ALLOW_FILE_PROTOCOL", "0") == "1"
-requires_file_protocol = pytest.mark.skipif(
-    not _file_protocol_allowed,
-    reason="Requires GIT_ALLOW_FILE_PROTOCOL=1 (git config protocol.file.allow=always)",
-)
 
 
 class TestSubmodulesList:
@@ -61,7 +52,6 @@ class TestSubmoduleStatus:
 class TestSubmoduleAdd:
     """Tests for submodule_add() method."""
 
-    @requires_file_protocol
     def test_given_valid_repo_when_add_submodule_then_returns_info(
         self, git_repo_pair: tuple[tuple[Path, GitOps], tuple[Path, GitOps]]
     ) -> None:
@@ -73,7 +63,6 @@ class TestSubmoduleAdd:
         assert info.path == "libs/mylib"
         assert info.url == str(sub_path)
 
-    @requires_file_protocol
     def test_given_submodule_added_when_list_then_appears(
         self, git_repo_pair: tuple[tuple[Path, GitOps], tuple[Path, GitOps]]
     ) -> None:
@@ -99,7 +88,6 @@ class TestSubmoduleAdd:
 class TestSubmoduleDeinit:
     """Tests for submodule_deinit() method."""
 
-    @requires_file_protocol
     def test_given_initialized_submodule_when_deinit_then_removes_workdir(
         self, git_repo_pair: tuple[tuple[Path, GitOps], tuple[Path, GitOps]]
     ) -> None:
@@ -119,7 +107,6 @@ class TestSubmoduleDeinit:
 class TestSubmoduleRemove:
     """Tests for submodule_remove() method."""
 
-    @requires_file_protocol
     def test_given_submodule_when_remove_then_fully_removed(
         self, git_repo_pair: tuple[tuple[Path, GitOps], tuple[Path, GitOps]]
     ) -> None:
@@ -148,7 +135,6 @@ class TestSubmoduleRemove:
 class TestSubmoduleSync:
     """Tests for submodule_sync() method."""
 
-    @requires_file_protocol
     def test_given_submodule_when_sync_then_succeeds(
         self, git_repo_pair: tuple[tuple[Path, GitOps], tuple[Path, GitOps]]
     ) -> None:
@@ -163,7 +149,6 @@ class TestSubmoduleSync:
 class TestSubmoduleUpdate:
     """Tests for submodule_update() method."""
 
-    @requires_file_protocol
     def test_given_submodule_when_update_then_returns_result(
         self, git_repo_pair: tuple[tuple[Path, GitOps], tuple[Path, GitOps]]
     ) -> None:

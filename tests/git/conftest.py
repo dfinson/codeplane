@@ -244,19 +244,24 @@ def git_repo_with_branch(git_repo: tuple[Path, GitOps]) -> tuple[Path, GitOps, s
 @pytest.fixture
 def git_repo_pair(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Generator[tuple[tuple[Path, GitOps], tuple[Path, GitOps]], None, None]:
     """Two separate repos for testing operations requiring multiple repositories.
 
-    Note: Enables file:// protocol for submodule tests (required by modern git).
+    Note: Enables file:// protocol for submodule tests via environment.
     """
+    # Enable file:// protocol for submodule operations via git config env vars
+    # This affects all git subprocess calls in this test
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "protocol.file.allow")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "always")
+
     # First repo (main)
     main_path = tmp_path / "main_repo"
     main_path.mkdir()
     main_repo = pygit2.init_repository(main_path)
     main_repo.config["user.name"] = "Test User"
     main_repo.config["user.email"] = "test@example.com"
-    # Enable file:// protocol for submodule operations
-    main_repo.config["protocol.file.allow"] = "always"
     sig = pygit2.Signature("Test User", "test@example.com")
     (main_path / "README.md").write_text("# Main Repo\n")
     main_repo.index.add("README.md")

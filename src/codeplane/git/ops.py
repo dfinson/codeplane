@@ -243,14 +243,17 @@ class GitOps:
         head_commit = self._access.must_head_commit()
         tree_id = self._access.index.write_tree()
         new_message = message if message is not None else head_commit.message
+        # Don't update ref - create orphan commit with same parents
         oid = self._access.create_commit(
-            "HEAD",
+            None,
             head_commit.author,
             self._access.default_signature,
             new_message,
             tree_id,
             list(head_commit.parent_ids),
         )
+        # Reset HEAD to new commit
+        self._access.reset(oid, pygit2.GIT_RESET_SOFT)
         return str(oid)
 
     def create_branch(self, name: str, ref: str = "HEAD") -> BranchInfo:
@@ -688,12 +691,17 @@ class GitOps:
             try:
                 sm = self._access.lookup_submodule(name)
                 status = self._determine_submodule_status(sm)
+                # Branch property throws RuntimeError when NULL
+                try:
+                    branch = sm.branch
+                except RuntimeError:
+                    branch = None
                 result.append(
                     SubmoduleInfo(
                         name=sm.name,
                         path=sm.path,
                         url=sm.url or "",
-                        branch=getattr(sm, "branch", None),
+                        branch=branch,
                         head_sha=str(sm.head_id) if sm.head_id else None,
                         status=status,
                     )

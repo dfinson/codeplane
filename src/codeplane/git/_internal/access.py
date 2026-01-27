@@ -297,7 +297,7 @@ class RepoAccess:
 
     def create_commit(
         self,
-        ref: str,
+        ref: str | None,
         author: pygit2.Signature,
         committer: pygit2.Signature,
         message: str,

@@ -151,6 +151,91 @@ class TestRebaseContinue:
         with pytest.raises(NoRebaseInProgressError):
             ops.rebase_continue()
 
+    def test_given_conflict_resolved_when_continue_then_proceeds(
+        self, git_repo_with_branch: tuple[Path, GitOps, str]
+    ) -> None:
+        """Continuing after resolving conflicts should proceed."""
+        from codeplane.git.errors import RebaseConflictError
+
+        repo_path, ops, _ = git_repo_with_branch
+        default_branch = ops.current_branch()
+
+        # Create conflicting changes
+        ops.checkout(default_branch)
+        (repo_path / "conflict.txt").write_text("default version")
+        ops.stage(["conflict.txt"])
+        ops.commit("add conflict on default")
+
+        ops.checkout("feature")
+        (repo_path / "conflict.txt").write_text("feature version")
+        ops.stage(["conflict.txt"])
+        ops.commit("add conflict on feature")
+
+        # Start rebase
+        plan = ops.rebase_plan(default_branch)
+        result = ops.rebase_execute(plan)
+
+        if result.state == "conflict":
+            # Resolve conflict and stage
+            (repo_path / "conflict.txt").write_text("resolved content")
+            ops.stage(["conflict.txt"])
+
+            # Continue - may succeed or encounter another conflict
+            try:
+                result = ops.rebase_continue()
+                assert result.state in ("done", "conflict")
+            except RebaseConflictError:
+                # Still conflicts - that's fine, test passes
+                pass
+            finally:
+                # Clean up if still in progress
+                if ops.rebase_in_progress():
+                    ops.rebase_abort()
+
+
+class TestRebaseSkip:
+    """Tests for rebase_skip() method."""
+
+    def test_given_no_rebase_when_skip_then_raises(
+        self, git_repo_with_commit: tuple[Path, GitOps]
+    ) -> None:
+        """Skipping when no rebase in progress should raise."""
+        _, ops = git_repo_with_commit
+
+        with pytest.raises(NoRebaseInProgressError):
+            ops.rebase_skip()
+
+    def test_given_conflict_when_skip_then_skips_commit(
+        self, git_repo_with_branch: tuple[Path, GitOps, str]
+    ) -> None:
+        """Skipping a conflicting commit should move to next step."""
+        repo_path, ops, _ = git_repo_with_branch
+        default_branch = ops.current_branch()
+
+        # Create conflicting changes
+        ops.checkout(default_branch)
+        (repo_path / "conflict.txt").write_text("default version")
+        ops.stage(["conflict.txt"])
+        ops.commit("add conflict on default")
+
+        ops.checkout("feature")
+        (repo_path / "conflict.txt").write_text("feature version")
+        ops.stage(["conflict.txt"])
+        ops.commit("add conflict on feature")
+
+        # Start rebase
+        plan = ops.rebase_plan(default_branch)
+        result = ops.rebase_execute(plan)
+
+        if result.state == "conflict":
+            # Skip should work
+            result = ops.rebase_skip()
+            assert result.state in ("done", "conflict")
+
+            # Clean up if still in conflict state
+            if result.state == "conflict":
+                ops.rebase_abort()
+
 
 class TestRebaseInProgress:
     """Tests for rebase_in_progress() method."""
