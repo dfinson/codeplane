@@ -8,12 +8,19 @@ import pygit2
 import pytest
 
 from codeplane.git import (
+    BlameInfo,
     BranchExistsError,
+    BranchInfo,
     BranchNotFoundError,
+    CommitInfo,
+    DiffInfo,
     GitOps,
     NotARepositoryError,
     NothingToCommitError,
+    RefInfo,
+    RemoteInfo,
     StashNotFoundError,
+    TagInfo,
 )
 
 
@@ -48,26 +55,26 @@ class TestHead:
     def test_head_normal(self, temp_repo: pygit2.Repository) -> None:
         ops = GitOps(temp_repo.workdir)
         head = ops.head()
-        assert isinstance(head, pygit2.Reference)
+        assert isinstance(head, RefInfo)
 
     def test_head_commit(self, temp_repo: pygit2.Repository) -> None:
         ops = GitOps(temp_repo.workdir)
         commit = ops.head_commit()
-        assert isinstance(commit, pygit2.Commit)
+        assert isinstance(commit, CommitInfo)
 
 
 class TestDiff:
     def test_diff_working_tree(self, repo_with_uncommitted: pygit2.Repository) -> None:
         ops = GitOps(repo_with_uncommitted.workdir)
         diff = ops.diff()
-        assert isinstance(diff, pygit2.Diff)
-        assert diff.stats.files_changed >= 1
+        assert isinstance(diff, DiffInfo)
+        assert diff.files_changed >= 1
 
     def test_diff_staged(self, repo_with_uncommitted: pygit2.Repository) -> None:
         ops = GitOps(repo_with_uncommitted.workdir)
         diff = ops.diff(staged=True)
-        assert isinstance(diff, pygit2.Diff)
-        assert diff.stats.files_changed == 1
+        assert isinstance(diff, DiffInfo)
+        assert diff.files_changed == 1
 
 
 class TestLog:
@@ -75,7 +82,7 @@ class TestLog:
         ops = GitOps(repo_with_history.workdir)
         log = ops.log(limit=10)
         assert len(log) == 6  # 5 + initial
-        assert all(isinstance(c, pygit2.Commit) for c in log)
+        assert all(isinstance(c, CommitInfo) for c in log)
 
     def test_log_limit(self, repo_with_history: pygit2.Repository) -> None:
         ops = GitOps(repo_with_history.workdir)
@@ -87,15 +94,16 @@ class TestBranches:
     def test_list_branches(self, repo_with_branches: pygit2.Repository) -> None:
         ops = GitOps(repo_with_branches.workdir)
         branches = ops.branches(include_remote=False)
-        names = {b.branch_name for b in branches}
+        assert all(isinstance(b, BranchInfo) for b in branches)
+        names = {b.short_name for b in branches}
         assert "main" in names
         assert "feature" in names
 
     def test_create_branch(self, temp_repo: pygit2.Repository) -> None:
         ops = GitOps(temp_repo.workdir)
         branch = ops.create_branch("new-feature")
-        assert isinstance(branch, pygit2.Branch)
-        assert branch.branch_name == "new-feature"
+        assert isinstance(branch, BranchInfo)
+        assert branch.short_name == "new-feature"
 
     def test_create_existing_branch(self, repo_with_branches: pygit2.Repository) -> None:
         ops = GitOps(repo_with_branches.workdir)
@@ -116,7 +124,7 @@ class TestBranches:
         ops = GitOps(repo_with_branches.workdir)
         ops.delete_branch("feature", force=True)
         branches = ops.branches(include_remote=False)
-        names = {b.branch_name for b in branches}
+        names = {b.short_name for b in branches}
         assert "feature" not in names
 
     def test_delete_nonexistent_branch(self, temp_repo: pygit2.Repository) -> None:
@@ -132,8 +140,9 @@ class TestCommit:
 
         ops = GitOps(temp_repo.workdir)
         ops.stage(["new.txt"])
-        oid = ops.commit("Add new file")
-        assert isinstance(oid, pygit2.Oid)
+        sha = ops.commit("Add new file")
+        assert isinstance(sha, str)
+        assert len(sha) == 40
 
     def test_commit_nothing_to_commit(self, temp_repo: pygit2.Repository) -> None:
         ops = GitOps(temp_repo.workdir)
@@ -142,8 +151,9 @@ class TestCommit:
 
     def test_commit_allow_empty(self, temp_repo: pygit2.Repository) -> None:
         ops = GitOps(temp_repo.workdir)
-        oid = ops.commit("Empty commit", allow_empty=True)
-        assert isinstance(oid, pygit2.Oid)
+        sha = ops.commit("Empty commit", allow_empty=True)
+        assert isinstance(sha, str)
+        assert len(sha) == 40
 
 
 class TestReset:
@@ -159,17 +169,17 @@ class TestMerge:
     def test_merge_fastforward(self, repo_with_branches: pygit2.Repository) -> None:
         ops = GitOps(repo_with_branches.workdir)
         ops.checkout("feature")
-        success, oid, conflicts = ops.merge("main")
-        assert success
-        assert conflicts == []
+        result = ops.merge("main")
+        assert result.success
+        assert result.conflict_paths == ()
 
     def test_merge_conflict(self, repo_with_conflict: tuple[pygit2.Repository, str]) -> None:
         repo, branch = repo_with_conflict
         ops = GitOps(repo.workdir)
-        success, oid, conflicts = ops.merge(branch)
-        assert not success
-        assert len(conflicts) > 0
-        assert "conflict.txt" in conflicts
+        result = ops.merge(branch)
+        assert not result.success
+        assert len(result.conflict_paths) > 0
+        assert "conflict.txt" in result.conflict_paths
 
     def test_abort_merge(self, repo_with_conflict: tuple[pygit2.Repository, str]) -> None:
         repo, branch = repo_with_conflict
@@ -205,8 +215,9 @@ class TestStash:
         ops = GitOps(repo_with_uncommitted.workdir)
         ops.unstage(["staged.txt"])
 
-        oid = ops.stash_push(message="Test stash")
-        assert isinstance(oid, pygit2.Oid)
+        sha = ops.stash_push(message="Test stash")
+        assert isinstance(sha, str)
+        assert len(sha) == 40
 
         status = ops.status()
         # Modified file should be stashed
@@ -225,7 +236,7 @@ class TestStash:
 
         stashes = ops.stash_list()
         assert len(stashes) >= 1
-        assert "First" in stashes[0][1]  # Message includes branch prefix
+        assert "First" in stashes[0].message  # Message includes branch prefix
 
     def test_stash_pop_invalid(self, temp_repo: pygit2.Repository) -> None:
         ops = GitOps(temp_repo.workdir)
@@ -236,13 +247,15 @@ class TestStash:
 class TestTags:
     def test_create_lightweight_tag(self, temp_repo: pygit2.Repository) -> None:
         ops = GitOps(temp_repo.workdir)
-        oid = ops.create_tag("v1.0.0")
-        assert isinstance(oid, pygit2.Oid)
+        sha = ops.create_tag("v1.0.0")
+        assert isinstance(sha, str)
+        assert len(sha) == 40
 
     def test_create_annotated_tag(self, temp_repo: pygit2.Repository) -> None:
         ops = GitOps(temp_repo.workdir)
-        oid = ops.create_tag("v1.0.0", message="Release 1.0.0")
-        assert isinstance(oid, pygit2.Oid)
+        sha = ops.create_tag("v1.0.0", message="Release 1.0.0")
+        assert isinstance(sha, str)
+        assert len(sha) == 40
 
     def test_list_tags(self, temp_repo: pygit2.Repository) -> None:
         ops = GitOps(temp_repo.workdir)
@@ -250,7 +263,8 @@ class TestTags:
         ops.create_tag("v2.0.0", message="Release 2.0.0")
 
         tags = ops.tags()
-        names = {t[0] for t in tags}
+        assert all(isinstance(t, TagInfo) for t in tags)
+        names = {t.name for t in tags}
         assert "v1.0.0" in names
         assert "v2.0.0" in names
 
@@ -259,8 +273,8 @@ class TestBlame:
     def test_blame_file(self, temp_repo: pygit2.Repository) -> None:
         ops = GitOps(temp_repo.workdir)
         blame = ops.blame("README.md")
-        assert isinstance(blame, pygit2.Blame)
-        assert len(blame) >= 1
+        assert isinstance(blame, BlameInfo)
+        assert len(blame.hunks) >= 1
 
 
 class TestRemotes:
@@ -268,4 +282,5 @@ class TestRemotes:
         ops = GitOps(repo_with_remote.workdir)
         remotes = ops.remotes()
         assert len(remotes) == 1
+        assert isinstance(remotes[0], RemoteInfo)
         assert remotes[0].name == "origin"

@@ -17,11 +17,38 @@ from codeplane.git.errors import (
     StashNotFoundError,
     UnmergedBranchError,
 )
+from codeplane.git.models import (
+    BlameHunk,
+    BlameInfo,
+    BranchInfo,
+    CommitInfo,
+    DiffFile,
+    DiffInfo,
+    MergeResult,
+    RefInfo,
+    RemoteInfo,
+    Signature,
+    StashEntry,
+    TagInfo,
+)
 from codeplane.git.ops import GitOps
 
 __all__ = [
     # Main class
     "GitOps",
+    # Models
+    "Signature",
+    "CommitInfo",
+    "BranchInfo",
+    "TagInfo",
+    "RemoteInfo",
+    "DiffFile",
+    "DiffInfo",
+    "BlameHunk",
+    "BlameInfo",
+    "StashEntry",
+    "RefInfo",
+    "MergeResult",
     # Credentials
     "SystemCredentialCallback",
     "get_default_callbacks",
