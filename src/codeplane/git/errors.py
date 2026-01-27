@@ -90,9 +90,11 @@ class RemoteError(GitError):
 class AuthenticationError(GitError):
     """Authentication failed for remote operation."""
 
-    def __init__(self, remote: str) -> None:
-        super().__init__(f"Authentication failed for remote: {remote}")
+    def __init__(self, remote: str, operation: str | None = None) -> None:
+        op_part = f" during {operation}" if operation else ""
+        super().__init__(f"Authentication failed for remote {remote!r}{op_part}")
         self.remote = remote
+        self.operation = operation
 
 
 class StashError(GitError):

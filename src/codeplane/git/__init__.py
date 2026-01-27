@@ -24,7 +24,9 @@ from codeplane.git.models import (
     CommitInfo,
     DiffFile,
     DiffInfo,
+    MergeAnalysis,
     MergeResult,
+    OperationResult,
     RefInfo,
     RemoteInfo,
     Signature,
@@ -49,6 +51,8 @@ __all__ = [
     "StashEntry",
     "RefInfo",
     "MergeResult",
+    "MergeAnalysis",
+    "OperationResult",
     # Credentials
     "SystemCredentialCallback",
     "get_default_callbacks",

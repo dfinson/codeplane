@@ -3,7 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
+from typing import Literal
+
+import pygit2
+
+DeltaStatus = Literal["added", "deleted", "modified", "renamed", "copied", "unknown"]
+
+_DELTA_STATUS_MAP: dict[int, DeltaStatus] = {
+    pygit2.GIT_DELTA_ADDED: "added",
+    pygit2.GIT_DELTA_DELETED: "deleted",
+    pygit2.GIT_DELTA_MODIFIED: "modified",
+    pygit2.GIT_DELTA_RENAMED: "renamed",
+    pygit2.GIT_DELTA_COPIED: "copied",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,6 +26,10 @@ class Signature:
     name: str
     email: str
     time: datetime
+
+    @classmethod
+    def from_pygit2(cls, sig: pygit2.Signature) -> Signature:
+        return cls(sig.name, sig.email, datetime.fromtimestamp(sig.time, tz=UTC))
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +43,18 @@ class CommitInfo:
     committer: Signature
     parent_shas: tuple[str, ...]
 
+    @classmethod
+    def from_pygit2(cls, commit: pygit2.Commit) -> CommitInfo:
+        sha = str(commit.id)
+        return cls(
+            sha=sha,
+            short_sha=sha[:7],
+            message=commit.message,
+            author=Signature.from_pygit2(commit.author),
+            committer=Signature.from_pygit2(commit.committer),
+            parent_shas=tuple(str(p) for p in commit.parent_ids),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class BranchInfo:
@@ -36,6 +65,19 @@ class BranchInfo:
     target_sha: str
     is_remote: bool
     upstream: str | None = None
+
+    @classmethod
+    def from_pygit2(cls, branch: pygit2.Branch) -> BranchInfo:
+        upstream = None
+        if hasattr(branch, "upstream") and branch.upstream:
+            upstream = branch.upstream.shorthand
+        return cls(
+            name=branch.name,
+            short_name=branch.shorthand,
+            target_sha=str(branch.target),
+            is_remote=branch.name.startswith("refs/remotes/"),
+            upstream=upstream,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +106,7 @@ class DiffFile:
 
     old_path: str | None
     new_path: str | None
-    status: str  # 'added', 'deleted', 'modified', 'renamed', 'copied'
+    status: DeltaStatus
     additions: int
     deletions: int
 
@@ -78,6 +120,27 @@ class DiffInfo:
     total_deletions: int
     files_changed: int
     patch: str | None = None
+
+    @classmethod
+    def from_pygit2(cls, diff: pygit2.Diff, include_patch: bool = False) -> DiffInfo:
+        files = tuple(
+            DiffFile(
+                old_path=delta.old_file.path if delta.old_file else None,
+                new_path=delta.new_file.path if delta.new_file else None,
+                status=_DELTA_STATUS_MAP.get(delta.status, "unknown"),
+                additions=0,
+                deletions=0,
+            )
+            for delta in diff.deltas
+        )
+        stats = diff.stats
+        return cls(
+            files=files,
+            total_additions=stats.insertions,
+            total_deletions=stats.deletions,
+            files_changed=stats.files_changed,
+            patch=diff.patch if include_patch else None,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +160,22 @@ class BlameInfo:
 
     path: str
     hunks: tuple[BlameHunk, ...]
+
+    @classmethod
+    def from_pygit2(cls, path: str, blame: pygit2.Blame) -> BlameInfo:
+        return cls(
+            path=path,
+            hunks=tuple(
+                BlameHunk(
+                    commit_sha=str(hunk.final_commit_id),
+                    author=Signature.from_pygit2(hunk.final_committer),  # type: ignore[arg-type]
+                    start_line=hunk.final_start_line_number,
+                    line_count=hunk.lines_in_hunk,
+                    original_start_line=hunk.orig_start_line_number,
+                )
+                for hunk in blame
+            ),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,4 +203,21 @@ class MergeResult:
 
     success: bool
     commit_sha: str | None
+    conflict_paths: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True, slots=True)
+class MergeAnalysis:
+    """Result of merge analysis."""
+
+    up_to_date: bool
+    fastforward_possible: bool
+    conflicts_likely: bool
+
+
+@dataclass(frozen=True, slots=True)
+class OperationResult:
+    """Result of cherrypick/revert operations."""
+
+    success: bool
     conflict_paths: tuple[str, ...] = field(default_factory=tuple)
