@@ -37,7 +37,7 @@ class DaemonConfig(BaseModel):
     """Daemon configuration."""
 
     host: str = "127.0.0.1"
-    port: int = 0  # 0 = auto-assign
+    port: int = 7654
     shutdown_timeout_sec: int = 5
 
     @field_validator("port")

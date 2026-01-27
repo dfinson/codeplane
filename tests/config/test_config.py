@@ -88,7 +88,7 @@ class TestConfigLoading:
 
         # Then
         assert config.logging.level == "INFO"
-        assert config.daemon.port == 0
+        assert config.daemon.port == 7654
 
     def test_given_repo_config_when_load_then_overrides_defaults(self, temp_repo: Path) -> None:
         """Repo config file overrides defaults."""
