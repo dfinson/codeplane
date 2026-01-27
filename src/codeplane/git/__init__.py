@@ -44,7 +44,7 @@ from codeplane.git.models import (
     RebaseAction,
     RebasePlan,
     RebaseResult,
-    RebaseState,
+    RebaseResultState,
     RebaseStep,
     RefInfo,
     RemoteInfo,
@@ -92,7 +92,7 @@ __all__ = [
     "RebasePlan",
     "RebaseStep",
     "RebaseResult",
-    "RebaseState",
+    "RebaseResultState",
     # Credentials
     "SystemCredentialCallback",
     "get_default_callbacks",

@@ -428,7 +428,7 @@ class SubmoduleUpdateResult:
 # =============================================================================
 
 RebaseAction = Literal["pick", "reword", "edit", "squash", "fixup", "drop"]
-RebaseState = Literal["done", "conflict", "edit_pause", "aborted"]
+RebaseResultState = Literal["done", "conflict", "edit_pause", "aborted"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -456,7 +456,7 @@ class RebaseResult:
     success: bool
     completed_steps: int
     total_steps: int
-    state: RebaseState
+    state: RebaseResultState
     conflict_paths: tuple[str, ...] = field(default_factory=tuple)
     current_commit: str | None = None  # For edit_pause
     new_head: str | None = None  # Final HEAD after successful rebase

@@ -154,8 +154,12 @@ class RebaseFlow:
         tree_id = self._access.index.write_tree()
 
         if step.action in ("squash", "fixup") and state.completed_commits:
-            # For squash/fixup after conflict, merge into previous commit
-            return self._squash_into_previous(step, state, concat_message=(step.action == "squash"))
+            # For squash/fixup after conflict, merge into previous commit,
+            # then advance state and continue executing remaining steps.
+            self._squash_into_previous(step, state, concat_message=(step.action == "squash"))
+            state.current_step += 1
+            self._save_state(state)
+            return self._execute_steps(state)
 
         # For pick, reword, edit - create commit from resolved state
         if step.action == "reword":

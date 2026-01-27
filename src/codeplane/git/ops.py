@@ -1084,12 +1084,18 @@ class GitOps:
         self.submodule_deinit(path, force=True)
 
         # Remove from .gitmodules (use name for section key)
-        subprocess.run(
+        result = subprocess.run(
             ["git", "config", "--file", ".gitmodules", "--remove-section", f"submodule.{name}"],
             cwd=str(self._access.path),
             capture_output=True,
+            text=True,
             timeout=30,
         )
+        # returncode 128 = "no such section" (already removed by deinit or never existed)
+        if result.returncode not in (0, 128):
+            raise SubmoduleError(
+                f"Failed to remove submodule from .gitmodules: {result.stderr.strip()}"
+            )
 
         # Stage .gitmodules change
         gitmodules_path = Path(self._access.path) / ".gitmodules"
@@ -1098,12 +1104,18 @@ class GitOps:
             self._access.index.write()
 
         # Remove from .git/config (use name for section key)
-        subprocess.run(
+        result = subprocess.run(
             ["git", "config", "--remove-section", f"submodule.{name}"],
             cwd=str(self._access.path),
             capture_output=True,
+            text=True,
             timeout=30,
         )
+        # returncode 128 = "no such section" (already removed by deinit or never existed)
+        if result.returncode not in (0, 128):
+            raise SubmoduleError(
+                f"Failed to remove submodule from .git/config: {result.stderr.strip()}"
+            )
 
         # Remove from index (use path)
         try:
