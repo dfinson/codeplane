@@ -75,33 +75,8 @@ def configure_logging(
         _add_request_id,  # type: ignore[list-item]
     ]
 
-    # For single output, use simple configuration
-    if len(config.outputs) == 1:
-        output = config.outputs[0]
-        output_level = _LEVEL_MAP.get((output.level or config.level).upper(), default_level)
-
-        if output.format == "json":
-            processors: list[structlog.types.Processor] = [
-                *shared_processors,
-                structlog.processors.JSONRenderer(),
-            ]
-        else:
-            processors = [
-                *shared_processors,
-                structlog.dev.ConsoleRenderer(colors=sys.stderr.isatty()),
-            ]
-
-        file = _get_output_file(output.destination)
-        structlog.configure(
-            processors=processors,
-            wrapper_class=structlog.make_filtering_bound_logger(output_level),
-            context_class=dict,
-            logger_factory=structlog.PrintLoggerFactory(file=file),
-            cache_logger_on_first_use=True,
-        )
-    else:
-        # Multi-output: configure stdlib logging with multiple handlers
-        _configure_multi_output(config, shared_processors, default_level)
+    # Always use stdlib logging for proper resource management
+    _configure_stdlib_logging(config, shared_processors, default_level)
 
 
 def _create_handler(destination: str) -> logging.Handler:
@@ -115,21 +90,12 @@ def _create_handler(destination: str) -> logging.Handler:
     return logging.FileHandler(path, mode="a")
 
 
-def _get_output_file(destination: str) -> Any:
-    """Get file object for PrintLoggerFactory."""
-    if destination in ("stderr", "stdout"):
-        return sys.stderr if destination == "stderr" else sys.stdout
-    path = Path(destination)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return path.open("a")  # noqa: SIM115
-
-
-def _configure_multi_output(
+def _configure_stdlib_logging(
     config: LoggingConfig,
     shared_processors: list[structlog.types.Processor],
     default_level: int,
 ) -> None:
-    """Configure multiple outputs via stdlib logging."""
+    """Configure logging via stdlib (proper file handle management)."""
     structlog.configure(
         processors=[
             *shared_processors,
@@ -147,7 +113,6 @@ def _configure_multi_output(
 
     for output in config.outputs:
         output_level = _LEVEL_MAP.get((output.level or config.level).upper(), default_level)
-
         if output.format == "json":
             formatter = structlog.stdlib.ProcessorFormatter(
                 processor=structlog.processors.JSONRenderer(),

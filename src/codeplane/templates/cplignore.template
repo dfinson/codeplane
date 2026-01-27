@@ -2,7 +2,7 @@
 # Syntax follows .gitignore
 
 # =============================================================================
-# Dependencies
+# Dependencies and caches
 # =============================================================================
 node_modules/
 vendor/
@@ -20,21 +20,9 @@ __pycache__/
 .coverage
 htmlcov/
 .hypothesis/
-
-# Go
-go.sum
-vendor/
-
-# Rust
-target/
-Cargo.lock
-
-# Ruby
 .bundle/
 vendor/bundle/
-
-# PHP
-vendor/
+go.sum
 
 # =============================================================================
 # Build outputs
@@ -42,6 +30,9 @@ vendor/
 dist/
 build/
 out/
+target/
+bin/
+obj/
 *.egg-info/
 *.egg
 *.whl
@@ -49,15 +40,13 @@ out/
 *.zip
 
 # Java/Kotlin/Scala
-target/
 *.jar
 *.war
 *.ear
 *.class
+Cargo.lock
 
 # .NET
-bin/
-obj/
 *.dll
 *.exe
 *.pdb
@@ -112,7 +101,6 @@ service-account*.json
 *.xlsx
 *.ppt
 *.pptx
-*.zip
 *.rar
 *.7z
 *.tar

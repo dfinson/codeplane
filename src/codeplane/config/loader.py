@@ -1,7 +1,7 @@
 """Configuration loading with pydantic-settings."""
 
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 import yaml
 from pydantic import ValidationError
@@ -34,7 +34,11 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 
 
 class _YamlSource(PydanticBaseSettingsSource):
-    _yaml_config: ClassVar[dict[str, Any]] = {}
+    """Settings source that reads from pre-loaded YAML config."""
+
+    def __init__(self, settings_cls: type[BaseSettings], yaml_config: dict[str, Any]) -> None:
+        super().__init__(settings_cls)
+        self._yaml_config = yaml_config
 
     def get_field_value(
         self,
@@ -48,37 +52,43 @@ class _YamlSource(PydanticBaseSettingsSource):
         return self._yaml_config
 
 
-class CodePlaneSettings(BaseSettings):
-    """Root config. Env vars: CODEPLANE__LOGGING__LEVEL, CODEPLANE__DAEMON__PORT, etc."""
+def _make_settings_class(yaml_config: dict[str, Any]) -> type[BaseSettings]:
+    """Create a Settings class with instance-based YAML source (thread-safe)."""
 
-    model_config = SettingsConfigDict(
-        env_prefix="CODEPLANE__",
-        env_nested_delimiter="__",
-        case_sensitive=False,
-    )
+    class CodePlaneSettings(BaseSettings):
+        """Root config. Env vars: CODEPLANE__LOGGING__LEVEL, CODEPLANE__DAEMON__PORT, etc."""
 
-    logging: LoggingConfig = LoggingConfig()
-    daemon: DaemonConfig = DaemonConfig()
-    index: IndexConfig = IndexConfig()
+        model_config = SettingsConfigDict(
+            env_prefix="CODEPLANE__",
+            env_nested_delimiter="__",
+            case_sensitive=False,
+        )
 
-    @classmethod
-    def settings_customise_sources(
-        cls,
-        settings_cls: type[BaseSettings],
-        init_settings: PydanticBaseSettingsSource,
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
-        file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
-    ) -> tuple[PydanticBaseSettingsSource, ...]:
-        # Precedence (first wins): init kwargs > env vars > yaml files
-        return (init_settings, env_settings, _YamlSource(settings_cls))
+        logging: LoggingConfig = LoggingConfig()
+        daemon: DaemonConfig = DaemonConfig()
+        index: IndexConfig = IndexConfig()
+
+        @classmethod
+        def settings_customise_sources(
+            cls,
+            settings_cls: type[BaseSettings],
+            init_settings: PydanticBaseSettingsSource,
+            env_settings: PydanticBaseSettingsSource,
+            dotenv_settings: PydanticBaseSettingsSource,  # noqa: ARG003
+            file_secret_settings: PydanticBaseSettingsSource,  # noqa: ARG003
+        ) -> tuple[PydanticBaseSettingsSource, ...]:
+            # Precedence (first wins): init kwargs > env vars > yaml files
+            return (init_settings, env_settings, _YamlSource(settings_cls, yaml_config))
+
+    return CodePlaneSettings
 
 
-# Re-export as CodePlaneConfig for API compatibility
+# For type hints and direct instantiation without YAML
+CodePlaneSettings = _make_settings_class({})
 CodePlaneConfig = CodePlaneSettings
 
 
-def load_config(repo_root: Path | None = None, **kwargs: Any) -> CodePlaneSettings:
+def load_config(repo_root: Path | None = None, **kwargs: Any) -> BaseSettings:
     """Load config: defaults < global yaml < repo yaml < env vars < kwargs."""
     repo_root = repo_root or Path.cwd()
 
@@ -86,11 +96,9 @@ def load_config(repo_root: Path | None = None, **kwargs: Any) -> CodePlaneSettin
     yaml_config = _load_yaml(GLOBAL_CONFIG_PATH)
     yaml_config = _deep_merge(yaml_config, _load_yaml(repo_root / ".codeplane" / "config.yaml"))
 
-    # Set yaml config for the source to pick up
-    _YamlSource._yaml_config = yaml_config
-
+    settings_cls = _make_settings_class(yaml_config)
     try:
-        return CodePlaneSettings(**kwargs)
+        return settings_cls(**kwargs)
     except ValidationError as e:
         err = e.errors()[0]
         field = ".".join(str(loc) for loc in err["loc"])
