@@ -2238,7 +2238,53 @@ Any tool can accept optional `session_id` parameter to:
 
 **Total: 12 tools**
 
-### 22.5 Tool Specifications
+### 22.5 Pagination
+
+Tools returning collections support cursor-based pagination for large result sets.
+
+#### Request Parameters
+
+```typescript
+{
+  // ... tool-specific parameters ...
+  cursor?: string;  // Opaque continuation token from previous response
+  limit?: number;   // Results per page (default 20, max 100)
+}
+```
+
+#### Response Schema
+
+```typescript
+{
+  results: Array<T>;
+  pagination: {
+    next_cursor?: string;      // Present if more results available
+    total_estimate?: number;   // Approximate total (optional, may be expensive)
+  };
+  // ... other tool-specific fields ...
+}
+```
+
+#### Pagination Behavior
+
+1. **Cursor opacity** — Cursors are opaque strings; clients must not parse or construct them
+2. **Cursor lifetime** — Cursors remain valid for the session lifetime or 1 hour, whichever is shorter
+3. **Consistency model** — Pagination uses snapshot isolation; concurrent writes do not affect in-flight pagination
+4. **Exhaustion** — When `next_cursor` is absent, all results have been returned
+
+#### Paginated Tools
+
+| Tool | Paginates | Notes |
+|------|-----------|-------|
+| `codeplane_search` | Yes | All search modes |
+| `codeplane_map` (structure) | Yes | File tree only |
+| `codeplane_symbols` | Yes | When listing all symbols in scope |
+| `codeplane_references` | Yes | Reference locations |
+| `codeplane_read` | No | Uses explicit line ranges |
+| `codeplane_mutate` | No | Single operation |
+| `codeplane_git` | Partial | Log/blame commands only |
+
+### 22.6 Tool Specifications
 
 ---
 
@@ -2280,8 +2326,10 @@ Unified search across lexical index, symbols, and references.
     score: number;
     match_type: "exact" | "fuzzy" | "semantic";
   }>;
-  total_matches: number;
-  truncated: boolean;
+  pagination: {
+    next_cursor?: string;      // Present if more results available
+    total_estimate?: number;   // Approximate match count
+  };
   query_time_ms: number;
   _session: SessionState;
 }
