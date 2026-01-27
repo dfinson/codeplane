@@ -146,25 +146,34 @@ class RebaseFlow:
             conflicts = self._get_conflict_paths()
             raise RebaseConflictError(conflicts)
 
-        # For edit pause, commit the current state first
+        # After conflicts are resolved, we need to commit the current step
+        # before continuing to the next step
         step = self._step_from_dict(state.steps[state.current_step])
-        if step.action == "edit":
-            # Create commit from current index
-            tree_id = self._access.index.write_tree()
-            original_commit = self._access.resolve_commit(step.commit_sha)
-            head_oid = self._access.must_head_target()
+        original_commit = self._access.resolve_commit(step.commit_sha)
+        head_oid = self._access.must_head_target()
+        tree_id = self._access.index.write_tree()
 
-            new_oid = self._access.create_commit(
-                "HEAD",
-                original_commit.author,
-                self._access.default_signature,
-                step.message or original_commit.message,
-                tree_id,
-                [head_oid],
-            )
-            state.completed_commits.append(str(new_oid))
-            state.current_step += 1
-            self._save_state(state)
+        if step.action in ("squash", "fixup") and state.completed_commits:
+            # For squash/fixup after conflict, merge into previous commit
+            return self._squash_into_previous(step, state, concat_message=(step.action == "squash"))
+
+        # For pick, reword, edit - create commit from resolved state
+        if step.action == "reword":
+            message = step.message or original_commit.message
+        else:
+            message = step.message or original_commit.message
+
+        new_oid = self._access.create_commit(
+            "HEAD",
+            original_commit.author,
+            self._access.default_signature,
+            message,
+            tree_id,
+            [head_oid],
+        )
+        state.completed_commits.append(str(new_oid))
+        state.current_step += 1
+        self._save_state(state)
 
         return self._execute_steps(state)
 
@@ -325,11 +334,12 @@ class RebaseFlow:
             message = prev_commit.message
 
         # Create new commit with current tree (includes squashed changes) and
-        # the same parent as the previous commit (replacing it in history)
+        # the same parents as the previous commit (replacing it in history)
         tree_id = self._access.index.write_tree()
-        parent_oid = prev_commit.parent_ids[0] if prev_commit.parent_ids else prev_oid
+        # Use previous commit's parent list; for root commits this is empty
+        parents = list(prev_commit.parent_ids)
 
-        # Use ref=None because HEAD doesn't point to parent_oid
+        # Use ref=None because HEAD doesn't point to parent
         # (pygit2 requires first parent == current HEAD when ref is set)
         new_oid = self._access.create_commit(
             None,  # Don't update any ref directly
@@ -337,7 +347,7 @@ class RebaseFlow:
             self._access.default_signature,
             message,
             tree_id,
-            [parent_oid],
+            parents,
         )
 
         # Replace the previous completed commit
@@ -370,7 +380,18 @@ class RebaseFlow:
         conflicts = self._access.index.conflicts
         if conflicts is None:
             return []
-        return [entry[0].path for entry in conflicts if entry[0] is not None]
+        # Check all three sides (ancestor, ours, theirs) for paths
+        paths: list[str] = []
+        seen: set[str] = set()
+        for entry in conflicts:
+            for side in entry:
+                if side is None:
+                    continue
+                path = side.path
+                if path not in seen:
+                    seen.add(path)
+                    paths.append(path)
+        return paths
 
     def _finalize(self, state: RebaseState) -> RebaseResult:
         """Finalize the rebase - update branch ref if on a branch."""

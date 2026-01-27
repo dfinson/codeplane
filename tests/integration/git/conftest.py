@@ -20,28 +20,49 @@ PUBLIC_REPO_SSH = "git@github.com:dfinson/codeplane-test-public.git"
 PRIVATE_REPO_SSH = "git@github.com:dfinson/codeplane-test-private.git"
 
 
-def _configure_ci_credentials() -> None:
-    """Configure git credential helper for CI environment if token is available."""
+@pytest.fixture(scope="session", autouse=True)
+def _configure_ci_credentials(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[None, None, None]:
+    """Configure git credential helper for CI environment if token is available.
+
+    Uses a session-scoped temporary credential file to avoid polluting global config.
+    """
     token = os.environ.get("CODEPLANE_TEST_PRIVATE_TOKEN")
     if not token:
+        yield
         return
-    # Use git credential store to avoid embedding token in URLs (security)
-    # This writes credentials to a temporary file that git can read
-    subprocess.run(
-        ["git", "config", "--global", "credential.helper", "store"],
-        capture_output=True,
-        check=False,
-    )
-    # Write credentials in git credential store format
-    cred_file = Path.home() / ".git-credentials"
+
+    # Create temp credential file scoped to test session
+    cred_dir = tmp_path_factory.mktemp("git-creds")
+    cred_file = cred_dir / "credentials"
     cred_line = f"https://x-access-token:{token}@github.com\n"
-    # Append if file exists, create if not
-    with open(cred_file, "a") as f:
-        f.write(cred_line)
+    cred_file.write_text(cred_line)
 
+    # Set environment to use temp credential store (doesn't pollute global config)
+    old_helper = os.environ.get("GIT_CONFIG_VALUE_0")
+    old_key = os.environ.get("GIT_CONFIG_KEY_0")
+    old_count = os.environ.get("GIT_CONFIG_COUNT")
 
-# Configure credentials once at module load for CI
-_configure_ci_credentials()
+    os.environ["GIT_CONFIG_COUNT"] = "1"
+    os.environ["GIT_CONFIG_KEY_0"] = "credential.helper"
+    os.environ["GIT_CONFIG_VALUE_0"] = f"store --file={cred_file}"
+
+    yield
+
+    # Cleanup environment
+    if old_count is None:
+        os.environ.pop("GIT_CONFIG_COUNT", None)
+    else:
+        os.environ["GIT_CONFIG_COUNT"] = old_count
+    if old_key is None:
+        os.environ.pop("GIT_CONFIG_KEY_0", None)
+    else:
+        os.environ["GIT_CONFIG_KEY_0"] = old_key
+    if old_helper is None:
+        os.environ.pop("GIT_CONFIG_VALUE_0", None)
+    else:
+        os.environ["GIT_CONFIG_VALUE_0"] = old_helper
 
 
 def _can_access_repo(url: str, timeout: int = 10) -> bool:

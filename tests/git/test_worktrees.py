@@ -283,7 +283,7 @@ class TestIsWorktree:
         # Note: is_worktree detection depends on pygit2 version
         # This test may need adjustment based on pygit2 capabilities
         # assert wt_ops.is_worktree() is True
-        return  # Skip assertion due to pygit2 version variance
+        pytest.skip("Skip assertion due to pygit2 version variance")
 
 
 class TestWorktreeInfo:

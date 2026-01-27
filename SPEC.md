@@ -1457,11 +1457,15 @@ All Git operations via `pygit2` (libgit2 bindings):
   - Submodules: list, status, init, update, sync, add, deinit, remove
   - Worktrees: list, add, open, remove, lock, unlock, prune
 
+Note: Some submodule operations (update, sync, add, deinit, remove) and worktree
+remove use subprocess fallbacks to `git` CLI for completeness and credential
+support where pygit2 bindings are incomplete.
+
 Credentials for remote operations:
 - SSH: via `KeypairFromAgent` (uses system SSH agent)
 - HTTPS: via credential helper callback that invokes `git credential fill`
 
-Agents never run git shell commands directly.
+Agents never run git shell commands directly (except for the subprocess fallbacks noted above).
 
 File operations:
 
