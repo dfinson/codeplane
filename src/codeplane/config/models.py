@@ -1,24 +1,68 @@
 """Configuration models with Pydantic validation."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+def _validate_log_level(v: str) -> str:
+    """Validate and normalize log level."""
+    valid = {"DEBUG", "INFO", "WARN", "WARNING", "ERROR"}
+    if v.upper() not in valid:
+        raise ValueError(f"Invalid log level: {v}. Must be one of {valid}")
+    return v.upper()
+
+
+class LogOutputConfig(BaseModel):
+    """Single logging output configuration."""
+
+    format: Literal["json", "console"] = Field(default="console", description="Output format")
+    destination: str = Field(default="stderr", description="stderr, stdout, or file path")
+    level: str | None = Field(default=None, description="Level override (inherits from parent if None)")
+
+    @field_validator("level")
+    @classmethod
+    def validate_level(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return _validate_log_level(v)
+
+    @field_validator("destination")
+    @classmethod
+    def validate_destination(cls, v: str) -> str:
+        if v in ("stderr", "stdout"):
+            return v
+        path = Path(v).expanduser()
+        if not path.is_absolute():
+            raise ValueError(f"File destination must be absolute path: {v}")
+        return str(path)
 
 
 class LoggingConfig(BaseModel):
-    """Logging configuration."""
+    """Logging configuration with multi-output support."""
 
-    level: str = Field(default="INFO", description="Log level")
-    json_format: bool = Field(default=False, description="Output JSON lines")
+    level: str = Field(default="INFO", description="Default log level")
+    outputs: list[LogOutputConfig] = Field(
+        default_factory=lambda: [LogOutputConfig()],
+        description="Output destinations (default: console to stderr)",
+    )
 
     @field_validator("level")
     @classmethod
     def validate_level(cls, v: str) -> str:
-        valid = {"DEBUG", "INFO", "WARN", "WARNING", "ERROR"}
-        if v.upper() not in valid:
-            raise ValueError(f"Invalid log level: {v}. Must be one of {valid}")
-        return v.upper()
+        return _validate_log_level(v)
+
+    @model_validator(mode="before")
+    @classmethod
+    def handle_legacy_json_format(cls, data: Any) -> Any:
+        """Backwards compatibility: convert json_format=True to outputs config."""
+        if isinstance(data, dict) and "json_format" in data:
+            json_format = data.pop("json_format")
+            if "outputs" not in data:
+                fmt = "json" if json_format else "console"
+                data["outputs"] = [{"format": fmt}]
+        return data
 
 
 class DaemonConfig(BaseModel):

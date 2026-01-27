@@ -1,15 +1,22 @@
 """Structured logging with request correlation.
 
-Supports JSON (machine) and console (human) output formats.
+Supports multiple simultaneous outputs with independent formats and levels.
 All entries within a request share a correlation ID.
 """
 
+from __future__ import annotations
+
+import logging
 import sys
 from contextvars import ContextVar
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import structlog
+
+if TYPE_CHECKING:
+    from codeplane.config.models import LoggingConfig
 
 # Context variable for request correlation
 _request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
@@ -43,27 +50,40 @@ def _add_request_id(
     return event_dict
 
 
+_LEVEL_MAP = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARN": logging.WARNING,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+}
+
+
 def configure_logging(
     *,
+    config: LoggingConfig | None = None,
     json_format: bool = False,
     level: str = "INFO",
 ) -> None:
     """Configure structlog for CodePlane.
 
+    For simple cases, use json_format and level directly.
+    For multi-output or advanced config, pass a LoggingConfig object.
+
     Args:
-        json_format: True for JSON lines, False for console format.
+        config: Full logging configuration. If provided, other args are ignored.
+        json_format: Output JSON lines (True) or console format (False).
         level: Log level (DEBUG, INFO, WARN, ERROR).
     """
-    import logging
+    from codeplane.config.models import LoggingConfig, LogOutputConfig
 
-    level_map = {
-        "DEBUG": logging.DEBUG,
-        "INFO": logging.INFO,
-        "WARN": logging.WARNING,
-        "WARNING": logging.WARNING,
-        "ERROR": logging.ERROR,
-    }
-    log_level = level_map.get(level.upper(), logging.INFO)
+    if config is None:
+        config = LoggingConfig(
+            level=level,
+            outputs=[LogOutputConfig(format="json" if json_format else "console")],
+        )
+
+    default_level = _LEVEL_MAP.get(config.level.upper(), logging.INFO)
 
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
@@ -72,24 +92,99 @@ def configure_logging(
         _add_request_id,  # type: ignore[list-item]
     ]
 
-    if json_format:
-        processors: list[structlog.types.Processor] = [
-            *shared_processors,
-            structlog.processors.JSONRenderer(),
-        ]
-    else:
-        processors = [
-            *shared_processors,
-            structlog.dev.ConsoleRenderer(colors=sys.stderr.isatty()),
-        ]
+    # For single output, use simple configuration
+    if len(config.outputs) == 1:
+        output = config.outputs[0]
+        output_level = _LEVEL_MAP.get((output.level or config.level).upper(), default_level)
 
+        if output.format == "json":
+            processors: list[structlog.types.Processor] = [
+                *shared_processors,
+                structlog.processors.JSONRenderer(),
+            ]
+        else:
+            processors = [
+                *shared_processors,
+                structlog.dev.ConsoleRenderer(colors=sys.stderr.isatty()),
+            ]
+
+        file = _get_output_file(output.destination)
+        structlog.configure(
+            processors=processors,
+            wrapper_class=structlog.make_filtering_bound_logger(output_level),
+            context_class=dict,
+            logger_factory=structlog.PrintLoggerFactory(file=file),
+            cache_logger_on_first_use=True,
+        )
+    else:
+        # Multi-output: configure stdlib logging with multiple handlers
+        _configure_multi_output(config, shared_processors, default_level)
+
+
+def _get_output_file(destination: str) -> Any:
+    """Get file object for destination."""
+    if destination == "stderr":
+        return sys.stderr
+    if destination == "stdout":
+        return sys.stdout
+    path = Path(destination)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path.open("a")  # noqa: SIM115
+
+
+def _configure_multi_output(
+    config: LoggingConfig,
+    shared_processors: list[structlog.types.Processor],
+    default_level: int,
+) -> None:
+    """Configure logging with multiple outputs via stdlib logging."""
+    # Use structlog's stdlib integration for multi-output
     structlog.configure(
-        processors=processors,
-        wrapper_class=structlog.make_filtering_bound_logger(log_level),
+        processors=[
+            *shared_processors,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(default_level),
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(file=sys.stderr),
+        logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
+
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+    root_logger.setLevel(default_level)
+
+    for output in config.outputs:
+        output_level = _LEVEL_MAP.get((output.level or config.level).upper(), default_level)
+
+        if output.format == "json":
+            formatter = structlog.stdlib.ProcessorFormatter(
+                processor=structlog.processors.JSONRenderer(),
+                foreign_pre_chain=shared_processors,
+            )
+        else:
+            formatter = structlog.stdlib.ProcessorFormatter(
+                processor=structlog.dev.ConsoleRenderer(
+                    colors=output.destination == "stderr" and sys.stderr.isatty()
+                ),
+                foreign_pre_chain=shared_processors,
+            )
+
+        handler = _create_handler(output.destination)
+        handler.setLevel(output_level)
+        handler.setFormatter(formatter)
+        root_logger.addHandler(handler)
+
+
+def _create_handler(destination: str) -> logging.Handler:
+    """Create appropriate handler for destination."""
+    if destination == "stderr":
+        return logging.StreamHandler(sys.stderr)
+    if destination == "stdout":
+        return logging.StreamHandler(sys.stdout)
+    path = Path(destination)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return logging.FileHandler(path, mode="a")
 
 
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:

@@ -1,10 +1,13 @@
 """Tests for structured logging."""
 
 import json
+import logging
+from pathlib import Path
 
 import pytest
 import structlog
 
+from codeplane.config.models import LoggingConfig, LogOutputConfig
 from codeplane.core.logging import (
     clear_request_id,
     configure_logging,
@@ -71,12 +74,16 @@ class TestRequestIdCorrelation:
 class TestLoggingConfiguration:
     """Logging configuration tests."""
 
+    def setup_method(self) -> None:
+        """Reset structlog and stdlib logging before each test."""
+        structlog.reset_defaults()
+        logging.getLogger().handlers.clear()
+
     def test_given_json_format_when_log_then_valid_json_output(
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """JSON format produces valid JSON with required fields."""
         # Given
-        structlog.reset_defaults()
         configure_logging(json_format=True, level="INFO")
         logger = get_logger("test")
 
@@ -104,3 +111,64 @@ class TestLoggingConfiguration:
 
         # Then
         assert logger is not None
+
+    def test_given_config_object_when_configure_then_takes_precedence(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """LoggingConfig object takes precedence over simple params."""
+        # Given
+        config = LoggingConfig(
+            level="DEBUG",
+            outputs=[LogOutputConfig(format="json", destination="stderr")],
+        )
+
+        # When
+        configure_logging(config=config, json_format=False, level="ERROR")
+        logger = get_logger()
+        logger.debug("debug msg")
+
+        # Then
+        captured = capsys.readouterr()
+        assert "debug msg" in captured.err
+
+    def test_given_multi_output_config_when_configure_then_logs_to_all(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Multiple outputs receive logs according to their levels."""
+        # Given
+        log_file = tmp_path / "test.jsonl"
+        config = LoggingConfig(
+            level="DEBUG",
+            outputs=[
+                LogOutputConfig(format="console", destination="stderr", level="INFO"),
+                LogOutputConfig(format="json", destination=str(log_file)),
+            ],
+        )
+
+        # When
+        configure_logging(config=config)
+        logger = get_logger()
+        logger.debug("debug only")
+        logger.info("info msg")
+
+        # Then - console should have INFO only
+        captured = capsys.readouterr()
+        assert "info msg" in captured.err
+        assert "debug only" not in captured.err
+
+        # Then - file should have both (inherits DEBUG)
+        content = log_file.read_text()
+        assert "debug only" in content
+        assert "info msg" in content
+
+    def test_given_json_format_key_in_dict_when_load_then_converts_to_outputs(self) -> None:
+        """YAML with json_format key converts to outputs config for migration."""
+        # Given
+        data = {"level": "DEBUG", "json_format": True}
+
+        # When
+        config = LoggingConfig.model_validate(data)
+
+        # Then
+        assert len(config.outputs) == 1
+        assert config.outputs[0].format == "json"

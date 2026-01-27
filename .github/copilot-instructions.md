@@ -146,6 +146,34 @@ Copilot performs well on narrow, locally-visible issues. It struggles with archi
 
 ---
 
+## C. Pull Request Creation
+
+When creating pull requests:
+
+### 1. Template Usage
+
+- **Always check for PR templates** in `.github/PULL_REQUEST_TEMPLATE.md` or `.github/PULL_REQUEST_TEMPLATE/`
+- **Use the template structure** — do not discard or reformat it
+- **Be context-sensitive with checkboxes** — only check boxes that actually apply to this PR
+  - If a checkbox doesn't apply, leave it unchecked or mark N/A
+  - Do not blindly check all boxes
+  - Each checked box is a commitment
+
+### 2. Description Guidelines
+
+- **Stay high-level** — PR descriptions summarize intent, not implementation details
+- **Link to issues** — Use `Closes #123` or `Relates to #123`
+- **Avoid code in descriptions** — The diff is the code; the description is the context
+- **State what changed and why** — not how (the diff shows how)
+
+### 3. Scope Discipline
+
+- One logical change per PR
+- If a PR touches unrelated areas, split it
+- Refactors and features should not mix
+
+---
+
 ## Dev Commands
 
 ```bash

@@ -175,23 +175,38 @@ Daemon shutdown:
 
 Logging:
 
-- Format: Structured JSON lines (one JSON object per line)
-- Location: `.codeplane/daemon.log`
-- Rotation: 3 files max, 10 MB each, oldest deleted on rotation
+- Multi-output support: logs can be sent to multiple destinations simultaneously
+- Each output specifies format, destination, and optional level override
+- Formats: `json` (structured JSON lines) or `console` (human-readable)
+- Destinations: `stderr`, `stdout`, or absolute file path
+- Default: single console output to stderr at INFO level
+- Rotation (file outputs only): 3 files max, 10 MB each, oldest deleted on rotation
 - Levels: `debug`, `info`, `warn`, `error`
-- Required fields per entry:
+- Required fields per JSON entry:
   - `ts`: ISO 8601 timestamp with milliseconds
   - `level`: log level
-  - `msg`: human-readable message
+  - `event`: human-readable message
 - Optional correlation fields:
+  - `request_id`: request correlation identifier
   - `op_id`: operation identifier (for tracing a single request)
   - `task_id`: task envelope identifier
-  - `req_id`: HTTP request identifier
-- Example entries:
+- Configuration example:
+  ```yaml
+  logging:
+    level: DEBUG
+    outputs:
+      - format: console
+        destination: stderr
+        level: INFO        # Show INFO+ on console
+      - format: json
+        destination: /var/log/codeplane.jsonl
+                            # Inherits DEBUG from parent
+  ```
+- JSON output example:
   ```json
-  {"ts":"2026-01-26T15:30:00.123Z","level":"info","msg":"daemon started","port":54321}
-  {"ts":"2026-01-26T15:30:01.456Z","level":"debug","op_id":"abc123","msg":"refactor planning started","symbol":"MyClass"}
-  {"ts":"2026-01-26T15:30:02.789Z","level":"error","op_id":"abc123","msg":"LSP timeout","lang":"java","timeout_ms":30000}
+  {"ts":"2026-01-26T15:30:00.123Z","level":"info","event":"daemon started","port":54321}
+  {"ts":"2026-01-26T15:30:01.456Z","level":"debug","op_id":"abc123","event":"refactor planning started","symbol":"MyClass"}
+  {"ts":"2026-01-26T15:30:02.789Z","level":"error","op_id":"abc123","event":"LSP timeout","lang":"java","timeout_ms":30000}
   ```
 - Access via CLI:
   - `cpl status --verbose`: last 50 lines
