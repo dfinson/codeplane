@@ -111,23 +111,15 @@ The following capabilities are folded into core commands or removed to avoid sur
 | Logs | Folded into `status --verbose` (last N log lines) and `doctor --logs` (bundled diag report). Optional alias `cpl logs` → `cpl status --follow` is acceptable but not a stable interface. |
 | Inspect | Folded into `status --json` for machine-readable introspection. |
 | Config CLI | Removed in v1. Use files: global config in user dir, repo config in `.codeplane/config`. One-off overrides via `cpl up --set key=value` if needed. |
-| Fetch shared index | Automatic and internal as part of `up` when policy dictates. |
-| Rebuild index | Automatic when integrity checks fail (with clear policy and warning). Hidden escape hatch: `cpl debug index-rebuild`. |
-| Upgrade | Removed entirely. Prefer package manager / installer. Self-updater deferred until security posture hardens. |
+| Rebuild index | Automatic when integrity checks fail; no manual trigger. |
 
 Daemon model:
 
-- Default: **repo-scoped daemon** — one daemon per repository.
+- **Repo-scoped daemon** — one daemon per repository; no multi-repo mode.
 - `cpl up` in a repo directory starts/ensures a daemon for that repo only.
-- No global multi-repo daemon in v1. Cross-repo features are out of scope; if added later, architecture will be revisited.
 - Transport: **HTTP localhost** with ephemeral port.
-  - Daemon binds to `127.0.0.1:0` (OS-assigned port).
-  - Port written to `.codeplane/port` on startup.
-  - Repo path written to `.codeplane/repo` (absolute path).
-  - Clients read both files to connect.
   - Cross-platform with identical code (no socket vs named pipe divergence).
   - MCP clients can connect directly via HTTP/SSE transport (no stdio proxy needed).
-  - Debugging trivial: `curl -H "X-CodePlane-Repo: $(cat .codeplane/repo)" http://127.0.0.1:$(cat .codeplane/port)/status`
 - Request validation:
   - All HTTP requests must include `X-CodePlane-Repo: <absolute-path>` header.
   - Daemon validates header matches its configured repository root.
@@ -142,15 +134,12 @@ Daemon model:
 
 Repo activation:
 
-- Repo must be initialized via `cpl init`.
-- Creates `.codeplane/`, repo UUID, config.
-- On `cpl up`: writes `port` and `repo` files, starts HTTP server.
+- `cpl up` initializes repo if needed (creates `.codeplane/`, repo UUID, config).
 - Index is eagerly built on startup and continuously maintained.
 
 Auto-start options (optional):
 
 - Manual: `cpl up` (recommended; explicit is better)
-- OS user-service integration deferred: repo-scoped daemons don't fit the "one global service" pattern cleanly. If needed, users can script `cpl up` in shell init or use a process manager.
 
 Daemon startup includes:
 
@@ -178,7 +167,6 @@ Logging:
 - Formats: `json` (structured JSON lines) or `console` (human-readable)
 - Destinations: `stderr`, `stdout`, or absolute file path
 - Default: single console output to stderr at INFO level
-- Rotation (file outputs only): 3 files max, 10 MB each, oldest deleted on rotation
 - Levels: `debug`, `info`, `warn`, `error`
 - Required fields per JSON entry:
   - `ts`: ISO 8601 timestamp with milliseconds
@@ -216,37 +204,21 @@ Installation and upgrades:
 - Install modes (user-level only; no root/system install):
   - `pipx install codeplane`
   - Static binary from GitHub Releases
-  - Optional: Homebrew, Winget
-- Upgrades:
-  - Via package manager or installer (no CLI self-updater in v1)
-  - No auto-updates
-  - Safe hot-restart of daemon via `cpl down` / `cpl up`
-  - Index artifacts forward-compatible if schema unchanged
+- Upgrades via package manager (pip/uv)
 
 Diagnostics and introspection:
 
 - `cpl doctor` checks:
   - Daemon reachable
-  - Index integrity (shared + overlay)
+  - Index integrity
   - Commit hash matches Git HEAD
-  - Port/token file validity
   - Config sanity
-  - Git clean state
 - `cpl doctor --logs`: bundled diagnostic report including recent logs
 - Runtime introspection:
   - `cpl status --verbose`: includes last N log lines and paths
   - `cpl status --json`: machine-readable index metadata (paths, size, commit, overlay state)
   - `cpl status --follow`: optional alias for tailing logs (not a stable interface)
   - Healthcheck endpoint exists (`/health`) returning JSON (interface details deferred)
-
-Shared index artifact handling:
-
-- CI builds shared index artifact (tracked-only; no secrets).
-- Hosted on GitHub Releases, S3, or Azure Blob.
-- Downloaded automatically as part of `cpl up` when policy dictates.
-- Stored in local cache, checksum-verified.
-- Replaces shared index if commit is newer.
-- Overlay never included; always local.
 
 Config precedence:
 
@@ -285,31 +257,6 @@ Fields:
 - `retryable`: Boolean hint — `true` if retry may succeed without intervention
 - `details`: Optional object with error-specific context
 
-Error code ranges:
-
-| Range | Category | Examples |
-|-------|----------|----------|
-| 1xxx | Request | `1001 REPO_HEADER_MISSING`, `1002 REPO_MISMATCH` |
-| 2xxx | Config | `2001 CONFIG_PARSE_ERROR`, `2002 CONFIG_INVALID_VALUE` |
-| 3xxx | Index | `3001 INDEX_CORRUPT`, `3002 INDEX_SCHEMA_MISMATCH`, `3003 INDEX_BUILD_FAILED` |
-| 4xxx | Refactor | `4001 REFACTOR_DIVERGENCE`, `4002 REFACTOR_GATE_FAILED`, `4003 REFACTOR_NO_CONTEXT` |
-| 5xxx | Mutation | `5001 MUTATION_SCOPE_VIOLATION`, `5002 MUTATION_PRECONDITION_FAILED`, `5003 MUTATION_LOCK_TIMEOUT` |
-| 6xxx | Task | `6001 TASK_BUDGET_EXCEEDED`, `6002 TASK_NOT_FOUND`, `6003 TASK_ALREADY_CLOSED` |
-| 7xxx | Test | `7001 TEST_RUNNER_NOT_FOUND`, `7002 TEST_TIMEOUT`, `7003 TEST_PARSE_FAILED` |
-| 8xxx | Indexer | `8001 INDEXER_NOT_INSTALLED`, `8002 INDEXER_TIMEOUT`, `8003 INDEXER_LANGUAGE_UNSUPPORTED` |
-| 9xxx | Internal | `9001 INTERNAL_ERROR`, `9002 INTERNAL_TIMEOUT` |
-
-Retryable errors (examples):
-- `MUTATION_LOCK_TIMEOUT` — another operation holds lock, retry after delay
-- `INDEXER_TIMEOUT` — indexer job timed out, retry may succeed
-- `INTERNAL_TIMEOUT` — transient resource pressure
-
-Non-retryable errors (examples):
-- `INDEX_CORRUPT` — requires rebuild
-- `REFACTOR_DIVERGENCE` — requires user decision
-- `REFACTOR_GATE_FAILED` — files not CLEAN, wait for refresh or use force_syntactic
-- `CONFIG_PARSE_ERROR` — requires config fix
-
 Defaults prevent footguns:
 
 - `.cplignore` auto-generated
@@ -322,7 +269,6 @@ Failure recovery playbooks:
 |---|---|---|
 | Corrupt index | `cpl doctor` fails hash check | Automatic rebuild (or `cpl debug index-rebuild`) |
 | Schema mismatch | Startup error | Automatic rebuild on `cpl up` |
-| Stale port/token | `cpl up` error (port file exists but daemon unreachable) | Automatic cleanup and restart on `cpl up` |
 | Stale revision | `cpl status` shows mismatch | Automatic re-fetch/rebuild on `cpl up` |
 | Daemon crash | Daemon auto-exits | `cpl up` (restarts daemon) |
 
@@ -586,7 +532,7 @@ These files are never indexed even locally.
 ### 6.9 Security-Auditability Notes
 
 - All mutations emit structured deltas.
-- Overlay and shared indexes are deterministic and reproducible.
+- Index is deterministic and reproducible.
 - Operation history is append-only (SQLite-backed).
 - No automatic retries or implicit mutations.
 
@@ -2140,12 +2086,10 @@ Items 1-3 from the original register have been resolved (see section 16). Remain
    - context explosion risk
    - warm LSP resource footprint
    - operational limits beyond `max_parallel_contexts` not fully specified
-2. Shared index artifact schema drift:
-   - strict compatibility and rebuild rules must be enforced
-3. Optional watchers:
+2. Optional watchers:
    - must never become correctness-critical
    - must not violate "no background mutation"
-4. Security posture depends on Git hygiene:
+3. Security posture depends on Git hygiene:
    - secrets committed to Git leak into shared artifacts by definition; mitigations are external (pre-commit hooks, scanning)
 
 ---
@@ -2163,7 +2107,6 @@ Stable enough that API design should be mechanical:
 - Task envelope semantics, budgets, fingerprinting, restart behavior
 - Ledger schema, retention policy, optional artifact model
 - CLI lifecycle and operability checks
-- Shared index artifact fetch and verification rules
 - Config layering and defaults framework
 - Observability model, trace/metric categories, and dashboard scope
 
