@@ -51,7 +51,7 @@ Track progress via [GitHub Milestones](https://github.com/dfinson/codeplane/mile
 | M5: Daemon & CLI | HTTP daemon, `cpl` CLI commands | |
 | M6: Core MCP Tools | File ops, search, git tools for agents | |
 | M7: Test Runner | Framework detection, parallel execution | |
-| M8: LSP & Refactor | Rename, extract, inline, move via LSP | |
+| M8: Semantic Refactor | Rename, move, delete via SCIP semantic index | |
 | M9: Polish & Hardening | Docs, benchmarks, security, packaging | |
 
 ## Development

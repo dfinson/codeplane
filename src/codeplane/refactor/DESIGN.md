@@ -2,25 +2,26 @@
 
 ## Scope
 
-The refactor module provides LSP-based semantic refactoring: rename, move, delete. It handles multi-context repos, divergence detection, and patch merging.
+The refactor module provides SCIP-based semantic refactoring: rename, move, delete. It queries pre-indexed SCIP semantic data, handles multi-context repos, divergence detection, and coordinates with the mutation engine.
 
 ### Responsibilities
 
-- LSP client management (start, stop, restart per language)
-- Refactor operation planning via LSP (`textDocument/rename`, etc.)
-- Multi-context handling (parallel execution, patch merging)
+- Query SCIP semantic index for symbol occurrences
+- Refactor operation planning from SCIP data
+- Multi-context handling (query multiple contexts, merge results)
 - Divergence detection and reporting
 - Preview generation before apply
 - Comment/docstring sweep (non-semantic post-refactor)
 - Coordination with mutation engine for atomic apply
+- Mutation gate enforcement (all affected files must be CLEAN)
 
 ### From SPEC.md
 
-- §7.11: LSP management
+- §7.5: Semantic Layer (SCIP Batch Indexers)
 - §8: Deterministic refactor engine
 - §8.3a: Architecture overview
-- §8.5: Single vs multi-context modes
-- §8.6: Divergence handling
+- §8.5: Refactor execution flow
+- §8.6: Multi-context handling
 - §8.11: Comment sweep
 
 ---
@@ -31,8 +32,8 @@ The refactor module provides LSP-based semantic refactoring: rename, move, delet
 
 ```python
 class RefactorEngine:
-    def __init__(self, config):
-        self.lsp_clients = {}  # lang -> LSPClient
+    def __init__(self, config, semantic_index):
+        self.semantic_index = semantic_index
     
     async def rename(self, symbol, new_name, contexts) -> RefactorResult: ...
     async def move(self, from_path, to_path) -> RefactorResult: ...
@@ -41,21 +42,21 @@ class RefactorEngine:
 ```
 
 **Pros:** Single entry point
-**Cons:** Large class, LSP management mixed with refactor logic
+**Cons:** Large class, index queries mixed with refactor logic
 
 ### Option B: Separated concerns
 
 ```python
-class LSPManager:
-    async def get_client(self, language: str) -> LSPClient: ...
-    async def restart(self, language: str) -> None: ...
+class SemanticQuery:
+    def find_occurrences(self, symbol: str, contexts: list[str]) -> list[Occurrence]: ...
+    def get_file_states(self, paths: list[Path]) -> dict[Path, FileState]: ...
 
 class RefactorPlanner:
-    async def plan_rename(self, symbol, new_name, contexts) -> RefactorPlan: ...
-    async def plan_move(self, from_path, to_path) -> RefactorPlan: ...
+    def plan_rename(self, symbol, new_name, occurrences) -> RefactorPlan: ...
+    def plan_move(self, from_path, to_path, occurrences) -> RefactorPlan: ...
 
-class PatchMerger:
-    def merge(self, patches: list[Patch]) -> MergedPatch | Divergence: ...
+class MutationGate:
+    def check(self, paths: list[Path]) -> GateResult: ...
 
 class RefactorExecutor:
     async def preview(self, plan: RefactorPlan) -> Preview: ...
@@ -65,27 +66,11 @@ class RefactorExecutor:
 **Pros:** Clear responsibilities, testable units
 **Cons:** More coordination code
 
-### Option C: Actor model
-
-```python
-# Each LSP is an actor/subprocess
-class LSPActor:
-    async def send_request(self, method, params) -> Response: ...
-
-class RefactorCoordinator:
-    async def execute(self, operation: RefactorOp) -> Result:
-        # Fan out to relevant LSP actors
-        # Collect and merge results
-```
-
-**Pros:** Natural fit for LSP subprocesses
-**Cons:** Complexity, debugging harder
-
 ---
 
 ## Recommended Approach
 
-**Option B (Separated concerns)** — LSPManager handles subprocess lifecycle, RefactorPlanner handles operation logic, PatchMerger handles multi-context, RefactorExecutor handles preview/apply.
+**Option B (Separated concerns)** — SemanticQuery handles SCIP index lookups, MutationGate checks file states, RefactorPlanner generates edit plans, RefactorExecutor handles preview/apply.
 
 ---
 
@@ -95,9 +80,9 @@ class RefactorCoordinator:
 refactor/
 ├── __init__.py
 ├── engine.py        # High-level RefactorEngine facade
-├── lsp_client.py    # Single LSP client (JSON-RPC over stdio)
-├── lsp_manager.py   # LSP lifecycle (start, stop, restart, health)
+├── query.py         # SCIP index queries (find occurrences, resolve symbols)
 ├── planner.py       # Refactor planning (rename, move, delete)
+├── gate.py          # Mutation gate (check file states)
 ├── contexts.py      # Multi-context detection and selection
 ├── patch.py         # Patch representation and merging
 └── sweep.py         # Comment/docstring sweep (non-semantic)
@@ -105,9 +90,8 @@ refactor/
 
 ## Dependencies
 
-- `pygls` — LSP utilities (optional, may use raw JSON-RPC)
-- `subprocess` + `asyncio` — LSP subprocess management
-- Standard library `json` for JSON-RPC
+- `protobuf` — SCIP format parsing
+- Standard library only for core logic
 
 ## Key Interfaces
 
@@ -121,34 +105,33 @@ class RefactorEngine:
     async def apply(self, refactor_id: str) -> Delta: ...
     async def cancel(self, refactor_id: str) -> None: ...
 
-# lsp_manager.py
-class LSPManager:
-    async def ensure_started(self, language: str) -> LSPClient: ...
-    async def stop(self, language: str) -> None: ...
-    async def stop_all(self) -> None: ...
-    def get_status(self) -> dict[str, LSPStatus]: ...
-    def get_pending_installs(self) -> list[str]: ...
+# query.py
+class SemanticQuery:
+    def find_symbol(self, name: str, position: Position) -> Symbol | None: ...
+    def find_occurrences(self, symbol: Symbol, contexts: list[str] | None = None) -> list[Occurrence]: ...
+    def get_file_state(self, path: Path) -> FileState: ...
 
-# lsp_client.py
-class LSPClient:
-    async def initialize(self, root_uri: str) -> InitializeResult: ...
-    async def text_document_rename(self, uri: str, position: Position, new_name: str) -> WorkspaceEdit: ...
-    async def shutdown(self) -> None: ...
+# gate.py
+class MutationGate:
+    def check(self, paths: list[Path]) -> GateResult: ...
+    def wait_for_clean(self, paths: list[Path], timeout: float) -> bool: ...
 ```
 
-## LSP Lifecycle (from SPEC.md §7.11)
+## Refactor Execution Flow (from SPEC.md §8.5)
 
-1. On `cpl up`, LSPManager starts LSPs for configured languages
-2. LSPs are lazy-started on first refactor operation
-3. LSP crash → automatic restart (max 3 retries)
-4. On `cpl down`, all LSPs terminated
-5. New language detected → flag `pending_lsp_install`, don't auto-download
+1. User requests refactor (e.g., rename symbol)
+2. MutationGate checks all affected files are CLEAN
+3. SemanticQuery finds all occurrences from SCIP index
+4. RefactorPlanner generates edit plan from occurrences
+5. Preview edits to user
+6. Apply edits atomically via mutation engine
+7. Mark affected files as DIRTY, enqueue semantic refresh
 
 ## Open Questions
 
-1. LSP binary discovery: PATH vs explicit config?
-   - **Recommendation:** Config first, then PATH fallback
-2. File virtualization: inject via `didOpen` or let LSP read disk?
-   - **Recommendation:** `didOpen` for full control (per SPEC.md §8.3a)
-3. Worktree isolation: actual Git worktrees or virtual?
-   - **Recommendation:** Start with in-memory virtualization; Git worktrees if needed for complex multi-context
+1. SCIP index access: direct file read vs index service?
+   - **Recommendation:** SQLite-backed index with SCIP data imported
+2. Multi-context query: parallel vs sequential?
+   - **Recommendation:** Sequential for simplicity; parallelize if slow
+3. Force syntactic mode: how to expose?
+   - **Recommendation:** Option in RefactorOptions, bypasses mutation gate

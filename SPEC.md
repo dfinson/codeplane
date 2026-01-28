@@ -294,21 +294,22 @@ Error code ranges:
 | 1xxx | Auth | `1001 AUTH_TOKEN_MISSING`, `1002 AUTH_TOKEN_INVALID` |
 | 2xxx | Config | `2001 CONFIG_PARSE_ERROR`, `2002 CONFIG_INVALID_VALUE` |
 | 3xxx | Index | `3001 INDEX_CORRUPT`, `3002 INDEX_SCHEMA_MISMATCH`, `3003 INDEX_BUILD_FAILED` |
-| 4xxx | Refactor | `4001 REFACTOR_DIVERGENCE`, `4002 REFACTOR_LSP_TIMEOUT`, `4003 REFACTOR_NO_CONTEXT` |
+| 4xxx | Refactor | `4001 REFACTOR_DIVERGENCE`, `4002 REFACTOR_GATE_FAILED`, `4003 REFACTOR_NO_CONTEXT` |
 | 5xxx | Mutation | `5001 MUTATION_SCOPE_VIOLATION`, `5002 MUTATION_PRECONDITION_FAILED`, `5003 MUTATION_LOCK_TIMEOUT` |
 | 6xxx | Task | `6001 TASK_BUDGET_EXCEEDED`, `6002 TASK_NOT_FOUND`, `6003 TASK_ALREADY_CLOSED` |
 | 7xxx | Test | `7001 TEST_RUNNER_NOT_FOUND`, `7002 TEST_TIMEOUT`, `7003 TEST_PARSE_FAILED` |
-| 8xxx | LSP | `8001 LSP_NOT_INSTALLED`, `8002 LSP_CRASH`, `8003 LSP_LANGUAGE_UNSUPPORTED` |
+| 8xxx | Indexer | `8001 INDEXER_NOT_INSTALLED`, `8002 INDEXER_TIMEOUT`, `8003 INDEXER_LANGUAGE_UNSUPPORTED` |
 | 9xxx | Internal | `9001 INTERNAL_ERROR`, `9002 INTERNAL_TIMEOUT` |
 
 Retryable errors (examples):
 - `MUTATION_LOCK_TIMEOUT` — another operation holds lock, retry after delay
-- `LSP_CRASH` — LSP restarted, retry may succeed
+- `INDEXER_TIMEOUT` — indexer job timed out, retry may succeed
 - `INTERNAL_TIMEOUT` — transient resource pressure
 
 Non-retryable errors (examples):
 - `INDEX_CORRUPT` — requires rebuild
 - `REFACTOR_DIVERGENCE` — requires user decision
+- `REFACTOR_GATE_FAILED` — files not CLEAN, wait for refresh or use force_syntactic
 - `CONFIG_PARSE_ERROR` — requires config fix
 
 Defaults prevent footguns:
@@ -600,22 +601,30 @@ Another source's `.cplignore` default explicitly blocks `.env` from indexing eve
 
 ---
 
-## 7. Indexing & Retrieval Architecture (Lexical + Structural + Graph)
+## 7. Indexing & Retrieval Architecture (Syntactic + Semantic, Two-Layer)
 
 ### 7.1 Overview
 
-CodePlane builds a deterministic, incrementally updated hybrid index with:
+CodePlane builds a deterministic, incrementally updated two-layer index:
 
-- Fast lexical search engine (Tantivy) for identifiers, paths, tokens.
-- Structured metadata store (SQLite).
-- Dependency and symbol graph for bounded, explainable expansions.
+**Syntactic Layer (Always-On):**
+- Fast lexical search engine (Tantivy) for identifiers, paths, tokens
+- Structural metadata store (SQLite)
+- Dependency and symbol graph for bounded, explainable expansions
+- Tree-sitter parsing (~15 bundled grammars)
 
-Indexing split:
+**Semantic Layer (Batch SCIP Indexers):**
+- One-shot SCIP indexers per language (scip-go, scip-typescript, rust-analyzer, etc.)
+- Precise cross-file references, type hierarchies, and symbol resolution
+- No persistent language servers — indexers run to completion and terminate
+- File state tracking (CLEAN/DIRTY/STALE/PENDING_CHECK)
 
-- Shared tracked index (Git-tracked files; CI-buildable; distributable artifact)
-- Local overlay index (untracked/sensitive files; local-only)
+Indexing scope:
+- Git-tracked files (primary)
+- CPL-tracked files (local overlay, never shared)
+- CPL-ignored files excluded
 
-No embeddings required. Normal load target is <1s response.
+No embeddings required. Normal load target is <1s response for syntactic queries.
 
 ### 7.2 Lexical Index
 
@@ -642,23 +651,107 @@ No embeddings required. Normal load target is <1s response.
 ### 7.4 Parser (Tree-sitter)
 
 - Default parser: Tree-sitter via Python bindings
-- Languages: 10+ bundled grammars (~10 MB total), version-pinned
-- Failure mode: “If grammar fails or file unsupported, crash gracefully and skip”
-  - This phrase is preserved as authored but is internally ambiguous; tracked as a risk.
+- Languages: ~15 bundled grammars (~15 MB total), version-pinned
+- Failure mode: If grammar fails or file unsupported, skip with warning
 - No fallback tokenization — lexical index handles fuzzy matching
-- Not sufficient for cross-file refactors; requires LSP
+- Tree-sitter provides syntactic structure only; semantic resolution via SCIP
 
-### 7.5 LSP Support (Indexing Context)
+### 7.5 Semantic Layer (SCIP Batch Indexers)
 
-- Usage: only for semantic refactors (rename symbol, move module)
-- Integration:
-  - Bundled tree-sitter grammars
-  - Dynamic LSP binary install via setup wizard (opt-in)
-  - Per-language cache under `~/.codeplane/lsp/` keyed by lang+version (intentionally shared across repos; these are tooling binaries, not repo state)
-- Invocation: async subprocesses via JSON-RPC per language; isolated and optional
+#### Design Rationale
+
+Persistent LSPs are rejected for CodePlane due to:
+- Memory overhead: 200MB–1GB+ per language server, multiplied by active languages
+- Latency on cold start: 5–30+ seconds to load project
+- Multi-environment complexity: Cannot easily run multiple Python interpreters, Go modules, or Java SDKs concurrently
+- Daemon resource constraints: CodePlane must remain lightweight
+
+Instead, CodePlane uses **one-shot SCIP indexers** that:
+- Run to completion and terminate (no persistent processes)
+- Output SCIP protobuf files (standard format, tooling ecosystem)
+- Support incremental/sharded operation (index changed files only)
+- Decouple indexing from query-time
+
+#### Supported SCIP Indexers
+
+| Language | Indexer | Acquisition |
+|----------|---------|-------------|
+| Go | scip-go | GitHub releases |
+| TypeScript/JavaScript | scip-typescript | npm package |
+| Python | scip-python | PyPI or GitHub |
+| Java/Kotlin | scip-java | GitHub releases |
+| C# | scip-dotnet | NuGet or GitHub |
+| Rust | rust-analyzer (SCIP mode) | GitHub releases |
+| C/C++ | scip-clang | GitHub releases |
+
+Additional indexers can be configured via `.codeplane/config.yaml`.
+
+#### Indexer Lifecycle
+
+1. **On-demand invocation**: Triggered by reconciliation when files are DIRTY
+2. **Execution**: Indexer runs as subprocess, writes output to file path (not stdout)
+3. **Termination**: Indexer must exit; hanging processes are killed after timeout
+4. **Import**: Output parsed and merged into semantic index
+5. **Cleanup**: Temporary SCIP files removed after import
+
+#### File State Model
+
+Each indexed file has a semantic state:
+
+| State | Meaning | Refresh Behavior |
+|-------|---------|------------------|
+| CLEAN | Semantic data matches content, dependencies confirmed | No action needed |
+| DIRTY | Content changed, refresh enqueued | Re-index this file |
+| STALE | Dependency's interface confirmed changed | Re-index this file |
+| PENDING_CHECK | Dependency is dirty, interface change unknown | Wait for dependency |
+
+State transitions:
+- File edit → DIRTY
+- Dependency becomes DIRTY → dependents become PENDING_CHECK
+- Dependency refresh completes with interface change → dependents become STALE
+- Dependency refresh completes with no interface change → dependents return to CLEAN
+- File refresh completes successfully → CLEAN
+
+#### Refresh Job Worker
+
+```
+COMMIT ORDER (Critical):
+1. Claim job (queued → running, atomic WHERE clause)
+2. Run SCIP indexer
+3. Check not superseded (HEAD at enqueue == current HEAD)
+4. Import output into semantic index (transactional)
+5. Mark completed AFTER import succeeds
+```
+
+HEAD-aware deduplication: Jobs keyed by `(context_id, head_at_enqueue)` to prevent redundant work after rapid commits.
+
+#### Mutation Gate
+
+Semantic writes (refactors using semantic data) require:
+- All affected files must be CLEAN
+- If any file is DIRTY/STALE/PENDING_CHECK, operation is rejected
+- Escape hatch: `force_syntactic: true` allows syntactic-only edits
+
+#### SCIP Indexer Configuration
+
+```yaml
+semantic:
+  enabled: true
+  indexers:
+    python:
+      command: ["scip-python", "index"]
+      args: ["--project-root", "."]
+      timeout_ms: 300000
+    typescript:
+      command: ["npx", "scip-typescript", "index"]
+      timeout_ms: 300000
+  refresh:
+    max_concurrent_jobs: 2
+    job_timeout_ms: 300000
+    poll_interval_ms: 30000
+```
 
 ### 7.6 Graph Index
-
 - Nodes: symbols
 - Edges: calls, imports, inherits, contains
 - Schema: `relation(src_id, dst_id, type, weight)`
@@ -713,15 +806,15 @@ This replaces repeated grep and file opening.
 
 ### 7.9.1 External Symbol Enrichment
 
-Query responses that reference symbols from external libraries (dependencies, stdlib) are automatically enriched with signature and docstring information via LSP.
+Query responses that reference symbols from external libraries (dependencies, stdlib) are enriched with signature and docstring information when available from SCIP index data.
 
 **Rationale:** Agents need library function signatures when refactoring code that calls them. Without this, agents guess or rely on training data (which may be stale for the installed version).
 
 **Mechanism:**
 
 1. Scan query results for unresolved symbols (calls/references not in indexed codebase)
-2. Issue LSP `textDocument/hover` at each symbol position
-3. Parse hover response for signature and docstring
+2. Look up symbol in SCIP semantic index (external dependencies indexed when SCIP indexer runs)
+3. Extract signature and docstring from SCIP occurrence data
 4. Attach enrichment to response
 
 **Response schema:**
@@ -739,17 +832,11 @@ Query responses that reference symbols from external libraries (dependencies, st
 }
 ```
 
-**Performance:**
-
-- LSP hover requests batched per unique symbol
-- Cached for session duration
-- Adds ~50-100ms when external symbols present
-- If LSP unavailable, enrichment omitted (degraded but functional)
-
 **Scope:**
 
 - Only symbols in returned snippets enriched (not pre-indexed)
-- Works for any language with LSP support
+- Enrichment available for languages with SCIP indexers
+- If semantic index unavailable or stale, enrichment omitted (degraded but functional)
 
 ### 7.10 Mental Map Endpoints (Embedding Replacement, Pre-API Concept)
 
@@ -843,148 +930,124 @@ Docstrings are:
 - Searchable via lexical index
 - Returned as part of symbol search results
 
-### 7.12 LSP Management & Language Support
+### 7.12 SCIP Indexer Management & Language Support
 
 #### Acquisition Model
 
-CodePlane does not bundle LSPs. LSPs are downloaded on-demand and cached globally.
+CodePlane does not bundle SCIP indexers. Indexers are downloaded on-demand and cached globally.
 
-- Cache location: `~/.codeplane/lsp/{language}-{server}-{version}/`
-- Manifest: `~/.codeplane/lsp/manifest.json` tracks installed LSPs and their checksums
+- Cache location: `~/.codeplane/indexers/{language}-{indexer}-{version}/`
+- Manifest: `~/.codeplane/indexers/manifest.json` tracks installed indexers and their checksums
 - Downloads are SHA256-verified against a signed manifest fetched from CodePlane's release infrastructure
 
 #### Init-Time Discovery
 
-`cpl init` performs language detection and prompts for LSP installation:
+`cpl init` performs language detection and prompts for SCIP indexer installation:
 
 1. Scan repository for language indicators (file extensions, config files)
-2. Present detected languages and recommended LSPs
-3. User confirms which LSPs to install
-4. Download, verify, and register confirmed LSPs
+2. Present detected languages and recommended indexers
+3. User confirms which indexers to install
+4. Download, verify, and register confirmed indexers
 5. Write selections to `.codeplane/config.yaml`
 
 Example prompt:
 ```
 Detected languages:
-  ✓ Python (3847 files) — recommended: pyright
-  ✓ TypeScript (1203 files) — recommended: typescript-language-server
-  ✓ Go (892 files) — recommended: gopls
-  ○ Java (12 files) — recommended: jdtls (optional, 200MB)
+  ✓ Python (3847 files) — recommended: scip-python
+  ✓ TypeScript (1203 files) — recommended: scip-typescript
+  ✓ Go (892 files) — recommended: scip-go
+  ○ Java (12 files) — recommended: scip-java (optional, 150MB)
 
-Install LSPs for [Python, TypeScript, Go]? [Y/n]
+Install SCIP indexers for [Python, TypeScript, Go]? [Y/n]
 Include Java? [y/N]
 ```
 
 #### Runtime Language Discovery
 
-If incremental reindexing detects a new language not covered by installed LSPs:
+If incremental reindexing detects a new language not covered by installed indexers:
 
-1. Daemon logs warning: `LSP_LANGUAGE_DISCOVERED`
-2. Daemon sets status flag: `pending_lsp_install: true`
-3. Refactor operations for that language return error `8003 LSP_LANGUAGE_UNSUPPORTED`
-4. `cpl status` shows: `New language detected: Rust. Run 'cpl lsp install' or configure exclusion.`
-5. MCP API continues serving all other operations normally
-6. User runs `cpl lsp install` to interactively install missing LSPs, or configures exclusion
-7. After LSP install, user must restart daemon (`cpl down && cpl up`) to activate new LSP
+1. Daemon logs warning: `INDEXER_LANGUAGE_DISCOVERED`
+2. Daemon sets status flag: `pending_indexer_install: true`
+3. Semantic operations for that language return error `8003 INDEXER_LANGUAGE_UNSUPPORTED`
+4. `cpl status` shows: `New language detected: Rust. Run 'cpl indexer install' or configure exclusion.`
+5. MCP API continues serving all other operations normally (syntactic queries still work)
+6. User runs `cpl indexer install` to interactively install missing indexers, or configures exclusion
 
 This design:
 - Never blocks the user silently
 - Never auto-downloads without consent
 - Keeps daemon running for languages already supported
 - Makes the gap visible and actionable
+- Syntactic layer remains fully functional for all languages
 
-#### LSP Lifecycle
-
-- LSPs are started lazily on first refactor operation for that language
-- LSPs persist for daemon lifetime (warm cache)
-- LSP crash triggers automatic restart (max 3 retries, then mark language unavailable)
-- `cpl down` terminates all LSPs
-
-#### LSP CLI Commands
+#### SCIP Indexer CLI Commands
 
 | Command | Description |
 |---------|-------------|
-| `cpl lsp list` | Show installed LSPs and their status |
-| `cpl lsp install` | Interactive install for detected but missing languages |
-| `cpl lsp install <language>` | Install LSP for specific language |
-| `cpl lsp remove <language>` | Remove LSP for specific language |
-| `cpl lsp update` | Check for and install LSP updates |
+| `cpl indexer list` | Show installed SCIP indexers and their status |
+| `cpl indexer install` | Interactive install for detected but missing languages |
+| `cpl indexer install <language>` | Install SCIP indexer for specific language |
+| `cpl indexer remove <language>` | Remove SCIP indexer for specific language |
+| `cpl indexer update` | Check for and install indexer updates |
+| `cpl indexer run [--language <lang>]` | Manually trigger semantic indexing |
 
-#### LSP Configuration
+#### SCIP Indexer Configuration
 
 ```yaml
-lsp:
-  # Per-language overrides
-  python:
-    server: pyright  # or pylsp, jedi-language-server
-    version: pinned  # or latest, or specific version
-    args: ["--stdio"]
-  typescript:
-    server: typescript-language-server
+semantic:
+  enabled: true
   
-  # Languages to exclude from LSP support entirely
+  indexers:
+    python:
+      command: ["scip-python", "index"]
+      args: ["--project-root", "."]
+      timeout_ms: 300000
+    typescript:
+      command: ["npx", "scip-typescript", "index"]
+      timeout_ms: 300000
+    go:
+      command: ["scip-go"]
+      timeout_ms: 300000
+  
+  # Languages to exclude from semantic indexing
   exclude:
     - markdown
     - plaintext
   
   # Global settings
-  startup_timeout_ms: 30000
-  request_timeout_ms: 60000
-  max_restart_attempts: 3
+  refresh:
+    max_concurrent_jobs: 2
+    job_timeout_ms: 300000
+    poll_interval_ms: 30000
 ```
-
-#### Supported LSP Sources
-
-CodePlane maintains a registry of known-good LSP configurations:
-
-| Language | Recommended Server | Acquisition |
-|----------|-------------------|-------------|
-| Python | pyright | npm package or standalone binary |
-| TypeScript/JavaScript | typescript-language-server | npm package |
-| Go | gopls | Go install or binary release |
-| Java | jdtls (Eclipse) | Eclipse download |
-| Rust | rust-analyzer | GitHub releases |
-| C# | OmniSharp | GitHub releases |
-| C/C++ | clangd | LLVM releases |
-| Ruby | solargraph | gem or binary |
-| PHP | intelephense | npm package |
-| Kotlin | kotlin-language-server | GitHub releases |
-| Swift | sourcekit-lsp | Xcode or Swift toolchain |
-| Scala | metals | Coursier |
-| Elixir | elixir-ls | GitHub releases |
-| Haskell | haskell-language-server | GHCup or binary |
-| Zig | zls | GitHub releases |
-| Lua | lua-language-server | GitHub releases |
-
-This list is not exhaustive. Users can configure any LSP that implements the Language Server Protocol.
 
 #### Tree-sitter Grammar Management
 
-Separate from LSPs, Tree-sitter grammars for parsing are:
+Tree-sitter grammars provide syntactic parsing (separate from SCIP semantic indexing):
 - Bundled for common languages (~15 grammars, ~15MB total)
 - Downloadable for additional languages via `cpl grammar install <language>`
 - Stored in `~/.codeplane/grammars/`
-- Required for indexing; optional if only using LSP refactors
+- Required for syntactic layer; semantic layer uses SCIP indexers
 
 ---
 
-## 8. Deterministic Refactor Engine (LSP-Only, Single vs Multi Context)
+## 8. Deterministic Refactor Engine (SCIP-Based Semantic Data)
 
 ### 8.1 Purpose
 
-Provide IntelliJ-class deterministic refactoring (rename / move / delete / change signature) across multi-language repositories using **LSP as the sole semantic authority**, preserving determinism, auditability, and user control.
+Provide IntelliJ-class deterministic refactoring (rename / move / delete / change signature) across multi-language repositories using **pre-indexed SCIP semantic data** as the semantic authority, preserving determinism, auditability, and user control.
 
 This subsystem is narrowly scoped: a high-correctness refactor planner and executor.
 
 ### 8.2 Core Principles
 
-- LSP-only semantics: all refactor planning delegated to language servers.
-- Static configuration: languages, environments, roots known at startup.
-- No speculative semantics: CodePlane never guesses bindings.
-- No working tree mutation during planning.
-- Single atomic apply to the real repo.
-- Explicit divergence handling when multiple semantic contexts disagree.
-- Optional subsystem: enabled by default, configurable off.
+- SCIP-based semantics: all refactor planning uses pre-indexed SCIP semantic data
+- Static configuration: languages, environments, roots known at startup
+- No speculative semantics: CodePlane never guesses bindings
+- No working tree mutation during planning
+- Single atomic apply to the real repo
+- Mutation gate: semantic writes require all affected files to be CLEAN
+- Optional subsystem: enabled by default, configurable off
 
 ### 8.3 Supported Operations
 
@@ -992,51 +1055,48 @@ This subsystem is narrowly scoped: a high-correctness refactor planner and execu
 - `rename_file(from_path, to_path)`
 - `move_file(from_path, to_path)`
 - `delete_symbol(at)`
-- Change signature (where supported by LSP)
 
 All operations:
 - Return **structured diff output** with `files_changed`, `edits`, `symbol`, `new_name`, etc.
 - Provide **preview → apply → rollback** semantics
 - Are **atomic** at the patching level
 - Operate across **tracked and untracked (overlay) files**
-- Apply LSP-driven semantics across **all languages**
+- Require all affected files to be in CLEAN semantic state
 - Trigger deterministic re-indexing after apply
 
 ### 8.3a Architecture Overview
 
-#### LSP-Only Execution
+#### SCIP-Based Execution
 
-- All refactor planning (rename, move, delete) is handled via LSP (`textDocument/rename`, `workspace/willRenameFiles`, etc.)
-- No fallback to CodePlane index logic
+- All refactor planning (rename, move, delete) uses SCIP semantic index data
+- SCIP provides: symbol definitions, references, type hierarchies, import graphs
+- No persistent language servers; semantic data pre-computed by batch indexers
 - CodePlane maintains full control of edit application, version tracking, and reindexing
 
-#### Persistent LSP Daemons
+#### Semantic Data Flow
 
-- One subprocess per supported language
-- Launched at daemon startup (`cpl up`) based on static config
-- Not started dynamically
-- Restart of daemon required to support new languages
-
-#### File State Virtualization
-
-- CodePlane injects file contents into LSP via `didOpen` and `didChange`
-- No LSP reads files directly from disk
-- File versioning is maintained in memory by CodePlane
+1. User requests refactor (e.g., rename symbol)
+2. CodePlane checks mutation gate: all affected files must be CLEAN
+3. Query SCIP index for all occurrences of target symbol
+4. Generate structured edit plan from occurrence positions
+5. Preview edits to user
+6. Apply edits atomically
+7. Mark affected files as DIRTY, enqueue semantic refresh
 
 #### Edit Application and Reindexing
 
-- `WorkspaceEdit` results from LSP are transformed into structured diffs
-- File edits are applied atomically
-- All affected files are reindexed into lexical index, structural metadata, and symbol/reference graph
+- Edit plans generated from SCIP occurrence data
+- File edits are applied atomically via mutation engine
+- Affected files are marked DIRTY and re-indexed
+- Syntactic index updated immediately; semantic index refreshed via job queue
 - Overlay/untracked files are updated as first-class citizens
 
 ### 8.3b Language Support Model
 
-- **All languages use LSPs exclusively**
-- Language support is statically declared at project init
-- Unsupported languages cannot execute refactor operations
-- No runtime auto-detection or fallback logic
-- LSPs persist for the daemon's lifecycle
+- Semantic refactors available for languages with SCIP indexers installed
+- Syntactic-only fallback available via `force_syntactic: true` option
+- Unsupported languages can still use syntactic edits (find/replace with confirmation)
+- No runtime auto-detection; language support declared at init
 
 ### 8.4 Definitions
 
@@ -1063,65 +1123,35 @@ A persistent Git worktree per context sandbox:
 - Sparse checkout to minimize I/O
 - Optional warm LSP instance bound to that worktree (optional but default)
 
-### 8.5 Refactor Modes
+### 8.5 Refactor Execution Flow
 
-Mode A: Single-context repo
+1. **Mutation Gate Check**: All affected files must be CLEAN
+2. **Query SCIP Index**: Find all occurrences of target symbol
+3. **Generate Edit Plan**: Compute structured edits from occurrence positions
+4. **Preview**: Show user the planned changes
+5. **Apply**: Execute edits atomically via mutation engine
+6. **Mark DIRTY**: Affected files enqueued for semantic re-indexing
+7. **Syntactic Update**: Immediate update of syntactic index
 
-When: one coherent environment per language.
+If mutation gate fails (files DIRTY/STALE/PENDING_CHECK):
+- Operation rejected with clear error
+- User can wait for semantic refresh to complete
+- Or use `force_syntactic: true` for syntactic-only edit
 
-Plan:
+### 8.6 Multi-Context Handling
 
-- One context per language
-- One persistent worktree + warm LSP
+When multiple semantic contexts exist for a language (e.g., multiple Python venvs):
 
-Flow:
+**Detection:**
+- Each context produces independent SCIP index data
+- Same file may have different semantic interpretations per context
 
-1. Reset worktree to commit R
-2. Ask LSP to compute refactor
-3. Apply edits in worktree
-4. Emit patch = `git diff R`
-5. Apply patch once to real working tree (atomic)
-6. Optional validation (diagnostics / build)
-
-Mode B: Multi-context repo
-
-When: multiple incompatible environments exist.
-
-Plan:
-
-- N contexts per language
-- One worktree + warm LSP per context
-- Compute in sandboxes, merge patches, apply once
-
-Flow:
-
-1. Select target contexts
-2. For each context (parallel, bounded):
-   - Reset worktree to R
-   - Run LSP refactor
-   - Emit patch Pi
-3. Merge patches:
-   - Disjoint edits → union
-   - Identical overlapping edits → de-dup
-   - Differing overlapping edits → divergence
-4. If no divergence:
-   - Apply merged patch atomically to real repo
-5. Optional per-context validation
-
-### 8.6 Divergence Handling
-
-Default: fail and report.
-
-On divergence return structured result:
-
-- Conflicting hunks
-- Context IDs
-- Diagnostics if available
-
-Optional (off by default):
-
-- Deterministic resolution policy (primary context wins)
-- Accepted only if validation passes in all contexts
+**Refactor behavior:**
+- Query all relevant contexts
+- Merge occurrence sets
+- Detect divergence (same position, different symbol identity)
+- If divergent: fail and report conflicting contexts
+- If consistent: proceed with merged occurrence set
 
 CodePlane never silently guesses semantics.
 
@@ -1134,7 +1164,7 @@ Minimum set:
 
 If uncertain:
 
-- Run all contexts for that language (bounded by config)
+- Query all contexts for that language (bounded by config)
 
 ### 8.8 Context Detection at Init
 
@@ -1149,7 +1179,7 @@ Signals:
 
 Classification:
 
-- Single context → single-context mode
+- Single context → uses single context data
 - Multiple valid roots → multi-context mode
 - Ambiguous → require explicit config
 
@@ -1164,17 +1194,14 @@ contexts:
   - id: core-java
     language: java
     workspace_roots: [./core]
-    worktree_scope_paths: [./core]
     env:
       build_root: ./core
-    lsp:
-      server: jdtls
-      version: pinned
+    indexer:
+      name: scip-java
 
 defaults:
   max_parallel_contexts: 4
   divergence_behavior: fail
-  validation: diagnostics
 ```
 
 ### 8.10 Git-Aware File Moves
