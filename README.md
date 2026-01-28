@@ -11,6 +11,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/status-pre--alpha-orange" alt="Status: Pre-alpha">
   <img src="https://img.shields.io/badge/python-≥3.12-blue" alt="Python ≥3.12">
+  <a href="https://codecov.io/gh/dfinson/codeplane"><img src="https://codecov.io/gh/dfinson/codeplane/branch/main/graph/badge.svg" alt="Coverage"></a>
   <img src="https://img.shields.io/github/license/dfinson/codeplane" alt="License">
 </p>
 
