@@ -45,13 +45,13 @@ Track progress via [GitHub Milestones](https://github.com/dfinson/codeplane/mile
 |-----------|-------------|--------|
 | M0: Foundation | Core types, errors, logging, configuration | ✅ Complete |
 | M1: Git Operations | Status, staging, commits, branches, diffs | ✅ Complete |
-| M2: Index Engine | Full-text search, symbol lookup, relationships | 🚧 In Progress |
+| M2: Index Engine | Syntactic search + SCIP semantic layer infrastructure | 🚧 In Progress |
 | M3: Mutation Engine | Atomic file changes with rollback | |
 | M4: Ledger & Task Model | Operation history, convergence metrics | |
 | M5: Daemon & CLI | HTTP daemon, `cpl` CLI commands | |
 | M6: Core MCP Tools | File ops, search, git tools for agents | |
 | M7: Test Runner | Framework detection, parallel execution | |
-| M8: Semantic Refactor | Rename, move, delete via SCIP semantic index | |
+| M8: Semantic Refactor | Rename, move, delete using SCIP semantic data | |
 | M9: Polish & Hardening | Docs, benchmarks, security, packaging | |
 
 ## Development
