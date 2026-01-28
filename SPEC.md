@@ -1,4 +1,4 @@
-﻿# CodePlane — Unified System Specification (Pre-API)
+﻿# CodePlane — Unified System Specification
 
 ## 1. Problem Statement
 
@@ -64,7 +64,7 @@ CodePlane does not plan, retry, or decide strategies. Its role is deterministic 
 
 ---
 
-## 4. Architecture Overview (Pre-API)
+## 4. Architecture Overview
 
 ### 4.1 Components
 
@@ -838,7 +838,7 @@ Query responses that reference symbols from external libraries (dependencies, st
 - Enrichment available for languages with SCIP indexers
 - If semantic index unavailable or stale, enrichment omitted (degraded but functional)
 
-### 7.10 Mental Map Endpoints (Embedding Replacement, Pre-API Concept)
+### 7.10 Mental Map Endpoints
 
 “Single call” repo map returns:
 
@@ -1347,7 +1347,7 @@ When disabled:
 - Partial or speculative refactors
 - Multi-symbol refactors
 
-### 8.14 Guarantees + Result Types (Pre-API Concept)
+### 8.14 Guarantees + Result Types
 
 Always:
 - **Deterministic**: Same refactor input → same result
