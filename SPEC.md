@@ -71,7 +71,7 @@ CodePlane does not plan, retry, or decide strategies. Its role is deterministic 
 - **CodePlane daemon (Python)**
   - Maintains deterministic indexes.
   - Owns file, Git, test, and refactor operations.
-  - Exposes endpoints (API/MCP design is out of scope here; only the existence of tool-like primitives is assumed).
+  - Exposes endpoints.
 
 - **Agent client**
   - Copilot, Claude Code, Cursor, Continue, etc.
