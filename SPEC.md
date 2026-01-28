@@ -75,8 +75,8 @@ CodePlane does not plan, retry, or decide strategies. Its role is deterministic 
 
 - **Agent client**
   - Copilot, Claude Code, Cursor, Continue, etc.
-  - Uses CodePlane tools only.
-  - Never edits files or runs shell commands directly.
+  - For operations CodePlane covers, agents should prefer CodePlane tools over direct file edits or shell commands.
+  - Agents will still use terminals and other tools for tasks outside CodePlane's scope.
 
 - **Git**
   - Authoritative history and audit layer.
