@@ -100,11 +100,18 @@ jobs:
 
       - name: Run tests with coverage
         if: steps.check-tests.outputs.has_tests == 'true'
-        run: pytest --cov=src/codeplane --cov-report=xml
+        run: pytest --cov=src/codeplane --cov-branch --cov-report=xml --junitxml=junit.xml -o junit_family=legacy
 
       - name: Upload coverage to Codecov
         if: steps.check-tests.outputs.has_tests == 'true'
         uses: codecov/codecov-action@v5
         with:
+          token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.xml
           fail_ci_if_error: false
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() && steps.check-tests.outputs.has_tests == 'true' }}
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}

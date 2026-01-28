@@ -1,0 +1,19 @@
+coverage:
+  status:
+    project:
+      default:
+        target: 90%
+        threshold: 2%  # Allow 2% drop without failing
+    patch:
+      default:
+        target: 90%
+        informational: true  # Report but don't block merge
+
+comment:
+  layout: "condensed_header, diff, flags"
+  behavior: default
+  require_changes: true  # Only comment when coverage changes
+
+ignore:
+  - "tests/**"
+  - "**/__pycache__/**"
