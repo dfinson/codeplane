@@ -123,19 +123,17 @@ Daemon model:
 - Transport: **HTTP localhost** with ephemeral port.
   - Daemon binds to `127.0.0.1:0` (OS-assigned port).
   - Port written to `.codeplane/port` on startup.
-  - Bearer token written to `.codeplane/token` (random per session).
+  - Repo path written to `.codeplane/repo` (absolute path).
   - Clients read both files to connect.
   - Cross-platform with identical code (no socket vs named pipe divergence).
   - MCP clients can connect directly via HTTP/SSE transport (no stdio proxy needed).
-  - Debugging trivial: `curl -H "Authorization: Bearer $(cat .codeplane/token)" http://127.0.0.1:$(cat .codeplane/port)/status`
-- Authentication:
-  - **Session token**: 32 cryptographically random bytes, hex-encoded (64 characters).
-  - Generated fresh on each `cpl up` (not persisted across restarts).
-  - Written to `.codeplane/token` with mode `0600` (owner read/write only).
-  - All HTTP requests must include `Authorization: Bearer <token>` header.
-  - Requests without valid token receive `401 Unauthorized`.
-  - Token mismatch (e.g., stale client) receives `401` with error code `AUTH_TOKEN_INVALID`.
-  - Rationale: Defense in depth. Any process that can read the token can already read source code, but token prevents accidental cross-repo requests and prepares for future remote access.
+  - Debugging trivial: `curl -H "X-CodePlane-Repo: $(cat .codeplane/repo)" http://127.0.0.1:$(cat .codeplane/port)/status`
+- Request validation:
+  - All HTTP requests must include `X-CodePlane-Repo: <absolute-path>` header.
+  - Daemon validates header matches its configured repository root.
+  - Missing header → `400` with error code `REPO_HEADER_MISSING`.
+  - Path mismatch → `400` with error code `REPO_MISMATCH` (response includes expected/received paths).
+  - Rationale: Prevents cross-repo accidents when multiple CodePlane instances run simultaneously. No token management, no file permissions, no auth state.
 - Isolation rationale:
   - Failure in one repo cannot affect another.
   - Version skew between repos is not a problem.
@@ -146,7 +144,7 @@ Repo activation:
 
 - Repo must be initialized via `cpl init`.
 - Creates `.codeplane/`, repo UUID, config.
-- On `cpl up`: writes `port` and `token` files, starts HTTP server.
+- On `cpl up`: writes `port` and `repo` files, starts HTTP server.
 - Index is lazily built or fetched.
 
 Auto-start options (optional):
@@ -291,7 +289,7 @@ Error code ranges:
 
 | Range | Category | Examples |
 |-------|----------|----------|
-| 1xxx | Auth | `1001 AUTH_TOKEN_MISSING`, `1002 AUTH_TOKEN_INVALID` |
+| 1xxx | Request | `1001 REPO_HEADER_MISSING`, `1002 REPO_MISMATCH` |
 | 2xxx | Config | `2001 CONFIG_PARSE_ERROR`, `2002 CONFIG_INVALID_VALUE` |
 | 3xxx | Index | `3001 INDEX_CORRUPT`, `3002 INDEX_SCHEMA_MISMATCH`, `3003 INDEX_BUILD_FAILED` |
 | 4xxx | Refactor | `4001 REFACTOR_DIVERGENCE`, `4002 REFACTOR_GATE_FAILED`, `4003 REFACTOR_NO_CONTEXT` |
@@ -3211,12 +3209,12 @@ Non-MCP endpoints for operators and monitoring.
 | `/status` | GET | JSON status (same as `status` tool) |
 | `/dashboard` | GET | Observability dashboard (see section 13) |
 
-**Authentication:** Same bearer token as MCP.
+**Validation:** Same `X-CodePlane-Repo` header as MCP.
 
 **Example:**
 
 ```bash
-curl -H "Authorization: Bearer $(cat .codeplane/token)" \
+curl -H "X-CodePlane-Repo: $(cat .codeplane/repo)" \
      http://127.0.0.1:$(cat .codeplane/port)/health
 ```
 
