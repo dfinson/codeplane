@@ -145,7 +145,7 @@ Repo activation:
 - Repo must be initialized via `cpl init`.
 - Creates `.codeplane/`, repo UUID, config.
 - On `cpl up`: writes `port` and `repo` files, starts HTTP server.
-- Index is lazily built or fetched.
+- Index is eagerly built on startup and continuously maintained.
 
 Auto-start options (optional):
 
