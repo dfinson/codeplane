@@ -2170,10 +2170,19 @@ Core design choices:
 | Dimension | Choice | Rationale |
 |-----------|--------|-----------|
 | Protocol | **Hybrid**: MCP (tools) + REST (admin) | MCP for agents, REST for operators |
-| Granularity | **Domain-clustered**: 12 tools | Balance between discoverability and precision |
-| Streaming | **Selective SSE**: long operations only | Progress visibility without overhead |
-| Naming | **Prefixed**: `codeplane_*` | Namespace safety, grep-friendly |
-| State | **Session-aware with explicit override** | Automatic context with escape hatch |
+| Framework | **FastMCP**: Official MCP Python SDK | Zero custom protocol code, schema from types |
+| Granularity | **Namespaced families**: ~35 tools | One tool per operation, grouped by prefix |
+| Streaming | **Context.report_progress**: native MCP | Progress via protocol, not separate tools |
+| Naming | **Prefixed families**: `git_*`, `search_*`, etc. | Namespace safety, semantic grouping |
+| State | **Envelope wrapper**: meta in every response | Session context without model pollution |
+
+**Tool Design Principles:**
+
+1. **One tool, one purpose** — Each tool has a single responsibility and return type
+2. **Namespaced families** — Related tools share prefix: `git_*`, `search_*`, `refactor_*`
+3. **Session via envelope** — Every response wrapped with session/timing metadata
+4. **Progress via Context** — Long operations report progress through MCP's native mechanism
+5. **Pagination via response models** — Cursor-based pagination encoded in return type
 
 ### 22.2 Protocol Architecture
 
@@ -2187,17 +2196,17 @@ Core design choices:
 ┌─────────────────────────────────────────────────────────────────┐
 │                    CodePlane Daemon                              │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
-│  │   MCP Handler   │  │  REST Handler   │  │  SSE Handler    │  │
-│  │   (12 tools)    │  │  (/health, etc) │  │  (streaming)    │  │
+│  │  FastMCP Server │  │  REST Handler   │  │  SSE Handler    │  │
+│  │   (~35 tools)   │  │  (/health, etc) │  │  (streaming)    │  │
 │  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘  │
 │           │                    │                    │           │
 │           └────────────────────┼────────────────────┘           │
 │                                ▼                                │
 │  ┌─────────────────────────────────────────────────────────────┐│
-│  │                    Session Manager                          ││
-│  │  - Auto-create on connect                                   ││
+│  │                  Response Envelope Wrapper                  ││
+│  │  - Wrap all tool responses with ToolResponse[T]             ││
+│  │  - Inject session_id, request_id, timestamp                 ││
 │  │  - Track task state, budgets, fingerprints                  ││
-│  │  - Include session context in all responses                 ││
 │  └─────────────────────────────────────────────────────────────┘│
 │                                │                                │
 │           ┌────────────────────┼────────────────────┐           │
@@ -2209,9 +2218,68 @@ Core design choices:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 22.3 Session Model
+### 22.3 Response Envelope
 
-Sessions provide automatic context correlation without requiring explicit management.
+All tool responses are wrapped in a consistent envelope that provides session context without polluting domain models.
+
+**Envelope schema:**
+
+```python
+@dataclass
+class ResponseMeta:
+    session_id: str | None
+    request_id: str
+    timestamp_ms: int
+    task_id: str | None = None
+    task_state: str | None = None  # "OPEN" | "CONVERGED" | "FAILED" | "CLOSED"
+
+@dataclass
+class ToolResponse(Generic[T]):
+    result: T
+    meta: ResponseMeta
+```
+
+**Wire format:**
+
+```json
+{
+  "result": {
+    "oid": "abc123def456",
+    "message": "feat: add new feature"
+  },
+  "meta": {
+    "session_id": "sess_a1b2c3d4e5f6",
+    "request_id": "req_x9y8z7w6v5u4",
+    "timestamp_ms": 1706400000000,
+    "task_id": "task_p1q2r3s4t5u6",
+    "task_state": "OPEN"
+  }
+}
+```
+
+**Implementation:**
+
+A `@codeplane_tool` decorator wraps FastMCP's `@mcp.tool()` to inject the envelope:
+
+```python
+def codeplane_tool(mcp: FastMCP):
+    def decorator(fn):
+        @wraps(fn)
+        async def wrapper(*args, ctx: Context, **kwargs):
+            result = await fn(*args, ctx=ctx, **kwargs)
+            return ToolResponse(
+                result=result,
+                meta=ResponseMeta(
+                    session_id=get_session_id(ctx),
+                    request_id=ctx.request_id,
+                    timestamp_ms=int(time.time() * 1000),
+                    task_id=get_task_id(ctx),
+                    task_state=get_task_state(ctx),
+                )
+            )
+        return mcp.tool()(wrapper)
+    return decorator
+```
 
 **Session lifecycle:**
 
@@ -2219,34 +2287,7 @@ Sessions provide automatic context correlation without requiring explicit manage
 2. **Task binding**: Session creates an implicit task envelope for convergence tracking
 3. **State tracking**: All operations within session share counters and fingerprints
 4. **Timeout**: Idle sessions close after 30 minutes (configurable)
-5. **Explicit control**: Client can create/close/switch sessions via `codeplane_task`
-
-**Session state (included in every response):**
-
-```json
-{
-  "_session": {
-    "session_id": "sess_a1b2c3d4e5f6",
-    "task_id": "task_x9y8z7w6v5u4",
-    "task_state": "OPEN",
-    "counters": {
-      "mutations": 3,
-      "mutations_budget": 20,
-      "test_runs": 1,
-      "test_runs_budget": 10
-    },
-    "fingerprints": {
-      "last_mutation": "abc123",
-      "last_failure": null
-    },
-    "timing": {
-      "started_at": "2026-01-26T15:30:00.000Z",
-      "last_op_at": "2026-01-26T15:32:15.123Z",
-      "idle_timeout_at": "2026-01-26T16:02:15.123Z"
-    }
-  }
-}
-```
+5. **Explicit control**: Client can create/close/switch sessions via `session_*` tools
 
 **Explicit session override:**
 
@@ -2255,68 +2296,160 @@ Any tool can accept optional `session_id` parameter to:
 - Resume a session after reconnect
 - Run operations in a specific task context
 
-```json
-{
-  "method": "tools/call",
-  "params": {
-    "name": "codeplane_mutate",
-    "arguments": {
-      "session_id": "sess_a1b2c3d4e5f6",
-      "edits": [...]
-    }
-  }
-}
-```
-
-**Debugging session state:**
-
-- Every log line includes `session_id`
-- `codeplane_status` returns full session details
-- Error responses include session snapshot
-- SSE events carry session context
-
 ### 22.4 Tool Catalog
 
-#### Core Tools (Always Available)
+Tools are organized into namespaced families. Each tool has a single responsibility and strongly-typed response.
 
-| Tool | Purpose | Streaming |
-|------|---------|-----------|
-| `codeplane_search` | Lexical, symbol, and reference search | No |
-| `codeplane_map` | Repository structure and mental model | No |
-| `codeplane_read` | Read files with optional line ranges | No |
-| `codeplane_mutate` | Atomic file edits | No |
-| `codeplane_git` | Full Git operations (status, diff, commits, branches, merge, stash, remotes, rebase, submodules, worktrees) | No |
-| `codeplane_status` | Daemon health, index state, session info | No |
+#### Session Tools
+
+| Tool | Purpose |
+|------|---------|
+| `session_info` | Get current session state, task context, operation history |
+| `session_create` | Create new session with optional task description |
+| `session_close` | Close session and finalize task |
+
+#### Git Tools — Read Operations
+
+| Tool | Purpose |
+|------|---------|
+| `git_status` | Repository status (staged, modified, untracked, conflicts) |
+| `git_diff` | Generate diff between refs or working tree |
+| `git_blame` | Line-by-line authorship for a file |
+| `git_log` | Commit history with optional filters |
+| `git_show` | Show commit details |
+| `git_branches` | List branches with tracking info |
+| `git_tags` | List tags |
+| `git_remotes` | List configured remotes |
+| `git_stash_list` | List stash entries |
+
+#### Git Tools — Write Operations
+
+| Tool | Purpose |
+|------|---------|
+| `git_stage` | Stage files for commit |
+| `git_unstage` | Unstage files |
+| `git_discard` | Discard working tree changes |
+| `git_commit` | Create commit |
+| `git_amend` | Amend previous commit |
+| `git_create_branch` | Create new branch |
+| `git_checkout` | Switch branches or restore files |
+| `git_delete_branch` | Delete branch |
+| `git_merge` | Merge branches |
+| `git_cherrypick` | Cherry-pick commits |
+| `git_revert` | Revert commits |
+| `git_reset` | Reset HEAD to a state |
+| `git_stash_push` | Stash changes |
+| `git_stash_pop` | Pop stash entry |
+| `git_fetch` | Fetch from remote |
+| `git_push` | Push to remote |
+| `git_pull` | Pull from remote |
+
+#### Git Tools — Rebase
+
+| Tool | Purpose |
+|------|---------|
+| `git_rebase_plan` | Generate rebase plan (commits to be rebased) |
+| `git_rebase_execute` | Execute rebase plan |
+| `git_rebase_continue` | Continue after conflict resolution |
+| `git_rebase_abort` | Abort and restore original state |
+| `git_rebase_skip` | Skip current commit |
+
+#### Git Tools — Submodules
+
+| Tool | Purpose |
+|------|---------|
+| `git_submodules` | List submodules with status |
+| `git_submodule_init` | Initialize submodules |
+| `git_submodule_update` | Update submodules to recorded commits |
+| `git_submodule_add` | Add new submodule |
+| `git_submodule_remove` | Remove submodule |
+
+#### Git Tools — Worktrees
+
+| Tool | Purpose |
+|------|---------|
+| `git_worktrees` | List worktrees |
+| `git_worktree_add` | Add new worktree |
+| `git_worktree_remove` | Remove worktree |
+
+#### Search Tools
+
+| Tool | Purpose |
+|------|---------|
+| `search` | Unified search (lexical, symbol, references, definitions) |
+
+#### Read Tools
+
+| Tool | Purpose |
+|------|---------|
+| `read_files` | Read file contents with optional line ranges |
+| `map_repo` | Repository structure and mental model |
+
+#### Mutation Tools
+
+| Tool | Purpose |
+|------|---------|
+| `mutate` | Atomic file edits |
 
 #### Refactor Tools (Requires LSP)
 
-| Tool | Purpose | Streaming |
-|------|---------|-----------|
-| `codeplane_refactor` | Semantic refactor (rename/move/delete) | Optional |
+| Tool | Purpose |
+|------|---------|
+| `refactor_rename` | Rename symbol across codebase |
+| `refactor_move` | Move symbol to different file |
+| `refactor_preview` | Preview refactoring changes |
+| `refactor_apply` | Apply previewed refactoring |
 
 #### Test Tools
 
-| Tool | Purpose | Streaming |
-|------|---------|-----------|
-| `codeplane_test` | Discover and run tests | Optional |
+| Tool | Purpose |
+|------|---------|
+| `test_discover` | Discover tests in codebase |
+| `test_run` | Execute tests with progress |
 
-#### Task/Session Tools
+#### Status Tools
 
-| Tool | Purpose | Streaming |
-|------|---------|-----------|
-| `codeplane_task` | Session/task lifecycle management | No |
+| Tool | Purpose |
+|------|---------|
+| `status` | Daemon health, index state |
 
-#### Streaming Tools (Long Operations)
+**Total: ~35 tools**
 
-| Tool | Purpose | Always Streaming |
-|------|---------|------------------|
-| `codeplane_refactor_stream` | Refactor with progress events | Yes |
-| `codeplane_test_stream` | Test execution with live results | Yes |
-| `codeplane_reindex_stream` | Full reindex with progress | Yes |
+### 22.5 Progress Reporting
 
-**Total: 12 tools**
+Long-running operations report progress through MCP's native `Context.report_progress()` mechanism rather than separate streaming tool variants.
 
-### 22.5 Pagination
+**Example:**
+
+```python
+@codeplane_tool(mcp)
+async def test_run(
+    targets: list[str] | None = None,
+    fail_fast: bool = False,
+    ctx: Context,
+) -> TestSuiteResult:
+    """Run tests with live progress updates."""
+    tests = await discover_tests(targets)
+    results = []
+    
+    for i, test in enumerate(tests):
+        await ctx.report_progress(
+            progress=i,
+            total=len(tests),
+            message=f"Running {test.name}",
+        )
+        result = await run_test(test)
+        results.append(result)
+        
+        if fail_fast and not result.passed:
+            break
+    
+    return TestSuiteResult(tests=results)
+```
+
+Clients receive progress events via the MCP protocol's built-in progress notification mechanism.
+
+### 22.6 Pagination
 
 Tools returning collections support cursor-based pagination for large result sets.
 
@@ -2354,19 +2487,20 @@ Tools returning collections support cursor-based pagination for large result set
 
 | Tool | Paginates | Notes |
 |------|-----------|-------|
-| `codeplane_search` | Yes | All search modes |
-| `codeplane_map` (structure) | Yes | File tree only |
-| `codeplane_symbols` | Yes | When listing all symbols in scope |
-| `codeplane_references` | Yes | Reference locations |
-| `codeplane_read` | No | Uses explicit line ranges |
-| `codeplane_mutate` | No | Single operation |
-| `codeplane_git` | Partial | Log/blame commands only |
+| `search` | Yes | All search modes |
+| `map_repo` (structure) | Yes | File tree only |
+| `git_log` | Yes | Commit history |
+| `git_blame` | Yes | Line authorship |
+| `read_files` | No | Uses explicit line ranges |
+| `mutate` | No | Single operation |
 
-### 22.6 Tool Specifications
+### 22.7 Tool Specifications
+
+The following sections define detailed parameter and response schemas for each tool. All responses are wrapped in the `ToolResponse` envelope (see 22.3).
 
 ---
 
-#### `codeplane_search`
+#### `search`
 
 Unified search across lexical index, symbols, and references.
 
@@ -2382,6 +2516,7 @@ Unified search across lexical index, symbols, and references.
     kinds?: string[];               // Symbol kinds: function, class, variable, etc.
   };
   limit?: number;                   // Max results (default 20, max 100)
+  cursor?: string;                  // Continuation token
   include_snippets?: boolean;       // Include code snippets (default true)
   session_id?: string;              // Optional session override
 }
@@ -2405,17 +2540,16 @@ Unified search across lexical index, symbols, and references.
     match_type: "exact" | "fuzzy" | "semantic";
   }>;
   pagination: {
-    next_cursor?: string;      // Present if more results available
-    total_estimate?: number;   // Approximate match count
+    next_cursor?: string;
+    total_estimate?: number;
   };
   query_time_ms: number;
-  _session: SessionState;
 }
 ```
 
 ---
 
-#### `codeplane_map`
+#### `map_repo`
 
 Repository mental model — structure, languages, entry points, dependencies.
 
@@ -2472,7 +2606,7 @@ Repository mental model — structure, languages, entry points, dependencies.
 
 ---
 
-#### `codeplane_read`
+#### `read_files`
 
 Read file contents with optional line ranges.
 
@@ -2514,7 +2648,7 @@ Read file contents with optional line ranges.
 
 ---
 
-#### `codeplane_mutate`
+#### `mutate`
 
 Atomic file edits with structured delta response.
 
@@ -2564,333 +2698,214 @@ Atomic file edits with structured delta response.
 
 ---
 
-#### `codeplane_git`
+#### Git Tools (`git_*`)
 
-Comprehensive Git operations — status, diff, staging, commits, branches, merges, stash, remote operations, interactive rebase, submodule management, and worktrees.
+Git operations are exposed as individual tools with the `git_` prefix. Each tool maps to a specific operation with strongly-typed parameters and responses.
 
-**Parameters:**
+**Tool naming convention:** `git_{operation}` (e.g., `git_status`, `git_commit`, `git_diff`)
+
+**Common optional parameter:** All git tools accept `session_id?: string` for session override.
+
+##### `git_status`
 
 ```typescript
+// Parameters
+{ paths?: string[] }
+
+// Response
 {
-  action: 
-    // Read operations
-    | "status" | "diff" | "blame" | "log" | "show" | "branches" | "tags" | "remotes"
-    | "merge_analysis" | "describe"
-    // Write operations - Index
-    | "stage" | "unstage" | "discard"
-    // Write operations - Commits
-    | "commit" | "amend"
-    // Write operations - Branches
-    | "create_branch" | "checkout" | "delete_branch" | "rename_branch"
-    // Write operations - History
-    | "reset" | "merge" | "cherrypick" | "revert" | "abort_merge"
-    // Write operations - Stash
-    | "stash_push" | "stash_pop" | "stash_apply" | "stash_drop" | "stash_list"
-    // Write operations - Tags
-    | "create_tag" | "delete_tag"
-    // Write operations - Remotes
-    | "fetch" | "push" | "pull"
-    // Write operations - Rebase (Interactive)
-    | "rebase_plan" | "rebase_execute" | "rebase_continue" | "rebase_abort" | "rebase_skip"
-    // Write operations - Submodules
-    | "submodules" | "submodule_status" | "submodule_init" | "submodule_update"
-    | "submodule_sync" | "submodule_add" | "submodule_deinit" | "submodule_remove"
-    // Write operations - Worktrees
-    | "worktrees" | "worktree_add" | "worktree_open" | "worktree_remove"
-    | "worktree_lock" | "worktree_unlock" | "worktree_prune" | "is_worktree" | "worktree_info";
-  
-  paths?: string[];                 // Scope to paths (for status, stage, diff, blame)
-  
-  options?: {
-    // For diff
-    base?: string;                  // Commit/ref to diff against
-    target?: string;                // Target ref (default: working tree)
-    staged?: boolean;               // Diff staged changes
-    
-    // For blame
-    line_range?: { start: number; end: number };
-    
-    // For log
-    ref?: string;                   // Starting ref (default: HEAD)
-    limit?: number;                 // Max commits (default: 50)
-    since?: string;                 // ISO date
-    until?: string;                 // ISO date
-    
-    // For show
-    ref?: string;                   // Commit to show
-    
-    // For commit/amend
-    message?: string;
-    author?: { name: string; email: string };
-    allow_empty?: boolean;
-    
-    // For create_branch
-    name?: string;
-    ref?: string;                   // Base ref (default: HEAD)
-    
-    // For checkout
-    ref?: string;
-    create?: boolean;               // Create branch if not exists
-    
-    // For delete_branch
-    name?: string;
-    force?: boolean;
-    
-    // For reset
-    ref?: string;
-    mode?: "soft" | "mixed" | "hard";
-    
-    // For merge
-    ref?: string;
-    message?: string;
-    
-    // For cherrypick/revert
-    commit?: string;
-    
-    // For stash_push
-    message?: string;
-    include_untracked?: boolean;
-    keep_index?: boolean;
-    
-    // For stash_pop/apply/drop
-    index?: number;                 // Stash index (default: 0)
-    
-    // For create_tag
-    name?: string;
-    ref?: string;
-    message?: string;               // If provided, creates annotated tag
-    
-    // For fetch/push/pull
-    remote?: string;                // Default: "origin"
-    refspecs?: string[];
-    force?: boolean;                // For push
-    prune?: boolean;                // For fetch
-    
-    // For rebase_plan
-    upstream?: string;              // Upstream ref to rebase onto
-    onto?: string;                  // Optional: rebase onto different base
-    
-    // For rebase_execute
-    plan?: {                        // Modified rebase plan
-      upstream: string;
-      onto: string;
-      steps: Array<{
-        action: "pick" | "reword" | "edit" | "squash" | "fixup" | "drop";
-        commit_sha: string;
-        message?: string;           // For reword/squash
-      }>;
-    };
-    
-    // For submodule operations
-    submodule_paths?: string[];     // Scope to specific submodules
-    recursive?: boolean;            // For submodule_update
-    init?: boolean;                 // Initialize before update (default true)
-    
-    // For submodule_add
-    url?: string;
-    path?: string;
-    branch?: string;
-    
-    // For worktree_add
-    worktree_path?: string;         // Path for new worktree
-    worktree_ref?: string;          // Branch/ref to checkout
-    checkout?: boolean;             // Checkout after add (default true)
-    
-    // For worktree_lock/unlock/remove/open
-    worktree_name?: string;
-    lock_reason?: string;           // For worktree_lock
-  };
-  
-  session_id?: string;
+  branch: string | null;
+  head_commit: string;
+  is_clean: boolean;
+  staged: Array<{ path: string; status: string; old_path?: string }>;
+  modified: Array<{ path: string; status: string }>;
+  untracked: string[];
+  conflicts: Array<{ path: string; ancestor_oid?: string; ours_oid?: string; theirs_oid?: string }>;
+  state: "none" | "merge" | "revert" | "cherrypick" | "rebase" | "bisect";
 }
 ```
 
-**Response (varies by action):**
+##### `git_diff`
 
 ```typescript
-// status
+// Parameters
 {
-  action: "status";
-  result: {
-    branch: string | null;          // null if detached HEAD
-    head_commit: string;
-    is_clean: boolean;
-    staged: Array<{ path: string; status: string; old_path?: string }>;
-    modified: Array<{ path: string; status: string }>;
-    untracked: string[];
-    conflicts: Array<{ path: string; ancestor_oid?: string; ours_oid?: string; theirs_oid?: string }>;
-    state: "none" | "merge" | "revert" | "cherrypick" | "rebase" | "bisect";
-  };
-  _session: SessionState;
+  base?: string;       // Commit/ref to diff against
+  target?: string;     // Target ref (default: working tree)
+  staged?: boolean;    // Diff staged changes
+  paths?: string[];    // Scope to paths
 }
 
-// diff
+// Response
 {
-  action: "diff";
-  result: {
-    files: Array<{
-      path: string;
-      status: "added" | "modified" | "deleted" | "renamed" | "copied";
-      old_path?: string;
-      binary: boolean;
-      hunks: Array<{
-        old_start: number;
-        old_lines: number;
-        new_start: number;
-        new_lines: number;
-        header: string;
-        lines: Array<{ origin: "+" | "-" | " "; content: string; old_lineno?: number; new_lineno?: number }>;
-      }>;
+  files: Array<{
+    path: string;
+    status: "added" | "modified" | "deleted" | "renamed" | "copied";
+    old_path?: string;
+    binary: boolean;
+    hunks: Array<{
+      old_start: number;
+      old_lines: number;
+      new_start: number;
+      new_lines: number;
+      header: string;
+      lines: Array<{ origin: "+" | "-" | " "; content: string; old_lineno?: number; new_lineno?: number }>;
     }>;
-    stats: { files_changed: number; insertions: number; deletions: number };
-  };
-  _session: SessionState;
+  }>;
+  stats: { files_changed: number; insertions: number; deletions: number };
+}
+```
+
+##### `git_commit`
+
+```typescript
+// Parameters
+{
+  message: string;
+  paths?: string[];    // Specific paths (default: all staged)
+  author?: { name: string; email: string };
+  allow_empty?: boolean;
 }
 
-// commit/amend
+// Response
+{ oid: string; short_oid: string }
+```
+
+##### `git_log`
+
+```typescript
+// Parameters
 {
-  action: "commit" | "amend";
-  result: {
+  ref?: string;        // Starting ref (default: HEAD)
+  limit?: number;      // Max commits (default: 50)
+  since?: string;      // ISO date
+  until?: string;      // ISO date
+  paths?: string[];    // Filter to paths
+  cursor?: string;     // Pagination
+}
+
+// Response
+{
+  commits: Array<{
     oid: string;
     short_oid: string;
-  };
-  _session: SessionState;
-}
-
-// merge
-{
-  action: "merge";
-  result: {
-    success: boolean;
-    fastforward: boolean;
-    commit?: string;
-    conflicts: Array<{ path: string; ancestor_oid?: string; ours_oid?: string; theirs_oid?: string }>;
-  };
-  _session: SessionState;
-}
-
-// stash_push
-{
-  action: "stash_push";
-  result: {
-    commit: string;
     message: string;
-  };
-  _session: SessionState;
-}
-
-// branches
-{
-  action: "branches";
-  result: Array<{
-    name: string;
-    commit: string;
-    is_current: boolean;
-    is_remote: boolean;
-    upstream?: string;
+    author: { name: string; email: string; time: string };
+    parents: string[];
   }>;
-  _session: SessionState;
+  pagination: { next_cursor?: string };
+}
+```
+
+##### `git_merge`
+
+```typescript
+// Parameters
+{
+  ref: string;         // Branch/ref to merge
+  message?: string;    // Merge commit message
 }
 
-// fetch
+// Response
 {
-  action: "fetch";
-  result: {
-    remote: string;
-    updated_refs: Array<{ ref: string; old_oid?: string; new_oid: string }>;
-  };
-  _session: SessionState;
+  success: boolean;
+  fastforward: boolean;
+  commit?: string;
+  conflicts: Array<{ path: string; ancestor_oid?: string; ours_oid?: string; theirs_oid?: string }>;
+}
+```
+
+##### `git_rebase_plan`
+
+```typescript
+// Parameters
+{
+  upstream: string;    // Upstream ref to rebase onto
+  onto?: string;       // Optional: rebase onto different base
 }
 
-// rebase_plan
+// Response
 {
-  action: "rebase_plan";
-  result: {
+  upstream: string;
+  onto: string;
+  steps: Array<{
+    action: "pick";
+    commit_sha: string;
+    message: string;
+  }>;
+}
+```
+
+##### `git_rebase_execute`
+
+```typescript
+// Parameters
+{
+  plan: {
     upstream: string;
     onto: string;
     steps: Array<{
-      action: "pick";
+      action: "pick" | "reword" | "edit" | "squash" | "fixup" | "drop";
       commit_sha: string;
-      message: string;
+      message?: string;  // For reword/squash
     }>;
   };
-  _session: SessionState;
 }
 
-// rebase_execute / rebase_continue / rebase_skip
+// Response
 {
-  action: "rebase_execute" | "rebase_continue" | "rebase_skip";
-  result: {
-    success: boolean;
-    completed_steps: number;
-    total_steps: number;
-    state: "done" | "conflict" | "edit_pause" | "aborted";
-    conflict_paths?: string[];
-    current_commit?: string;        // For edit_pause
-    new_head?: string;              // Final HEAD after success
-  };
-  _session: SessionState;
-}
-
-// submodules
-{
-  action: "submodules";
-  result: Array<{
-    name: string;
-    path: string;
-    url: string;
-    branch?: string;
-    head_sha?: string;
-    status: "uninitialized" | "clean" | "dirty" | "outdated" | "missing";
-  }>;
-  _session: SessionState;
-}
-
-// submodule_update
-{
-  action: "submodule_update";
-  result: {
-    updated: string[];
-    failed: Array<{ path: string; error: string }>;
-    already_current: string[];
-  };
-  _session: SessionState;
-}
-
-// worktrees
-{
-  action: "worktrees";
-  result: Array<{
-    name: string;
-    path: string;
-    head_ref: string;
-    head_sha: string;
-    is_main: boolean;
-    is_bare: boolean;
-    is_locked: boolean;
-    lock_reason?: string;
-    is_prunable: boolean;
-  }>;
-  _session: SessionState;
-}
-
-// worktree_add
-{
-  action: "worktree_add";
-  result: {
-    name: string;
-    path: string;
-    head_ref: string;
-    head_sha: string;
-  };
-  _session: SessionState;
+  success: boolean;
+  completed_steps: number;
+  total_steps: number;
+  state: "done" | "conflict" | "edit_pause" | "aborted";
+  conflict_paths?: string[];
+  current_commit?: string;
+  new_head?: string;
 }
 ```
-```
+
+##### Other Git Tools
+
+The remaining git tools follow similar patterns:
+
+| Tool | Key Parameters | Response Summary |
+|------|---------------|------------------|
+| `git_blame` | `path`, `line_range?` | Line authorship with commit info |
+| `git_show` | `ref` | Commit details with diff |
+| `git_branches` | - | List of branches with tracking |
+| `git_tags` | - | List of tags |
+| `git_remotes` | - | List of remotes with URLs |
+| `git_stage` | `paths` | Staging result |
+| `git_unstage` | `paths` | Unstaging result |
+| `git_discard` | `paths` | Discard result |
+| `git_amend` | `message?` | Amended commit OID |
+| `git_create_branch` | `name`, `ref?` | New branch info |
+| `git_checkout` | `ref`, `create?` | Checkout result |
+| `git_delete_branch` | `name`, `force?` | Deletion result |
+| `git_reset` | `ref`, `mode` | Reset result |
+| `git_cherrypick` | `commit` | Cherry-pick result |
+| `git_revert` | `commit` | Revert result |
+| `git_stash_push` | `message?`, `include_untracked?` | Stash commit |
+| `git_stash_pop` | `index?` | Pop result |
+| `git_stash_list` | - | List of stash entries |
+| `git_fetch` | `remote?`, `prune?` | Updated refs |
+| `git_push` | `remote?`, `force?` | Push result |
+| `git_pull` | `remote?` | Pull result |
+| `git_rebase_continue` | - | Rebase state |
+| `git_rebase_abort` | - | Abort confirmation |
+| `git_rebase_skip` | - | Skip result |
+| `git_submodules` | - | List with status |
+| `git_submodule_init` | `paths?` | Init result |
+| `git_submodule_update` | `paths?`, `recursive?` | Update result |
+| `git_submodule_add` | `url`, `path`, `branch?` | New submodule info |
+| `git_submodule_remove` | `path` | Removal result |
+| `git_worktrees` | - | List of worktrees |
+| `git_worktree_add` | `path`, `ref` | New worktree info |
+| `git_worktree_remove` | `name`, `force?` | Removal result |
 
 ---
 
-#### `codeplane_refactor`
+#### Refactor Tools (`refactor_*`)
 
 Semantic refactoring via LSP.
 
@@ -2937,7 +2952,7 @@ Semantic refactoring via LSP.
     contexts_used: string[];
   };
   applied?: {
-    delta: MutationDelta;           // Same as codeplane_mutate
+    delta: MutationDelta;           // Same as mutate
     validation?: {
       diagnostics_before: number;
       diagnostics_after: number;
@@ -2957,7 +2972,7 @@ Semantic refactoring via LSP.
 
 ---
 
-#### `codeplane_test`
+#### Test Tools (`test_*`)
 
 Test discovery and execution.
 
@@ -3037,7 +3052,7 @@ Test discovery and execution.
 
 ---
 
-#### `codeplane_task`
+#### Session Tools (`session_*`)
 
 Session and task lifecycle management.
 
@@ -3103,7 +3118,7 @@ Session and task lifecycle management.
 
 ---
 
-#### `codeplane_status`
+#### `status`
 
 Daemon health, index state, and session info.
 
@@ -3157,90 +3172,7 @@ Daemon health, index state, and session info.
 
 ---
 
-### 22.6 Streaming Tools (SSE)
-
-For long-running operations, streaming variants provide real-time progress.
-
-#### SSE Event Format
-
-```typescript
-// Progress event
-{
-  "event": "progress",
-  "data": {
-    "op_id": "op_abc123",
-    "phase": "planning" | "applying" | "validating",
-    "progress": { "current": 5, "total": 20 },
-    "message": "Processing file 5/20: src/utils.ts",
-    "_session": SessionState
-  }
-}
-
-// Result event (final)
-{
-  "event": "result",
-  "data": {
-    "op_id": "op_abc123",
-    "status": "completed" | "failed" | "cancelled",
-    "result": { ... },              // Same as non-streaming response
-    "_session": SessionState
-  }
-}
-
-// Error event
-{
-  "event": "error",
-  "data": {
-    "op_id": "op_abc123",
-    "code": 4002,
-    "error": "REFACTOR_LSP_TIMEOUT",
-    "message": "LSP timeout for Java",
-    "retryable": true,
-    "_session": SessionState
-  }
-}
-```
-
-#### `codeplane_refactor_stream`
-
-Same parameters as `codeplane_refactor`, returns SSE stream.
-
-Progress events include:
-- Context initialization
-- Per-file LSP processing
-- Patch generation
-- Validation results
-
-#### `codeplane_test_stream`
-
-Same parameters as `codeplane_test`, returns SSE stream.
-
-Progress events include:
-- Target discovery
-- Per-target start/complete
-- Real-time pass/fail updates
-- Final summary
-
-#### `codeplane_reindex_stream`
-
-**Parameters:**
-
-```typescript
-{
-  mode: "incremental" | "full";
-  session_id?: string;
-}
-```
-
-Progress events include:
-- File scanning
-- Parsing progress
-- Symbol extraction
-- Graph construction
-
----
-
-### 22.7 REST Endpoints (Operator)
+### 22.8 REST Endpoints (Operator)
 
 Non-MCP endpoints for operators and monitoring.
 
@@ -3249,7 +3181,7 @@ Non-MCP endpoints for operators and monitoring.
 | `/health` | GET | Liveness check (returns 200 if alive) |
 | `/ready` | GET | Readiness check (returns 200 if index loaded) |
 | `/metrics` | GET | Prometheus-format metrics (see section 13) |
-| `/status` | GET | JSON status (same as `codeplane_status`) |
+| `/status` | GET | JSON status (same as `status` tool) |
 | `/dashboard` | GET | Observability dashboard (see section 13) |
 
 **Authentication:** Same bearer token as MCP.
@@ -3263,7 +3195,7 @@ curl -H "Authorization: Bearer $(cat .codeplane/token)" \
 
 ---
 
-### 22.8 Error Handling
+### 22.9 Error Handling
 
 All MCP tools use the error schema defined in section 4.2.
 
@@ -3311,7 +3243,7 @@ Client must close task and open new one, or configure additional budget.
 
 ---
 
-### 22.9 MCP Server Configuration
+### 22.10 MCP Server Configuration
 
 CodePlane registers as an MCP server. Client configuration example:
 
@@ -3337,11 +3269,11 @@ Clients can read `.codeplane/port` and `.codeplane/token` to configure automatic
 
 ---
 
-### 22.10 Versioning
+### 22.11 Versioning
 
 - API version included in `/status` response
 - Breaking changes increment major version
 - Tools may gain optional parameters without version bump
-- Deprecated tools return warning in `_session.warnings`
+- Deprecated tools return warning in `meta.warnings`
 
 Current version: `1.0.0`
