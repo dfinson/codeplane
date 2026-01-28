@@ -2,94 +2,82 @@
 
 ## Scope
 
-The tools module contains implementations for all 12 MCP tools. Each tool is a thin handler that validates input, delegates to domain services, and formats output.
+The tools module contains MCP tool implementations using FastMCP. Each tool is a decorated function that validates input, delegates to domain services, and returns structured output wrapped in a response envelope.
 
 ### Responsibilities
 
-- Input validation (parameter schemas)
+- MCP tool registration via `@codeplane_tool(mcp)` decorator
+- Input validation (auto-generated from type hints)
 - Delegation to appropriate domain modules
-- Output formatting (including `_session` block)
-- Error mapping to CodePlane error codes
-- Streaming setup for SSE variants
+- Output formatting via `ToolResponse[T]` envelope
+- Progress reporting via `Context.report_progress()`
 
-### Tools (from SPEC.md §20.4–20.5)
+### Architecture Decision: FastMCP-Native Design
 
-| Tool | Delegates To |
-|------|--------------|
-| `codeplane_search` | `index/` |
-| `codeplane_map` | `index/` |
-| `codeplane_read` | filesystem + `index/` metadata |
-| `codeplane_mutate` | `mutation/` |
-| `codeplane_git` | `git/` |
-| `codeplane_refactor` | `refactor/` |
-| `codeplane_test` | `testing/` |
-| `codeplane_task` | `ledger/` + session |
-| `codeplane_status` | daemon + `index/` + `refactor/` |
-| `codeplane_refactor_stream` | `refactor/` (SSE) |
-| `codeplane_test_stream` | `testing/` (SSE) |
-| `codeplane_reindex_stream` | `index/` (SSE) |
+**Decision:** Use FastMCP's native patterns instead of custom MCP protocol handling.
 
----
+**Rationale:** See SPEC.md section 22 and GitHub issue #123 for full ADR.
 
-## Design Options
+**Key points:**
+1. **Tool granularity:** Split mega-tools into namespaced families (e.g., `git_*`, `search_*`)
+2. **Response envelope:** All responses wrapped in `ToolResponse[T]` with `meta` field
+3. **Progress reporting:** Use `Context.report_progress()` instead of separate `_stream` tools
+4. **Pagination:** Use `Page[T]` Pydantic models with cursor support
 
-### Option A: Function per tool
+### Tool Families (from SPEC.md §22.4)
 
-```python
-# tools/search.py
-async def codeplane_search(params: SearchParams, session: Session) -> SearchResult:
-    results = await index_service.search(params.query, params.mode, params.scope)
-    return SearchResult(results=results, _session=session.state())
-```
+| Family | Count | Delegates To |
+|--------|-------|--------------|
+| `git_*` | ~20 | `git/` (GitOps) |
+| `search_*` | 1 | `index/` |
+| `file_*` | 3 | filesystem + `index/` |
+| `refactor_*` | 3 | `refactor/` |
+| `test_*` | 2 | `testing/` |
+| `session_*` | 3 | `ledger/` + session |
+| `status_*` | 1 | daemon + `index/` |
 
-**Pros:** Simple, direct
-**Cons:** May duplicate validation/error handling
-
-### Option B: Tool class with base
-
-```python
-# tools/base.py
-class Tool:
-    name: str
-    def validate(self, params: dict) -> Params: ...
-    async def execute(self, params: Params, session: Session) -> Result: ...
-
-# tools/search.py
-class SearchTool(Tool):
-    name = "codeplane_search"
-    async def execute(self, params, session):
-        ...
-```
-
-**Pros:** Consistent interface, easy to enumerate tools
-**Cons:** More boilerplate
-
-### Option C: Decorated functions with registry
-
-```python
-# tools/registry.py
-TOOLS = {}
-
-def tool(name: str):
-    def decorator(fn):
-        TOOLS[name] = fn
-        return fn
-    return decorator
-
-# tools/search.py
-@tool("codeplane_search")
-async def search(params: SearchParams, session: Session) -> SearchResult:
-    ...
-```
-
-**Pros:** Simple functions, automatic registration
-**Cons:** Global state
+**Total: ~33 tools**
 
 ---
 
-## Recommended Approach
+## Implementation Pattern
 
-**Option C (Decorated functions)** — keeps implementations simple, automatic discovery, easy to test individual tools.
+```python
+# tools/git.py
+from codeplane.mcp import mcp, codeplane_tool
+from codeplane.git import GitOps
+
+@codeplane_tool(mcp)
+def git_status(repo_path: str, include_untracked: bool = True) -> RepoStatus:
+    """Get repository status including staged, unstaged, and untracked files."""
+    return GitOps(repo_path).status(include_untracked=include_untracked)
+```
+
+### Response Envelope
+
+All tools return `ToolResponse[T]`:
+
+```python
+@dataclass
+class ToolResponse[T]:
+    result: T           # The actual tool result
+    meta: ResponseMeta  # session_id, request_id, timestamp_ms
+```
+
+### Progress Reporting
+
+Long operations use FastMCP's native progress:
+
+```python
+@codeplane_tool(mcp)
+async def test_run(paths: list[str], ctx: Context) -> TestResult:
+    """Run tests with progress updates."""
+    tests = discover_tests(paths)
+    for i, test in enumerate(tests):
+        await ctx.report_progress(progress=i, total=len(tests))
+        run_test(test)
+    return TestResult(...)
+```
 
 ---
 
@@ -97,19 +85,32 @@ async def search(params: SearchParams, session: Session) -> SearchResult:
 
 ```
 tools/
-├── __init__.py      # Export TOOLS registry
-├── registry.py      # @tool decorator, TOOLS dict
-├── search.py        # codeplane_search
-├── map.py           # codeplane_map
-├── read.py          # codeplane_read
-├── mutate.py        # codeplane_mutate
-├── git.py           # codeplane_git
-├── refactor.py      # codeplane_refactor, codeplane_refactor_stream
-├── test.py          # codeplane_test, codeplane_test_stream
-├── task.py          # codeplane_task
-├── status.py        # codeplane_status
-└── reindex.py       # codeplane_reindex_stream
+├── __init__.py      # Export mcp instance and codeplane_tool decorator
+├── server.py        # FastMCP("CodePlane") instance
+├── envelope.py      # ToolResponse, ResponseMeta, @codeplane_tool
+├── git.py           # git_* tools (~20)
+├── search.py        # search_* tools
+├── file.py          # file_* tools
+├── refactor.py      # refactor_* tools
+├── test.py          # test_* tools
+├── session.py       # session_* tools
+└── status.py        # status_* tools
 ```
+
+---
+
+## Dependencies
+
+- `mcp` package (FastMCP)
+- Domain modules: `git/`, `index/`, `mutation/`, `refactor/`, `testing/`, `ledger/`
+
+---
+
+## References
+
+- SPEC.md section 22 (MCP Integration)
+- GitHub issue #123 (ADR: FastMCP-native tool design)
+
 
 ## Dependencies
 
