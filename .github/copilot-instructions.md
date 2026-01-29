@@ -25,6 +25,91 @@ These are non-negotiable design principles. Do not suggest alternatives:
 
 ---
 
+## ⛔ ABSOLUTE PROHIBITION: No Hacky Workarounds
+
+**This is the most important section. Violating these rules is unacceptable.**
+
+When you encounter ANY problem — type errors, lint failures, test failures, API mismatches, library incompatibilities — you MUST address it properly. There are NO exceptions.
+
+### What Constitutes a Hacky Workaround (FORBIDDEN)
+
+- **Type ignores to silence errors** — `# type: ignore`, `cast()` to lie about types, `Any` to escape type checking
+- **Inline imports to avoid module-level issues** — If an import fails at module level, fix the real problem
+- **Try/except around imports** — Dependencies are declared; if missing, that's a setup bug
+- **Raw SQL to bypass ORM type issues** — If SQLModel types don't work, understand why and fix the model or query
+- **String manipulation instead of proper parsing** — If you need to parse TOML, use a TOML parser
+- **Regex to extract structured data** — Use the appropriate parser for the format
+- **Casting return values to silence type checkers** — `int(some_any_value)` when you don't know what it is
+- **Empty except blocks** — `except: pass` hides bugs
+- **Fallback values that mask errors** — `value or default` when `value` being falsy indicates a bug
+- **Conditional logic to work around library quirks** — If a library behaves unexpectedly, read its docs or find a different approach
+- **Copy-pasting code because you can't figure out the abstraction** — Take the time to understand the pattern
+
+### What You MUST Do Instead
+
+1. **Stop and diagnose** — Understand WHY the error occurs, not just WHAT the error says
+2. **Read documentation** — Library docs, type stubs, source code if needed
+3. **Check existing patterns** — How does the rest of the codebase handle this?
+4. **Question the approach** — Maybe the entire approach is wrong, not just the implementation
+5. **Ask for clarification** — If you're unsure, say so. Don't guess and hack.
+6. **Fix root causes** — If the model is wrong, fix the model. If the schema is wrong, fix the schema.
+7. **Propose alternatives** — If proper solution A is blocked, propose proper solution B, not a hack
+
+### Examples of Proper Problem Resolution
+
+**Bad (hack):**
+```python
+# Type checker complains about Symbol.id being int | None
+stmt = select(func.count(Symbol.id))  # type: ignore
+```
+
+**Good (proper):**
+```python
+# Symbol.id is Optional because SQLModel uses None before insert.
+# Use func.count('*') which doesn't depend on column nullability.
+stmt = select(func.count()).select_from(Symbol)
+```
+
+**Bad (hack):**
+```python
+try:
+    import tantivy
+except ImportError:
+    tantivy = None  # type: ignore
+```
+
+**Good (proper):**
+```python
+# tantivy is a declared dependency in pyproject.toml
+# If it fails to import, that's a broken environment - let it crash
+import tantivy
+```
+
+**Bad (hack):**
+```python
+# SQLModel join doesn't type-check, use raw SQL
+result = session.exec(text("SELECT * FROM symbols JOIN ..."))
+```
+
+**Good (proper):**
+```python
+# Understand SQLModel's join syntax and use it correctly
+# If the ORM can't express it, reconsider the query design
+stmt = select(Symbol).join(File, Symbol.file_id == File.id)
+```
+
+### The Fundamental Rule
+
+**If your solution involves the words "workaround", "hack", "bypass", "silence", "ignore", or "for now" — STOP.**
+
+Either:
+1. Solve the problem correctly, or
+2. Explicitly state "I cannot solve this properly because X" and ask for guidance
+
+There is no third option. Quick fixes become permanent technical debt. Every hack you write, someone else has to maintain. Respect the codebase and the humans who work on it.
+
+---
+
 ## A. Development Workflow
 
 When implementing features, fixing bugs, or making changes:
@@ -119,6 +204,27 @@ Before writing any abstraction, validator, or helper, ask: "Does a library alrea
 
 If you can delete code and tests still pass with equivalent coverage, the code was unnecessary.
 
+### 9. Problem-Solving Standards
+
+**Every problem requires proper understanding before any solution.**
+
+When you encounter an error, failure, or unexpected behavior:
+
+1. **Reproduce and isolate** — Can you create a minimal case?
+2. **Read the error completely** — Stack traces, type errors, and lint messages contain information
+3. **Trace the data flow** — Where does the unexpected value come from?
+4. **Consult authoritative sources** — Library documentation, type stubs, source code
+5. **Understand the design intent** — Why was the code written this way?
+
+**Never:**
+- Guess at solutions without understanding the problem
+- Apply fixes that worked elsewhere without verifying they apply here
+- Suppress errors instead of fixing their causes
+- Add defensive code to "handle" situations that shouldn't occur
+- Use escape hatches (`Any`, `# type: ignore`, `cast()`) to silence type checkers
+
+**If you don't understand something, say so.** Admitting uncertainty is professional. Shipping hacks is not.
+
 ---
 
 ## B. Code Review Guidance
@@ -169,6 +275,23 @@ Copilot performs well on narrow, locally-visible issues. It struggles with archi
 - Suggesting changes that violate spec invariants
 - Overengineering suggestions for spike/prototype branches
 - Context-free "best practice" recommendations
+
+### Type System Respect
+
+The type system exists to catch bugs. When mypy reports an error:
+
+1. **The type checker is probably right** — Don't assume it's wrong
+2. **Read the full error** — Mypy explains exactly what's incompatible
+3. **Trace the types** — Where does the type mismatch originate?
+4. **Fix the root cause** — Not the symptom
+
+**Never acceptable:**
+- `# type: ignore` without a specific error code and explanation
+- `cast()` that lies about the actual runtime type
+- `Any` to escape type checking
+- `isinstance()` guards that paper over design flaws
+
+**If the types don't work, the design might be wrong.** Type errors often reveal architectural problems. Listen to them.
 
 ---
 
