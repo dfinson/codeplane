@@ -14,9 +14,13 @@ we only know "an identifier named X appears at line Y". Semantic resolution
 from __future__ import annotations
 
 import hashlib
+import importlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+import tree_sitter
+import tree_sitter_typescript
 
 if TYPE_CHECKING:
     pass
@@ -70,7 +74,9 @@ class ParseResult:
 
 
 # Language to Tree-sitter language name mapping
+# Maps our internal names to tree-sitter grammar module names
 LANGUAGE_MAP: dict[str, str] = {
+    # Official tree-sitter languages
     "python": "python",
     "javascript": "javascript",
     "typescript": "typescript",
@@ -78,28 +84,34 @@ LANGUAGE_MAP: dict[str, str] = {
     "go": "go",
     "rust": "rust",
     "java": "java",
-    "kotlin": "kotlin",
     "scala": "scala",
     "csharp": "c_sharp",
-    "fsharp": "c_sharp",  # F# uses C# grammar as fallback
+    "c": "c",
+    "cpp": "cpp",
     "ruby": "ruby",
     "php": "php",
     "swift": "swift",
-    "elixir": "elixir",
     "haskell": "haskell",
-    "sql": "sql",
+    "julia": "julia",
     "json": "json",
-    "yaml": "yaml",
-    "toml": "toml",
-    "markdown": "markdown",
     "html": "html",
     "css": "css",
+    "regex": "regex",
+    # tree-sitter-grammars languages
     "bash": "bash",
+    "shell": "bash",
     "dockerfile": "dockerfile",
-    "terraform": "hcl",
     "hcl": "hcl",
-    "protobuf": "proto",
-    "graphql": "graphql",
+    "terraform": "hcl",
+    "lua": "lua",
+    "makefile": "make",
+    "make": "make",
+    "markdown": "markdown",
+    "requirements": "requirements",
+    "sql": "sql",
+    "toml": "toml",
+    "xml": "xml",
+    "yaml": "yaml",
 }
 
 
@@ -142,6 +154,57 @@ SYMBOL_QUERIES: dict[str, str] = {
         (class_declaration name: (identifier) @name) @class
         (interface_declaration name: (identifier) @name) @interface
     """,
+    "scala": """
+        (function_definition name: (identifier) @name) @function
+        (class_definition name: (identifier) @name) @class
+        (trait_definition name: (identifier) @name) @trait
+        (object_definition name: (identifier) @name) @object
+    """,
+    "c_sharp": """
+        (method_declaration name: (identifier) @name) @method
+        (class_declaration name: (identifier) @name) @class
+        (interface_declaration name: (identifier) @name) @interface
+        (struct_declaration name: (identifier) @name) @struct
+    """,
+    "c": """
+        (function_definition declarator: (function_declarator declarator: (identifier) @name)) @function
+        (struct_specifier name: (type_identifier) @name) @struct
+        (enum_specifier name: (type_identifier) @name) @enum
+    """,
+    "cpp": """
+        (function_definition declarator: (function_declarator declarator: (identifier) @name)) @function
+        (class_specifier name: (type_identifier) @name) @class
+        (struct_specifier name: (type_identifier) @name) @struct
+    """,
+    "ruby": """
+        (method name: (identifier) @name) @method
+        (class name: (constant) @name) @class
+        (module name: (constant) @name) @module
+    """,
+    "php": """
+        (function_definition name: (name) @name) @function
+        (class_declaration name: (name) @name) @class
+        (method_declaration name: (name) @name) @method
+    """,
+    "swift": """
+        (function_declaration name: (simple_identifier) @name) @function
+        (class_declaration name: (type_identifier) @name) @class
+        (protocol_declaration name: (type_identifier) @name) @protocol
+    """,
+    "haskell": """
+        (function name: (variable) @name) @function
+        (type_alias name: (type) @name) @type
+    """,
+    "lua": """
+        (function_declaration name: (identifier) @name) @function
+    """,
+    "bash": """
+        (function_definition name: (word) @name) @function
+    """,
+    "sql": """
+        (create_function_statement name: (identifier) @name) @function
+        (create_table_statement name: (identifier) @name) @table
+    """,
 }
 
 
@@ -178,11 +241,6 @@ class TreeSitterParser:
 
     def __post_init__(self) -> None:
         """Initialize the parser."""
-        try:
-            import tree_sitter
-        except ImportError as e:
-            raise ImportError("tree-sitter is required. Install with: uv add tree-sitter") from e
-
         self._parser = tree_sitter.Parser()
         self._languages = {}
 
@@ -191,30 +249,71 @@ class TreeSitterParser:
         if lang_name in self._languages:
             return self._languages[lang_name]
 
-        try:
-            import tree_sitter_go
-            import tree_sitter_javascript
-            import tree_sitter_python
-            import tree_sitter_rust
-
-            # Map language names to their modules
-            lang_modules = {
-                "python": tree_sitter_python,
-                "javascript": tree_sitter_javascript,
-                "go": tree_sitter_go,
-                "rust": tree_sitter_rust,
-            }
-
-            if lang_name in lang_modules:
-                import tree_sitter
-
-                lang = tree_sitter.Language(lang_modules[lang_name].language())
+        # Special handling for typescript/tsx which have separate language functions
+        if lang_name in ("typescript", "tsx"):
+            try:
+                if lang_name == "typescript":
+                    lang = tree_sitter.Language(tree_sitter_typescript.language_typescript())
+                else:
+                    lang = tree_sitter.Language(tree_sitter_typescript.language_tsx())
                 self._languages[lang_name] = lang
                 return lang
-        except ImportError:
-            pass
+            except ImportError as err:
+                raise ValueError(f"Language not available: {lang_name}") from err
 
-        raise ValueError(f"Language not available: {lang_name}")
+        # Standard loading for other languages
+        lang_module = self._load_language_module(lang_name)
+        if lang_module is None:
+            raise ValueError(f"Language not available: {lang_name}")
+
+        lang = tree_sitter.Language(lang_module.language())
+        self._languages[lang_name] = lang
+        return lang
+
+    def _load_language_module(self, lang_name: str) -> Any:
+        """Load tree-sitter language module by name."""
+        # Map grammar names to their import paths
+        # Most follow tree_sitter_{name} pattern
+        import_map: dict[str, str] = {
+            "python": "tree_sitter_python",
+            "javascript": "tree_sitter_javascript",
+            "go": "tree_sitter_go",
+            "rust": "tree_sitter_rust",
+            "java": "tree_sitter_java",
+            "scala": "tree_sitter_scala",
+            "c_sharp": "tree_sitter_c_sharp",
+            "c": "tree_sitter_c",
+            "cpp": "tree_sitter_cpp",
+            "ruby": "tree_sitter_ruby",
+            "php": "tree_sitter_php",
+            "swift": "tree_sitter_swift",
+            "haskell": "tree_sitter_haskell",
+            "julia": "tree_sitter_julia",
+            "json": "tree_sitter_json",
+            "html": "tree_sitter_html",
+            "css": "tree_sitter_css",
+            "regex": "tree_sitter_regex",
+            "bash": "tree_sitter_bash",
+            "dockerfile": "tree_sitter_dockerfile",
+            "hcl": "tree_sitter_hcl",
+            "lua": "tree_sitter_lua",
+            "make": "tree_sitter_make",
+            "markdown": "tree_sitter_markdown",
+            "requirements": "tree_sitter_requirements",
+            "sql": "tree_sitter_sql",
+            "toml": "tree_sitter_toml",
+            "xml": "tree_sitter_xml",
+            "yaml": "tree_sitter_yaml",
+        }
+
+        module_name = import_map.get(lang_name)
+        if module_name is None:
+            return None
+
+        try:
+            return importlib.import_module(module_name)
+        except ImportError:
+            return None
 
     def parse(self, path: Path, content: bytes | None = None) -> ParseResult:
         """
@@ -416,8 +515,10 @@ class TreeSitterParser:
     def _detect_language_from_ext(self, ext: str) -> str | None:
         """Detect language from file extension."""
         ext_map = {
+            # Python
             "py": "python",
             "pyi": "python",
+            # JavaScript/TypeScript
             "js": "javascript",
             "jsx": "javascript",
             "mjs": "javascript",
@@ -426,38 +527,60 @@ class TreeSitterParser:
             "tsx": "tsx",
             "mts": "typescript",
             "cts": "typescript",
+            # Go
             "go": "go",
+            # Rust
             "rs": "rust",
+            # JVM
             "java": "java",
-            "kt": "kotlin",
-            "kts": "kotlin",
             "scala": "scala",
             "sc": "scala",
+            # .NET
             "cs": "csharp",
-            "fs": "fsharp",
-            "fsx": "fsharp",
+            # C/C++
+            "c": "c",
+            "h": "c",
+            "cpp": "cpp",
+            "cc": "cpp",
+            "cxx": "cpp",
+            "hpp": "cpp",
+            "hxx": "cpp",
+            # Ruby
             "rb": "ruby",
+            # PHP
             "php": "php",
+            # Swift
             "swift": "swift",
-            "ex": "elixir",
-            "exs": "elixir",
+            # Haskell
             "hs": "haskell",
+            "lhs": "haskell",
+            # Julia
+            "jl": "julia",
+            # Lua
+            "lua": "lua",
+            # Shell
+            "sh": "bash",
+            "bash": "bash",
+            "zsh": "bash",
+            # Config/Data
             "tf": "terraform",
             "hcl": "hcl",
             "sql": "sql",
             "md": "markdown",
+            "mdx": "markdown",
             "json": "json",
             "yaml": "yaml",
             "yml": "yaml",
             "toml": "toml",
-            "proto": "protobuf",
-            "graphql": "graphql",
-            "gql": "graphql",
-            "nix": "nix",
-            "sh": "bash",
-            "bash": "bash",
+            "xml": "xml",
             "html": "html",
+            "htm": "html",
             "css": "css",
+            "dockerfile": "dockerfile",
+            "makefile": "makefile",
+            "mk": "makefile",
+            "txt": "requirements",  # pip requirements
+            "regex": "regex",
         }
         return ext_map.get(ext)
 

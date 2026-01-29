@@ -24,13 +24,14 @@ if TYPE_CHECKING:
 
 class LanguageFamily(str, Enum):
     """
-    Canonical language family identifiers (19 total).
+    Canonical language family identifiers (20 total).
 
-    Code families (11): require meaningful named nodes in Tree-sitter parse.
-    Data families (8): require valid tree with content.
+    Partitioned into:
+    - Internal Eight (syntactic-only via Tree-sitter)
+    - External Twelve (semantic via SCIP indexers)
     """
 
-    # Code families
+    # External Twelve (semantic - require SCIP indexers)
     JAVASCRIPT = "javascript"
     PYTHON = "python"
     GO = "go"
@@ -42,7 +43,8 @@ class LanguageFamily(str, Enum):
     SWIFT = "swift"
     ELIXIR = "elixir"
     HASKELL = "haskell"
-    # Data families
+    CPP = "cpp"
+    # Internal Eight (syntactic-only - batteries included)
     TERRAFORM = "terraform"
     SQL = "sql"
     DOCKER = "docker"
@@ -51,6 +53,42 @@ class LanguageFamily(str, Enum):
     PROTOBUF = "protobuf"
     GRAPHQL = "graphql"
     CONFIG = "config"
+
+    @classmethod
+    def external_families(cls) -> frozenset[LanguageFamily]:
+        """Return families requiring external SCIP indexers."""
+        return frozenset(
+            {
+                cls.JAVASCRIPT,
+                cls.PYTHON,
+                cls.GO,
+                cls.RUST,
+                cls.JVM,
+                cls.DOTNET,
+                cls.RUBY,
+                cls.PHP,
+                cls.SWIFT,
+                cls.ELIXIR,
+                cls.HASKELL,
+                cls.CPP,
+            }
+        )
+
+    @classmethod
+    def internal_families(cls) -> frozenset[LanguageFamily]:
+        """Return families handled internally (syntactic-only)."""
+        return frozenset(
+            {
+                cls.TERRAFORM,
+                cls.SQL,
+                cls.DOCKER,
+                cls.MARKDOWN,
+                cls.JSON_YAML,
+                cls.PROTOBUF,
+                cls.GRAPHQL,
+                cls.CONFIG,
+            }
+        )
 
     @classmethod
     def code_families(cls) -> frozenset[LanguageFamily]:
@@ -68,6 +106,7 @@ class LanguageFamily(str, Enum):
                 cls.SWIFT,
                 cls.ELIXIR,
                 cls.HASKELL,
+                cls.CPP,
             }
         )
 
@@ -96,6 +135,16 @@ class LanguageFamily(str, Enum):
     def is_data(self) -> bool:
         """True if this is a data family."""
         return self in self.data_families()
+
+    @property
+    def requires_external_tool(self) -> bool:
+        """True if this family requires an external SCIP indexer."""
+        return self in self.external_families()
+
+    @property
+    def is_internal(self) -> bool:
+        """True if this family is handled internally (syntactic-only)."""
+        return self in self.internal_families()
 
 
 class Freshness(str, Enum):
@@ -139,6 +188,18 @@ class JobStatus(str, Enum):
     COMPLETED = "completed"
     SUPERSEDED = "superseded"
     FAILED = "failed"
+
+
+class JobFailureReason(str, Enum):
+    """Reason for job failure (for fail-fast protocol)."""
+
+    NONE = "none"
+    MISSING_TOOL = "missing_tool"  # External SCIP indexer not installed
+    TOOL_CRASHED = "tool_crashed"  # Tool ran but crashed
+    TOOL_TIMEOUT = "tool_timeout"  # Tool exceeded time limit
+    PARSE_ERROR = "parse_error"  # SCIP output unparseable
+    IO_ERROR = "io_error"  # File system error
+    INTERNAL_ERROR = "internal_error"  # Bug in CodePlane
 
 
 class ProbeStatus(str, Enum):
@@ -340,6 +401,24 @@ class Edge(SQLModel, table=True):
     layer: str
 
 
+class SymbolEdge(SQLModel, table=True):
+    """
+    Symbol-to-symbol relationship from SCIP (calls, extends, implements).
+
+    HIGH-VOLUME TABLE: Use BulkWriter.insert_many() AFTER obtaining
+    symbol_ids for both source and target.
+    """
+
+    __tablename__ = "symbol_edges"
+
+    id: int | None = Field(default=None, primary_key=True)
+    src_symbol_id: int = Field(foreign_key="symbols.id", index=True)
+    dst_symbol_id: int = Field(foreign_key="symbols.id", index=True)
+    relation: str  # calls, extends, implements, type_of, etc.
+    layer: str  # always "semantic" for SCIP-derived edges
+    certainty: str  # certain, ambiguous
+
+
 class FileSemanticFacts(SQLModel, table=True):
     """
     Semantic facts per (file, context) pair.
@@ -370,6 +449,11 @@ class RefreshJob(SQLModel, table=True):
 
     MEDIUM-VOLUME TABLE: Use ORM for atomic status transitions
     (requires WHERE clause for race safety).
+
+    Fail-Fast Protocol:
+    - Jobs check for tool availability BEFORE running
+    - If tool missing, fail immediately with failure_reason=MISSING_TOOL
+    - Coordinator gathers MISSING_TOOL failures for user confirmation
     """
 
     __tablename__ = "refresh_jobs"
@@ -377,6 +461,7 @@ class RefreshJob(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     context_id: int = Field(foreign_key="contexts.id", index=True)
     status: str = Field(index=True)  # queued, running, completed, superseded, failed
+    failure_reason: str | None = None  # JobFailureReason value for failed jobs
     scope: str | None = None  # JSON: RefreshScope
     desired_scope: str | None = None  # JSON: for running-job widening
     trigger_reason: str | None = None
