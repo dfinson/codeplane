@@ -50,6 +50,7 @@ The index module builds and queries the hybrid two-layer index: syntactic (alway
 - §7.5: Semantic Layer (SCIP Batch Indexers)
 - §7.6: Graph index
 - §7.8: Atomic update protocol
+- §8.4: Context Discovery & Membership (authoritative source for language families, ownership model, discovery phases, membership rules, and ContextRouter)
 
 ---
 

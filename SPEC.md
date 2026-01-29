@@ -39,7 +39,7 @@
   - [8.1 Purpose](#81-purpose)
   - [8.2 Core Principles](#82-core-principles)
   - [8.3 Supported Operations](#83-supported-operations)
-  - [8.4 Definitions](#84-definitions)
+  - [8.4 Context Discovery & Membership](#84-context-discovery--membership)
   - [8.5 Refactor Execution Flow](#85-refactor-execution-flow)
   - [8.5a Two-Phase Rename](#85a-two-phase-rename-agent-decision-flow)
   - [8.5b Witness Packets](#85b-witness-packets)
@@ -1200,24 +1200,200 @@ All operations:
 - Unsupported languages can still use syntactic edits (find/replace with confirmation)
 - No runtime auto-detection; language support declared at init
 
-### 8.4 Definitions
+### 8.4 Context Discovery & Membership
 
-Context:
+This section is the **authoritative source** for context discovery, ownership, and membership rules. Sections 8.6–8.9 provide operational details that build on these definitions.
 
-A context is the minimal semantic “world” in which a SCIP indexer analyzes a subset of the repo.
+#### 8.4.1 Core Definitions & Correctness Rules
 
-Context includes:
+**A. The "Language Family" Key**
 
-- Language + SCIP indexer
-- Environment selector:
-  - Python interpreter path / venv
-  - C# solution + SDK
-  - Java build root
-  - Go module/work root + tags
-- Workspace roots
-- Sparse-checkout include paths
+All phases must use these exact string identifiers. No other strings are valid.
 
-Context worktree:
+Unified Families: `javascript`, `python`, `go`, `rust`, `jvm`, `dotnet`, `ruby`, `php`, `swift`, `elixir`, `haskell`, `terraform`, `sql`, `docker`, `markdown`, `json_yaml`, `protobuf`, `graphql`, `config`.
+
+**B. Ownership Model**
+
+Context ownership is defined per-family.
+
+- Query: `get_context(repo_id, file_path, language_family)`
+- Result: Returns exactly one `Context` or `None`.
+- Implication: A file path can be owned by multiple contexts if and only if they belong to different families.
+
+**C. Path Canonicalization & Containment**
+
+All paths are POSIX Canonical Relative Paths (Separator `/`, no leading `/`, repo root is `""`).
+
+Segment-Safe Containment:
+
+```python
+def is_inside(file_path: str, root_path: str) -> bool:
+    if root_path == "": return True
+    if file_path == root_path: return True
+    return file_path.startswith(root_path + "/")
+```
+
+**D. Router State (Strict Consistency)**
+
+To prevent non-deterministic file ownership during startup:
+
+- Gating: The Router MUST NOT answer queries until the initial Probe phase has resolved all pending candidates to `valid`, `failed`, `empty`, or `detached`.
+- Valid Only: The Router considers ONLY contexts with `probe_status='valid'`.
+
+#### 8.4.2 Phase A: Discovery (Candidate Generation)
+
+Output: A list of `CandidateContext` objects.
+
+Precedence: If multiple Tier 1 fences claim authority over a path, the **Closest Ancestor** wins.
+
+**Strategy 1: Marker-Based Discovery**
+
+Scan directories. If markers match, create candidates for the corresponding family.
+
+| Unified Family | Tier 1 Markers (Workspace Fences) | Tier 2 Markers (Package Roots) |
+|----------------|-----------------------------------|--------------------------------|
+| javascript | `pnpm-workspace.yaml`, `package.json` (w/ workspaces), `lerna.json`, `nx.json`, `turbo.json`, `rush.json`, `yarn.lock`, `pnpm-lock.yaml` | `package.json`, `deno.json`, `deno.jsonc`, `tsconfig.json`, `jsconfig.json` |
+| python | `uv.lock`, `poetry.lock`, `Pipfile.lock` | `pyproject.toml`, `setup.py`, `setup.cfg`, `requirements.txt`, `Pipfile` |
+| go | `go.work` | `go.mod` |
+| rust | `Cargo.lock`, `Cargo.toml` (w/ `[workspace]`) | `Cargo.toml` |
+| jvm | `settings.gradle`, `settings.gradle.kts`, `.mvn` | `build.gradle`, `build.gradle.kts`, `pom.xml`, `build.sbt` |
+| dotnet | `*.sln` | `*.csproj`, `*.fsproj`, `*.vbproj` |
+| terraform | `.terraform.lock.hcl` | `main.tf`, `versions.tf` |
+| ruby | `Gemfile.lock` | `Gemfile` |
+| php | `composer.lock` | `composer.json` |
+| config | `flake.lock` | `flake.nix` |
+| protobuf | `buf.work.yaml` | `buf.yaml` |
+
+**Strategy 2: Ambient Discovery (Root-Only)**
+
+For families without reliable package markers, we GUARANTEE a fallback context.
+
+Families: `sql`, `docker`, `markdown`, `json_yaml`, `graphql` (plus `protobuf` if no `buf.yaml`).
+
+Rule: Always create exactly one Candidate Context at `root_path=""` for each of these families.
+
+#### 8.4.3 Phase A.2: Tier 1 Authority (The Filter)
+
+Filter Tier 2 candidates based on Tier 1 configuration. Applies to `javascript`, `go`, `rust`, `jvm`.
+
+Conflict Resolution: If a Tier 2 root T is inside Tier 1 root A and B (where B is inside A), B is the authoritative fence.
+
+**Javascript (`javascript`):**
+- Markers: `package.json` (workspaces), `pnpm-workspace.yaml`. (Lockfiles alone do NOT trigger strict fencing).
+- Logic: Root R (the workspace file location) is ALWAYS pending. Sub-roots matching workspace globs are pending. Others are detached.
+
+**Go (`go`):**
+- Marker: `go.work`.
+- Logic: Listed modules pending. Others detached.
+
+**Rust (`rust`):**
+- Marker: `Cargo.toml` (with `[workspace]`).
+- Logic: R is pending. Listed members pending. Others detached.
+
+**JVM (`jvm`):**
+- Marker: `settings.gradle`, `settings.gradle.kts`.
+- Logic: Scan for `include('path')` or `include("path")`.
+- Strict Mode: If ALL includes are simple string literals, mark unlisted as detached.
+- Permissive Mode: If any variable expansion/concatenation is detected, mark ALL discovered roots as pending.
+
+#### 8.4.4 Phase B: Membership & Exclusion
+
+**1. The Mandatory Hole-Punch Rule**
+
+For every Candidate Context C of Family F:
+1. Identify all other Candidates for Family F that satisfy `is_inside(child.root, C.root)`.
+2. Normalization: Convert `child.root` to a Canonical Relative Path from `C.root`.
+3. Glob Format: Append `/**`. (e.g., if child is `apps/api` relative to C, add `apps/api/**`).
+4. Add to `C.exclude_spec`.
+
+Note: This creates the "No-Owner Zone" for files inside detached contexts, which is intended behavior.
+
+**2. The Master Include Spec (Canonical)**
+
+Every marker row from Phase A maps here.
+
+| Family | Type | Include Spec (Canonical Globs) |
+|--------|------|--------------------------------|
+| javascript | Code | `["**/*.js", "**/*.jsx", "**/*.mjs", "**/*.cjs", "**/*.vue", "**/*.svelte", "**/*.astro", "**/*.ts", "**/*.tsx", "**/*.cts", "**/*.mts"]` |
+| python | Code | `["**/*.py", "**/*.pyi", "**/*.pyw", "**/*.pyx", "**/*.pxd", "**/*.pxi"]` |
+| go | Code | `["**/*.go"]` |
+| rust | Code | `["**/*.rs"]` |
+| jvm | Code | `["**/*.java", "**/*.kt", "**/*.kts", "**/*.scala", "**/*.sc"]` |
+| dotnet | Code | `["**/*.cs", "**/*.fs", "**/*.fsx", "**/*.vb"]` |
+| ruby | Code | `["**/*.rb", "**/*.rake", "**/Gemfile"]` |
+| php | Code | `["**/*.php"]` |
+| terraform | Data | `["**/*.tf", "**/*.hcl"]` |
+| sql | Data | `["**/*.sql"]` |
+| docker | Data | `["**/Dockerfile", "**/*.Dockerfile", "**/docker-compose.yml", "**/docker-compose.yaml"]` |
+| markdown | Data | `["**/*.md", "**/*.markdown", "**/*.mdx"]` |
+| json_yaml | Data | `["**/*.json", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.jsonc"]` |
+| protobuf | Data | `["**/*.proto"]` |
+| graphql | Data | `["**/*.graphql", "**/*.gql"]` |
+| config | Data | `["**/*.nix"]` |
+
+**Universal Excludes:** `["**/node_modules/**", "**/venv/**", "**/__pycache__/**", "**/.git/**", "**/target/**", "**/dist/**", "**/build/**", "**/vendor/**"]`
+
+#### 8.4.5 Phase C: The Partitioned Probe (Deterministic)
+
+Protocol:
+1. Check Status: If `detached`, STOP.
+2. Sampling: Select up to 5 files matching `include_spec`.
+   - Sort Order: Path length ascending (shortest first), then lexicographical.
+   - Note: This minimizes fixture/generated code noise.
+3. Validation: Stop at the first file that passes the validation check. If ANY sample passes, the context is `valid`. If ALL samples fail, the context is `failed`.
+
+**Type A: "Code" Families**
+
+Valid File:
+- Tree-sitter parse contains Zero ERROR nodes (optional strictness) OR error count is < 10% of total nodes.
+- Tree contains at least one Named node that is NOT an Extra (comment/whitespace) and NOT an ERROR.
+
+Failed Context: All sampled files fail the check.
+Empty Context: No files match `include_spec`.
+
+**Type B: "Data" Families**
+
+Valid File:
+- Tree-sitter parse produces a tree.
+- Root node has child count > 0.
+- Contains Zero ERROR nodes.
+
+Failed Context: All samples have syntax errors.
+Empty Context: No files match `include_spec`.
+
+#### 8.4.6 The Router (Implementation)
+
+```python
+class ContextRouter:
+    """
+    The Canonical Source of Truth.
+    State: Active only when probe_status IN ('valid').
+    """
+    def get_context_for_file(self, repo_id: str, file_path: str, language_family: str) -> Context | None:
+        # 1. Fetch Candidates (VALID ONLY)
+        candidates = self.get_valid_contexts(repo_id, language_family)
+        
+        # 2. Sort: Deepest Root First
+        candidates.sort(key=lambda c: len(c.root_path), reverse=True)
+        
+        for ctx in candidates:
+            # 3. SEGMENT-SAFE CONTAINMENT
+            if not is_inside(file_path, ctx.root_path):
+                continue
+            
+            # 4. EXCLUSION CHECK (Canonical Globs)
+            #    Matches path against Universal Excludes + Hole Punches
+            if match_globs(file_path, ctx.exclude_spec):
+                continue
+                
+            # 5. INCLUSION CHECK
+            if match_globs(file_path, ctx.include_spec):
+                return ctx
+                
+        return None
+```
+
+#### 8.4.7 Context Worktree
 
 A persistent Git worktree per context sandbox:
 
@@ -1381,6 +1557,8 @@ Capsules reduce ambiguity from "here's everything, figure it out" to "answer thi
 
 ### 8.6 Multi-Context Handling
 
+> See §8.4 for authoritative context discovery and ownership rules.
+
 When multiple semantic contexts exist for a language (e.g., multiple Python venvs):
 
 **Detection:**
@@ -1398,6 +1576,8 @@ CodePlane never silently guesses semantics.
 
 ### 8.7 Context Selection Rules
 
+> Context ownership is defined in §8.4. This section covers selection for refactor operations.
+
 Minimum set:
 
 - Context owning the definition file
@@ -1408,6 +1588,8 @@ If uncertain:
 - Query all contexts for that language (bounded by config)
 
 ### 8.8 Context Detection at Init
+
+> Discovery phases and marker tables are defined in §8.4.2–8.4.3. This section covers initialization behavior.
 
 Principle: best-effort and safe; require explicit config when ambiguous.
 
