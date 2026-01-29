@@ -1044,11 +1044,11 @@ All operations:
 
 Context:
 
-A context is the minimal semantic “world” in which an LSP can correctly analyze and refactor a subset of the repo.
+A context is the minimal semantic “world” in which a SCIP indexer analyzes a subset of the repo.
 
 Context includes:
 
-- Language + LSP server type/version
+- Language + SCIP indexer
 - Environment selector:
   - Python interpreter path / venv
   - C# solution + SDK
@@ -1063,7 +1063,6 @@ A persistent Git worktree per context sandbox:
 
 - Reset to base commit R before each operation
 - Sparse checkout to minimize I/O
-- Optional warm LSP instance bound to that worktree (optional but default)
 
 ### 8.5 Refactor Execution Flow
 
@@ -1292,7 +1291,7 @@ When disabled:
 
 Always:
 - **Deterministic**: Same refactor input → same result
-- **Isolated**: Edits are applied only to confirmed, LSP-authorized files
+- **Isolated**: Edits are applied only to files with CLEAN semantic state
 - **Audit-safe**: Git-aware moves preserve index correctness
 - **Overlay-compatible**: Untracked files handled equally
 - **Agent-delegated commit control**: CodePlane never stages or commits
@@ -1326,7 +1325,7 @@ Results:
 
 ### 9.2 Apply Protocol
 
-- All edits are planned externally (LSP or reducer).
+- All edits are planned externally (SCIP index or reducer).
 - All file edits staged in memory or temp files.
 - Each target file exclusively locked prior to apply.
 - Contents replaced wholesale via:
@@ -1594,7 +1593,7 @@ If a runner is configured but not available in PATH:
 
 Target rules depend on language + available runner; supports any language with:
 
-- recognized parser (Tree-sitter or LSP-backed)
+- recognized parser (Tree-sitter)
 - declarative discovery of test files/commands
 - CLI runner that can execute individual test units
 
@@ -1860,7 +1859,6 @@ Operators need to answer:
 - Are agents making progress or spinning?
 - Which operations are slow, failing, or succeeding?
 - Is the index fresh or stale?
-- Are LSP servers responsive or degraded?
 
 Without observability, operators debug blind.
 
@@ -1898,7 +1896,7 @@ The daemon exposes continuous health metrics:
 | Metric | What It Measures |
 |--------|------------------|
 | Index staleness | Time since last reconciliation; drift from Git HEAD |
-| LSP status | Per-language availability, response times, error rates |
+| Indexer status | Per-language SCIP indexer availability and last run |
 | Resource usage | Memory, CPU, open file handles |
 | Reconciliation rate | Reconciliations per minute; duration histogram |
 | Task throughput | Tasks opened/closed per interval; budget exhaustion rate |
@@ -1990,7 +1988,7 @@ Refactors described as tool operations:
 
 Implementation:
 
-- All semantic refactors use LSP (`textDocument/rename`, etc.) as the sole authority
+- All semantic refactors use SCIP index data as the sole authority
 - CodePlane never guesses or speculatively resolves bindings
 - Non-semantic operations (exact-match comment/docstring sweeps, mechanical file renames) are handled separately and reported as optional, previewable patches
 
@@ -2066,7 +2064,7 @@ The following contradictions have been resolved:
 
 1. **`.env` overlay indexing**: Resolved. Default-blocked in `.cplignore`. Users can explicitly whitelist via `!.env` if needed. See section 6.10.
 
-2. **Refactor fallback semantics**: Resolved. Semantic refactors are LSP-only; CodePlane never guesses bindings. "Structured lexical edits" refers only to non-semantic operations (exact-match comment sweeps, mechanical file renames). These are explicitly not semantic refactors.
+2. **Refactor fallback semantics**: Resolved. Semantic refactors are SCIP-based; CodePlane never guesses bindings. "Structured lexical edits" refers only to non-semantic operations (exact-match comment sweeps, mechanical file renames). These are explicitly not semantic refactors.
 
 3. **Tree-sitter failure policy**: Resolved. On parse failure, skip file, log warning, continue indexing. Never abort the indexing pass for a single file failure. See section 7.4.
 
@@ -2080,7 +2078,6 @@ Items 1-3 from the original register have been resolved (see section 16). Remain
 
 1. Multi-context scaling:
    - context explosion risk
-   - warm LSP resource footprint
    - operational limits beyond `max_parallel_contexts` not fully specified
 2. Optional watchers:
    - must never become correctness-critical
@@ -2355,7 +2352,7 @@ Tools are organized into namespaced families. Each tool has a single responsibil
 |------|---------|
 | `mutate` | Atomic file edits |
 
-#### Refactor Tools (Requires LSP)
+#### Refactor Tools (Requires SCIP)
 
 | Tool | Purpose |
 |------|---------|
@@ -2871,7 +2868,7 @@ The remaining git tools follow similar patterns:
 
 #### Refactor Tools (`refactor_*`)
 
-Semantic refactoring via LSP.
+Semantic refactoring via SCIP index.
 
 **Parameters:**
 
@@ -2911,7 +2908,7 @@ Semantic refactoring via LSP.
     edits: Array<{
       path: string;
       hunks: Array<{ old: string; new: string; line: number }>;
-      semantic: boolean;            // LSP-driven vs comment sweep
+      semantic: boolean;            // SCIP-based vs comment sweep
     }>;
     contexts_used: string[];
   };
@@ -3090,7 +3087,7 @@ Daemon health, index state, and session info.
 
 ```typescript
 {
-  include?: Array<"daemon" | "index" | "session" | "lsp" | "config">;
+  include?: Array<"daemon" | "index" | "session" | "indexers" | "config">;
   session_id?: string;
 }
 ```
@@ -3116,11 +3113,11 @@ Daemon health, index state, and session info.
     healthy: boolean;
   };
   session: SessionState;
-  lsp: {
+  indexers: {
     languages: Array<{
       language: string;
-      server: string;
-      status: "running" | "stopped" | "crashed" | "not_installed";
+      indexer: string;
+      status: "ready" | "running" | "not_installed";
       memory_mb?: number;
     }>;
     pending_install: string[];
@@ -3220,7 +3217,7 @@ CodePlane registers as an MCP server. Client configuration example:
       "transport": "http",
       "url": "http://127.0.0.1:${port}",
       "headers": {
-        "Authorization": "Bearer ${token}"
+        "X-CodePlane-Repo": "${repo_path}"
       }
     }
   }
@@ -3229,7 +3226,7 @@ CodePlane registers as an MCP server. Client configuration example:
 
 **Dynamic discovery:**
 
-Clients can read `.codeplane/port` and `.codeplane/token` to configure automatically.
+Clients read `.codeplane/port` for the port number.
 
 ---
 
