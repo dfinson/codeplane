@@ -27,7 +27,7 @@ from codeplane.index.models import (
 )
 
 if TYPE_CHECKING:
-    from codeplane.index.db import Database
+    from codeplane.index._internal.db import Database
 
 
 class FileStateService:

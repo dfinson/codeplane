@@ -18,8 +18,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from codeplane.index.db import Database
+    from codeplane.index._internal.db import Database
 
+from codeplane.index._internal.parsing import SyntacticSymbol, TreeSitterParser
 from codeplane.index.models import (
     Certainty,
     File,
@@ -28,7 +29,6 @@ from codeplane.index.models import (
     Role,
     Symbol,
 )
-from codeplane.index.parser import SyntacticSymbol, TreeSitterParser
 
 
 @dataclass

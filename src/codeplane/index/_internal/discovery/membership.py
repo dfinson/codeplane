@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from codeplane.index.discovery import INCLUDE_SPECS, UNIVERSAL_EXCLUDES
+from codeplane.index._internal.discovery.scanner import INCLUDE_SPECS, UNIVERSAL_EXCLUDES
 from codeplane.index.models import CandidateContext, LanguageFamily
 
 if TYPE_CHECKING:

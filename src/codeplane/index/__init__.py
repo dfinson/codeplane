@@ -6,16 +6,17 @@ This module provides:
 - Context discovery: Automatic project boundary detection
 - File state tracking: Freshness × Certainty for mutation gate
 
-Key classes:
-- Database: Connection manager with WAL mode
-- BulkWriter: High-performance bulk inserts
+Public API is in `codeplane.index.ops`:
 - IndexCoordinator: High-level orchestration
+- IndexStats, InitResult, SearchResult: Result types
+
+Internal implementations are in `codeplane.index._internal/`.
 
 See DESIGN.md for architecture details.
 """
 
-from codeplane.index.db import BulkWriter, Database
-from codeplane.index.indexes import create_additional_indexes
+from codeplane.index._internal.db import BulkWriter, Database, Reconciler, create_additional_indexes
+from codeplane.index._internal.db.reconcile import ChangedFile, ReconcileResult
 from codeplane.index.models import (
     CandidateContext,
     Certainty,
@@ -40,9 +41,15 @@ from codeplane.index.models import (
     Role,
     Symbol,
 )
-from codeplane.index.reconcile import ChangedFile, Reconciler, ReconcileResult
+from codeplane.index.ops import IndexCoordinator, IndexStats, InitResult, SearchMode, SearchResult
 
 __all__ = [
+    # Public API (ops.py)
+    "IndexCoordinator",
+    "IndexStats",
+    "InitResult",
+    "SearchMode",
+    "SearchResult",
     # Database
     "Database",
     "BulkWriter",

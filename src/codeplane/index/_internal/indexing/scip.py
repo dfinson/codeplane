@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     pass
 
+from codeplane.index._internal.tools import TOOL_RECIPES, ToolManager, ToolRecipe
 from codeplane.index.models import (
     Certainty,
     LanguageFamily,
@@ -32,7 +33,6 @@ from codeplane.index.models import (
     Symbol,
     SymbolEdge,
 )
-from codeplane.index.tools import TOOL_RECIPES, ToolManager, ToolRecipe
 
 
 @dataclass

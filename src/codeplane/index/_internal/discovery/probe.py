@@ -16,8 +16,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from codeplane.index._internal.parsing import TreeSitterParser
 from codeplane.index.models import CandidateContext, LanguageFamily
-from codeplane.index.parser import TreeSitterParser
 
 
 @dataclass

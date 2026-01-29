@@ -29,7 +29,7 @@ from codeplane.index.models import (
 if TYPE_CHECKING:
     from typing import Any
 
-    from codeplane.index.db import Database
+    from codeplane.index._internal.db import Database
 
     ScipImporter = Any  # Placeholder for future implementation
 

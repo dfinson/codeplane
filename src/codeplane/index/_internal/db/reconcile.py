@@ -24,7 +24,7 @@ import pygit2
 from codeplane.index.models import File, Freshness, RepoState
 
 if TYPE_CHECKING:
-    from codeplane.index.db import Database
+    from codeplane.index._internal.db.database import Database
 
 
 @dataclass

@@ -21,13 +21,17 @@ from typing import TYPE_CHECKING
 
 from sqlmodel import select
 
-from codeplane.index.authority import Tier1AuthorityFilter
-from codeplane.index.db import Database
-from codeplane.index.discovery import ContextDiscovery
-from codeplane.index.graph import SymbolGraph
-from codeplane.index.indexes import create_additional_indexes
-from codeplane.index.lexical import LexicalIndex
-from codeplane.index.membership import MembershipResolver
+from codeplane.index._internal.db import Database, Reconciler, create_additional_indexes
+from codeplane.index._internal.discovery import (
+    ContextDiscovery,
+    ContextProbe,
+    ContextRouter,
+    MembershipResolver,
+    Tier1AuthorityFilter,
+)
+from codeplane.index._internal.indexing import LexicalIndex, StructuralIndexer, SymbolGraph
+from codeplane.index._internal.parsing import TreeSitterParser
+from codeplane.index._internal.state import FileStateService, RefreshJobService
 from codeplane.index.models import (
     CandidateContext,
     Context,
@@ -36,13 +40,6 @@ from codeplane.index.models import (
     ProbeStatus,
     Symbol,
 )
-from codeplane.index.parser import TreeSitterParser
-from codeplane.index.probe import ContextProbe
-from codeplane.index.reconcile import Reconciler
-from codeplane.index.refresh import RefreshJobService
-from codeplane.index.router import ContextRouter
-from codeplane.index.state import FileStateService
-from codeplane.index.structural import StructuralIndexer
 
 if TYPE_CHECKING:
     from codeplane.index.models import FileState

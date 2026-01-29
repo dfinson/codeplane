@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
 
-from codeplane.index.membership import is_inside
+from codeplane.index._internal.discovery.membership import is_inside
 from codeplane.index.models import CandidateContext, LanguageFamily
 
 
