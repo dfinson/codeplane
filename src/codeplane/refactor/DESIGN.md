@@ -48,6 +48,10 @@ The refactor module provides SCIP-based semantic refactoring: rename, move, dele
 - §8.5c: Decision capsules
 - §8.6: Multi-context handling
 
+### Architecture
+
+![CodePlane Semantic Refactor Architecture](../../docs/images/codeplane-semantic-refactor-architecture.png)
+
 ---
 
 ## File Plan

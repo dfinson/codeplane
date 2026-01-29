@@ -1166,6 +1166,8 @@ All operations:
 
 ### 8.3a Architecture Overview
 
+![CodePlane Semantic Refactor Architecture](docs/images/codeplane-semantic-refactor-architecture.png)
+
 #### SCIP-Based Execution
 
 - All refactor planning (rename, move, delete) uses SCIP semantic index data
