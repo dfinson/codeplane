@@ -157,8 +157,6 @@ Daemon shutdown:
 - Connected SSE clients: receive `shutdown` event, then disconnect
 - Flushes writes
 - Releases locks
-- Deletes `port` and `token` files
-- Leaves repo unchanged
 
 Logging:
 
@@ -192,7 +190,7 @@ Logging:
   ```json
   {"ts":"2026-01-26T15:30:00.123Z","level":"info","event":"daemon started","port":54321}
   {"ts":"2026-01-26T15:30:01.456Z","level":"debug","op_id":"abc123","event":"refactor planning started","symbol":"MyClass"}
-  {"ts":"2026-01-26T15:30:02.789Z","level":"error","op_id":"abc123","event":"LSP timeout","lang":"java","timeout_ms":30000}
+  {"ts":"2026-01-26T15:30:02.789Z","level":"error","op_id":"abc123","event":"indexer timeout","lang":"java","timeout_ms":30000}
   ```
 - Access via CLI:
   - `cpl status --verbose`: last 50 lines
@@ -1172,7 +1170,7 @@ Structured diff will reflect:
 
 ### 8.11 Comments and Documentation References
 
-LSP-based renames **do not affect** comments, docstrings, or markdown files.
+SCIP-based renames **do not affect** comments, docstrings, or markdown files.
 
 Examples of unaffected references:
 - `# MyClassA` (comment)
@@ -1252,15 +1250,14 @@ refactor:
       - .txt
 ```
 
-This ensures textual references to renamed symbols are coherently updated without being conflated with semantic LSP-backed mutations, while giving agents visibility into what changed and why.
+This ensures textual references to renamed symbols are coherently updated without being conflated with semantic SCIP-backed mutations, while giving agents visibility into what changed and why.
 
 ### 8.12 Optional Subsystem Toggle
 
-The deterministic LSP-backed refactor engine is **enabled by default**, but may be disabled via configuration or CLI for environments with limited resources.
+The deterministic SCIP-backed refactor engine is **enabled by default**, but may be disabled via configuration or CLI for environments with limited resources.
 
 **Why disable:**
-- LSPs are persistent subprocesses and consume non-trivial memory per language
-- On large, multi-language repos, total steady-state memory may exceed 2–4 GB
+- SCIP indexers consume resources during indexing
 - Some users may prefer to delegate refactors to agents or external tools
 
 **How to disable:**
@@ -1278,9 +1275,9 @@ cpl up --no-refactor
 
 When disabled:
 
-- No LSPs launched
+- No SCIP indexers run
 - No refactor endpoints
-- Indexing and generic mutation remain
+- Syntactic indexing and generic mutation remain
 
 ### 8.13 Refactor Out of Scope
 
@@ -1386,11 +1383,10 @@ Global:
 - Git index, HEAD, or refs are never modified.
 - No Git status, reset, merge, stash operations triggered as rollback.
 
-### 9.8 LSP and Edit Planning
+### 9.8 SCIP and Edit Planning
 
-- All semantic refactors sourced from LSP (`textDocument/rename`, etc.).
+- All semantic refactors sourced from SCIP index data.
 - No fallback to internal symbol index for semantic edit planning.
-- Structured reducers (non-LSP) must output the same enriched schema.
 - All edits must conform to a unified diff format.
 
 ### 9.9 Performance Constraints
