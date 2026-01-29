@@ -1,5 +1,82 @@
 ﻿# CodePlane — Unified System Specification
 
+## Table of Contents
+
+- [1. Problem Statement](#1-problem-statement)
+- [2. Core Idea](#2-core-idea)
+- [3. Explicit Non-Goals](#3-explicit-non-goals)
+- [4. Architecture Overview](#4-architecture-overview)
+  - [4.1 Components](#41-components)
+  - [4.2 CLI, Daemon Lifecycle, and Operability](#42-cli-daemon-lifecycle-and-operability)
+  - [4.3 Terminology Note](#43-terminology-note-always-on-vs-operated-lifecycle)
+- [5. Repository Truth & Reconciliation](#5-repository-truth--reconciliation-no-watchers)
+  - [5.1 Design Goals](#51-design-goals)
+  - [5.2 Canonical Repo State Version](#52-canonical-repo-state-version)
+  - [5.3 File Type Classification](#53-file-type-classification)
+  - [5.4 Change Detection Strategy](#54-change-detection-strategy)
+  - [5.5 Reconciliation Triggers](#55-reconciliation-triggers)
+  - [5.6 Rename and Move Detection](#56-rename-and-move-detection)
+  - [5.7 CRLF, Symlinks, Submodules](#57-crlf-symlinks-submodules)
+  - [5.8 Corruption and Recovery](#58-corruption-and-recovery)
+  - [5.9 Reconcile Algorithm](#59-reconcile-algorithm-pseudocode)
+  - [5.10 Reconciliation Invariants](#510-reconciliation-invariants)
+- [6. Ignore Rules, Two-Tier Index Model, and Security](#6-ignore-rules-two-tier-index-model-and-security-posture)
+  - [6.1–6.10 Security and Ignore Configuration](#61-security-guarantees)
+- [7. Indexing & Retrieval Architecture](#7-indexing--retrieval-architecture-syntactic--semantic-two-layer)
+  - [7.1 Overview](#71-overview)
+  - [7.2 Lexical Index](#72-lexical-index)
+  - [7.3 Structural Metadata](#73-structural-metadata)
+  - [7.4 Parser (Tree-sitter)](#74-parser-tree-sitter)
+  - [7.5 Semantic Layer (SCIP Batch Indexers)](#75-semantic-layer-scip-batch-indexers)
+  - [7.6 Graph Index](#76-graph-index)
+  - [7.7 Indexing Mechanics](#77-indexing-mechanics)
+  - [7.8 Atomic Update Protocol](#78-atomic-update-protocol)
+  - [7.9 Retrieval Pipeline](#79-retrieval-pipeline-no-embeddings)
+  - [7.10 Mental Map Endpoints](#710-mental-map-endpoints)
+  - [7.11 Documentation Awareness](#711-documentation-awareness)
+  - [7.12 SCIP Indexer Management](#712-scip-indexer-management--language-support)
+- [8. Deterministic Refactor Engine](#8-deterministic-refactor-engine-scip-based-semantic-data)
+  - [8.1 Purpose](#81-purpose)
+  - [8.2 Core Principles](#82-core-principles)
+  - [8.3 Supported Operations](#83-supported-operations)
+  - [8.4 Definitions](#84-definitions)
+  - [8.5 Refactor Execution Flow](#85-refactor-execution-flow)
+  - [8.5a Two-Phase Rename](#85a-two-phase-rename-agent-decision-flow)
+  - [8.5b Witness Packets](#85b-witness-packets)
+  - [8.5c Decision Capsules](#85c-decision-capsules)
+  - [8.6 Multi-Context Handling](#86-multi-context-handling)
+  - [8.7–8.14 Context, Config, and Guarantees](#87-context-selection-rules)
+- [9. Mutation Engine](#9-mutation-engine-atomic-file-edits)
+  - [9.1–9.10 Mutation Design](#91-design-objectives)
+- [10. Git and File Operations](#10-git-and-file-operations-no-terminal-mediation)
+- [11. Tests: Planning, Parallelism, Execution](#11-tests-planning-parallelism-execution)
+  - [11.1–11.8 Test Model](#111-goal)
+- [12. Task Model, Convergence Controls, and Ledger](#12-task-model-convergence-controls-and-ledger)
+  - [12.1–12.5 Task and Ledger Design](#121-scope-and-principle)
+- [13. Observability and Operator Insight](#13-observability-and-operator-insight)
+  - [13.1–13.6 Observability Design](#131-why-observability)
+- [15. Deterministic Refactoring Primitives](#15-deterministic-refactoring-primitives-summary-level-capability-list)
+- [16. Embeddings Policy](#16-embeddings-policy)
+- [17. Subsystem Ownership Boundaries](#17-subsystem-ownership-boundaries-who-owns-what)
+- [18. Resolved Conflicts](#18-resolved-conflicts-previously-open)
+- [19. Risk Register](#19-risk-register-remaining-design-points)
+- [20. Readiness Note](#20-readiness-note-what-is-stable-enough-for-api-surfacing-next)
+- [21. What CodePlane Is](#21-what-codeplane-is-canonical-summary)
+- [22. MCP API Specification](#22-mcp-api-specification)
+  - [22.1 Design Principles](#221-design-principles)
+  - [22.2 Protocol Architecture](#222-protocol-architecture)
+  - [22.3 Response Envelope](#223-response-envelope)
+  - [22.4 Tool Catalog](#224-tool-catalog)
+  - [22.5 Progress Reporting](#225-progress-reporting)
+  - [22.6 Pagination](#226-pagination)
+  - [22.7 Tool Specifications](#227-tool-specifications)
+  - [22.8 REST Endpoints](#228-rest-endpoints-operator)
+  - [22.9 Error Handling](#229-error-handling)
+  - [22.10 MCP Server Configuration](#2210-mcp-server-configuration)
+  - [22.11 Versioning](#2211-versioning)
+
+---
+
 ## 1. Problem Statement
 
 Modern AI coding agents are not limited by reasoning ability. They are limited by **how they interact with repositories**.
@@ -660,19 +737,100 @@ State transitions:
 COMMIT ORDER (Critical):
 1. Claim job (queued → running, atomic WHERE clause)
 2. Run SCIP indexer
-3. Check not superseded (HEAD at enqueue == current HEAD)
+3. Fresh HEAD read + supersede check (MUST be fresh git_rev_parse_head(), not cached)
 4. Import output into semantic index (transactional)
 5. Mark completed AFTER import succeeds
 ```
 
+**Critical invariant**: Step 3 MUST re-read HEAD immediately before the import decision. Reading HEAD once at function start and comparing later is stale—HEAD can change during indexer execution. The supersede check and import decision must be atomic:
+
+```python
+# After indexer completes:
+job.refresh()  # Reload job state from DB
+current_head = git_rev_parse_head()  # FRESH read
+
+if job.status == 'superseded' or job.head_at_enqueue != current_head:
+    mark_superseded(job_id)
+    discard_output(result)
+    return
+
+# Only now import
+import_scip_output(result)
+mark_completed(job_id)
+```
+
 HEAD-aware deduplication: Jobs keyed by `(context_id, head_at_enqueue)` to prevent redundant work after rapid commits.
+
+#### Scoped Refresh (Monotonic Lattice)
+
+Refresh jobs support optional scoping for efficiency:
+
+```python
+@dataclass
+class RefreshScope:
+    files: list[str] | None = None      # Specific files only
+    packages: list[str] | None = None   # Specific packages only
+    changed_since: float | None = None  # Files changed after timestamp
+```
+
+**Critical invariant**: Scope is monotonic per (context_id, head). For the same HEAD:
+- If existing job is queued/running, **merge scope (widen only), never supersede**
+- Only supersede on HEAD change
+
+```
+Scope lattice (narrowest → broadest):
+files([a.py]) ⊂ files([a.py, b.py]) ⊂ packages([pkg]) ⊂ FULL (None)
+changed_since(T1) ⊂ changed_since(T0) where T0 < T1
+```
+
+Merge rules:
+- `None` (full refresh) absorbs everything
+- Files: union of file lists
+- Packages: union of package lists  
+- changed_since: take earlier timestamp (wider range)
+
+This prevents:
+- Refresh storms from concurrent narrow requests
+- Lost coverage from superseding broader jobs with narrower ones
 
 #### Mutation Gate
 
-Semantic writes (refactors using semantic data) require:
-- All affected files must be CLEAN
-- If any file is DIRTY/STALE/PENDING_CHECK, operation is rejected
-- Escape hatch: `force_syntactic: true` allows syntactic-only edits
+**File State Model (Two Axes)**
+
+Files have two orthogonal state dimensions:
+
+| Axis | Values | Meaning |
+|------|--------|---------|
+| Freshness | CLEAN, DIRTY, STALE, PENDING_CHECK | Index currency vs content |
+| Certainty | CERTAIN, AMBIGUOUS | Semantic identity confidence |
+
+**Freshness axis** (index currency):
+- CLEAN: Semantic data matches content, deps confirmed
+- DIRTY: Content changed, refresh enqueued
+- STALE: Dependency interface confirmed changed
+- PENDING_CHECK: Dependency dirty, interface change unknown
+
+**Certainty axis** (semantic confidence):
+- CERTAIN: Semantic identity proven, no ambiguity
+- AMBIGUOUS: Index fresh but language semantics ambiguous (dynamic dispatch, reflection, multiple definitions)
+
+**Mutation behavior by combined state:**
+
+| State | Behavior |
+|-------|----------|
+| CLEAN + CERTAIN | Automatic semantic edits allowed |
+| CLEAN + AMBIGUOUS | Return `needs_decision` with candidates |
+| DIRTY/STALE/PENDING_CHECK + * | Block, return `blocked` with witness packet |
+
+**Response outcomes:**
+- `ok` — edits applied
+- `ok_syntactic` — edits applied via syntactic fallback
+- `blocked` — non-CLEAN files, with witness packet and suggested_refresh_scope
+- `needs_decision` — CLEAN but AMBIGUOUS, with candidates for agent to choose
+- `refused` — operation cannot be performed
+- `unsupported` — operation not implemented for this language
+
+**Escape hatch:** `force_syntactic: true` bypasses mutation gate entirely, applies syntactic-only edits with risk tiers.
 
 #### SCIP Indexer Configuration
 
@@ -1066,7 +1224,9 @@ A persistent Git worktree per context sandbox:
 
 ### 8.5 Refactor Execution Flow
 
-1. **Mutation Gate Check**: All affected files must be CLEAN
+**Simple flow (CLEAN + CERTAIN files):**
+
+1. **Mutation Gate Check**: All affected files must be CLEAN + CERTAIN
 2. **Query SCIP Index**: Find all occurrences of target symbol
 3. **Generate Edit Plan**: Compute structured edits from occurrence positions
 4. **Preview**: Show user the planned changes
@@ -1074,10 +1234,148 @@ A persistent Git worktree per context sandbox:
 6. **Mark DIRTY**: Affected files enqueued for semantic re-indexing
 7. **Syntactic Update**: Immediate update of syntactic index
 
-If mutation gate fails (files DIRTY/STALE/PENDING_CHECK):
-- Operation rejected with clear error
+**Blocked flow (non-CLEAN files):**
+
+If any affected file is DIRTY/STALE/PENDING_CHECK:
+- Return `status: "blocked"` with witness packet
+- Include `suggested_refresh_scope` for targeted re-indexing
 - User can wait for semantic refresh to complete
 - Or use `force_syntactic: true` for syntactic-only edit
+
+**Ambiguous flow (CLEAN + AMBIGUOUS files):**
+
+If files are CLEAN but AMBIGUOUS (semantic uncertainty):
+- Return `status: "needs_decision"` with:
+  - Candidates (each with complete `apply_plan`)
+  - Witness packet (structured evidence)
+  - Decision capsules (micro-queries agent can answer)
+- Agent selects candidate and calls `/decisions/commit` with proof
+- See §8.5a for details
+
+### 8.5a Two-Phase Rename (Agent Decision Flow)
+
+Rename is the classic ambiguity case. When semantic identity is uncertain (dynamic dispatch, multiple definitions, reflection), CodePlane returns a decision problem instead of guessing.
+
+**Phase 1: Plan**
+
+```
+POST /refactor/rename
+{
+  "symbol": "MyClass.process",
+  "new_name": "handle",
+  "context_id": "python-main"
+}
+
+Response (needs_decision):
+{
+  "status": "needs_decision",
+  "plan_id": "uuid",
+  "symbol": "MyClass.process",
+  "candidates": [
+    {
+      "id": "group_0",
+      "description": "MyClass.process in src/core.py (semantic)",
+      "confidence": 0.95,
+      "provenance": "semantic",
+      "occurrences": [...],
+      "apply_plan": { "edits": [...] }
+    },
+    {
+      "id": "group_1", 
+      "description": "process in src/utils.py (syntactic match)",
+      "confidence": 0.6,
+      "provenance": "syntactic",
+      "occurrences": [...],
+      "apply_plan": { "edits": [...] }
+    }
+  ],
+  "witness": { ... },
+  "decision_capsules": [...],
+  "commit_endpoint": "/decisions/commit",
+  "expires_at": "2026-01-29T12:05:00Z"
+}
+```
+
+**Phase 2: Commit**
+
+Agent reasons over candidates, gathers proof, then commits:
+
+```
+POST /decisions/commit
+{
+  "plan_id": "uuid",
+  "selected_candidate_id": "group_0",
+  "proof": {
+    "symbol_identity": "MyClass.process",
+    "anchors": [
+      { "file": "src/core.py", "line": 42, "anchor_before": "def ", "anchor_after": "(self" }
+    ],
+    "file_line_evidence": [
+      { "file": "src/core.py", "line": 42, "content_hash": "abc123" }
+    ]
+  }
+}
+```
+
+**Critical invariant**: Decision commit MUST re-validate the full mutation gate before applying edits. Verifying anchors and hashes alone is insufficient—the core invariant "semantic writes require CLEAN + CERTAIN" cannot be bypassed.
+
+```
+Decision commit flow:
+1. Retrieve plan and candidate
+2. RE-VALIDATE MUTATION GATE (not just anchors):
+   - Recompute affected_files from plan
+   - Check file states: all must be CLEAN
+   - If non-CLEAN: return blocked with suggested_refresh_scope
+   - If CLEAN but now AMBIGUOUS: return needs_decision (state shifted)
+3. Verify anchors match current file content
+4. Verify file line hashes
+5. Apply edits atomically
+6. Cache decision for future similar scenarios
+```
+
+### 8.5b Witness Packets
+
+Every `blocked` or `needs_decision` response includes a witness packet—structured evidence for agent consumption:
+
+```json
+{
+  "bounds": {
+    "files_scanned": ["src/core.py", "src/utils.py"],
+    "contexts_queried": ["python-main"],
+    "time_budget_ms": 5000,
+    "truncated": false
+  },
+  "facts": [
+    {
+      "fact_type": "definition",
+      "location": {"file": "src/core.py", "line": 42},
+      "content": "def process(self, data):",
+      "provenance": "semantic",
+      "confidence": 0.95
+    }
+  ],
+  "invariants_failed": ["files_not_clean"],
+  "disambiguation_checklist": [
+    {
+      "question": "Which definition is in scope at the call site?",
+      "fact_needed": "scope_resolution",
+      "how_to_verify": "Check import chain from line 15"
+    }
+  ]
+}
+```
+
+### 8.5c Decision Capsules
+
+Pre-packaged micro-queries that agents can answer by reading code:
+
+| Capsule Type | Question | Stop Rule |
+|--------------|----------|-----------|
+| `scope_resolution` | Which of these N definitions is in scope at cursor? | First importable, non-shadowed definition |
+| `receiver_resolution` | Which receivers can reach this call? | All assignments flowing to receiver position |
+| `context_membership` | Which contexts include this file? | All contexts whose patterns match |
+
+Capsules reduce ambiguity from "here's everything, figure it out" to "answer this specific bounded question."
 
 ### 8.6 Multi-Context Handling
 

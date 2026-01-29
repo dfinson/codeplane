@@ -1,5 +1,43 @@
 # Git Module — Design Spec
 
+## Table of Contents
+
+- [Scope](#scope)
+  - [Responsibilities](#responsibilities)
+  - [From SPEC.md](#from-specmd)
+- [pygit2 Capability Assessment](#pygit2-capability-assessment)
+  - [Credential Handling](#credential-handling)
+- [Design Options](#design-options)
+  - [Option A: Pure pygit2 (Recommended)](#option-a-pure-pygit2-recommended)
+  - [Option B: Pure pygit2 (Local Only)](#option-b-pure-pygit2-local-only)
+  - [Option C: pygit2 with Subprocess Fallback](#option-c-pygit2-with-subprocess-fallback)
+- [Recommended Approach](#recommended-approach)
+- [File Plan](#file-plan)
+- [Dependencies](#dependencies)
+- [Key Interfaces](#key-interfaces)
+  - [GitOps Class](#gitops-class)
+  - [Types](#types)
+- [Credential Handling](#credential-handling-1)
+- [Open Questions](#open-questions)
+- [Interactive Rebase](#interactive-rebase)
+  - [Design: Hybrid Plan-Based](#design-hybrid-plan-based)
+  - [Interface](#interface)
+  - [Types](#types-1)
+  - [Implementation](#implementation)
+- [Submodule Management](#submodule-management)
+  - [Design: Full Management with Subprocess Fallback](#design-full-management-with-subprocess-fallback)
+  - [Interface](#interface-1)
+  - [Types](#types-2)
+  - [Implementation Strategy](#implementation-strategy)
+- [Worktree Support](#worktree-support)
+  - [Design: GitOps-Returning Worktrees](#design-gitops-returning-worktrees)
+  - [Interface](#interface-2)
+  - [Types](#types-3)
+  - [Usage Pattern](#usage-pattern)
+- [Test Strategy](#test-strategy)
+
+---
+
 ## Scope
 
 The git module provides **comprehensive, structured Git operations** via `pygit2`. If an agent wants to mutate Git state, it should be able to. CodePlane exposes the full power of Git programmatically.
