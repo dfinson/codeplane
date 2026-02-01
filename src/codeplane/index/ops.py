@@ -1016,7 +1016,8 @@ class IndexCoordinator:
 
             symbols = self._parser.extract_symbols(result)
             return [s.name for s in symbols]
-        except (OSError, UnicodeDecodeError):
+        except (OSError, UnicodeDecodeError, ValueError):
+            # ValueError: unsupported file extension
             return []
 
     def _load_cplignore_patterns(self) -> list[str]:
