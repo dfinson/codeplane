@@ -84,23 +84,21 @@ def up_command(path: Path, port: int | None) -> None:
 
     db_path, tantivy_path = get_index_paths(repo_root)
 
+    # Check if index exists, initialize if needed
+    if not db_path.exists() and not initialize_repo(repo_root):
+        raise click.ClickException("Failed to initialize repository")
+
+    # Now create coordinator and load
     coordinator = IndexCoordinator(
         repo_root=repo_root,
         db_path=db_path,
         tantivy_path=tantivy_path,
     )
 
-    # Load existing index or initialize if needed
     loop = asyncio.new_event_loop()
     try:
-        loaded = loop.run_until_complete(coordinator.load_existing())
-        if not loaded:
-            # No valid index - run full initialization
-            # initialize_repo handles config, grammars, AND index building
-            if not initialize_repo(repo_root):
-                raise click.ClickException("Failed to initialize repository")
-            # Re-load now that index exists
-            loop.run_until_complete(coordinator.load_existing())
+        if not loop.run_until_complete(coordinator.load_existing()):
+            raise click.ClickException("Failed to load index")
     finally:
         loop.close()
 
