@@ -1,0 +1,41 @@
+# Anchor symbols for psf/requests
+# Pinned to a stable release tag
+
+repo: psf/requests
+commit: v2.32.3
+contexts:
+  - root: "."
+    language: python
+    anchors:
+      - name: Session
+        kind: class
+        file: src/requests/sessions.py
+        line_range: [1, 800]
+      - name: Request
+        kind: class
+        file: src/requests/models.py
+        line_range: [1, 1000]
+      - name: Response
+        kind: class
+        file: src/requests/models.py
+        line_range: [1, 1000]
+      - name: get
+        kind: function
+        file: src/requests/api.py
+        line_range: [1, 200]
+      - name: post
+        kind: function
+        file: src/requests/api.py
+        line_range: [1, 200]
+      - name: HTTPAdapter
+        kind: class
+        file: src/requests/adapters.py
+        line_range: [1, 600]
+
+search_queries:
+  - query: "class Session"
+    expected_path_contains: "sessions.py"
+  - query: "def get"
+    expected_path_contains: "api.py"
+  - query: "Response"
+    expected_path_contains: "models.py"

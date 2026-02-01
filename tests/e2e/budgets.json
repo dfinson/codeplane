@@ -1,0 +1,22 @@
+{
+  "psf/requests": {
+    "full_index_seconds": 10,
+    "incremental_seconds": 3,
+    "max_rss_mb": 1500
+  },
+  "pallets/click": {
+    "full_index_seconds": 15,
+    "incremental_seconds": 3,
+    "max_rss_mb": 1500
+  },
+  "python-attrs/attrs": {
+    "full_index_seconds": 10,
+    "incremental_seconds": 3,
+    "max_rss_mb": 1500
+  },
+  "more-itertools/more-itertools": {
+    "full_index_seconds": 10,
+    "incremental_seconds": 3,
+    "max_rss_mb": 1500
+  }
+}

@@ -1,0 +1,45 @@
+# Anchor symbols for pallets/click
+# Pinned to a stable release tag
+
+repo: pallets/click
+commit: 8.1.8
+contexts:
+  - root: "."
+    language: python
+    anchors:
+      - name: Group
+        kind: class
+        file: src/click/core.py
+        line_range: [1, 3000]
+      - name: Command
+        kind: class
+        file: src/click/core.py
+        line_range: [1, 3000]
+      - name: Context
+        kind: class
+        file: src/click/core.py
+        line_range: [1, 3000]
+      - name: echo
+        kind: function
+        file: src/click/utils.py
+        line_range: [1, 500]
+      - name: style
+        kind: function
+        file: src/click/termui.py
+        line_range: [1, 700]
+      - name: Option
+        kind: class
+        file: src/click/core.py
+        line_range: [1, 3000]
+      - name: Argument
+        kind: class
+        file: src/click/core.py
+        line_range: [1, 3000]
+
+search_queries:
+  - query: "class Group"
+    expected_path_contains: "core.py"
+  - query: "def echo"
+    expected_path_contains: "utils.py"
+  - query: "style"
+    expected_path_contains: "termui.py"
