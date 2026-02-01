@@ -138,6 +138,10 @@ module = [
     "tree_sitter_go.*",
     "tree_sitter_rust.*",
     "scip.*",
+    "starlette.*",
+    "uvicorn.*",
+    "watchfiles.*",
+    "httpx.*",
 ]
 ignore_missing_imports = true
 

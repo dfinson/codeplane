@@ -16,8 +16,12 @@ REPO_HEADER = "X-CodePlane-Repo"
 CallNext = Callable[[Request], Awaitable[Response]]
 
 
-class RepoValidationMiddleware(BaseHTTPMiddleware):
-    """Validate X-CodePlane-Repo header on all requests."""
+class RepoValidationMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
+    """Validate X-CodePlane-Repo header on all requests.
+
+    Note: type: ignore needed because starlette's BaseHTTPMiddleware
+    doesn't export complete type information for subclassing.
+    """
 
     def __init__(self, app: Any, repo_root: Path) -> None:
         super().__init__(app)

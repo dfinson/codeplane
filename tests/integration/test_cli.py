@@ -99,7 +99,8 @@ class TestErrorPropagation:
 
         # Then
         assert result.exit_code == 1
-        assert "Not inside a git repository" in result.output
+        assert "is not a git repository" in result.output
+        assert "cpl init" in result.output
 
 
 class TestWorkflows:

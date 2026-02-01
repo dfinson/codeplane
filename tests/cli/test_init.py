@@ -100,7 +100,8 @@ class TestInitCommand:
 
         # Then
         assert result.exit_code == 1
-        assert "Not a git repository" in result.output
+        assert "is not a git repository" in result.output
+        assert "cpl init" in result.output
 
     def test_given_initialized_repo_when_init_again_then_idempotent(
         self, temp_git_repo: Path
