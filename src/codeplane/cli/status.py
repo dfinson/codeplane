@@ -20,7 +20,7 @@ def status_command(path: Path, as_json: bool) -> None:
     repo_root = path.resolve()
     if not (repo_root / ".git").exists():
         raise click.ClickException(
-            f"Not a git repository root: {repo_root}\nRun from the repository root or pass --path."
+            f"Not a git repository: {repo_root}"
         )
 
     codeplane_dir = repo_root / ".codeplane"

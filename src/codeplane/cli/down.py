@@ -19,14 +19,13 @@ def down_command(path: Path) -> None:
     repo_root = path.resolve()
     if not (repo_root / ".git").exists():
         raise click.ClickException(
-            f"Not a git repository root: {repo_root}\nRun from the repository root or pass --path."
+            f"Not a git repository: {repo_root}"
         )
 
     codeplane_dir = repo_root / ".codeplane"
     if not codeplane_dir.exists():
-        raise click.ClickException(
-            f"Repository not initialized. Nothing to stop.\nExpected: {codeplane_dir}"
-        )
+        click.echo("Repository not initialized. Nothing to stop.")
+        return
 
     if not is_daemon_running(codeplane_dir):
         click.echo("Daemon is not running")
