@@ -29,16 +29,17 @@ from codeplane.index._internal.discovery import (
     MembershipResolver,
     Tier1AuthorityFilter,
 )
-from codeplane.index._internal.indexing import LexicalIndex, StructuralIndexer, SymbolGraph
+from codeplane.index._internal.indexing import FactQueries, LexicalIndex, StructuralIndexer
 from codeplane.index._internal.parsing import TreeSitterParser
-from codeplane.index._internal.state import FileStateService, RefreshJobService
+from codeplane.index._internal.state import FileStateService
 from codeplane.index.models import (
     CandidateContext,
+    Certainty,
     Context,
     ContextMarker,
-    Occurrence,
+    DefFact,
     ProbeStatus,
-    Symbol,
+    RefFact,
 )
 
 if TYPE_CHECKING:
@@ -135,10 +136,9 @@ class IndexCoordinator:
         self._parser: TreeSitterParser | None = None
         self._router: ContextRouter | None = None
         self._structural: StructuralIndexer | None = None
-        self._graph: SymbolGraph | None = None
+        self._facts: FactQueries | None = None
         self._state: FileStateService | None = None
         self._reconciler: Reconciler | None = None
-        self._refresh: RefreshJobService | None = None
 
         self._initialized = False
 
@@ -166,7 +166,6 @@ class IndexCoordinator:
         # Initialize components
         self._parser = TreeSitterParser()
         self._lexical = LexicalIndex(self.tantivy_path)
-        self._refresh = RefreshJobService(self.db, self.repo_root, None)
 
         # Step 3: Discover contexts
         discovery = ContextDiscovery(self.repo_root)
@@ -255,9 +254,9 @@ class IndexCoordinator:
         self._state = FileStateService(self.db)
         self._reconciler = Reconciler(self.db, self.repo_root)
 
-        # Initialize graph with session
-        with self.db.session() as session:
-            self._graph = SymbolGraph(session)
+        # Initialize fact queries
+        # Note: FactQueries needs a session, so we create per-request
+        self._facts = None  # Created on demand in session context
 
         # Step 9: Index all files
         files_indexed = await self._index_all_files()
@@ -402,90 +401,57 @@ class IndexCoordinator:
             for hit in search_results.results
         ]
 
-    async def get_symbol(
+    async def get_def(
         self,
         name: str,
         path: str | None = None,  # noqa: ARG002 - reserved for future use
         context_id: int | None = None,
-    ) -> Symbol | None:
-        """
-        Get symbol by name. Thread-safe.
+    ) -> DefFact | None:
+        """Get definition by name. Thread-safe.
 
         Args:
-            name: Symbol name to find
+            name: Definition name to find
             path: Optional file path filter (reserved)
-            context_id: Optional context filter
+            context_id: Optional context filter (unit_id)
 
         Returns:
-            Symbol if found, None otherwise
+            DefFact if found, None otherwise
         """
         with self.db.session() as session:
-            stmt = select(Symbol).where(Symbol.name == name)
+            stmt = select(DefFact).where(DefFact.name == name)
             if context_id is not None:
-                stmt = stmt.where(Symbol.context_id == context_id)
+                stmt = stmt.where(DefFact.unit_id == context_id)
             return session.exec(stmt).first()
 
     async def get_references(
         self,
-        symbol: Symbol,
-        context_id: int,
-    ) -> list[Occurrence]:
-        """
-        Get all references to a symbol. Thread-safe.
+        def_fact: DefFact,
+        _context_id: int,
+        *,
+        limit: int = 100,
+    ) -> list[RefFact]:
+        """Get references to a definition. Thread-safe.
 
         Args:
-            symbol: Symbol to find references for
-            context_id: Context to search in
+            def_fact: DefFact to find references for
+            _context_id: Context to search in (reserved for future use)
+            limit: Maximum number of results (bounded query)
 
         Returns:
-            List of Occurrence objects
+            List of RefFact objects
         """
-        if symbol.id is None:
-            return []
-
         with self.db.session() as session:
-            stmt = select(Occurrence).where(
-                Occurrence.symbol_id == symbol.id,
-                Occurrence.context_id == context_id,
-            )
-            return list(session.exec(stmt).all())
+            facts = FactQueries(session)
+            return facts.list_refs_by_def_uid(def_fact.def_uid, limit=limit)
 
     async def get_file_state(self, file_id: int, context_id: int) -> FileState:
         """Get computed file state for mutation gating."""
         if self._state is None:
-            from codeplane.index.models import Certainty, FileState, Freshness
+            from codeplane.index.models import FileState, Freshness
 
-            return FileState(freshness=Freshness.UNINDEXED, certainty=Certainty.UNKNOWN)
+            return FileState(freshness=Freshness.UNINDEXED, certainty=Certainty.UNCERTAIN)
 
         return self._state.get_file_state(file_id, context_id)
-
-    async def enqueue_refresh(
-        self,
-        context_id: int,
-        trigger_reason: str = "manual",
-    ) -> int | None:
-        """
-        Enqueue a semantic refresh job for a context.
-
-        Returns job ID if created, None if already covered.
-        """
-        if self._refresh is None:
-            return None
-
-        return self._refresh.enqueue_refresh(context_id, None, trigger_reason)
-
-    async def get_missing_tools(self) -> list[tuple[int, str, str]]:
-        """
-        Get contexts that failed due to missing SCIP tools.
-
-        Returns list of (context_id, language_family, tool_name).
-        Used for user confirmation loop.
-        """
-        if self._refresh is None:
-            return []
-
-        failures = self._refresh.get_missing_tool_failures()
-        return [(ctx_id, fam.value, tool) for ctx_id, fam, tool in failures]
 
     def close(self) -> None:
         """Close all resources."""

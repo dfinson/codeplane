@@ -18,30 +18,29 @@ if TYPE_CHECKING:
 
 
 ADDITIONAL_INDEXES = [
-    # Composite indexes for common query patterns
-    "CREATE INDEX IF NOT EXISTS idx_occurrences_context_file ON occurrences(context_id, file_id)",
-    "CREATE INDEX IF NOT EXISTS idx_occurrences_context_symbol ON occurrences(context_id, symbol_id)",
-    "CREATE INDEX IF NOT EXISTS idx_exports_context_file ON exports(context_id, file_id)",
+    # Composite indexes for common Tier 1 query patterns
+    # DefFact queries by file and name
+    "CREATE INDEX IF NOT EXISTS idx_def_facts_file_name ON def_facts(file_id, name)",
+    # RefFact queries by file and target
+    "CREATE INDEX IF NOT EXISTS idx_ref_facts_file_target ON ref_facts(file_id, target_def_uid)",
+    "CREATE INDEX IF NOT EXISTS idx_ref_facts_target_tier ON ref_facts(target_def_uid, ref_tier)",
+    # ScopeFact queries by file
+    "CREATE INDEX IF NOT EXISTS idx_scope_facts_file ON scope_facts(file_id)",
+    # ImportFact queries by file
+    "CREATE INDEX IF NOT EXISTS idx_import_facts_file ON import_facts(file_id)",
+    # LocalBindFact queries by scope
+    "CREATE INDEX IF NOT EXISTS idx_local_bind_facts_scope ON local_bind_facts(scope_id)",
+    # ExportSurface queries by unit
+    "CREATE INDEX IF NOT EXISTS idx_export_surfaces_unit ON export_surfaces(unit_id)",
+    # Context queries by family and status
     "CREATE INDEX IF NOT EXISTS idx_contexts_family_status ON contexts(language_family, probe_status)",
-    "CREATE INDEX IF NOT EXISTS idx_refresh_jobs_context_status ON refresh_jobs(context_id, status)",
-    "CREATE INDEX IF NOT EXISTS idx_edges_source_context ON edges(source_file, context_id)",
-    "CREATE INDEX IF NOT EXISTS idx_edges_target_context ON edges(target_file, context_id)",
-    # Unique constraint for decision cache
-    "CREATE UNIQUE INDEX IF NOT EXISTS idx_decision_cache_unique ON decision_cache(ambiguity_signature, repo_head)",
-    # Symbol lookup by file and name (for Read-After-Write)
-    "CREATE INDEX IF NOT EXISTS idx_symbols_file_name_line ON symbols(file_id, name, line)",
-    # File semantic facts lookup
-    "CREATE INDEX IF NOT EXISTS idx_file_semantic_facts_context ON file_semantic_facts(context_id)",
+    # AnchorGroup queries by unit (not file)
+    "CREATE INDEX IF NOT EXISTS idx_anchor_groups_unit ON anchor_groups(unit_id)",
 ]
 
 
 def create_additional_indexes(engine: Engine) -> None:
-    """
-    Create additional composite indexes.
-
-    Call this after Database.create_all() to add performance indexes
-    that cannot be expressed via SQLModel Field() declarations.
-    """
+    """Create additional composite indexes for Tier 1 fact tables."""
     with engine.connect() as conn:
         for sql in ADDITIONAL_INDEXES:
             conn.execute(text(sql))
@@ -51,16 +50,15 @@ def create_additional_indexes(engine: Engine) -> None:
 def drop_additional_indexes(engine: Engine) -> None:
     """Drop additional indexes (for testing/reset)."""
     index_names = [
-        "idx_occurrences_context_file",
-        "idx_occurrences_context_symbol",
-        "idx_exports_context_file",
+        "idx_def_facts_file_name",
+        "idx_ref_facts_file_target",
+        "idx_ref_facts_target_tier",
+        "idx_scope_facts_file",
+        "idx_import_facts_file",
+        "idx_local_bind_facts_scope",
+        "idx_export_surfaces_unit",
         "idx_contexts_family_status",
-        "idx_refresh_jobs_context_status",
-        "idx_edges_source_context",
-        "idx_edges_target_context",
-        "idx_decision_cache_unique",
-        "idx_symbols_file_name_line",
-        "idx_file_semantic_facts_context",
+        "idx_anchor_groups_unit",
     ]
     with engine.connect() as conn:
         for name in index_names:

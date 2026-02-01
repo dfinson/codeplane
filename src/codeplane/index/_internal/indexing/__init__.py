@@ -1,28 +1,11 @@
-"""Indexing layers: lexical (T0), structural (T1), semantic (T2)."""
+"""Indexing layers: lexical (Tier 0), structural (Tier 1)."""
 
-from codeplane.index._internal.indexing.graph import (
-    CallPath,
-    SymbolGraph,
-    SymbolNode,
-)
+from codeplane.index._internal.indexing.graph import FactQueries
 from codeplane.index._internal.indexing.lexical import (
     LexicalIndex,
     SearchResult,
     SearchResults,
     create_index,
-)
-from codeplane.index._internal.indexing.scip import (
-    IndexerResult,
-    PopulateResult,
-    SCIPDocument,
-    SCIPIndex,
-    SCIPOccurrence,
-    SCIPParser,
-    SCIPPopulator,
-    SCIPRelation,
-    SCIPRunner,
-    SCIPSymbol,
-    is_scip_available,
 )
 from codeplane.index._internal.indexing.structural import (
     BatchResult,
@@ -32,30 +15,16 @@ from codeplane.index._internal.indexing.structural import (
 )
 
 __all__ = [
-    # Lexical
+    # Lexical (Tier 0)
     "LexicalIndex",
     "SearchResult",
     "SearchResults",
     "create_index",
-    # Structural
+    # Structural (Tier 1)
     "StructuralIndexer",
     "ExtractionResult",
     "BatchResult",
     "index_context",
-    # Graph
-    "SymbolGraph",
-    "SymbolNode",
-    "CallPath",
-    # SCIP
-    "SCIPParser",
-    "SCIPRunner",
-    "SCIPPopulator",
-    "SCIPIndex",
-    "SCIPDocument",
-    "SCIPSymbol",
-    "SCIPOccurrence",
-    "SCIPRelation",
-    "IndexerResult",
-    "PopulateResult",
-    "is_scip_available",
+    # Fact Queries
+    "FactQueries",
 ]

@@ -293,7 +293,7 @@ class Reconciler:
 
             stmt = select(File.path, File.content_hash).where(col(File.path).in_(paths))
             results = session.exec(stmt)
-            return {row[0]: row[1] for row in results}
+            return {row[0]: row[1] for row in results if row[1] is not None}
 
     def _compute_hash(self, path: Path) -> str:
         """Compute SHA-256 hash of file content."""

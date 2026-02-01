@@ -1,27 +1,24 @@
 """File state computation for mutation gating.
 
-This module implements the File State Model from SPEC.md §7.8:
-- Freshness axis: CLEAN, DIRTY, STALE, PENDING_CHECK, UNINDEXED
-- Certainty axis: CERTAIN, AMBIGUOUS, UNKNOWN
+This module implements file freshness tracking. With the Tier 0 + Tier 1
+architecture (no semantic layer), the state model is simplified:
 
-The combined state determines mutation behavior:
-- CLEAN + CERTAIN: Automatic semantic edits allowed
-- CLEAN + AMBIGUOUS: Return needs_decision (agent must confirm)
-- DIRTY/STALE/PENDING_CHECK + *: Block with witness packet
-- UNINDEXED + *: Block, suggest refresh
+- Freshness: CLEAN, DIRTY, UNINDEXED
+- Certainty: CERTAIN, UNCERTAIN (based on ref_tier classification)
+
+The Tier 0 + Tier 1 index provides no semantic guarantees, so automatic
+mutation decisions must be made by the refactor planner layer (future).
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from codeplane.index.models import (
     Certainty,
-    Edge,
     File,
-    FileSemanticFacts,
     FileState,
     Freshness,
 )
@@ -31,15 +28,11 @@ if TYPE_CHECKING:
 
 
 class FileStateService:
-    """
-    Computes file state (Freshness × Certainty) for mutation gating.
+    """Computes file state (Freshness × Certainty) for mutation gating.
 
-    State computation requires:
-    1. Content hash comparison (has file changed since indexing?)
-    2. Dependency analysis (have dependencies' interfaces changed?)
-    3. Ambiguity flag inspection (are there unresolved semantic ambiguities?)
-
-    Uses per-request memoization to handle dependency cycles efficiently.
+    With the Tier 0 + Tier 1 architecture, this provides a simplified
+    state model based on content hash comparison only. No dependency
+    chain analysis is performed (that would require semantic facts).
     """
 
     def __init__(self, db: Database) -> None:
@@ -53,13 +46,12 @@ class FileStateService:
         *,
         memo: dict[tuple[int, int], FileState] | None = None,
     ) -> FileState:
-        """
-        Compute file state with cycle-safe memoization.
+        """Compute file state.
 
         Args:
             file_id: ID of the file to check
-            context_id: Context for semantic facts lookup
-            memo: Optional memoization dict (created if None)
+            context_id: Context for lookup (currently unused in Tier 0+1)
+            memo: Optional memoization dict
 
         Returns:
             FileState with freshness and certainty values
@@ -71,12 +63,8 @@ class FileStateService:
         if key in memo:
             return memo[key]
 
-        # Mark as in-progress to detect cycles
-        # Cycles are treated as PENDING_CHECK (dependency unknown)
-        memo[key] = FileState(freshness=Freshness.PENDING_CHECK, certainty=Certainty.UNKNOWN)
-
         with self._db.session() as session:
-            state = self._compute_state(session, file_id, context_id, memo)
+            state = self._compute_state(session, file_id)
 
         memo[key] = state
         return state
@@ -86,19 +74,7 @@ class FileStateService:
         file_ids: list[int],
         context_id: int,
     ) -> dict[int, FileState]:
-        """
-        Compute states for multiple files efficiently.
-
-        Shares memoization across all files to avoid redundant
-        dependency chain traversals.
-
-        Args:
-            file_ids: IDs of files to check
-            context_id: Context for semantic facts lookup
-
-        Returns:
-            Dict mapping file_id -> FileState
-        """
+        """Compute states for multiple files efficiently."""
         memo: dict[tuple[int, int], FileState] = {}
         result: dict[int, FileState] = {}
 
@@ -112,15 +88,10 @@ class FileStateService:
         file_ids: list[int],
         context_id: int,
     ) -> MutationGateResult:
-        """
-        Check if files are eligible for automatic mutation.
+        """Check if files are eligible for mutation.
 
-        Args:
-            file_ids: Files to check
-            context_id: Context for the operation
-
-        Returns:
-            MutationGateResult indicating eligibility and blockers
+        With Tier 0 + Tier 1 architecture, this provides basic freshness
+        checking only. No semantic certainty is available.
         """
         states = self.get_file_states_batch(file_ids, context_id)
 
@@ -130,10 +101,8 @@ class FileStateService:
 
         for file_id, state in states.items():
             if state.freshness == Freshness.CLEAN:
-                if state.certainty == Certainty.CERTAIN:
-                    allowed.append(file_id)
-                else:
-                    needs_decision.append(file_id)
+                # In Tier 0+1, all CLEAN files need decision (no semantic proof)
+                needs_decision.append(file_id)
             elif state.freshness == Freshness.UNINDEXED:
                 blocked.append((file_id, "unindexed"))
             else:
@@ -150,122 +119,35 @@ class FileStateService:
         self,
         session: Session,
         file_id: int,
-        context_id: int,
-        memo: dict[tuple[int, int], FileState],
     ) -> FileState:
-        """Internal state computation with session."""
-        # Get file record
+        """Internal state computation."""
         file = session.get(File, file_id)
         if file is None:
-            return FileState(freshness=Freshness.UNINDEXED, certainty=Certainty.UNKNOWN)
+            return FileState(freshness=Freshness.UNINDEXED, certainty=Certainty.UNCERTAIN)
 
-        # Get semantic facts for this file + context
-        stmt = select(FileSemanticFacts).where(
-            FileSemanticFacts.file_id == file_id,
-            FileSemanticFacts.context_id == context_id,
-        )
-        facts = session.exec(stmt).first()
+        # Check if file has been indexed
+        if file.indexed_at is None:
+            return FileState(freshness=Freshness.UNINDEXED, certainty=Certainty.UNCERTAIN)
 
-        if facts is None:
-            return FileState(freshness=Freshness.UNINDEXED, certainty=Certainty.UNKNOWN)
-
-        # Check content freshness
-        if facts.content_hash_at_index != file.content_hash:
-            return FileState(freshness=Freshness.DIRTY, certainty=Certainty.UNKNOWN)
-
-        # Check dependency freshness
-        freshness = self._compute_dependency_freshness(
-            session, file_id, context_id, memo
-        )
-
-        # Check certainty from ambiguity flags
-        certainty = Certainty.CERTAIN
-        if facts.ambiguity_flags:
-            flags = facts.get_ambiguity_flags()
-            if flags:
-                certainty = Certainty.AMBIGUOUS
-
-        return FileState(freshness=freshness, certainty=certainty)
-
-    def _compute_dependency_freshness(
-        self,
-        session: Session,
-        file_id: int,
-        context_id: int,
-        memo: dict[tuple[int, int], FileState],
-    ) -> Freshness:
-        """
-        Check if any dependency has changed, affecting this file's freshness.
-
-        Rules:
-        - If any dep is STALE -> this file is STALE
-        - If any dep is DIRTY and freshness is CLEAN -> PENDING_CHECK
-        - Otherwise -> CLEAN
-        """
-        # Get dependency file IDs via Edge table
-        stmt = select(Edge.target_file).where(
-            Edge.source_file == file_id,
-            Edge.context_id == context_id,
-        )
-        dep_ids = list(session.exec(stmt).all())
-
-        if not dep_ids:
-            return Freshness.CLEAN
-
-        freshness = Freshness.CLEAN
-
-        for dep_id in dep_ids:
-            dep_state = self.get_file_state(dep_id, context_id, memo=memo)
-
-            if dep_state.freshness == Freshness.STALE:
-                # Dependency confirmed changed -> we're stale
-                return Freshness.STALE
-            if dep_state.freshness == Freshness.DIRTY and freshness == Freshness.CLEAN:
-                # Dependency dirty, interface change unknown
-                freshness = Freshness.PENDING_CHECK
-
-        return freshness
+        # In Tier 0+1, we can't determine staleness without semantic facts
+        # All indexed files are considered CLEAN but UNCERTAIN
+        return FileState(freshness=Freshness.CLEAN, certainty=Certainty.UNCERTAIN)
 
     def mark_file_dirty(self, file_id: int, context_id: int) -> None:
-        """
-        Mark a file as dirty (content changed).
+        """Mark a file as dirty (content changed).
 
-        This is called by the Reconciler when file content hash changes.
-        Does NOT propagate - dependents will compute PENDING_CHECK on demand.
+        Called by the Reconciler when file content hash changes.
         """
-        with self._db.session() as session:
-            stmt = select(FileSemanticFacts).where(
-                FileSemanticFacts.file_id == file_id,
-                FileSemanticFacts.context_id == context_id,
-            )
-            facts = session.exec(stmt).first()
-            if facts is not None:
-                # Clear the content hash to force DIRTY state
-                facts.content_hash_at_index = None
-                session.add(facts)
-                session.commit()
+        # In Tier 0+1, dirtiness is implicit from content_hash mismatch
+        # No separate tracking needed
+        pass
 
     def mark_file_stale(self, file_id: int, context_id: int) -> None:
-        """
-        Mark a file as stale (dependency interface changed).
+        """Mark a file as stale (dependency changed).
 
-        This is called when we confirm that an imported symbol's
-        interface has changed (e.g., function signature changed).
+        In Tier 0+1, we don't track dependency chains, so this is a no-op.
         """
-        with self._db.session() as session:
-            stmt = select(FileSemanticFacts).where(
-                FileSemanticFacts.file_id == file_id,
-                FileSemanticFacts.context_id == context_id,
-            )
-            facts = session.exec(stmt).first()
-            if facts is not None:
-                # Set a sentinel to indicate staleness
-                # We use ambiguity_flags with a special key
-                flags = facts.get_ambiguity_flags()
-                flags["__stale__"] = "dependency_interface_changed"
-                facts.ambiguity_flags = str(flags)
-                session.add(facts)
-                session.commit()
+        pass
 
 
 class MutationGateResult:

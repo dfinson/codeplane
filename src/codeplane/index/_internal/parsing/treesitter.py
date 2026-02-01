@@ -3,12 +3,14 @@
 This module provides Tree-sitter parsing for:
 - Local symbol extraction (functions, classes, methods, variables)
 - Identifier occurrence tracking (where identifiers appear)
+- Scope extraction (lexical scopes for binding resolution)
+- Import extraction (import statements for cross-file refs)
 - Interface hash computation (for dependency change detection)
 - Probe validation (does this file parse correctly?)
 
 Note: "identifier_occurrences" != "references". At the syntactic layer,
 we only know "an identifier named X appears at line Y". Semantic resolution
-(which definition does this refer to?) comes from SCIP.
+(which definition does this refer to?) requires additional analysis.
 """
 
 from __future__ import annotations
@@ -24,6 +26,59 @@ import tree_sitter_typescript
 
 if TYPE_CHECKING:
     pass
+
+
+@dataclass
+class SyntacticScope:
+    """A lexical scope extracted via Tree-sitter parsing."""
+
+    scope_id: int  # Local ID within file (assigned by extractor)
+    parent_scope_id: int | None  # Parent scope ID (None for file scope)
+    kind: str  # file, class, function, block, comprehension, lambda
+    start_line: int
+    start_col: int
+    end_line: int
+    end_col: int
+
+
+@dataclass
+class SyntacticImport:
+    """An import statement extracted via Tree-sitter parsing."""
+
+    import_uid: str  # Unique ID (computed from file + line + name)
+    imported_name: str  # Name being imported
+    alias: str | None  # Local alias (None if no alias)
+    source_literal: str | None  # Module path string (if extractable)
+    import_kind: str  # python_import, python_from, js_import, etc.
+    start_line: int
+    start_col: int
+    end_line: int
+    end_col: int
+    scope_id: int | None = None  # Scope where import is visible
+
+
+@dataclass
+class SyntacticBind:
+    """A local binding extracted via Tree-sitter parsing."""
+
+    name: str  # Bound identifier name
+    scope_id: int  # Scope where binding occurs
+    target_kind: str  # DEF, IMPORT, UNKNOWN
+    target_uid: str | None  # def_uid or import_uid
+    reason_code: str  # PARAM, LOCAL_ASSIGN, DEF_IN_SCOPE, IMPORT_ALIAS, etc.
+    start_line: int
+    start_col: int
+
+
+@dataclass
+class DynamicAccess:
+    """A dynamic access pattern detected via Tree-sitter parsing."""
+
+    pattern_type: str  # bracket_access, getattr, reflect, eval, import_module
+    start_line: int
+    start_col: int
+    extracted_literals: list[str] = field(default_factory=list)
+    has_non_literal_key: bool = False
 
 
 @dataclass
@@ -424,6 +479,568 @@ class TreeSitterParser:
 
         walk(result.root_node)
         return occurrences
+
+    def extract_scopes(self, result: ParseResult) -> list[SyntacticScope]:
+        """Extract lexical scopes from a parse result.
+
+        Args:
+            result: ParseResult from parse()
+
+        Returns:
+            List of SyntacticScope objects representing lexical scopes.
+        """
+        if result.language == "python":
+            return self._extract_python_scopes(result.root_node)
+        elif result.language in ("javascript", "typescript", "tsx"):
+            return self._extract_js_scopes(result.root_node)
+        else:
+            return self._extract_generic_scopes(result.root_node)
+
+    def extract_imports(self, result: ParseResult, file_path: str) -> list[SyntacticImport]:
+        """Extract import statements from a parse result.
+
+        Args:
+            result: ParseResult from parse()
+            file_path: File path for UID generation
+
+        Returns:
+            List of SyntacticImport objects.
+        """
+        if result.language == "python":
+            return self._extract_python_imports(result.root_node, file_path)
+        elif result.language in ("javascript", "typescript", "tsx"):
+            return self._extract_js_imports(result.root_node, file_path)
+        else:
+            return []
+
+    def extract_dynamic_accesses(self, result: ParseResult) -> list[DynamicAccess]:
+        """Extract dynamic access patterns for telemetry.
+
+        Args:
+            result: ParseResult from parse()
+
+        Returns:
+            List of DynamicAccess objects.
+        """
+        if result.language == "python":
+            return self._extract_python_dynamic(result.root_node)
+        elif result.language in ("javascript", "typescript", "tsx"):
+            return self._extract_js_dynamic(result.root_node)
+        else:
+            return []
+
+    def _extract_python_scopes(self, root: Any) -> list[SyntacticScope]:
+        """Extract scopes from Python AST."""
+        scopes: list[SyntacticScope] = []
+        scope_counter = 0
+
+        # File scope is implicit (scope_id=0)
+        file_scope = SyntacticScope(
+            scope_id=scope_counter,
+            parent_scope_id=None,
+            kind="file",
+            start_line=root.start_point[0] + 1,
+            start_col=root.start_point[1],
+            end_line=root.end_point[0] + 1,
+            end_col=root.end_point[1],
+        )
+        scopes.append(file_scope)
+
+        def walk(node: Any, parent_scope_id: int) -> None:
+            nonlocal scope_counter
+
+            scope_types = {
+                "class_definition": "class",
+                "function_definition": "function",
+                "lambda": "lambda",
+                "list_comprehension": "comprehension",
+                "set_comprehension": "comprehension",
+                "dictionary_comprehension": "comprehension",
+                "generator_expression": "comprehension",
+            }
+
+            if node.type in scope_types:
+                scope_counter += 1
+                scope = SyntacticScope(
+                    scope_id=scope_counter,
+                    parent_scope_id=parent_scope_id,
+                    kind=scope_types[node.type],
+                    start_line=node.start_point[0] + 1,
+                    start_col=node.start_point[1],
+                    end_line=node.end_point[0] + 1,
+                    end_col=node.end_point[1],
+                )
+                scopes.append(scope)
+                for child in node.children:
+                    walk(child, scope_counter)
+            else:
+                for child in node.children:
+                    walk(child, parent_scope_id)
+
+        for child in root.children:
+            walk(child, 0)
+
+        return scopes
+
+    def _extract_js_scopes(self, root: Any) -> list[SyntacticScope]:
+        """Extract scopes from JavaScript/TypeScript AST."""
+        scopes: list[SyntacticScope] = []
+        scope_counter = 0
+
+        # File scope
+        file_scope = SyntacticScope(
+            scope_id=scope_counter,
+            parent_scope_id=None,
+            kind="file",
+            start_line=root.start_point[0] + 1,
+            start_col=root.start_point[1],
+            end_line=root.end_point[0] + 1,
+            end_col=root.end_point[1],
+        )
+        scopes.append(file_scope)
+
+        def walk(node: Any, parent_scope_id: int) -> None:
+            nonlocal scope_counter
+
+            scope_types = {
+                "class_declaration": "class",
+                "class_expression": "class",
+                "function_declaration": "function",
+                "function_expression": "function",
+                "arrow_function": "function",
+                "method_definition": "function",
+                "for_statement": "block",
+                "for_in_statement": "block",
+                "while_statement": "block",
+                "if_statement": "block",
+                "statement_block": "block",
+            }
+
+            if node.type in scope_types:
+                scope_counter += 1
+                scope = SyntacticScope(
+                    scope_id=scope_counter,
+                    parent_scope_id=parent_scope_id,
+                    kind=scope_types[node.type],
+                    start_line=node.start_point[0] + 1,
+                    start_col=node.start_point[1],
+                    end_line=node.end_point[0] + 1,
+                    end_col=node.end_point[1],
+                )
+                scopes.append(scope)
+                for child in node.children:
+                    walk(child, scope_counter)
+            else:
+                for child in node.children:
+                    walk(child, parent_scope_id)
+
+        for child in root.children:
+            walk(child, 0)
+
+        return scopes
+
+    def _extract_generic_scopes(self, root: Any) -> list[SyntacticScope]:
+        """Extract scopes generically by looking for common scope patterns."""
+        scopes: list[SyntacticScope] = []
+        scope_counter = 0
+
+        # File scope
+        file_scope = SyntacticScope(
+            scope_id=scope_counter,
+            parent_scope_id=None,
+            kind="file",
+            start_line=root.start_point[0] + 1,
+            start_col=root.start_point[1],
+            end_line=root.end_point[0] + 1,
+            end_col=root.end_point[1],
+        )
+        scopes.append(file_scope)
+
+        scope_type_patterns = {
+            "class": "class",
+            "function": "function",
+            "method": "function",
+            "block": "block",
+            "lambda": "lambda",
+        }
+
+        def walk(node: Any, parent_scope_id: int) -> None:
+            nonlocal scope_counter
+
+            # Check if node type contains any scope-indicating patterns
+            kind: str | None = None
+            for pattern, scope_kind in scope_type_patterns.items():
+                if pattern in node.type:
+                    kind = scope_kind
+                    break
+
+            if kind is not None:
+                scope_counter += 1
+                scope = SyntacticScope(
+                    scope_id=scope_counter,
+                    parent_scope_id=parent_scope_id,
+                    kind=kind,
+                    start_line=node.start_point[0] + 1,
+                    start_col=node.start_point[1],
+                    end_line=node.end_point[0] + 1,
+                    end_col=node.end_point[1],
+                )
+                scopes.append(scope)
+                for child in node.children:
+                    walk(child, scope_counter)
+            else:
+                for child in node.children:
+                    walk(child, parent_scope_id)
+
+        for child in root.children:
+            walk(child, 0)
+
+        return scopes
+
+    def _extract_python_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract imports from Python AST."""
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def walk(node: Any) -> None:
+            # import foo, import foo as bar
+            if node.type == "import_statement":
+                for child in node.children:
+                    if child.type == "dotted_name":
+                        name = child.text.decode("utf-8") if child.text else ""
+                        imports.append(
+                            SyntacticImport(
+                                import_uid=make_uid(name, node.start_point[0] + 1),
+                                imported_name=name,
+                                alias=None,
+                                source_literal=name,
+                                import_kind="python_import",
+                                start_line=node.start_point[0] + 1,
+                                start_col=node.start_point[1],
+                                end_line=node.end_point[0] + 1,
+                                end_col=node.end_point[1],
+                            )
+                        )
+                    elif child.type == "aliased_import":
+                        name_node = child.child_by_field_name("name")
+                        alias_node = child.child_by_field_name("alias")
+                        if name_node:
+                            name = name_node.text.decode("utf-8") if name_node.text else ""
+                            alias = (
+                                alias_node.text.decode("utf-8")
+                                if alias_node and alias_node.text
+                                else None
+                            )
+                            imports.append(
+                                SyntacticImport(
+                                    import_uid=make_uid(name, node.start_point[0] + 1),
+                                    imported_name=name,
+                                    alias=alias,
+                                    source_literal=name,
+                                    import_kind="python_import",
+                                    start_line=node.start_point[0] + 1,
+                                    start_col=node.start_point[1],
+                                    end_line=node.end_point[0] + 1,
+                                    end_col=node.end_point[1],
+                                )
+                            )
+
+            # from foo import bar, from foo import bar as baz
+            elif node.type == "import_from_statement":
+                module_node = node.child_by_field_name("module_name")
+                source = (
+                    module_node.text.decode("utf-8") if module_node and module_node.text else None
+                )
+
+                for child in node.children:
+                    if child.type == "dotted_name" and child != module_node:
+                        name = child.text.decode("utf-8") if child.text else ""
+                        imports.append(
+                            SyntacticImport(
+                                import_uid=make_uid(name, node.start_point[0] + 1),
+                                imported_name=name,
+                                alias=None,
+                                source_literal=source,
+                                import_kind="python_from",
+                                start_line=node.start_point[0] + 1,
+                                start_col=node.start_point[1],
+                                end_line=node.end_point[0] + 1,
+                                end_col=node.end_point[1],
+                            )
+                        )
+                    elif child.type == "aliased_import":
+                        name_node = child.child_by_field_name("name")
+                        alias_node = child.child_by_field_name("alias")
+                        if name_node:
+                            name = name_node.text.decode("utf-8") if name_node.text else ""
+                            alias = (
+                                alias_node.text.decode("utf-8")
+                                if alias_node and alias_node.text
+                                else None
+                            )
+                            imports.append(
+                                SyntacticImport(
+                                    import_uid=make_uid(name, node.start_point[0] + 1),
+                                    imported_name=name,
+                                    alias=alias,
+                                    source_literal=source,
+                                    import_kind="python_from",
+                                    start_line=node.start_point[0] + 1,
+                                    start_col=node.start_point[1],
+                                    end_line=node.end_point[0] + 1,
+                                    end_col=node.end_point[1],
+                                )
+                            )
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return imports
+
+    def _extract_js_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract imports from JavaScript/TypeScript AST."""
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def walk(node: Any) -> None:
+            # import { foo } from 'bar', import foo from 'bar'
+            if node.type == "import_statement":
+                source_node = node.child_by_field_name("source")
+                source = None
+                if source_node and source_node.text:
+                    # Strip quotes
+                    source = source_node.text.decode("utf-8").strip("'\"")
+
+                # Find imported names
+                for child in node.children:
+                    if child.type == "import_clause":
+                        for clause_child in child.children:
+                            if clause_child.type == "identifier":
+                                # default import
+                                name = (
+                                    clause_child.text.decode("utf-8") if clause_child.text else ""
+                                )
+                                imports.append(
+                                    SyntacticImport(
+                                        import_uid=make_uid(name, node.start_point[0] + 1),
+                                        imported_name=name,
+                                        alias=None,
+                                        source_literal=source,
+                                        import_kind="js_import",
+                                        start_line=node.start_point[0] + 1,
+                                        start_col=node.start_point[1],
+                                        end_line=node.end_point[0] + 1,
+                                        end_col=node.end_point[1],
+                                    )
+                                )
+                            elif clause_child.type == "named_imports":
+                                for spec in clause_child.children:
+                                    if spec.type == "import_specifier":
+                                        name_node = spec.child_by_field_name("name")
+                                        alias_node = spec.child_by_field_name("alias")
+                                        if name_node and name_node.text:
+                                            name = name_node.text.decode("utf-8")
+                                            alias = (
+                                                alias_node.text.decode("utf-8")
+                                                if alias_node and alias_node.text
+                                                else None
+                                            )
+                                            imports.append(
+                                                SyntacticImport(
+                                                    import_uid=make_uid(
+                                                        name, node.start_point[0] + 1
+                                                    ),
+                                                    imported_name=name,
+                                                    alias=alias,
+                                                    source_literal=source,
+                                                    import_kind="js_import",
+                                                    start_line=node.start_point[0] + 1,
+                                                    start_col=node.start_point[1],
+                                                    end_line=node.end_point[0] + 1,
+                                                    end_col=node.end_point[1],
+                                                )
+                                            )
+                            elif clause_child.type == "namespace_import":
+                                # import * as foo
+                                for ns_child in clause_child.children:
+                                    if ns_child.type == "identifier":
+                                        alias = (
+                                            ns_child.text.decode("utf-8") if ns_child.text else ""
+                                        )
+                                        imports.append(
+                                            SyntacticImport(
+                                                import_uid=make_uid("*", node.start_point[0] + 1),
+                                                imported_name="*",
+                                                alias=alias,
+                                                source_literal=source,
+                                                import_kind="js_import",
+                                                start_line=node.start_point[0] + 1,
+                                                start_col=node.start_point[1],
+                                                end_line=node.end_point[0] + 1,
+                                                end_col=node.end_point[1],
+                                            )
+                                        )
+
+            # require() calls - const foo = require('bar')
+            elif node.type == "call_expression":
+                func_node = node.child_by_field_name("function")
+                if func_node and func_node.text and func_node.text.decode("utf-8") == "require":
+                    args_node = node.child_by_field_name("arguments")
+                    if args_node and args_node.children:
+                        for arg in args_node.children:
+                            if arg.type == "string":
+                                source = arg.text.decode("utf-8").strip("'\"") if arg.text else None
+                                # Try to find variable name from parent
+                                imports.append(
+                                    SyntacticImport(
+                                        import_uid=make_uid(
+                                            source or "require", node.start_point[0] + 1
+                                        ),
+                                        imported_name=source or "require",
+                                        alias=None,
+                                        source_literal=source,
+                                        import_kind="js_require",
+                                        start_line=node.start_point[0] + 1,
+                                        start_col=node.start_point[1],
+                                        end_line=node.end_point[0] + 1,
+                                        end_col=node.end_point[1],
+                                    )
+                                )
+                                break
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return imports
+
+    def _extract_python_dynamic(self, root: Any) -> list[DynamicAccess]:
+        """Extract dynamic access patterns from Python AST."""
+        dynamics: list[DynamicAccess] = []
+
+        def walk(node: Any) -> None:
+            # getattr(obj, name)
+            if node.type == "call":
+                func_node = node.child_by_field_name("function")
+                if func_node and func_node.type == "identifier":
+                    func_name = func_node.text.decode("utf-8") if func_node.text else ""
+                    if func_name in ("getattr", "setattr", "hasattr", "delattr"):
+                        args_node = node.child_by_field_name("arguments")
+                        literals: list[str] = []
+                        has_dynamic = False
+                        if args_node:
+                            for i, arg in enumerate(args_node.children):
+                                if i == 1:  # Second argument is the attribute name
+                                    if arg.type == "string":
+                                        literal = (
+                                            arg.text.decode("utf-8").strip("'\"")
+                                            if arg.text
+                                            else ""
+                                        )
+                                        literals.append(literal)
+                                    else:
+                                        has_dynamic = True
+                        dynamics.append(
+                            DynamicAccess(
+                                pattern_type="getattr",
+                                start_line=node.start_point[0] + 1,
+                                start_col=node.start_point[1],
+                                extracted_literals=literals,
+                                has_non_literal_key=has_dynamic,
+                            )
+                        )
+                    elif func_name in ("eval", "exec"):
+                        dynamics.append(
+                            DynamicAccess(
+                                pattern_type="eval",
+                                start_line=node.start_point[0] + 1,
+                                start_col=node.start_point[1],
+                                has_non_literal_key=True,
+                            )
+                        )
+
+            # obj[key] subscript
+            elif node.type == "subscript":
+                subscript_node = node.child_by_field_name("subscript")
+                sub_literals: list[str] = []
+                sub_has_dynamic = True
+                if subscript_node and subscript_node.type == "string":
+                    literal = (
+                        subscript_node.text.decode("utf-8").strip("'\"")
+                        if subscript_node.text
+                        else ""
+                    )
+                    sub_literals.append(literal)
+                    sub_has_dynamic = False
+                dynamics.append(
+                    DynamicAccess(
+                        pattern_type="bracket_access",
+                        start_line=node.start_point[0] + 1,
+                        start_col=node.start_point[1],
+                        extracted_literals=sub_literals,
+                        has_non_literal_key=sub_has_dynamic,
+                    )
+                )
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return dynamics
+
+    def _extract_js_dynamic(self, root: Any) -> list[DynamicAccess]:
+        """Extract dynamic access patterns from JavaScript/TypeScript AST."""
+        dynamics: list[DynamicAccess] = []
+
+        def walk(node: Any) -> None:
+            # obj[key] subscript
+            if node.type == "subscript_expression":
+                index_node = node.child_by_field_name("index")
+                literals: list[str] = []
+                has_dynamic = True
+                if index_node and index_node.type == "string":
+                    literal = (
+                        index_node.text.decode("utf-8").strip("'\"") if index_node.text else ""
+                    )
+                    literals.append(literal)
+                    has_dynamic = False
+                dynamics.append(
+                    DynamicAccess(
+                        pattern_type="bracket_access",
+                        start_line=node.start_point[0] + 1,
+                        start_col=node.start_point[1],
+                        extracted_literals=literals,
+                        has_non_literal_key=has_dynamic,
+                    )
+                )
+
+            # eval() calls
+            elif node.type == "call_expression":
+                func_node = node.child_by_field_name("function")
+                if func_node and func_node.type == "identifier":
+                    func_name = func_node.text.decode("utf-8") if func_node.text else ""
+                    if func_name == "eval":
+                        dynamics.append(
+                            DynamicAccess(
+                                pattern_type="eval",
+                                start_line=node.start_point[0] + 1,
+                                start_col=node.start_point[1],
+                                has_non_literal_key=True,
+                            )
+                        )
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return dynamics
 
     def compute_interface_hash(self, symbols: list[SyntacticSymbol]) -> str:
         """

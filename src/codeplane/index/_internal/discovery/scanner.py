@@ -29,18 +29,18 @@ if TYPE_CHECKING:
 
 
 # Marker file definitions per language family
-# Tier 1: Workspace fences that define authority
-# Tier 2: Package roots (potential contexts)
+# WORKSPACE: Monorepo/workspace boundaries that define authority
+# PACKAGE: Individual package roots (potential contexts)
 MARKER_DEFINITIONS: dict[LanguageFamily, dict[MarkerTier, list[str]]] = {
     LanguageFamily.JAVASCRIPT: {
-        MarkerTier.TIER1: [
+        MarkerTier.WORKSPACE: [
             "pnpm-workspace.yaml",
             "lerna.json",
             "nx.json",
             "turbo.json",
             "rush.json",
         ],
-        MarkerTier.TIER2: [
+        MarkerTier.PACKAGE: [
             "package.json",
             "deno.json",
             "deno.jsonc",
@@ -49,12 +49,12 @@ MARKER_DEFINITIONS: dict[LanguageFamily, dict[MarkerTier, list[str]]] = {
         ],
     },
     LanguageFamily.PYTHON: {
-        MarkerTier.TIER1: [
+        MarkerTier.WORKSPACE: [
             "uv.lock",
             "poetry.lock",
             "Pipfile.lock",
         ],
-        MarkerTier.TIER2: [
+        MarkerTier.PACKAGE: [
             "pyproject.toml",
             "setup.py",
             "setup.cfg",
@@ -63,16 +63,16 @@ MARKER_DEFINITIONS: dict[LanguageFamily, dict[MarkerTier, list[str]]] = {
         ],
     },
     LanguageFamily.GO: {
-        MarkerTier.TIER1: ["go.work"],
-        MarkerTier.TIER2: ["go.mod"],
+        MarkerTier.WORKSPACE: ["go.work"],
+        MarkerTier.PACKAGE: ["go.mod"],
     },
     LanguageFamily.RUST: {
-        MarkerTier.TIER1: [],  # Cargo.toml with [workspace] is handled specially
-        MarkerTier.TIER2: ["Cargo.toml"],
+        MarkerTier.WORKSPACE: [],  # Cargo.toml with [workspace] is handled specially
+        MarkerTier.PACKAGE: ["Cargo.toml"],
     },
     LanguageFamily.JVM: {
-        MarkerTier.TIER1: ["settings.gradle", "settings.gradle.kts"],
-        MarkerTier.TIER2: [
+        MarkerTier.WORKSPACE: ["settings.gradle", "settings.gradle.kts"],
+        MarkerTier.PACKAGE: [
             "build.gradle",
             "build.gradle.kts",
             "pom.xml",
@@ -80,12 +80,12 @@ MARKER_DEFINITIONS: dict[LanguageFamily, dict[MarkerTier, list[str]]] = {
         ],
     },
     LanguageFamily.DOTNET: {
-        MarkerTier.TIER1: [],  # .sln files handled via glob
-        MarkerTier.TIER2: [],  # .csproj, .fsproj handled via glob
+        MarkerTier.WORKSPACE: [],  # .sln files handled via glob
+        MarkerTier.PACKAGE: [],  # .csproj, .fsproj handled via glob
     },
     LanguageFamily.CPP: {
-        MarkerTier.TIER1: [],
-        MarkerTier.TIER2: [
+        MarkerTier.WORKSPACE: [],
+        MarkerTier.PACKAGE: [
             "CMakeLists.txt",
             "Makefile",
             "meson.build",
@@ -95,24 +95,24 @@ MARKER_DEFINITIONS: dict[LanguageFamily, dict[MarkerTier, list[str]]] = {
         ],
     },
     LanguageFamily.TERRAFORM: {
-        MarkerTier.TIER1: [".terraform.lock.hcl"],
-        MarkerTier.TIER2: ["main.tf", "versions.tf"],
+        MarkerTier.WORKSPACE: [".terraform.lock.hcl"],
+        MarkerTier.PACKAGE: ["main.tf", "versions.tf"],
     },
     LanguageFamily.RUBY: {
-        MarkerTier.TIER1: ["Gemfile.lock"],
-        MarkerTier.TIER2: ["Gemfile"],
+        MarkerTier.WORKSPACE: ["Gemfile.lock"],
+        MarkerTier.PACKAGE: ["Gemfile"],
     },
     LanguageFamily.PHP: {
-        MarkerTier.TIER1: ["composer.lock"],
-        MarkerTier.TIER2: ["composer.json"],
+        MarkerTier.WORKSPACE: ["composer.lock"],
+        MarkerTier.PACKAGE: ["composer.json"],
     },
     LanguageFamily.CONFIG: {
-        MarkerTier.TIER1: ["flake.lock"],
-        MarkerTier.TIER2: ["flake.nix"],
+        MarkerTier.WORKSPACE: ["flake.lock"],
+        MarkerTier.PACKAGE: ["flake.nix"],
     },
     LanguageFamily.PROTOBUF: {
-        MarkerTier.TIER1: ["buf.work.yaml"],
-        MarkerTier.TIER2: ["buf.yaml"],
+        MarkerTier.WORKSPACE: ["buf.work.yaml"],
+        MarkerTier.PACKAGE: ["buf.yaml"],
     },
 }
 
@@ -283,13 +283,13 @@ class ContextDiscovery:
             if existing:
                 existing.markers.append(marker.path)
                 # Upgrade tier if needed
-                if marker.tier == MarkerTier.TIER1 and existing.tier != 1:
+                if marker.tier == MarkerTier.WORKSPACE and existing.tier != 1:
                     existing.tier = 1
             else:
                 candidate = CandidateContext(
                     language_family=marker.family,
                     root_path=marker_dir,
-                    tier=1 if marker.tier == MarkerTier.TIER1 else 2,
+                    tier=1 if marker.tier == MarkerTier.WORKSPACE else 2,
                     markers=[marker.path],
                     include_spec=INCLUDE_SPECS.get(marker.family, []),
                     exclude_spec=list(UNIVERSAL_EXCLUDES),
@@ -346,13 +346,13 @@ class ContextDiscovery:
 
             if existing:
                 existing.markers.append(marker.path)
-                if marker.tier == MarkerTier.TIER1 and existing.tier != 1:
+                if marker.tier == MarkerTier.WORKSPACE and existing.tier != 1:
                     existing.tier = 1
             else:
                 candidate = CandidateContext(
                     language_family=family,
                     root_path=marker_dir,
-                    tier=1 if marker.tier == MarkerTier.TIER1 else 2,
+                    tier=1 if marker.tier == MarkerTier.WORKSPACE else 2,
                     markers=[marker.path],
                     include_spec=INCLUDE_SPECS.get(family, []),
                     exclude_spec=list(UNIVERSAL_EXCLUDES),
@@ -392,7 +392,7 @@ class ContextDiscovery:
                     DiscoveredMarker(
                         path=rel_path,
                         family=LanguageFamily.DOTNET,
-                        tier=MarkerTier.TIER1,
+                        tier=MarkerTier.WORKSPACE,
                     )
                 )
 
@@ -405,7 +405,7 @@ class ContextDiscovery:
                         DiscoveredMarker(
                             path=rel_path,
                             family=LanguageFamily.DOTNET,
-                            tier=MarkerTier.TIER2,
+                            tier=MarkerTier.PACKAGE,
                         )
                     )
 
@@ -470,7 +470,7 @@ class ContextDiscovery:
                             DiscoveredMarker(
                                 path=marker.path,
                                 family=marker.family,
-                                tier=MarkerTier.TIER1,
+                                tier=MarkerTier.WORKSPACE,
                             )
                         )
                     else:
@@ -490,7 +490,7 @@ class ContextDiscovery:
             if (
                 marker.family == LanguageFamily.JAVASCRIPT
                 and marker.path.endswith("package.json")
-                and marker.tier == MarkerTier.TIER2
+                and marker.tier == MarkerTier.PACKAGE
             ):
                 full_path = self.repo_root / marker.path
                 try:
@@ -501,7 +501,7 @@ class ContextDiscovery:
                             DiscoveredMarker(
                                 path=marker.path,
                                 family=marker.family,
-                                tier=MarkerTier.TIER1,
+                                tier=MarkerTier.WORKSPACE,
                             )
                         )
                     else:
@@ -521,7 +521,7 @@ class ContextDiscovery:
             if (
                 marker.family == LanguageFamily.JVM
                 and marker.path.endswith("pom.xml")
-                and marker.tier == MarkerTier.TIER2
+                and marker.tier == MarkerTier.PACKAGE
             ):
                 full_path = self.repo_root / marker.path
                 try:
@@ -531,7 +531,7 @@ class ContextDiscovery:
                             DiscoveredMarker(
                                 path=marker.path,
                                 family=marker.family,
-                                tier=MarkerTier.TIER1,
+                                tier=MarkerTier.WORKSPACE,
                             )
                         )
                     else:

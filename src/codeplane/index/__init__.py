@@ -1,50 +1,55 @@
-"""Index module - hybrid two-layer indexing engine.
+"""Index module - Full Stacked Index (Tier 0 + Tier 1).
 
-This module provides:
-- Syntactic layer: Tree-sitter parsing, Tantivy full-text search
-- Semantic layer: SCIP batch indexer integration
-- Context discovery: Automatic project boundary detection
-- File state tracking: Freshness × Certainty for mutation gate
+Architecture (see SPEC.md §7):
+- Tier 0: Tantivy lexical index (always-on, candidate discovery)
+- Tier 1: Tree-sitter/SQLite structural facts (defs, refs, scopes, binds, imports, exports)
 
-Public API is in `codeplane.index.ops`:
-- IndexCoordinator: High-level orchestration
-- IndexStats, InitResult, SearchResult: Result types
-
-Internal implementations are in `codeplane.index._internal/`.
-
-See DESIGN.md for architecture details.
+This index provides syntactic facts only. No semantic resolution, no call graph,
+no type information.
 """
 
 from codeplane.index._internal.db import BulkWriter, Database, Reconciler, create_additional_indexes
 from codeplane.index._internal.db.reconcile import ChangedFile, ReconcileResult
 from codeplane.index.models import (
+    # Fact tables
+    AnchorGroup,
+    # Enums
+    BindReasonCode,
+    BindTargetKind,
+    # Data transfer models
     CandidateContext,
     Certainty,
     Context,
     ContextMarker,
-    DecisionCache,
-    Edge,
-    Export,
+    DefFact,
+    DynamicAccessPattern,
+    DynamicAccessSite,
+    Epoch,
+    ExportEntry,
+    ExportSurface,
+    ExportThunk,
+    ExportThunkMode,
     File,
-    FileSemanticFacts,
     FileState,
     Freshness,
-    JobStatus,
+    ImportFact,
+    ImportKind,
     LanguageFamily,
-    Layer,
+    LexicalHit,
+    LocalBindFact,
     MarkerTier,
-    Occurrence,
     ProbeStatus,
-    RefreshJob,
-    RefreshScope,
+    RefFact,
+    RefTier,
     RepoState,
     Role,
-    Symbol,
+    ScopeFact,
+    ScopeKind,
 )
 from codeplane.index.ops import IndexCoordinator, IndexStats, InitResult, SearchMode, SearchResult
 
 __all__ = [
-    # Public API (ops.py)
+    # Public API
     "IndexCoordinator",
     "IndexStats",
     "InitResult",
@@ -54,33 +59,41 @@ __all__ = [
     "Database",
     "BulkWriter",
     "create_additional_indexes",
+    "Reconciler",
+    "ReconcileResult",
+    "ChangedFile",
     # Enums
     "LanguageFamily",
     "Freshness",
     "Certainty",
-    "Layer",
+    "RefTier",
     "Role",
-    "JobStatus",
+    "ScopeKind",
+    "BindTargetKind",
+    "BindReasonCode",
+    "ImportKind",
+    "ExportThunkMode",
+    "DynamicAccessPattern",
     "ProbeStatus",
     "MarkerTier",
-    # Table models
+    # Fact tables
     "File",
     "Context",
     "ContextMarker",
-    "Symbol",
-    "Occurrence",
-    "Export",
-    "Edge",
-    "FileSemanticFacts",
-    "RefreshJob",
+    "DefFact",
+    "RefFact",
+    "ScopeFact",
+    "LocalBindFact",
+    "ImportFact",
+    "ExportSurface",
+    "ExportEntry",
+    "ExportThunk",
+    "AnchorGroup",
+    "DynamicAccessSite",
     "RepoState",
-    "DecisionCache",
+    "Epoch",
     # Data transfer models
     "FileState",
-    "RefreshScope",
     "CandidateContext",
-    # Reconciler
-    "Reconciler",
-    "ReconcileResult",
-    "ChangedFile",
+    "LexicalHit",
 ]
