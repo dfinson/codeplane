@@ -99,42 +99,74 @@ class FileWatcher:
             logger.error("watcher_error", error=str(e))
 
     async def _poll_loop(self) -> None:
-        """Poll loop using git status (for cross-filesystem where inotify fails)."""
-        from codeplane.git import GitOps
+        """Poll loop using mtime checks (for cross-filesystem where inotify fails).
 
-        git_ops = GitOps(self.repo_root)
-        last_status: set[str] = set()
+        Uses the coordinator's indexed file list rather than git status,
+        since gitignored files may still be indexed if not in .cplignore.
+        """
+        from codeplane.index._internal.ignore import PRUNABLE_DIRS
+
+        # Track mtimes for all non-cplignored files
+        mtimes: dict[Path, float] = {}
+
+        # Initial scan
+        mtimes = self._scan_mtimes(PRUNABLE_DIRS)
 
         while not self._stop_event.is_set():
+            await asyncio.sleep(self.poll_interval)
+
             try:
-                # pygit2 status is fast even on cross-fs
-                current_status = set(git_ops.status().keys())
+                current_mtimes = self._scan_mtimes(PRUNABLE_DIRS)
 
-                # Detect new/changed files since last poll
-                changed = current_status - last_status
+                # Find changed files
+                changed: list[Path] = []
+                for path, mtime in current_mtimes.items():
+                    old_mtime = mtimes.get(path)
+                    if old_mtime is None or mtime > old_mtime:
+                        rel_path = path.relative_to(self.repo_root)
+                        if ".git" not in rel_path.parts:
+                            changed.append(rel_path)
+
+                # Find deleted files
+                for path in mtimes:
+                    if path not in current_mtimes:
+                        rel_path = path.relative_to(self.repo_root)
+                        if ".git" not in rel_path.parts:
+                            changed.append(rel_path)
+
+                mtimes = current_mtimes
+
                 if changed:
-                    relevant_paths: list[Path] = []
-                    for path_str in changed:
-                        rel_path = Path(path_str)
-                        if ".git" in rel_path.parts:
-                            continue
-                        if rel_path.name == ".cplignore":
-                            relevant_paths.append(rel_path)
-                            continue
-                        if self._ignore_checker.should_ignore(self.repo_root / rel_path):
-                            continue
-                        relevant_paths.append(rel_path)
+                    # Filter through cplignore (but include .cplignore itself)
+                    relevant: list[Path] = []
+                    for rel_path in changed:
+                        if rel_path.name == ".cplignore" or not self._ignore_checker.should_ignore(
+                            self.repo_root / rel_path
+                        ):
+                            relevant.append(rel_path)
 
-                    if relevant_paths:
-                        logger.info("changes_detected", count=len(relevant_paths))
-                        self.on_change(relevant_paths)
-
-                last_status = current_status
+                    if relevant:
+                        logger.info("changes_detected", count=len(relevant))
+                        self.on_change(relevant)
 
             except Exception as e:
                 logger.error("poll_error", error=str(e))
 
-            await asyncio.sleep(self.poll_interval)
+    def _scan_mtimes(self, prunable_dirs: frozenset[str]) -> dict[Path, float]:
+        """Scan filesystem for file mtimes, respecting PRUNABLE_DIRS."""
+        import os
+
+        mtimes: dict[Path, float] = {}
+        for dirpath, dirnames, filenames in os.walk(self.repo_root):
+            # Prune expensive directories in-place
+            dirnames[:] = [d for d in dirnames if d not in prunable_dirs]
+
+            for filename in filenames:
+                file_path = Path(dirpath) / filename
+                with contextlib.suppress(OSError):
+                    mtimes[file_path] = file_path.stat().st_mtime
+
+        return mtimes
 
     async def _handle_changes(self, changes: set[tuple[Change, str]]) -> None:
         """Process a batch of file changes."""
