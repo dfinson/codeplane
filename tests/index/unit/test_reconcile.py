@@ -360,3 +360,119 @@ class TestReconcileResult:
         assert result.files_removed == 0
         assert result.files_unchanged == 0
         assert result.errors == []
+        assert result.cplignore_changed is False
+
+
+class TestCplignoreChangeDetection:
+    """Tests for .cplignore change detection."""
+
+    def test_detects_cplignore_creation(
+        self, reconciler_setup: tuple[Path, Database, Reconciler]
+    ) -> None:
+        """Reconciler should detect when .cplignore is created."""
+        repo_path, db, reconciler = reconciler_setup
+
+        # No .cplignore initially
+        codeplane_dir = repo_path / ".codeplane"
+        codeplane_dir.mkdir(exist_ok=True)
+
+        # First reconcile without .cplignore - hash should be None
+        result1 = reconciler.reconcile(paths=[Path("initial.py")])
+        assert result1.cplignore_changed is False  # None -> None is not a change
+
+        # Create .cplignore
+        cplignore_path = codeplane_dir / ".cplignore"
+        cplignore_path.write_text("*.log\n")
+
+        # Reconcile again - should detect the change
+        result2 = reconciler.reconcile(paths=[Path("initial.py")])
+        assert result2.cplignore_changed is True
+
+        # Verify hash stored in RepoState
+        with db.session() as session:
+            repo_state = session.get(RepoState, 1)
+            assert repo_state is not None
+            assert repo_state.cplignore_hash is not None
+
+    def test_detects_cplignore_modification(
+        self, reconciler_setup: tuple[Path, Database, Reconciler]
+    ) -> None:
+        """Reconciler should detect when .cplignore content changes."""
+        repo_path, db, reconciler = reconciler_setup
+
+        # Create .cplignore
+        codeplane_dir = repo_path / ".codeplane"
+        codeplane_dir.mkdir(exist_ok=True)
+        cplignore_path = codeplane_dir / ".cplignore"
+        cplignore_path.write_text("*.log\n")
+
+        # First reconcile
+        result1 = reconciler.reconcile(paths=[Path("initial.py")])
+        assert result1.cplignore_changed is True  # First time seeing it
+
+        # Reconcile again without changes
+        result2 = reconciler.reconcile(paths=[Path("initial.py")])
+        assert result2.cplignore_changed is False
+
+        # Modify .cplignore
+        cplignore_path.write_text("*.log\n*.tmp\n")
+
+        # Reconcile again - should detect the change
+        result3 = reconciler.reconcile(paths=[Path("initial.py")])
+        assert result3.cplignore_changed is True
+
+    def test_no_change_on_same_content(
+        self, reconciler_setup: tuple[Path, Database, Reconciler]
+    ) -> None:
+        """Reconciler should not flag change if .cplignore content is same."""
+        repo_path, db, reconciler = reconciler_setup
+
+        # Create .cplignore
+        codeplane_dir = repo_path / ".codeplane"
+        codeplane_dir.mkdir(exist_ok=True)
+        cplignore_path = codeplane_dir / ".cplignore"
+        cplignore_path.write_text("*.log\n")
+
+        # First reconcile
+        result1 = reconciler.reconcile(paths=[Path("initial.py")])
+        assert result1.cplignore_changed is True
+
+        # Multiple reconciles with same content
+        for _ in range(3):
+            result = reconciler.reconcile(paths=[Path("initial.py")])
+            assert result.cplignore_changed is False
+
+    def test_detects_cplignore_deletion(
+        self, reconciler_setup: tuple[Path, Database, Reconciler]
+    ) -> None:
+        """Reconciler should detect when .cplignore is deleted."""
+        repo_path, db, reconciler = reconciler_setup
+
+        # Create .cplignore
+        codeplane_dir = repo_path / ".codeplane"
+        codeplane_dir.mkdir(exist_ok=True)
+        cplignore_path = codeplane_dir / ".cplignore"
+        cplignore_path.write_text("*.log\n")
+
+        # First reconcile
+        result1 = reconciler.reconcile(paths=[Path("initial.py")])
+        assert result1.cplignore_changed is True
+
+        # Verify hash is stored
+        with db.session() as session:
+            repo_state = session.get(RepoState, 1)
+            assert repo_state is not None
+            assert repo_state.cplignore_hash is not None
+
+        # Delete .cplignore
+        cplignore_path.unlink()
+
+        # Reconcile again - should detect the change (hash -> None)
+        result2 = reconciler.reconcile(paths=[Path("initial.py")])
+        assert result2.cplignore_changed is True
+
+        # Verify hash is now None
+        with db.session() as session:
+            repo_state = session.get(RepoState, 1)
+            assert repo_state is not None
+            assert repo_state.cplignore_hash is None

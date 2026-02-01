@@ -516,6 +516,7 @@ class RepoState(SQLModel, table=True):
     last_seen_index_mtime: float | None = None
     checked_at: float | None = None
     current_epoch_id: int | None = None  # Current epoch ID
+    cplignore_hash: str | None = None  # Hash of .codeplane/.cplignore content
 
 
 class Epoch(SQLModel, table=True):

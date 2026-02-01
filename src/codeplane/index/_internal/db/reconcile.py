@@ -50,6 +50,7 @@ class ReconcileResult:
     head_after: str | None = None
     duration_ms: float = 0.0
     errors: list[str] = field(default_factory=list)
+    cplignore_changed: bool = False  # True if .cplignore was modified
 
     @property
     def files_changed(self) -> int:
@@ -94,6 +95,11 @@ class Reconciler:
         self._repo: pygit2.Repository | None = None
 
     @property
+    def cplignore_path(self) -> Path:
+        """Path to the .cplignore file."""
+        return self.repo_root / ".codeplane" / ".cplignore"
+
+    @property
     def repo(self) -> pygit2.Repository:
         """Lazily open the git repository."""
         if self._repo is None:
@@ -106,6 +112,8 @@ class Reconciler:
 
         If paths is None, reconcile all tracked files in the repository.
         If paths is provided, only reconcile those specific files.
+
+        Also detects .cplignore changes and sets cplignore_changed flag.
 
         Uses immediate_transaction for RepoState to prevent race conditions.
         Uses BulkWriter for file operations for performance.
@@ -123,6 +131,9 @@ class Reconciler:
         current_head = self._get_git_head()
         result.head_after = current_head
 
+        # Check for .cplignore changes
+        current_cplignore_hash = self._compute_cplignore_hash()
+
         # Update RepoState atomically with immediate transaction
         with self.db.immediate_transaction() as session:
             repo_state = session.get(RepoState, 1)
@@ -133,6 +144,11 @@ class Reconciler:
             result.head_before = repo_state.last_seen_head
             repo_state.last_seen_head = current_head
             repo_state.checked_at = time.time()
+
+            # Detect .cplignore change
+            if repo_state.cplignore_hash != current_cplignore_hash:
+                result.cplignore_changed = True
+                repo_state.cplignore_hash = current_cplignore_hash
 
         # Determine which files to check
         if paths is None:
@@ -273,6 +289,12 @@ class Reconciler:
     def _get_git_head(self) -> str:
         """Get current HEAD commit hash."""
         return str(self.repo.head.target)
+
+    def _compute_cplignore_hash(self) -> str | None:
+        """Compute hash of .cplignore file content, or None if it doesn't exist."""
+        if not self.cplignore_path.exists():
+            return None
+        return self._compute_hash(self.cplignore_path)
 
     def _get_all_tracked_files(self) -> list[str]:
         """Get all files tracked by git."""
