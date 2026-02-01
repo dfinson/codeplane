@@ -3070,6 +3070,8 @@ Unified search across lexical index, symbols, and references.
 
 Repository mental model — structure, languages, entry points, dependencies.
 
+Queries the existing index to build a mental model. Does NOT scan the filesystem — reflects only what's indexed.
+
 **Parameters:**
 
 ```typescript
@@ -3088,34 +3090,32 @@ Repository mental model — structure, languages, entry points, dependencies.
     root: string;
     tree: DirectoryNode[];          // Nested directory structure
     file_count: number;
-    total_lines: number;
+    contexts: string[];             // Valid context root paths
   };
   languages: Array<{
-    language: string;
+    language: string;               // Language family from File.language_family
     file_count: number;
-    line_count: number;
     percentage: number;
   }>;
   entry_points: Array<{
     path: string;
-    kind: "main" | "cli" | "api" | "test" | "config";
-    language: string;
+    kind: string;                   // DefFact.kind (function, class, method)
+    name: string;                   // DefFact.name
+    qualified_name?: string;        // DefFact.qualified_name
   }>;
   dependencies: {
-    direct: string[];
-    dev: string[];
-    package_manager: string;
+    external_modules: string[];     // From ImportFact.source_literal (non-relative)
+    import_count: number;
   };
   test_layout: {
-    framework: string;
-    test_dirs: string[];
+    test_files: string[];           // File paths matching test patterns
     test_count: number;
   };
   public_api: Array<{
-    symbol: string;
-    kind: string;
-    path: string;
-    exported: boolean;
+    name: string;                   // ExportEntry.exported_name
+    def_uid?: string;               // Target definition UID
+    certainty: string;              // CERTAIN or UNCERTAIN
+    evidence?: string;              // Evidence kind (e.g., __all__literal)
   }>;
   _session: SessionState;
 }
