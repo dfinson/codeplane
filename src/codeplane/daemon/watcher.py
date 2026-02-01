@@ -100,31 +100,15 @@ class FileWatcher:
 
     async def _poll_loop(self) -> None:
         """Poll loop using git status (for cross-filesystem where inotify fails)."""
-        import subprocess
+        from codeplane.git import GitOps
 
+        git_ops = GitOps(self.repo_root)
         last_status: set[str] = set()
 
         while not self._stop_event.is_set():
             try:
-                # git status --porcelain is fast even on cross-fs
-                result = subprocess.run(
-                    ["git", "status", "--porcelain", "-uall"],
-                    cwd=self.repo_root,
-                    capture_output=True,
-                    text=True,
-                    timeout=30,
-                )
-                if result.returncode != 0:
-                    await asyncio.sleep(self.poll_interval)
-                    continue
-
-                # Parse changed files
-                current_status: set[str] = set()
-                for line in result.stdout.splitlines():
-                    if len(line) > 3:
-                        # Format: "XY path" or "XY path -> newpath"
-                        path_part = line[3:].split(" -> ")[0].strip('"')
-                        current_status.add(path_part)
+                # pygit2 status is fast even on cross-fs
+                current_status = set(git_ops.status().keys())
 
                 # Detect new/changed files since last poll
                 changed = current_status - last_status
@@ -147,8 +131,6 @@ class FileWatcher:
 
                 last_status = current_status
 
-            except subprocess.TimeoutExpired:
-                logger.warning("git_status_timeout")
             except Exception as e:
                 logger.error("poll_error", error=str(e))
 
