@@ -220,16 +220,15 @@ def test_full_index_within_budget(initialized_repo: InitResult) -> None:
 
 **Location:** `tests/e2e/test_incremental.py`
 
+**How it works:** Incremental reindexing happens automatically via the
+daemon/watcher when files change. There is no `cpl reindex` CLI command.
+
 **Implemented:**
 - `test_reinit_includes_new_file` - Re-init picks up new files
 - `test_reinit_removes_deleted_file` - Re-init removes deleted files
 
-**Blocked (requires `cpl reindex`):**
-- `test_incremental_reindex_updates_only_changed_file` - marked `xfail`
-
-**Why blocked:** True incremental reindex requires a `cpl reindex <path>`
-command that is not implemented yet. Current workaround validates via
-`cpl init --force`.
+**Daemon-based incremental testing:** Covered in Scenario 3 via
+`test_given_daemon_when_file_modified_then_reindex_triggered`.
 
 ### Scenario 3: Daemon Lifecycle
 
@@ -257,15 +256,13 @@ command that is not implemented yet. Current workaround validates via
 
 **Location:** `tests/e2e/test_search.py`
 
-**Implemented (workaround):**
+**How it works:** Search is exposed via MCP tools only, not CLI.
+These tests validate the underlying indexed data that powers search.
+
+**Implemented:**
 - `test_anchor_symbols_in_database` - Direct SQLite lookup
 - `test_def_facts_populated` - Table has rows
 - `test_files_table_populated` - Table has rows
-
-**Blocked (requires `cpl search`):**
-- `test_anchor_search_queries` - marked `xfail`
-
-**Why blocked:** Requires `cpl search <query>` CLI command.
 
 ### Scenario 5: Query Performance
 
@@ -357,16 +354,12 @@ pytest tests/e2e/ -m e2e --timeout=600
 - [x] `budgets_loader.py` - JSON budget loader
 - [x] `conftest.py` - Core fixtures and markers
 - [x] `test_full_index.py` - Scenario 1 tests
+- [x] `test_incremental.py` - Scenario 2 tests
 - [x] `test_daemon.py` - Scenario 3 tests
 - [x] `test_search.py` - Scenario 4 + 5 tests
 - [x] Anchor specs for all Tier 1 repos
 - [x] Anchor specs for all Tier 2 repos
 - [x] Budget specs for all repos
-
-### In Progress
-
-- [ ] `test_incremental.py` - Blocked on `cpl reindex`
-- [ ] `test_search.py` - Blocked on `cpl search`
 
 ### Not Started
 

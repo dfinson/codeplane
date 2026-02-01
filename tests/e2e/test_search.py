@@ -1,11 +1,10 @@
-"""E2E Test Scenario 4: Lexical Search Quality.
+"""E2E Test Scenario 4: Search Quality via Database.
 
-Validates search returns expected results using anchor-based assertions
+Validates search/index quality using direct database queries
 per E2E_TEST_PROPOSALS.md.
 
-NOTE: These tests require a `cpl search` CLI command which is not yet
-implemented. Tests are marked as xfail until the CLI is available.
-Database queries are used as a workaround for basic validation.
+Search is exposed via MCP tools only, not CLI. These tests validate
+the underlying indexed data that powers search.
 """
 
 from __future__ import annotations
@@ -18,40 +17,7 @@ from tests.e2e.conftest import InitResult
 @pytest.mark.e2e
 @pytest.mark.slow
 class TestSearchQuality:
-    """Scenario 4: Lexical Search Quality."""
-
-    @pytest.mark.xfail(reason="cpl search CLI not yet implemented")
-    def test_anchor_search_queries(self, initialized_repo: InitResult) -> None:
-        """Verify search queries return expected files.
-
-        Requires: cpl search <query>
-        """
-        repo = initialized_repo.repo
-        anchors = repo.anchors
-
-        if not anchors.search_queries:
-            pytest.skip("No search queries defined for this repo")
-
-        failures = []
-
-        for sq in anchors.search_queries:
-            result, _ = repo.env.run_cpl(
-                ["search", sq.query],
-                cwd=repo.path,
-            )
-
-            if not result.success:
-                failures.append(f"Query '{sq.query}' failed: {result.stderr}")
-                continue
-
-            # Check if expected path is in output
-            if sq.expected_path_contains not in result.stdout:
-                failures.append(
-                    f"Query '{sq.query}': expected path containing "
-                    f"'{sq.expected_path_contains}' not in output"
-                )
-
-        assert not failures, "Search query failures:\n" + "\n".join(failures)
+    """Scenario 4: Search Quality via Database."""
 
     def test_anchor_symbols_in_database(self, initialized_repo: InitResult) -> None:
         """Verify anchor symbols are in the database (workaround for search)."""

@@ -1,11 +1,9 @@
-"""E2E Test Scenario 2: Incremental Update Isolated.
+"""E2E Test Scenario 2: Incremental Update.
 
-Validates that single-file edits only reindex affected files
-per E2E_TEST_PROPOSALS.md.
+Validates incremental indexing behavior per E2E_TEST_PROPOSALS.md.
 
-NOTE: These tests require a `cpl reindex` CLI command which is not yet
-implemented. Tests are marked as xfail until the CLI is available.
-For now, we validate the database state after a full re-init.
+Incremental reindexing happens automatically via the daemon/watcher.
+These tests validate reinit behavior for file additions/deletions.
 """
 
 from __future__ import annotations
@@ -18,57 +16,7 @@ from tests.e2e.conftest import InitResult
 @pytest.mark.e2e
 @pytest.mark.slow
 class TestIncrementalUpdate:
-    """Scenario 2: Incremental Update Isolated."""
-
-    @pytest.mark.xfail(reason="cpl reindex CLI not yet implemented")
-    def test_incremental_reindex_updates_only_changed_file(
-        self, initialized_repo: InitResult
-    ) -> None:
-        """Verify incremental reindex only touches the changed file.
-
-        Requires: cpl reindex <path>
-        """
-        repo = initialized_repo.repo
-
-        # Find a Python file to edit
-        rows = repo.query_db("SELECT path FROM files WHERE path LIKE '%.py' LIMIT 1")
-        if not rows:
-            pytest.skip("No Python files found")
-
-        target_path = repo.path / rows[0][0]
-
-        # Get def count before
-        before_count = repo.count_defs()
-
-        # Edit the file - append a new function
-        original_content = target_path.read_text()
-        new_content = original_content + "\n\ndef _injected_e2e_test_func():\n    pass\n"
-        target_path.write_text(new_content)
-
-        try:
-            # Trigger incremental reindex (requires cpl reindex <path>)
-            result, _ = repo.env.run_cpl(
-                ["reindex", str(target_path.relative_to(repo.path))],
-                cwd=repo.path,
-            )
-            result.check()
-
-            # Verify the injected function exists
-            matches = repo.query_db(
-                "SELECT name FROM def_facts WHERE name = ?",
-                ("_injected_e2e_test_func",),
-            )
-            assert len(matches) > 0, "Injected function not found after reindex"
-
-            # Verify def count increased by 1
-            after_count = repo.count_defs()
-            assert after_count == before_count + 1, (
-                f"Expected 1 new def, got {after_count - before_count}"
-            )
-
-        finally:
-            # Restore original content
-            target_path.write_text(original_content)
+    """Scenario 2: Incremental Update."""
 
     def test_reinit_includes_new_file(self, initialized_repo: InitResult) -> None:
         """Verify re-running init picks up new files."""
