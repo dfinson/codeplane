@@ -16,13 +16,25 @@ from codeplane.index._internal.ignore import IgnoreChecker
 logger = structlog.get_logger()
 
 
+def _is_cross_filesystem(path: Path) -> bool:
+    """Detect if path is on a cross-filesystem mount (WSL /mnt/*, network drives, etc.)."""
+    resolved = path.resolve()
+    path_str = str(resolved)
+    # WSL accessing Windows filesystem
+    if path_str.startswith("/mnt/") and len(path_str) > 5 and path_str[5].isalpha():
+        return True
+    # Common network/remote mounts
+    return path_str.startswith(("/run/user/", "/media/", "/net/"))
+
+
 @dataclass
 class FileWatcher:
     """
     Async file watcher that filters changes through .cplignore.
 
     Design:
-    - Uses watchfiles for cross-platform async watching
+    - Uses watchfiles for native filesystem watching
+    - Falls back to git-based polling for cross-filesystem (WSL /mnt/*)
     - Filters changes through IgnoreChecker before emitting
     - Detects .cplignore changes and reloads filter
     - Notifies callback with batched path changes
@@ -30,14 +42,17 @@ class FileWatcher:
 
     repo_root: Path
     on_change: Callable[[list[Path]], None]
+    poll_interval: float = 5.0  # Seconds between git status polls
 
     _ignore_checker: IgnoreChecker = field(init=False)
     _watch_task: asyncio.Task[None] | None = field(default=None, init=False)
     _stop_event: asyncio.Event = field(default_factory=asyncio.Event, init=False)
+    _is_cross_fs: bool = field(init=False)
 
     def __post_init__(self) -> None:
-        """Initialize ignore checker."""
+        """Initialize ignore checker and detect cross-filesystem."""
         self._ignore_checker = IgnoreChecker(self.repo_root)
+        self._is_cross_fs = _is_cross_filesystem(self.repo_root)
 
     async def start(self) -> None:
         """Start watching for file changes."""
@@ -45,8 +60,17 @@ class FileWatcher:
             return
 
         self._stop_event.clear()
-        self._watch_task = asyncio.create_task(self._watch_loop())
-        logger.info("file_watcher_started", repo_root=str(self.repo_root))
+        if self._is_cross_fs:
+            self._watch_task = asyncio.create_task(self._poll_loop())
+            logger.info(
+                "file_watcher_started",
+                repo_root=str(self.repo_root),
+                mode="polling",
+                interval=self.poll_interval,
+            )
+        else:
+            self._watch_task = asyncio.create_task(self._watch_loop())
+            logger.info("file_watcher_started", repo_root=str(self.repo_root), mode="native")
 
     async def stop(self) -> None:
         """Stop watching for file changes."""
@@ -61,7 +85,7 @@ class FileWatcher:
         logger.info("file_watcher_stopped")
 
     async def _watch_loop(self) -> None:
-        """Main watch loop."""
+        """Main watch loop using watchfiles (native filesystem events)."""
         try:
             async for changes in awatch(
                 self.repo_root,
@@ -73,6 +97,62 @@ class FileWatcher:
             pass
         except Exception as e:
             logger.error("watcher_error", error=str(e))
+
+    async def _poll_loop(self) -> None:
+        """Poll loop using git status (for cross-filesystem where inotify fails)."""
+        import subprocess
+
+        last_status: set[str] = set()
+
+        while not self._stop_event.is_set():
+            try:
+                # git status --porcelain is fast even on cross-fs
+                result = subprocess.run(
+                    ["git", "status", "--porcelain", "-uall"],
+                    cwd=self.repo_root,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                if result.returncode != 0:
+                    await asyncio.sleep(self.poll_interval)
+                    continue
+
+                # Parse changed files
+                current_status: set[str] = set()
+                for line in result.stdout.splitlines():
+                    if len(line) > 3:
+                        # Format: "XY path" or "XY path -> newpath"
+                        path_part = line[3:].split(" -> ")[0].strip('"')
+                        current_status.add(path_part)
+
+                # Detect new/changed files since last poll
+                changed = current_status - last_status
+                if changed:
+                    relevant_paths: list[Path] = []
+                    for path_str in changed:
+                        rel_path = Path(path_str)
+                        if ".git" in rel_path.parts:
+                            continue
+                        if rel_path.name == ".cplignore":
+                            relevant_paths.append(rel_path)
+                            continue
+                        if self._ignore_checker.should_ignore(self.repo_root / rel_path):
+                            continue
+                        relevant_paths.append(rel_path)
+
+                    if relevant_paths:
+                        logger.info("changes_detected", count=len(relevant_paths))
+                        self.on_change(relevant_paths)
+
+                last_status = current_status
+
+            except subprocess.TimeoutExpired:
+                logger.warning("git_status_timeout")
+            except Exception as e:
+                logger.error("poll_error", error=str(e))
+
+            await asyncio.sleep(self.poll_interval)
 
     async def _handle_changes(self, changes: set[tuple[Change, str]]) -> None:
         """Process a batch of file changes."""
