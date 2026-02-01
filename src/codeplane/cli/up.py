@@ -10,7 +10,7 @@ import click
 from codeplane.cli.init import initialize_repo
 from codeplane.config.loader import load_config
 from codeplane.config.models import CodePlaneConfig
-from codeplane.daemon.lifecycle import is_daemon_running, read_daemon_info, run_daemon
+from codeplane.daemon.lifecycle import is_server_running, read_server_info, run_server
 from codeplane.index.ops import IndexCoordinator
 
 LOGO = r"""
@@ -67,17 +67,17 @@ def up_command(path: Path, port: int | None) -> None:
     codeplane_dir = repo_root / ".codeplane"
 
     # Check if already running
-    if is_daemon_running(codeplane_dir):
-        info = read_daemon_info(codeplane_dir)
+    if is_server_running(codeplane_dir):
+        info = read_server_info(codeplane_dir)
         if info:
-            pid, daemon_port = info
-            click.echo(f"Already running (PID {pid}, port {daemon_port})")
+            pid, server_port = info
+            click.echo(f"Already running (PID {pid}, port {server_port})")
             return
 
     # Load config
     config = cast(CodePlaneConfig, load_config(repo_root))
     if port is not None:
-        config.daemon.port = port
+        config.server.port = port
 
     # Get index paths from config (respects index.index_path for cross-filesystem)
     from codeplane.config.loader import get_index_paths
@@ -104,9 +104,9 @@ def up_command(path: Path, port: int | None) -> None:
     finally:
         loop.close()
 
-    _print_banner(config.daemon.host, config.daemon.port)
+    _print_banner(config.server.host, config.server.port)
     try:
-        asyncio.run(run_daemon(repo_root, coordinator, config.daemon))
+        asyncio.run(run_server(repo_root, coordinator, config.server))
     except KeyboardInterrupt:
         click.echo("\nStopped")
     finally:

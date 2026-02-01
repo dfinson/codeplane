@@ -69,7 +69,7 @@ class TestConfigModels:
         # When / Then
         if valid:
             config = CodePlaneConfig(daemon=daemon_config)
-            assert config.daemon.port == port
+            assert config.server.port == port
         else:
             with pytest.raises(ValidationError):
                 CodePlaneConfig(daemon=daemon_config)
@@ -88,7 +88,7 @@ class TestConfigLoading:
 
         # Then
         assert config.logging.level == "INFO"
-        assert config.daemon.port == 7654
+        assert config.server.port == 7654
 
     def test_given_repo_config_when_load_then_overrides_defaults(self, temp_repo: Path) -> None:
         """Repo config file overrides defaults."""

@@ -33,8 +33,8 @@ class LoggingConfig(BaseModel):
     outputs: list[LogOutputConfig] = Field(default_factory=lambda: [LogOutputConfig()])
 
 
-class DaemonConfig(BaseModel):
-    """Daemon configuration."""
+class ServerConfig(BaseModel):
+    """Server configuration."""
 
     host: str = "127.0.0.1"
     port: int = 7654
@@ -60,5 +60,5 @@ class CodePlaneConfig(BaseModel):
     """Root configuration."""
 
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
-    daemon: DaemonConfig = Field(default_factory=DaemonConfig)
+    server: ServerConfig = Field(default_factory=ServerConfig)
     index: IndexConfig = Field(default_factory=IndexConfig)

@@ -6,7 +6,7 @@ from pathlib import Path
 import click
 import httpx
 
-from codeplane.daemon.lifecycle import is_daemon_running, read_daemon_info
+from codeplane.daemon.lifecycle import is_server_running, read_server_info
 
 
 @click.command()
@@ -32,7 +32,7 @@ def status_command(path: Path, as_json: bool) -> None:
             click.echo("Repository not initialized. Run 'cpl init' first.")
         return
 
-    if not is_daemon_running(codeplane_dir):
+    if not is_server_running(codeplane_dir):
         if as_json:
             click.echo(json.dumps({"initialized": True, "running": False}))
         else:
@@ -40,7 +40,7 @@ def status_command(path: Path, as_json: bool) -> None:
             click.echo(f"Repository: {repo_root}")
         return
 
-    info = read_daemon_info(codeplane_dir)
+    info = read_server_info(codeplane_dir)
     if info is None:
         if as_json:
             click.echo(json.dumps({"initialized": True, "running": False}))

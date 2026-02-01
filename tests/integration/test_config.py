@@ -77,8 +77,8 @@ class TestConfigCascade:
 
         # Then - verify cascade
         assert config.logging.level == "DEBUG"  # from repo
-        assert config.daemon.port == 9999  # from env (overrides global)
-        assert config.daemon.host == "0.0.0.0"  # from global
+        assert config.server.port == 9999  # from env (overrides global)
+        assert config.server.host == "0.0.0.0"  # from global
 
     def test_given_nested_config_when_merge_then_deep_merges(
         self, temp_repo: Path, global_config_dir: Path

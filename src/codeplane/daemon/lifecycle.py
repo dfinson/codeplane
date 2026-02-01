@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import structlog
 import uvicorn
 
-from codeplane.config.models import DaemonConfig
+from codeplane.config.models import ServerConfig
 from codeplane.daemon.indexer import BackgroundIndexer
 from codeplane.daemon.watcher import FileWatcher
 
@@ -27,7 +27,7 @@ PORT_FILE = "daemon.port"
 
 
 @dataclass
-class DaemonController:
+class ServerController:
     """
     Orchestrates daemon components.
 
@@ -39,7 +39,7 @@ class DaemonController:
 
     repo_root: Path
     coordinator: IndexCoordinator
-    config: DaemonConfig
+    config: ServerConfig
 
     indexer: BackgroundIndexer = field(init=False)
     watcher: FileWatcher = field(init=False)
@@ -114,7 +114,7 @@ def remove_pid_file(codeplane_dir: Path) -> None:
             path.unlink()
 
 
-def read_daemon_info(codeplane_dir: Path) -> tuple[int, int] | None:
+def read_server_info(codeplane_dir: Path) -> tuple[int, int] | None:
     """Read daemon PID and port from files. Returns (pid, port) or None."""
     pid_path = codeplane_dir / PID_FILE
     port_path = codeplane_dir / PORT_FILE
@@ -127,11 +127,11 @@ def read_daemon_info(codeplane_dir: Path) -> tuple[int, int] | None:
         return None
 
 
-def is_daemon_running(codeplane_dir: Path) -> bool:
+def is_server_running(codeplane_dir: Path) -> bool:
     """Check if daemon is running by verifying PID file and process."""
     import os
 
-    info = read_daemon_info(codeplane_dir)
+    info = read_server_info(codeplane_dir)
     if info is None:
         return False
 
@@ -147,15 +147,15 @@ def is_daemon_running(codeplane_dir: Path) -> bool:
         return False
 
 
-async def run_daemon(
+async def run_server(
     repo_root: Path,
     coordinator: IndexCoordinator,
-    config: DaemonConfig,
+    config: ServerConfig,
 ) -> None:
     """Run the daemon until shutdown signal."""
     from codeplane.daemon.app import create_app
 
-    controller = DaemonController(
+    controller = ServerController(
         repo_root=repo_root,
         coordinator=coordinator,
         config=config,
@@ -201,7 +201,7 @@ def stop_daemon(codeplane_dir: Path) -> bool:
     """Stop a running daemon by sending SIGTERM. Returns True if stopped."""
     import os
 
-    info = read_daemon_info(codeplane_dir)
+    info = read_server_info(codeplane_dir)
     if info is None:
         return False
 

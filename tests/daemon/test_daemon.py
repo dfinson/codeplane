@@ -421,14 +421,14 @@ class TestDaemonLifecycle:
 
     def test_given_no_pid_file_when_is_running_then_false(self, tmp_path: Path) -> None:
         """No PID file means daemon is not running."""
-        from codeplane.daemon.lifecycle import is_daemon_running
+        from codeplane.daemon.lifecycle import is_server_running
 
         # Given
         codeplane_dir = tmp_path / ".codeplane"
         codeplane_dir.mkdir()
 
         # When
-        result = is_daemon_running(codeplane_dir)
+        result = is_server_running(codeplane_dir)
 
         # Then
         assert result is False
@@ -437,7 +437,7 @@ class TestDaemonLifecycle:
         self, tmp_path: Path
     ) -> None:
         """PID file with non-existent process means not running."""
-        from codeplane.daemon.lifecycle import is_daemon_running
+        from codeplane.daemon.lifecycle import is_server_running
 
         # Given
         codeplane_dir = tmp_path / ".codeplane"
@@ -446,7 +446,7 @@ class TestDaemonLifecycle:
         (codeplane_dir / "daemon.port").write_text("7654")
 
         # When
-        result = is_daemon_running(codeplane_dir)
+        result = is_server_running(codeplane_dir)
 
         # Then
         assert result is False
@@ -455,7 +455,7 @@ class TestDaemonLifecycle:
 
     def test_given_valid_info_when_write_pid_file_then_files_created(self, tmp_path: Path) -> None:
         """Writing PID file creates both pid and port files."""
-        from codeplane.daemon.lifecycle import read_daemon_info, write_pid_file
+        from codeplane.daemon.lifecycle import read_server_info, write_pid_file
 
         # Given
         codeplane_dir = tmp_path / ".codeplane"
@@ -465,7 +465,7 @@ class TestDaemonLifecycle:
         write_pid_file(codeplane_dir, port=8080)
 
         # Then
-        info = read_daemon_info(codeplane_dir)
+        info = read_server_info(codeplane_dir)
         assert info is not None
         pid, port = info
         assert pid > 0  # Current process PID
@@ -487,29 +487,29 @@ class TestDaemonLifecycle:
         assert not (codeplane_dir / "daemon.pid").exists()
         assert not (codeplane_dir / "daemon.port").exists()
 
-    def test_given_no_files_when_read_daemon_info_then_none(self, tmp_path: Path) -> None:
+    def test_given_no_files_when_read_server_info_then_none(self, tmp_path: Path) -> None:
         """Missing files return None for daemon info."""
-        from codeplane.daemon.lifecycle import read_daemon_info
+        from codeplane.daemon.lifecycle import read_server_info
 
         codeplane_dir = tmp_path / ".codeplane"
         codeplane_dir.mkdir()
 
-        result = read_daemon_info(codeplane_dir)
+        result = read_server_info(codeplane_dir)
 
         assert result is None
 
-    def test_given_invalid_pid_content_when_read_daemon_info_then_none(
+    def test_given_invalid_pid_content_when_read_server_info_then_none(
         self, tmp_path: Path
     ) -> None:
         """Invalid PID file content returns None."""
-        from codeplane.daemon.lifecycle import read_daemon_info
+        from codeplane.daemon.lifecycle import read_server_info
 
         codeplane_dir = tmp_path / ".codeplane"
         codeplane_dir.mkdir()
         (codeplane_dir / "daemon.pid").write_text("not-a-number")
         (codeplane_dir / "daemon.port").write_text("8080")
 
-        result = read_daemon_info(codeplane_dir)
+        result = read_server_info(codeplane_dir)
 
         assert result is None
 
@@ -540,20 +540,20 @@ class TestDaemonLifecycle:
         assert result is False
 
 
-class TestDaemonController:
-    """Tests for DaemonController."""
+class TestServerController:
+    """Tests for ServerController."""
 
     def test_given_coordinator_when_create_controller_then_components_initialized(
         self, tmp_path: Path
     ) -> None:
         """Controller initializes indexer and watcher."""
-        from codeplane.config.models import DaemonConfig
-        from codeplane.daemon.lifecycle import DaemonController
+        from codeplane.config.models import ServerConfig
+        from codeplane.daemon.lifecycle import ServerController
 
         coordinator = MagicMock()
-        config = DaemonConfig()
+        config = ServerConfig()
 
-        controller = DaemonController(
+        controller = ServerController(
             repo_root=tmp_path,
             coordinator=coordinator,
             config=config,
@@ -567,17 +567,17 @@ class TestDaemonController:
         self, tmp_path: Path
     ) -> None:
         """Starting controller starts indexer and watcher."""
-        from codeplane.config.models import DaemonConfig
-        from codeplane.daemon.lifecycle import DaemonController
+        from codeplane.config.models import ServerConfig
+        from codeplane.daemon.lifecycle import ServerController
 
         cpl_dir = tmp_path / ".codeplane"
         cpl_dir.mkdir()
         (cpl_dir / ".cplignore").write_text("")
 
         coordinator = MagicMock()
-        config = DaemonConfig()
+        config = ServerConfig()
 
-        controller = DaemonController(
+        controller = ServerController(
             repo_root=tmp_path,
             coordinator=coordinator,
             config=config,
@@ -595,17 +595,17 @@ class TestDaemonController:
         self, tmp_path: Path
     ) -> None:
         """Stopping controller sets shutdown event."""
-        from codeplane.config.models import DaemonConfig
-        from codeplane.daemon.lifecycle import DaemonController
+        from codeplane.config.models import ServerConfig
+        from codeplane.daemon.lifecycle import ServerController
 
         cpl_dir = tmp_path / ".codeplane"
         cpl_dir.mkdir()
         (cpl_dir / ".cplignore").write_text("")
 
         coordinator = MagicMock()
-        config = DaemonConfig()
+        config = ServerConfig()
 
-        controller = DaemonController(
+        controller = ServerController(
             repo_root=tmp_path,
             coordinator=coordinator,
             config=config,

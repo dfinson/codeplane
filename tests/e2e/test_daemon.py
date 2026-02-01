@@ -25,7 +25,7 @@ def _get_free_port() -> int:
 
 
 @pytest.fixture
-def daemon_port() -> int:
+def server_port() -> int:
     """Get a unique free port for daemon tests."""
     return _get_free_port()
 
@@ -101,12 +101,12 @@ class TestDaemonE2E:
 
     @pytest.mark.e2e
     def test_given_repo_when_cpl_up_then_daemon_starts(
-        self, daemon_test_repo: Path, isolated_env: IsolatedEnv, daemon_port: int
+        self, daemon_test_repo: Path, isolated_env: IsolatedEnv, server_port: int
     ) -> None:
         """cpl up starts the daemon and creates pid file."""
         import sys
 
-        print(f"DEBUG test: starting, port={daemon_port}", file=sys.stderr, flush=True)
+        print(f"DEBUG test: starting, port={server_port}", file=sys.stderr, flush=True)
         # Given - initialized repo
         print("DEBUG test: running cpl init", file=sys.stderr, flush=True)
         result, _ = isolated_env.run_cpl(["init"], cwd=daemon_test_repo, timeout=60)
@@ -114,9 +114,9 @@ class TestDaemonE2E:
         result.check()
 
         # When - start daemon with unique port
-        print(f"DEBUG test: running cpl up --port {daemon_port}", file=sys.stderr, flush=True)
+        print(f"DEBUG test: running cpl up --port {server_port}", file=sys.stderr, flush=True)
         result, _ = isolated_env.run_cpl(
-            ["up", "--port", str(daemon_port)], cwd=daemon_test_repo, timeout=60
+            ["up", "--port", str(server_port)], cwd=daemon_test_repo, timeout=60
         )
         print(f"DEBUG test: cpl up returned {result.returncode}", file=sys.stderr, flush=True)
 
@@ -144,12 +144,12 @@ class TestDaemonE2E:
 
     @pytest.mark.e2e
     def test_given_running_daemon_when_cpl_down_then_daemon_stops(
-        self, daemon_test_repo: Path, isolated_env: IsolatedEnv, daemon_port: int
+        self, daemon_test_repo: Path, isolated_env: IsolatedEnv, server_port: int
     ) -> None:
         """cpl down stops a running daemon."""
         # Given - init and start daemon
         isolated_env.run_cpl(["init"], cwd=daemon_test_repo)
-        isolated_env.run_cpl(["up", "--port", str(daemon_port)], cwd=daemon_test_repo)
+        isolated_env.run_cpl(["up", "--port", str(server_port)], cwd=daemon_test_repo)
 
         pid_file = daemon_test_repo / ".codeplane" / "daemon.pid"
         assert pid_file.exists(), "Daemon should be running"
@@ -177,13 +177,13 @@ class TestDaemonE2E:
 
     @pytest.mark.e2e
     def test_given_running_daemon_when_cpl_status_then_shows_running(
-        self, daemon_test_repo: Path, isolated_env: IsolatedEnv, daemon_port: int
+        self, daemon_test_repo: Path, isolated_env: IsolatedEnv, server_port: int
     ) -> None:
         """cpl status shows daemon state when running."""
         # Given - init and start daemon
         isolated_env.run_cpl(["init"], cwd=daemon_test_repo)
         up_result, _ = isolated_env.run_cpl(
-            ["up", "--port", str(daemon_port)], cwd=daemon_test_repo
+            ["up", "--port", str(server_port)], cwd=daemon_test_repo
         )
         up_result.check()
 
@@ -220,12 +220,12 @@ class TestDaemonE2E:
     @pytest.mark.e2e
     @pytest.mark.slow
     def test_given_daemon_when_file_modified_then_reindex_triggered(
-        self, daemon_test_repo: Path, isolated_env: IsolatedEnv, daemon_port: int
+        self, daemon_test_repo: Path, isolated_env: IsolatedEnv, server_port: int
     ) -> None:
         """Daemon detects file changes and triggers reindex."""
         # Given - init and start daemon
         isolated_env.run_cpl(["init"], cwd=daemon_test_repo)
-        isolated_env.run_cpl(["up", "--port", str(daemon_port)], cwd=daemon_test_repo)
+        isolated_env.run_cpl(["up", "--port", str(server_port)], cwd=daemon_test_repo)
 
         try:
             # Give daemon time to start watching

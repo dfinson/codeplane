@@ -151,4 +151,4 @@ class TestWorkflows:
 
         # Then
         assert config.logging.level == "DEBUG"
-        assert config.daemon.port == 3000
+        assert config.server.port == 3000

@@ -9,10 +9,10 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 if TYPE_CHECKING:
-    from codeplane.daemon.lifecycle import DaemonController
+    from codeplane.daemon.lifecycle import ServerController
 
 
-def create_routes(controller: DaemonController) -> list[Route]:
+def create_routes(controller: ServerController) -> list[Route]:
     """Create HTTP routes bound to the daemon controller."""
 
     async def health(request: Request) -> JSONResponse:

@@ -2,12 +2,12 @@
 
 from codeplane.daemon.app import create_app
 from codeplane.daemon.indexer import BackgroundIndexer
-from codeplane.daemon.lifecycle import DaemonController
+from codeplane.daemon.lifecycle import ServerController
 from codeplane.daemon.watcher import FileWatcher
 
 __all__ = [
     "BackgroundIndexer",
-    "DaemonController",
+    "ServerController",
     "FileWatcher",
     "create_app",
 ]

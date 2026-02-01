@@ -70,7 +70,7 @@ class TestDownCommand:
         assert result.exit_code == 0
         assert "not initialized" in result.output.lower()
 
-    @patch("codeplane.cli.down.is_daemon_running")
+    @patch("codeplane.cli.down.is_server_running")
     def test_given_initialized_repo_not_running_when_down_then_reports_not_running(
         self, mock_is_running: MagicMock, initialized_repo: Path
     ) -> None:
@@ -82,8 +82,8 @@ class TestDownCommand:
         assert "not running" in result.output.lower()
 
     @patch("codeplane.cli.down.stop_daemon")
-    @patch("codeplane.cli.down.read_daemon_info")
-    @patch("codeplane.cli.down.is_daemon_running")
+    @patch("codeplane.cli.down.read_server_info")
+    @patch("codeplane.cli.down.is_server_running")
     def test_given_running_daemon_when_down_then_stops_daemon(
         self,
         mock_is_running: MagicMock,
@@ -102,8 +102,8 @@ class TestDownCommand:
         mock_stop_daemon.assert_called_once()
 
     @patch("codeplane.cli.down.stop_daemon")
-    @patch("codeplane.cli.down.read_daemon_info")
-    @patch("codeplane.cli.down.is_daemon_running")
+    @patch("codeplane.cli.down.read_server_info")
+    @patch("codeplane.cli.down.is_server_running")
     def test_given_running_daemon_when_stop_fails_then_reports_failure(
         self,
         mock_is_running: MagicMock,
@@ -121,8 +121,8 @@ class TestDownCommand:
         assert "failed" in result.output.lower() or "already exited" in result.output.lower()
 
     @patch("codeplane.cli.down.stop_daemon")
-    @patch("codeplane.cli.down.read_daemon_info")
-    @patch("codeplane.cli.down.is_daemon_running")
+    @patch("codeplane.cli.down.read_server_info")
+    @patch("codeplane.cli.down.is_server_running")
     def test_given_running_daemon_no_info_when_down_then_still_stops(
         self,
         mock_is_running: MagicMock,
@@ -130,7 +130,7 @@ class TestDownCommand:
         mock_stop_daemon: MagicMock,
         initialized_repo: Path,
     ) -> None:
-        """Down still attempts to stop even if read_daemon_info returns None."""
+        """Down still attempts to stop even if read_server_info returns None."""
         mock_is_running.return_value = True
         mock_read_info.return_value = None
         mock_stop_daemon.return_value = True

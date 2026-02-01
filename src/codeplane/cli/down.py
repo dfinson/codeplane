@@ -4,7 +4,7 @@ from pathlib import Path
 
 import click
 
-from codeplane.daemon.lifecycle import is_daemon_running, read_daemon_info, stop_daemon
+from codeplane.daemon.lifecycle import is_server_running, read_server_info, stop_daemon
 
 
 @click.command()
@@ -28,11 +28,11 @@ def down_command(path: Path) -> None:
         click.echo("Repository not initialized. Nothing to stop.")
         return
 
-    if not is_daemon_running(codeplane_dir):
+    if not is_server_running(codeplane_dir):
         click.echo("Daemon is not running")
         return
 
-    info = read_daemon_info(codeplane_dir)
+    info = read_server_info(codeplane_dir)
     if info:
         pid, port = info
         click.echo(f"Stopping daemon (PID {pid}, port {port})...")

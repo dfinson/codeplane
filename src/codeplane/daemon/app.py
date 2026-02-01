@@ -11,10 +11,10 @@ from codeplane.daemon.middleware import RepoValidationMiddleware
 from codeplane.daemon.routes import create_routes
 
 if TYPE_CHECKING:
-    from codeplane.daemon.lifecycle import DaemonController
+    from codeplane.daemon.lifecycle import ServerController
 
 
-def create_app(controller: DaemonController, repo_root: Path) -> Starlette:
+def create_app(controller: ServerController, repo_root: Path) -> Starlette:
     """Create the Starlette application."""
     routes = create_routes(controller)
 
