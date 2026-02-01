@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import fnmatch
 import os
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from codeplane.index._internal.ignore import IgnoreChecker
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable
@@ -82,74 +83,6 @@ class WatcherConfig:
 
     # Max queue size for pending changes
     max_queue_size: int = 10000
-
-
-class IgnoreChecker:
-    """Checks if paths should be ignored based on .cplignore patterns."""
-
-    def __init__(
-        self,
-        root: Path,
-        extra_patterns: list[str] | None = None,
-    ) -> None:
-        """Initialize ignore checker."""
-        self._root = root
-        self._patterns: list[str] = []
-
-        # Load .cplignore patterns (created by cpl init)
-        self._load_cplignore(root / ".codeplane" / ".cplignore")
-
-        # Add extra patterns
-        if extra_patterns:
-            self._patterns.extend(extra_patterns)
-
-    def _load_cplignore(self, cplignore_path: Path) -> None:
-        """Load patterns from a .cplignore file."""
-        if not cplignore_path.exists():
-            return
-
-        try:
-            content = cplignore_path.read_text()
-            for line in content.splitlines():
-                line = line.strip()
-                # Skip comments and empty lines
-                if not line or line.startswith("#"):
-                    continue
-                # Normalize pattern
-                if line.endswith("/"):
-                    # Directory pattern - match contents
-                    self._patterns.append(f"{line}**")
-                else:
-                    self._patterns.append(line)
-        except OSError:
-            pass
-
-    def should_ignore(self, path: Path) -> bool:
-        """Check if a path should be ignored."""
-        try:
-            rel_path = path.relative_to(self._root)
-        except ValueError:
-            return True
-
-        rel_str = str(rel_path)
-
-        for pattern in self._patterns:
-            # Handle negation patterns
-            if pattern.startswith("!"):
-                if fnmatch.fnmatch(rel_str, pattern[1:]):
-                    return False
-                continue
-
-            # Standard matching
-            if fnmatch.fnmatch(rel_str, pattern):
-                return True
-
-            # Also match against any parent directory
-            for parent in rel_path.parents:
-                if fnmatch.fnmatch(str(parent), pattern):
-                    return True
-
-        return False
 
 
 class FileWatcher:

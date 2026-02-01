@@ -456,6 +456,17 @@ class StructuralIndexer:
                     result.errors.append(f"{extraction.file_path}: File ID not found")
                     continue
 
+                # Delete existing facts for this file (idempotent re-indexing)
+                for fact_model in (
+                    DefFact,
+                    RefFact,
+                    ScopeFact,
+                    ImportFact,
+                    LocalBindFact,
+                    DynamicAccessSite,
+                ):
+                    writer.delete_where(fact_model, "file_id = :fid", {"fid": file_id})
+
                 # Build local_scope_id -> db_scope_id mapping
                 scope_id_map: dict[int, int] = {}  # local_scope_id -> db scope_id
 

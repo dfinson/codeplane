@@ -69,12 +69,6 @@ def up_command(path: Path, foreground: bool, port: int | None) -> None:
 
     codeplane_dir = repo_root / ".codeplane"
 
-    # Auto-init if not initialized
-    if not codeplane_dir.exists():
-        click.echo("Initializing repository...")
-        if not initialize_repo(repo_root):
-            raise click.ClickException("Failed to initialize repository")
-
     # Check if already running
     if is_daemon_running(codeplane_dir):
         info = read_daemon_info(codeplane_dir)
@@ -98,10 +92,17 @@ def up_command(path: Path, foreground: bool, port: int | None) -> None:
         tantivy_path=tantivy_path,
     )
 
-    # Initialize if needed (loads existing index)
+    # Load existing index or initialize if needed
     loop = asyncio.new_event_loop()
     try:
-        loop.run_until_complete(coordinator.initialize())
+        loaded = loop.run_until_complete(coordinator.load_existing())
+        if not loaded:
+            # No valid index - run full initialization
+            # initialize_repo handles config, grammars, AND index building
+            if not initialize_repo(repo_root):
+                raise click.ClickException("Failed to initialize repository")
+            # Re-load now that index exists
+            loop.run_until_complete(coordinator.load_existing())
     finally:
         loop.close()
 

@@ -323,6 +323,56 @@ class IndexCoordinator:
             errors=errors,
         )
 
+    async def load_existing(self) -> bool:
+        """Load existing index without re-indexing.
+
+        Use this when starting daemon on an already-initialized repo.
+        Performs reconciliation to detect stale files per SPEC §5.5.
+
+        Returns True if index loaded successfully, False if index doesn't exist.
+        """
+        if self._initialized:
+            return True
+
+        # Check if index exists
+        if not self.db_path.exists():
+            return False
+
+        # Initialize components
+        self._parser = TreeSitterParser()
+        self._lexical = LexicalIndex(self.tantivy_path)
+        self._epoch_manager = EpochManager(self.db, self._lexical)
+
+        # Initialize router from existing contexts
+        self._router = ContextRouter()
+
+        # Load existing contexts and populate router
+        with self.db.session() as session:
+            contexts = session.exec(select(Context)).all()
+            if not contexts:
+                return False  # No contexts = not initialized
+
+            # Router would be populated from contexts here
+            # (Currently router doesn't need initialization data)
+
+        # Initialize remaining components
+        self._structural = StructuralIndexer(self.db, self.repo_root)
+        self._state = FileStateService(self.db)
+        self._reconciler = Reconciler(self.db, self.repo_root)
+
+        # Run reconciliation per SPEC §5.5 (on daemon start)
+        # This detects files changed since last run
+        self._reconciler.reconcile(paths=[])
+
+        self._facts = None  # Created on demand in session context
+
+        # Reload lexical index to pick up existing data
+        if self._lexical is not None:
+            self._lexical.reload()
+
+        self._initialized = True
+        return True
+
     async def reindex_incremental(self, changed_paths: list[Path]) -> IndexStats:
         """
         Incremental reindex for changed files.

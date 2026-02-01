@@ -106,7 +106,10 @@ def get_needed_grammars(languages: set[LanguageFamily]) -> list[tuple[str, str]]
 def install_grammars(
     packages: list[tuple[str, str]], quiet: bool = False, status_fn: Any = None
 ) -> bool:
-    """Install grammar packages via pip/uv.
+    """Install grammar packages via pip.
+
+    Uses the current Python interpreter to install packages into the running
+    environment. This ensures packages are installed where they can be imported.
 
     Args:
         packages: List of (package_name, min_version) tuples
@@ -118,27 +121,20 @@ def install_grammars(
     if not packages:
         return True
 
-    # Build pip install command
+    import importlib
+
     specs = [f"{pkg}>={ver}" for pkg, ver in packages]
     pkg_names = [p for p, _ in packages]
 
     if status_fn and not quiet:
         status_fn(f"Installing: {', '.join(pkg_names)}", style="none", indent=4)
 
-    # Try uv first (faster), fall back to pip
+    # Always use sys.executable to ensure packages install into the current env
+    cmd = [sys.executable, "-m", "pip", "install", "--quiet"] + specs
     try:
-        cmd = ["uv", "pip", "install", "--quiet"] + specs
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode == 0:
-            return True
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-
-    # Fall back to pip
-    try:
-        cmd = [sys.executable, "-m", "pip", "install", "--quiet"] + specs
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if result.returncode == 0:
+            importlib.invalidate_caches()
             return True
         else:
             if status_fn and not quiet:

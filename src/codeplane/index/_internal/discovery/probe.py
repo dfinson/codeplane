@@ -16,6 +16,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from codeplane.index._internal.ignore import IgnoreChecker
 from codeplane.index._internal.parsing import TreeSitterParser
 from codeplane.index.models import CandidateContext, LanguageFamily
 
@@ -70,6 +71,8 @@ class ContextProbe:
         self.config = config or ProbeConfig()
         self.parser = parser or TreeSitterParser()
         self._family_to_ext = self._build_extension_map()
+        # Shared ignore checker - loads .cplignore automatically
+        self._ignore_checker = IgnoreChecker(self.repo_path)
 
     def _build_extension_map(self) -> dict[LanguageFamily, set[str]]:
         """Map language families to file extensions."""
@@ -160,9 +163,16 @@ class ContextProbe:
         files: list[Path] = []
 
         for dirpath, dirnames, filenames in os.walk(root):
-            # Skip excluded directories
-            rel_dir = Path(dirpath).relative_to(root)
-            if self._is_excluded(str(rel_dir), excludes):
+            dir_path = Path(dirpath)
+
+            # Skip excluded directories (via shared IgnoreChecker + context excludes)
+            if self._ignore_checker.should_ignore(dir_path):
+                dirnames.clear()
+                continue
+
+            # Also check context-specific excludes
+            rel_dir = dir_path.relative_to(root)
+            if self._is_excluded_by_context(str(rel_dir), excludes):
                 dirnames.clear()
                 continue
 
@@ -171,17 +181,20 @@ class ContextProbe:
                     return files
 
                 if Path(name).suffix in extensions:
-                    file_path = Path(dirpath) / name
+                    file_path = dir_path / name
+                    # Check both shared ignore and context excludes
+                    if self._ignore_checker.should_ignore(file_path):
+                        continue
                     rel_file = file_path.relative_to(root)
-                    if not self._is_excluded(str(rel_file), excludes):
+                    if not self._is_excluded_by_context(str(rel_file), excludes):
                         files.append(file_path)
 
         return files
 
-    def _is_excluded(self, path: str, excludes: list[str]) -> bool:
-        """Check if path matches any exclude pattern."""
+    def _is_excluded_by_context(self, path: str, excludes: list[str]) -> bool:
+        """Check if path matches context-specific exclude patterns."""
         for pattern in excludes:
-            # Simple glob matching
+            # Simple glob matching for context excludes
             if pattern.endswith("/**"):
                 prefix = pattern[:-3]
                 if path == prefix or path.startswith(prefix + "/"):

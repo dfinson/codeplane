@@ -11,7 +11,7 @@ from pathlib import Path
 import structlog
 from watchfiles import Change, awatch
 
-from codeplane.index._internal.watcher.watcher import IgnoreChecker
+from codeplane.index._internal.ignore import IgnoreChecker
 
 logger = structlog.get_logger()
 

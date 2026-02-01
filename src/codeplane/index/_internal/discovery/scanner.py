@@ -201,6 +201,8 @@ UNIVERSAL_EXCLUDES: list[str] = [
     "**/venv/**",
     "**/__pycache__/**",
     "**/.git/**",
+    "**/.codeplane/**",
+    ".codeplane/**",
     "**/target/**",
     "**/dist/**",
     "**/build/**",
