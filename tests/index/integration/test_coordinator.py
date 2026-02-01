@@ -270,3 +270,155 @@ class TestCoordinatorMonorepo:
             assert len(results) >= 1
         finally:
             coordinator.close()
+
+
+class TestCoordinatorCplignore:
+    """Tests for .cplignore enforcement during indexing."""
+
+    @pytest.mark.asyncio
+    async def test_cplignore_excludes_dependencies(self, tmp_path: Path) -> None:
+        """Should not index files in dependency directories (node_modules, venv, etc)."""
+        from codeplane.templates import get_cplignore_template
+
+        # Create project
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        (repo_root / "pyproject.toml").write_text('[project]\nname = "test"')
+
+        # Create .codeplane/.cplignore (simulating cpl init)
+        codeplane_dir = repo_root / ".codeplane"
+        codeplane_dir.mkdir()
+        (codeplane_dir / ".cplignore").write_text(get_cplignore_template())
+
+        # Create src directory with files
+        src = repo_root / "src"
+        src.mkdir()
+        (src / "__init__.py").write_text("")
+        (src / "main.py").write_text("def main(): pass")
+
+        # Create dependency directories that should be ignored per .cplignore
+        venv = repo_root / ".venv"
+        venv.mkdir()
+        (venv / "lib.py").write_text("VENV_CODE = True")
+
+        node_modules = repo_root / "node_modules"
+        node_modules.mkdir()
+        (node_modules / "package.js").write_text("module.exports = {}")
+
+        pycache = src / "__pycache__"
+        pycache.mkdir()
+        (pycache / "main.cpython-312.pyc").write_bytes(b"compiled")
+
+        db_path = tmp_path / "index.db"
+        tantivy_path = tmp_path / "tantivy"
+
+        coordinator = IndexCoordinator(repo_root, db_path, tantivy_path)
+
+        try:
+            await coordinator.initialize()
+
+            # Search for content that should NOT be indexed
+            venv_results = await coordinator.search("VENV_CODE")
+            node_results = await coordinator.search("module.exports")
+
+            # None of these should be found
+            assert len(venv_results) == 0, ".venv/ should be ignored"
+            assert len(node_results) == 0, "node_modules/ should be ignored"
+
+            # But main.py should be indexed
+            main_results = await coordinator.search("main")
+            assert len(main_results) >= 1, "main.py should be indexed"
+        finally:
+            coordinator.close()
+
+    @pytest.mark.asyncio
+    async def test_cplignore_excludes_build_outputs(self, tmp_path: Path) -> None:
+        """Should not index build output directories (dist, build, target)."""
+        from codeplane.templates import get_cplignore_template
+
+        # Create project
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        (repo_root / "pyproject.toml").write_text('[project]\nname = "test"')
+
+        # Create .codeplane/.cplignore (simulating cpl init)
+        codeplane_dir = repo_root / ".codeplane"
+        codeplane_dir.mkdir()
+        (codeplane_dir / ".cplignore").write_text(get_cplignore_template())
+
+        # Create src directory
+        src = repo_root / "src"
+        src.mkdir()
+        (src / "__init__.py").write_text("")
+        (src / "main.py").write_text("def main(): pass")
+
+        # Create build output directories
+        dist = repo_root / "dist"
+        dist.mkdir()
+        (dist / "bundle.py").write_text("BUNDLED = True")
+
+        build = repo_root / "build"
+        build.mkdir()
+        (build / "output.py").write_text("BUILD_OUTPUT = True")
+
+        db_path = tmp_path / "index.db"
+        tantivy_path = tmp_path / "tantivy"
+
+        coordinator = IndexCoordinator(repo_root, db_path, tantivy_path)
+
+        try:
+            await coordinator.initialize()
+
+            # Search for content that should NOT be indexed
+            dist_results = await coordinator.search("BUNDLED")
+            build_results = await coordinator.search("BUILD_OUTPUT")
+
+            assert len(dist_results) == 0, "dist/ should be ignored"
+            assert len(build_results) == 0, "build/ should be ignored"
+
+            # But main.py should be indexed
+            main_results = await coordinator.search("main")
+            assert len(main_results) >= 1, "main.py should be indexed"
+        finally:
+            coordinator.close()
+
+    @pytest.mark.asyncio
+    async def test_codeplane_directory_always_excluded(self, tmp_path: Path) -> None:
+        """Should never index .codeplane directory itself."""
+        from codeplane.templates import get_cplignore_template
+
+        # Create project
+        repo_root = tmp_path / "repo"
+        repo_root.mkdir()
+        (repo_root / "pyproject.toml").write_text('[project]\nname = "test"')
+
+        # Create src directory
+        src = repo_root / "src"
+        src.mkdir()
+        (src / "__init__.py").write_text("")
+        (src / "main.py").write_text("def main(): pass")
+
+        # Create .codeplane with some files (simulating cpl init + artifacts)
+        codeplane = repo_root / ".codeplane"
+        codeplane.mkdir()
+        (codeplane / ".cplignore").write_text(get_cplignore_template())
+        (codeplane / "config.yaml").write_text("CODEPLANE_CONFIG = true")
+        (codeplane / "index.db").write_bytes(b"database")
+
+        db_path = tmp_path / "index.db"
+        tantivy_path = tmp_path / "tantivy"
+
+        coordinator = IndexCoordinator(repo_root, db_path, tantivy_path)
+
+        try:
+            await coordinator.initialize()
+
+            # Search for content that should NOT be indexed
+            config_results = await coordinator.search("CODEPLANE_CONFIG")
+            assert len(config_results) == 0, ".codeplane/ should always be ignored"
+
+            # But main.py should be indexed
+            main_results = await coordinator.search("main")
+            assert len(main_results) >= 1, "main.py should be indexed"
+        finally:
+            coordinator.close()

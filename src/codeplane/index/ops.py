@@ -21,7 +21,16 @@ from typing import TYPE_CHECKING
 
 from sqlmodel import select
 
-from codeplane.index._internal.db import Database, Reconciler, create_additional_indexes
+from codeplane.index._internal.db import (
+    Database,
+    EpochManager,
+    EpochStats,
+    IndexRecovery,
+    IntegrityChecker,
+    IntegrityReport,
+    Reconciler,
+    create_additional_indexes,
+)
 from codeplane.index._internal.discovery import (
     ContextDiscovery,
     ContextProbe,
@@ -139,6 +148,7 @@ class IndexCoordinator:
         self._facts: FactQueries | None = None
         self._state: FileStateService | None = None
         self._reconciler: Reconciler | None = None
+        self._epoch_manager: EpochManager | None = None
 
         self._initialized = False
 
@@ -156,6 +166,7 @@ class IndexCoordinator:
         7. Persist contexts to database
         8. Initialize router
         9. Index all files
+        10. Publish initial epoch
         """
         errors: list[str] = []
 
@@ -166,6 +177,7 @@ class IndexCoordinator:
         # Initialize components
         self._parser = TreeSitterParser()
         self._lexical = LexicalIndex(self.tantivy_path)
+        self._epoch_manager = EpochManager(self.db, self._lexical)
 
         # Step 3: Discover contexts
         discovery = ContextDiscovery(self.repo_root)
@@ -261,6 +273,14 @@ class IndexCoordinator:
         # Step 9: Index all files
         files_indexed = await self._index_all_files()
 
+        # Reload index so searcher sees committed changes
+        if self._lexical is not None:
+            self._lexical.reload()
+
+        # Step 10: Publish initial epoch
+        if self._epoch_manager is not None:
+            self._epoch_manager.publish_epoch(files_indexed=files_indexed)
+
         self._initialized = True
 
         return InitResult(
@@ -313,6 +333,10 @@ class IndexCoordinator:
                             self._lexical.remove_file(str(path))
                         files_removed += 1
 
+            # Reload index so searcher sees committed changes
+            if self._lexical is not None:
+                self._lexical.reload()
+
             # Update structural index
             await self._update_structural_index(changed_paths)
 
@@ -344,12 +368,17 @@ class IndexCoordinator:
             if self._reconciler is not None:
                 self._reconciler.reconcile(None)
 
-            # Rebuild Tantivy index
-            with self._tantivy_write_lock:
-                if self._lexical is not None:
+            # Rebuild Tantivy index - clear first, then index
+            # Note: _index_all_files acquires tantivy_write_lock internally
+            if self._lexical is not None:
+                with self._tantivy_write_lock:
                     self._lexical.clear()
 
-                files_indexed = await self._index_all_files()
+            files_indexed = await self._index_all_files()
+
+            # Reload index so searcher sees committed changes
+            if self._lexical is not None:
+                self._lexical.reload()
 
         duration = time.time() - start_time
 
@@ -453,6 +482,44 @@ class IndexCoordinator:
 
         return self._state.get_file_state(file_id, context_id)
 
+    async def verify_integrity(self) -> IntegrityReport:
+        """Verify index integrity (FK violations, missing files, Tantivy sync).
+
+        Returns:
+            IntegrityReport with passed=True if healthy, issues list if not.
+        """
+        checker = IntegrityChecker(self.db, self.repo_root, self._lexical)
+        return checker.verify()
+
+    async def recover(self) -> None:
+        """Wipe and prepare for full reindex.
+
+        Per SPEC.md §5.8: On CPL index corruption, wipe and reindex.
+        After calling this, call initialize() to rebuild.
+        """
+        recovery = IndexRecovery(self.db, self.tantivy_path)
+        recovery.wipe_all()
+        self._initialized = False
+        self._lexical = None
+
+    def get_current_epoch(self) -> int:
+        """Return current epoch ID, or 0 if none published."""
+        if self._epoch_manager is None:
+            return 0
+        return self._epoch_manager.get_current_epoch()
+
+    def publish_epoch(self, files_indexed: int = 0, commit_hash: str | None = None) -> EpochStats:
+        """Atomically publish a new epoch. See SPEC.md §7.6."""
+        if self._epoch_manager is None:
+            raise RuntimeError("Coordinator not initialized")
+        return self._epoch_manager.publish_epoch(files_indexed, commit_hash)
+
+    def await_epoch(self, target_epoch: int, timeout_seconds: float = 5.0) -> bool:
+        """Block until epoch >= target, or timeout. Returns True if reached."""
+        if self._epoch_manager is None:
+            return False
+        return self._epoch_manager.await_epoch(target_epoch, timeout_seconds)
+
     def close(self) -> None:
         """Close all resources."""
         self._lexical = None
@@ -538,37 +605,99 @@ class IndexCoordinator:
         except (OSError, UnicodeDecodeError):
             return []
 
+    def _load_cplignore_patterns(self) -> list[str]:
+        """Load ignore patterns from .codeplane/.cplignore.
+
+        This file must exist (created by `cpl init`).
+        """
+        cplignore_path = self.repo_root / ".codeplane" / ".cplignore"
+        if not cplignore_path.exists():
+            msg = f".codeplane/.cplignore not found at {cplignore_path}. Run `cpl init` first."
+            raise FileNotFoundError(msg)
+
+        content = cplignore_path.read_text()
+        patterns: list[str] = []
+
+        for line in content.splitlines():
+            line = line.strip()
+            # Skip comments and empty lines
+            if not line or line.startswith("#"):
+                continue
+            # Normalize directory patterns
+            if line.endswith("/"):
+                patterns.append(f"{line}**")
+            else:
+                patterns.append(line)
+
+        return patterns
+
     def _find_files(
         self,
         root: Path,
         include_globs: list[str],
         exclude_globs: list[str],
     ) -> list[Path]:
-        """Find files matching include/exclude patterns."""
+        """Find files matching include/exclude patterns, respecting .cplignore."""
         import fnmatch
 
         files: list[Path] = []
 
-        # Universal excludes
-        excluded_parts = {
-            "node_modules",
-            "venv",
-            "__pycache__",
-            ".git",
-            "target",
-            "dist",
-            "build",
-            "vendor",
-            ".codeplane",
-        }
+        # Load ignore patterns from .cplignore.template (bundled source of truth)
+        cplignore_patterns = self._load_cplignore_patterns()
+
+        def matches_glob(rel_path: str, pattern: str) -> bool:
+            """Match path against glob pattern, handling ** correctly."""
+            if fnmatch.fnmatch(rel_path, pattern):
+                return True
+
+            # If pattern starts with **/, also match without the prefix
+            if pattern.startswith("**/"):
+                suffix = pattern[3:]
+                if fnmatch.fnmatch(rel_path, suffix):
+                    return True
+
+            return False
+
+        def should_ignore(path: Path) -> bool:
+            """Check if path should be ignored based on .cplignore patterns."""
+            try:
+                rel_path = path.relative_to(self.repo_root)
+            except ValueError:
+                return True
+
+            rel_str = str(rel_path)
+
+            # Always exclude .codeplane directory
+            if rel_str.startswith(".codeplane") or ".codeplane/" in rel_str:
+                return True
+
+            for pattern in cplignore_patterns:
+                # Handle negation patterns
+                if pattern.startswith("!"):
+                    if matches_glob(rel_str, pattern[1:]):
+                        return False
+                    continue
+
+                # Standard matching
+                if matches_glob(rel_str, pattern):
+                    return True
+
+                # Also match against any parent directory
+                for parent in rel_path.parents:
+                    parent_str = str(parent)
+                    if matches_glob(parent_str, pattern):
+                        return True
+                    if matches_glob(parent_str + "/", pattern):
+                        return True
+
+            return False
 
         for path in root.rglob("*"):
             if not path.is_file():
                 continue
 
-            # Check excluded parts
-            parts = path.relative_to(root).parts
-            if any(part in excluded_parts for part in parts):
+            # Check .cplignore patterns
+            if should_ignore(path):
                 continue
 
             rel_str = str(path.relative_to(root))
@@ -576,7 +705,7 @@ class IndexCoordinator:
             # Check exclude globs
             excluded = False
             for pattern in exclude_globs:
-                if fnmatch.fnmatch(rel_str, pattern):
+                if matches_glob(rel_str, pattern):
                     excluded = True
                     break
 
@@ -588,7 +717,7 @@ class IndexCoordinator:
                 files.append(path)
             else:
                 for pattern in include_globs:
-                    if fnmatch.fnmatch(rel_str, pattern):
+                    if matches_glob(rel_str, pattern):
                         files.append(path)
                         break
 
