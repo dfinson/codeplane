@@ -3,6 +3,7 @@
 from collections.abc import Generator
 from pathlib import Path
 
+import pygit2
 import pytest
 import yaml
 from click.testing import CliRunner
@@ -14,11 +15,25 @@ runner = CliRunner()
 
 @pytest.fixture
 def temp_git_repo(tmp_path: Path) -> Generator[Path, None, None]:
-    """Create a temporary git repository."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / ".git").mkdir()
-    yield repo
+    """Create a temporary git repository with initial commit."""
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    pygit2.init_repository(str(repo_path))
+
+    # Configure and create initial commit (required for HEAD to exist)
+    repo = pygit2.Repository(str(repo_path))
+    repo.config["user.name"] = "Test"
+    repo.config["user.email"] = "test@test.com"
+
+    # Create a file and commit
+    (repo_path / "README.md").write_text("# Test repo")
+    repo.index.add("README.md")
+    repo.index.write()
+    tree = repo.index.write_tree()
+    sig = pygit2.Signature("Test", "test@test.com")
+    repo.create_commit("HEAD", sig, sig, "Initial commit", tree, [])
+
+    yield repo_path
 
 
 @pytest.fixture
