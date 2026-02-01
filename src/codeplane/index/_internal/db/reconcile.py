@@ -19,8 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import pygit2
-
+from codeplane.git import GitOps
 from codeplane.index.models import File, Freshness, RepoState
 
 if TYPE_CHECKING:
@@ -92,7 +91,7 @@ class Reconciler:
         """
         self.db = db
         self.repo_root = repo_root
-        self._repo: pygit2.Repository | None = None
+        self._git: GitOps | None = None
 
     @property
     def cplignore_path(self) -> Path:
@@ -100,11 +99,11 @@ class Reconciler:
         return self.repo_root / ".codeplane" / ".cplignore"
 
     @property
-    def repo(self) -> pygit2.Repository:
+    def git(self) -> GitOps:
         """Lazily open the git repository."""
-        if self._repo is None:
-            self._repo = pygit2.Repository(str(self.repo_root))
-        return self._repo
+        if self._git is None:
+            self._git = GitOps(self.repo_root)
+        return self._git
 
     def reconcile(self, paths: list[Path] | None = None) -> ReconcileResult:
         """
@@ -288,7 +287,7 @@ class Reconciler:
 
     def _get_git_head(self) -> str:
         """Get current HEAD commit hash."""
-        return str(self.repo.head.target)
+        return self.git.head().target_sha
 
     def _compute_cplignore_hash(self) -> str | None:
         """Compute hash of .cplignore file content, or None if it doesn't exist."""
@@ -298,12 +297,7 @@ class Reconciler:
 
     def _get_all_tracked_files(self) -> list[str]:
         """Get all files tracked by git."""
-        files: list[str] = []
-        index = self.repo.index
-        index.read()
-        for entry in index:
-            files.append(entry.path)
-        return files
+        return self.git.tracked_files()
 
     def _get_db_hashes(self, paths: list[str]) -> dict[str, str]:
         """Get content hashes from database for given paths."""
@@ -373,45 +367,37 @@ class Reconciler:
         changed: list[ChangedFile] = []
 
         try:
-            old_obj = self.repo.get(pygit2.Oid(hex=from_commit))
-            new_obj = self.repo.get(pygit2.Oid(hex=to_commit))
-            if old_obj is None or new_obj is None:
-                raise ValueError(f"Commit not found: {from_commit} or {to_commit}")
+            diff_info = self.git.diff(base=from_commit, target=to_commit)
 
-            old_commit = old_obj.peel(pygit2.Commit)
-            new_commit = new_obj.peel(pygit2.Commit)
-            diff = self.repo.diff(old_commit, new_commit)
-
-            for delta in diff.deltas:
-                if delta.status == pygit2.GIT_DELTA_ADDED:
+            for diff_file in diff_info.files:
+                status = diff_file.status
+                if status == "added":
                     change_type = "added"
                     old_hash = None
-                    new_hash = str(delta.new_file.id)
-                elif delta.status == pygit2.GIT_DELTA_DELETED:
-                    change_type = "deleted"
-                    old_hash = str(delta.old_file.id)
                     new_hash = ""
-                elif delta.status in (
-                    pygit2.GIT_DELTA_MODIFIED,
-                    pygit2.GIT_DELTA_RENAMED,
-                ):
+                elif status == "deleted":
+                    change_type = "deleted"
+                    old_hash = ""
+                    new_hash = ""
+                elif status in ("modified", "renamed"):
                     change_type = "modified"
-                    old_hash = str(delta.old_file.id)
-                    new_hash = str(delta.new_file.id)
+                    old_hash = ""
+                    new_hash = ""
                 else:
                     continue
 
-                path = delta.new_file.path or delta.old_file.path
-                changed.append(
-                    ChangedFile(
-                        path=path,
-                        old_hash=old_hash,
-                        new_hash=new_hash,
-                        change_type=change_type,
+                path = diff_file.new_path or diff_file.old_path
+                if path is not None:
+                    changed.append(
+                        ChangedFile(
+                            path=path,
+                            old_hash=old_hash,
+                            new_hash=new_hash,
+                            change_type=change_type,
+                        )
                     )
-                )
 
-        except (KeyError, ValueError) as e:
+        except Exception as e:
             # Invalid commit reference
             raise ValueError(f"Invalid commit reference: {e}") from e
 

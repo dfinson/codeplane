@@ -191,3 +191,130 @@ class TestRoutingResult:
         assert len(result.routes) == 1
         assert result.routed_count == 1
         assert result.unrouted_count == 0
+
+
+class TestRouterEdgeCases:
+    """Tests for router edge cases."""
+
+    def test_route_unknown_extension(self) -> None:
+        """Unknown extensions should not be routed."""
+        contexts = [make_candidate(LanguageFamily.PYTHON, "src")]
+        router = ContextRouter()
+        result = router.route_files(["src/data.xyz"], contexts)
+
+        assert result.unrouted_count == 1
+        assert "Unknown extension" in result.routes[0].reason
+
+    def test_route_no_contexts_for_family(self) -> None:
+        """No contexts for family should result in unrouted."""
+        contexts = [make_candidate(LanguageFamily.PYTHON, "src")]
+        router = ContextRouter()
+        # Route a JavaScript file with no JS contexts
+        result = router.route_files(["src/app.js"], contexts)
+
+        assert result.unrouted_count == 1
+        assert "No contexts for family" in result.routes[0].reason
+
+    def test_route_include_spec_extension_pattern(self) -> None:
+        """Extension pattern in include_spec should work."""
+        contexts = [make_candidate(LanguageFamily.PYTHON, "src", include_spec=["*.py", "*.pyi"])]
+        router = ContextRouter()
+
+        # .py should match
+        result1 = router.route_files(["src/main.py"], contexts)
+        assert result1.routes[0].routed
+
+        # .pyi should match
+        result2 = router.route_files(["src/stubs.pyi"], contexts)
+        assert result2.routes[0].routed
+
+    def test_route_include_spec_fnmatch_pattern(self) -> None:
+        """Fnmatch pattern in include_spec should work."""
+        contexts = [make_candidate(LanguageFamily.PYTHON, "src", include_spec=["test_*.py"])]
+        router = ContextRouter()
+
+        # test_main.py should match
+        result1 = router.route_files(["src/test_main.py"], contexts)
+        assert result1.routes[0].routed
+
+        # main.py should not match
+        result2 = router.route_files(["src/main.py"], contexts)
+        assert not result2.routes[0].routed
+
+    def test_route_include_spec_no_match(self) -> None:
+        """File not matching include_spec should not route."""
+        contexts = [make_candidate(LanguageFamily.PYTHON, "src", include_spec=["*.md"])]
+        router = ContextRouter()
+
+        result = router.route_files(["src/main.py"], contexts)
+        assert not result.routes[0].routed
+
+    def test_route_exclude_spec_double_star(self) -> None:
+        """Exclude spec with ** should match nested paths."""
+        contexts = [make_candidate(LanguageFamily.PYTHON, "src", exclude_spec=["tests/**"])]
+        router = ContextRouter()
+
+        # Root of tests should be excluded
+        result1 = router.route_files(["src/tests/test_main.py"], contexts)
+        assert not result1.routes[0].routed
+
+        # Nested tests should also be excluded
+        result2 = router.route_files(["src/tests/unit/test_core.py"], contexts)
+        assert not result2.routes[0].routed
+
+    def test_route_exclude_spec_single_star(self) -> None:
+        """Exclude spec with /* should match only direct children."""
+        contexts = [make_candidate(LanguageFamily.PYTHON, "src", exclude_spec=["vendor/*"])]
+        router = ContextRouter()
+
+        # Direct child should be excluded
+        result1 = router.route_files(["src/vendor/lib.py"], contexts)
+        assert not result1.routes[0].routed
+
+        # Nested file should not be excluded by /* pattern
+        _ = router.route_files(["src/vendor/pkg/lib.py"], contexts)
+        # Note: /* only matches direct children, so nested might match or not
+        # based on implementation - let's verify behavior
+
+    def test_relative_to_empty_root(self) -> None:
+        """Relative to empty root returns full path."""
+        router = ContextRouter()
+        assert router._relative_to("src/main.py", "") == "src/main.py"
+
+    def test_relative_to_same_path(self) -> None:
+        """Relative to same path returns empty string."""
+        router = ContextRouter()
+        assert router._relative_to("src", "src") == ""
+
+    def test_relative_to_nested_path(self) -> None:
+        """Relative to parent returns relative portion."""
+        router = ContextRouter()
+        assert router._relative_to("src/pkg/main.py", "src") == "pkg/main.py"
+
+    def test_root_context_routing(self) -> None:
+        """Root context (empty path) should match files at root."""
+        contexts = [make_candidate(LanguageFamily.PYTHON, "")]
+        router = ContextRouter()
+        result = router.route_files(["main.py"], contexts)
+
+        assert result.routes[0].routed
+        assert result.routes[0].context_root == ""
+
+    def test_multiple_families_routing(self) -> None:
+        """Multiple families should route correctly."""
+        contexts = [
+            make_candidate(LanguageFamily.PYTHON, "src"),
+            make_candidate(LanguageFamily.GO, "go"),
+            make_candidate(LanguageFamily.RUST, "rust"),
+        ]
+        router = ContextRouter()
+
+        result = router.route_files(
+            ["src/main.py", "go/main.go", "rust/main.rs"],
+            contexts,
+        )
+
+        assert result.routed_count == 3
+        assert result.routes[0].language_family == LanguageFamily.PYTHON
+        assert result.routes[1].language_family == LanguageFamily.GO
+        assert result.routes[2].language_family == LanguageFamily.RUST

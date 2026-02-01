@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -128,11 +129,14 @@ class IndexCoordinator:
         repo_root: Path,
         db_path: Path,
         tantivy_path: Path,
+        *,
+        quiet: bool = False,
     ) -> None:
         """Initialize coordinator with paths."""
         self.repo_root = repo_root
         self.db_path = db_path
         self.tantivy_path = tantivy_path
+        self._quiet = quiet
 
         # Database
         self.db = Database(db_path)
@@ -185,9 +189,18 @@ class IndexCoordinator:
         discovery_result = discovery.discover_all()
         all_candidates = discovery_result.candidates
 
-        # Step 4: Apply authority filter
+        # Extract root fallback context before filtering (it bypasses normal flow)
+        root_fallback = next(
+            (c for c in all_candidates if getattr(c, "is_root_fallback", False)),
+            None,
+        )
+        regular_candidates = [
+            c for c in all_candidates if not getattr(c, "is_root_fallback", False)
+        ]
+
+        # Step 4: Apply authority filter (only to regular candidates)
         authority = Tier1AuthorityFilter(self.repo_root)
-        authority_result = authority.apply(all_candidates)
+        authority_result = authority.apply(regular_candidates)
         pending_candidates = authority_result.pending
         detached_candidates = authority_result.detached
 
@@ -209,14 +222,24 @@ class IndexCoordinator:
                 candidate.probe_status = ProbeStatus.FAILED
             probed_candidates.append(candidate)
 
+        # Add root fallback back (already marked VALID, bypasses probing)
+        if root_fallback is not None:
+            probed_candidates.append(root_fallback)
+
         # Step 7: Persist contexts
         contexts_valid = 0
         contexts_failed = 0
 
         with self.db.session() as session:
             for candidate in probed_candidates:
+                # Use special name for root fallback context
+                if getattr(candidate, "is_root_fallback", False):
+                    name = "_root"
+                else:
+                    name = candidate.root_path or "root"
+
                 context = Context(
-                    name=candidate.root_path or "root",
+                    name=name,
                     language_family=candidate.language_family.value,
                     root_path=candidate.root_path,
                     tier=candidate.tier,
@@ -231,7 +254,7 @@ class IndexCoordinator:
                 session.add(context)
                 session.flush()
 
-                # Add markers
+                # Add markers (root fallback has none)
                 for marker_path in candidate.markers:
                     marker = ContextMarker(
                         context_id=context.id,
@@ -737,6 +760,9 @@ class IndexCoordinator:
         Returns:
             Tuple of (count of files indexed, list of indexed file paths).
         """
+        from codeplane.core.progress import progress
+        from codeplane.index._internal.discovery.language_detect import detect_language_family
+
         if self._lexical is None or self._parser is None:
             return 0, []
 
@@ -744,20 +770,24 @@ class IndexCoordinator:
         indexed_paths: list[str] = []
 
         with self._tantivy_write_lock:
-            # Get all valid contexts
+            # Get all valid contexts, separating root fallback from others
             with self.db.session() as session:
                 stmt = select(Context).where(
                     Context.probe_status == ProbeStatus.VALID.value,
                     Context.enabled == True,  # noqa: E712
                 )
-                contexts = list(session.exec(stmt).all())
+                all_contexts = list(session.exec(stmt).all())
 
-            # Collect files per context (deduplicated)
-            context_files: dict[int, list[str]] = {}
-            seen_paths: set[str] = set()
+            # Separate root fallback (tier=3) from specific contexts
+            specific_contexts = [c for c in all_contexts if c.tier != 3]
+            root_context = next((c for c in all_contexts if c.tier == 3), None)
 
-            # Index files for each context
-            for context in contexts:
+            # First pass: collect files from specific contexts (tier 1/2/ambient)
+            files_to_index: list[tuple[Path, str, int, str | None]] = []
+            # (full_path, rel_str, ctx_id, language_family)
+            claimed_paths: set[str] = set()
+
+            for context in specific_contexts:
                 context_root = self.repo_root / context.root_path
                 if not context_root.exists():
                     continue
@@ -765,32 +795,57 @@ class IndexCoordinator:
                 include_globs = context.get_include_globs()
                 exclude_globs = context.get_exclude_globs()
                 context_id = context.id or 0
-                context_files[context_id] = []
 
-                # Find matching files
                 for file_path in self._find_files(context_root, include_globs, exclude_globs):
                     rel_path = file_path.relative_to(self.repo_root)
                     rel_str = str(rel_path)
 
-                    # Skip if already indexed (prevent duplicates)
-                    if rel_str in seen_paths:
+                    if rel_str in claimed_paths:
                         continue
-                    seen_paths.add(rel_str)
+                    claimed_paths.add(rel_str)
+                    files_to_index.append((file_path, rel_str, context_id, context.language_family))
 
-                    try:
-                        content = file_path.read_text()
-                        symbols = self._extract_symbols(file_path)
-                        self._lexical.add_file(
-                            rel_str,
-                            content,
-                            context_id=context_id,
-                            symbols=symbols,
-                        )
-                        count += 1
-                        indexed_paths.append(rel_str)
-                        context_files[context_id].append(rel_str)
-                    except (OSError, UnicodeDecodeError):
+            # Second pass: find unclaimed files for root fallback context
+            if root_context is not None:
+                root_context_id = root_context.id or 0
+                exclude_globs = root_context.get_exclude_globs()
+
+                for file_path in self._find_all_tracked_files(exclude_globs):
+                    rel_path = file_path.relative_to(self.repo_root)
+                    rel_str = str(rel_path)
+
+                    if rel_str in claimed_paths:
                         continue
+
+                    # Detect language from extension (may be None for unknown types)
+                    # Lexical index indexes ALL text files; language is optional
+                    lang_family = detect_language_family(file_path)
+                    lang_value = lang_family.value if lang_family else None
+                    claimed_paths.add(rel_str)
+                    files_to_index.append((file_path, rel_str, root_context_id, lang_value))
+
+            # Third pass: index files with progress bar
+            context_files: dict[int, list[str]] = {}
+
+            file_iter: Iterable[tuple[Path, str, int, str | None]] = files_to_index
+            if not self._quiet:
+                file_iter = progress(files_to_index, desc="Indexing", unit="files")
+
+            for file_path, rel_str, context_id, _lang_family in file_iter:
+                try:
+                    content = file_path.read_text()
+                    symbols = self._extract_symbols(file_path)
+                    self._lexical.add_file(
+                        rel_str,
+                        content,
+                        context_id=context_id,
+                        symbols=symbols,
+                    )
+                    count += 1
+                    indexed_paths.append(rel_str)
+                    context_files.setdefault(context_id, []).append(rel_str)
+                except (OSError, UnicodeDecodeError):
+                    continue
 
             # Run structural indexer for each context
             if self._structural is not None:
@@ -1029,6 +1084,62 @@ class IndexCoordinator:
                     if matches_glob(rel_str, pattern):
                         files.append(path)
                         break
+
+        return files
+
+    def _find_all_tracked_files(self, exclude_globs: list[str]) -> list[Path]:
+        """Find all git-tracked files, applying exclude patterns.
+
+        Used by the root fallback context to find files not claimed by
+        any specific context.
+        """
+        import fnmatch
+
+        from codeplane.git import GitOps
+
+        files: list[Path] = []
+        cplignore_patterns = self._load_cplignore_patterns()
+
+        def matches_glob(rel_path: str, pattern: str) -> bool:
+            if fnmatch.fnmatch(rel_path, pattern):
+                return True
+            if pattern.startswith("**/"):
+                suffix = pattern[3:]
+                if fnmatch.fnmatch(rel_path, suffix):
+                    return True
+            return False
+
+        def should_ignore(rel_str: str) -> bool:
+            if rel_str.startswith(".codeplane") or ".codeplane/" in rel_str:
+                return True
+            for pattern in cplignore_patterns:
+                if pattern.startswith("!"):
+                    if matches_glob(rel_str, pattern[1:]):
+                        return False
+                    continue
+                if matches_glob(rel_str, pattern):
+                    return True
+            return False
+
+        # Get all tracked files from git
+        git_ops = GitOps(self.repo_root)
+        for rel_str in git_ops.tracked_files():
+            # Check cplignore
+            if should_ignore(rel_str):
+                continue
+
+            # Check exclude globs
+            excluded = False
+            for pattern in exclude_globs:
+                if matches_glob(rel_str, pattern):
+                    excluded = True
+                    break
+            if excluded:
+                continue
+
+            full_path = self.repo_root / rel_str
+            if full_path.is_file():
+                files.append(full_path)
 
         return files
 

@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import tree_sitter
-import tree_sitter_typescript
 
 if TYPE_CHECKING:
     pass
@@ -131,7 +130,7 @@ class ParseResult:
 # Language to Tree-sitter language name mapping
 # Maps our internal names to tree-sitter grammar module names
 LANGUAGE_MAP: dict[str, str] = {
-    # Official tree-sitter languages
+    # Core/mainstream
     "python": "python",
     "javascript": "javascript",
     "typescript": "typescript",
@@ -139,6 +138,7 @@ LANGUAGE_MAP: dict[str, str] = {
     "go": "go",
     "rust": "rust",
     "java": "java",
+    "kotlin": "kotlin",
     "scala": "scala",
     "csharp": "c_sharp",
     "c": "c",
@@ -146,27 +146,40 @@ LANGUAGE_MAP: dict[str, str] = {
     "ruby": "ruby",
     "php": "php",
     "swift": "swift",
+    # Functional
+    "elixir": "elixir",
     "haskell": "haskell",
-    "julia": "julia",
-    "json": "json",
-    "html": "html",
-    "css": "css",
-    "regex": "regex",
-    # tree-sitter-grammars languages
+    "ocaml": "ocaml",
+    # Scripting
     "bash": "bash",
     "shell": "bash",
+    "lua": "lua",
+    "julia": "julia",
+    # Systems
+    "zig": "zig",
+    "ada": "ada",
+    "fortran": "fortran",
+    "odin": "odin",
+    # Web
+    "html": "html",
+    "css": "css",
+    "xml": "xml",
+    # Hardware
+    "verilog": "verilog",
+    # Data/Config
+    "json": "json",
+    "yaml": "yaml",
+    "toml": "toml",
     "dockerfile": "dockerfile",
     "hcl": "hcl",
     "terraform": "hcl",
-    "lua": "lua",
+    "sql": "sql",
+    "graphql": "graphql",
     "makefile": "make",
     "make": "make",
     "markdown": "markdown",
+    "regex": "regex",
     "requirements": "requirements",
-    "sql": "sql",
-    "toml": "toml",
-    "xml": "xml",
-    "yaml": "yaml",
 }
 
 
@@ -260,6 +273,78 @@ SYMBOL_QUERIES: dict[str, str] = {
         (create_function_statement name: (identifier) @name) @function
         (create_table_statement name: (identifier) @name) @table
     """,
+    # TSX - same as TypeScript with JSX support
+    "tsx": """
+        (function_declaration name: (identifier) @name) @function
+        (class_declaration name: (type_identifier) @name) @class
+        (method_definition name: (property_identifier) @name) @method
+        (interface_declaration name: (type_identifier) @name) @interface
+        (type_alias_declaration name: (type_identifier) @name) @type_alias
+    """,
+    # Julia - functions and types
+    "julia": """
+        (function_definition name: (identifier) @name) @function
+        (short_function_definition name: (identifier) @name) @function
+        (struct_definition name: (identifier) @name) @struct
+        (abstract_definition name: (identifier) @name) @abstract
+        (macro_definition name: (identifier) @name) @macro
+    """,
+    # JSON - top-level keys as "symbols"
+    "json": """
+        (pair key: (string) @name) @property
+    """,
+    # HTML - elements with id/class attributes
+    "html": """
+        (element (start_tag (tag_name) @name)) @element
+    """,
+    # CSS - selectors and rules
+    "css": """
+        (rule_set (selectors (class_selector (class_name) @name))) @class
+        (rule_set (selectors (id_selector (id_name) @name))) @id
+    """,
+    # Dockerfile - instructions
+    "dockerfile": """
+        (from_instruction) @from
+        (run_instruction) @run
+        (cmd_instruction) @cmd
+        (label_instruction) @label
+        (expose_instruction) @expose
+        (env_instruction) @env
+        (copy_instruction) @copy
+        (entrypoint_instruction) @entrypoint
+    """,
+    # HCL/Terraform - blocks and resources
+    "hcl": """
+        (block (identifier) @type (string_lit)? @name) @block
+    """,
+    # Makefile - targets
+    "make": """
+        (rule (targets (word) @name)) @target
+    """,
+    # Markdown - headings
+    "markdown": """
+        (atx_heading (atx_h1_marker) (inline) @name) @h1
+        (atx_heading (atx_h2_marker) (inline) @name) @h2
+        (atx_heading (atx_h3_marker) (inline) @name) @h3
+    """,
+    # Requirements.txt - package names
+    "requirements": """
+        (requirement (package) @name) @package
+    """,
+    # TOML - tables and keys
+    "toml": """
+        (table (bare_key) @name) @table
+        (pair (bare_key) @name) @key
+    """,
+    # XML - elements
+    "xml": """
+        (element (STag (Name) @name)) @element
+        (element (EmptyElemTag (Name) @name)) @element
+    """,
+    # YAML - keys
+    "yaml": """
+        (block_mapping_pair key: (flow_node) @name) @mapping
+    """,
 }
 
 
@@ -307,10 +392,11 @@ class TreeSitterParser:
         # Special handling for typescript/tsx which have separate language functions
         if lang_name in ("typescript", "tsx"):
             try:
+                ts_module = importlib.import_module("tree_sitter_typescript")
                 if lang_name == "typescript":
-                    lang = tree_sitter.Language(tree_sitter_typescript.language_typescript())
+                    lang = tree_sitter.Language(ts_module.language_typescript())
                 else:
-                    lang = tree_sitter.Language(tree_sitter_typescript.language_tsx())
+                    lang = tree_sitter.Language(ts_module.language_tsx())
                 self._languages[lang_name] = lang
                 return lang
             except ImportError as err:
@@ -328,13 +414,15 @@ class TreeSitterParser:
     def _load_language_module(self, lang_name: str) -> Any:
         """Load tree-sitter language module by name."""
         # Map grammar names to their import paths
-        # Most follow tree_sitter_{name} pattern
+        # Must match all languages in GRAMMAR_PACKAGES in grammars.py
         import_map: dict[str, str] = {
+            # Core/mainstream
             "python": "tree_sitter_python",
             "javascript": "tree_sitter_javascript",
             "go": "tree_sitter_go",
             "rust": "tree_sitter_rust",
             "java": "tree_sitter_java",
+            "kotlin": "tree_sitter_kotlin",
             "scala": "tree_sitter_scala",
             "c_sharp": "tree_sitter_c_sharp",
             "c": "tree_sitter_c",
@@ -342,23 +430,37 @@ class TreeSitterParser:
             "ruby": "tree_sitter_ruby",
             "php": "tree_sitter_php",
             "swift": "tree_sitter_swift",
+            # Functional
+            "elixir": "tree_sitter_elixir",
             "haskell": "tree_sitter_haskell",
+            "ocaml": "tree_sitter_ocaml",
+            # Scripting
+            "bash": "tree_sitter_bash",
+            "lua": "tree_sitter_lua",
             "julia": "tree_sitter_julia",
-            "json": "tree_sitter_json",
+            # Systems
+            "zig": "tree_sitter_zig",
+            "ada": "tree_sitter_ada",
+            "fortran": "tree_sitter_fortran",
+            "odin": "tree_sitter_odin",
+            # Web
             "html": "tree_sitter_html",
             "css": "tree_sitter_css",
-            "regex": "tree_sitter_regex",
-            "bash": "tree_sitter_bash",
+            "xml": "tree_sitter_xml",
+            # Hardware
+            "verilog": "tree_sitter_verilog",
+            # Data/Config
+            "json": "tree_sitter_json",
+            "yaml": "tree_sitter_yaml",
+            "toml": "tree_sitter_toml",
             "dockerfile": "tree_sitter_dockerfile",
             "hcl": "tree_sitter_hcl",
-            "lua": "tree_sitter_lua",
+            "sql": "tree_sitter_sql",
+            "graphql": "tree_sitter_graphql",
             "make": "tree_sitter_make",
             "markdown": "tree_sitter_markdown",
+            "regex": "tree_sitter_regex",
             "requirements": "tree_sitter_requirements",
-            "sql": "tree_sitter_sql",
-            "toml": "tree_sitter_toml",
-            "xml": "tree_sitter_xml",
-            "yaml": "tree_sitter_yaml",
         }
 
         module_name = import_map.get(lang_name)
@@ -1135,6 +1237,9 @@ class TreeSitterParser:
             # Python
             "py": "python",
             "pyi": "python",
+            "pyw": "python",
+            "pyx": "python",
+            "pxd": "python",
             # JavaScript/TypeScript
             "js": "javascript",
             "jsx": "javascript",
@@ -1150,6 +1255,8 @@ class TreeSitterParser:
             "rs": "rust",
             # JVM
             "java": "java",
+            "kt": "kotlin",
+            "kts": "kotlin",
             "scala": "scala",
             "sc": "scala",
             # .NET
@@ -1162,41 +1269,66 @@ class TreeSitterParser:
             "cxx": "cpp",
             "hpp": "cpp",
             "hxx": "cpp",
+            "hh": "cpp",
             # Ruby
             "rb": "ruby",
+            "rake": "ruby",
             # PHP
             "php": "php",
             # Swift
             "swift": "swift",
-            # Haskell
+            # Functional
+            "ex": "elixir",
+            "exs": "elixir",
             "hs": "haskell",
             "lhs": "haskell",
-            # Julia
+            "ml": "ocaml",
+            "mli": "ocaml",
+            # Scripting
             "jl": "julia",
-            # Lua
             "lua": "lua",
-            # Shell
             "sh": "bash",
             "bash": "bash",
             "zsh": "bash",
+            # Systems
+            "zig": "zig",
+            "adb": "ada",
+            "ads": "ada",
+            "f90": "fortran",
+            "f95": "fortran",
+            "f03": "fortran",
+            "f08": "fortran",
+            "odin": "odin",
+            # Web
+            "html": "html",
+            "htm": "html",
+            "css": "css",
+            "xml": "xml",
+            "xsl": "xml",
+            "svg": "xml",
+            # Hardware
+            "v": "verilog",
+            "sv": "verilog",
+            "vhd": "verilog",
+            "vhdl": "verilog",
             # Config/Data
-            "tf": "terraform",
-            "hcl": "hcl",
-            "sql": "sql",
-            "md": "markdown",
-            "mdx": "markdown",
             "json": "json",
             "yaml": "yaml",
             "yml": "yaml",
             "toml": "toml",
-            "xml": "xml",
-            "html": "html",
-            "htm": "html",
-            "css": "css",
+            "tf": "terraform",
+            "tfvars": "terraform",
+            "hcl": "hcl",
+            "sql": "sql",
+            "graphql": "graphql",
+            "gql": "graphql",
             "dockerfile": "dockerfile",
             "makefile": "makefile",
             "mk": "makefile",
-            "txt": "requirements",  # pip requirements
+            "md": "markdown",
+            "mdx": "markdown",
+            "markdown": "markdown",
+            "txt": "requirements",
             "regex": "regex",
         }
         return ext_map.get(ext)

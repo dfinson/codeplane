@@ -31,6 +31,16 @@ These are non-negotiable design principles. Do not suggest alternatives:
 
 When you encounter ANY problem — type errors, lint failures, test failures, API mismatches, library incompatibilities — you MUST address it properly. There are NO exceptions.
 
+---
+
+### **⚠️ THE "FOR NOW" TEST**
+
+**If your next sentence includes the words "for now", your solution is probably garbage.**
+
+"For now" means you're proposing a workaround instead of fixing the root cause. Stop. Go back. Find the real fix.
+
+---
+
 ### What Constitutes a Hacky Workaround (FORBIDDEN)
 
 - **Type ignores to silence errors** — `# type: ignore`, `cast()` to lie about types, `Any` to escape type checking

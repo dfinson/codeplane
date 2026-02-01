@@ -231,6 +231,12 @@ class GitOps:
         """Current branch name, or None if detached or unborn."""
         return self._access.current_branch_name()
 
+    def tracked_files(self) -> list[str]:
+        """List all files tracked in the git index."""
+        index = self._access.index
+        index.read()
+        return [entry.path for entry in index]
+
     # =========================================================================
     # Write Operations
     # =========================================================================

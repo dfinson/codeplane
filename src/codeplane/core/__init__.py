@@ -13,6 +13,7 @@ from codeplane.core.logging import (
     get_request_id,
     set_request_id,
 )
+from codeplane.core.progress import progress, status, task
 
 __all__ = [
     # Errors
@@ -26,4 +27,8 @@ __all__ = [
     "get_logger",
     "get_request_id",
     "set_request_id",
+    # Progress
+    "progress",
+    "status",
+    "task",
 ]

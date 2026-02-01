@@ -311,6 +311,20 @@ class ContextDiscovery:
                 )
                 candidates_by_family[family] = [candidate]
 
+        # Phase A.4: Add root fallback context (tier 3)
+        # This catches all files not claimed by marker-based or ambient contexts
+        root_fallback = CandidateContext(
+            language_family=LanguageFamily.CONFIG,  # Placeholder, actual detection per-file
+            root_path="",
+            tier=3,  # Lowest priority
+            markers=[],
+            include_spec=["**/*"],  # Include everything
+            exclude_spec=list(UNIVERSAL_EXCLUDES),
+            probe_status=ProbeStatus.VALID,  # Always valid
+            is_root_fallback=True,  # Flag for special handling
+        )
+        result.candidates.append(root_fallback)
+
         # Flatten to list
         for family_candidates in candidates_by_family.values():
             result.candidates.extend(family_candidates)

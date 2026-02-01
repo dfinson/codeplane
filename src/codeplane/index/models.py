@@ -27,36 +27,83 @@ if TYPE_CHECKING:
 
 
 class LanguageFamily(str, Enum):
-    """Canonical language family identifiers (20 total)."""
+    """Canonical language family identifiers for tree-sitter supported languages.
 
-    # Code families
-    JAVASCRIPT = "javascript"
+    All languages get lexical indexing (full-text search).
+    Languages with tree-sitter grammars also get structural indexing (symbols, refs).
+
+    Structural parsing available (grammar installed):
+        JAVASCRIPT, PYTHON, GO, RUST, JVM, DOTNET, RUBY, PHP, SWIFT, CPP,
+        ELIXIR, HASKELL, OCAML, SHELL, LUA, JULIA, ZIG, ADA, FORTRAN, ODIN,
+        HTML, CSS, VERILOG, TERRAFORM, SQL, DOCKER, MARKDOWN, JSON_YAML,
+        GRAPHQL, MAKE
+
+    Lexical-only (no grammar on PyPI):
+        CLOJURE, ELM, PERL, R, NIM, D, PASCAL, DART, GLEAM, CRYSTAL, V,
+        PROTOBUF, CONFIG, ASSEMBLY
+    """
+
+    # Code families - mainstream
+    JAVASCRIPT = "javascript"  # JS, TS, JSX, TSX, Vue, Svelte
     PYTHON = "python"
     GO = "go"
     RUST = "rust"
-    JVM = "jvm"
-    DOTNET = "dotnet"
+    JVM = "jvm"  # Java, Kotlin, Scala, Groovy
+    DOTNET = "dotnet"  # C#, F#, VB
     RUBY = "ruby"
     PHP = "php"
     SWIFT = "swift"
-    ELIXIR = "elixir"
+    CPP = "cpp"  # C, C++, Objective-C
+    # Code families - functional
+    ELIXIR = "elixir"  # Elixir, Erlang
     HASKELL = "haskell"
-    CPP = "cpp"
-    # Data families
-    TERRAFORM = "terraform"
+    OCAML = "ocaml"  # OCaml, ReasonML
+    CLOJURE = "clojure"  # Clojure, other Lisps
+    ELM = "elm"
+    # Code families - scripting
+    SHELL = "shell"  # Bash, Zsh, Fish, PowerShell
+    LUA = "lua"
+    PERL = "perl"
+    R = "r"
+    JULIA = "julia"
+    # Code families - systems
+    ZIG = "zig"
+    NIM = "nim"
+    D = "d"
+    ADA = "ada"
+    FORTRAN = "fortran"
+    PASCAL = "pascal"
+    # Code families - other
+    DART = "dart"
+    GLEAM = "gleam"
+    CRYSTAL = "crystal"
+    V = "v"
+    ODIN = "odin"
+    # Web/markup
+    HTML = "html"  # HTML, XML, SVG
+    CSS = "css"  # CSS, SCSS, Less
+    # Hardware description
+    VERILOG = "verilog"  # Verilog, SystemVerilog, VHDL
+    # Data/config families
+    TERRAFORM = "terraform"  # HCL, Terraform
     SQL = "sql"
     DOCKER = "docker"
-    MARKDOWN = "markdown"
-    JSON_YAML = "json_yaml"
+    MARKDOWN = "markdown"  # Markdown, MDX, RST
+    JSON_YAML = "json_yaml"  # JSON, YAML, TOML
     PROTOBUF = "protobuf"
     GRAPHQL = "graphql"
-    CONFIG = "config"
+    CONFIG = "config"  # INI, TOML, env files, etc.
+    # Build systems
+    MAKE = "make"  # Make, CMake, Meson, Ninja
+    # Assembly
+    ASSEMBLY = "assembly"
 
     @classmethod
     def code_families(cls) -> "frozenset[LanguageFamily]":
         """Return code families."""
         return frozenset(
             {
+                # Mainstream
                 cls.JAVASCRIPT,
                 cls.PYTHON,
                 cls.GO,
@@ -66,9 +113,35 @@ class LanguageFamily(str, Enum):
                 cls.RUBY,
                 cls.PHP,
                 cls.SWIFT,
+                cls.CPP,
+                # Functional
                 cls.ELIXIR,
                 cls.HASKELL,
-                cls.CPP,
+                cls.OCAML,
+                cls.CLOJURE,
+                cls.ELM,
+                # Scripting
+                cls.SHELL,
+                cls.LUA,
+                cls.PERL,
+                cls.R,
+                cls.JULIA,
+                # Systems
+                cls.ZIG,
+                cls.NIM,
+                cls.D,
+                cls.ADA,
+                cls.FORTRAN,
+                cls.PASCAL,
+                # Other
+                cls.DART,
+                cls.GLEAM,
+                cls.CRYSTAL,
+                cls.V,
+                cls.ODIN,
+                # Hardware
+                cls.VERILOG,
+                cls.ASSEMBLY,
             }
         )
 
@@ -85,6 +158,9 @@ class LanguageFamily(str, Enum):
                 cls.PROTOBUF,
                 cls.GRAPHQL,
                 cls.CONFIG,
+                cls.HTML,
+                cls.CSS,
+                cls.MAKE,
             }
         )
 
@@ -553,6 +629,7 @@ class CandidateContext(SQLModel):
     include_spec: list[str] | None = None
     exclude_spec: list[str] | None = None
     probe_status: ProbeStatus = ProbeStatus.PENDING
+    is_root_fallback: bool = False  # True for tier-3 root fallback context
 
 
 class LexicalHit(SQLModel):

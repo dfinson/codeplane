@@ -133,7 +133,7 @@ class TestInitCommand:
 
         # Then
         assert result.exit_code == 0
-        assert "Initialized CodePlane" in result.output
+        assert "Initializing CodePlane" in result.output
         with config_path.open() as f:
             config = yaml.safe_load(f)
         assert "custom" not in config

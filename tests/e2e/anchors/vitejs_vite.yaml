@@ -1,0 +1,41 @@
+# Anchor symbols for vitejs/vite (Tier 3 - Polyglot)
+# TypeScript + JavaScript build tool
+# Tests multi-language context discovery
+
+repo: vitejs/vite
+commit: v6.0.0
+contexts:
+  - root: "."
+    language: typescript
+    anchors:
+      - name: createServer
+        kind: function
+        file: packages/vite/src/node/server/index.ts
+        line_range: [1, 500]
+      - name: build
+        kind: function
+        file: packages/vite/src/node/build.ts
+        line_range: [1, 1000]
+      - name: resolveConfig
+        kind: function
+        file: packages/vite/src/node/config.ts
+        line_range: [1, 1500]
+      - name: Plugin
+        kind: interface
+        file: packages/vite/src/node/plugin.ts
+        line_range: [1, 500]
+  - root: "."
+    language: javascript
+    anchors:
+      - name: defineConfig
+        kind: function
+        file: packages/vite/src/node/config.ts
+        line_range: [1, 200]
+
+search_queries:
+  - query: "createServer"
+    expected_path_contains: "server"
+  - query: "resolveConfig"
+    expected_path_contains: "config"
+  - query: "Plugin"
+    expected_path_contains: "plugin"

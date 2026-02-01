@@ -8,6 +8,7 @@ import click
 import yaml
 
 from codeplane.config.models import CodePlaneConfig
+from codeplane.core.progress import status
 from codeplane.templates import get_cplignore_template
 
 
@@ -26,9 +27,18 @@ def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False
 
     if codeplane_dir.exists() and not force:
         if not quiet:
-            click.echo(f"Already initialized: {codeplane_dir}")
-            click.echo("Use --force to reinitialize")
+            status(f"Already initialized: {codeplane_dir}", style="info")
+            status("Use --force to reinitialize", style="info")
         return False
+
+    if not quiet:
+        status(f"Initializing CodePlane in {repo_root}", style="none")
+
+    # If force is set and directory exists, remove it completely to start fresh
+    if force and codeplane_dir.exists():
+        import shutil
+
+        shutil.rmtree(codeplane_dir)
 
     codeplane_dir.mkdir(exist_ok=True)
 
@@ -49,13 +59,18 @@ def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False
         )
 
     if not quiet:
-        click.echo(f"Initialized CodePlane in {repo_root}")
-        click.echo(f"  Config: {config_path.relative_to(repo_root)}")
-        click.echo(f"  Ignore: {cplignore_path.relative_to(repo_root)}")
+        status("Config created", style="success", indent=2)
+
+    # Scan repo and install any needed tree-sitter grammars
+    from codeplane.index._internal.grammars import ensure_grammars_for_repo
+
+    status_fn = status if not quiet else None
+    if not ensure_grammars_for_repo(repo_root, quiet=quiet, status_fn=status_fn) and not quiet:
+        status("Warning: some grammars failed to install", style="warning", indent=2)
 
     # Build initial index per SPEC.md §4.2
     if not quiet:
-        click.echo("Building initial index...")
+        status("Building index...", style="none", indent=2)
 
     from codeplane.index.ops import IndexCoordinator
 
@@ -67,6 +82,7 @@ def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False
         repo_root=repo_root,
         db_path=db_path,
         tantivy_path=tantivy_path,
+        quiet=quiet,
     )
 
     try:
@@ -78,12 +94,15 @@ def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False
 
         if result.errors:
             for err in result.errors:
-                click.echo(f"Error: {err}", err=True)
+                status(f"Error: {err}", style="error")
             return False
 
         if not quiet:
-            click.echo(f"  Indexed {result.files_indexed} files")
-            click.echo(f"  Contexts: {result.contexts_valid} valid")
+            status(
+                f"Indexed {result.files_indexed} files, {result.contexts_valid} contexts",
+                style="success",
+                indent=2,
+            )
     finally:
         coord.close()
 

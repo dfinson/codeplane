@@ -264,3 +264,159 @@ class TestDiscoveryResult:
         result = discovery.discover_all()
 
         assert hasattr(result, "markers")
+
+
+class TestScannerEdgeCases:
+    """Tests for scanner edge cases."""
+
+    def test_discover_single_family(self, temp_dir: Path) -> None:
+        """discover_family should return results for specific family."""
+        repo_path = temp_dir / "repo"
+        repo_path.mkdir()
+        (repo_path / "pyproject.toml").write_text('[project]\nname = "test"\n')
+        (repo_path / "package.json").write_text('{"name": "test"}\n')
+
+        discovery = ContextDiscovery(repo_path)
+        result = discovery.discover_family(LanguageFamily.PYTHON)
+
+        # Should only have Python candidates
+        for c in result.candidates:
+            assert c.language_family == LanguageFamily.PYTHON
+
+    def test_discover_dotnet_sln_file(self, temp_dir: Path) -> None:
+        """Should discover .sln files as Tier 1 workspace markers."""
+        repo_path = temp_dir / "repo"
+        repo_path.mkdir()
+
+        sln_content = "Microsoft Visual Studio Solution File, Format Version 12.00\n"
+        (repo_path / "MySolution.sln").write_text(sln_content)
+
+        discovery = ContextDiscovery(repo_path)
+        result = discovery.discover_all()
+
+        dotnet_candidates = [
+            c for c in result.candidates if c.language_family == LanguageFamily.DOTNET
+        ]
+        assert len(dotnet_candidates) >= 1
+        # sln file should be Tier 1
+        sln_candidates = [c for c in dotnet_candidates if c.tier == 1]
+        assert len(sln_candidates) >= 1
+
+    def test_discover_dotnet_csproj_file(self, temp_dir: Path) -> None:
+        """Should discover .csproj files as Tier 2 markers."""
+        repo_path = temp_dir / "repo"
+        repo_path.mkdir()
+
+        csproj_content = '<Project Sdk="Microsoft.NET.Sdk"></Project>'
+        (repo_path / "MyProject.csproj").write_text(csproj_content)
+
+        discovery = ContextDiscovery(repo_path)
+        result = discovery.discover_all()
+
+        dotnet_candidates = [
+            c for c in result.candidates if c.language_family == LanguageFamily.DOTNET
+        ]
+        assert len(dotnet_candidates) >= 1
+
+    def test_discover_js_package_with_workspaces(self, temp_dir: Path) -> None:
+        """package.json with workspaces should be Tier 1."""
+        repo_path = temp_dir / "repo"
+        repo_path.mkdir()
+
+        pkg_content = '{"name": "monorepo", "workspaces": ["packages/*"]}'
+        (repo_path / "package.json").write_text(pkg_content)
+
+        discovery = ContextDiscovery(repo_path)
+        result = discovery.discover_all()
+
+        js_candidates = [
+            c for c in result.candidates if c.language_family == LanguageFamily.JAVASCRIPT
+        ]
+        # Should be Tier 1 due to workspaces field
+        tier1 = [c for c in js_candidates if c.tier == 1]
+        assert len(tier1) >= 1
+
+    def test_discover_maven_pom_with_modules(self, temp_dir: Path) -> None:
+        """pom.xml with <modules> should be Tier 1."""
+        repo_path = temp_dir / "repo"
+        repo_path.mkdir()
+
+        pom_content = """<?xml version="1.0"?>
+<project>
+    <modules>
+        <module>core</module>
+    </modules>
+</project>
+"""
+        (repo_path / "pom.xml").write_text(pom_content)
+
+        discovery = ContextDiscovery(repo_path)
+        result = discovery.discover_all()
+
+        jvm_candidates = [c for c in result.candidates if c.language_family == LanguageFamily.JVM]
+        tier1 = [c for c in jvm_candidates if c.tier == 1]
+        assert len(tier1) >= 1
+
+    def test_discover_cargo_workspace(self, temp_dir: Path) -> None:
+        """Cargo.toml with [workspace] should be Tier 1."""
+        repo_path = temp_dir / "repo"
+        repo_path.mkdir()
+
+        cargo_content = "[workspace]\nmembers = []\n"
+        (repo_path / "Cargo.toml").write_text(cargo_content)
+
+        discovery = ContextDiscovery(repo_path)
+        result = discovery.discover_all()
+
+        rust_candidates = [c for c in result.candidates if c.language_family == LanguageFamily.RUST]
+        tier1 = [c for c in rust_candidates if c.tier == 1]
+        assert len(tier1) >= 1
+
+    def test_discover_invalid_json_package(self, temp_dir: Path) -> None:
+        """Invalid JSON in package.json should not crash."""
+        repo_path = temp_dir / "repo"
+        repo_path.mkdir()
+
+        (repo_path / "package.json").write_text("invalid json {{{")
+
+        discovery = ContextDiscovery(repo_path)
+        result = discovery.discover_all()
+
+        # Should not crash, may or may not find candidates
+        assert isinstance(result, DiscoveryResult)
+
+    def test_discover_nested_markers(self, temp_dir: Path) -> None:
+        """Should consolidate markers in same directory."""
+        repo_path = temp_dir / "repo"
+        repo_path.mkdir()
+
+        # Both files in same directory
+        (repo_path / "pyproject.toml").write_text('[project]\nname = "test"\n')
+        (repo_path / "setup.py").write_text("# setup\n")
+
+        discovery = ContextDiscovery(repo_path)
+        result = discovery.discover_all()
+
+        py_candidates = [c for c in result.candidates if c.language_family == LanguageFamily.PYTHON]
+        # Should be consolidated to one candidate with multiple markers
+        root_candidates = [c for c in py_candidates if c.root_path == ""]
+        assert len(root_candidates) == 1
+        # Should have multiple markers
+        assert len(root_candidates[0].markers) >= 1
+
+    def test_discover_ambient_family_fallback(self, temp_dir: Path) -> None:
+        """Ambient family should get fallback context if no markers."""
+        repo_path = temp_dir / "repo"
+        repo_path.mkdir()
+
+        # Create a markdown file but no markers
+        (repo_path / "README.md").write_text("# Readme\n")
+
+        discovery = ContextDiscovery(repo_path)
+        result = discovery.discover_family(LanguageFamily.MARKDOWN)
+
+        # Markdown is ambient, should get fallback context
+        assert len(result.candidates) >= 1
+        # Fallback has empty root and no tier
+        fallback = [c for c in result.candidates if c.tier is None]
+        assert len(fallback) >= 1

@@ -1,22 +1,22 @@
 """CLI runner for true E2E tests.
 
-Creates isolated Python environments with codeplane installed from source,
-then runs cpl commands via subprocess. This ensures tests exercise the
-actual user experience through the CLI.
+Uses a cached Python environment with codeplane installed from source,
+then runs cpl commands via subprocess. The venv is cached at
+~/.cache/codeplane-e2e and reused across test runs for speed.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from threading import Thread
+# Cache location for the E2E venv
+E2E_CACHE_DIR = Path.home() / ".cache" / "codeplane-e2e"
 
 
 @dataclass
@@ -43,15 +43,6 @@ class CLIResult:
                 f"stdout: {self.stdout}"
             )
             raise RuntimeError(msg)
-
-
-@dataclass
-class RSSTracker:
-    """Tracks peak RSS of a subprocess."""
-
-    peak_mb: float = 0.0
-    _thread: Thread | None = None
-    _stop: bool = False
 
 
 @dataclass
@@ -89,11 +80,7 @@ class IsolatedEnv:
         t0 = time.perf_counter()
 
         if track_rss:
-            # Run with RSS tracking
             peak_rss_mb = self._run_with_rss_tracking(cmd, cwd, env, timeout)
-            # Re-run to get output (RSS tracking consumes it)
-            # Actually, let's do it properly in one pass
-            pass
 
         result = subprocess.run(
             cmd,
@@ -171,27 +158,45 @@ class IsolatedEnv:
 
 def get_codeplane_source_root() -> Path:
     """Get the root of the codeplane source tree."""
-    # This file is at tests/e2e/cli_runner.py
-    # Source root is 2 levels up
     return Path(__file__).parent.parent.parent
 
 
-def create_isolated_env(base_path: Path, name: str = "test_env") -> IsolatedEnv:
-    """Create an isolated environment with codeplane installed from source.
+def _get_pyproject_hash() -> str:
+    """Get hash of pyproject.toml to detect dependency changes."""
+    pyproject = get_codeplane_source_root() / "pyproject.toml"
+    if pyproject.exists():
+        return hashlib.md5(pyproject.read_bytes()).hexdigest()[:8]
+    return "unknown"
 
-    Args:
-        base_path: Base directory for the environment
-        name: Name of the environment directory
 
-    Returns:
-        IsolatedEnv ready for testing
-    """
-    env_root = base_path / name
-    env_root.mkdir(parents=True, exist_ok=True)
+def _venv_is_valid(venv_path: Path, cpl_path: Path) -> bool:
+    """Check if existing venv is valid and working."""
+    if not venv_path.exists() or not cpl_path.exists():
+        return False
 
+    # Try running cpl --version
+    try:
+        result = subprocess.run(
+            [str(cpl_path), "--version"],
+            capture_output=True,
+            timeout=10,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+def _create_venv(env_root: Path) -> IsolatedEnv:
+    """Create a fresh venv with codeplane installed."""
     venv_path = env_root / ".venv"
     python_path = venv_path / "bin" / "python"
     cpl_path = venv_path / "bin" / "cpl"
+
+    # Remove existing if present
+    if venv_path.exists():
+        import shutil
+
+        shutil.rmtree(venv_path)
 
     # Create venv
     subprocess.run(
@@ -200,21 +205,25 @@ def create_isolated_env(base_path: Path, name: str = "test_env") -> IsolatedEnv:
         capture_output=True,
     )
 
-    # Upgrade pip
+    # Upgrade pip (quietly)
     subprocess.run(
-        [str(python_path), "-m", "pip", "install", "--upgrade", "pip"],
+        [str(python_path), "-m", "pip", "install", "--upgrade", "pip", "-q"],
         check=True,
         capture_output=True,
     )
 
-    # Install codeplane from source (editable mode)
+    # Install codeplane from source
     source_root = get_codeplane_source_root()
     subprocess.run(
-        [str(python_path), "-m", "pip", "install", "-e", str(source_root)],
+        [str(python_path), "-m", "pip", "install", "-e", str(source_root), "-q"],
         check=True,
         capture_output=True,
-        timeout=600,  # Tree-sitter deps can be slow
+        timeout=600,
     )
+
+    # Write hash marker
+    hash_file = env_root / ".pyproject_hash"
+    hash_file.write_text(_get_pyproject_hash())
 
     return IsolatedEnv(
         root=env_root,
@@ -222,3 +231,43 @@ def create_isolated_env(base_path: Path, name: str = "test_env") -> IsolatedEnv:
         python_path=python_path,
         cpl_path=cpl_path,
     )
+
+
+def get_or_create_cached_env() -> IsolatedEnv:
+    """Get cached E2E environment, creating if needed.
+
+    The venv is cached at ~/.cache/codeplane-e2e and reused across runs.
+    It's rebuilt if:
+    - It doesn't exist
+    - cpl --version fails
+    - pyproject.toml hash changed (dependencies updated)
+    """
+    env_root = E2E_CACHE_DIR
+    env_root.mkdir(parents=True, exist_ok=True)
+
+    venv_path = env_root / ".venv"
+    cpl_path = venv_path / "bin" / "cpl"
+    hash_file = env_root / ".pyproject_hash"
+
+    # Check if rebuild needed
+    current_hash = _get_pyproject_hash()
+    stored_hash = hash_file.read_text().strip() if hash_file.exists() else ""
+
+    needs_rebuild = not _venv_is_valid(venv_path, cpl_path) or current_hash != stored_hash
+
+    if needs_rebuild:
+        return _create_venv(env_root)
+
+    return IsolatedEnv(
+        root=env_root,
+        venv_path=venv_path,
+        python_path=venv_path / "bin" / "python",
+        cpl_path=cpl_path,
+    )
+
+
+# Legacy function for compatibility
+def create_isolated_env(base_path: Path, name: str = "test_env") -> IsolatedEnv:
+    """Create an isolated environment (legacy, prefer get_or_create_cached_env)."""
+    env_root = base_path / name
+    return _create_venv(env_root)

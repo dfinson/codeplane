@@ -33,5 +33,15 @@
     "full_index_seconds": 60,
     "incremental_seconds": 10,
     "max_rss_mb": 2000
+  },
+  "vitejs/vite": {
+    "full_index_seconds": 180,
+    "incremental_seconds": 20,
+    "max_rss_mb": 3000
+  },
+  "astral-sh/ruff": {
+    "full_index_seconds": 300,
+    "incremental_seconds": 30,
+    "max_rss_mb": 4000
   }
 }

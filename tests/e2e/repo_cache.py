@@ -150,25 +150,13 @@ def materialize_repo(case: RepoCase, dest: Path) -> Path:
     repo_path = dest / case.slug
 
     # Copy entire repo (fast for shallow clones)
-    shutil.copytree(cache_path, repo_path)
+    # Use symlinks=True to preserve symlinks, ignore_dangling_symlinks to skip broken ones
+    shutil.copytree(cache_path, repo_path, symlinks=True, ignore_dangling_symlinks=True)
 
-    # Create .codeplane directory with .cplignore
+    # Remove any existing .codeplane directory from cache copy
+    # so that `cpl init` can properly initialize
     codeplane_dir = repo_path / ".codeplane"
-    codeplane_dir.mkdir(exist_ok=True)
-
-    cplignore = codeplane_dir / ".cplignore"
-    cplignore.write_text("""# CodePlane ignore patterns for E2E tests
-__pycache__/
-*.pyc
-.git/
-.venv/
-.tox/
-.nox/
-.pytest_cache/
-*.egg-info/
-dist/
-build/
-node_modules/
-""")
+    if codeplane_dir.exists():
+        shutil.rmtree(codeplane_dir)
 
     return repo_path

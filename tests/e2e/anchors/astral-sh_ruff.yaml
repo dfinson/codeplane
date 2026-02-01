@@ -1,0 +1,31 @@
+# Anchor symbols for astral-sh/ruff (Tier 3 - Polyglot)
+# Rust core + Python tests/config
+# Tests multi-language context discovery
+
+repo: astral-sh/ruff
+commit: "0.8.0"
+contexts:
+  - root: "."
+    language: rust
+    anchors:
+      - name: check
+        kind: function
+        file: crates/ruff/src/lib.rs
+        line_range: [1, 500]
+      - name: Checker
+        kind: struct
+        file: crates/ruff_linter/src/checkers/ast/mod.rs
+        line_range: [1, 1000]
+  - root: "."
+    language: python
+    anchors:
+      - name: main
+        kind: function
+        file: scripts/check_ecosystem.py
+        line_range: [1, 500]
+
+search_queries:
+  - query: "Checker"
+    expected_path_contains: "checker"
+  - query: "check"
+    expected_path_contains: ".rs"

@@ -104,7 +104,8 @@ def _configure_stdlib_logging(
         wrapper_class=structlog.make_filtering_bound_logger(default_level),
         context_class=dict,
         logger_factory=structlog.stdlib.LoggerFactory(),
-        cache_logger_on_first_use=True,
+        # Don't cache - allows reconfiguration and respects level changes
+        cache_logger_on_first_use=False,
     )
 
     root_logger = logging.getLogger()

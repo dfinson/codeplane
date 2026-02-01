@@ -16,27 +16,27 @@ from codeplane.daemon.lifecycle import is_daemon_running, read_daemon_info, run_
 from codeplane.index.ops import IndexCoordinator
 
 LOGO = r"""
-                        *+++++++++++++*
-                     +++++++++++++++++++++
-                  ++++++++++++***++++++++++++
-                ++++++++*              ++++++++
-               +++++++                   +++++++
-              ++++++                       ++++++
-             ++++++                         *+++++
-            ++++++          *++              +++++*
-            +++++           +++++             +++++
-                             *+++++
-        +++++++++++++++++++*   +++++*++++++++++++++++++
-                             ++++++
-            +++++           +++++             +++++
-            ++++++          *++              ++++++
-             ++++++                         ++++++
-              ++++++                       ++++++
-               +++++++                   +++++++
-                +++++++++             +++++++++
-                  +++++++++++++++++++++++++++
-                     +++++++++++++++++++++*
-                         +++++++++++++*
+                          ++++++++++++++++++++++
+                       *++++++++++++++++++++++++++*
+                     *+++++++*              *+++++++*
+                   *+++++++                    *++++++*
+                  ++++++*                        *++++++
+                *+++++                              +++++*
+               ++++++                                *+++++
+               +++++             ++++                 +++++
+               *****              +++++                ****
+                                    +++++
+         *++++++++++++++++++++++     *++++ ++++++++++++++++++++++
+                                    ++++*
+               ++++*              ++++*               *++++
+               +++++             ++++                 +++++
+               *+++++                                +++++*
+                 *+++++                            ++++++
+                  *++++++*                       +++++++
+                    ++++++++                  ++++++++
+                     *++++++++++          ++++++++++*
+                        *+++++++++++++++++++++++++
+                           *++++++++++++++++++*
 """
 
 
@@ -65,10 +65,7 @@ def up_command(path: Path, foreground: bool, port: int | None) -> None:
     """
     repo_root = path.resolve()
     if not (repo_root / ".git").exists():
-        raise click.ClickException(
-            f"'{repo_root}' is not a git repository. "
-            "CodePlane must be run from a git repository root, or pass a path: cpl up PATH"
-        )
+        raise click.ClickException(f"Not a git repository: {repo_root}")
 
     codeplane_dir = repo_root / ".codeplane"
 
