@@ -32,7 +32,7 @@ class TestRepoMapper:
     def test_given_indexed_files_when_map_structure_then_returns_tree(
         self, db_session: Session, tmp_path: Path
     ) -> None:
-        """Map structure returns directory tree from index."""
+        """Map structure returns directory tree from index with line counts."""
         # Given - indexed files in DB
         ctx = Context(
             language_family="python",
@@ -43,9 +43,9 @@ class TestRepoMapper:
         db_session.flush()
 
         files = [
-            File(path="src/main.py", language_family="python"),
-            File(path="src/utils.py", language_family="python"),
-            File(path="tests/test_main.py", language_family="python"),
+            File(path="src/main.py", language_family="python", line_count=100),
+            File(path="src/utils.py", language_family="python", line_count=50),
+            File(path="tests/test_main.py", language_family="python", line_count=75),
         ]
         for f in files:
             db_session.add(f)
@@ -60,6 +60,13 @@ class TestRepoMapper:
         assert result.structure is not None
         assert result.structure.file_count == 3
         assert "src" in result.structure.contexts
+
+        # Verify line_count is present on file nodes
+        src_dir = next((n for n in result.structure.tree if n.name == "src"), None)
+        assert src_dir is not None
+        main_file = next((n for n in src_dir.children if n.name == "main.py"), None)
+        assert main_file is not None
+        assert main_file.line_count == 100
 
     def test_given_indexed_files_when_map_languages_then_groups_by_family(
         self, db_session: Session, tmp_path: Path
