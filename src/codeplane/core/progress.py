@@ -59,13 +59,7 @@ def _is_tty() -> bool:
 
 
 def status(message: str, *, style: str = "info", indent: int = 0) -> None:
-    """Print a status message to stderr.
-
-    Args:
-        message: The message to display
-        style: One of "success", "error", "info", "none"
-        indent: Number of spaces to indent (default 0)
-    """
+    """Print a styled status message to stderr."""
     prefix = _STYLES.get(style, "")
     padding = " " * indent
     line = f"{padding}{prefix}{message}"
@@ -90,23 +84,7 @@ def progress[T](
     total: int | None = None,
     unit: str = "files",
 ) -> Iterator[T]:
-    """Wrap an iterable with a progress bar if large enough.
-
-    Shows progress bar only if:
-    - TTY is available AND
-    - Total items > _PROGRESS_THRESHOLD (100)
-
-    Otherwise yields items silently (with DEBUG logging).
-
-    Args:
-        iterable: Items to iterate
-        desc: Description shown before progress bar
-        total: Total count (auto-detected if iterable has __len__)
-        unit: Unit name for display (default "files")
-
-    Yields:
-        Items from the iterable
-    """
+    """Wrap an iterable with a progress bar if TTY and >100 items."""
     # Try to get total
     if total is None:
         try:

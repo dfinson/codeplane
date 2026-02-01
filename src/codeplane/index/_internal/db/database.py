@@ -26,41 +26,13 @@ if TYPE_CHECKING:
 
 
 class Database:
-    """
-    Database connection manager with WAL mode and hybrid access patterns.
-
-    Configures SQLite for concurrent access:
-    - WAL mode for concurrent readers with queued writers
-    - 30-second busy timeout to handle contention
-    - Foreign keys enabled for referential integrity
-
-    Usage::
-
-        db = Database(Path("index.db"))
-        db.create_all()
-
-        # ORM access (low volume)
-        with db.session() as session:
-            context = session.get(Context, 1)
-
-        # Serializable writes (RepoState)
-        with db.immediate_transaction() as session:
-            repo_state = session.get(RepoState, 1)
-            repo_state.last_seen_head = new_head
-
-        # Bulk access (high volume)
-        with db.bulk_writer() as writer:
-            ids = writer.insert_many_returning_ids(File, file_dicts, ["path"])
-            writer.insert_many(Symbol, symbol_dicts)
-    """
+    """SQLite connection manager with WAL mode for concurrent access."""
 
     def __init__(self, db_path: Path) -> None:
-        """Initialize database with path to SQLite file."""
         self.db_path = db_path
         self.engine = self._create_engine()
 
     def _create_engine(self) -> Engine:
-        """Create SQLAlchemy engine with proper configuration."""
         engine = create_engine(
             f"sqlite:///{self.db_path}",
             connect_args={"check_same_thread": False},
@@ -141,50 +113,15 @@ def _configure_pragmas(dbapi_conn: Any, _connection_record: Any) -> None:
 
 
 class BulkWriter:
-    """
-    High-performance bulk insert using Core SQL.
-
-    Bypasses ORM object instantiation overhead for high-volume tables.
-    Uses SQLModel table metadata to avoid hardcoded SQL.
-
-    For tables with foreign keys, use insert_many_returning_ids() to get
-    parent IDs before inserting child records (Read-After-Write pattern).
-
-    Example::
-
-        with db.bulk_writer() as writer:
-            # Insert files, get path -> id mapping
-            path_to_id = writer.insert_many_returning_ids(
-                File,
-                [{"path": "a.py", "content_hash": "abc"}, ...],
-                ["path"]
-            )
-
-            # Now insert symbols with resolved file_id
-            symbols = [
-                {"file_id": path_to_id[("a.py",)], "name": "foo", ...},
-                ...
-            ]
-            writer.insert_many(Symbol, symbols)
-    """
+    """High-performance bulk insert using Core SQL, bypassing ORM overhead."""
 
     def __init__(self, engine: Engine) -> None:
-        """Initialize bulk writer with database engine."""
         self.engine = engine
         self.conn = engine.connect()
         self.transaction = self.conn.begin()
 
     def insert_many(self, model_class: type[SQLModel], records: list[dict[str, Any]]) -> int:
-        """
-        Bulk insert records into table defined by model_class.
-
-        Args:
-            model_class: SQLModel class (e.g., File, Symbol)
-            records: List of dicts matching model fields
-
-        Returns:
-            Number of records inserted
-        """
+        """Bulk insert records into table, returning count inserted."""
         if not records:
             return 0
 
@@ -198,37 +135,7 @@ class BulkWriter:
         records: list[dict[str, Any]],
         key_columns: list[str],
     ) -> dict[tuple[Any, ...], int]:
-        """
-        Bulk insert and return mapping of key columns to generated IDs.
-
-        Use this for parent tables (File, Symbol) before inserting child
-        tables (Occurrence, Export) that reference them via foreign keys.
-
-        Args:
-            model_class: SQLModel class
-            records: List of dicts to insert
-            key_columns: Columns that form the unique lookup key
-
-        Returns:
-            Dict mapping tuple(key_values) -> id
-
-        Example::
-
-            # Insert files, get path -> id mapping
-            path_to_id = writer.insert_many_returning_ids(
-                File,
-                [{"path": "a.py", "content_hash": "abc"}, ...],
-                ["path"]
-            )
-            # path_to_id = {("a.py",): 1, ("b.py",): 2, ...}
-
-            # Now insert symbols with file_id
-            symbols = [
-                {"file_id": path_to_id[("a.py",)], "name": "foo", ...},
-                ...
-            ]
-            writer.insert_many(Symbol, symbols)
-        """
+        """Bulk insert and return mapping of key columns to generated IDs for FK resolution."""
         if not records:
             return {}
 
@@ -275,18 +182,7 @@ class BulkWriter:
         conflict_columns: list[str],
         update_columns: list[str],
     ) -> int:
-        """
-        Bulk upsert (insert or update on conflict).
-
-        Args:
-            model_class: SQLModel class
-            records: List of dicts
-            conflict_columns: Columns that define uniqueness
-            update_columns: Columns to update on conflict
-
-        Returns:
-            Number of records processed
-        """
+        """Bulk upsert (insert or update on conflict), returning count processed."""
         if not records:
             return 0
 
@@ -317,12 +213,7 @@ class BulkWriter:
         condition: str,
         params: dict[str, Any],
     ) -> int:
-        """
-        Bulk delete with condition.
-
-        Returns:
-            Number of rows affected
-        """
+        """Bulk delete rows matching condition, returning count affected."""
         table = model_class.__table__  # type: ignore[attr-defined]
         sql = f"DELETE FROM {table.name} WHERE {condition}"
         result = self.conn.execute(text(sql), params)

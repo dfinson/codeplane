@@ -13,16 +13,7 @@ from codeplane.templates import get_cplignore_template
 
 
 def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False) -> bool:
-    """Initialize a repository for CodePlane. Returns True on success.
-
-    Args:
-        repo_root: Path to the git repository root
-        force: Overwrite existing .codeplane directory
-        quiet: Suppress output (for auto-init from `cpl up`)
-
-    Returns:
-        True if initialization succeeded, False if already initialized (and not force)
-    """
+    """Initialize a repository for CodePlane, returning True on success."""
     codeplane_dir = repo_root / ".codeplane"
 
     if codeplane_dir.exists() and not force:

@@ -58,44 +58,15 @@ class ReconcileResult:
 
 
 class Reconciler:
-    """
-    Filesystem reconciliation service.
-
-    Compares file content hashes against the database and marks changed files
-    as DIRTY for reindexing.
-
-    INVARIANT: Caller (Coordinator) MUST hold reconcile_lock.
-    This class is NOT safe for concurrent calls.
-
-    Usage::
-
-        reconciler = Reconciler(db, repo_root)
-
-        # Full reconciliation
-        result = reconciler.reconcile()
-
-        # Incremental reconciliation (specific paths)
-        result = reconciler.reconcile(paths=[Path("src/foo.py")])
-
-        # Get files changed since a commit
-        changed = reconciler.get_changed_files(since_head="abc123")
-    """
+    """Filesystem reconciliation service. INVARIANT: Caller must hold reconcile_lock."""
 
     def __init__(self, db: Database, repo_root: Path) -> None:
-        """
-        Initialize reconciler.
-
-        Args:
-            db: Database instance
-            repo_root: Path to repository root
-        """
         self.db = db
         self.repo_root = repo_root
         self._git: GitOps | None = None
 
     @property
     def cplignore_path(self) -> Path:
-        """Path to the .cplignore file."""
         return self.repo_root / ".codeplane" / ".cplignore"
 
     @property
