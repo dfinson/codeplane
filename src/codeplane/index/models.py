@@ -227,6 +227,7 @@ class File(SQLModel, table=True):
     language_family: str | None = None
     content_hash: str | None = None
     indexed_at: float | None = None
+    last_indexed_epoch: int | None = Field(default=None, index=True)
 
     # Relationships
     defs: list["DefFact"] = Relationship(back_populates="file")

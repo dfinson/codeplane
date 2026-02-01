@@ -271,15 +271,18 @@ class IndexCoordinator:
         self._facts = None  # Created on demand in session context
 
         # Step 9: Index all files
-        files_indexed = await self._index_all_files()
+        files_indexed, indexed_paths = await self._index_all_files()
 
         # Reload index so searcher sees committed changes
         if self._lexical is not None:
             self._lexical.reload()
 
-        # Step 10: Publish initial epoch
+        # Step 10: Publish initial epoch with indexed file paths
         if self._epoch_manager is not None:
-            self._epoch_manager.publish_epoch(files_indexed=files_indexed)
+            self._epoch_manager.publish_epoch(
+                files_indexed=files_indexed,
+                indexed_paths=indexed_paths,
+            )
 
         self._initialized = True
 
@@ -374,11 +377,18 @@ class IndexCoordinator:
                 with self._tantivy_write_lock:
                     self._lexical.clear()
 
-            files_indexed = await self._index_all_files()
+            files_indexed, indexed_paths = await self._index_all_files()
 
             # Reload index so searcher sees committed changes
             if self._lexical is not None:
                 self._lexical.reload()
+
+            # Publish epoch with indexed paths
+            if self._epoch_manager is not None:
+                self._epoch_manager.publish_epoch(
+                    files_indexed=files_indexed,
+                    indexed_paths=indexed_paths,
+                )
 
         duration = time.time() - start_time
 
@@ -525,12 +535,17 @@ class IndexCoordinator:
         self._lexical = None
         self._initialized = False
 
-    async def _index_all_files(self) -> int:
-        """Index all files in valid contexts."""
+    async def _index_all_files(self) -> tuple[int, list[str]]:
+        """Index all files in valid contexts.
+
+        Returns:
+            Tuple of (count of files indexed, list of indexed file paths).
+        """
         if self._lexical is None or self._parser is None:
-            return 0
+            return 0, []
 
         count = 0
+        indexed_paths: list[str] = []
 
         with self._tantivy_write_lock:
             # Get all valid contexts
@@ -563,10 +578,11 @@ class IndexCoordinator:
                             symbols=symbols,
                         )
                         count += 1
+                        indexed_paths.append(str(rel_path))
                     except (OSError, UnicodeDecodeError):
                         continue
 
-        return count
+        return count, indexed_paths
 
     async def _update_structural_index(self, changed_paths: list[Path]) -> None:
         """Update structural index for changed files."""

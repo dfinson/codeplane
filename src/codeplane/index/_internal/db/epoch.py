@@ -58,12 +58,18 @@ class EpochManager:
         self,
         files_indexed: int = 0,
         commit_hash: str | None = None,
+        indexed_paths: list[str] | None = None,
     ) -> EpochStats:
         """
         Atomically publish a new epoch.
 
         This commits all pending SQLite changes and Tantivy updates,
         then advances the epoch counter.
+
+        Args:
+            files_indexed: Number of files indexed in this epoch
+            commit_hash: Git commit hash at time of indexing
+            indexed_paths: Paths of files indexed, to update last_indexed_epoch
 
         Per SPEC.md §7.6: Publishing an epoch means SQLite + Tantivy committed.
         """
@@ -94,6 +100,21 @@ class EpochManager:
             else:
                 state = RepoState(id=1, current_epoch_id=new_epoch_id)
                 session.add(state)
+
+            # Update last_indexed_epoch for indexed files
+            if indexed_paths:
+                # Use batch update for efficiency
+                placeholders = ", ".join(f":p{i}" for i in range(len(indexed_paths)))
+                params: dict[str, str | int] = {f"p{i}": p for i, p in enumerate(indexed_paths)}
+                params["epoch"] = new_epoch_id
+                from sqlalchemy import text
+
+                session.exec(  # type: ignore[call-overload]
+                    text(
+                        f"UPDATE files SET last_indexed_epoch = :epoch "
+                        f"WHERE path IN ({placeholders})"
+                    ).bindparams(**params)
+                )
 
             session.commit()
 

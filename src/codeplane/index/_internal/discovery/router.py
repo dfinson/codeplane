@@ -16,9 +16,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from codeplane.index._internal.discovery.membership import is_inside
 from codeplane.index.models import CandidateContext, LanguageFamily
+
+if TYPE_CHECKING:
+    from codeplane.index.models import Context
 
 
 @dataclass
@@ -219,6 +223,41 @@ class ContextRouter:
             prefix = pattern[:-2]
             return path.startswith(prefix + "/") and "/" not in path[len(prefix) + 1 :]
         return fnmatch(path, pattern)
+
+    def file_to_context(self, file_path: str, contexts: list[Context]) -> Context | None:
+        """Route a file to its owning Context from the database.
+
+        Unlike route_files() which works with CandidateContext, this method
+        works with actual Context model instances from the database.
+
+        Args:
+            file_path: Relative file path
+            contexts: List of Context instances from the database
+
+        Returns:
+            The owning Context, or None if no match.
+        """
+        ext = Path(file_path).suffix.lower()
+        family = self._extension_to_family.get(ext)
+        if family is None:
+            return None
+
+        # Filter to matching family and sort by depth (deepest first)
+        family_str = family.value
+        matching = [c for c in contexts if c.language_family == family_str]
+        matching.sort(key=lambda c: -c.root_path.count("/"))
+
+        for ctx in matching:
+            candidate = CandidateContext(
+                root_path=ctx.root_path,
+                language_family=family,
+                include_spec=ctx.get_include_globs(),
+                exclude_spec=ctx.get_exclude_globs(),
+            )
+            if self._matches_context(file_path, candidate):
+                return ctx
+
+        return None
 
 
 def route_single_file(file_path: str, contexts: list[CandidateContext]) -> FileRoute | None:
