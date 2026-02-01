@@ -64,8 +64,6 @@ dependencies = [
     "tree-sitter-toml>=0.6.0",
     "tree-sitter-xml>=0.6.0",
     "tree-sitter-yaml>=0.6.0",
-    # SCIP (semantic indexing)
-    "scip>=0.1.12",
     # Git
     "pygit2>=1.19.0",
     # Logging

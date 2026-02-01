@@ -17,25 +17,34 @@
 
 ---
 
-CodePlane executes safe, deterministic operations for AI coding agents. It owns indexing, refactoring, testing, and file mutations—applying changes atomically and returning structured, auditable results so agents can act without probing or guesswork.
+CodePlane executes deterministic operations for AI coding agents. It owns indexing, file mutations, and Git operations—returning structured, auditable results so agents can act without probing or guesswork.
 
 ## Status
 
-🚧 **Pre-alpha** — M0 + M1 complete, M2 in progress.
+🚧 **Pre-alpha** — M0 + M1 complete, M2 (Index Engine) in progress.
 
 Core infrastructure and Git operations are implemented. See the [roadmap](#roadmap) for progress.
 
-## Vision
+## Architecture
 
-AI coding agents need reliable infrastructure:
+CodePlane provides a **full stacked index**:
 
-- **Atomic mutations** — Changes succeed completely or roll back entirely
-- **Fast code search** — Sub-second queries across the codebase  
-- **Semantic refactoring** — Rename, extract, move with full reference updates
-- **Structured test results** — Normalized output from any test framework
-- **Operation history** — Full audit trail for debugging and convergence tracking
+- **Tier 0 — Tantivy Lexical Index**: Fast, deterministic lexical retrieval for candidate discovery
+- **Tier 1 — Tree-sitter/SQLite Structural Facts**: Definitions, references, scopes, imports, exports
 
-CodePlane provides this via MCP (Model Context Protocol) tools, exposing capabilities as a local HTTP daemon.
+The planner produces:
+- Bounded candidate sets
+- Patch previews with text edits
+- Coverage + Risk manifests (explicit about what is PROVEN vs ANCHORED)
+
+**Auto-apply rules:**
+- Only PROVEN edits (same-file bindings, explicit imports) can auto-apply
+- Everything else is proposal-only unless explicitly confirmed
+
+**What CodePlane is NOT:**
+- Not a semantic refactor engine (no SCIP/LSP authority)
+- Not an IDE replacement
+- Not an agent or orchestrator
 
 ## Roadmap
 
@@ -45,14 +54,17 @@ Track progress via [GitHub Milestones](https://github.com/dfinson/codeplane/mile
 |-----------|-------------|--------|
 | M0: Foundation | Core types, errors, logging, configuration | ✅ Complete |
 | M1: Git Operations | Status, staging, commits, branches, diffs | ✅ Complete |
-| M2: Index Engine | Syntactic search + SCIP semantic layer infrastructure | 🚧 In Progress |
-| M3: Mutation Engine | Atomic file changes with rollback | |
-| M4: Ledger & Task Model | Operation history, convergence metrics | |
-| M5: Daemon & CLI | HTTP daemon, `cpl` CLI commands | |
-| M6: Core MCP Tools | File ops, search, git tools for agents | |
-| M7: Test Runner | Framework detection, parallel execution | |
-| M8: Semantic Refactor | Rename, move, delete using SCIP semantic data | |
+| M2: Index Engine | Tantivy lexical + Tree-sitter/SQLite structural facts | 🚧 In Progress |
+| M3: Refactor Planner | Bounded candidate sets with coverage/risk manifests | |
+| M4: Mutation Engine | Atomic file changes with rollback | |
+| M5: Ledger & Task Model | Operation history, convergence metrics | |
+| M6: Daemon & CLI | HTTP daemon, `cpl` CLI commands | |
+| M7: Core MCP Tools | File ops, search, git tools for agents | |
+| M8: Test Runner | Framework detection, parallel execution | |
 | M9: Polish & Hardening | Docs, benchmarks, security, packaging | |
+| M10: Advanced Semantic Support | Research milestone: SCIP/LSP integration analysis | 🔬 Research |
+
+**Note:** M10 is a research milestone where we analyze complexity vs benefit for full semantic refactor support (SCIP, LSP backends). Implementation decisions will be made based on documented analysis.
 
 ## Development
 
@@ -62,6 +74,12 @@ make lint        # Run ruff linter
 make typecheck   # Run mypy
 make test        # Run pytest
 ```
+
+## Design Authority
+
+[SPEC.md](SPEC.md) is the single source of design truth. All design decisions are documented there, including:
+- Section 7: Index Architecture (Tier 0 + Tier 1)
+- Section 19: Semantic Support Exploration (design archaeology of approaches that failed)
 
 ## License
 
