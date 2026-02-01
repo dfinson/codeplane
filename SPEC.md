@@ -7,7 +7,7 @@
 - [3. Explicit Non-Goals](#3-explicit-non-goals)
 - [4. Architecture Overview](#4-architecture-overview)
   - [4.1 Components](#41-components)
-  - [4.2 CLI, Daemon Lifecycle, and Operability](#42-cli-daemon-lifecycle-and-operability)
+  - [4.2 CLI, Server Lifecycle, and Operability](#42-cli-server-lifecycle-and-operability)
   - [4.3 Terminology Note](#43-terminology-note-always-on-vs-operated-lifecycle)
 - [5. Repository Truth & Reconciliation](#5-repository-truth--reconciliation-no-watchers)
   - [5.1 Design Goals](#51-design-goals)
@@ -147,7 +147,7 @@ CodePlane does not plan, retry, or decide strategies. Its role is deterministic 
 
 ### 4.1 Components
 
-- **CodePlane daemon (Python)**
+- **CodePlane server (Python)**
   - Maintains deterministic indexes.
   - Owns file, Git, test, and refactor operations.
   - Exposes endpoints.
@@ -165,7 +165,7 @@ Operational viewpoint:
 
 - VS Code is a viewer, not a state manager.
 
-### 4.2 CLI, Daemon Lifecycle, and Operability
+### 4.2 CLI, Server Lifecycle, and Operability
 
 CodePlane uses a single operator CLI: `cpl`. It is explicitly **not agent-facing**.
 
@@ -174,9 +174,8 @@ Core commands (idempotent; human output derivable from structured JSON via `--js
 | Command | Description |
 |---|---|
 | `cpl init` | One-time repo setup: write `.codeplane/`, generate `.cplignore`, bind repo ID, build first index (or schedule immediately). |
-| `cpl up` | Start the repo's daemon if not running. Idempotent, safe to run repeatedly. |
-| `cpl down` | Gracefully stop the repo's daemon. Useful for upgrades, debugging, releasing locks. |
-| `cpl status` | Single human-readable view: daemon running, repo fingerprint, index version, last reconcile, last error. |
+| `cpl up` | Start the CodePlane server (foreground). Ctrl+C to stop. Idempotent check prevents duplicate instances. |
+| `cpl status` | Single human-readable view: server running, repo fingerprint, index version, last reconcile, last error. |
 | `cpl doctor` | Single "tell me what's wrong and how to fix it" command. Output suitable for pasting into issues. |
 
 Humans learn: `init` once, then `up/status/doctor`.
@@ -192,16 +191,17 @@ The following capabilities are folded into core commands or removed to avoid sur
 | Config CLI | Removed in v1. Use files: global config in user dir, repo config in `.codeplane/config`. One-off overrides via `cpl up --set key=value` if needed. |
 | Rebuild index | Automatic when integrity checks fail; no manual trigger. |
 
-Daemon model:
+Server model:
 
-- **Repo-scoped daemon** — one daemon per repository; no multi-repo mode.
-- `cpl up` in a repo directory starts/ensures a daemon for that repo only.
+- **Foreground process** — `cpl up` runs in foreground, Ctrl+C to stop. No background daemonization.
+- **Repo-scoped** — one server per repository; no multi-repo mode.
+- `cpl up` in a repo directory starts a server for that repo only.
 - Transport: **HTTP localhost** with ephemeral port.
   - Cross-platform with identical code (no socket vs named pipe divergence).
   - MCP clients can connect directly via HTTP/SSE transport (no stdio proxy needed).
 - Request validation:
   - All HTTP requests must include `X-CodePlane-Repo: <absolute-path>` header.
-  - Daemon validates header matches its configured repository root.
+  - Server validates header matches its configured repository root.
   - Missing header → `400` with error code `REPO_HEADER_MISSING`.
   - Path mismatch → `400` with error code `REPO_MISMATCH` (response includes expected/received paths).
   - Rationale: Prevents cross-repo accidents when multiple CodePlane instances run simultaneously. No token management, no file permissions, no auth state.
@@ -216,17 +216,13 @@ Repo activation:
 - `cpl up` initializes repo if needed (creates `.codeplane/`, repo UUID, config).
 - Index is eagerly built on startup and continuously maintained.
 
-Auto-start options (optional):
-
-- Manual: `cpl up` (recommended; explicit is better)
-
-Daemon startup includes:
+Server startup includes:
 
 - Git HEAD verification
 - Overlay index diff
 - Index consistency check
 
-Daemon shutdown:
+Server shutdown (Ctrl+C or SIGTERM):
 
 - Graceful shutdown timeout: 5 seconds (configurable)
 - In-flight HTTP requests: allowed to complete until timeout, then aborted
@@ -267,7 +263,7 @@ Logging:
   ```
 - JSON output example:
   ```json
-  {"ts":"2026-01-26T15:30:00.123Z","level":"info","event":"daemon started","port":54321}
+  {"ts":"2026-01-26T15:30:00.123Z","level":"info","event":"server started","port":54321}
   {"ts":"2026-01-26T15:30:01.456Z","level":"debug","op_id":"abc123","event":"refactor planning started","symbol":"MyClass"}
   {"ts":"2026-01-26T15:30:02.789Z","level":"error","op_id":"abc123","event":"indexer timeout","lang":"java","timeout_ms":30000}
   ```
@@ -286,7 +282,7 @@ Installation and upgrades:
 Diagnostics and introspection:
 
 - `cpl doctor` checks:
-  - Daemon reachable
+  - Server reachable
   - Index integrity
   - Commit hash matches Git HEAD
   - Config sanity
@@ -306,7 +302,7 @@ Config precedence:
 
 Environment variables use `CODEPLANE__` prefix with double underscore delimiter for nesting:
 - `CODEPLANE__LOGGING__LEVEL=DEBUG`
-- `CODEPLANE__DAEMON__PORT=8080`
+- `CODEPLANE__SERVER__PORT=8080`
 
 No dedicated config CLI in v1. Edit files directly.
 
@@ -347,7 +343,6 @@ Failure recovery playbooks:
 | Corrupt index | `cpl doctor` fails hash check | Automatic rebuild (or `cpl debug index-rebuild`) |
 | Schema mismatch | Startup error | Automatic rebuild on `cpl up` |
 | Stale revision | `cpl status` shows mismatch | Automatic re-fetch/rebuild on `cpl up` |
-| Daemon crash | Daemon auto-exits | `cpl up` (restarts daemon) |
 
 Platform constraints:
 
@@ -371,7 +366,7 @@ One source uses “local, always-on control plane” as conceptual framing; the 
 Unified operational interpretation:
 
 - CodePlane is **conceptually** a “control plane beneath agents.”
-- It is **operationally** a repo-scoped daemon managed via `cpl up` / `cpl down`.
+- It is **operationally** a repo-scoped foreground server started via `cpl up` (Ctrl+C to stop).
 
 ---
 
@@ -431,7 +426,7 @@ CPL-tracked files (not in Git):
 
 Reconciliation occurs:
 
-- On daemon start
+- On server start
 - Before and after every operation that reads or mutates repo state
 - After agent-initiated file or Git ops (rename, commit, rebase, etc.)
 
@@ -499,7 +494,7 @@ def reconcile(repo):
 
 ### 5.10 Reconciliation Invariants
 
-- No daemon threads mutate **repository state** (working tree, `.git/`, HEAD).
+- No server threads mutate **repository state** (working tree, `.git/`, HEAD).
 - Background threads **may** update **derived state** (SQLite index, Tantivy, caches).
 - Index updates are continuous: file watcher detects changes, background worker reindexes.
 - Reconcile logic is stateless, deterministic, idempotent.
@@ -2048,7 +2043,7 @@ A task exists to:
 
 - group related operations
 - apply execution limits
-- survive daemon restarts
+- survive server restarts
 - produce structured outcomes
 
 A task does not:
@@ -2065,7 +2060,7 @@ Lifecycle states:
 | OPEN | Task active; operations correlated |
 | CLOSED_SUCCESS | Task ended cleanly |
 | CLOSED_FAILED | Task aborted due to limits/invariants |
-| CLOSED_INTERRUPTED | Daemon restart or client disconnect |
+| CLOSED_INTERRUPTED | Server restart or client disconnect |
 
 Tasks are explicitly opened and closed; never reopened implicitly.
 
@@ -2129,7 +2124,7 @@ CodePlane does not decide next step.
 
 ### 12.4 Restart Semantics
 
-On daemon restart:
+On server restart:
 
 - All OPEN tasks marked CLOSED_INTERRUPTED.
 - Repo reconciled from Git.
@@ -2165,7 +2160,7 @@ It exists to answer:
 
 Primary persistence:
 
-- Local append-only SQLite DB owned by daemon, stored in repo:
+- Local append-only SQLite DB owned by server, stored in repo:
   - `.codeplane/ledger.db`
 
 v1 ledger schema (SQLite only):
@@ -2256,7 +2251,7 @@ CodePlane is infrastructure. Infrastructure requires visibility.
 
 Operators need to answer:
 
-- Is the daemon healthy?
+- Is the server healthy?
 - Are agents making progress or spinning?
 - Which operations are slow, failing, or succeeding?
 - Is the index fresh or stale?
@@ -2271,7 +2266,7 @@ Principles:
 
 1. **Visibility without overhead**: Observability is always-on, not sampled or opt-in.
 2. **Structured and queryable**: Telemetry is structured data, not log grep.
-3. **Bundled and self-contained**: No external dependencies required. Dashboard ships with daemon.
+3. **Bundled and self-contained**: No external dependencies required. Dashboard ships with server.
 4. **Standards-based**: OpenTelemetry for traces and metrics. Exportable but not required.
 
 ### 13.3 What CodePlane Monitors
@@ -2290,9 +2285,9 @@ Every MCP operation emits a trace with spans:
 
 Purpose: Understand what agents are doing, how long it takes, and what fails.
 
-#### System Health (Daemon-Level)
+#### System Health (Server-Level)
 
-The daemon exposes continuous health metrics:
+The server exposes continuous health metrics:
 
 | Metric | What It Measures |
 |--------|------------------|
@@ -2302,7 +2297,7 @@ The daemon exposes continuous health metrics:
 | Reconciliation rate | Reconciliations per minute; duration histogram |
 | Task throughput | Tasks opened/closed per interval; budget exhaustion rate |
 
-Purpose: Know if the daemon is healthy before problems compound.
+Purpose: Know if the server is healthy before problems compound.
 
 #### Convergence Signals (Agent-Level)
 
@@ -2321,9 +2316,9 @@ Purpose: Detect spinning agents and non-convergent loops without CodePlane makin
 
 #### Dashboard Endpoint
 
-The daemon exposes a unified dashboard at `/dashboard`:
+The server exposes a unified dashboard at `/dashboard`:
 
-- Bundled with daemon; no external setup
+- Bundled with server; no external setup
 - Accessible via browser at `http://127.0.0.1:<port>/dashboard`
 - Unified view of traces, metrics, and health
 
@@ -2336,7 +2331,7 @@ Dashboard capabilities:
 
 #### Metrics Endpoint
 
-The daemon exposes a Prometheus-compatible metrics endpoint at `/metrics`:
+The server exposes a Prometheus-compatible metrics endpoint at `/metrics`:
 
 - Scrapeable by external monitoring systems
 - Useful for fleet-level aggregation (optional, not required)
@@ -2469,7 +2464,7 @@ The following contradictions have been resolved:
 
 3. **Tree-sitter failure policy**: Resolved. On parse failure, skip file, log warning, continue indexing. Never abort the indexing pass for a single file failure. See section 7.4.
 
-4. **"Always-on" framing vs explicit lifecycle**: Resolved. CodePlane is conceptually a control plane, operationally a repo-scoped daemon managed via `cpl up` / `cpl down`. OS service integration is deferred.
+4. **"Always-on" framing vs explicit lifecycle**: Resolved. CodePlane is conceptually a control plane, operationally a repo-scoped server managed via `cpl up` (Ctrl+C to stop). OS service integration is deferred.
 
 ---
 
@@ -2528,7 +2523,7 @@ This section documents the semantic indexing approaches explored during CodePlan
 - Memory overhead: 200MB–1GB+ per language server
 - Cold start latency: 5–30+ seconds per project
 - Multi-environment complexity: cannot easily run multiple interpreters/SDKs
-- Daemon resource constraints: CodePlane must remain lightweight
+- Server resource constraints: CodePlane must remain lightweight
 - Multi-worktree hostility: LSP assumes single project root
 - Operational complexity outweighed benefits for refactor planning
 
@@ -2614,7 +2609,7 @@ The correct shippable baseline is a **refactor planner** with a **full stacked i
 
 Semantic engines (SCIP, LSP, compiler APIs) may be reintroduced as:
 - Opt-in batch jobs per language/project
-- User-initiated, not daemon-managed
+- User-initiated, not server-managed
 - Results cached but not authoritative
 - Planner remains the default UX
 
@@ -2622,7 +2617,7 @@ Semantic engines (SCIP, LSP, compiler APIs) may be reintroduced as:
 - Documented complexity-benefit analysis per language
 - Clear operational model (install, version, update)
 - Proof that semantic confidence exceeds planner confidence for target use case
-- No impact on daemon startup time or memory footprint
+- No impact on server startup time or memory footprint
 
 Until these criteria are met, semantic engines are explicitly deferred.
 
@@ -2711,7 +2706,7 @@ Core design choices:
                       │ MCP/JSON-RPC 2.0 over HTTP/SSE
                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    CodePlane Daemon                              │
+│                    CodePlane Server                              │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
 │  │  FastMCP Server │  │  REST Handler   │  │  SSE Handler    │  │
 │  │   (~35 tools)   │  │  (/health, etc) │  │  (streaming)    │  │
@@ -2928,7 +2923,7 @@ Tools are organized into namespaced families. Each tool has a single responsibil
 
 | Tool | Purpose |
 |------|---------|
-| `status` | Daemon health, index state |
+| `status` | Server health, index state |
 
 **Total: ~35 tools**
 
@@ -3647,7 +3642,7 @@ Session and task lifecycle management.
 
 #### `status`
 
-Daemon health, index state, and session info.
+Server health, index state, and session info.
 
 **Parameters:**
 
