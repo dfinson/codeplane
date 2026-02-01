@@ -39,6 +39,7 @@ class DirectoryNode:
     is_dir: bool
     children: list[DirectoryNode] = field(default_factory=list)
     file_count: int = 0
+    line_count: int | None = None  # Only for files
 
 
 @dataclass
@@ -148,14 +149,13 @@ class RepoMapper:
 
     def _build_structure(self, depth: int) -> StructureInfo:
         """Build directory tree from indexed files."""
-        # Get all indexed file paths
-        stmt = select(File.path)
-        paths = list(self._session.exec(stmt).all())
+        # Get all indexed file paths with line counts
+        stmt = select(File.path, File.line_count)
+        file_data = list(self._session.exec(stmt).all())
+        path_to_lines: dict[str, int | None] = dict(file_data)
 
         # Get valid contexts
-        ctx_stmt = select(Context.root_path).where(
-            Context.probe_status == ProbeStatus.VALID.value
-        )
+        ctx_stmt = select(Context.root_path).where(Context.probe_status == ProbeStatus.VALID.value)
         contexts = list(self._session.exec(ctx_stmt).all())
 
         # Build tree
@@ -167,7 +167,7 @@ class RepoMapper:
 
         dir_nodes: dict[str, DirectoryNode] = {".": root_node}
 
-        for path_str in paths:
+        for path_str, line_count in path_to_lines.items():
             parts = Path(path_str).parts
             if len(parts) > depth + 1:
                 continue
@@ -193,6 +193,7 @@ class RepoMapper:
                 name=parts[-1],
                 path=path_str,
                 is_dir=False,
+                line_count=line_count,
             )
             parent_node.children.append(file_node)
             parent_node.file_count += 1
@@ -209,7 +210,7 @@ class RepoMapper:
         return StructureInfo(
             root=str(self._repo_root),
             tree=root_node.children,
-            file_count=len(paths),
+            file_count=len(path_to_lines),
             contexts=contexts,
         )
 
@@ -300,11 +301,7 @@ class RepoMapper:
         results = list(self._session.exec(stmt).all())
 
         # Filter to likely external modules (no relative imports)
-        external = [
-            source
-            for source, _ in results
-            if source and not source.startswith(".")
-        ]
+        external = [source for source, _ in results if source and not source.startswith(".")]
 
         total_imports = sum(count for _, count in results)
 

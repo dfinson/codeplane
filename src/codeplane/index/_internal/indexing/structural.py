@@ -78,6 +78,7 @@ class ExtractionResult:
     dynamic_sites: list[dict[str, Any]] = field(default_factory=list)
     interface_hash: str | None = None
     content_hash: str | None = None
+    line_count: int = 0
     error: str | None = None
     parse_time_ms: int = 0
 
@@ -113,6 +114,9 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
 
         content = full_path.read_bytes()
         result.content_hash = hashlib.sha256(content).hexdigest()
+        result.line_count = content.count(b"\n") + (
+            1 if content and not content.endswith(b"\n") else 0
+        )
 
         parser = TreeSitterParser()
         try:
@@ -436,7 +440,7 @@ class StructuralIndexer:
                 continue
             if extraction.file_path not in file_id_map:
                 file_id_map[extraction.file_path] = self._ensure_file_id(
-                    extraction.file_path, extraction.content_hash, context_id
+                    extraction.file_path, extraction.content_hash, extraction.line_count, context_id
                 )
 
         with self.db.bulk_writer() as writer:
@@ -541,7 +545,9 @@ class StructuralIndexer:
 
         return results
 
-    def _ensure_file_id(self, file_path: str, content_hash: str | None, _context_id: int) -> int:
+    def _ensure_file_id(
+        self, file_path: str, content_hash: str | None, line_count: int, _context_id: int
+    ) -> int:
         """Ensure file exists in database and return its ID."""
         with self.db.session() as session:
             from sqlmodel import select
@@ -555,6 +561,7 @@ class StructuralIndexer:
             file = File(
                 path=file_path,
                 content_hash=content_hash,
+                line_count=line_count,
                 language_family=self._detect_family(file_path),
             )
             session.add(file)

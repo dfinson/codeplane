@@ -3085,6 +3085,16 @@ Queries the existing index to build a mental model. Does NOT scan the filesystem
 **Response:**
 
 ```typescript
+// DirectoryNode structure
+interface DirectoryNode {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  children?: DirectoryNode[];       // Only for directories
+  file_count?: number;              // Only for directories
+  line_count?: number;              // Only for files (from File.line_count)
+}
+
 {
   structure: {
     root: string;

@@ -226,6 +226,7 @@ class File(SQLModel, table=True):
     path: str = Field(unique=True, index=True)
     language_family: str | None = None
     content_hash: str | None = None
+    line_count: int | None = None
     indexed_at: float | None = None
     last_indexed_epoch: int | None = Field(default=None, index=True)
 
