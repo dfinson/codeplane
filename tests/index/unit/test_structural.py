@@ -48,27 +48,29 @@ class TestDefUidComputation:
 
     def test_compute_def_uid_basic(self) -> None:
         """def_uid should be deterministic."""
-        uid1 = _compute_def_uid(1, "function", "foo", None)
-        uid2 = _compute_def_uid(1, "function", "foo", None)
+        uid1 = _compute_def_uid("src/foo.py", 1, "function", "foo", None)
+        uid2 = _compute_def_uid("src/foo.py", 1, "function", "foo", None)
         assert uid1 == uid2
 
     def test_compute_def_uid_different_inputs(self) -> None:
         """Different inputs should produce different def_uids."""
-        uid1 = _compute_def_uid(1, "function", "foo", None)
-        uid2 = _compute_def_uid(1, "function", "bar", None)
-        uid3 = _compute_def_uid(2, "function", "foo", None)
+        uid1 = _compute_def_uid("src/foo.py", 1, "function", "foo", None)
+        uid2 = _compute_def_uid("src/foo.py", 1, "function", "bar", None)
+        uid3 = _compute_def_uid("src/foo.py", 2, "function", "foo", None)
+        uid4 = _compute_def_uid("src/bar.py", 1, "function", "foo", None)  # Different file
         assert uid1 != uid2
         assert uid1 != uid3
+        assert uid1 != uid4
 
     def test_compute_def_uid_with_signature(self) -> None:
         """Signature hash should affect def_uid."""
-        uid1 = _compute_def_uid(1, "function", "foo", "abc123")
-        uid2 = _compute_def_uid(1, "function", "foo", "def456")
+        uid1 = _compute_def_uid("src/foo.py", 1, "function", "foo", "abc123")
+        uid2 = _compute_def_uid("src/foo.py", 1, "function", "foo", "def456")
         assert uid1 != uid2
 
     def test_compute_def_uid_length(self) -> None:
         """def_uid should be 16 characters (truncated SHA256)."""
-        uid = _compute_def_uid(1, "function", "foo", None)
+        uid = _compute_def_uid("src/foo.py", 1, "function", "foo", None)
         assert len(uid) == 16
 
 
