@@ -97,3 +97,55 @@ class TestSearchQuality:
         repo = initialized_repo.repo
         count = repo.count_files()
         assert count > 0, "files table is empty"
+
+
+@pytest.mark.e2e
+class TestQueryPerformance:
+    """Scenario 5: Query Performance Micro-Budget."""
+
+    def test_def_query_under_budget(self, initialized_repo: InitResult) -> None:
+        """20 symbol lookups complete under 1s."""
+        import time
+
+        repo = initialized_repo.repo
+        anchors = repo.anchors
+
+        # Collect up to 20 anchor symbol names
+        symbols = [a.name for ctx in anchors.contexts for a in ctx.anchors][:20]
+
+        if len(symbols) < 5:
+            pytest.skip("Not enough anchor symbols for query performance test")
+
+        t0 = time.perf_counter()
+        for name in symbols:
+            repo.query_db(
+                "SELECT name FROM def_facts WHERE name = ?",
+                (name,),
+            )
+        elapsed = time.perf_counter() - t0
+
+        assert elapsed < 1.0, f"{len(symbols)} queries took {elapsed:.2f}s (budget: 1s)"
+
+    def test_file_listing_under_budget(self, initialized_repo: InitResult) -> None:
+        """File listing query completes under 500ms."""
+        import time
+
+        repo = initialized_repo.repo
+
+        t0 = time.perf_counter()
+        repo.query_db("SELECT path, line_count FROM files LIMIT 1000")
+        elapsed = time.perf_counter() - t0
+
+        assert elapsed < 0.5, f"File listing took {elapsed:.2f}s (budget: 0.5s)"
+
+    def test_def_count_by_kind_under_budget(self, initialized_repo: InitResult) -> None:
+        """Grouped count query completes under 500ms."""
+        import time
+
+        repo = initialized_repo.repo
+
+        t0 = time.perf_counter()
+        repo.query_db("SELECT kind, COUNT(*) FROM def_facts GROUP BY kind")
+        elapsed = time.perf_counter() - t0
+
+        assert elapsed < 0.5, f"Grouped count took {elapsed:.2f}s (budget: 0.5s)"
