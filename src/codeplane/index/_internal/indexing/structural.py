@@ -49,11 +49,19 @@ from codeplane.index.models import (
 
 
 def _compute_def_uid(
-    unit_id: int, kind: str, lexical_path: str, signature_hash: str | None, disambiguator: int = 0
+    unit_id: int,
+    file_path: str,
+    kind: str,
+    lexical_path: str,
+    signature_hash: str | None,
+    disambiguator: int = 0,
 ) -> str:
-    """Compute stable def_uid per SPEC.md §7.4."""
+    """Compute stable def_uid per SPEC.md §7.4.
+
+    Includes file_path to distinguish same-named symbols in different files.
+    """
     sig = signature_hash or ""
-    raw = f"{unit_id}:{kind}:{lexical_path}:{sig}:{disambiguator}"
+    raw = f"{unit_id}:{file_path}:{kind}:{lexical_path}:{sig}:{disambiguator}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
@@ -145,6 +153,9 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
         def_uid_by_name: dict[str, str] = {}  # name -> def_uid (latest in file)
         def_scope_by_name: dict[str, int] = {}  # name -> local_scope_id containing def
 
+        # Track disambiguator for symbols with same (lexical_path, sig_hash)
+        disambiguator_counts: dict[tuple[str, str | None], int] = {}
+
         # Convert symbols to DefFact dicts
         for sym in symbols:
             sig_hash = (
@@ -152,7 +163,16 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
                 if sym.signature
                 else None
             )
-            def_uid = _compute_def_uid(unit_id, sym.kind, sym.name, sig_hash)
+            lexical_path = _compute_lexical_path(sym, symbols)
+
+            # Compute disambiguator for same-signature siblings
+            key = (lexical_path, sig_hash)
+            disambiguator = disambiguator_counts.get(key, 0)
+            disambiguator_counts[key] = disambiguator + 1
+
+            def_uid = _compute_def_uid(
+                unit_id, file_path, sym.kind, lexical_path, sig_hash, disambiguator
+            )
 
             # Find containing scope
             containing_scope = _find_containing_scope(scopes, sym.line, sym.column)

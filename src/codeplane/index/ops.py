@@ -47,6 +47,7 @@ from codeplane.index.models import (
     Context,
     ContextMarker,
     DefFact,
+    File,
     ProbeStatus,
     RefFact,
 )
@@ -377,6 +378,9 @@ class IndexCoordinator:
                 with self._tantivy_write_lock:
                     self._lexical.clear()
 
+            # Clear structural facts before full reindex
+            self._clear_all_structural_facts()
+
             files_indexed, indexed_paths = await self._index_all_files()
 
             # Reload index so searcher sees committed changes
@@ -538,6 +542,10 @@ class IndexCoordinator:
     async def _index_all_files(self) -> tuple[int, list[str]]:
         """Index all files in valid contexts.
 
+        Populates both:
+        - Tantivy (lexical search)
+        - SQLite fact tables (DefFact, RefFact, etc.)
+
         Returns:
             Tuple of (count of files indexed, list of indexed file paths).
         """
@@ -556,6 +564,10 @@ class IndexCoordinator:
                 )
                 contexts = list(session.exec(stmt).all())
 
+            # Collect files per context (deduplicated)
+            context_files: dict[int, list[str]] = {}
+            seen_paths: set[str] = set()
+
             # Index files for each context
             for context in contexts:
                 context_root = self.repo_root / context.root_path
@@ -564,46 +576,139 @@ class IndexCoordinator:
 
                 include_globs = context.get_include_globs()
                 exclude_globs = context.get_exclude_globs()
+                context_id = context.id or 0
+                context_files[context_id] = []
 
                 # Find matching files
                 for file_path in self._find_files(context_root, include_globs, exclude_globs):
                     rel_path = file_path.relative_to(self.repo_root)
+                    rel_str = str(rel_path)
+
+                    # Skip if already indexed (prevent duplicates)
+                    if rel_str in seen_paths:
+                        continue
+                    seen_paths.add(rel_str)
+
                     try:
                         content = file_path.read_text()
                         symbols = self._extract_symbols(file_path)
                         self._lexical.add_file(
-                            str(rel_path),
+                            rel_str,
                             content,
-                            context_id=context.id or 0,
+                            context_id=context_id,
                             symbols=symbols,
                         )
                         count += 1
-                        indexed_paths.append(str(rel_path))
+                        indexed_paths.append(rel_str)
+                        context_files[context_id].append(rel_str)
                     except (OSError, UnicodeDecodeError):
                         continue
+
+            # Run structural indexer for each context
+            if self._structural is not None:
+                for context_id, file_paths in context_files.items():
+                    if file_paths:
+                        self._structural.index_files(file_paths, context_id)
 
         return count, indexed_paths
 
     async def _update_structural_index(self, changed_paths: list[Path]) -> None:
-        """Update structural index for changed files."""
-        if self._structural is None or self._parser is None:
+        """Update structural index for changed files.
+
+        Clears existing facts for changed files, then re-extracts.
+        Groups files by context and indexes each group with its context_id.
+        """
+        if self._structural is None:
             return
 
-        # Parse and update each changed file
-        for path in changed_paths:
-            full_path = self.repo_root / path
-            if not full_path.exists():
-                continue
+        # Convert to string paths
+        str_paths = [str(p) for p in changed_paths if (self.repo_root / p).exists()]
+        if not str_paths:
+            return
 
-            try:
-                content = full_path.read_bytes()
-                result = self._parser.parse(full_path, content)
-                if result is not None:
-                    symbols = self._parser.extract_symbols(result)
-                    # Symbols extracted for structural update
-                    _ = symbols
-            except (OSError, UnicodeDecodeError):
-                continue
+        # Load contexts for routing
+        with self.db.session() as session:
+            from sqlalchemy import text
+
+            contexts = session.exec(
+                select(Context).where(Context.probe_status == ProbeStatus.VALID.value)
+            ).all()
+
+            # Build file -> context_id mapping
+            file_to_context: dict[str, int] = {}
+            for ctx in contexts:
+                if ctx.id is None:
+                    continue
+                ctx_root = ctx.root_path
+                # NOTE: include_globs and exclude_globs available for future glob matching
+                # TODO(#XXX): Apply proper glob matching from include/exclude specs
+
+                for str_path in str_paths:
+                    # Check if file is under this context root
+                    if not str_path.startswith(ctx_root):
+                        continue
+                    # For now, accept all files under context root
+                    if str_path not in file_to_context:
+                        file_to_context[str_path] = ctx.id
+
+            # Delete existing facts for these files before re-indexing
+            for str_path in str_paths:
+                file = session.exec(select(File).where(File.path == str_path)).first()
+                if file and file.id is not None:
+                    file_id = file.id
+                    # Delete facts for this file using raw SQL
+                    session.exec(
+                        text("DELETE FROM def_facts WHERE file_id = :fid").bindparams(fid=file_id)
+                    )  # type: ignore[call-overload]
+                    session.exec(
+                        text("DELETE FROM ref_facts WHERE file_id = :fid").bindparams(fid=file_id)
+                    )  # type: ignore[call-overload]
+                    session.exec(
+                        text("DELETE FROM scope_facts WHERE file_id = :fid").bindparams(fid=file_id)
+                    )  # type: ignore[call-overload]
+                    session.exec(
+                        text("DELETE FROM import_facts WHERE file_id = :fid").bindparams(
+                            fid=file_id
+                        )
+                    )  # type: ignore[call-overload]
+                    session.exec(
+                        text("DELETE FROM local_bind_facts WHERE file_id = :fid").bindparams(
+                            fid=file_id
+                        )
+                    )  # type: ignore[call-overload]
+                    session.exec(
+                        text("DELETE FROM dynamic_access_sites WHERE file_id = :fid").bindparams(
+                            fid=file_id
+                        )
+                    )  # type: ignore[call-overload]
+            session.commit()
+
+        # Group files by context_id and re-index
+        context_files: dict[int, list[str]] = {}
+        for str_path, ctx_id in file_to_context.items():
+            if ctx_id not in context_files:
+                context_files[ctx_id] = []
+            context_files[ctx_id].append(str_path)
+
+        for ctx_id, paths in context_files.items():
+            self._structural.index_files(paths, context_id=ctx_id)
+
+    def _clear_all_structural_facts(self) -> None:
+        """Clear all structural facts from the database.
+
+        Used before full reindex to avoid duplicate key violations.
+        """
+        with self.db.session() as session:
+            from sqlalchemy import text
+
+            # Clear all fact tables
+            session.exec(text("DELETE FROM def_facts"))  # type: ignore[call-overload]
+            session.exec(text("DELETE FROM ref_facts"))  # type: ignore[call-overload]
+            session.exec(text("DELETE FROM scope_facts"))  # type: ignore[call-overload]
+            session.exec(text("DELETE FROM import_facts"))  # type: ignore[call-overload]
+            session.exec(text("DELETE FROM local_bind_facts"))  # type: ignore[call-overload]
+            session.exec(text("DELETE FROM dynamic_access_sites"))  # type: ignore[call-overload]
+            session.commit()
 
     def _extract_symbols(self, file_path: Path) -> list[str]:
         """Extract symbol names from a file."""
