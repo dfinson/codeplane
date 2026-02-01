@@ -58,4 +58,7 @@ class RepoValidationMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
                 status_code=400,
             )
 
-        return await call_next(request)
+        response = await call_next(request)
+        # Always include repo in response so agents can detect wrong-server mistakes
+        response.headers[REPO_HEADER] = str(self.repo_root)
+        return response

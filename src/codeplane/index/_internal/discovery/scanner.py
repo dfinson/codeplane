@@ -213,21 +213,36 @@ UNIVERSAL_EXCLUDES: list[str] = [
 
 
 def _walk_with_pruning(root: Path) -> list[tuple[str, str]]:
-    """Walk directory tree, pruning excluded directories.
-
-    Uses os.walk with in-place modification of dirnames for performance.
-    Much faster than rglob on large repos with node_modules/venv.
+    """Get all tracked files from git index (fast).
 
     Returns list of (rel_dir_posix, filename) tuples.
+    Falls back to os.walk with pruning if git isn't available.
     """
+    from codeplane.git import GitOps
+
     results: list[tuple[str, str]] = []
 
+    try:
+        git_ops = GitOps(root)
+        for rel_path in git_ops.tracked_files():
+            # Split into directory and filename
+            if "/" in rel_path:
+                rel_dir = rel_path.rsplit("/", 1)[0]
+                filename = rel_path.rsplit("/", 1)[1]
+            else:
+                rel_dir = ""
+                filename = rel_path
+            results.append((rel_dir, filename))
+        return results
+    except Exception:
+        pass
+
+    # Fallback to os.walk with pruning
     for dirpath, dirnames, filenames in os.walk(root):
-        # Prune excluded directories in-place (modifies iteration)
         dirnames[:] = [d for d in dirnames if d not in PRUNABLE_DIRS]
 
-        rel_dir = Path(dirpath).relative_to(root)
-        rel_dir_posix = str(rel_dir).replace("\\", "/")
+        rel_dir_path = Path(dirpath).relative_to(root)
+        rel_dir_posix = str(rel_dir_path).replace("\\", "/")
         if rel_dir_posix == ".":
             rel_dir_posix = ""
 

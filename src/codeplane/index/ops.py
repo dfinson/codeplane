@@ -13,6 +13,7 @@ Discovery -> Authority -> Membership -> Probe -> Router -> Index
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from collections.abc import Iterable
@@ -55,6 +56,15 @@ from codeplane.index.models import (
 
 if TYPE_CHECKING:
     from codeplane.index.models import FileState
+
+
+def _matches_glob(rel_path: str, pattern: str) -> bool:
+    """Check if a path matches a glob pattern, with ** support."""
+    import fnmatch
+
+    if fnmatch.fnmatch(rel_path, pattern):
+        return True
+    return pattern.startswith("**/") and fnmatch.fnmatch(rel_path, pattern[3:])
 
 
 @dataclass
@@ -473,6 +483,9 @@ class IndexCoordinator:
             )
             contexts = list(session.exec(ctx_stmt).all())
 
+        # Walk filesystem once, apply cplignore
+        all_files = self._walk_all_files()
+
         for context in contexts:
             context_root = self.repo_root / context.root_path
             if not context_root.exists():
@@ -481,7 +494,9 @@ class IndexCoordinator:
             exclude_globs = context.get_exclude_globs()
             context_id = context.id or 1
 
-            for file_path in self._find_files(context_root, include_globs, exclude_globs):
+            for file_path in self._filter_files_for_context(
+                all_files, context_root, include_globs, exclude_globs
+            ):
                 rel_path = str(file_path.relative_to(self.repo_root))
                 if rel_path not in should_index:
                     should_index.add(rel_path)
@@ -841,14 +856,17 @@ class IndexCoordinator:
             specific_contexts = [c for c in all_contexts if c.tier != 3]
             root_context = next((c for c in all_contexts if c.tier == 3), None)
 
-            # First pass: collect files from specific contexts (tier 1/2/ambient)
+            # Walk filesystem ONCE - applies PRUNABLE_DIRS and cplignore
             if not self._quiet:
                 status("Discovering files...", style="none", indent=4)
+
+            all_files = self._walk_all_files()
 
             files_to_index: list[tuple[Path, str, int, str | None]] = []
             # (full_path, rel_str, ctx_id, language_family)
             claimed_paths: set[str] = set()
 
+            # First pass: match files to specific contexts (tier 1/2/ambient)
             for context in specific_contexts:
                 context_root = self.repo_root / context.root_path
                 if not context_root.exists():
@@ -858,7 +876,9 @@ class IndexCoordinator:
                 exclude_globs = context.get_exclude_globs()
                 context_id = context.id or 0
 
-                for file_path in self._find_files(context_root, include_globs, exclude_globs):
+                for file_path in self._filter_files_for_context(
+                    all_files, context_root, include_globs, exclude_globs
+                ):
                     rel_path = file_path.relative_to(self.repo_root)
                     rel_str = str(rel_path)
 
@@ -867,12 +887,12 @@ class IndexCoordinator:
                     claimed_paths.add(rel_str)
                     files_to_index.append((file_path, rel_str, context_id, context.language_family))
 
-            # Second pass: find unclaimed files for root fallback context
+            # Second pass: assign unclaimed files to root fallback context
             if root_context is not None:
                 root_context_id = root_context.id or 0
                 exclude_globs = root_context.get_exclude_globs()
 
-                for file_path in self._find_all_tracked_files(exclude_globs):
+                for file_path in self._filter_unclaimed_files(all_files, exclude_globs):
                     rel_path = file_path.relative_to(self.repo_root)
                     rel_str = str(rel_path)
 
@@ -1067,157 +1087,105 @@ class IndexCoordinator:
 
         return patterns
 
-    def _find_files(
-        self,
-        root: Path,
-        include_globs: list[str],
-        exclude_globs: list[str],
-    ) -> list[Path]:
-        """Find files matching include/exclude patterns, respecting .cplignore."""
-        import fnmatch
-        import os
+    def _walk_all_files(self) -> list[str]:
+        """Walk filesystem once, return all indexable file paths (relative to repo root).
 
+        Applies PRUNABLE_DIRS pruning and cplignore filtering.
+        Does NOT use git - indexes any file on disk that isn't in .cplignore.
+        """
         from codeplane.index._internal.ignore import PRUNABLE_DIRS
 
-        files: list[Path] = []
-
-        # Load ignore patterns from .cplignore.template (bundled source of truth)
         cplignore_patterns = self._load_cplignore_patterns()
 
-        def matches_glob(rel_path: str, pattern: str) -> bool:
-            """Match path against glob pattern, handling ** correctly."""
-            if fnmatch.fnmatch(rel_path, pattern):
-                return True
-
-            # If pattern starts with **/, also match without the prefix
-            if pattern.startswith("**/"):
-                suffix = pattern[3:]
-                if fnmatch.fnmatch(rel_path, suffix):
-                    return True
-
-            return False
-
         def should_ignore(rel_str: str) -> bool:
-            """Check if path should be ignored based on .cplignore patterns."""
-            # Always exclude .codeplane directory
             if rel_str.startswith(".codeplane") or ".codeplane/" in rel_str:
                 return True
-
-            rel_path = Path(rel_str)
-
             for pattern in cplignore_patterns:
-                # Handle negation patterns
                 if pattern.startswith("!"):
-                    if matches_glob(rel_str, pattern[1:]):
+                    if _matches_glob(rel_str, pattern[1:]):
                         return False
                     continue
-
-                # Standard matching
-                if matches_glob(rel_str, pattern):
+                if _matches_glob(rel_str, pattern):
                     return True
-
-                # Also match against any parent directory
-                for parent in rel_path.parents:
-                    parent_str = str(parent)
-                    if matches_glob(parent_str, pattern):
-                        return True
-                    if matches_glob(parent_str + "/", pattern):
-                        return True
-
             return False
 
-        # Use os.walk with pruning instead of rglob for performance
-        for dirpath, dirnames, filenames in os.walk(root):
-            # Prune excluded directories in-place
+        all_files: list[str] = []
+        for dirpath, dirnames, filenames in os.walk(self.repo_root):
+            # Prune dirs in-place to skip expensive subtrees
             dirnames[:] = [d for d in dirnames if d not in PRUNABLE_DIRS]
 
             for filename in filenames:
-                path = Path(dirpath) / filename
+                full_path = Path(dirpath) / filename
+                rel_str = str(full_path.relative_to(self.repo_root)).replace("\\", "/")
 
-                # Get relative path from context root for include/exclude matching
-                try:
-                    rel_from_ctx = path.relative_to(root)
-                except ValueError:
-                    continue
-                rel_str = str(rel_from_ctx).replace("\\", "/")
+                if not should_ignore(rel_str):
+                    all_files.append(rel_str)
 
-                # Get relative path from repo root for cplignore matching
-                try:
-                    rel_from_repo = path.relative_to(self.repo_root)
-                except ValueError:
-                    continue
-                rel_str_repo = str(rel_from_repo).replace("\\", "/")
+        return all_files
 
-                # Check .cplignore patterns (relative to repo root)
-                if should_ignore(rel_str_repo):
-                    continue
-
-                # Check exclude globs (relative to context root)
-                excluded = False
-                for pattern in exclude_globs:
-                    if matches_glob(rel_str, pattern):
-                        excluded = True
-                        break
-
-                if excluded:
-                    continue
-
-                # Check include globs (empty = include all)
-                if not include_globs:
-                    files.append(path)
-                else:
-                    for pattern in include_globs:
-                        if matches_glob(rel_str, pattern):
-                            files.append(path)
-                            break
-
-        return files
-
-    def _find_all_tracked_files(self, exclude_globs: list[str]) -> list[Path]:
-        """Find all git-tracked files, applying exclude patterns.
-
-        Used by the root fallback context to find files not claimed by
-        any specific context.
-        """
-        import fnmatch
-
-        from codeplane.git import GitOps
+    def _filter_files_for_context(
+        self,
+        all_files: list[str],
+        context_root: Path,
+        include_globs: list[str],
+        exclude_globs: list[str],
+    ) -> list[Path]:
+        """Filter pre-walked files for a specific context."""
+        # Compute context prefix relative to repo root
+        try:
+            context_prefix = str(context_root.relative_to(self.repo_root)).replace("\\", "/")
+            if context_prefix == ".":
+                context_prefix = ""
+        except ValueError:
+            context_prefix = ""
 
         files: list[Path] = []
-        cplignore_patterns = self._load_cplignore_patterns()
-
-        def matches_glob(rel_path: str, pattern: str) -> bool:
-            if fnmatch.fnmatch(rel_path, pattern):
-                return True
-            if pattern.startswith("**/"):
-                suffix = pattern[3:]
-                if fnmatch.fnmatch(rel_path, suffix):
-                    return True
-            return False
-
-        def should_ignore(rel_str: str) -> bool:
-            if rel_str.startswith(".codeplane") or ".codeplane/" in rel_str:
-                return True
-            for pattern in cplignore_patterns:
-                if pattern.startswith("!"):
-                    if matches_glob(rel_str, pattern[1:]):
-                        return False
+        for rel_str_repo in all_files:
+            # Filter to files under context root
+            if context_prefix:
+                if not rel_str_repo.startswith(context_prefix + "/"):
                     continue
-                if matches_glob(rel_str, pattern):
-                    return True
-            return False
-
-        # Get all tracked files from git
-        git_ops = GitOps(self.repo_root)
-        for rel_str in git_ops.tracked_files():
-            # Check cplignore
-            if should_ignore(rel_str):
-                continue
+                rel_str = rel_str_repo[len(context_prefix) + 1 :]
+            else:
+                rel_str = rel_str_repo
 
             # Check exclude globs
             excluded = False
             for pattern in exclude_globs:
-                if matches_glob(rel_str, pattern):
+                if _matches_glob(rel_str, pattern):
+                    excluded = True
+                    break
+            if excluded:
+                continue
+
+            # Check include globs (empty = include all)
+            if include_globs:
+                matched = False
+                for pattern in include_globs:
+                    if _matches_glob(rel_str, pattern):
+                        matched = True
+                        break
+                if not matched:
+                    continue
+
+            full_path = self.repo_root / rel_str_repo
+            if full_path.is_file():
+                files.append(full_path)
+
+        return files
+
+    def _filter_unclaimed_files(
+        self,
+        all_files: list[str],
+        exclude_globs: list[str],
+    ) -> list[Path]:
+        """Filter pre-walked files for root fallback context."""
+        files: list[Path] = []
+        for rel_str in all_files:
+            # Check exclude globs
+            excluded = False
+            for pattern in exclude_globs:
+                if _matches_glob(rel_str, pattern):
                     excluded = True
                     break
             if excluded:

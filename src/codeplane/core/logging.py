@@ -71,7 +71,7 @@ def configure_logging(
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
-        structlog.processors.TimeStamper(fmt="iso", utc=True, key="ts"),
+        structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S", key="timestamp"),
         _add_request_id,  # type: ignore[list-item]
     ]
 

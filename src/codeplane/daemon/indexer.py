@@ -135,23 +135,23 @@ class BackgroundIndexer:
             self._pending_paths.clear()
 
         self._state = IndexerState.INDEXING
-        logger.info("indexing_started", path_count=len(paths))
 
         try:
-            # Run indexing in thread pool
-            loop = asyncio.get_event_loop()
-            stats = await loop.run_in_executor(
-                self._executor,
-                self._index_sync,
-                paths,
-            )
+            from rich.console import Console
+
+            console = Console(stderr=True)
+            with console.status(f"[cyan]Reindexing {len(paths)} file(s)...[/cyan]", spinner="dots"):
+                # Run indexing in thread pool
+                loop = asyncio.get_event_loop()
+                stats = await loop.run_in_executor(
+                    self._executor,
+                    self._index_sync,
+                    paths,
+                )
             self._last_stats = stats
             self._last_error = None
-            logger.info(
-                "indexing_completed",
-                files_updated=stats.files_updated,
-                files_removed=stats.files_removed,
-                duration_seconds=f"{stats.duration_seconds:.3f}",
+            console.print(
+                f"  [green]✓[/green] Reindexed {stats.files_updated} file(s) in {stats.duration_seconds:.2f}s"
             )
 
             # Notify completion callback

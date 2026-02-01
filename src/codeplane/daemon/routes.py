@@ -22,7 +22,7 @@ def create_routes(controller: ServerController) -> list[Route]:
             {
                 "status": "healthy",
                 "repo_root": str(controller.repo_root),
-                "daemon_version": "0.1.0",
+                "version": "0.1.0",
             }
         )
 

@@ -117,11 +117,15 @@ def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False
     )
 
     try:
+        import time
+
+        start_time = time.time()
         loop = asyncio.new_event_loop()
         try:
             result = loop.run_until_complete(coord.initialize())
         finally:
             loop.close()
+        elapsed = time.time() - start_time
 
         if result.errors:
             for err in result.errors:
@@ -129,7 +133,9 @@ def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False
             return False
 
         if not quiet:
-            status(f"Indexed {result.files_indexed} files", style="success", indent=2)
+            status(
+                f"Indexed {result.files_indexed} files in {elapsed:.1f}s", style="success", indent=2
+            )
             # Show breakdown by extension
             if result.files_by_ext:
                 sorted_exts = sorted(

@@ -61,7 +61,7 @@ class ServerController:
 
     async def start(self) -> None:
         """Start all daemon components."""
-        logger.info("daemon_starting", repo_root=str(self.repo_root))
+        logger.info("server starting", repo_root=str(self.repo_root))
 
         # Start indexer thread pool
         self.indexer.start()
@@ -69,11 +69,11 @@ class ServerController:
         # Start file watcher
         await self.watcher.start()
 
-        logger.info("daemon_started")
+        logger.info("server started")
 
     async def stop(self) -> None:
         """Stop all daemon components gracefully."""
-        logger.info("daemon_stopping")
+        logger.info("server stopping")
 
         # Stop watcher first (no new events)
         await self.watcher.stop()
@@ -84,7 +84,7 @@ class ServerController:
         # Signal shutdown complete
         self._shutdown_event.set()
 
-        logger.info("daemon_stopped")
+        logger.info("server stopped")
 
     def wait_for_shutdown(self) -> asyncio.Event:
         """Get the shutdown event for external coordination."""
@@ -188,7 +188,7 @@ async def run_server(
 
     try:
         logger.info(
-            "daemon_listening",
+            "server listening",
             host=config.host,
             port=config.port,
         )
