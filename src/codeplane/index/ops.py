@@ -267,6 +267,10 @@ class IndexCoordinator:
         self._state = FileStateService(self.db)
         self._reconciler = Reconciler(self.db, self.repo_root)
 
+        # Establish baseline reconciler state (HEAD, .cplignore hash)
+        # This prevents spurious change detection on first incremental call
+        self._reconciler.reconcile(paths=[])
+
         # Initialize fact queries
         # Note: FactQueries needs a session, so we create per-request
         self._facts = None  # Created on demand in session context
@@ -301,6 +305,8 @@ class IndexCoordinator:
         Incremental reindex for changed files.
 
         SERIALIZED: Acquires reconcile_lock and tantivy_write_lock.
+
+        If .cplignore changes, triggers a full reindex to apply new patterns.
         """
         if not self._initialized:
             msg = "Coordinator not initialized"
@@ -314,7 +320,11 @@ class IndexCoordinator:
         with self._reconcile_lock:
             # Reconcile changes
             if self._reconciler is not None:
-                self._reconciler.reconcile(changed_paths)
+                reconcile_result = self._reconciler.reconcile(changed_paths)
+
+                # If .cplignore changed, do full reindex to apply new patterns
+                if reconcile_result.cplignore_changed:
+                    return await self._reindex_for_cplignore_change()
 
             # Update Tantivy
             with self._tantivy_write_lock:
@@ -354,6 +364,184 @@ class IndexCoordinator:
             symbols_indexed=symbols_indexed,
             duration_seconds=duration,
         )
+
+    async def _reindex_for_cplignore_change(self) -> IndexStats:
+        """Handle .cplignore change by computing file diff and updating index.
+
+        Removes files that are now ignored and adds files that are now included.
+        Must be called while holding _reconcile_lock.
+        """
+        start_time = time.time()
+        files_added = 0
+        files_removed = 0
+
+        # Get currently indexed files from database
+        with self.db.session() as session:
+            file_stmt = select(File.path)
+            indexed_paths = set(session.exec(file_stmt).all())
+
+        # Get files that should be indexed under current .cplignore rules
+        should_index: set[str] = set()
+        file_to_context: dict[str, int] = {}  # Map file path to context ID
+
+        with self.db.session() as session:
+            ctx_stmt = select(Context).where(
+                Context.probe_status == ProbeStatus.VALID.value,
+                Context.enabled == True,  # noqa: E712
+            )
+            contexts = list(session.exec(ctx_stmt).all())
+
+        for context in contexts:
+            context_root = self.repo_root / context.root_path
+            if not context_root.exists():
+                continue
+            include_globs = context.get_include_globs()
+            exclude_globs = context.get_exclude_globs()
+            context_id = context.id or 1
+
+            for file_path in self._find_files(context_root, include_globs, exclude_globs):
+                rel_path = str(file_path.relative_to(self.repo_root))
+                if rel_path not in should_index:
+                    should_index.add(rel_path)
+                    file_to_context[rel_path] = context_id
+
+        # Compute diff
+        to_remove = indexed_paths - should_index
+        to_add = should_index - indexed_paths
+
+        # Remove files that are now ignored
+        with self._tantivy_write_lock:
+            for rel_path in to_remove:
+                if self._lexical is not None:
+                    self._lexical.remove_file(rel_path)
+                files_removed += 1
+
+            # Add files that are now included
+            for rel_path in to_add:
+                full_path = self.repo_root / rel_path
+                if full_path.exists():
+                    try:
+                        content = full_path.read_text()
+                        symbols = self._extract_symbols(full_path)
+                        ctx_id = file_to_context.get(rel_path, 1)
+                        if self._lexical is not None:
+                            self._lexical.add_file(
+                                rel_path, content, context_id=ctx_id, symbols=symbols
+                            )
+                        files_added += 1
+                    except (OSError, UnicodeDecodeError):
+                        continue
+
+        # Reload index
+        if self._lexical is not None:
+            self._lexical.reload()
+
+        # Pre-create File records for added files before structural indexing
+        # This ensures FKs are valid within the same transaction
+        file_id_map: dict[str, int] = {}
+        if to_add:
+            import hashlib
+
+            with self.db.session() as session:
+                for rel_path in to_add:
+                    full_path = self.repo_root / rel_path
+                    if not full_path.exists():
+                        continue
+                    # Compute content hash
+                    content_hash = hashlib.sha256(full_path.read_bytes()).hexdigest()
+                    # Detect language
+                    ext = full_path.suffix.lower()
+                    lang_map = {
+                        ".py": "python",
+                        ".pyi": "python",
+                        ".js": "javascript",
+                        ".jsx": "javascript",
+                        ".ts": "javascript",
+                        ".tsx": "javascript",
+                        ".go": "go",
+                        ".rs": "rust",
+                    }
+                    lang = lang_map.get(ext)
+
+                    file_record = File(
+                        path=rel_path,
+                        content_hash=content_hash,
+                        language_family=lang,
+                    )
+                    session.add(file_record)
+                    session.flush()  # Get ID without committing
+                    if file_record.id is not None:
+                        file_id_map[rel_path] = file_record.id
+                session.commit()
+
+        # Update structural index for added files, grouped by context
+        if to_add and self._structural is not None:
+            # Group files by context_id
+            by_context: dict[int, list[str]] = {}
+            for rel_path in to_add:
+                ctx_id = file_to_context.get(rel_path, 1)
+                if ctx_id not in by_context:
+                    by_context[ctx_id] = []
+                by_context[ctx_id].append(rel_path)
+
+            for ctx_id, paths in by_context.items():
+                self._structural.index_files(paths, context_id=ctx_id, file_id_map=file_id_map)
+
+        # Remove structural facts for removed files
+        if to_remove:
+            self._remove_structural_facts_for_paths(list(to_remove))
+
+        # Remove File records for removed paths
+        if to_remove:
+            with self.db.bulk_writer() as writer:
+                for rel_path in to_remove:
+                    writer.delete_where(File, "path = :p", {"p": rel_path})
+
+        duration = time.time() - start_time
+
+        return IndexStats(
+            files_processed=len(to_add) + len(to_remove),
+            files_added=files_added,
+            files_updated=0,
+            files_removed=files_removed,
+            symbols_indexed=0,
+            duration_seconds=duration,
+        )
+
+    def _remove_structural_facts_for_paths(self, paths: list[str]) -> None:
+        """Remove all structural facts for the given file paths."""
+        with self.db.session() as session:
+            from sqlalchemy import text
+
+            for str_path in paths:
+                file = session.exec(select(File).where(File.path == str_path)).first()
+                if file and file.id is not None:
+                    file_id = file.id
+                    session.exec(
+                        text("DELETE FROM def_facts WHERE file_id = :fid").bindparams(fid=file_id)
+                    )  # type: ignore[call-overload]
+                    session.exec(
+                        text("DELETE FROM ref_facts WHERE file_id = :fid").bindparams(fid=file_id)
+                    )  # type: ignore[call-overload]
+                    session.exec(
+                        text("DELETE FROM scope_facts WHERE file_id = :fid").bindparams(fid=file_id)
+                    )  # type: ignore[call-overload]
+                    session.exec(
+                        text("DELETE FROM import_facts WHERE file_id = :fid").bindparams(
+                            fid=file_id
+                        )
+                    )  # type: ignore[call-overload]
+                    session.exec(
+                        text("DELETE FROM local_bind_facts WHERE file_id = :fid").bindparams(
+                            fid=file_id
+                        )
+                    )  # type: ignore[call-overload]
+                    session.exec(
+                        text("DELETE FROM dynamic_access_sites WHERE file_id = :fid").bindparams(
+                            fid=file_id
+                        )
+                    )  # type: ignore[call-overload]
+            session.commit()
 
     async def reindex_full(self) -> IndexStats:
         """

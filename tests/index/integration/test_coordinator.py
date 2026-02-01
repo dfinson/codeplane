@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pygit2
 import pytest
 
 from codeplane.index.ops import (
@@ -278,11 +279,14 @@ class TestCoordinatorCplignore:
     @pytest.mark.asyncio
     async def test_cplignore_excludes_dependencies(self, tmp_path: Path) -> None:
         """Should not index files in dependency directories (node_modules, venv, etc)."""
+        import pygit2
+
         from codeplane.templates import get_cplignore_template
 
-        # Create project
+        # Create project with git repo
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
+        pygit2.init_repository(str(repo_root))
         (repo_root / "pyproject.toml").write_text('[project]\nname = "test"')
 
         # Create .codeplane/.cplignore (simulating cpl init)
@@ -309,6 +313,16 @@ class TestCoordinatorCplignore:
         pycache.mkdir()
         (pycache / "main.cpython-312.pyc").write_bytes(b"compiled")
 
+        # Create initial commit
+        repo = pygit2.Repository(str(repo_root))
+        repo.config["user.name"] = "Test"
+        repo.config["user.email"] = "test@test.com"
+        repo.index.add_all()
+        repo.index.write()
+        tree = repo.index.write_tree()
+        sig = pygit2.Signature("Test", "test@test.com")
+        repo.create_commit("HEAD", sig, sig, "Initial commit", tree, [])
+
         db_path = tmp_path / "index.db"
         tantivy_path = tmp_path / "tantivy"
 
@@ -334,11 +348,14 @@ class TestCoordinatorCplignore:
     @pytest.mark.asyncio
     async def test_cplignore_excludes_build_outputs(self, tmp_path: Path) -> None:
         """Should not index build output directories (dist, build, target)."""
+        import pygit2
+
         from codeplane.templates import get_cplignore_template
 
-        # Create project
+        # Create project with git repo
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
+        pygit2.init_repository(str(repo_root))
         (repo_root / "pyproject.toml").write_text('[project]\nname = "test"')
 
         # Create .codeplane/.cplignore (simulating cpl init)
@@ -360,6 +377,16 @@ class TestCoordinatorCplignore:
         build = repo_root / "build"
         build.mkdir()
         (build / "output.py").write_text("BUILD_OUTPUT = True")
+
+        # Create initial commit
+        repo = pygit2.Repository(str(repo_root))
+        repo.config["user.name"] = "Test"
+        repo.config["user.email"] = "test@test.com"
+        repo.index.add_all()
+        repo.index.write()
+        tree = repo.index.write_tree()
+        sig = pygit2.Signature("Test", "test@test.com")
+        repo.create_commit("HEAD", sig, sig, "Initial commit", tree, [])
 
         db_path = tmp_path / "index.db"
         tantivy_path = tmp_path / "tantivy"
@@ -385,11 +412,14 @@ class TestCoordinatorCplignore:
     @pytest.mark.asyncio
     async def test_codeplane_directory_always_excluded(self, tmp_path: Path) -> None:
         """Should never index .codeplane directory itself."""
+        import pygit2
+
         from codeplane.templates import get_cplignore_template
 
-        # Create project
+        # Create project with git repo
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
+        pygit2.init_repository(str(repo_root))
         (repo_root / "pyproject.toml").write_text('[project]\nname = "test"')
 
         # Create src directory
@@ -404,6 +434,16 @@ class TestCoordinatorCplignore:
         (codeplane / ".cplignore").write_text(get_cplignore_template())
         (codeplane / "config.yaml").write_text("CODEPLANE_CONFIG = true")
         (codeplane / "index.db").write_bytes(b"database")
+
+        # Create initial commit
+        repo = pygit2.Repository(str(repo_root))
+        repo.config["user.name"] = "Test"
+        repo.config["user.email"] = "test@test.com"
+        repo.index.add_all()
+        repo.index.write()
+        tree = repo.index.write_tree()
+        sig = pygit2.Signature("Test", "test@test.com")
+        repo.create_commit("HEAD", sig, sig, "Initial commit", tree, [])
 
         db_path = tmp_path / "index.db"
         tantivy_path = tmp_path / "tantivy"
@@ -420,5 +460,127 @@ class TestCoordinatorCplignore:
             # But main.py should be indexed
             main_results = await coordinator.search("main")
             assert len(main_results) >= 1, "main.py should be indexed"
+        finally:
+            coordinator.close()
+
+
+class TestCplignoreChangeHandling:
+    """Tests for .cplignore change detection and index updates."""
+
+    @pytest.mark.asyncio
+    async def test_cplignore_change_adds_previously_ignored_py_files(
+        self, integration_repo: Path, tmp_path: Path
+    ) -> None:
+        """When .cplignore removes a pattern, previously ignored .py files should be indexed."""
+        # Create a Python file in src/ that will be ignored initially via pattern
+        (integration_repo / "src" / "generated_code.py").write_text(
+            "GENERATED_CONTENT = 'marker_for_test'\n"
+        )
+
+        # Add to git index
+        repo = pygit2.Repository(str(integration_repo))
+        repo.index.add("src/generated_code.py")
+        repo.index.write()
+
+        # Add *generated* pattern to .cplignore BEFORE initialization
+        cplignore_path = integration_repo / ".codeplane" / ".cplignore"
+        original_content = cplignore_path.read_text()
+        cplignore_path.write_text(original_content + "\n**/generated*.py\n")
+
+        db_path = tmp_path / "index.db"
+        tantivy_path = tmp_path / "tantivy"
+
+        coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
+
+        try:
+            # Initialize - generated_code.py should be ignored per .cplignore
+            await coordinator.initialize()
+
+            # Verify generated file is NOT indexed
+            gen_results = await coordinator.search("GENERATED_CONTENT")
+            assert len(gen_results) == 0, "generated_code.py should be ignored initially"
+
+            # Modify .cplignore to remove the pattern (restore original)
+            cplignore_path.write_text(original_content)
+
+            # Trigger incremental reindex - this should detect .cplignore change
+            await coordinator.reindex_incremental([])
+
+            # Now the generated file should be indexed
+            gen_results = await coordinator.search("GENERATED_CONTENT")
+            assert len(gen_results) >= 1, (
+                "generated_code.py should be indexed after .cplignore change"
+            )
+        finally:
+            coordinator.close()
+
+    @pytest.mark.asyncio
+    async def test_cplignore_change_removes_newly_ignored_py_files(
+        self, integration_repo: Path, tmp_path: Path
+    ) -> None:
+        """When .cplignore adds a pattern, matching .py files should be removed from index."""
+        # Create a Python file that will be indexed initially
+        (integration_repo / "src" / "temporary.py").write_text("TEMP_CODE = True\n")
+
+        # Add to git index
+        repo = pygit2.Repository(str(integration_repo))
+        repo.index.add("src/temporary.py")
+        repo.index.write()
+
+        db_path = tmp_path / "index.db"
+        tantivy_path = tmp_path / "tantivy"
+
+        coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
+
+        try:
+            # Initialize - temporary.py should be indexed
+            await coordinator.initialize()
+
+            # Verify temporary.py IS indexed
+            temp_results = await coordinator.search("TEMP_CODE")
+            assert len(temp_results) >= 1, "temporary.py should be indexed initially"
+
+            # Modify .cplignore to ignore temporary.py
+            cplignore_path = integration_repo / ".codeplane" / ".cplignore"
+            original_content = cplignore_path.read_text()
+            cplignore_path.write_text(original_content + "\n**/temporary.py\n")
+
+            # Trigger incremental reindex
+            await coordinator.reindex_incremental([])
+
+            # Now temporary.py should NOT be indexed
+            temp_results = await coordinator.search("TEMP_CODE")
+            assert len(temp_results) == 0, "temporary.py should be removed after .cplignore change"
+        finally:
+            coordinator.close()
+
+    @pytest.mark.asyncio
+    async def test_cplignore_unchanged_no_reindex(
+        self, integration_repo: Path, tmp_path: Path
+    ) -> None:
+        """When .cplignore hasn't changed, incremental reindex should be efficient."""
+        db_path = tmp_path / "index.db"
+        tantivy_path = tmp_path / "tantivy"
+
+        coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
+
+        try:
+            # Initialize
+            await coordinator.initialize()
+
+            # Get initial file count
+            initial_results = await coordinator.search("def")
+            initial_count = len(initial_results)
+
+            # Trigger incremental reindex without any changes
+            stats = await coordinator.reindex_incremental([])
+
+            # Should have minimal work
+            assert stats.files_added == 0
+            assert stats.files_removed == 0
+
+            # Same files should still be indexed
+            final_results = await coordinator.search("def")
+            assert len(final_results) == initial_count
         finally:
             coordinator.close()
