@@ -2,7 +2,10 @@
 
 import click
 
+from codeplane.cli.down import down_command
 from codeplane.cli.init import init_command
+from codeplane.cli.status import status_command
+from codeplane.cli.up import up_command
 
 
 @click.group()
@@ -12,6 +15,9 @@ def cli() -> None:
 
 
 cli.add_command(init_command, name="init")
+cli.add_command(up_command, name="up")
+cli.add_command(down_command, name="down")
+cli.add_command(status_command, name="status")
 
 
 if __name__ == "__main__":

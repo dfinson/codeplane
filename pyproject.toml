@@ -21,6 +21,7 @@ dependencies = [
     # HTTP Server
     "starlette>=0.52.0",
     "uvicorn>=0.40.0",
+    "httpx>=0.28.0",
     # MCP
     "mcp>=1.9.0",
     # Config & Validation
@@ -69,6 +70,8 @@ dependencies = [
     # Logging
     "structlog>=25.5.0",
     "sqlalchemy[mypy]>=2.0.46",
+    # File watching
+    "watchfiles>=1.0.0",
 ]
 
 [project.optional-dependencies]
