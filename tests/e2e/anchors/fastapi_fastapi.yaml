@@ -1,0 +1,45 @@
+# Anchor symbols for fastapi/fastapi
+# Pinned to a stable release tag
+
+repo: fastapi/fastapi
+commit: "0.115.0"
+contexts:
+  - root: "."
+    language: python
+    anchors:
+      - name: FastAPI
+        kind: class
+        file: fastapi/applications.py
+        line_range: [1, 1500]
+      - name: APIRouter
+        kind: class
+        file: fastapi/routing.py
+        line_range: [1, 2000]
+      - name: Depends
+        kind: function
+        file: fastapi/params.py
+        line_range: [1, 500]
+      - name: Query
+        kind: class
+        file: fastapi/params.py
+        line_range: [1, 500]
+      - name: Path
+        kind: class
+        file: fastapi/params.py
+        line_range: [1, 500]
+      - name: Body
+        kind: class
+        file: fastapi/params.py
+        line_range: [1, 500]
+      - name: HTTPException
+        kind: class
+        file: fastapi/exceptions.py
+        line_range: [1, 200]
+
+search_queries:
+  - query: "class FastAPI"
+    expected_path_contains: "applications.py"
+  - query: "class APIRouter"
+    expected_path_contains: "routing.py"
+  - query: "Depends"
+    expected_path_contains: "params.py"

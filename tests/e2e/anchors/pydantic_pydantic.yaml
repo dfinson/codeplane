@@ -1,0 +1,41 @@
+# Anchor symbols for pydantic/pydantic
+# Pinned to a stable release tag
+
+repo: pydantic/pydantic
+commit: v2.10.0
+contexts:
+  - root: "."
+    language: python
+    anchors:
+      - name: BaseModel
+        kind: class
+        file: pydantic/main.py
+        line_range: [1, 2000]
+      - name: Field
+        kind: function
+        file: pydantic/fields.py
+        line_range: [1, 1000]
+      - name: validator
+        kind: function
+        file: pydantic/functional_validators.py
+        line_range: [1, 500]
+      - name: ValidationError
+        kind: class
+        file: pydantic/errors.py
+        line_range: [1, 500]
+      - name: ConfigDict
+        kind: class
+        file: pydantic/config.py
+        line_range: [1, 300]
+      - name: field_validator
+        kind: function
+        file: pydantic/functional_validators.py
+        line_range: [1, 500]
+
+search_queries:
+  - query: "class BaseModel"
+    expected_path_contains: "main.py"
+  - query: "def Field"
+    expected_path_contains: "fields.py"
+  - query: "ValidationError"
+    expected_path_contains: "errors.py"
