@@ -499,8 +499,9 @@ def reconcile(repo):
 
 ### 5.10 Reconciliation Invariants
 
-- All mutations are operation-initiated.
-- No daemon background threads mutate repo state.
+- No daemon threads mutate **repository state** (working tree, `.git/`, HEAD).
+- Background threads **may** update **derived state** (SQLite index, Tantivy, caches).
+- Index updates are continuous: file watcher detects changes, background worker reindexes.
 - Reconcile logic is stateless, deterministic, idempotent.
 - Git is the sole truth for tracked file identity and content.
 - CPL index is derived from disk + Git, never canonical.
@@ -514,7 +515,6 @@ def reconcile(repo):
 - No shared artifact includes secrets. Only Git-tracked files are eligible.
 - Local overlay index may include sensitive files, but it is never uploaded/shared/in CI artifacts.
 - All indexing and mutation actions are scoped, audited, deterministic.
-- Reconciliation is stateless and pull-based; no background mutation.
 
 ### 6.2 Threat Assumptions
 
