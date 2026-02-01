@@ -79,14 +79,15 @@ def up_command(path: Path, port: int | None) -> None:
     if port is not None:
         config.server.port = port
 
-    # Get index paths from config (respects index.index_path for cross-filesystem)
+    # Initialize if needed (this creates config with correct index_path)
+    codeplane_dir = repo_root / ".codeplane"
+    if not codeplane_dir.exists() and not initialize_repo(repo_root):
+        raise click.ClickException("Failed to initialize repository")
+
+    # Get index paths from config AFTER init (so we read the created config)
     from codeplane.config.loader import get_index_paths
 
     db_path, tantivy_path = get_index_paths(repo_root)
-
-    # Check if index exists, initialize if needed
-    if not db_path.exists() and not initialize_repo(repo_root):
-        raise click.ClickException("Failed to initialize repository")
 
     # Now create coordinator and load
     coordinator = IndexCoordinator(
