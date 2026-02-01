@@ -46,7 +46,7 @@ class TestInitCommand:
         assert (repo / ".codeplane" / "config.yaml").exists()
 
     def test_given_git_repo_when_init_then_creates_ignore_file(self, temp_git_repo: Path) -> None:
-        """Init creates .codeplane/ignore with default patterns."""
+        """Init creates .codeplane/.cplignore with default patterns."""
         # Given
         repo = temp_git_repo
 
@@ -54,9 +54,9 @@ class TestInitCommand:
         runner.invoke(cli, ["init", str(repo)])
 
         # Then
-        ignore_path = repo / ".codeplane" / "ignore"
-        assert ignore_path.exists()
-        content = ignore_path.read_text()
+        cplignore_path = repo / ".codeplane" / ".cplignore"
+        assert cplignore_path.exists()
+        content = cplignore_path.read_text()
         assert "node_modules/" in content
         assert ".env" in content
 

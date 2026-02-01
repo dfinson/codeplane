@@ -92,10 +92,12 @@ class TestIgnoreChecker:
         # Nothing should be ignored without patterns
         assert not checker.should_ignore(tmp_path / "test.py")
 
-    def test_gitignore_patterns(self, tmp_path: Path) -> None:
-        """Checker loads patterns from .gitignore."""
-        gitignore = tmp_path / ".gitignore"
-        gitignore.write_text("*.pyc\n__pycache__/\n")
+    def test_cplignore_patterns(self, tmp_path: Path) -> None:
+        """Checker loads patterns from .codeplane/.cplignore."""
+        cpl_dir = tmp_path / ".codeplane"
+        cpl_dir.mkdir()
+        cplignore = cpl_dir / ".cplignore"
+        cplignore.write_text("*.pyc\n__pycache__/\n")
 
         checker = IgnoreChecker(tmp_path)
 
@@ -103,17 +105,16 @@ class TestIgnoreChecker:
         assert checker.should_ignore(tmp_path / "__pycache__" / "module.pyc")
         assert not checker.should_ignore(tmp_path / "test.py")
 
-    def test_codeplane_gitignore(self, tmp_path: Path) -> None:
-        """Checker loads patterns from .codeplane/.gitignore."""
+    def test_cplignore_directory_patterns(self, tmp_path: Path) -> None:
+        """Checker correctly handles directory patterns from .cplignore."""
         cpl_dir = tmp_path / ".codeplane"
         cpl_dir.mkdir()
-        gitignore = cpl_dir / ".gitignore"
-        gitignore.write_text("*.tantivy\nbuild_output/\n")
+        cplignore = cpl_dir / ".cplignore"
+        cplignore.write_text("*.tantivy\nbuild_output/\n")
 
-        # Use extra_patterns=[] to avoid default .codeplane/** pattern
-        checker = IgnoreChecker(tmp_path, extra_patterns=[])
+        checker = IgnoreChecker(tmp_path)
 
-        # Patterns from .codeplane/.gitignore should be applied
+        # Patterns from .codeplane/.cplignore should be applied
         assert checker.should_ignore(tmp_path / "search.tantivy")
         assert checker.should_ignore(tmp_path / "build_output" / "file.txt")
 
@@ -126,9 +127,11 @@ class TestIgnoreChecker:
         assert not checker.should_ignore(tmp_path / "main.py")
 
     def test_comment_lines_ignored(self, tmp_path: Path) -> None:
-        """Comment lines in gitignore are ignored."""
-        gitignore = tmp_path / ".gitignore"
-        gitignore.write_text("# This is a comment\n*.pyc\n# Another comment\n")
+        """Comment lines in .cplignore are ignored."""
+        cpl_dir = tmp_path / ".codeplane"
+        cpl_dir.mkdir()
+        cplignore = cpl_dir / ".cplignore"
+        cplignore.write_text("# This is a comment\n*.pyc\n# Another comment\n")
 
         checker = IgnoreChecker(tmp_path)
 
@@ -137,9 +140,11 @@ class TestIgnoreChecker:
         assert not checker.should_ignore(tmp_path / "# This is a comment")
 
     def test_empty_lines_ignored(self, tmp_path: Path) -> None:
-        """Empty lines in gitignore are ignored."""
-        gitignore = tmp_path / ".gitignore"
-        gitignore.write_text("*.pyc\n\n\n*.log\n")
+        """Empty lines in .cplignore are ignored."""
+        cpl_dir = tmp_path / ".codeplane"
+        cpl_dir.mkdir()
+        cplignore = cpl_dir / ".cplignore"
+        cplignore.write_text("*.pyc\n\n\n*.log\n")
 
         checker = IgnoreChecker(tmp_path)
 
@@ -195,12 +200,19 @@ class TestFileWatcher:
             await asyncio.sleep(0.15)
             (tmp_path / "new_file.py").write_text("# new")
 
-        # Run both concurrently
-        await asyncio.gather(
-            collect_events(),
-            create_file(),
-            return_exceptions=True,
-        )
+        # Run both concurrently with timeout
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    collect_events(),
+                    create_file(),
+                    return_exceptions=True,
+                ),
+                timeout=5.0,
+            )
+        except TimeoutError:
+            watcher.stop()
+            pytest.fail("File watcher polling did not detect change in time")
 
         # Should have received at least one batch
         assert len(events_received) >= 1
@@ -230,11 +242,18 @@ class TestFileWatcher:
             await asyncio.sleep(0.15)
             test_file.write_text("# modified")
 
-        await asyncio.gather(
-            collect_events(),
-            modify_file(),
-            return_exceptions=True,
-        )
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    collect_events(),
+                    modify_file(),
+                    return_exceptions=True,
+                ),
+                timeout=5.0,
+            )
+        except TimeoutError:
+            watcher.stop()
+            pytest.fail("File watcher polling did not detect change in time")
 
         assert len(events_received) >= 1
         all_events = [e for batch in events_received for e in batch]
@@ -263,11 +282,18 @@ class TestFileWatcher:
             await asyncio.sleep(0.15)
             test_file.unlink()
 
-        await asyncio.gather(
-            collect_events(),
-            delete_file(),
-            return_exceptions=True,
-        )
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    collect_events(),
+                    delete_file(),
+                    return_exceptions=True,
+                ),
+                timeout=5.0,
+            )
+        except TimeoutError:
+            watcher.stop()
+            pytest.fail("File watcher polling did not detect change in time")
 
         assert len(events_received) >= 1
         all_events = [e for batch in events_received for e in batch]
@@ -275,10 +301,12 @@ class TestFileWatcher:
         assert any("to_delete.py" in str(p) for p in deleted_paths)
 
     @pytest.mark.asyncio
-    async def test_ignores_gitignored_files(self, tmp_path: Path) -> None:
-        """Watcher ignores files matching gitignore patterns."""
-        # Create .gitignore
-        (tmp_path / ".gitignore").write_text("*.log\n")
+    async def test_ignores_cplignored_files(self, tmp_path: Path) -> None:
+        """Watcher ignores files matching .cplignore patterns."""
+        # Create .codeplane/.cplignore
+        cpl_dir = tmp_path / ".codeplane"
+        cpl_dir.mkdir()
+        (cpl_dir / ".cplignore").write_text("*.log\n")
 
         config = WatcherConfig(root=tmp_path, debounce_seconds=0.1)
         watcher = FileWatcher(config)
@@ -286,11 +314,10 @@ class TestFileWatcher:
         events_received: list[list[FileChangeEvent]] = []
 
         async def collect_events() -> None:
-            count = 0
             async for events in watcher.watch():
                 events_received.append(events)
-                count += 1
-                if count >= 2:
+                # Only expect 1 batch since ignored files don't trigger events
+                if len(events_received) >= 1:
                     watcher.stop()
 
         async def create_files() -> None:
@@ -298,11 +325,18 @@ class TestFileWatcher:
             (tmp_path / "debug.log").write_text("log content")  # Should be ignored
             (tmp_path / "main.py").write_text("# python")  # Should be detected
 
-        await asyncio.gather(
-            collect_events(),
-            create_files(),
-            return_exceptions=True,
-        )
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(
+                    collect_events(),
+                    create_files(),
+                    return_exceptions=True,
+                ),
+                timeout=5.0,
+            )
+        except TimeoutError:
+            watcher.stop()
+            pytest.fail("File watcher polling did not detect change in time")
 
         all_events = [e for batch in events_received for e in batch]
         all_paths = [str(e.path) for e in all_events]

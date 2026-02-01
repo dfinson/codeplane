@@ -1,7 +1,7 @@
 """File watcher for continuous background indexing.
 
 This module implements file watching as specified in SPEC.md §7.7:
-- Watch all files NOT ignored by .gitignore, .codeplane/.gitignore, CPL rules
+- Watch all files NOT ignored by .codeplane/.cplignore patterns
 - Debounce events (handle storms, mid-write saves)
 - Enqueue changed files for background indexing
 - Never block UX during ingestion
@@ -85,7 +85,7 @@ class WatcherConfig:
 
 
 class IgnoreChecker:
-    """Checks if paths should be ignored based on patterns."""
+    """Checks if paths should be ignored based on .cplignore patterns."""
 
     def __init__(
         self,
@@ -96,21 +96,20 @@ class IgnoreChecker:
         self._root = root
         self._patterns: list[str] = []
 
-        # Load gitignore patterns
-        self._load_gitignore(root / ".gitignore")
-        self._load_gitignore(root / ".codeplane" / ".gitignore")
+        # Load .cplignore patterns (created by cpl init)
+        self._load_cplignore(root / ".codeplane" / ".cplignore")
 
         # Add extra patterns
         if extra_patterns:
             self._patterns.extend(extra_patterns)
 
-    def _load_gitignore(self, gitignore_path: Path) -> None:
-        """Load patterns from a gitignore file."""
-        if not gitignore_path.exists():
+    def _load_cplignore(self, cplignore_path: Path) -> None:
+        """Load patterns from a .cplignore file."""
+        if not cplignore_path.exists():
             return
 
         try:
-            content = gitignore_path.read_text()
+            content = cplignore_path.read_text()
             for line in content.splitlines():
                 line = line.strip()
                 # Skip comments and empty lines
@@ -158,7 +157,7 @@ class FileWatcher:
 
     The watcher:
     - Monitors the root directory recursively
-    - Filters out ignored files (.gitignore, .codeplane/.gitignore, etc.)
+    - Filters out files matching .codeplane/.cplignore patterns
     - Debounces rapid changes (handles save storms)
     - Yields batches of changed files for background indexing
 

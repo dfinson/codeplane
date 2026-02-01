@@ -54,6 +54,13 @@ version = "0.1.0"
 testpaths = ["tests"]
 """)
 
+    # Create .codeplane/.cplignore (simulating cpl init)
+    codeplane_dir = repo_path / ".codeplane"
+    codeplane_dir.mkdir()
+    from codeplane.templates import get_cplignore_template
+
+    (codeplane_dir / ".cplignore").write_text(get_cplignore_template())
+
     # Create tests directory
     (repo_path / "tests").mkdir()
     (repo_path / "tests" / "__init__.py").write_text("")
@@ -92,6 +99,13 @@ def integration_monorepo(tmp_path: Path) -> Generator[Path, None, None]:
     (repo_path / "pnpm-workspace.yaml").write_text("""packages:
   - 'packages/*'
 """)
+
+    # Create .codeplane/.cplignore (simulating cpl init)
+    codeplane_dir = repo_path / ".codeplane"
+    codeplane_dir.mkdir()
+    from codeplane.templates import get_cplignore_template
+
+    (codeplane_dir / ".cplignore").write_text(get_cplignore_template())
 
     # Create root package.json
     (repo_path / "package.json").write_text("""{
