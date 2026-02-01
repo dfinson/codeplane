@@ -11,29 +11,24 @@ from codeplane.config.models import CodePlaneConfig
 from codeplane.templates import get_cplignore_template
 
 
-@click.command()
-@click.argument("path", default=".", type=click.Path(exists=True, path_type=Path))
-@click.option("--force", "-f", is_flag=True, help="Overwrite existing .codeplane directory")
-def init_command(path: Path, force: bool) -> None:
-    """Initialize a repository for CodePlane management.
+def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False) -> bool:
+    """Initialize a repository for CodePlane. Returns True on success.
 
-    Creates .codeplane/ directory with default configuration and builds
-    the initial index. Must be run from the git repository root.
+    Args:
+        repo_root: Path to the git repository root
+        force: Overwrite existing .codeplane directory
+        quiet: Suppress output (for auto-init from `cpl up`)
 
-    PATH is the repository root (default: current directory).
+    Returns:
+        True if initialization succeeded, False if already initialized (and not force)
     """
-    repo_root = path.resolve()
-    if not (repo_root / ".git").exists():
-        raise click.ClickException(
-            f"Not a git repository root: {repo_root}\nRun from the repository root or pass --path."
-        )
-
     codeplane_dir = repo_root / ".codeplane"
 
     if codeplane_dir.exists() and not force:
-        click.echo(f"Already initialized: {codeplane_dir}")
-        click.echo("Use --force to reinitialize")
-        return
+        if not quiet:
+            click.echo(f"Already initialized: {codeplane_dir}")
+            click.echo("Use --force to reinitialize")
+        return False
 
     codeplane_dir.mkdir(exist_ok=True)
 
@@ -53,12 +48,14 @@ def init_command(path: Path, force: bool) -> None:
             "# Ignore everything except config files\n*\n!.gitignore\n!config.yaml\n"
         )
 
-    click.echo(f"Initialized CodePlane in {repo_root}")
-    click.echo(f"  Config: {config_path.relative_to(repo_root)}")
-    click.echo(f"  Ignore: {cplignore_path.relative_to(repo_root)}")
+    if not quiet:
+        click.echo(f"Initialized CodePlane in {repo_root}")
+        click.echo(f"  Config: {config_path.relative_to(repo_root)}")
+        click.echo(f"  Ignore: {cplignore_path.relative_to(repo_root)}")
 
     # Build initial index per SPEC.md §4.2
-    click.echo("Building initial index...")
+    if not quiet:
+        click.echo("Building initial index...")
 
     from codeplane.index.ops import IndexCoordinator
 
@@ -82,9 +79,35 @@ def init_command(path: Path, force: bool) -> None:
         if result.errors:
             for err in result.errors:
                 click.echo(f"Error: {err}", err=True)
-            sys.exit(1)
+            return False
 
-        click.echo(f"  Indexed {result.files_indexed} files")
-        click.echo(f"  Contexts: {result.contexts_valid} valid")
+        if not quiet:
+            click.echo(f"  Indexed {result.files_indexed} files")
+            click.echo(f"  Contexts: {result.contexts_valid} valid")
     finally:
         coord.close()
+
+    return True
+
+
+@click.command()
+@click.argument("path", default=".", type=click.Path(exists=True, path_type=Path))
+@click.option("--force", "-f", is_flag=True, help="Overwrite existing .codeplane directory")
+def init_command(path: Path, force: bool) -> None:
+    """Initialize a repository for CodePlane management.
+
+    Creates .codeplane/ directory with default configuration and builds
+    the initial index. Must be run from the git repository root.
+
+    PATH is the repository root (default: current directory).
+    """
+    repo_root = path.resolve()
+    if not (repo_root / ".git").exists():
+        raise click.ClickException(
+            f"Not a git repository: {repo_root}"
+        )
+
+    if not initialize_repo(repo_root, force=force):
+        if not force:
+            return  # Already initialized, message printed
+        sys.exit(1)  # Errors occurred

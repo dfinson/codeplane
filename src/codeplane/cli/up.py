@@ -3,15 +3,53 @@
 import asyncio
 import os
 import sys
+from importlib.metadata import version
 from pathlib import Path
 from typing import cast
 
 import click
 
+from codeplane.cli.init import initialize_repo
 from codeplane.config.loader import load_config
 from codeplane.config.models import CodePlaneConfig
 from codeplane.daemon.lifecycle import is_daemon_running, read_daemon_info, run_daemon
 from codeplane.index.ops import IndexCoordinator
+
+LOGO = r"""
+                        *+++++++++++++*
+                     +++++++++++++++++++++
+                  ++++++++++++***++++++++++++
+                ++++++++*              ++++++++
+               +++++++                   +++++++
+              ++++++                       ++++++
+             ++++++                         *+++++
+            ++++++          *++              +++++*
+            +++++           +++++             +++++
+                             *+++++
+        +++++++++++++++++++*   +++++*++++++++++++++++++
+                             ++++++
+            +++++           +++++             +++++
+            ++++++          *++              ++++++
+             ++++++                         ++++++
+              ++++++                       ++++++
+               +++++++                   +++++++
+                +++++++++             +++++++++
+                  +++++++++++++++++++++++++++
+                     +++++++++++++++++++++*
+                         +++++++++++++*
+"""
+
+
+def _print_banner(host: str, port: int) -> None:
+    """Print startup banner with logo and info."""
+    ver = version("codeplane")
+    click.echo(LOGO)
+    click.echo(click.style("  CodePlane", fg="cyan", bold=True) + f" v{ver}")
+    click.echo("  Local repository control plane for AI coding agents")
+    click.echo()
+    click.echo(f"  Listening on {click.style(f'http://{host}:{port}', fg='green')}")
+    click.echo(f"  Press {click.style('Ctrl+C', bold=True)} to stop")
+    click.echo()
 
 
 @click.command()
@@ -28,14 +66,16 @@ def up_command(path: Path, foreground: bool, port: int | None) -> None:
     repo_root = path.resolve()
     if not (repo_root / ".git").exists():
         raise click.ClickException(
-            f"Not a git repository root: {repo_root}\nRun from the repository root or pass --path."
+            f"Not a git repository: {repo_root}"
         )
 
     codeplane_dir = repo_root / ".codeplane"
+
+    # Auto-init if not initialized
     if not codeplane_dir.exists():
-        raise click.ClickException(
-            f"Repository not initialized. Run 'cpl init' first.\nExpected: {codeplane_dir}"
-        )
+        click.echo("Initializing repository...")
+        if not initialize_repo(repo_root):
+            raise click.ClickException("Failed to initialize repository")
 
     # Check if already running
     if is_daemon_running(codeplane_dir):
@@ -69,8 +109,7 @@ def up_command(path: Path, foreground: bool, port: int | None) -> None:
 
     if foreground:
         # Run in foreground
-        click.echo(f"Starting daemon on {config.daemon.host}:{config.daemon.port}")
-        click.echo("Press Ctrl+C to stop")
+        _print_banner(config.daemon.host, config.daemon.port)
         try:
             asyncio.run(run_daemon(repo_root, coordinator, config.daemon))
         except KeyboardInterrupt:
