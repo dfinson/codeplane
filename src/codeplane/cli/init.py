@@ -86,7 +86,7 @@ def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False
     gitignore_path = codeplane_dir / ".gitignore"
     if not gitignore_path.exists() or force:
         gitignore_path.write_text(
-            "# Ignore everything except config files\n*\n!.gitignore\n!config.yaml\n"
+            "# Ignore everything except config files\n*\n!.gitignore\n!.cplignore\n!config.yaml\n"
         )
 
     if not quiet:
