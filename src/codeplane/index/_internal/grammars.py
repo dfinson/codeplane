@@ -149,9 +149,12 @@ def install_grammars(
 def scan_repo_languages(repo_root: Path) -> set[LanguageFamily]:
     """Quick scan of repo to determine which languages are present.
 
-    Uses git ls-files for speed, falls back to filesystem walk.
+    Uses git ls-files for speed, falls back to filesystem walk with pruning.
     """
+    import os
+
     from codeplane.index._internal.discovery.language_detect import detect_language_family
+    from codeplane.index._internal.ignore import PRUNABLE_DIRS
 
     languages: set[LanguageFamily] = set()
 
@@ -173,14 +176,17 @@ def scan_repo_languages(repo_root: Path) -> set[LanguageFamily]:
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
-    # Fall back to walking the filesystem (slower)
-    for path in repo_root.rglob("*"):
-        if path.is_file() and not any(
-            part.startswith(".") for part in path.relative_to(repo_root).parts
-        ):
-            lang = detect_language_family(path)
-            if lang is not None:
-                languages.add(lang)
+    # Fall back to walking the filesystem with pruning
+    for dirpath, dirnames, filenames in os.walk(repo_root):
+        # Prune excluded directories in-place
+        dirnames[:] = [d for d in dirnames if d not in PRUNABLE_DIRS]
+
+        for filename in filenames:
+            path = Path(dirpath) / filename
+            if not any(part.startswith(".") for part in path.relative_to(repo_root).parts):
+                lang = detect_language_family(path)
+                if lang is not None:
+                    languages.add(lang)
 
     return languages
 

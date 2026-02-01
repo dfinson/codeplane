@@ -1,0 +1,114 @@
+"""cpl clear command - remove CodePlane data from a repository."""
+
+import shutil
+from pathlib import Path
+
+import click
+import questionary
+from rich.console import Console
+
+from codeplane.cli.init import _get_xdg_index_dir
+
+
+def clear_repo(repo_root: Path, *, force: bool = False) -> bool:
+    """Remove all CodePlane data from a repository.
+
+    This removes:
+    - .codeplane/ directory (config, local index if stored there)
+    - XDG index directory (for cross-filesystem setups like WSL)
+
+    Returns True if cleared successfully, False if cancelled or nothing to clear.
+    """
+    console = Console(stderr=True)
+    codeplane_dir = repo_root / ".codeplane"
+    xdg_index_dir = _get_xdg_index_dir(repo_root)
+
+    # Check what exists
+    has_codeplane_dir = codeplane_dir.exists()
+    has_xdg_index = xdg_index_dir.exists()
+
+    if not has_codeplane_dir and not has_xdg_index:
+        console.print("[yellow]Nothing to clear[/yellow] - no CodePlane data found")
+        return False
+
+    # Show what will be deleted
+    console.print("\n[bold]The following will be permanently deleted:[/bold]\n")
+
+    if has_codeplane_dir:
+        console.print(f"  [cyan]•[/cyan] {codeplane_dir}")
+
+    if has_xdg_index:
+        console.print(f"  [cyan]•[/cyan] {xdg_index_dir}")
+
+    console.print()
+
+    # Confirm unless forced
+    if not force:
+        answer = questionary.select(
+            "This action cannot be undone. Are you sure?",
+            choices=[
+                questionary.Choice("No, keep my data", value=False),
+                questionary.Choice("Yes, delete everything", value=True),
+            ],
+            style=questionary.Style(
+                [
+                    ("question", "bold"),
+                    ("highlighted", "fg:red bold"),
+                    ("selected", "fg:red"),
+                ]
+            ),
+        ).ask()
+
+        if not answer:
+            console.print("[dim]Cancelled[/dim]")
+            return False
+
+    # Delete
+    errors: list[str] = []
+
+    if has_codeplane_dir:
+        try:
+            shutil.rmtree(codeplane_dir)
+            console.print(f"  [green]✓[/green] Removed {codeplane_dir}")
+        except OSError as e:
+            errors.append(f"Failed to remove {codeplane_dir}: {e}")
+            console.print(f"  [red]✗[/red] Failed to remove {codeplane_dir}: {e}")
+
+    if has_xdg_index:
+        try:
+            shutil.rmtree(xdg_index_dir)
+            console.print(f"  [green]✓[/green] Removed {xdg_index_dir}")
+        except OSError as e:
+            errors.append(f"Failed to remove {xdg_index_dir}: {e}")
+            console.print(f"  [red]✗[/red] Failed to remove {xdg_index_dir}: {e}")
+
+    if errors:
+        return False
+
+    console.print("\n[green]CodePlane data cleared successfully[/green]")
+    return True
+
+
+@click.command()
+@click.argument("path", default=".", type=click.Path(exists=True, path_type=Path))
+@click.option("--force", "-f", is_flag=True, help="Skip confirmation prompt")
+def clear_command(path: Path, force: bool) -> None:
+    """Remove all CodePlane data from a repository.
+
+    This removes the .codeplane/ directory and any associated index files
+    (including cross-filesystem index storage for WSL setups).
+
+    PATH is the repository root (default: current directory).
+    """
+    repo_root = path.resolve()
+
+    if not (repo_root / ".git").exists():
+        raise click.ClickException(
+            f"'{repo_root}' is not a git repository. "
+            "Run from a git repository root, or pass a path: cpl clear PATH"
+        )
+
+    if not clear_repo(repo_root, force=force):
+        if not force:
+            return  # Cancelled or nothing to clear
+        raise click.ClickException("Failed to clear CodePlane data")

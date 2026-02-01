@@ -41,6 +41,7 @@ dependencies = [
     # CLI progress & output
     "tqdm>=4.66.0",
     "rich>=14.0.0",
+    "questionary>=2.0.0",
     # File watching
     "watchfiles>=1.0.0",
 ]
@@ -116,6 +117,7 @@ module = [
     "watchfiles.*",
     "httpx.*",
     "rich.*",
+    "questionary.*",
 ]
 ignore_missing_imports = true
 
