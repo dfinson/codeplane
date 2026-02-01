@@ -85,7 +85,10 @@ class LexicalIndex:
 
         # Build schema
         schema_builder = tantivy.SchemaBuilder()
-        schema_builder.add_text_field("path", stored=True, tokenizer_name="raw")
+        # Use default tokenizer for path to allow partial matching (e.g., "utils" matches "src/utils.py")
+        schema_builder.add_text_field("path", stored=True, tokenizer_name="default")
+        # Use raw tokenizer for exact path matching (used for deletion)
+        schema_builder.add_text_field("path_exact", stored=False, tokenizer_name="raw")
         schema_builder.add_text_field("content", stored=True, tokenizer_name="default")
         schema_builder.add_text_field("symbols", stored=True, tokenizer_name="default")
         schema_builder.add_integer_field("context_id", stored=True, indexed=True)
@@ -119,12 +122,13 @@ class LexicalIndex:
 
         writer = self._index.writer()
         try:
-            # Delete existing document for this path
-            writer.delete_documents("path", file_path)
+            # Delete existing document for this path (use path_exact for exact matching)
+            writer.delete_documents("path_exact", file_path)
 
             # Add new document
             doc = tantivy.Document()
             doc.add_text("path", file_path)
+            doc.add_text("path_exact", file_path)  # For exact match deletion
             doc.add_text("content", content)
             doc.add_text("symbols", " ".join(symbols) if symbols else "")
             doc.add_integer("context_id", context_id)
@@ -153,12 +157,13 @@ class LexicalIndex:
         count = 0
         try:
             for f in files:
-                # Delete existing
-                writer.delete_documents("path", f["path"])
+                # Delete existing (use path_exact for exact matching)
+                writer.delete_documents("path_exact", f["path"])
 
                 # Add new
                 doc = tantivy.Document()
                 doc.add_text("path", f["path"])
+                doc.add_text("path_exact", f["path"])  # For exact match deletion
                 doc.add_text("content", f.get("content", ""))
                 doc.add_text("symbols", " ".join(f.get("symbols", [])))
                 doc.add_integer("context_id", f.get("context_id", 0))
@@ -177,7 +182,8 @@ class LexicalIndex:
 
         writer = self._index.writer()
         try:
-            deleted = writer.delete_documents("path", file_path)
+            # Use path_exact field for exact matching
+            deleted = writer.delete_documents("path_exact", file_path)
             writer.commit()
             return bool(deleted > 0)
         finally:
