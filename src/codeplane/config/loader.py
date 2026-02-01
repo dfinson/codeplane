@@ -1,7 +1,7 @@
 """Configuration loading with pydantic-settings."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 from pydantic import ValidationError
@@ -103,3 +103,15 @@ def load_config(repo_root: Path | None = None, **kwargs: Any) -> BaseSettings:
         err = e.errors()[0]
         field = ".".join(str(loc) for loc in err["loc"])
         raise ConfigError.invalid_value(field, err.get("input"), err["msg"]) from e
+
+
+def get_index_paths(repo_root: Path) -> tuple[Path, Path]:
+    """Get db_path and tantivy_path for a repo, respecting config.index.index_path."""
+    from codeplane.config.models import CodePlaneConfig
+
+    config = cast(CodePlaneConfig, load_config(repo_root))
+    if config.index.index_path:
+        index_dir = Path(config.index.index_path)
+    else:
+        index_dir = repo_root / ".codeplane"
+    return index_dir / "index.db", index_dir / "tantivy"

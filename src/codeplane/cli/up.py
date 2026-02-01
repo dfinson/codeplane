@@ -82,9 +82,10 @@ def up_command(path: Path, foreground: bool, port: int | None) -> None:
     if port is not None:
         config.daemon.port = port
 
-    # Initialize coordinator
-    db_path = codeplane_dir / "index.db"
-    tantivy_path = codeplane_dir / "tantivy"
+    # Get index paths from config (respects index.index_path for cross-filesystem)
+    from codeplane.config.loader import get_index_paths
+
+    db_path, tantivy_path = get_index_paths(repo_root)
 
     coordinator = IndexCoordinator(
         repo_root=repo_root,

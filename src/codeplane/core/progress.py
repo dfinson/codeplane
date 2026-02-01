@@ -29,7 +29,8 @@ from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
-from tqdm import tqdm
+from rich.console import Console
+from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
 
 if TYPE_CHECKING:
     from structlog.stdlib import BoundLogger
@@ -37,10 +38,13 @@ if TYPE_CHECKING:
 # Threshold for showing progress bar
 _PROGRESS_THRESHOLD = 100
 
+# Console for output
+_console = Console(stderr=True)
+
 # Style prefixes
 _STYLES = {
-    "success": "✓ ",
-    "error": "✗ ",
+    "success": "[green]✓[/green] ",
+    "error": "[red]✗[/red] ",
     "info": "  ",
     "none": "",
 }
@@ -62,16 +66,7 @@ def status(message: str, *, style: str = "info", indent: int = 0) -> None:
     """Print a styled status message to stderr."""
     prefix = _STYLES.get(style, "")
     padding = " " * indent
-    line = f"{padding}{prefix}{message}"
-
-    if _is_tty():
-        # Clear line and print (handles overwriting progress bars)
-        sys.stderr.write(f"\r\033[K{line}\n")
-        sys.stderr.flush()
-    else:
-        # Non-TTY: simple print
-        sys.stderr.write(f"{line}\n")
-        sys.stderr.flush()
+    _console.print(f"{padding}{prefix}{message}", highlight=False)
 
     # Log at DEBUG for observability (lazy to respect runtime config)
     _get_logger().debug("status", message=message, style=style)
@@ -83,8 +78,9 @@ def progress[T](
     desc: str | None = None,
     total: int | None = None,
     unit: str = "files",
+    force: bool = False,
 ) -> Iterator[T]:
-    """Wrap an iterable with a progress bar if TTY and >100 items."""
+    """Wrap an iterable with a progress bar if TTY and >100 items (or force=True)."""
     # Try to get total
     if total is None:
         try:
@@ -93,23 +89,21 @@ def progress[T](
             total = None
 
     # Decide whether to show progress
-    show_bar = _is_tty() and total is not None and total > _PROGRESS_THRESHOLD
+    show_bar = _is_tty() and total is not None and (force or total > _PROGRESS_THRESHOLD)
 
     if show_bar:
-        # Use tqdm with minimal formatting
-        bar_format = "  {desc}: [{bar:20}] {n_fmt}/{total_fmt} {unit}"
-        with tqdm(
-            iterable,
-            desc=desc or "Processing",
-            total=total,
-            unit=unit,
-            file=sys.stderr,
-            bar_format=bar_format,
-            leave=False,  # Clear bar when done
-            dynamic_ncols=True,
+        with Progress(
+            TextColumn("    {task.description}:"),
+            BarColumn(bar_width=25, style="cyan", complete_style="cyan"),
+            TaskProgressColumn(),
+            TextColumn("{task.completed}/{task.total} {task.fields[unit]}"),
+            console=_console,
+            transient=True,
         ) as pbar:
-            for item in pbar:
+            task_id = pbar.add_task(desc or "Processing", total=total, unit=unit)
+            for item in iterable:
                 yield item
+                pbar.advance(task_id)
     else:
         # No progress bar, just yield
         log = _get_logger()

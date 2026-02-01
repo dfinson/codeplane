@@ -38,8 +38,9 @@ dependencies = [
     # Logging
     "structlog>=25.5.0",
     "sqlalchemy[mypy]>=2.0.46",
-    # CLI progress
+    # CLI progress & output
     "tqdm>=4.66.0",
+    "rich>=14.0.0",
     # File watching
     "watchfiles>=1.0.0",
 ]
@@ -114,6 +115,7 @@ module = [
     "uvicorn.*",
     "watchfiles.*",
     "httpx.*",
+    "rich.*",
 ]
 ignore_missing_imports = true
 

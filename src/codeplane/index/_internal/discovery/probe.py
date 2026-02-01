@@ -160,9 +160,14 @@ class ContextProbe:
 
     def _sample_files(self, root: Path, extensions: set[str], excludes: list[str]) -> list[Path]:
         """Sample files matching extensions."""
+        from codeplane.index._internal.ignore import PRUNABLE_DIRS
+
         files: list[Path] = []
 
         for dirpath, dirnames, filenames in os.walk(root):
+            # Prune excluded directories in-place for performance
+            dirnames[:] = [d for d in dirnames if d not in PRUNABLE_DIRS]
+
             dir_path = Path(dirpath)
 
             # Skip excluded directories (via shared IgnoreChecker + context excludes)

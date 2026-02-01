@@ -2,11 +2,15 @@
 
 import asyncio
 import hashlib
+import math
 import sys
 from pathlib import Path
 
 import click
 import yaml
+from rich.console import Console
+from rich.padding import Padding
+from rich.table import Table
 
 from codeplane.config.models import CodePlaneConfig
 from codeplane.core.progress import status
@@ -52,7 +56,24 @@ def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False
 
     codeplane_dir.mkdir(exist_ok=True)
 
+    # Determine index storage location before writing config
+    # Cross-filesystem paths (WSL /mnt/*) need index on native filesystem
+    index_dir: Path
+    if _is_cross_filesystem(repo_root):
+        index_dir = _get_xdg_index_dir(repo_root)
+        index_dir.mkdir(parents=True, exist_ok=True)
+        if not quiet:
+            status(
+                f"Cross-filesystem detected, storing index at: {index_dir}",
+                style="info",
+                indent=2,
+            )
+    else:
+        index_dir = codeplane_dir
+
+    # Create config with index_path
     config = CodePlaneConfig()
+    config.index.index_path = str(index_dir)
     config_path = codeplane_dir / "config.yaml"
     with config_path.open("w") as f:
         yaml.dump(config.model_dump(), f, default_flow_style=False, sort_keys=False)
@@ -77,25 +98,6 @@ def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False
     status_fn = status if not quiet else None
     if not ensure_grammars_for_repo(repo_root, quiet=quiet, status_fn=status_fn) and not quiet:
         status("Warning: some grammars failed to install", style="warning", indent=2)
-
-    # Determine index storage location
-    # Cross-filesystem paths (WSL /mnt/*) need index on native filesystem
-    if _is_cross_filesystem(repo_root):
-        index_dir = _get_xdg_index_dir(repo_root)
-        index_dir.mkdir(parents=True, exist_ok=True)
-        if not quiet:
-            status(
-                f"Cross-filesystem detected, storing index at: {index_dir}",
-                style="info",
-                indent=2,
-            )
-            status(
-                "Tip: Set index.index_path in config.yaml to customize",
-                style="info",
-                indent=2,
-            )
-    else:
-        index_dir = codeplane_dir
 
     # Build initial index per SPEC.md §4.2
     if not quiet:
@@ -134,14 +136,24 @@ def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False
                     result.files_by_ext.items(),
                     key=lambda x: -x[1],  # Sort by count descending
                 )
+                max_count = sorted_exts[0][1] if sorted_exts else 1
+                max_sqrt = math.sqrt(max_count)
+                table = Table(show_header=False, box=None, padding=(0, 1), pad_edge=False)
+                table.add_column("ext", style="cyan", width=12)
+                table.add_column("count", style="white", justify="right", width=4)
+                table.add_column("bar")
                 for ext, count in sorted_exts[:8]:
-                    bar_width = min(count * 40 // result.files_indexed, 40)
-                    bar = "█" * bar_width
-                    status(f"{ext:12} {count:4}  {bar}", style="none", indent=4)
+                    bar_width = max(1, int(math.sqrt(count) / max_sqrt * 20))
+                    bar = f"[green]{'━' * bar_width}[/green][dim]{'━' * (20 - bar_width)}[/dim]"
+                    table.add_row(ext, str(count), bar)
                 rest = sorted_exts[8:]
                 if rest:
                     rest_count = sum(c for _, c in rest)
-                    status(f"{'other':12} {rest_count:4}", style="none", indent=4)
+                    bar_width = max(1, int(math.sqrt(rest_count) / max_sqrt * 20))
+                    bar = f"[dim green]{'━' * bar_width}[/dim green][dim]{'━' * (20 - bar_width)}[/dim]"
+                    table.add_row("other", str(rest_count), bar, style="dim")
+                console = Console(stderr=True)
+                console.print(Padding(table, (0, 0, 0, 4)))
     finally:
         coord.close()
 

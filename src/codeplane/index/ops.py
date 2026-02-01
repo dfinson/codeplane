@@ -210,10 +210,17 @@ class IndexCoordinator:
         membership_result = membership.resolve(pending_candidates)
         resolved_candidates = membership_result.contexts
 
-        # Step 6: Probe contexts
+        # Step 6: Probe contexts (validate each has parseable files)
+        from codeplane.core.progress import progress
+
         probe = ContextProbe(self.repo_root, parser=self._parser)
         probed_candidates: list[CandidateContext] = []
-        for candidate in resolved_candidates:
+
+        probe_iter: Iterable[CandidateContext] = resolved_candidates
+        if not self._quiet:
+            probe_iter = progress(resolved_candidates, desc="Validating", unit="roots", force=True)
+
+        for candidate in probe_iter:
             probe_result = probe.validate(candidate)
             if probe_result.valid:
                 candidate.probe_status = ProbeStatus.VALID
