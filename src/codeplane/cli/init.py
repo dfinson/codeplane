@@ -1,6 +1,7 @@
 """cpl init command - initialize a repository for CodePlane."""
 
 import asyncio
+import hashlib
 import sys
 from pathlib import Path
 
@@ -10,6 +11,24 @@ import yaml
 from codeplane.config.models import CodePlaneConfig
 from codeplane.core.progress import status
 from codeplane.templates import get_cplignore_template
+
+
+def _is_cross_filesystem(path: Path) -> bool:
+    """Detect if path is on a cross-filesystem mount (WSL /mnt/*, network drives, etc.)."""
+    resolved = path.resolve()
+    path_str = str(resolved)
+    # WSL accessing Windows filesystem
+    if path_str.startswith("/mnt/") and len(path_str) > 5 and path_str[5].isalpha():
+        return True
+    # Common network/remote mounts
+    return path_str.startswith(("/run/user/", "/media/", "/net/"))
+
+
+def _get_xdg_index_dir(repo_root: Path) -> Path:
+    """Get XDG-compliant index directory for a repo."""
+    xdg_data = Path.home() / ".local" / "share" / "codeplane" / "indices"
+    repo_hash = hashlib.sha256(str(repo_root.resolve()).encode()).hexdigest()[:12]
+    return xdg_data / repo_hash
 
 
 def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False) -> bool:
@@ -59,14 +78,33 @@ def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False
     if not ensure_grammars_for_repo(repo_root, quiet=quiet, status_fn=status_fn) and not quiet:
         status("Warning: some grammars failed to install", style="warning", indent=2)
 
+    # Determine index storage location
+    # Cross-filesystem paths (WSL /mnt/*) need index on native filesystem
+    if _is_cross_filesystem(repo_root):
+        index_dir = _get_xdg_index_dir(repo_root)
+        index_dir.mkdir(parents=True, exist_ok=True)
+        if not quiet:
+            status(
+                f"Cross-filesystem detected, storing index at: {index_dir}",
+                style="info",
+                indent=2,
+            )
+            status(
+                "Tip: Set index.index_path in config.yaml to customize",
+                style="info",
+                indent=2,
+            )
+    else:
+        index_dir = codeplane_dir
+
     # Build initial index per SPEC.md §4.2
     if not quiet:
         status("Building index...", style="none", indent=2)
 
     from codeplane.index.ops import IndexCoordinator
 
-    db_path = codeplane_dir / "index.db"
-    tantivy_path = codeplane_dir / "tantivy"
+    db_path = index_dir / "index.db"
+    tantivy_path = index_dir / "tantivy"
     tantivy_path.mkdir(exist_ok=True)
 
     coord = IndexCoordinator(
@@ -89,11 +127,21 @@ def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False
             return False
 
         if not quiet:
-            status(
-                f"Indexed {result.files_indexed} files, {result.contexts_valid} contexts",
-                style="success",
-                indent=2,
-            )
+            status(f"Indexed {result.files_indexed} files", style="success", indent=2)
+            # Show breakdown by extension
+            if result.files_by_ext:
+                sorted_exts = sorted(
+                    result.files_by_ext.items(),
+                    key=lambda x: -x[1],  # Sort by count descending
+                )
+                for ext, count in sorted_exts[:8]:
+                    bar_width = min(count * 40 // result.files_indexed, 40)
+                    bar = "█" * bar_width
+                    status(f"{ext:12} {count:4}  {bar}", style="none", indent=4)
+                rest = sorted_exts[8:]
+                if rest:
+                    rest_count = sum(c for _, c in rest)
+                    status(f"{'other':12} {rest_count:4}", style="none", indent=4)
     finally:
         coord.close()
 

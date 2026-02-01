@@ -16,7 +16,7 @@ import json
 import threading
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -67,6 +67,7 @@ class InitResult:
     contexts_detached: int
     files_indexed: int
     errors: list[str]
+    files_by_ext: dict[str, int] = field(default_factory=dict)  # extension -> file count
 
 
 @dataclass
@@ -299,7 +300,7 @@ class IndexCoordinator:
         self._facts = None  # Created on demand in session context
 
         # Step 9: Index all files
-        files_indexed, indexed_paths = await self._index_all_files()
+        files_indexed, indexed_paths, files_by_ext = await self._index_all_files()
 
         # Reload index so searcher sees committed changes
         if self._lexical is not None:
@@ -321,6 +322,7 @@ class IndexCoordinator:
             contexts_detached=len(detached_candidates),
             files_indexed=files_indexed,
             errors=errors,
+            files_by_ext=files_by_ext,
         )
 
     async def load_existing(self) -> bool:
@@ -642,7 +644,7 @@ class IndexCoordinator:
             # Clear structural facts before full reindex
             self._clear_all_structural_facts()
 
-            files_indexed, indexed_paths = await self._index_all_files()
+            files_indexed, indexed_paths, _ = await self._index_all_files()
 
             # Reload index so searcher sees committed changes
             if self._lexical is not None:
@@ -800,7 +802,7 @@ class IndexCoordinator:
         self._lexical = None
         self._initialized = False
 
-    async def _index_all_files(self) -> tuple[int, list[str]]:
+    async def _index_all_files(self) -> tuple[int, list[str], dict[str, int]]:
         """Index all files in valid contexts.
 
         Populates both:
@@ -808,13 +810,13 @@ class IndexCoordinator:
         - SQLite fact tables (DefFact, RefFact, etc.)
 
         Returns:
-            Tuple of (count of files indexed, list of indexed file paths).
+            Tuple of (count of files indexed, list of indexed file paths, files by language).
         """
-        from codeplane.core.progress import progress
+        from codeplane.core.progress import progress, status
         from codeplane.index._internal.discovery.language_detect import detect_language_family
 
         if self._lexical is None or self._parser is None:
-            return 0, []
+            return 0, [], {}
 
         count = 0
         indexed_paths: list[str] = []
@@ -833,6 +835,9 @@ class IndexCoordinator:
             root_context = next((c for c in all_contexts if c.tier == 3), None)
 
             # First pass: collect files from specific contexts (tier 1/2/ambient)
+            if not self._quiet:
+                status("Discovering files...", style="none", indent=4)
+
             files_to_index: list[tuple[Path, str, int, str | None]] = []
             # (full_path, rel_str, ctx_id, language_family)
             claimed_paths: set[str] = set()
@@ -876,6 +881,7 @@ class IndexCoordinator:
 
             # Third pass: index files with progress bar
             context_files: dict[int, list[str]] = {}
+            files_by_ext: dict[str, int] = {}
 
             file_iter: Iterable[tuple[Path, str, int, str | None]] = files_to_index
             if not self._quiet:
@@ -894,16 +900,24 @@ class IndexCoordinator:
                     count += 1
                     indexed_paths.append(rel_str)
                     context_files.setdefault(context_id, []).append(rel_str)
+                    # Track by file extension
+                    ext = file_path.suffix.lower() or file_path.name.lower()
+                    files_by_ext[ext] = files_by_ext.get(ext, 0) + 1
                 except (OSError, UnicodeDecodeError):
                     continue
 
             # Run structural indexer for each context
             if self._structural is not None:
-                for context_id, file_paths in context_files.items():
+                struct_iter: Iterable[tuple[int, list[str]]] = context_files.items()
+                if not self._quiet:
+                    struct_iter = progress(
+                        list(context_files.items()), desc="Extracting symbols", unit="contexts"
+                    )
+                for context_id, file_paths in struct_iter:
                     if file_paths:
                         self._structural.index_files(file_paths, context_id)
 
-        return count, indexed_paths
+        return count, indexed_paths, files_by_ext
 
     async def _update_structural_index(self, changed_paths: list[Path]) -> None:
         """Update structural index for changed files.
@@ -1054,6 +1068,9 @@ class IndexCoordinator:
     ) -> list[Path]:
         """Find files matching include/exclude patterns, respecting .cplignore."""
         import fnmatch
+        import os
+
+        from codeplane.index._internal.ignore import PRUNABLE_DIRS
 
         files: list[Path] = []
 
@@ -1073,18 +1090,13 @@ class IndexCoordinator:
 
             return False
 
-        def should_ignore(path: Path) -> bool:
+        def should_ignore(rel_str: str) -> bool:
             """Check if path should be ignored based on .cplignore patterns."""
-            try:
-                rel_path = path.relative_to(self.repo_root)
-            except ValueError:
-                return True
-
-            rel_str = str(rel_path)
-
             # Always exclude .codeplane directory
             if rel_str.startswith(".codeplane") or ".codeplane/" in rel_str:
                 return True
+
+            rel_path = Path(rel_str)
 
             for pattern in cplignore_patterns:
                 # Handle negation patterns
@@ -1107,34 +1119,50 @@ class IndexCoordinator:
 
             return False
 
-        for path in root.rglob("*"):
-            if not path.is_file():
-                continue
+        # Use os.walk with pruning instead of rglob for performance
+        for dirpath, dirnames, filenames in os.walk(root):
+            # Prune excluded directories in-place
+            dirnames[:] = [d for d in dirnames if d not in PRUNABLE_DIRS]
 
-            # Check .cplignore patterns
-            if should_ignore(path):
-                continue
+            for filename in filenames:
+                path = Path(dirpath) / filename
 
-            rel_str = str(path.relative_to(root))
+                # Get relative path from context root for include/exclude matching
+                try:
+                    rel_from_ctx = path.relative_to(root)
+                except ValueError:
+                    continue
+                rel_str = str(rel_from_ctx).replace("\\", "/")
 
-            # Check exclude globs
-            excluded = False
-            for pattern in exclude_globs:
-                if matches_glob(rel_str, pattern):
-                    excluded = True
-                    break
+                # Get relative path from repo root for cplignore matching
+                try:
+                    rel_from_repo = path.relative_to(self.repo_root)
+                except ValueError:
+                    continue
+                rel_str_repo = str(rel_from_repo).replace("\\", "/")
 
-            if excluded:
-                continue
+                # Check .cplignore patterns (relative to repo root)
+                if should_ignore(rel_str_repo):
+                    continue
 
-            # Check include globs (empty = include all)
-            if not include_globs:
-                files.append(path)
-            else:
-                for pattern in include_globs:
+                # Check exclude globs (relative to context root)
+                excluded = False
+                for pattern in exclude_globs:
                     if matches_glob(rel_str, pattern):
-                        files.append(path)
+                        excluded = True
                         break
+
+                if excluded:
+                    continue
+
+                # Check include globs (empty = include all)
+                if not include_globs:
+                    files.append(path)
+                else:
+                    for pattern in include_globs:
+                        if matches_glob(rel_str, pattern):
+                            files.append(path)
+                            break
 
         return files
 

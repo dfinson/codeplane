@@ -3,6 +3,7 @@
 Single source of truth for path exclusion logic used by:
 - FileWatcher (runtime file change filtering)
 - ContextProbe (validation file sampling)
+- ContextDiscovery (marker scanning with directory pruning)
 - Any component needing .cplignore + UNIVERSAL_EXCLUDES support
 """
 
@@ -10,6 +11,72 @@ from __future__ import annotations
 
 import fnmatch
 from pathlib import Path
+
+# Directory names to prune during os.walk traversal (for performance).
+# These are checked by exact name match, not glob patterns.
+PRUNABLE_DIRS: frozenset[str] = frozenset(
+    {
+        # Version control
+        ".git",
+        ".svn",
+        ".hg",
+        # CodePlane
+        ".codeplane",
+        # JavaScript/Node
+        "node_modules",
+        ".npm",
+        ".yarn",
+        ".pnpm-store",
+        # Python
+        "venv",
+        ".venv",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".tox",
+        ".nox",
+        "eggs",
+        ".eggs",
+        "site-packages",
+        ".ipynb_checkpoints",
+        # Go
+        "vendor",
+        "pkg",
+        # Rust
+        "target",
+        # JVM (Java/Kotlin/Scala)
+        ".gradle",
+        ".m2",
+        "out",
+        # .NET
+        "bin",
+        "obj",
+        "packages",
+        # Terraform
+        ".terraform",
+        # Ruby
+        ".bundle",
+        # PHP
+        # (uses vendor, already listed under Go)
+        # Build outputs (general)
+        "dist",
+        "build",
+        "_build",
+        # Coverage/testing
+        "coverage",
+        ".coverage",
+        ".nyc_output",
+        "htmlcov",
+        # IDE/editor
+        ".idea",
+        ".vscode",
+        # Caches
+        ".cache",
+        "tmp",
+        "temp",
+    }
+)
 
 
 class IgnoreChecker:

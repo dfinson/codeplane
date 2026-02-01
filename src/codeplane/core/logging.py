@@ -122,7 +122,9 @@ def _configure_stdlib_logging(
         else:
             formatter = structlog.stdlib.ProcessorFormatter(
                 processor=structlog.dev.ConsoleRenderer(
-                    colors=output.destination == "stderr" and sys.stderr.isatty()
+                    colors=output.destination == "stderr" and sys.stderr.isatty(),
+                    pad_event_to=0,
+                    pad_level=False,
                 ),
                 foreign_pre_chain=shared_processors,
             )

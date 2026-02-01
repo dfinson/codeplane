@@ -53,6 +53,7 @@ class IndexConfig(BaseModel):
 
     max_file_size_mb: int = 10
     excluded_extensions: list[str] = Field(default_factory=lambda: [".min.js", ".min.css", ".map"])
+    index_path: str | None = None  # Override index storage location (for WSL/cross-fs)
 
 
 class CodePlaneConfig(BaseModel):

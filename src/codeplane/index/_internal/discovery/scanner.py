@@ -13,10 +13,12 @@ Key concepts:
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from codeplane.index._internal.ignore import PRUNABLE_DIRS
 from codeplane.index.models import (
     CandidateContext,
     LanguageFamily,
@@ -210,6 +212,31 @@ UNIVERSAL_EXCLUDES: list[str] = [
 ]
 
 
+def _walk_with_pruning(root: Path) -> list[tuple[str, str]]:
+    """Walk directory tree, pruning excluded directories.
+
+    Uses os.walk with in-place modification of dirnames for performance.
+    Much faster than rglob on large repos with node_modules/venv.
+
+    Returns list of (rel_dir_posix, filename) tuples.
+    """
+    results: list[tuple[str, str]] = []
+
+    for dirpath, dirnames, filenames in os.walk(root):
+        # Prune excluded directories in-place (modifies iteration)
+        dirnames[:] = [d for d in dirnames if d not in PRUNABLE_DIRS]
+
+        rel_dir = Path(dirpath).relative_to(root)
+        rel_dir_posix = str(rel_dir).replace("\\", "/")
+        if rel_dir_posix == ".":
+            rel_dir_posix = ""
+
+        for filename in filenames:
+            results.append((rel_dir_posix, filename))
+
+    return results
+
+
 @dataclass
 class DiscoveredMarker:
     """A marker file discovered during scanning."""
@@ -394,83 +421,65 @@ class ContextDiscovery:
         return result
 
     def _scan_markers(self) -> list[DiscoveredMarker]:
-        """Scan repository for all marker files."""
+        """Scan repository for all marker files using fast directory walk."""
+        # Walk once, filter many - much faster than multiple rglob calls
+        all_files = _walk_with_pruning(self.repo_root)
+
+        # Build lookup of marker names to (family, tier)
+        marker_lookup: dict[str, list[tuple[LanguageFamily, MarkerTier]]] = {}
+        for family, tier_markers in MARKER_DEFINITIONS.items():
+            for tier, marker_names in tier_markers.items():
+                for name in marker_names:
+                    marker_lookup.setdefault(name, []).append((family, tier))
+
+        # Extension-based markers for dotnet
+        dotnet_extensions = {".sln", ".csproj", ".fsproj", ".vbproj"}
+
         markers: list[DiscoveredMarker] = []
 
-        for family in MARKER_DEFINITIONS:
-            markers.extend(self._scan_markers_for_family(family))
+        for rel_dir, filename in all_files:
+            rel_path = f"{rel_dir}/{filename}" if rel_dir else filename
 
-        # Handle special cases: .sln files for dotnet
-        for sln_path in self.repo_root.rglob("*.sln"):
-            rel_path = str(sln_path.relative_to(self.repo_root)).replace("\\", "/")
-            if not self._is_excluded(rel_path):
+            # Check exact marker name match
+            if filename in marker_lookup:
+                for family, tier in marker_lookup[filename]:
+                    markers.append(DiscoveredMarker(path=rel_path, family=family, tier=tier))
+
+            # Check dotnet extension-based markers
+            ext = Path(filename).suffix.lower()
+            if ext in dotnet_extensions:
+                tier = MarkerTier.WORKSPACE if ext == ".sln" else MarkerTier.PACKAGE
                 markers.append(
-                    DiscoveredMarker(
-                        path=rel_path,
-                        family=LanguageFamily.DOTNET,
-                        tier=MarkerTier.WORKSPACE,
-                    )
+                    DiscoveredMarker(path=rel_path, family=LanguageFamily.DOTNET, tier=tier)
                 )
 
-        # Handle .csproj, .fsproj, .vbproj for dotnet
-        for pattern in ["*.csproj", "*.fsproj", "*.vbproj"]:
-            for proj_path in self.repo_root.rglob(pattern):
-                rel_path = str(proj_path.relative_to(self.repo_root)).replace("\\", "/")
-                if not self._is_excluded(rel_path):
-                    markers.append(
-                        DiscoveredMarker(
-                            path=rel_path,
-                            family=LanguageFamily.DOTNET,
-                            tier=MarkerTier.PACKAGE,
-                        )
-                    )
-
-        # Handle Cargo.toml with [workspace] specially
+        # Post-process markers for workspace detection
         markers = self._handle_rust_workspaces(markers)
-
-        # Handle package.json with workspaces
         markers = self._handle_js_workspaces(markers)
-
-        # Handle pom.xml with <modules>
         markers = self._handle_maven_modules(markers)
 
         return markers
 
     def _scan_markers_for_family(self, family: LanguageFamily) -> list[DiscoveredMarker]:
-        """Scan for markers of a specific family."""
-        markers: list[DiscoveredMarker] = []
+        """Scan for markers of a specific family using fast directory walk."""
+        all_files = _walk_with_pruning(self.repo_root)
 
         tier_markers = MARKER_DEFINITIONS.get(family, {})
+        markers: list[DiscoveredMarker] = []
 
-        for tier, marker_names in tier_markers.items():
-            for marker_name in marker_names:
-                for marker_path in self.repo_root.rglob(marker_name):
-                    rel_path = str(marker_path.relative_to(self.repo_root)).replace("\\", "/")
-                    if not self._is_excluded(rel_path):
-                        markers.append(
-                            DiscoveredMarker(
-                                path=rel_path,
-                                family=family,
-                                tier=tier,
-                            )
-                        )
+        for rel_dir, filename in all_files:
+            rel_path = f"{rel_dir}/{filename}" if rel_dir else filename
+
+            for tier, marker_names in tier_markers.items():
+                if filename in marker_names:
+                    markers.append(DiscoveredMarker(path=rel_path, family=family, tier=tier))
 
         return markers
 
     def _is_excluded(self, path: str) -> bool:
         """Check if path matches universal excludes."""
-        excluded_parts = {
-            "node_modules",
-            "venv",
-            "__pycache__",
-            ".git",
-            "target",
-            "dist",
-            "build",
-            "vendor",
-        }
         parts = path.split("/")
-        return any(part in excluded_parts for part in parts)
+        return any(part in PRUNABLE_DIRS for part in parts)
 
     def _handle_rust_workspaces(self, markers: list[DiscoveredMarker]) -> list[DiscoveredMarker]:
         """Upgrade Cargo.toml with [workspace] to Tier 1."""
