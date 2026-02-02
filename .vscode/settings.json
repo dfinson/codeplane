@@ -1,0 +1,9 @@
+{
+    "chat.mcp.serverSampling": {
+        "codeplane/.vscode/mcp.json: codeplane": {
+            "allowedModels": [
+                "copilot/claude-opus-4.5"
+            ]
+        }
+    }
+}

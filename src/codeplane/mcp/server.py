@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import structlog
 from fastmcp.utilities.json_schema import dereference_refs
 from pydantic import BaseModel, Field
 
@@ -13,6 +14,8 @@ if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from codeplane.mcp.context import AppContext
+
+log = structlog.get_logger(__name__)
 
 
 class ToolResponse(BaseModel):
@@ -50,6 +53,8 @@ def create_mcp_server(context: AppContext) -> FastMCP:
         testing,
     )
 
+    log.info("mcp_server_creating", repo_root=str(context.repo_root))
+
     mcp = FastMCP(
         "codeplane",
         instructions="CodePlane repository control plane for AI coding agents.",
@@ -58,8 +63,12 @@ def create_mcp_server(context: AppContext) -> FastMCP:
     )
 
     # Wire all registered tools
+    tool_count = 0
     for spec in registry.get_all():
         _wire_tool(mcp, spec, context)
+        tool_count += 1
+
+    log.info("mcp_server_created", tool_count=tool_count)
 
     return mcp
 
@@ -83,6 +92,9 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
 
     # Create handler that accepts **kwargs and reconstructs the params model
     async def handler(**kwargs: Any) -> dict[str, Any]:
+        tool_name = spec.name  # Capture for logging
+        log.debug("mcp_tool_call_start", tool=tool_name, kwargs=list(kwargs.keys()))
+
         # Reconstruct the params model from kwargs
         params = params_model(**kwargs)
 
@@ -91,6 +103,7 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
 
         try:
             result_data: dict[str, Any] = await spec_handler(context, params)
+            log.debug("mcp_tool_call_success", tool=tool_name, session_id=session.session_id)
             return ToolResponse(
                 success=True,
                 result=result_data,
@@ -100,6 +113,7 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
                 },
             ).model_dump()
         except Exception as e:
+            log.error("mcp_tool_call_error", tool=tool_name, error=str(e), exc_info=True)
             return ToolResponse(
                 success=False,
                 result=None,
@@ -122,8 +136,32 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
 
 def run_server(repo_root: Path, db_path: Path, tantivy_path: Path) -> None:
     """Create and run the MCP server."""
+    from codeplane.config.models import LoggingConfig, LogOutputConfig
+    from codeplane.core.logging import configure_logging
     from codeplane.mcp.context import AppContext
+
+    # Configure logging to both stderr and a file for debugging
+    log_file = repo_root / ".codeplane" / "mcp-server.log"
+    configure_logging(
+        config=LoggingConfig(
+            level="DEBUG",
+            outputs=[
+                LogOutputConfig(destination="stderr", format="console", level="INFO"),
+                LogOutputConfig(destination=str(log_file), format="json", level="DEBUG"),
+            ],
+        )
+    )
+
+    log.info(
+        "mcp_server_starting",
+        repo_root=str(repo_root),
+        db_path=str(db_path),
+        tantivy_path=str(tantivy_path),
+        log_file=str(log_file),
+    )
 
     context = AppContext.create(repo_root, db_path, tantivy_path)
     mcp = create_mcp_server(context)
+
+    log.info("mcp_server_running")
     mcp.run()
