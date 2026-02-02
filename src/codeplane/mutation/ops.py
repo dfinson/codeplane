@@ -3,6 +3,10 @@
 Atomic file edits with structured delta response.
 Per SPEC.md §23.7 mutate tool specification.
 
+Supports multiple edit modes:
+- exact: Content-addressed replacement (safest, default)
+- patch: Line-level patches (legacy, deprecated)
+
 Triggers reindex after mutation via callback.
 """
 
@@ -12,6 +16,7 @@ import hashlib
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -19,13 +24,29 @@ if TYPE_CHECKING:
     pass
 
 
+class EditMode(str, Enum):
+    """Edit mode for mutations."""
+
+    EXACT = "exact"  # Content-addressed replacement (default, safe)
+    PATCH = "patch"  # Line-level patches (legacy, dangerous)
+
+
 @dataclass
 class Patch:
-    """Line-level patch within a file."""
+    """Line-level patch within a file (legacy mode)."""
 
     start: int  # Start line (1-indexed)
     end: int  # End line (1-indexed, inclusive)
     replacement: str
+
+
+@dataclass
+class ExactEdit:
+    """Content-addressed edit specification."""
+
+    old_content: str
+    new_content: str
+    expected_occurrences: int = 1
 
 
 @dataclass
@@ -34,8 +55,18 @@ class Edit:
 
     path: str
     action: Literal["create", "update", "delete"]
-    content: str | None = None  # Full content for create/update
-    patches: list[Patch] | None = None  # Or line-level patches
+    mode: EditMode = EditMode.EXACT
+
+    # For create/update with full content
+    content: str | None = None
+
+    # For exact mode (update only)
+    old_content: str | None = None
+    new_content: str | None = None
+    expected_occurrences: int = 1
+
+    # For patch mode (legacy, update only)
+    patches: list[Patch] | None = None
 
 
 @dataclass
@@ -48,6 +79,14 @@ class FileDelta:
     new_hash: str | None = None
     insertions: int = 0
     deletions: int = 0
+
+
+@dataclass
+class DryRunInfo:
+    """Additional info returned during dry run."""
+
+    content_hash: str  # Hash of content that would be replaced
+    unified_diff: str | None = None
 
 
 @dataclass
@@ -68,9 +107,29 @@ class MutationResult:
     applied: bool
     dry_run: bool
     delta: MutationDelta
+    dry_run_info: DryRunInfo | None = None
     affected_symbols: list[str] | None = None
     affected_tests: list[str] | None = None
     repo_fingerprint: str = ""
+
+
+class ContentNotFoundError(Exception):
+    """Raised when old_content is not found in file."""
+
+    def __init__(self, path: str, snippet: str | None = None) -> None:
+        self.path = path
+        self.snippet = snippet
+        super().__init__(f"Content not found in {path}")
+
+
+class MultipleMatchesError(Exception):
+    """Raised when old_content matches multiple locations."""
+
+    def __init__(self, path: str, count: int, lines: list[int]) -> None:
+        self.path = path
+        self.count = count
+        self.lines = lines
+        super().__init__(f"Content found {count} times in {path}, expected 1")
 
 
 class MutationOps:
@@ -110,12 +169,19 @@ class MutationOps:
 
         Returns:
             MutationResult with delta information
+
+        Raises:
+            ContentNotFoundError: old_content not found (exact mode)
+            MultipleMatchesError: old_content found multiple times (exact mode)
+            FileNotFoundError: File doesn't exist for update/delete
+            FileExistsError: File already exists for create
         """
         mutation_id = str(uuid.uuid4())[:8]
         file_deltas: list[FileDelta] = []
         changed_paths: list[Path] = []
         total_insertions = 0
         total_deletions = 0
+        dry_run_info: DryRunInfo | None = None
 
         # Validate all edits first
         for edit in edits:
@@ -151,26 +217,40 @@ class MutationOps:
                     full_path.write_text(content)
 
             elif edit.action == "update":
-                old_content = full_path.read_text()
-                old_hash = _hash_content(old_content)
+                old_file_content = full_path.read_text()
+                old_hash = _hash_content(old_file_content)
 
-                if edit.content is not None:
-                    new_content = edit.content
+                # Determine new content based on mode
+                if edit.mode == EditMode.EXACT and edit.old_content is not None:
+                    new_file_content = self._apply_exact_edit(
+                        old_file_content,
+                        edit.old_content,
+                        edit.new_content or "",
+                        edit.expected_occurrences,
+                        edit.path,
+                    )
+                    # For dry run, compute hash of content being replaced
+                    if dry_run:
+                        dry_run_info = DryRunInfo(
+                            content_hash=_hash_content(edit.old_content),
+                        )
+                elif edit.content is not None:
+                    new_file_content = edit.content
                 elif edit.patches:
-                    new_content = _apply_patches(old_content, edit.patches)
+                    new_file_content = _apply_patches(old_file_content, edit.patches)
                 else:
-                    new_content = old_content
+                    new_file_content = old_file_content
 
-                new_hash = _hash_content(new_content)
+                new_hash = _hash_content(new_file_content)
 
                 # Compute diff stats
-                old_lines = old_content.splitlines()
-                new_lines = new_content.splitlines()
+                old_lines = old_file_content.splitlines()
+                new_lines = new_file_content.splitlines()
                 insertions = max(0, len(new_lines) - len(old_lines))
                 deletions = max(0, len(old_lines) - len(new_lines))
 
                 if not dry_run:
-                    full_path.write_text(new_content)
+                    full_path.write_text(new_file_content)
 
             file_deltas.append(
                 FileDelta(
@@ -200,7 +280,45 @@ class MutationOps:
                 deletions=total_deletions,
                 files=file_deltas,
             ),
+            dry_run_info=dry_run_info,
         )
+
+    def _apply_exact_edit(
+        self,
+        file_content: str,
+        old_content: str,
+        new_content: str,
+        expected_occurrences: int,
+        path: str,
+    ) -> str:
+        """Apply exact content replacement.
+
+        Raises:
+            ContentNotFoundError: old_content not found
+            MultipleMatchesError: old_content found more times than expected
+        """
+        # Count occurrences
+        count = file_content.count(old_content)
+
+        if count == 0:
+            raise ContentNotFoundError(path, old_content[:100] if old_content else None)
+
+        if count != expected_occurrences:
+            # Find line numbers of matches
+            lines = []
+            search_start = 0
+            for _ in range(min(count, 10)):  # Limit search
+                idx = file_content.find(old_content, search_start)
+                if idx == -1:
+                    break
+                line_num = file_content[:idx].count("\n") + 1
+                lines.append(line_num)
+                search_start = idx + 1
+
+            raise MultipleMatchesError(path, count, lines)
+
+        # Replace all expected occurrences
+        return file_content.replace(old_content, new_content, expected_occurrences)
 
 
 def _hash_content(content: str) -> str:
@@ -209,7 +327,7 @@ def _hash_content(content: str) -> str:
 
 
 def _apply_patches(content: str, patches: list[Patch]) -> str:
-    """Apply line-level patches to content."""
+    """Apply line-level patches to content (legacy mode)."""
     lines = content.splitlines(keepends=True)
 
     # Sort patches by start line descending to apply from bottom up
@@ -226,3 +344,4 @@ def _apply_patches(content: str, patches: list[Patch]) -> str:
         lines[start_idx:end_idx] = replacement_lines
 
     return "".join(lines)
+
