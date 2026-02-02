@@ -31,7 +31,6 @@ from codeplane.index._internal.db import (
     IntegrityChecker,
     IntegrityReport,
     Reconciler,
-    ReconcileResult,
     create_additional_indexes,
 )
 from codeplane.index._internal.discovery import (
@@ -648,8 +647,8 @@ class IndexCoordinator:
         """
         Full repository reindex - idempotent and incremental.
 
-        Reconciles filesystem against index state and only processes deltas.
-        Safe to call at any time; does minimal work if index is up-to-date.
+        Checks for stale files (indexed_at == NULL) and only processes those.
+        Safe to call at any time; returns immediately if index is up-to-date.
 
         SERIALIZED: Acquires reconcile_lock and tantivy_write_lock.
         """
@@ -663,21 +662,13 @@ class IndexCoordinator:
         files_removed = 0
 
         with self._reconcile_lock:
-            # Reconcile all tracked files - detects adds, modifications, deletions
-            reconcile_result: ReconcileResult | None = None
-            if self._reconciler is not None:
-                reconcile_result = self._reconciler.reconcile(None)
-
-            # Get files that need indexing (no indexed_at or hash changed)
+            # Check for stale files FIRST (fast DB query) before expensive reconcile
             with self.db.session() as session:
-                # Files needing initial index or reindex
                 stale_stmt = select(File).where(File.indexed_at == None)  # noqa: E711
                 stale_files = list(session.exec(stale_stmt).all())
 
-            if not stale_files and (
-                reconcile_result is None or reconcile_result.files_changed == 0
-            ):
-                # Index is already up-to-date
+            # If no stale files, index is already up-to-date - skip reconcile
+            if not stale_files:
                 duration = time.time() - start_time
                 return IndexStats(
                     files_processed=0,
