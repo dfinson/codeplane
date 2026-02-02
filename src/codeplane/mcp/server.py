@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fastmcp.utilities.json_schema import compress_schema
+from fastmcp.utilities.json_schema import dereference_refs
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
@@ -54,6 +54,7 @@ def create_mcp_server(context: AppContext) -> FastMCP:
         "codeplane",
         instructions="CodePlane repository control plane for AI coding agents.",
         stateless_http=True,
+        json_response=True,  # Use JSON responses instead of SSE for broader client compatibility
     )
 
     # Wire all registered tools
@@ -75,9 +76,10 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
     params_model = spec.params_model
     spec_handler = spec.handler
 
-    # Get the JSON schema from the params model and flatten it
+    # Get the JSON schema from the params model and fully dereference it
+    # dereference_refs inlines all $refs and removes $defs for full compatibility
     raw_schema = params_model.model_json_schema()
-    flat_schema = compress_schema(raw_schema)
+    flat_schema = dereference_refs(raw_schema)
 
     # Create handler that accepts **kwargs and reconstructs the params model
     async def handler(**kwargs: Any) -> dict[str, Any]:
