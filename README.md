@@ -17,69 +17,82 @@
 
 ---
 
-CodePlane executes deterministic operations for AI coding agents. It owns indexing, file mutations, and Git operations—returning structured, auditable results so agents can act without probing or guesswork.
+## The Problem
+
+AI coding agents lose **5-10x time** on tasks that should be instant:
+
+- **Exploratory thrash** — repeated grep, file opens, and retries to build a mental model
+- **Terminal mediation** — deterministic operations (git status, diff, run test) produce unstructured text and loops
+- **Missing deterministic refactors** — renames that IDEs do in seconds take agents minutes via search-and-edit
+
+The bottleneck is I/O and orchestration, not model capability.
+
+## The Solution
+
+CodePlane turns a repository into a **deterministic, queryable system**:
+
+```
+Agent plans and decides → CodePlane executes → Structured result → Next action
+```
+
+Every operation returns complete, structured context in a single call. No probing. No guesswork.
+
+```mermaid
+flowchart LR
+    subgraph Agent["AI Coding Agent"]
+        A1[Plan]
+        A2[Decide]
+    end
+    
+    subgraph CodePlane["CodePlane Server"]
+        direction TB
+        T0["Tier 0: Lexical Index<br/>(Tantivy)"]
+        T1["Tier 1: Structural Facts<br/>(Tree-sitter + SQLite)"]
+        OPS["Git · Files · Refactor · Tests"]
+    end
+    
+    subgraph Output["Structured Results"]
+        R1[Bounded candidate sets]
+        R2[Patch previews]
+        R3[Coverage manifests]
+    end
+    
+    Agent -->|MCP Tools| CodePlane
+    CodePlane --> Output
+    Output -->|Single call| Agent
+```
 
 ## Status
 
-🚧 **Pre-alpha** — M0 + M1 complete, M2 (Index Engine) in progress.
+🚧 **Pre-alpha** — Core infrastructure (M0) and Git operations (M1) complete. Index engine (M2) in progress.
 
-Core infrastructure and Git operations are implemented. See the [roadmap](#roadmap) for progress.
+| Phase | Milestone | Status |
+|-------|-----------|--------|
+| **Foundation** | M0: Core (types, errors, logging, config) | ✅ |
+| | M1: Git Operations (status, staging, commits, branches, diffs) | ✅ |
+| **Index** | M2: Index Engine (Tantivy lexical + Tree-sitter structural) | 🚧 |
+| **Execution** | M3: Refactor Planner · M4: Mutation Engine · M5: Ledger | |
+| **Interface** | M6: Daemon & CLI · M7: MCP Tools · M8: Test Runner | |
+| **Release** | M9: Polish & Hardening | |
+| **Research** | M10: Advanced Semantic Support (SCIP/LSP analysis) | 🔬 |
 
-## Architecture
+Track progress: [GitHub Milestones](https://github.com/dfinson/codeplane/milestones)
 
-CodePlane provides a **full stacked index**:
-
-- **Tier 0 — Tantivy Lexical Index**: Fast, deterministic lexical retrieval for candidate discovery
-- **Tier 1 — Tree-sitter/SQLite Structural Facts**: Definitions, references, scopes, imports, exports
-
-The planner produces:
-- Bounded candidate sets
-- Patch previews with text edits
-- Coverage + Risk manifests (explicit about what is PROVEN vs ANCHORED)
-
-**Auto-apply rules:**
-- Only PROVEN edits (same-file bindings, explicit imports) can auto-apply
-- Everything else is proposal-only unless explicitly confirmed
-
-**What CodePlane is NOT:**
-- Not a semantic refactor engine (no SCIP/LSP authority)
-- Not an IDE replacement
-- Not an agent or orchestrator
-
-## Roadmap
-
-Track progress via [GitHub Milestones](https://github.com/dfinson/codeplane/milestones):
-
-| Milestone | Description | Status |
-|-----------|-------------|--------|
-| M0: Foundation | Core types, errors, logging, configuration | ✅ Complete |
-| M1: Git Operations | Status, staging, commits, branches, diffs | ✅ Complete |
-| M2: Index Engine | Tantivy lexical + Tree-sitter/SQLite structural facts | 🚧 In Progress |
-| M3: Refactor Planner | Bounded candidate sets with coverage/risk manifests | |
-| M4: Mutation Engine | Atomic file changes with rollback | |
-| M5: Ledger & Task Model | Operation history, convergence metrics | |
-| M6: Daemon & CLI | HTTP daemon, `cpl` CLI commands | |
-| M7: Core MCP Tools | File ops, search, git tools for agents | |
-| M8: Test Runner | Framework detection, parallel execution | |
-| M9: Polish & Hardening | Docs, benchmarks, security, packaging | |
-| M10: Advanced Semantic Support | Research milestone: SCIP/LSP integration analysis | 🔬 Research |
-
-**Note:** M10 is a research milestone where we analyze complexity vs benefit for full semantic refactor support (SCIP, LSP backends). Implementation decisions will be made based on documented analysis.
-
-## Development
+## Quick Start
 
 ```bash
-make dev         # Install with dev dependencies
-make lint        # Run ruff linter
-make typecheck   # Run mypy
-make test        # Run pytest
+make dev         # Install with dev deps
+make test        # Run tests
+make lint        # Ruff
+make typecheck   # Mypy
 ```
 
 ## Design Authority
 
-[SPEC.md](SPEC.md) is the single source of design truth. All design decisions are documented there, including:
-- Section 7: Index Architecture (Tier 0 + Tier 1)
-- Section 19: Semantic Support Exploration (design archaeology of approaches that failed)
+[SPEC.md](SPEC.md) is the single source of truth. Key sections:
+
+- §7: Index Architecture (Tier 0 + Tier 1)
+- §19: Semantic Support Exploration (design archaeology)
 
 ## License
 
