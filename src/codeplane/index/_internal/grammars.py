@@ -208,11 +208,13 @@ def ensure_grammars_for_repo(repo_root: Path, quiet: bool = False, status_fn: An
     needed = get_needed_grammars(languages)
     if not needed:
         if status_fn and not quiet:
-            status_fn("Language support ready", style="success", indent=2)
+            lang_list = ", ".join(sorted(languages)) if languages else "none detected"
+            status_fn(f"Language support ready ({lang_list})", style="success", indent=2)
         return True
 
     # Install
     success = install_grammars(needed, quiet=quiet, status_fn=status_fn)
     if success and status_fn and not quiet:
-        status_fn("Language support ready", style="success", indent=2)
+        lang_list = ", ".join(sorted(languages)) if languages else "none detected"
+        status_fn(f"Language support ready ({lang_list})", style="success", indent=2)
     return success

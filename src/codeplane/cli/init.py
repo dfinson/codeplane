@@ -90,7 +90,8 @@ def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False
         )
 
     if not quiet:
-        status("Config created", style="success", indent=2)
+        rel_config_path = config_path.relative_to(repo_root)
+        status(f"Config created at {rel_config_path}", style="success", indent=2)
 
     # Scan repo and install any needed tree-sitter grammars
     from codeplane.index._internal.grammars import ensure_grammars_for_repo
