@@ -153,7 +153,19 @@ async def run_server(
     config: ServerConfig,
 ) -> None:
     """Run the daemon until shutdown signal."""
+    from rich.console import Console
+
     from codeplane.daemon.app import create_app
+
+    console = Console(stderr=True)
+
+    # Run initial full index BEFORE accepting connections
+    console.print("[cyan]Building initial index...[/cyan]")
+    with console.status("[cyan]Indexing repository...[/cyan]", spinner="dots"):
+        stats = await coordinator.reindex_full()
+    console.print(
+        f"  [green]✓[/green] Indexed {stats.files_added} files in {stats.duration_seconds:.2f}s"
+    )
 
     controller = ServerController(
         repo_root=repo_root,
