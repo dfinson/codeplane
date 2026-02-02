@@ -154,8 +154,6 @@ async def run_server(
     config: ServerConfig,
 ) -> None:
     """Run the daemon until shutdown signal."""
-    from importlib.metadata import version
-
     from rich.console import Console
 
     from codeplane.daemon.app import create_app
@@ -173,14 +171,9 @@ async def run_server(
         )
 
     # Print banner
-    ver = version("codeplane")
-    console.print()
-    console.print(f"  [cyan bold]CodePlane[/cyan bold] v{ver}")
-    console.print("  Local repository control plane for AI coding agents")
-    console.print()
-    console.print(f"  Listening on [green]http://{config.host}:{config.port}[/green]")
-    console.print("  Press [bold]Ctrl+C[/bold] to stop")
-    console.print()
+    from codeplane.cli.up import _print_banner
+
+    _print_banner(config.host, config.port)
 
     controller = ServerController(
         repo_root=repo_root,
@@ -196,6 +189,7 @@ async def run_server(
         host=config.host,
         port=config.port,
         log_level="warning",  # Use structlog instead
+        ws="none",  # Disable websockets - we use SSE for MCP
     )
     server = uvicorn.Server(uvicorn_config)
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -41,10 +43,15 @@ def create_app(
     # Mount MCP at /mcp
     routes.append(Mount("/mcp", app=mcp_app))
 
+    @asynccontextmanager
+    async def lifespan(_app: Starlette) -> AsyncIterator[None]:
+        await controller.start()
+        yield
+        await controller.stop()
+
     app = Starlette(
         routes=routes,
-        on_startup=[controller.start],
-        on_shutdown=[controller.stop],
+        lifespan=lifespan,
     )
 
     # Add middleware to inject repo header into responses

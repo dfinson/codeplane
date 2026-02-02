@@ -10,7 +10,6 @@ import click
 from codeplane.cli.init import initialize_repo
 from codeplane.config.loader import load_config
 from codeplane.config.models import CodePlaneConfig
-from codeplane.daemon.lifecycle import is_server_running, read_server_info, run_server
 from codeplane.index.ops import IndexCoordinator
 
 LOGO = r"""
@@ -60,6 +59,8 @@ def up_command(path: Path, port: int | None) -> None:
 
     PATH is the repository root (default: current directory).
     """
+    from codeplane.daemon.lifecycle import is_server_running, read_server_info, run_server
+
     repo_root = path.resolve()
     if not (repo_root / ".git").exists():
         raise click.ClickException(f"Not a git repository: {repo_root}")

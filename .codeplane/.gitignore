@@ -1,4 +1,0 @@
-# Ignore everything except config files
-*
-!.gitignore
-!config.yaml
