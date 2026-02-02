@@ -163,8 +163,7 @@ async def run_server(
     console = Console(stderr=True)
 
     # Ensure index is up-to-date (idempotent - does minimal work if already current)
-    with console.status("[cyan]Synchronizing index...[/cyan]", spinner="dots"):
-        stats = await coordinator.reindex_full()
+    stats = await coordinator.reindex_full()
 
     if stats.files_processed > 0:
         console.print(
@@ -172,8 +171,6 @@ async def run_server(
             f"{stats.files_updated} updated, {stats.files_removed} removed "
             f"in {stats.duration_seconds:.2f}s"
         )
-    else:
-        console.print("  [green]✓[/green] Index up-to-date")
 
     # Print banner
     ver = version("codeplane")
