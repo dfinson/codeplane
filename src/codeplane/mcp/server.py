@@ -59,6 +59,8 @@ def create_mcp_server(context: AppContext) -> FastMCP:
     mcp = FastMCP(
         "codeplane",
         instructions="CodePlane repository control plane for AI coding agents.",
+        stateless_http=True,
+        json_response=True,  # Use JSON responses instead of SSE for broader client compatibility
     )
 
     # Wire all registered tools
@@ -200,4 +202,4 @@ def run_server(repo_root: Path, db_path: Path, tantivy_path: Path) -> None:
     mcp = create_mcp_server(context)
 
     log.info("mcp_server_running")
-    mcp.run(transport="stdio")
+    mcp.run()
