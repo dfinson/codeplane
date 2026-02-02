@@ -199,12 +199,11 @@ Server model:
 - Transport: **HTTP localhost** with ephemeral port.
   - Cross-platform with identical code (no socket vs named pipe divergence).
   - MCP clients can connect directly via HTTP/SSE transport (no stdio proxy needed).
-- Request validation:
-  - All HTTP requests must include `X-CodePlane-Repo: <absolute-path>` header.
-  - Server validates header matches its configured repository root.
-  - Missing header → `400` with error code `REPO_HEADER_MISSING`.
-  - Path mismatch → `400` with error code `REPO_MISMATCH` (response includes expected/received paths).
-  - Rationale: Prevents cross-repo accidents when multiple CodePlane instances run simultaneously. No token management, no file permissions, no auth state.
+- Response header:
+  - All HTTP responses include `X-CodePlane-Repo: <absolute-path>` header.
+  - Clients can use this to detect wrong-server mistakes when multiple CodePlane instances run simultaneously.
+  - No request header required — clients don't need to send repo path on every request.
+  - Rationale: Simpler client integration while still enabling cross-repo accident detection. No token management, no file permissions, no auth state.
 - Isolation rationale:
   - Failure in one repo cannot affect another.
   - Version skew between repos is not a problem.
@@ -3706,13 +3705,13 @@ Non-MCP endpoints for operators and monitoring.
 | `/status` | GET | JSON status (same as `status` tool) |
 | `/dashboard` | GET | Observability dashboard (see section 13) |
 
-**Validation:** Same `X-CodePlane-Repo` header as MCP.
+**Response header:** All responses include `X-CodePlane-Repo` header with the server's repository path.
 
 **Example:**
 
 ```bash
-curl -H "X-CodePlane-Repo: $(cat .codeplane/repo)" \
-     http://127.0.0.1:$(cat .codeplane/port)/health
+curl http://127.0.0.1:$(cat .codeplane/port)/health
+# Response includes: X-CodePlane-Repo: /path/to/repo
 ```
 
 ---
@@ -3776,14 +3775,13 @@ CodePlane registers as an MCP server. Client configuration example:
   "mcpServers": {
     "codeplane": {
       "transport": "http",
-      "url": "http://127.0.0.1:${port}",
-      "headers": {
-        "X-CodePlane-Repo": "${repo_path}"
-      }
+      "url": "http://127.0.0.1:${port}"
     }
   }
 }
 ```
+
+**Response header:** All responses include `X-CodePlane-Repo` header with the server's repository path. Clients can use this to verify they're talking to the correct server.
 
 **Dynamic discovery:**
 

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 from starlette.applications import Starlette
 
-from codeplane.daemon.middleware import RepoValidationMiddleware
+from codeplane.daemon.middleware import RepoHeaderMiddleware
 from codeplane.daemon.routes import create_routes
 
 if TYPE_CHECKING:
@@ -24,7 +24,7 @@ def create_app(controller: ServerController, repo_root: Path) -> Starlette:
         on_shutdown=[controller.stop],
     )
 
-    # Add repo validation middleware
-    app.add_middleware(RepoValidationMiddleware, repo_root=repo_root)
+    # Add middleware to inject repo header into responses
+    app.add_middleware(RepoHeaderMiddleware, repo_root=repo_root)
 
     return app

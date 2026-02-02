@@ -617,99 +617,56 @@ class TestServerController:
         assert controller.wait_for_shutdown().is_set()
 
 
-class TestRepoValidationMiddleware:
-    """Tests for RepoValidationMiddleware."""
+class TestRepoHeaderMiddleware:
+    """Tests for RepoHeaderMiddleware."""
 
-    def test_given_health_endpoint_when_request_then_skips_validation(self, tmp_path: Path) -> None:
-        """Health endpoint skips header validation."""
+    def test_given_request_when_response_then_includes_repo_header(self, tmp_path: Path) -> None:
+        """All responses include X-CodePlane-Repo header."""
         from starlette.applications import Starlette
         from starlette.middleware import Middleware
         from starlette.responses import JSONResponse
         from starlette.routing import Route
         from starlette.testclient import TestClient
 
-        from codeplane.daemon.middleware import RepoValidationMiddleware
+        from codeplane.daemon.middleware import REPO_HEADER, RepoHeaderMiddleware
+
+        async def status(_request):
+            return JSONResponse({"status": "ok"})
+
+        app = Starlette(
+            routes=[Route("/status", status)],
+            middleware=[Middleware(RepoHeaderMiddleware, repo_root=tmp_path)],
+        )
+
+        client = TestClient(app, raise_server_exceptions=False)
+        response = client.get("/status")
+        assert response.status_code == 200
+        assert response.headers[REPO_HEADER] == str(tmp_path)
+
+    def test_given_health_endpoint_when_request_then_includes_repo_header(
+        self, tmp_path: Path
+    ) -> None:
+        """Health endpoint also includes repo header."""
+        from starlette.applications import Starlette
+        from starlette.middleware import Middleware
+        from starlette.responses import JSONResponse
+        from starlette.routing import Route
+        from starlette.testclient import TestClient
+
+        from codeplane.daemon.middleware import REPO_HEADER, RepoHeaderMiddleware
 
         async def health(_request):
             return JSONResponse({"status": "ok"})
 
         app = Starlette(
             routes=[Route("/health", health)],
-            middleware=[Middleware(RepoValidationMiddleware, repo_root=tmp_path)],
+            middleware=[Middleware(RepoHeaderMiddleware, repo_root=tmp_path)],
         )
 
         client = TestClient(app, raise_server_exceptions=False)
         response = client.get("/health")
-        # Should not fail due to missing header
         assert response.status_code == 200
-
-    def test_given_missing_header_when_request_then_returns_400(self, tmp_path: Path) -> None:
-        """Missing X-CodePlane-Repo header returns 400."""
-        from starlette.applications import Starlette
-        from starlette.middleware import Middleware
-        from starlette.responses import JSONResponse
-        from starlette.routing import Route
-        from starlette.testclient import TestClient
-
-        from codeplane.daemon.middleware import RepoValidationMiddleware
-
-        async def status(_request):
-            return JSONResponse({"status": "ok"})
-
-        app = Starlette(
-            routes=[Route("/status", status)],
-            middleware=[Middleware(RepoValidationMiddleware, repo_root=tmp_path)],
-        )
-
-        client = TestClient(app, raise_server_exceptions=False)
-        response = client.get("/status")
-        assert response.status_code == 400
-        assert "REPO_HEADER_MISSING" in response.text
-
-    def test_given_mismatched_repo_when_request_then_returns_400(self, tmp_path: Path) -> None:
-        """Mismatched X-CodePlane-Repo header returns 400."""
-        from starlette.applications import Starlette
-        from starlette.middleware import Middleware
-        from starlette.responses import JSONResponse
-        from starlette.routing import Route
-        from starlette.testclient import TestClient
-
-        from codeplane.daemon.middleware import RepoValidationMiddleware
-
-        async def status(_request):
-            return JSONResponse({"status": "ok"})
-
-        app = Starlette(
-            routes=[Route("/status", status)],
-            middleware=[Middleware(RepoValidationMiddleware, repo_root=tmp_path)],
-        )
-
-        client = TestClient(app, raise_server_exceptions=False)
-        response = client.get("/status", headers={"X-CodePlane-Repo": "/wrong/path"})
-        assert response.status_code == 400
-        assert "REPO_MISMATCH" in response.text
-
-    def test_given_correct_header_when_request_then_passes_through(self, tmp_path: Path) -> None:
-        """Correct X-CodePlane-Repo header allows request through."""
-        from starlette.applications import Starlette
-        from starlette.middleware import Middleware
-        from starlette.responses import JSONResponse
-        from starlette.routing import Route
-        from starlette.testclient import TestClient
-
-        from codeplane.daemon.middleware import RepoValidationMiddleware
-
-        async def status(_request):
-            return JSONResponse({"status": "ok"})
-
-        app = Starlette(
-            routes=[Route("/status", status)],
-            middleware=[Middleware(RepoValidationMiddleware, repo_root=tmp_path)],
-        )
-
-        client = TestClient(app, raise_server_exceptions=False)
-        response = client.get("/status", headers={"X-CodePlane-Repo": str(tmp_path)})
-        assert response.status_code == 200
+        assert response.headers[REPO_HEADER] == str(tmp_path)
 
 
 class TestDaemonRoutes:

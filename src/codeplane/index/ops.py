@@ -53,6 +53,7 @@ from codeplane.index.models import (
     ProbeStatus,
     RefFact,
 )
+from codeplane.tools.map_repo import IncludeOption, MapRepoResult, RepoMapper
 
 if TYPE_CHECKING:
     from codeplane.index.models import FileState
@@ -782,6 +783,27 @@ class IndexCoordinator:
             return FileState(freshness=Freshness.UNINDEXED, certainty=Certainty.UNCERTAIN)
 
         return self._state.get_file_state(file_id, context_id)
+
+    async def map_repo(
+        self,
+        include: list[IncludeOption] | None = None,
+        depth: int = 3,
+    ) -> MapRepoResult:
+        """Build repository mental model from indexed data.
+
+        Queries the existing index - does NOT scan filesystem.
+
+        Args:
+            include: Sections to include. Defaults to structure, languages, entry_points.
+                Options: structure, languages, entry_points, dependencies, test_layout, public_api
+            depth: Directory tree depth (default 3)
+
+        Returns:
+            MapRepoResult with requested sections populated.
+        """
+        with self.db.session() as session:
+            mapper = RepoMapper(session, self.repo_root)
+            return mapper.map(include=include, depth=depth)
 
     async def verify_integrity(self) -> IntegrityReport:
         """Verify index integrity (FK violations, missing files, Tantivy sync).

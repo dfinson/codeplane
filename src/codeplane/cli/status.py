@@ -54,7 +54,6 @@ def status_command(path: Path, as_json: bool) -> None:
     try:
         response = httpx.get(
             f"http://127.0.0.1:{port}/status",
-            headers={"X-CodePlane-Repo": str(repo_root)},
             timeout=5.0,
         )
         status_data = response.json()
