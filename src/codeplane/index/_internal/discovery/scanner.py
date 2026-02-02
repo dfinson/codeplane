@@ -515,7 +515,7 @@ class ContextDiscovery:
                         )
                     else:
                         result.append(marker)
-                except OSError:
+                except (OSError, UnicodeDecodeError):
                     result.append(marker)
             else:
                 result.append(marker)
@@ -546,7 +546,7 @@ class ContextDiscovery:
                         )
                     else:
                         result.append(marker)
-                except (OSError, json.JSONDecodeError):
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                     result.append(marker)
             else:
                 result.append(marker)
@@ -576,7 +576,7 @@ class ContextDiscovery:
                         )
                     else:
                         result.append(marker)
-                except OSError:
+                except (OSError, UnicodeDecodeError):
                     result.append(marker)
             else:
                 result.append(marker)

@@ -425,7 +425,7 @@ class IndexCoordinator:
                 for path in changed_paths:
                     full_path = self.repo_root / path
                     if full_path.exists():
-                        content = full_path.read_text()
+                        content = self._safe_read_text(full_path)
                         symbols = self._extract_symbols(full_path)
                         if self._lexical is not None:
                             self._lexical.add_file(
@@ -520,7 +520,7 @@ class IndexCoordinator:
                 full_path = self.repo_root / rel_path
                 if full_path.exists():
                     try:
-                        content = full_path.read_text()
+                        content = self._safe_read_text(full_path)
                         symbols = self._extract_symbols(full_path)
                         ctx_id = file_to_context.get(rel_path, 1)
                         if self._lexical is not None:
@@ -684,7 +684,7 @@ class IndexCoordinator:
                     full_path = self.repo_root / file_record.path
                     if full_path.exists():
                         try:
-                            content = full_path.read_text()
+                            content = self._safe_read_text(full_path)
                             symbols = self._extract_symbols(full_path)
                             if self._lexical is not None:
                                 self._lexical.add_file(
@@ -991,7 +991,7 @@ class IndexCoordinator:
 
             for file_path, rel_str, context_id, _lang_family in file_iter:
                 try:
-                    content = file_path.read_text()
+                    content = self._safe_read_text(file_path)
                     symbols = self._extract_symbols(file_path)
                     self._lexical.add_file(
                         rel_str,
@@ -1136,6 +1136,13 @@ class IndexCoordinator:
             # ValueError: unsupported file extension
             return []
 
+    def _safe_read_text(self, path: Path) -> str:
+        """Read file text, treating binary/encoding errors as empty content."""
+        try:
+            return path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            return ""
+
     def _load_cplignore_patterns(self) -> list[str]:
         """Load ignore patterns from .codeplane/.cplignore.
 
@@ -1146,7 +1153,7 @@ class IndexCoordinator:
             msg = f".codeplane/.cplignore not found at {cplignore_path}. Run `cpl init` first."
             raise FileNotFoundError(msg)
 
-        content = cplignore_path.read_text()
+        content = self._safe_read_text(cplignore_path)
         patterns: list[str] = []
 
         for line in content.splitlines():
