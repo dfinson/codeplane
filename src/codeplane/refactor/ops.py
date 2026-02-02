@@ -93,18 +93,17 @@ def _scan_file_for_comment_occurrences(
             stripped = line.strip()
 
             # Check for docstring boundaries
-            if not in_docstring:
-                if stripped.startswith('"""') or stripped.startswith("'''"):
-                    docstring_delimiter = stripped[:3]
-                    in_docstring = True
-                    # Check if ends on same line
-                    if stripped.count(docstring_delimiter) >= 2:
-                        in_docstring = False
-                        if _word_boundary_match(line, symbol):
-                            occurrences.append((i, stripped[:60]))
-                    elif _word_boundary_match(line, symbol):
+            if not in_docstring and (stripped.startswith('"""') or stripped.startswith("'''")):
+                docstring_delimiter = stripped[:3]
+                in_docstring = True
+                # Check if ends on same line
+                if stripped.count(docstring_delimiter) >= 2:
+                    in_docstring = False
+                    if _word_boundary_match(line, symbol):
                         occurrences.append((i, stripped[:60]))
-                    continue
+                elif _word_boundary_match(line, symbol):
+                    occurrences.append((i, stripped[:60]))
+                continue
 
             if in_docstring:
                 if docstring_delimiter and docstring_delimiter in stripped[3:]:
@@ -190,8 +189,9 @@ class RefactorOps:
     ) -> RefactorResult:
         """Rename a symbol across the codebase.
 
-        Uses index to find definition and references. Returns candidates
-        with certainty scores for agent review.
+        Uses index to find ALL definitions with the given name and their
+        references. Also performs codebase-wide lexical search as fallback.
+        Returns candidates with certainty scores for agent review.
 
         Args:
             symbol: Symbol name or path:line:col locator
@@ -204,60 +204,55 @@ class RefactorOps:
         """
         refactor_id = str(uuid.uuid4())[:8]
 
-        # Find definition via index
-        def_fact = await self._coordinator.get_def(symbol)
-        if def_fact is None:
-            return RefactorResult(
-                refactor_id=refactor_id,
-                status="divergence",
-                divergence=RefactorDivergence(
-                    resolution_options=[f"Symbol '{symbol}' not found in index"]
-                ),
-            )
+        # Find ALL definitions with this name (not just the first)
+        all_defs = await self._coordinator.get_all_defs(symbol)
 
-        # Find all references
-        refs = await self._coordinator.get_references(def_fact, _context_id=0)
-
-        # Build edit hunks from refs
         edits_by_file: dict[str, list[EditHunk]] = {}
-        affected_files: set[str] = set()
+        seen_locations: set[tuple[str, int]] = set()  # (path, line) to dedupe
 
-        # Add definition site
-        def_file = await self._get_file_path(def_fact.file_id)
-        if def_file:
-            edits_by_file.setdefault(def_file, []).append(
-                EditHunk(
-                    old=def_fact.name,
-                    new=new_name,
-                    line=def_fact.start_line,
-                    certainty="high",  # Definition is always high certainty
-                )
-            )
-            affected_files.add(def_file)
-
-        # Add reference sites
-        for ref in refs:
-            ref_file = await self._get_file_path(ref.file_id)
-            if ref_file:
-                # Map index certainty to hunk certainty
-                cert: Literal["high", "medium", "low"] = (
-                    "high" if ref.certainty == "CERTAIN" else "low"
-                )
-                edits_by_file.setdefault(ref_file, []).append(
-                    EditHunk(
-                        old=symbol,
-                        new=new_name,
-                        line=ref.start_line,
-                        certainty=cert,
+        # Process each definition and its references
+        for def_fact in all_defs:
+            def_file = await self._get_file_path(def_fact.file_id)
+            if def_file:
+                loc = (def_file, def_fact.start_line)
+                if loc not in seen_locations:
+                    seen_locations.add(loc)
+                    edits_by_file.setdefault(def_file, []).append(
+                        EditHunk(
+                            old=def_fact.name,
+                            new=new_name,
+                            line=def_fact.start_line,
+                            certainty="high",
+                        )
                     )
-                )
-                affected_files.add(ref_file)
 
-        # Scan for comment/docstring occurrences if requested
+            # Get references for this definition
+            refs = await self._coordinator.get_references(def_fact, _context_id=0)
+            for ref in refs:
+                ref_file = await self._get_file_path(ref.file_id)
+                if ref_file:
+                    loc = (ref_file, ref.start_line)
+                    if loc not in seen_locations:
+                        seen_locations.add(loc)
+                        cert: Literal["high", "medium", "low"] = (
+                            "high" if ref.certainty == "CERTAIN" else "low"
+                        )
+                        edits_by_file.setdefault(ref_file, []).append(
+                            EditHunk(
+                                old=symbol,
+                                new=new_name,
+                                line=ref.start_line,
+                                certainty=cert,
+                            )
+                        )
+
+        # Codebase-wide lexical search as low-certainty fallback
+        await self._add_lexical_fallback(symbol, new_name, seen_locations, edits_by_file)
+
+        # Scan for comment/docstring occurrences
         if _include_comments:
-            await self._add_comment_occurrences(
-                symbol, new_name, affected_files, edits_by_file
-            )
+            affected_files = set(edits_by_file.keys())
+            await self._add_comment_occurrences(symbol, new_name, affected_files, edits_by_file)
 
         # Build preview
         file_edits = [FileEdit(path=path, hunks=hunks) for path, hunks in edits_by_file.items()]
@@ -305,9 +300,7 @@ class RefactorOps:
             with self._coordinator.db.session() as session:
                 from sqlmodel import select
 
-                file_record = session.exec(
-                    select(File).where(File.path == file_path)
-                ).first()
+                file_record = session.exec(select(File).where(File.path == file_path)).first()
                 language = file_record.language_family if file_record else None
 
             # Find comment occurrences
@@ -324,6 +317,55 @@ class RefactorOps:
                             new=new_name,
                             line=line_num,
                             certainty="medium",  # Comment occurrences are medium certainty
+                        )
+                    )
+
+    async def _add_lexical_fallback(
+        self,
+        symbol: str,
+        new_name: str,
+        seen_locations: set[tuple[str, int]],
+        edits_by_file: dict[str, list[EditHunk]],
+    ) -> None:
+        """Codebase-wide lexical search as low-certainty fallback.
+
+        Finds all occurrences of the symbol as a whole word across the
+        entire codebase. These are marked as low certainty since we can't
+        semantically verify they refer to the same symbol.
+        """
+        from codeplane.index.models import File
+
+        # Get all indexed files
+        with self._coordinator.db.session() as session:
+            from sqlmodel import select
+
+            files = session.exec(select(File)).all()
+
+        for file_record in files:
+            full_path = self._repo_root / file_record.path
+            if not full_path.exists():
+                continue
+
+            try:
+                content = full_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+
+            # Search for whole-word matches
+            pattern = rf"\b{re.escape(symbol)}\b"
+            for i, line in enumerate(content.splitlines(), 1):
+                loc = (file_record.path, i)
+                if loc in seen_locations:
+                    continue
+
+                if re.search(pattern, line):
+                    seen_locations.add(loc)
+                    edits_by_file.setdefault(file_record.path, []).append(
+                        EditHunk(
+                            old=symbol,
+                            new=new_name,
+                            line=i,
+                            certainty="low",  # Lexical match only
                         )
                     )
 
@@ -427,9 +469,7 @@ class RefactorOps:
             # Reconstruct content
             new_content = "".join(new_lines)
 
-            edits.append(
-                Edit(path=file_edit.path, action="update", content=new_content)
-            )
+            edits.append(Edit(path=file_edit.path, action="update", content=new_content))
 
         # Execute mutation
         mutation_result = mutation_ops.mutate(edits)

@@ -824,7 +824,7 @@ class IndexCoordinator:
         path: str | None = None,  # noqa: ARG002 - reserved for future use
         context_id: int | None = None,
     ) -> DefFact | None:
-        """Get definition by name. Thread-safe.
+        """Get first definition by name. Thread-safe.
 
         Args:
             name: Definition name to find
@@ -840,6 +840,41 @@ class IndexCoordinator:
             if context_id is not None:
                 stmt = stmt.where(DefFact.unit_id == context_id)
             return session.exec(stmt).first()
+
+    async def get_all_defs(
+        self,
+        name: str,
+        *,
+        path: str | None = None,
+        context_id: int | None = None,
+        limit: int = 100,
+    ) -> list[DefFact]:
+        """Get all definitions by name. Thread-safe.
+
+        Use this for refactoring where multiple symbols may share a name
+        (e.g., methods on different classes).
+
+        Args:
+            name: Definition name to find
+            path: Optional file path filter
+            context_id: Optional context filter (unit_id)
+            limit: Maximum results (default 100)
+
+        Returns:
+            List of DefFact objects matching the name
+        """
+        await self.wait_for_freshness()
+        with self.db.session() as session:
+            stmt = select(DefFact).where(DefFact.name == name)
+            if path is not None:
+                from codeplane.index.models import File
+
+                subq = select(File.id).where(File.path == path).scalar_subquery()
+                stmt = stmt.where(DefFact.file_id == subq)
+            if context_id is not None:
+                stmt = stmt.where(DefFact.unit_id == context_id)
+            stmt = stmt.limit(limit)
+            return list(session.exec(stmt).all())
 
     async def get_references(
         self,
