@@ -382,9 +382,8 @@ class IndexCoordinator:
         self._state = FileStateService(self.db)
         self._reconciler = Reconciler(self.db, self.repo_root)
 
-        # Run reconciliation per SPEC §5.5 (on daemon start)
-        # This detects files changed since last run
-        self._reconciler.reconcile(paths=[])
+        # Skip reconciliation on load - reindex_full handles this if needed
+        # The old reconcile(paths=[]) was causing hangs on cross-filesystem mounts
 
         self._facts = None  # Created on demand in session context
 
