@@ -481,7 +481,9 @@ class RefactorOps:
         Returns:
             RefactorResult with preview. Call apply() to execute.
         """
-        from codeplane.index.models import ImportFact
+        from sqlmodel import or_, select
+
+        from codeplane.index.models import File, ImportFact
 
         refactor_id = str(uuid.uuid4())[:8]
         edits_by_file: dict[str, list[EditHunk]] = {}
@@ -496,65 +498,83 @@ class RefactorOps:
         from_module = self._path_to_module(from_path)
         to_module = self._path_to_module(to_path)
 
-        # Also handle directory moves (package moves)
-        from_dir = from_path.rstrip(".py")
-        to_dir = to_path.rstrip(".py")
+        # Build SQL filter patterns:
+        # - Exact match: source_literal == from_module
+        # - Prefix match: source_literal LIKE from_module.%
+        # - imported_name match for bare imports
+        from_module_prefix = f"{from_module}.%"
+        bare_name = from_module.split(".")[-1]  # e.g., "helper" from "src.utils.helper"
 
-        # Find all ImportFacts that reference this module
         with self._coordinator.db.session() as session:
-            from sqlmodel import select
+            # Push filtering to SQL - don't fetch all imports
+            # Note: source_literal is nullable, these comparisons handle NULL correctly
+            stmt = (
+                select(ImportFact, File.path)
+                .join(File, ImportFact.file_id == File.id)  # type: ignore[arg-type]
+                .where(
+                    or_(
+                        # Match source_literal exactly or as prefix
+                        ImportFact.source_literal == from_module,
+                        ImportFact.source_literal.like(from_module_prefix),  # type: ignore[union-attr]
+                        # Match imported_name for bare "import foo" statements
+                        ImportFact.imported_name == from_module,
+                        ImportFact.imported_name == bare_name,
+                    )
+                )
+            )
+            results = session.exec(stmt).all()
 
-            # Match imports by source_literal or imported_name
-            imports = session.exec(select(ImportFact)).all()
-
-            for imp in imports:
-                # Check if import references our module
-                matches = False
+            for imp, file_path in results:
+                # Determine what to replace
                 old_value = ""
                 new_value = ""
 
-                # Check source_literal (e.g., "from src.utils import helper")
                 if imp.source_literal:
-                    if imp.source_literal == from_module or imp.source_literal.startswith(
-                        from_module + "."
-                    ):
-                        matches = True
+                    if imp.source_literal == from_module:
+                        old_value = from_module
+                        new_value = to_module
+                    elif imp.source_literal.startswith(from_module + "."):
                         old_value = imp.source_literal
                         new_value = imp.source_literal.replace(from_module, to_module, 1)
-                    # Also check for relative imports or bare names
-                    elif imp.source_literal == from_dir or imp.source_literal.startswith(
-                        from_dir + "/"
-                    ):
-                        matches = True
-                        old_value = imp.source_literal
-                        new_value = imp.source_literal.replace(from_dir, to_dir, 1)
 
-                if matches and old_value:
-                    file_path = await self._get_file_path(imp.file_id)
-                    if file_path:
-                        # Get actual line from file to find import statement
-                        full_path = self._repo_root / file_path
-                        if full_path.exists():
-                            try:
-                                content = full_path.read_text(encoding="utf-8")
-                                lines = content.splitlines()
-                                # Find the line containing this import
-                                for i, line in enumerate(lines, 1):
-                                    if old_value in line:
-                                        loc = (file_path, i)
-                                        if loc not in seen_locations:
-                                            seen_locations.add(loc)
-                                            edits_by_file.setdefault(file_path, []).append(
-                                                EditHunk(
-                                                    old=old_value,
-                                                    new=new_value,
-                                                    line=i,
-                                                    certainty="high",
-                                                )
+                # If source_literal didn't match, check imported_name
+                if not old_value:
+                    if imp.imported_name == from_module:
+                        old_value = from_module
+                        new_value = to_module
+                    elif imp.imported_name == bare_name:
+                        # For "import helper" -> need to update if it refers to our module
+                        # This is lower certainty since we can't be sure
+                        old_value = bare_name
+                        new_value = to_module.split(".")[-1]  # new bare name
+
+                if old_value:
+                    # Read file to find exact line
+                    full_path = self._repo_root / file_path
+                    if full_path.exists():
+                        try:
+                            content = full_path.read_text(encoding="utf-8")
+                            lines = content.splitlines()
+                            for i, line in enumerate(lines, 1):
+                                if old_value in line and "import" in line.lower():
+                                    loc = (file_path, i)
+                                    if loc not in seen_locations:
+                                        seen_locations.add(loc)
+                                        # Certainty based on match type
+                                        cert: Literal["high", "medium", "low"] = (
+                                            "high" if imp.source_literal else "medium"
+                                        )
+                                        edits_by_file.setdefault(file_path, []).append(
+                                            EditHunk(
+                                                old=old_value,
+                                                new=new_value,
+                                                line=i,
+                                                certainty=cert,
                                             )
-                                        break
-                            except (OSError, UnicodeDecodeError):
-                                pass
+                                        )
+                                    break
+                        except (OSError, UnicodeDecodeError):
+                            pass
 
         # Lexical fallback: search for module path strings in all files
         await self._add_move_lexical_fallback(
@@ -723,57 +743,62 @@ class RefactorOps:
         edits_by_file: dict[str, list[EditHunk]],
     ) -> None:
         """Find all imports referencing a file/module."""
-        from codeplane.index.models import ImportFact
+        from sqlmodel import or_, select
+
+        from codeplane.index.models import File, ImportFact
 
         # Normalize and convert to module path
         file_path = file_path.lstrip("./").rstrip("/")
         module_path = self._path_to_module(file_path)
+        module_prefix = f"{module_path}.%"
+        bare_name = module_path.split(".")[-1]
 
         with self._coordinator.db.session() as session:
-            from sqlmodel import select
+            # Push filtering to SQL
+            # Note: source_literal is nullable, these comparisons handle NULL correctly
+            stmt = (
+                select(ImportFact, File.path)
+                .join(File, ImportFact.file_id == File.id)  # type: ignore[arg-type]
+                .where(
+                    or_(
+                        ImportFact.source_literal == module_path,
+                        ImportFact.source_literal.like(module_prefix),  # type: ignore[union-attr]
+                        ImportFact.imported_name == module_path,
+                        ImportFact.imported_name == bare_name,
+                    )
+                )
+            )
+            results = session.exec(stmt).all()
 
-            imports = session.exec(select(ImportFact)).all()
-
-            for imp in imports:
-                matches = False
-
-                # Check source_literal
-                if imp.source_literal and (
-                    imp.source_literal == module_path
-                    or imp.source_literal.startswith(module_path + ".")
-                ):
-                    matches = True
-
-                # Check imported_name for direct imports
-                if imp.imported_name == module_path.split(".")[-1]:
-                    matches = True
-
-                if matches:
-                    ref_file = await self._get_file_path(imp.file_id)
-                    if ref_file:
-                        full_path = self._repo_root / ref_file
-                        if full_path.exists():
-                            try:
-                                content = full_path.read_text(encoding="utf-8")
-                                lines = content.splitlines()
-                                # Find the import line
-                                search_term = imp.source_literal or imp.imported_name
-                                for i, line in enumerate(lines, 1):
-                                    if search_term in line and ("import" in line.lower()):
-                                        loc = (ref_file, i)
-                                        if loc not in seen_locations:
-                                            seen_locations.add(loc)
-                                            edits_by_file.setdefault(ref_file, []).append(
-                                                EditHunk(
-                                                    old=line.strip(),
-                                                    new="",  # Deletion marker
-                                                    line=i,
-                                                    certainty="high",
-                                                )
-                                            )
-                                        break
-                            except (OSError, UnicodeDecodeError):
-                                pass
+            for imp, ref_file in results:
+                full_path = self._repo_root / ref_file
+                if full_path.exists():
+                    try:
+                        content = full_path.read_text(encoding="utf-8")
+                        lines = content.splitlines()
+                        # Find the import line
+                        search_term = imp.source_literal or imp.imported_name
+                        for i, line in enumerate(lines, 1):
+                            if search_term in line and "import" in line.lower():
+                                loc = (ref_file, i)
+                                if loc not in seen_locations:
+                                    seen_locations.add(loc)
+                                    # source_literal match = high certainty
+                                    # imported_name only = medium certainty
+                                    cert: Literal["high", "medium", "low"] = (
+                                        "high" if imp.source_literal else "medium"
+                                    )
+                                    edits_by_file.setdefault(ref_file, []).append(
+                                        EditHunk(
+                                            old=line.strip(),
+                                            new="",  # Deletion marker
+                                            line=i,
+                                            certainty=cert,
+                                        )
+                                    )
+                                break
+                    except (OSError, UnicodeDecodeError):
+                        pass
 
     async def _find_symbol_references(
         self,
