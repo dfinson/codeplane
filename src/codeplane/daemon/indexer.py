@@ -152,13 +152,20 @@ class BackgroundIndexer:
             self._last_error = None
 
             # Build descriptive message showing what changed
+
             parts: list[str] = []
             if stats.files_added:
-                parts.append(f"{stats.files_added} added")
+                parts.append(
+                    f"{stats.files_added} file{'s' if stats.files_added != 1 else ''} added"
+                )
             if stats.files_updated:
-                parts.append(f"{stats.files_updated} updated")
+                parts.append(
+                    f"{stats.files_updated} file{'s' if stats.files_updated != 1 else ''} updated"
+                )
             if stats.files_removed:
-                parts.append(f"{stats.files_removed} removed")
+                parts.append(
+                    f"{stats.files_removed} file{'s' if stats.files_removed != 1 else ''} removed"
+                )
             summary = ", ".join(parts) if parts else "no changes"
             console.print(f"  [green]✓[/green] {summary} in {stats.duration_seconds:.2f}s")
 
