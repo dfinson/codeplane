@@ -1,0 +1,307 @@
+"""Structured error system for MCP tools.
+
+Provides typed exceptions with error codes and remediation hints.
+Enables agents to understand failures and self-correct.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
+
+
+class ErrorCode(str, Enum):
+    """Machine-readable error codes for MCP tool failures."""
+
+    # Validation errors - agent should fix input
+    CONTENT_NOT_FOUND = "CONTENT_NOT_FOUND"
+    MULTIPLE_MATCHES = "MULTIPLE_MATCHES"
+    ANCHOR_NOT_FOUND = "ANCHOR_NOT_FOUND"
+    ANCHOR_AMBIGUOUS = "ANCHOR_AMBIGUOUS"
+    INVALID_RANGE = "INVALID_RANGE"
+    INVALID_MODE = "INVALID_MODE"
+
+    # State errors - agent should re-read file
+    FILE_MODIFIED = "FILE_MODIFIED"
+    HASH_MISMATCH = "HASH_MISMATCH"
+    DRY_RUN_EXPIRED = "DRY_RUN_EXPIRED"
+    DRY_RUN_REQUIRED = "DRY_RUN_REQUIRED"
+
+    # File errors
+    FILE_NOT_FOUND = "FILE_NOT_FOUND"
+    FILE_EXISTS = "FILE_EXISTS"
+    PERMISSION_DENIED = "PERMISSION_DENIED"
+    ENCODING_ERROR = "ENCODING_ERROR"
+
+    # Git errors
+    REF_NOT_FOUND = "REF_NOT_FOUND"
+    MERGE_CONFLICT = "MERGE_CONFLICT"
+    DIRTY_WORKING_TREE = "DIRTY_WORKING_TREE"
+
+    # System errors
+    IO_ERROR = "IO_ERROR"
+    INTERNAL_ERROR = "INTERNAL_ERROR"
+
+
+@dataclass
+class ErrorResponse:
+    """Structured error response for MCP tools."""
+
+    code: ErrorCode
+    message: str
+    remediation: str
+    path: str | None = None
+    context: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "code": self.code.value,
+            "message": self.message,
+            "remediation": self.remediation,
+            "path": self.path,
+            "context": self.context,
+        }
+
+
+class MCPError(Exception):
+    """Base exception for MCP tool errors with structured response."""
+
+    def __init__(
+        self,
+        code: ErrorCode,
+        message: str,
+        remediation: str,
+        path: str | None = None,
+        **context: Any,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.remediation = remediation
+        self.path = path
+        self.context = context
+
+    def to_response(self) -> ErrorResponse:
+        """Convert to ErrorResponse."""
+        return ErrorResponse(
+            code=self.code,
+            message=self.message,
+            remediation=self.remediation,
+            path=self.path,
+            context=self.context,
+        )
+
+
+# =============================================================================
+# Specific Error Classes
+# =============================================================================
+
+
+class ContentNotFoundError(MCPError):
+    """Raised when old_content is not found in file."""
+
+    def __init__(self, path: str, snippet: str | None = None) -> None:
+        super().__init__(
+            code=ErrorCode.CONTENT_NOT_FOUND,
+            message=f"Content not found in {path}",
+            remediation="Re-read the file to get current content. Ensure exact whitespace match.",
+            path=path,
+            snippet_preview=snippet[:100] if snippet else None,
+        )
+
+
+class MultipleMatchesError(MCPError):
+    """Raised when old_content matches multiple locations."""
+
+    def __init__(self, path: str, count: int, lines: list[int]) -> None:
+        super().__init__(
+            code=ErrorCode.MULTIPLE_MATCHES,
+            message=f"Content found {count} times in {path}, expected 1",
+            remediation="Add more context lines to old_content to make it unique, or set expected_occurrences.",
+            path=path,
+            match_count=count,
+            match_lines=lines[:10],  # Limit to first 10
+        )
+
+
+class InvalidRangeError(MCPError):
+    """Raised when line range is invalid."""
+
+    def __init__(self, path: str, start: int, end: int, line_count: int) -> None:
+        super().__init__(
+            code=ErrorCode.INVALID_RANGE,
+            message=f"Invalid range [{start}, {end}] for file with {line_count} lines",
+            remediation="Ensure start <= end and both are within file bounds (1 to line_count).",
+            path=path,
+            start=start,
+            end=end,
+            line_count=line_count,
+        )
+
+
+class HashMismatchError(MCPError):
+    """Raised when content hash doesn't match expected."""
+
+    def __init__(self, path: str, expected: str, actual: str) -> None:
+        super().__init__(
+            code=ErrorCode.HASH_MISMATCH,
+            message=f"File {path} was modified since dry run",
+            remediation="Re-read the file and re-run with dry_run=True to get new hash.",
+            path=path,
+            expected_hash=expected,
+            actual_hash=actual,
+        )
+
+
+class DryRunRequiredError(MCPError):
+    """Raised when line_range mode is used without prior dry_run."""
+
+    def __init__(self, path: str) -> None:
+        super().__init__(
+            code=ErrorCode.DRY_RUN_REQUIRED,
+            message=f"Line-range edit on {path} requires prior dry_run",
+            remediation="Call mutate with dry_run=True first to get content_hash, then call again with the hash.",
+            path=path,
+        )
+
+
+class DryRunExpiredError(MCPError):
+    """Raised when dry_run_id is too old."""
+
+    def __init__(self, dry_run_id: str, age_seconds: float) -> None:
+        super().__init__(
+            code=ErrorCode.DRY_RUN_EXPIRED,
+            message=f"Dry run {dry_run_id} expired ({age_seconds:.1f}s old, max 60s)",
+            remediation="Re-run with dry_run=True to get a fresh validation token.",
+            dry_run_id=dry_run_id,
+            age_seconds=age_seconds,
+        )
+
+
+# =============================================================================
+# Error Catalog for Introspection
+# =============================================================================
+
+
+@dataclass
+class ErrorDocumentation:
+    """Documentation for an error code."""
+
+    code: ErrorCode
+    category: str  # validation, state, file, git, system
+    description: str
+    causes: list[str]
+    remediation: list[str]
+
+
+ERROR_CATALOG: dict[str, ErrorDocumentation] = {
+    ErrorCode.CONTENT_NOT_FOUND.value: ErrorDocumentation(
+        code=ErrorCode.CONTENT_NOT_FOUND,
+        category="validation",
+        description="The specified old_content was not found in the file.",
+        causes=[
+            "File was modified since you last read it",
+            "Whitespace mismatch (trailing spaces, tabs vs spaces)",
+            "Line ending mismatch (CRLF vs LF)",
+            "Content exists but with different indentation",
+        ],
+        remediation=[
+            "Re-read the file with read_files to get current content",
+            "Copy exact content including all whitespace",
+            "Check for invisible characters or encoding issues",
+        ],
+    ),
+    ErrorCode.MULTIPLE_MATCHES.value: ErrorDocumentation(
+        code=ErrorCode.MULTIPLE_MATCHES,
+        category="validation",
+        description="The old_content matched multiple locations in the file.",
+        causes=[
+            "Content is not unique (common pattern like 'return None')",
+            "Insufficient context lines provided",
+        ],
+        remediation=[
+            "Add more surrounding lines to old_content to make it unique",
+            "Set expected_occurrences if you want to replace all matches",
+            "Use line numbers from the error response to identify which match you want",
+        ],
+    ),
+    ErrorCode.HASH_MISMATCH.value: ErrorDocumentation(
+        code=ErrorCode.HASH_MISMATCH,
+        category="state",
+        description="The file was modified between dry_run and apply.",
+        causes=[
+            "Another process modified the file",
+            "Auto-formatter ran on save",
+            "Too much time elapsed between dry_run and apply",
+        ],
+        remediation=[
+            "Re-read the file to see current state",
+            "Re-run with dry_run=True to get fresh content_hash",
+            "Apply changes more quickly after dry_run",
+        ],
+    ),
+    ErrorCode.DRY_RUN_REQUIRED.value: ErrorDocumentation(
+        code=ErrorCode.DRY_RUN_REQUIRED,
+        category="validation",
+        description="Line-range edits require a prior dry_run for safety.",
+        causes=[
+            "Attempted line_range edit without dry_run",
+            "Missing content_hash parameter",
+        ],
+        remediation=[
+            "First call mutate with dry_run=True to preview and get content_hash",
+            "Then call again with the content_hash to apply",
+            "Or use 'exact' mode which doesn't require dry_run",
+        ],
+    ),
+    ErrorCode.INVALID_RANGE.value: ErrorDocumentation(
+        code=ErrorCode.INVALID_RANGE,
+        category="validation",
+        description="The specified line range is invalid.",
+        causes=[
+            "start > end",
+            "Line numbers exceed file length",
+            "Line numbers are 0 or negative",
+        ],
+        remediation=[
+            "Line numbers are 1-indexed",
+            "Use read_files to check file length first",
+            "Ensure start <= end",
+        ],
+    ),
+    ErrorCode.FILE_NOT_FOUND.value: ErrorDocumentation(
+        code=ErrorCode.FILE_NOT_FOUND,
+        category="file",
+        description="The specified file does not exist.",
+        causes=[
+            "Typo in file path",
+            "File was deleted or moved",
+            "Path is absolute instead of relative to repo root",
+        ],
+        remediation=[
+            "Use map_repo to see available files",
+            "Ensure path is relative to repository root",
+            "Check for typos in directory names",
+        ],
+    ),
+    ErrorCode.FILE_EXISTS.value: ErrorDocumentation(
+        code=ErrorCode.FILE_EXISTS,
+        category="file",
+        description="Cannot create file that already exists.",
+        causes=[
+            "File already exists at target path",
+            "Trying to create instead of update",
+        ],
+        remediation=[
+            "Use action='update' instead of 'create' for existing files",
+            "Choose a different path for new file",
+        ],
+    ),
+}
+
+
+def get_error_documentation(code: str) -> ErrorDocumentation | None:
+    """Get documentation for an error code."""
+    return ERROR_CATALOG.get(code)
