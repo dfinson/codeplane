@@ -95,7 +95,7 @@ async def refactor_rename(ctx: AppContext, params: RefactorRenameParams) -> dict
 #         params.target,
 #         include_comments=params.include_comments,
 #     )
-#
+    result = await ctx.refactor_ops.apply(params.refactor_id, ctx.mutation_ops)
 #     return _serialize_refactor_result(result)
 
 
