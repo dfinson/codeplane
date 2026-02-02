@@ -560,6 +560,8 @@ class StructuralIndexer:
         self, file_path: str, content_hash: str | None, line_count: int, _context_id: int
     ) -> int:
         """Ensure file exists in database and return its ID."""
+        import time
+
         with self.db.session() as session:
             from sqlmodel import select
 
@@ -574,6 +576,7 @@ class StructuralIndexer:
                 content_hash=content_hash,
                 line_count=line_count,
                 language_family=self._detect_family(file_path),
+                indexed_at=time.time(),  # Mark as indexed
             )
             session.add(file)
             session.commit()
