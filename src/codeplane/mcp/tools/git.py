@@ -355,6 +355,13 @@ async def git_stage(ctx: AppContext, params: GitStageParams) -> dict[str, Any]:
     return {"staged": params.paths}
 
 
+@registry.register("git_stage_all", "Stage all changed files", EmptyParams)
+async def git_stage_all(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
+    """Stage all changed files."""
+    staged = ctx.git_ops.stage_all()
+    return {"staged": staged}
+
+
 @registry.register("git_unstage", "Unstage files", GitUnstageParams)
 async def git_unstage(ctx: AppContext, params: GitUnstageParams) -> dict[str, Any]:
     """Unstage files."""

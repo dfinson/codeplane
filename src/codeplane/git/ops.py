@@ -286,6 +286,21 @@ class GitOps:
                 index.remove(p)
         index.write()
 
+    def stage_all(self) -> list[str]:
+        """Stage all changed files. Returns list of staged paths."""
+        index = self._access.index
+        status = self._access.status()
+        staged: list[str] = []
+        for path, flags in status.items():
+            if flags & (STATUS_WT_NEW | STATUS_WT_MODIFIED):
+                index.add(path)
+                staged.append(path)
+            elif flags & STATUS_WT_DELETED:
+                index.remove(path)
+                staged.append(path)
+        index.write()
+        return staged
+
     def unstage(self, paths: Sequence[str | Path]) -> None:
         """Unstage files (keeps working tree changes)."""
         if self._access.is_unborn:
