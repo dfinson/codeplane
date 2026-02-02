@@ -15,8 +15,6 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from tree_sitter import Node, Tree
 
-    from codeplane.index.models import LanguageFamily
-
 
 # =============================================================================
 # Extraction Result Dataclasses
@@ -115,10 +113,12 @@ class ReceiverShapeData:
     @property
     def observed_members_json(self) -> str:
         """Serialize observed members to JSON."""
-        return json.dumps({
-            "fields": sorted(self.observed_fields),
-            "methods": sorted(self.observed_methods),
-        })
+        return json.dumps(
+            {
+                "fields": sorted(self.observed_fields),
+                "methods": sorted(self.observed_methods),
+            }
+        )
 
 
 @dataclass
@@ -236,18 +236,18 @@ class BaseTypeExtractor(ABC):
 
     def extract_type_annotations(
         self,
-        tree: Tree,
-        file_path: str,
-        scopes: list[dict[str, Any]],
+        tree: Tree,  # noqa: ARG002
+        file_path: str,  # noqa: ARG002
+        scopes: list[dict[str, Any]],  # noqa: ARG002
     ) -> list[TypeAnnotationData]:
         """Default: no type annotations."""
         return []
 
     def extract_type_members(
         self,
-        tree: Tree,
-        file_path: str,
-        defs: list[dict[str, Any]],
+        tree: Tree,  # noqa: ARG002
+        file_path: str,  # noqa: ARG002
+        defs: list[dict[str, Any]],  # noqa: ARG002
     ) -> list[TypeMemberData]:
         """Default: no type members."""
         return []
@@ -255,18 +255,18 @@ class BaseTypeExtractor(ABC):
     def extract_member_accesses(
         self,
         tree: Tree,
-        file_path: str,
+        file_path: str,  # noqa: ARG002
         scopes: list[dict[str, Any]],
         type_annotations: list[TypeAnnotationData],
     ) -> list[MemberAccessData]:
         """Extract member accesses - implemented in base class."""
-        return self._extract_dot_accesses(tree, file_path, scopes, type_annotations)
+        return self._extract_dot_accesses(tree, scopes, type_annotations)
 
     def extract_interface_impls(
         self,
-        tree: Tree,
-        file_path: str,
-        defs: list[dict[str, Any]],
+        tree: Tree,  # noqa: ARG002
+        file_path: str,  # noqa: ARG002
+        defs: list[dict[str, Any]],  # noqa: ARG002
     ) -> list[InterfaceImplData]:
         """Default: no interface implementations."""
         return []
@@ -274,7 +274,6 @@ class BaseTypeExtractor(ABC):
     def _extract_dot_accesses(
         self,
         tree: Tree,
-        file_path: str,
         scopes: list[dict[str, Any]],
         type_annotations: list[TypeAnnotationData],
     ) -> list[MemberAccessData]:
@@ -321,10 +320,12 @@ class BaseTypeExtractor(ABC):
             # Get the member name (rightmost child that's an identifier)
             member_node = None
             for child in current.children:
-                if child.type in ("identifier", "property_identifier", "field_identifier"):
-                    if child != current.children[0]:  # Not the object
-                        member_node = child
-                        break
+                if (
+                    child.type in ("identifier", "property_identifier", "field_identifier")
+                    and child != current.children[0]
+                ):  # Not the object
+                    member_node = child
+                    break
             if member_node:
                 parts.insert(0, member_node.text.decode() if member_node.text else "")
 
@@ -372,9 +373,7 @@ class BaseTypeExtractor(ABC):
             end_col=node.end_point[1],
         )
 
-    def _get_scope_id_for_node(
-        self, node: Node, scopes: list[dict[str, Any]]
-    ) -> int | None:
+    def _get_scope_id_for_node(self, node: Node, scopes: list[dict[str, Any]]) -> int | None:
         """Find the scope_id for a node based on line/column position."""
         line = node.start_point[0] + 1
         col = node.start_point[1]
@@ -490,10 +489,14 @@ def get_registry() -> ExtractorRegistry:
 def _register_builtin_extractors(registry: ExtractorRegistry) -> None:
     """Register all built-in extractors."""
     # Import here to avoid circular imports
-    from codeplane.index._internal.extraction.python import PythonExtractor
+    from codeplane.index._internal.extraction.languages import ALL_LANGUAGE_CONFIGS
+    from codeplane.index._internal.extraction.query_based import QueryBasedExtractor
 
-    registry.register(PythonExtractor())
-
-    # TODO: Add more extractors as implemented
-    # from codeplane.index._internal.extraction.typescript import TypeScriptExtractor
-    # registry.register(TypeScriptExtractor())
+    # Register query-based extractors for all configured languages
+    for config in set(ALL_LANGUAGE_CONFIGS.values()):
+        try:
+            extractor = QueryBasedExtractor(config)
+            registry.register(extractor)
+        except ValueError:
+            # Grammar not available - skip this language
+            pass
