@@ -29,7 +29,8 @@ class EditHunk:
     old: str
     new: str
     line: int
-    certainty: Literal["high", "medium", "low"]  # From index certainty
+    certainty: Literal["high", "medium", "low"]
+    snippet: str | None = None  # Context line for agent verification
 
 
 @dataclass
@@ -49,7 +50,10 @@ class RefactorPreview:
     contexts_used: list[str] = field(default_factory=list)
     high_certainty_count: int = 0
     medium_certainty_count: int = 0  # Comment/docstring occurrences
-    low_certainty_count: int = 0  # Agent should review these
+    low_certainty_count: int = 0
+    # Actionable guidance for agents
+    verification_required: bool = False
+    verification_guidance: str | None = None
 
 
 @dataclass
@@ -260,12 +264,33 @@ class RefactorOps:
         medium_count = sum(1 for fe in file_edits for h in fe.hunks if h.certainty == "medium")
         low_count = sum(1 for fe in file_edits for h in fe.hunks if h.certainty == "low")
 
+        # Build verification guidance if there are low-certainty matches
+        verification_required = low_count > 0
+        verification_guidance = None
+        if verification_required:
+            low_hunks = [
+                f"  - {fe.path}:{h.line}: {h.snippet or '(no snippet)'}"
+                for fe in file_edits
+                for h in fe.hunks
+                if h.certainty == "low"
+            ]
+            verification_guidance = (
+                f"Found {low_count} low-certainty matches that may be false positives.\n"
+                f"BEFORE applying, verify these are actual references to '{symbol}' "
+                f"(not the English word or a different symbol):\n"
+                + "\n".join(low_hunks[:10])  # Show first 10
+                + (f"\n  ... and {low_count - 10} more" if low_count > 10 else "")
+                + "\n\nUse read_files to inspect these locations before calling refactor_apply."
+            )
+
         preview = RefactorPreview(
             files_affected=len(file_edits),
             edits=file_edits,
             high_certainty_count=high_count,
             medium_certainty_count=medium_count,
             low_certainty_count=low_count,
+            verification_required=verification_required,
+            verification_guidance=verification_guidance,
         )
 
         self._pending[refactor_id] = preview
@@ -353,19 +378,23 @@ class RefactorOps:
 
             # Search for whole-word matches
             pattern = rf"\b{re.escape(symbol)}\b"
-            for i, line in enumerate(content.splitlines(), 1):
+            lines = content.splitlines()
+            for i, line in enumerate(lines, 1):
                 loc = (file_record.path, i)
                 if loc in seen_locations:
                     continue
 
                 if re.search(pattern, line):
                     seen_locations.add(loc)
+                    # Capture snippet for agent verification (trimmed)
+                    snippet = line.strip()[:80]
                     edits_by_file.setdefault(file_record.path, []).append(
                         EditHunk(
                             old=symbol,
                             new=new_name,
                             line=i,
-                            certainty="low",  # Lexical match only
+                            certainty="low",
+                            snippet=snippet,
                         )
                     )
 
