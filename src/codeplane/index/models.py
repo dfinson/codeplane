@@ -15,6 +15,7 @@ import json
 from enum import Enum
 from typing import TYPE_CHECKING
 
+from sqlalchemy import Column, ForeignKey, Integer
 from sqlmodel import Field, Relationship, SQLModel
 
 if TYPE_CHECKING:
@@ -371,7 +372,9 @@ class DefFact(SQLModel, table=True):
     __tablename__ = "def_facts"
 
     def_uid: str = Field(primary_key=True)  # Stable identity (see §7.4)
-    file_id: int = Field(foreign_key="files.id", index=True)
+    file_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("files.id", ondelete="CASCADE"), index=True)
+    )
     unit_id: int = Field(foreign_key="contexts.id", index=True)
     kind: str = Field(index=True)  # function, class, method, variable, etc.
     name: str = Field(index=True)  # Simple name
@@ -395,7 +398,9 @@ class RefFact(SQLModel, table=True):
     __tablename__ = "ref_facts"
 
     ref_id: int | None = Field(default=None, primary_key=True)
-    file_id: int = Field(foreign_key="files.id", index=True)
+    file_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("files.id", ondelete="CASCADE"), index=True)
+    )
     unit_id: int = Field(foreign_key="contexts.id", index=True)
     scope_id: int | None = Field(default=None, foreign_key="scope_facts.scope_id", index=True)
     token_text: str = Field(index=True)  # Exact text slice from source
@@ -424,7 +429,9 @@ class ScopeFact(SQLModel, table=True):
     __tablename__ = "scope_facts"
 
     scope_id: int | None = Field(default=None, primary_key=True)
-    file_id: int = Field(foreign_key="files.id", index=True)
+    file_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("files.id", ondelete="CASCADE"), index=True)
+    )
     unit_id: int = Field(foreign_key="contexts.id", index=True)
     parent_scope_id: int | None = Field(default=None, index=True)  # NULL for file scope
     kind: str = Field(index=True)  # file, class, function, block, etc.
@@ -445,7 +452,9 @@ class LocalBindFact(SQLModel, table=True):
     __tablename__ = "local_bind_facts"
 
     bind_id: int | None = Field(default=None, primary_key=True)
-    file_id: int = Field(foreign_key="files.id", index=True)
+    file_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("files.id", ondelete="CASCADE"), index=True)
+    )
     unit_id: int = Field(foreign_key="contexts.id", index=True)
     scope_id: int | None = Field(default=None, foreign_key="scope_facts.scope_id", index=True)
     name: str = Field(index=True)  # Bound identifier name
@@ -467,7 +476,9 @@ class ImportFact(SQLModel, table=True):
     __tablename__ = "import_facts"
 
     import_uid: str = Field(primary_key=True)
-    file_id: int = Field(foreign_key="files.id", index=True)
+    file_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("files.id", ondelete="CASCADE"), index=True)
+    )
     unit_id: int = Field(foreign_key="contexts.id", index=True)
     scope_id: int | None = Field(default=None, foreign_key="scope_facts.scope_id", index=True)
     imported_name: str = Field(index=True)  # Name being imported
@@ -564,7 +575,9 @@ class DynamicAccessSite(SQLModel, table=True):
     __tablename__ = "dynamic_access_sites"
 
     site_id: int | None = Field(default=None, primary_key=True)
-    file_id: int = Field(foreign_key="files.id", index=True)
+    file_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("files.id", ondelete="CASCADE"), index=True)
+    )
     unit_id: int = Field(foreign_key="contexts.id", index=True)
     start_line: int
     start_col: int

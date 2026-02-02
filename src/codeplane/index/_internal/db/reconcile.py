@@ -190,7 +190,7 @@ class Reconciler:
                     update_columns=["content_hash", "indexed_at"],
                 )
 
-            # Remove deleted files
+            # Remove deleted files (CASCADE deletes dependent facts automatically)
             if removed_paths:
                 placeholders = ", ".join(f":p{i}" for i in range(len(removed_paths)))
                 params = {f"p{i}": p for i, p in enumerate(removed_paths)}
