@@ -24,7 +24,8 @@ class RangeParam(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     path: str | None = Field(
-        None, description="File path this range applies to (optional if single file)"
+        None,
+        description="File path this range applies to. Required when reading multiple files with different ranges.",
     )
     start: int = Field(..., gt=0, description="Start line (1-indexed, inclusive)")
     end: int = Field(..., gt=0, description="End line (1-indexed, inclusive)")
@@ -42,7 +43,11 @@ class ReadFilesParams(BaseParams):
     paths: list[str] = Field(..., description="File paths relative to repo root")
     ranges: list[RangeParam] | None = Field(
         None,
-        description="Optional line ranges. Use 'start' and 'end' (1-indexed, inclusive).",
+        description=(
+            "Optional line ranges per file. Each range can specify a 'path' to apply "
+            "different ranges to different files in one call. Example: "
+            "[{path: 'a.py', start: 1, end: 50}, {path: 'b.py', start: 100, end: 150}]"
+        ),
     )
     include_metadata: bool = Field(False, description="Include file stats (size, mtime)")
 
