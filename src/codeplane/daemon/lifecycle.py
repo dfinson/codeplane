@@ -70,7 +70,11 @@ class ServerController:
         # Start file watcher
         await self.watcher.start()
 
+        base_url = f"http://{self.config.host}:{self.config.port}"
         logger.info("server started")
+        logger.info("endpoint", name="mcp", url=f"{base_url}/mcp/sse")
+        logger.info("endpoint", name="health", url=f"{base_url}/health")
+        logger.info("endpoint", name="status", url=f"{base_url}/status")
 
     async def stop(self) -> None:
         """Stop all daemon components gracefully."""

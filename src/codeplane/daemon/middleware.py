@@ -2,29 +2,34 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 REPO_HEADER = "X-CodePlane-Repo"
 
-# Type alias for the call_next function
-CallNext = Callable[[Request], Awaitable[Response]]
 
+class RepoHeaderMiddleware:
+    """Inject X-CodePlane-Repo header into all responses.
 
-class RepoHeaderMiddleware(BaseHTTPMiddleware):
-    """Inject X-CodePlane-Repo header into all responses."""
+    Uses pure ASGI middleware to avoid breaking streaming responses (SSE).
+    """
 
-    def __init__(self, app: Any, repo_root: Path) -> None:
-        super().__init__(app)
+    def __init__(self, app: ASGIApp, repo_root: Path) -> None:
+        self.app = app
         self.repo_root = repo_root.resolve()
 
-    async def dispatch(self, request: Request, call_next: CallNext) -> Response:
-        """Dispatch request and inject repo header into response."""
-        response = await call_next(request)
-        response.headers[REPO_HEADER] = str(self.repo_root)
-        return response
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> Any:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers.append((REPO_HEADER.lower().encode(), str(self.repo_root).encode()))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)

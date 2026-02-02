@@ -38,7 +38,7 @@ def create_app(
         coordinator=coordinator,
     )
     mcp = create_mcp_server(context)
-    mcp_app = mcp.http_app()
+    mcp_app = mcp.http_app(transport="sse")
 
     # Mount MCP at /mcp
     routes.append(Mount("/mcp", app=mcp_app))
