@@ -3,10 +3,6 @@
 Atomic file edits with structured delta response.
 Per SPEC.md §23.7 mutate tool specification.
 
-Supports multiple edit modes:
-- exact: Content-addressed replacement (safest, default)
-- patch: Line-level patches (legacy, deprecated)
-
 Triggers reindex after mutation via callback.
 """
 
@@ -16,28 +12,11 @@ import hashlib
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     pass
-
-
-class EditMode(str, Enum):
-    """Edit mode for mutations."""
-
-    EXACT = "exact"  # Content-addressed replacement (default, safe)
-    PATCH = "patch"  # Line-level patches (legacy, dangerous)
-
-
-@dataclass
-class Patch:
-    """Line-level patch within a file (legacy mode)."""
-
-    start: int  # Start line (1-indexed)
-    end: int  # End line (1-indexed, inclusive)
-    replacement: str
 
 
 @dataclass
@@ -55,7 +34,6 @@ class Edit:
 
     path: str
     action: Literal["create", "update", "delete"]
-    mode: EditMode = EditMode.EXACT
 
     # For create/update with full content
     content: str | None = None
@@ -64,9 +42,6 @@ class Edit:
     old_content: str | None = None
     new_content: str | None = None
     expected_occurrences: int = 1
-
-    # For patch mode (legacy, update only)
-    patches: list[Patch] | None = None
 
 
 @dataclass
@@ -220,8 +195,8 @@ class MutationOps:
                 old_file_content = full_path.read_text()
                 old_hash = _hash_content(old_file_content)
 
-                # Determine new content based on mode
-                if edit.mode == EditMode.EXACT and edit.old_content is not None:
+                # Determine new content
+                if edit.old_content is not None:
                     new_file_content = self._apply_exact_edit(
                         old_file_content,
                         edit.old_content,
@@ -236,8 +211,6 @@ class MutationOps:
                         )
                 elif edit.content is not None:
                     new_file_content = edit.content
-                elif edit.patches:
-                    new_file_content = _apply_patches(old_file_content, edit.patches)
                 else:
                     new_file_content = old_file_content
 
@@ -324,24 +297,4 @@ class MutationOps:
 def _hash_content(content: str) -> str:
     """Hash content for delta tracking."""
     return hashlib.sha256(content.encode()).hexdigest()[:12]
-
-
-def _apply_patches(content: str, patches: list[Patch]) -> str:
-    """Apply line-level patches to content (legacy mode)."""
-    lines = content.splitlines(keepends=True)
-
-    # Sort patches by start line descending to apply from bottom up
-    sorted_patches = sorted(patches, key=lambda p: p.start, reverse=True)
-
-    for patch in sorted_patches:
-        start_idx = patch.start - 1  # Convert to 0-indexed
-        end_idx = patch.end  # End is inclusive in spec
-
-        replacement_lines = patch.replacement.splitlines(keepends=True)
-        if patch.replacement and not patch.replacement.endswith("\n"):
-            replacement_lines[-1] += "\n"
-
-        lines[start_idx:end_idx] = replacement_lines
-
-    return "".join(lines)
 

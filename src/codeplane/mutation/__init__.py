@@ -5,7 +5,6 @@ from codeplane.mutation.ops import (
     MutationDelta,
     MutationOps,
     MutationResult,
-    Patch,
 )
 
-__all__ = ["MutationOps", "MutationResult", "MutationDelta", "Edit", "Patch"]
+__all__ = ["MutationOps", "MutationResult", "MutationDelta", "Edit"]

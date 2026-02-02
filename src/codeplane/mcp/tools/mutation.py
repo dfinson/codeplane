@@ -25,30 +25,10 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
-class RangeParam(BaseModel):
-    """Line range for patch mode."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    start: int = Field(..., gt=0, description="Start line (1-indexed)")
-    end: int = Field(..., gt=0, description="End line (1-indexed, inclusive)")
-
-
-class PatchParam(BaseModel):
-    """A line-level patch (legacy mode)."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    range: RangeParam
-    replacement: str
-
-
 class EditParam(BaseModel):
     """A single file edit.
 
-    Modes:
-    - exact (default): Use old_content/new_content for safe string replacement
-    - patch (legacy): Use patches for line-based edits (dangerous, may corrupt)
+    For updates, use old_content/new_content for safe content-addressed replacement.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -59,13 +39,10 @@ class EditParam(BaseModel):
     # Full content replacement (create, or update without exact matching)
     content: str | None = Field(None, description="Full file content for create or full replacement")
 
-    # Exact mode (recommended for update) - content-addressed replacement
+    # Exact mode (update only) - content-addressed replacement
     old_content: str | None = Field(None, description="Exact content to find and replace")
     new_content: str | None = Field(None, description="Content to replace old_content with")
     expected_occurrences: int = Field(1, ge=1, description="Expected number of old_content matches")
-
-    # Patch mode (legacy, dangerous)
-    patches: list[PatchParam] | None = Field(None, description="Line-level patches (legacy mode)")
 
 
 class MutateParams(BaseParams):
@@ -84,11 +61,7 @@ class MutateParams(BaseParams):
 async def mutate(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
     """Apply atomic file edits.
 
-    Supports two modes:
-    - exact (default): Safe content-addressed replacement using old_content/new_content
-    - patch (legacy): Line-based patches (dangerous, may corrupt files)
-
-    For exact mode, provide old_content and new_content. The tool will:
+    For updates, provide old_content and new_content. The tool will:
     1. Find old_content in the file (must match exactly)
     2. Verify it appears expected_occurrences times (default 1)
     3. Replace with new_content
@@ -97,35 +70,21 @@ async def mutate(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
     - CONTENT_NOT_FOUND: old_content doesn't exist in file
     - MULTIPLE_MATCHES: old_content found more times than expected
     """
-    from codeplane.mutation.ops import Edit, EditMode, Patch
+    from codeplane.mutation.ops import Edit
 
     ledger = get_ledger()
 
     # Convert params to ops types
     edits = []
     for e in params.edits:
-        # Determine mode based on what's provided
-        mode = EditMode.EXACT
-        if e.patches:
-            mode = EditMode.PATCH
-
-        patches = None
-        if e.patches:
-            patches = [
-                Patch(start=p.range.start, end=p.range.end, replacement=p.replacement)
-                for p in e.patches
-            ]
-
         edits.append(
             Edit(
                 path=e.path,
                 action=e.action,
-                mode=mode,
                 content=e.content,
                 old_content=e.old_content,
                 new_content=e.new_content,
                 expected_occurrences=e.expected_occurrences,
-                patches=patches,
             )
         )
 
