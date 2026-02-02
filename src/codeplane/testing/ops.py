@@ -129,23 +129,23 @@ class TestOps:
         self,
         targets: list[str] | None = None,
         *,
-        pattern: str | None = None,
-        tags: list[str] | None = None,
-        failed_only: bool = False,
-        parallelism: int | None = None,
-        timeout_sec: int | None = None,
-        fail_fast: bool = False,
+        _pattern: str | None = None,
+        _tags: list[str] | None = None,
+        _failed_only: bool = False,
+        _parallelism: int | None = None,
+        _timeout_sec: int | None = None,
+        _fail_fast: bool = False,
     ) -> TestResult:
         """Run tests.
 
         Args:
             targets: Specific targets to run (default all)
-            pattern: Test name pattern filter
-            tags: Test tags/markers filter
-            failed_only: Re-run only failures
-            parallelism: Worker count (default auto)
-            timeout_sec: Per-target timeout
-            fail_fast: Stop on first failure
+            _pattern: Test name pattern filter (not yet implemented)
+            _tags: Test tags/markers filter (not yet implemented)
+            _failed_only: Re-run only failures (not yet implemented)
+            _parallelism: Worker count (not yet implemented)
+            _timeout_sec: Per-target timeout (not yet implemented)
+            _fail_fast: Stop on first failure (not yet implemented)
 
         Returns:
             TestResult with run_id for status tracking

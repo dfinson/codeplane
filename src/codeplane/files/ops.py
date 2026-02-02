@@ -19,7 +19,7 @@ class FileResult:
     language: str
     line_count: int
     range: tuple[int, int] | None = None  # (start, end) if partial
-    metadata: dict[str, str | int] | None = None
+    metadata: dict[str, int] | None = None
 
 
 @dataclass
@@ -59,7 +59,8 @@ class FileOps:
         range_map: dict[str, tuple[int, int]] = {}
         if ranges:
             for r in ranges:
-                range_map[r["path"]] = (r["start_line"], r["end_line"])
+                path_key = str(r["path"]) if "path" in r else ""
+                range_map[path_key] = (int(r["start_line"]), int(r["end_line"]))
 
         results: list[FileResult] = []
         for rel_path in paths:
@@ -86,12 +87,12 @@ class FileOps:
             # Detect language from extension
             lang = _detect_language(full_path.suffix)
 
-            metadata = None
+            metadata: dict[str, int] | None = None
             if include_metadata:
                 stat = full_path.stat()
                 metadata = {
                     "size_bytes": stat.st_size,
-                    "modified_at": stat.st_mtime,
+                    "modified_at": int(stat.st_mtime),
                 }
 
             results.append(
