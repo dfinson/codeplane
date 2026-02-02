@@ -97,7 +97,7 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
     # Create handler that accepts **kwargs and reconstructs the params model
     async def handler(**kwargs: Any) -> dict[str, Any]:
         tool_name = spec.name  # Capture for logging
-        log.debug("mcp_tool_call_start", tool=tool_name, kwargs=list(kwargs.keys()))
+        log.info("tool_call", tool=tool_name)
 
         # Reconstruct the params model from kwargs
         try:
@@ -123,7 +123,6 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
 
         try:
             result_data: dict[str, Any] = await spec_handler(context, params)
-            log.debug("mcp_tool_call_success", tool=tool_name, session_id=session.session_id)
             return ToolResponse(
                 success=True,
                 result=result_data,

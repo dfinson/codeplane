@@ -112,6 +112,10 @@ def _configure_stdlib_logging(
     root_logger.handlers.clear()
     root_logger.setLevel(default_level)
 
+    # Silence noisy upstream MCP SDK loggers (low-value per-request spam)
+    logging.getLogger("mcp.server.lowlevel.server").setLevel(logging.WARNING)
+    logging.getLogger("mcp.server.streamable_http").setLevel(logging.WARNING)
+
     for output in config.outputs:
         output_level = _LEVEL_MAP.get((output.level or config.level).upper(), default_level)
         if output.format == "json":
