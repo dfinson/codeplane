@@ -750,27 +750,42 @@ class IndexCoordinator:
             # Update structural index for changed files
             if stale_files:
                 await self._update_structural_index(
-                    [Path(f.path) for f in stale_files if (self.repo_root / f.path).exists()]
-                )
+    async def map_repo(
+        self,
+        include: list[IncludeOption] | None = None,
+        depth: int = 3,
+        limit: int = 100,
+        include_globs: list[str] | None = None,
+        exclude_globs: list[str] | None = None,
+        respect_gitignore: bool = True,
+    ) -> MapRepoResult:
+        """Build repository mental model from indexed data.
 
-            # Publish epoch
-            if self._epoch_manager is not None:
-                self._epoch_manager.publish_epoch(
-                    files_indexed=files_added + files_updated,
-                    indexed_paths=[f.path for f in stale_files],
-                )
+        Queries the existing index - does NOT scan filesystem.
 
-        duration = time.time() - start_time
+        Args:
+            include: Sections to include. Defaults to structure, languages, entry_points.
+                Options: structure, languages, entry_points, dependencies, test_layout, public_api
+            depth: Directory tree depth (default 3)
+            limit: Maximum files to return in structure (default 100)
+            include_globs: Glob patterns to include (e.g., ['src/**'])
+            exclude_globs: Glob patterns to exclude (e.g., ['**/output/**'])
+            respect_gitignore: Honor .gitignore patterns (default True)
 
-        return IndexStats(
-            files_processed=len(stale_files),
-            files_added=files_added,
-            files_updated=files_updated,
-            files_removed=files_removed,
-            symbols_indexed=0,
-            duration_seconds=duration,
-        )
-
+        Returns:
+            MapRepoResult with requested sections and pagination info.
+        """
+        await self.wait_for_freshness()
+        with self.db.session() as session:
+            mapper = RepoMapper(session, self.repo_root)
+            return mapper.map(
+                include=include,
+                depth=depth,
+                limit=limit,
+                include_globs=include_globs,
+                exclude_globs=exclude_globs,
+                respect_gitignore=respect_gitignore,
+            )
     async def wait_for_freshness(self) -> None:
         """Block unti index is fresh (no pending writes)."""
         if not self._initialized:
@@ -987,9 +1002,22 @@ class IndexCoordinator:
             for context in specific_contexts:
                 context_root = self.repo_root / context.root_path
                 if not context_root.exists():
-                    continue
+        for ctx_id, paths in context_files.items():
+            self._structural.index_files(paths, context_id=ctx_id)
 
-                include_globs = context.get_include_globs()
+        # Run Pass 2: resolve cross-file references for updated files
+        # Collect file IDs from the paths we just indexed
+        resolved_file_ids: list[int] = []
+        with self.db.session() as session:
+            for str_path in str_paths:
+                file = session.exec(select(File).where(File.path == str_path)).first()
+                if file and file.id:
+                    resolved_file_ids.append(file.id)
+
+        if resolved_file_ids:
+            from codeplane.index._internal.indexing import resolve_references
+
+            resolve_references(self.db, file_ids=resolved_file_ids)
                 exclude_globs = context.get_exclude_globs()
                 context_id = context.id or 0
 
@@ -1008,19 +1036,25 @@ class IndexCoordinator:
             if root_context is not None:
                 root_context_id = root_context.id or 0
                 exclude_globs = root_context.get_exclude_globs()
+            # Run structural indexer for each context
+            if self._structural is not None:
+                struct_iter: Iterable[tuple[int, list[str]]] = context_files.items()
+                if not self._quiet:
+                    struct_iter = progress(
+                        list(context_files.items()), desc="Extracting symbols", unit="contexts"
+                    )
+                for context_id, file_paths in struct_iter:
+                    if file_paths:
+                        self._structural.index_files(file_paths, context_id)
 
-                for file_path in self._filter_unclaimed_files(all_files, exclude_globs):
-                    rel_path = file_path.relative_to(self.repo_root)
-                    rel_str = str(rel_path)
+                # Run Pass 2: resolve cross-file references
+                from codeplane.index._internal.indexing import resolve_references
 
-                    if rel_str in claimed_paths:
-                        continue
+                if not self._quiet:
+                    status("Resolving cross-file references...", style="none", indent=4)
+                resolve_references(self.db)
 
-                    # Detect language from extension (may be None for unknown types)
-                    # Lexical index indexes ALL text files; language is optional
-                    lang_family = detect_language_family(file_path)
-                    lang_value = lang_family.value if lang_family else None
-                    claimed_paths.add(rel_str)
+        return count, indexed_paths, files_by_ext
                     files_to_index.append((file_path, rel_str, root_context_id, lang_value))
 
             # Third pass: index files with progress bar

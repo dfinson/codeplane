@@ -84,6 +84,7 @@ async def mutate(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
             "files_changed": result.delta.files_changed,
             "insertions": result.delta.insertions,
             "deletions": result.delta.deletions,
+            "stats_are_estimates": True,  # Line-count diff, not actual diff algorithm
             "files": [
                 {
                     "path": f.path,

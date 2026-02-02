@@ -9,10 +9,12 @@ Candidates are ranked by certainty - agent reviews before applying.
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
+
 if TYPE_CHECKING:
     from codeplane.index.ops import IndexCoordinator
     from codeplane.mutation.ops import Edit, MutationDelta, MutationOps
@@ -46,6 +48,7 @@ class RefactorPreview:
     edits: list[FileEdit] = field(default_factory=list)
     contexts_used: list[str] = field(default_factory=list)
     high_certainty_count: int = 0
+    medium_certainty_count: int = 0  # Comment/docstring occurrences
     low_certainty_count: int = 0  # Agent should review these
 
 
@@ -66,6 +69,93 @@ class RefactorResult:
     preview: RefactorPreview | None = None
     applied: MutationDelta | None = None
     divergence: RefactorDivergence | None = None
+
+
+def _scan_file_for_comment_occurrences(
+    content: str,
+    symbol: str,
+    language: str | None,
+) -> list[tuple[int, str]]:
+    """Scan file content for symbol occurrences in comments and docstrings.
+
+    Returns list of (line_number, context_snippet) tuples.
+    """
+    occurrences: list[tuple[int, str]] = []
+    lines = content.splitlines()
+
+    # Patterns for comments and docstrings by language
+    if language in ("python", None):
+        # Python: # comments, triple-quoted strings
+        in_docstring = False
+        docstring_delimiter = None
+
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+
+            # Check for docstring boundaries
+            if not in_docstring:
+                if stripped.startswith('"""') or stripped.startswith("'''"):
+                    docstring_delimiter = stripped[:3]
+                    in_docstring = True
+                    # Check if ends on same line
+                    if stripped.count(docstring_delimiter) >= 2:
+                        in_docstring = False
+                        if _word_boundary_match(line, symbol):
+                            occurrences.append((i, stripped[:60]))
+                    elif _word_boundary_match(line, symbol):
+                        occurrences.append((i, stripped[:60]))
+                    continue
+
+            if in_docstring:
+                if docstring_delimiter and docstring_delimiter in stripped[3:]:
+                    in_docstring = False
+                if _word_boundary_match(line, symbol):
+                    occurrences.append((i, stripped[:60]))
+                continue
+
+            # Check for # comments
+            if "#" in line:
+                comment_start = line.index("#")
+                comment_text = line[comment_start:]
+                if _word_boundary_match(comment_text, symbol):
+                    occurrences.append((i, stripped[:60]))
+
+    elif language in ("javascript", "typescript", "java", "go", "rust", "cpp"):
+        # C-style: // comments, /* */ blocks, and JSDoc /** */
+        in_block_comment = False
+
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+
+            if in_block_comment:
+                if "*/" in line:
+                    in_block_comment = False
+                if _word_boundary_match(line, symbol):
+                    occurrences.append((i, stripped[:60]))
+                continue
+
+            if "/*" in line:
+                in_block_comment = True
+                if "*/" in line[line.index("/*") + 2 :]:
+                    in_block_comment = False
+                if _word_boundary_match(line, symbol):
+                    occurrences.append((i, stripped[:60]))
+                continue
+
+            # Check for // comments
+            if "//" in line:
+                comment_start = line.index("//")
+                comment_text = line[comment_start:]
+                if _word_boundary_match(comment_text, symbol):
+                    occurrences.append((i, stripped[:60]))
+
+    return occurrences
+
+
+def _word_boundary_match(text: str, symbol: str) -> bool:
+    """Check if symbol appears in text as a whole word."""
+    pattern = rf"\b{re.escape(symbol)}\b"
+    return bool(re.search(pattern, text))
 
 
 class RefactorOps:
@@ -106,8 +196,8 @@ class RefactorOps:
         Args:
             symbol: Symbol name or path:line:col locator
             new_name: New name for the symbol
-            include_comments: Also update comments/docs (default True)
-            contexts: Limit to specific contexts
+            _include_comments: Also update comments/docs (default True)
+            _contexts: Limit to specific contexts
 
         Returns:
             RefactorResult with preview. Call apply() to execute.
@@ -130,6 +220,7 @@ class RefactorOps:
 
         # Build edit hunks from refs
         edits_by_file: dict[str, list[EditHunk]] = {}
+        affected_files: set[str] = set()
 
         # Add definition site
         def_file = await self._get_file_path(def_fact.file_id)
@@ -142,6 +233,7 @@ class RefactorOps:
                     certainty="high",  # Definition is always high certainty
                 )
             )
+            affected_files.add(def_file)
 
         # Add reference sites
         for ref in refs:
@@ -159,16 +251,25 @@ class RefactorOps:
                         certainty=cert,
                     )
                 )
+                affected_files.add(ref_file)
+
+        # Scan for comment/docstring occurrences if requested
+        if _include_comments:
+            await self._add_comment_occurrences(
+                symbol, new_name, affected_files, edits_by_file
+            )
 
         # Build preview
         file_edits = [FileEdit(path=path, hunks=hunks) for path, hunks in edits_by_file.items()]
         high_count = sum(1 for fe in file_edits for h in fe.hunks if h.certainty == "high")
+        medium_count = sum(1 for fe in file_edits for h in fe.hunks if h.certainty == "medium")
         low_count = sum(1 for fe in file_edits for h in fe.hunks if h.certainty == "low")
 
         preview = RefactorPreview(
             files_affected=len(file_edits),
             edits=file_edits,
             high_certainty_count=high_count,
+            medium_certainty_count=medium_count,
             low_certainty_count=low_count,
         )
 
@@ -179,6 +280,52 @@ class RefactorOps:
             status="previewed",
             preview=preview,
         )
+
+    async def _add_comment_occurrences(
+        self,
+        symbol: str,
+        new_name: str,
+        affected_files: set[str],
+        edits_by_file: dict[str, list[EditHunk]],
+    ) -> None:
+        """Scan affected files for comment/docstring occurrences."""
+        from codeplane.index.models import File
+
+        for file_path in affected_files:
+            full_path = self._repo_root / file_path
+            if not full_path.exists():
+                continue
+
+            try:
+                content = full_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+
+            # Detect language from file
+            with self._coordinator.db.session() as session:
+                from sqlmodel import select
+
+                file_record = session.exec(
+                    select(File).where(File.path == file_path)
+                ).first()
+                language = file_record.language_family if file_record else None
+
+            # Find comment occurrences
+            comment_hits = _scan_file_for_comment_occurrences(content, symbol, language)
+
+            # Get existing edit lines to avoid duplicates
+            existing_lines = {h.line for h in edits_by_file.get(file_path, [])}
+
+            for line_num, _snippet in comment_hits:
+                if line_num not in existing_lines:
+                    edits_by_file.setdefault(file_path, []).append(
+                        EditHunk(
+                            old=symbol,
+                            new=new_name,
+                            line=line_num,
+                            certainty="medium",  # Comment occurrences are medium certainty
+                        )
+                    )
 
     async def _get_file_path(self, file_id: int) -> str | None:
         """Look up file path from file_id."""
@@ -256,7 +403,7 @@ class RefactorOps:
             # Read file content
             content = full_path.read_text(encoding="utf-8")
             lines = content.splitlines(keepends=True)
-            
+
             # Group hunks by line for this file
             hunks_by_line: dict[int, list[EditHunk]] = {}
             for hunk in file_edit.hunks:
@@ -268,7 +415,7 @@ class RefactorOps:
                 if i in hunks_by_line:
                     # Apply replacements on this line
                     # Sort by length of 'old' descending to avoid substring issues often
-                    # but simple replace is dangerous without columns. 
+                    # but simple replace is dangerous without columns.
                     # Proceeding with simple replace per current arch.
                     current_line = line_content
                     for hunk in hunks_by_line[i]:
@@ -276,16 +423,12 @@ class RefactorOps:
                     new_lines.append(current_line)
                 else:
                     new_lines.append(line_content)
-            
+
             # Reconstruct content
             new_content = "".join(new_lines)
-            
+
             edits.append(
-                Edit(
-                    path=file_edit.path,
-                    action="update",
-                    content=new_content
-                )
+                Edit(path=file_edit.path, action="update", content=new_content)
             )
 
         # Execute mutation

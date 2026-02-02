@@ -1,4 +1,4 @@
-"""Indexing layers: lexical (Tier 0), structural (Tier 1)."""
+"""Indexing layers: lexical (Tier 0), structural (Tier 1), resolution (Tier 1.5)."""
 
 from codeplane.index._internal.indexing.graph import FactQueries
 from codeplane.index._internal.indexing.lexical import (
@@ -6,6 +6,11 @@ from codeplane.index._internal.indexing.lexical import (
     SearchResult,
     SearchResults,
     create_index,
+)
+from codeplane.index._internal.indexing.resolver import (
+    ReferenceResolver,
+    ResolutionStats,
+    resolve_references,
 )
 from codeplane.index._internal.indexing.structural import (
     BatchResult,
@@ -25,6 +30,10 @@ __all__ = [
     "ExtractionResult",
     "BatchResult",
     "index_context",
+    # Reference Resolution (Tier 1.5)
+    "ReferenceResolver",
+    "ResolutionStats",
+    "resolve_references",
     # Fact Queries
     "FactQueries",
 ]

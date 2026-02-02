@@ -123,6 +123,7 @@ def _serialize_refactor_result(result: RefactorResult) -> dict[str, Any]:
         output["preview"] = {
             "files_affected": result.preview.files_affected,
             "high_certainty_count": result.preview.high_certainty_count,
+            "medium_certainty_count": result.preview.medium_certainty_count,
             "low_certainty_count": result.preview.low_certainty_count,
             "edits": [
                 {

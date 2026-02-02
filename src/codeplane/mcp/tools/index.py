@@ -50,6 +50,17 @@ class MapRepoParams(BaseParams):
     depth: int = Field(default=3, le=10)
     cursor: str | None = None
     limit: int = Field(default=100, le=1000)
+    # Filtering options
+    include_globs: list[str] | None = Field(
+        default=None, description="Glob patterns to include (e.g., ['src/**', 'lib/**'])"
+    )
+    exclude_globs: list[str] | None = Field(
+        default=None,
+        description="Glob patterns to exclude (e.g., ['**/output/**', '**/mlruns/**'])",
+    )
+    respect_gitignore: bool = Field(
+        default=True, description="Honor .gitignore patterns (default: true)"
+    )
 
 
 class GetDefParams(BaseParams):
@@ -142,7 +153,6 @@ async def search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
             "pagination": {},
             "query_time_ms": 0,
         }
-        return {"results": ref_results, "query_time_ms": 0}
 
     # Lexical or symbol search
     search_results = await ctx.coordinator.search(
@@ -174,6 +184,10 @@ async def map_repo(ctx: AppContext, params: MapRepoParams) -> dict[str, Any]:
     result = await ctx.coordinator.map_repo(
         include=params.include,
         depth=params.depth,
+        limit=params.limit,
+        include_globs=params.include_globs,
+        exclude_globs=params.exclude_globs,
+        respect_gitignore=params.respect_gitignore,
     )
 
     # Convert dataclasses to dicts
@@ -230,6 +244,15 @@ async def map_repo(ctx: AppContext, params: MapRepoParams) -> dict[str, Any]:
             }
             for sym in result.public_api
         ]
+
+    # Add pagination info
+    output["pagination"] = {
+        "truncated": result.truncated,
+    }
+    if result.next_cursor:
+        output["pagination"]["next_cursor"] = result.next_cursor
+    if result.total_estimate:
+        output["pagination"]["total_estimate"] = result.total_estimate
 
     return output
 

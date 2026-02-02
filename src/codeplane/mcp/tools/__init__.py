@@ -1,5 +1,23 @@
 """MCP tool handlers."""
 
-from codeplane.mcp.tools import files, git, index, mutation, refactor, session, testing
+from codeplane.mcp.tools import (
+    capabilities,
+    files,
+    git,
+    index,
+    mutation,
+    refactor,
+    session,
+    testing,
+)
 
-__all__ = ["files", "git", "index", "mutation", "refactor", "session", "testing"]
+__all__ = [
+    "capabilities",
+    "files",
+    "git",
+    "index",
+    "mutation",
+    "refactor",
+    "session",
+    "testing",
+]

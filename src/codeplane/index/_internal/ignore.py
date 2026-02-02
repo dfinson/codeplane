@@ -4,7 +4,8 @@ Single source of truth for path exclusion logic used by:
 - FileWatcher (runtime file change filtering)
 - ContextProbe (validation file sampling)
 - ContextDiscovery (marker scanning with directory pruning)
-- Any component needing .cplignore + UNIVERSAL_EXCLUDES support
+- map_repo (filtering results)
+- Any component needing .cplignore + .gitignore + UNIVERSAL_EXCLUDES support
 """
 
 from __future__ import annotations
@@ -95,28 +96,80 @@ class IgnoreChecker:
         self,
         root: Path,
         extra_patterns: list[str] | None = None,
+        *,
+        respect_gitignore: bool = False,
     ) -> None:
         self._root = root
         self._patterns: list[str] = list(PRUNABLE_DIRS)
         self._load_cplignore(root / ".codeplane" / ".cplignore")
+        if respect_gitignore:
+            self._load_gitignore_recursive(root)
         if extra_patterns:
             self._patterns.extend(extra_patterns)
 
     def _load_cplignore(self, cplignore_path: Path) -> None:
         if not cplignore_path.exists():
             return
+        self._load_ignore_file(cplignore_path)
 
+    def _load_gitignore_recursive(self, root: Path) -> None:
+        """Load .gitignore from root and all subdirectories.
+
+        Handles nested .gitignore files by prefixing patterns with their
+        relative directory path.
+        """
+        # Load root .gitignore
+        root_gitignore = root / ".gitignore"
+        if root_gitignore.exists():
+            self._load_ignore_file(root_gitignore)
+
+        # Walk for nested .gitignore files
+        for dirpath, dirnames, filenames in root.walk():
+            # Skip prunable dirs
+            dirnames[:] = [d for d in dirnames if d not in PRUNABLE_DIRS]
+
+            if dirpath == root:
+                continue  # Already loaded
+
+            if ".gitignore" in filenames:
+                gitignore_path = dirpath / ".gitignore"
+                rel_dir = dirpath.relative_to(root)
+                self._load_ignore_file(gitignore_path, prefix=str(rel_dir))
+
+    def _load_ignore_file(self, path: Path, prefix: str = "") -> None:
+        """Load patterns from an ignore file.
+
+        Args:
+            path: Path to the ignore file
+            prefix: Directory prefix for nested .gitignore patterns
+        """
         try:
-            content = cplignore_path.read_text()
+            content = path.read_text()
             for line in content.splitlines():
                 line = line.strip()
                 if not line or line.startswith("#"):
                     continue
+
+                # Handle negation
+                is_negation = line.startswith("!")
+                if is_negation:
+                    line = line[1:]
+
                 # Directory patterns (ending in /) match all contents
                 if line.endswith("/"):
-                    self._patterns.append(f"{line}**")
+                    pattern = f"{line}**"
                 else:
-                    self._patterns.append(line)
+                    pattern = line
+
+                # Apply prefix for nested .gitignore
+                if prefix:
+                    pattern = f"{prefix}/{pattern}"
+
+                # Re-add negation prefix
+                if is_negation:
+                    pattern = f"!{pattern}"
+
+                self._patterns.append(pattern)
         except OSError:
             pass
 
@@ -160,3 +213,13 @@ class IgnoreChecker:
                     return True
 
         return False
+
+
+def matches_glob(rel_path: str, pattern: str) -> bool:
+    """Check if a path matches a glob pattern, with ** support."""
+    if fnmatch.fnmatch(rel_path, pattern):
+        return True
+    # Handle **/pattern for any-depth matching
+    if pattern.startswith("**/"):
+        return fnmatch.fnmatch(rel_path, pattern[3:])
+    return False
