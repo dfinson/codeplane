@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from codeplane.mcp.registry import registry
+from codeplane.mcp.tools.base import BaseParams
 
 if TYPE_CHECKING:
     from codeplane.mcp.context import AppContext
@@ -17,7 +18,7 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
-class SearchParams(BaseModel):
+class SearchParams(BaseParams):
     """Parameters for search."""
 
     query: str
@@ -29,7 +30,7 @@ class SearchParams(BaseModel):
     include_snippets: bool = True
 
 
-class MapRepoParams(BaseModel):
+class MapRepoParams(BaseParams):
     """Parameters for map_repo."""
 
     include: (
@@ -48,14 +49,14 @@ class MapRepoParams(BaseModel):
     depth: int = Field(default=3, le=10)
 
 
-class GetDefParams(BaseModel):
+class GetDefParams(BaseParams):
     """Parameters for get_def (search definitions mode)."""
 
     name: str
     context_id: int | None = None
 
 
-class GetReferencesParams(BaseModel):
+class GetReferencesParams(BaseParams):
     """Parameters for get_references."""
 
     symbol: str

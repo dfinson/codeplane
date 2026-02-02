@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
-
 from codeplane.mcp.registry import registry
+from codeplane.mcp.tools.base import BaseParams
 
 if TYPE_CHECKING:
     from codeplane.mcp.context import AppContext
@@ -18,13 +17,13 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
-class TestDiscoverParams(BaseModel):
+class TestDiscoverParams(BaseParams):
     """Parameters for test_discover."""
 
     paths: list[str] | None = None
 
 
-class TestRunParams(BaseModel):
+class TestRunParams(BaseParams):
     """Parameters for test_run."""
 
     targets: list[str] | None = None
@@ -36,13 +35,13 @@ class TestRunParams(BaseModel):
     fail_fast: bool = False
 
 
-class TestStatusParams(BaseModel):
+class TestStatusParams(BaseParams):
     """Parameters for test_status."""
 
     run_id: str
 
 
-class TestCancelParams(BaseModel):
+class TestCancelParams(BaseParams):
     """Parameters for test_cancel."""
 
     run_id: str

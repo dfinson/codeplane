@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from codeplane.mcp.registry import registry
+from codeplane.mcp.tools.base import BaseParams
 
 if TYPE_CHECKING:
     from codeplane.mcp.context import AppContext
@@ -18,13 +19,13 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
-class GitStatusParams(BaseModel):
+class GitStatusParams(BaseParams):
     """Parameters for git_status."""
 
     paths: list[str] | None = None
 
 
-class GitDiffParams(BaseModel):
+class GitDiffParams(BaseParams):
     """Parameters for git_diff."""
 
     base: str | None = None
@@ -32,7 +33,7 @@ class GitDiffParams(BaseModel):
     staged: bool = False
 
 
-class GitCommitParams(BaseModel):
+class GitCommitParams(BaseParams):
     """Parameters for git_commit."""
 
     message: str
@@ -40,135 +41,135 @@ class GitCommitParams(BaseModel):
     allow_empty: bool = False
 
 
-class GitLogParams(BaseModel):
+class GitLogParams(BaseParams):
     """Parameters for git_log."""
 
     ref: str = "HEAD"
     limit: int = Field(default=50, le=100)
 
 
-class GitBranchCreateParams(BaseModel):
+class GitBranchCreateParams(BaseParams):
     """Parameters for git_create_branch."""
 
     name: str
     ref: str = "HEAD"
 
 
-class GitCheckoutParams(BaseModel):
+class GitCheckoutParams(BaseParams):
     """Parameters for git_checkout."""
 
     ref: str
     create: bool = False
 
 
-class GitDeleteBranchParams(BaseModel):
+class GitDeleteBranchParams(BaseParams):
     """Parameters for git_delete_branch."""
 
     name: str
     force: bool = False
 
 
-class GitResetParams(BaseModel):
+class GitResetParams(BaseParams):
     """Parameters for git_reset."""
 
     ref: str
     mode: str = "mixed"
 
 
-class GitMergeParams(BaseModel):
+class GitMergeParams(BaseParams):
     """Parameters for git_merge."""
 
     ref: str
 
 
-class GitStageParams(BaseModel):
+class GitStageParams(BaseParams):
     """Parameters for git_stage."""
 
     paths: list[str]
 
 
-class GitUnstageParams(BaseModel):
+class GitUnstageParams(BaseParams):
     """Parameters for git_unstage."""
 
     paths: list[str]
 
 
-class GitDiscardParams(BaseModel):
+class GitDiscardParams(BaseParams):
     """Parameters for git_discard."""
 
     paths: list[str]
 
 
-class GitAmendParams(BaseModel):
+class GitAmendParams(BaseParams):
     """Parameters for git_amend."""
 
     message: str | None = None
 
 
-class GitBlameParams(BaseModel):
+class GitBlameParams(BaseParams):
     """Parameters for git_blame."""
 
     path: str
 
 
-class GitShowParams(BaseModel):
+class GitShowParams(BaseParams):
     """Parameters for git_show."""
 
     ref: str = "HEAD"
 
 
-class EmptyParams(BaseModel):
+class EmptyParams(BaseParams):
     """Empty params for tools with no arguments."""
 
     pass
 
 
-class GitStashPushParams(BaseModel):
+class GitStashPushParams(BaseParams):
     """Parameters for git_stash_push."""
 
     message: str | None = None
     include_untracked: bool = False
 
 
-class GitStashPopParams(BaseModel):
+class GitStashPopParams(BaseParams):
     """Parameters for git_stash_pop."""
 
     index: int = 0
 
 
-class GitRebasePlanParams(BaseModel):
+class GitRebasePlanParams(BaseParams):
     """Parameters for git_rebase_plan."""
 
     upstream: str
     onto: str | None = None
 
 
-class GitCherrypickParams(BaseModel):
+class GitCherrypickParams(BaseParams):
     """Parameters for git_cherrypick."""
 
     commit: str
 
 
-class GitRevertParams(BaseModel):
+class GitRevertParams(BaseParams):
     """Parameters for git_revert."""
 
     commit: str
 
 
-class GitFetchParams(BaseModel):
+class GitFetchParams(BaseParams):
     """Parameters for git_fetch."""
 
     remote: str = "origin"
 
 
-class GitPushParams(BaseModel):
+class GitPushParams(BaseParams):
     """Parameters for git_push."""
 
     remote: str = "origin"
     force: bool = False
 
 
-class GitPullParams(BaseModel):
+class GitPullParams(BaseParams):
     """Parameters for git_pull."""
 
     remote: str = "origin"

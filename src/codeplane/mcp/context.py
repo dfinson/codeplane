@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from codeplane.files.ops import FileOps
     from codeplane.git.ops import GitOps
     from codeplane.index.ops import IndexCoordinator
+    from codeplane.mcp.session import SessionManager
     from codeplane.mutation.ops import MutationOps
     from codeplane.refactor.ops import RefactorOps
     from codeplane.testing.ops import TestOps
@@ -32,6 +33,7 @@ class AppContext:
     mutation_ops: MutationOps
     refactor_ops: RefactorOps
     test_ops: TestOps
+    session_manager: SessionManager
 
     @classmethod
     def create(
@@ -52,6 +54,7 @@ class AppContext:
         from codeplane.files.ops import FileOps
         from codeplane.git.ops import GitOps
         from codeplane.index.ops import IndexCoordinator as IC
+        from codeplane.mcp.session import SessionManager
         from codeplane.mutation.ops import MutationOps
         from codeplane.refactor.ops import RefactorOps
         from codeplane.testing.ops import TestOps
@@ -73,6 +76,7 @@ class AppContext:
         mutation_ops = MutationOps(repo_root, on_mutation=on_mutation)
         refactor_ops = RefactorOps(repo_root, coordinator)
         test_ops = TestOps(repo_root, coordinator)
+        session_manager = SessionManager()
 
         return cls(
             repo_root=repo_root,
@@ -82,4 +86,5 @@ class AppContext:
             mutation_ops=mutation_ops,
             refactor_ops=refactor_ops,
             test_ops=test_ops,
+            session_manager=session_manager,
         )

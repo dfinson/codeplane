@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from pydantic import BaseModel
 
 from codeplane.mcp.registry import registry
+from codeplane.mcp.tools.base import BaseParams
 
 if TYPE_CHECKING:
     from codeplane.mcp.context import AppContext
@@ -38,7 +39,7 @@ class EditParam(BaseModel):
     patches: list[PatchParam] | None = None
 
 
-class MutateParams(BaseModel):
+class MutateParams(BaseParams):
     """Parameters for mutate."""
 
     edits: list[EditParam]

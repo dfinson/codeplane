@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -16,10 +17,13 @@ if TYPE_CHECKING:
 class ToolResponse(BaseModel):
     """Standardized tool response envelope per Spec §23.3."""
 
+    # Using snake_case for wire format compatibility with Spec
+    result: Any = None
+    meta: dict[str, Any] = Field(default_factory=dict)
+
+    # Robustness fields (implied by "structured error response")
     success: bool
-    data: Any
     error: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 def create_mcp_server(context: AppContext) -> FastMCP:
@@ -65,13 +69,34 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
 
     # Create handler with explicit type annotation set after definition
     async def handler(params: Any) -> ToolResponse:
+        # Extract session_id from params if present
+        # Most params models are Pydantic models, but some might be dicts or None?
+        # FastMCP / Pydantic ensures params is an instance of params_model.
+        session_id = getattr(params, "session_id", None)
+
+        session = context.session_manager.get_or_create(session_id)
+
         try:
-            result: dict[str, Any] = await spec_handler(context, params)
-            return ToolResponse(success=True, data=result)
+            result_data: dict[str, Any] = await spec_handler(context, params)
+            return ToolResponse(
+                success=True,
+                result=result_data,
+                meta={
+                    "session_id": session.session_id,
+                    "timestamp": int(time.time() * 1000),
+                },
+            )
         except Exception as e:
             # We catch all exceptions to ensure we return a structured error response
             # instead of crashing the MCP connection or returning an RPC error.
-            return ToolResponse(success=False, data=None, error=str(e))
+            return ToolResponse(
+                success=False,
+                result=None,
+                error=str(e),
+                meta={
+                    "session_id": session.session_id,
+                },
+            )
 
     # Set the type hint explicitly so FastMCP can introspect it
     handler.__annotations__["params"] = params_model

@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
-
 from codeplane.mcp.registry import registry
+from codeplane.mcp.tools.base import BaseParams
 
 if TYPE_CHECKING:
     from codeplane.mcp.context import AppContext
@@ -18,7 +17,7 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
-class RefactorRenameParams(BaseModel):
+class RefactorRenameParams(BaseParams):
     """Parameters for refactor_rename."""
 
     symbol: str  # Symbol name or path:line:col locator
@@ -27,7 +26,7 @@ class RefactorRenameParams(BaseModel):
     contexts: list[str] | None = None
 
 
-class RefactorMoveParams(BaseModel):
+class RefactorMoveParams(BaseParams):
     """Parameters for refactor_move."""
 
     from_path: str
@@ -35,20 +34,20 @@ class RefactorMoveParams(BaseModel):
     include_comments: bool = True
 
 
-class RefactorDeleteParams(BaseModel):
+class RefactorDeleteParams(BaseParams):
     """Parameters for refactor_delete."""
 
     target: str  # Symbol or path
     include_comments: bool = True
 
 
-class RefactorApplyParams(BaseModel):
+class RefactorApplyParams(BaseParams):
     """Parameters for refactor_apply."""
 
     refactor_id: str
 
 
-class RefactorCancelParams(BaseModel):
+class RefactorCancelParams(BaseParams):
     """Parameters for refactor_cancel."""
 
     refactor_id: str

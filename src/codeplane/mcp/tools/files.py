@@ -4,9 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from pydantic import BaseModel
-
 from codeplane.mcp.registry import registry
+from codeplane.mcp.tools.base import BaseParams
 
 if TYPE_CHECKING:
     from codeplane.mcp.context import AppContext
@@ -17,7 +16,7 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
-class ReadFilesParams(BaseModel):
+class ReadFilesParams(BaseParams):
     """Parameters for read_files."""
 
     paths: list[str]
