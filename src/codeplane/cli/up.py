@@ -79,9 +79,6 @@ def up_command(path: Path, port: int | None) -> None:
     if port is not None:
         config.server.port = port
 
-    # Print banner first
-    _print_banner(config.server.host, config.server.port)
-
     # Initialize if needed (this creates config with correct index_path)
     codeplane_dir = repo_root / ".codeplane"
     if not codeplane_dir.exists() and not initialize_repo(repo_root):
