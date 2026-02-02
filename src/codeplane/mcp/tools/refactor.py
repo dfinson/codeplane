@@ -79,31 +79,33 @@ async def refactor_rename(ctx: AppContext, params: RefactorRenameParams) -> dict
     return _serialize_refactor_result(result)
 
 
-# TODO: Implement RefactorOps.move() before enabling
-# @registry.register("refactor_move", "Move a file/module, updating imports", RefactorMoveParams)
-# async def refactor_move(ctx: AppContext, params: RefactorMoveParams) -> dict[str, Any]:
-#     """Move file/module."""
-#     result = await ctx.refactor_ops.move(
-#         params.from_path,
-#         params.to_path,
-#         include_comments=params.include_comments,
-#     )
-#
-#     return _serialize_refactor_result(result)
+@registry.register("refactor_move", "Move a file/module, updating imports", RefactorMoveParams)
+async def refactor_move(ctx: AppContext, params: RefactorMoveParams) -> dict[str, Any]:
+    """Move file/module and update all import references."""
+    result = await ctx.refactor_ops.move(
+        params.from_path,
+        params.to_path,
+        include_comments=params.include_comments,
+    )
+    return _serialize_refactor_result(result)
 
 
-# TODO: Implement RefactorOps.delete() before enabling
-# @registry.register(
-#     "refactor_delete", "Delete symbol/file, cleaning up references", RefactorDeleteParams
-# )
-# async def refactor_delete(ctx: AppContext, params: RefactorDeleteParams) -> dict[str, Any]:
-#     """Delete with reference cleanup."""
-#     result = await ctx.refactor_ops.delete(
-#         params.target,
-#         include_comments=params.include_comments,
-#     )
-#     result = await ctx.refactor_ops.apply(params.refactor_id, ctx.mutation_ops)
-#     return _serialize_refactor_result(result)
+@registry.register(
+    "refactor_delete",
+    "Find all references to a symbol/file for manual cleanup",
+    RefactorDeleteParams,
+)
+async def refactor_delete(ctx: AppContext, params: RefactorDeleteParams) -> dict[str, Any]:
+    """Find references that need cleanup when deleting.
+
+    Unlike rename/move, this does NOT auto-remove references.
+    It surfaces them for manual cleanup since deletion semantics vary.
+    """
+    result = await ctx.refactor_ops.delete(
+        params.target,
+        include_comments=params.include_comments,
+    )
+    return _serialize_refactor_result(result)
 
 
 @registry.register("refactor_apply", "Apply a previewed refactoring", RefactorApplyParams)
