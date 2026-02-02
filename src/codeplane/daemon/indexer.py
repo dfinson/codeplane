@@ -150,9 +150,17 @@ class BackgroundIndexer:
                 )
             self._last_stats = stats
             self._last_error = None
-            console.print(
-                f"  [green]✓[/green] Reindexed {stats.files_updated} file(s) in {stats.duration_seconds:.2f}s"
-            )
+
+            # Build descriptive message showing what changed
+            parts: list[str] = []
+            if stats.files_added:
+                parts.append(f"{stats.files_added} added")
+            if stats.files_updated:
+                parts.append(f"{stats.files_updated} updated")
+            if stats.files_removed:
+                parts.append(f"{stats.files_removed} removed")
+            summary = ", ".join(parts) if parts else "no changes"
+            console.print(f"  [green]✓[/green] {summary} in {stats.duration_seconds:.2f}s")
 
             # Notify completion callback
             if self._on_complete is not None:
