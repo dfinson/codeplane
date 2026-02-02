@@ -488,17 +488,215 @@ class RefactorOps:
     ) -> RefactorResult:
         """Move a file/module, updating all imports.
 
+        Uses ImportFact to find all imports referencing the source module
+        and generates edits to update them to the new path.
+
         Args:
-            from_path: Source path
-            to_path: Destination path
-            include_comments: Update comments/docs
+            from_path: Source path (relative to repo root)
+            to_path: Destination path (relative to repo root)
+            include_comments: Update comments/docs mentioning the path
 
         Returns:
-            RefactorResult with preview.
+            RefactorResult with preview. Call apply() to execute.
         """
-        # TODO: Use ImportFact to find all imports of this module
-        # and generate edit hunks for updating import paths
-        raise NotImplementedError("Move not yet implemented")
+        from codeplane.index.models import ImportFact
+
+        refactor_id = str(uuid.uuid4())[:8]
+        edits_by_file: dict[str, list[EditHunk]] = {}
+        seen_locations: set[tuple[str, int]] = set()
+
+        # Normalize paths (remove leading ./ and trailing slashes)
+        from_path = from_path.lstrip("./").rstrip("/")
+        to_path = to_path.lstrip("./").rstrip("/")
+
+        # Convert file paths to module paths for import matching
+        # e.g., "src/utils/helper.py" -> "src.utils.helper"
+        from_module = self._path_to_module(from_path)
+        to_module = self._path_to_module(to_path)
+
+        # Also handle directory moves (package moves)
+        from_dir = from_path.rstrip(".py")
+        to_dir = to_path.rstrip(".py")
+
+        # Find all ImportFacts that reference this module
+        with self._coordinator.db.session() as session:
+            from sqlmodel import select
+
+            # Match imports by source_literal or imported_name
+            imports = session.exec(select(ImportFact)).all()
+
+            for imp in imports:
+                # Check if import references our module
+                matches = False
+                old_value = ""
+                new_value = ""
+
+                # Check source_literal (e.g., "from src.utils import helper")
+                if imp.source_literal:
+                    if imp.source_literal == from_module or imp.source_literal.startswith(
+                        from_module + "."
+                    ):
+                        matches = True
+                        old_value = imp.source_literal
+                        new_value = imp.source_literal.replace(from_module, to_module, 1)
+                    # Also check for relative imports or bare names
+                    elif imp.source_literal == from_dir or imp.source_literal.startswith(
+                        from_dir + "/"
+                    ):
+                        matches = True
+                        old_value = imp.source_literal
+                        new_value = imp.source_literal.replace(from_dir, to_dir, 1)
+
+                if matches and old_value:
+                    file_path = await self._get_file_path(imp.file_id)
+                    if file_path:
+                        # Get actual line from file to find import statement
+                        full_path = self._repo_root / file_path
+                        if full_path.exists():
+                            try:
+                                content = full_path.read_text(encoding="utf-8")
+                                lines = content.splitlines()
+                                # Find the line containing this import
+                                for i, line in enumerate(lines, 1):
+                                    if old_value in line:
+                                        loc = (file_path, i)
+                                        if loc not in seen_locations:
+                                            seen_locations.add(loc)
+                                            edits_by_file.setdefault(file_path, []).append(
+                                                EditHunk(
+                                                    old=old_value,
+                                                    new=new_value,
+                                                    line=i,
+                                                    certainty="high",
+                                                )
+                                            )
+                                        break
+                            except (OSError, UnicodeDecodeError):
+                                pass
+
+        # Lexical fallback: search for module path strings in all files
+        await self._add_move_lexical_fallback(
+            from_module, to_module, from_path, to_path, seen_locations, edits_by_file
+        )
+
+        # Scan comments if requested
+        if include_comments:
+            affected_files = set(edits_by_file.keys())
+            # Check for path mentions in comments
+            for pattern, replacement in [(from_path, to_path), (from_module, to_module)]:
+                await self._add_comment_occurrences(
+                    pattern, replacement, affected_files, edits_by_file
+                )
+
+        # Build preview
+        preview = self._build_preview(edits_by_file)
+        self._pending[refactor_id] = preview
+
+        return RefactorResult(
+            refactor_id=refactor_id,
+            status="previewed",
+            preview=preview,
+        )
+
+    async def _add_move_lexical_fallback(
+        self,
+        from_module: str,
+        to_module: str,
+        from_path: str,
+        to_path: str,
+        seen_locations: set[tuple[str, int]],
+        edits_by_file: dict[str, list[EditHunk]],
+    ) -> None:
+        """Lexical search for module references not captured by ImportFact."""
+        from codeplane.index.models import File
+
+        with self._coordinator.db.session() as session:
+            from sqlmodel import select
+
+            files = session.exec(select(File)).all()
+
+        # Patterns to search for
+        patterns = [
+            (from_module, to_module),  # Dotted module path
+            (from_path, to_path),  # File path
+        ]
+
+        for file_record in files:
+            full_path = self._repo_root / file_record.path
+            if not full_path.exists():
+                continue
+
+            try:
+                content = full_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+
+            lines = content.splitlines()
+            for i, line in enumerate(lines, 1):
+                for old_val, new_val in patterns:
+                    loc = (file_record.path, i)
+                    if loc in seen_locations:
+                        continue
+
+                    # Check for quoted strings containing the path/module
+                    if f'"{old_val}"' in line or f"'{old_val}'" in line:
+                        seen_locations.add(loc)
+                        edits_by_file.setdefault(file_record.path, []).append(
+                            EditHunk(
+                                old=old_val,
+                                new=new_val,
+                                line=i,
+                                certainty="low",
+                            )
+                        )
+
+    def _path_to_module(self, path: str) -> str:
+        """Convert file path to Python module path."""
+        # Remove .py extension and convert / to .
+        module = path.replace("/", ".").replace("\\", ".")
+        if module.endswith(".py"):
+            module = module[:-3]
+        return module
+
+    def _build_preview(self, edits_by_file: dict[str, list[EditHunk]]) -> RefactorPreview:
+        """Build RefactorPreview from edits."""
+        file_edits = [FileEdit(path=path, hunks=hunks) for path, hunks in edits_by_file.items()]
+        high_count = sum(1 for fe in file_edits for h in fe.hunks if h.certainty == "high")
+        medium_count = sum(1 for fe in file_edits for h in fe.hunks if h.certainty == "medium")
+        low_count = sum(1 for fe in file_edits for h in fe.hunks if h.certainty == "low")
+
+        verification_required = low_count > 0
+        low_certainty_files: list[str] = []
+        verification_guidance = None
+
+        if verification_required:
+            file_counts: dict[str, int] = {}
+            for fe in file_edits:
+                low_in_file = sum(1 for h in fe.hunks if h.certainty == "low")
+                if low_in_file > 0:
+                    file_counts[fe.path] = low_in_file
+                    low_certainty_files.append(fe.path)
+
+            files_summary = ", ".join(f"{p} ({c})" for p, c in list(file_counts.items())[:5])
+            if len(file_counts) > 5:
+                files_summary += f", ... and {len(file_counts) - 5} more files"
+
+            verification_guidance = (
+                f"{low_count} low-certainty matches found.\n\n"
+                f"Files: {files_summary}\n\n"
+                f"Use refactor_inspect to review before applying."
+            )
+
+        return RefactorPreview(
+            files_affected=len(file_edits),
+            edits=file_edits,
+            high_certainty_count=high_count,
+            medium_certainty_count=medium_count,
+            low_certainty_count=low_count,
+            verification_required=verification_required,
+            low_certainty_files=low_certainty_files,
+            verification_guidance=verification_guidance,
+        )
 
     async def delete(
         self,
@@ -506,17 +704,230 @@ class RefactorOps:
         *,
         include_comments: bool = True,
     ) -> RefactorResult:
-        """Delete a symbol or file, cleaning up references.
+        """Delete a symbol or file, finding all references that need cleanup.
+
+        Unlike rename/move, delete doesn't auto-fix references - it surfaces them
+        for manual cleanup since deletion semantics vary (remove import, replace
+        with alternative, etc.).
 
         Args:
-            target: Symbol or path to delete
-            include_comments: Clean up comments
+            target: Symbol name or file path to delete
+            include_comments: Include comment references in preview
 
         Returns:
-            RefactorResult with preview showing references to clean up.
+            RefactorResult with preview showing all references.
+            Hunks have old=target, new="" to indicate deletion sites.
         """
-        # TODO: Find all references and flag them for cleanup
-        raise NotImplementedError("Delete not yet implemented")
+        refactor_id = str(uuid.uuid4())[:8]
+        edits_by_file: dict[str, list[EditHunk]] = {}
+        seen_locations: set[tuple[str, int]] = set()
+
+        # Check if target is a file path or symbol name
+        is_file = "/" in target or target.endswith(".py")
+
+        if is_file:
+            # Find imports of this file/module
+            await self._find_file_references(target, seen_locations, edits_by_file)
+        else:
+            # Find references to this symbol
+            await self._find_symbol_references(target, seen_locations, edits_by_file)
+
+        # Lexical fallback for both cases
+        await self._add_delete_lexical_fallback(target, seen_locations, edits_by_file)
+
+        # Scan comments if requested
+        if include_comments:
+            affected_files = set(edits_by_file.keys())
+            # For delete, we mark comment refs but don't auto-remove
+            await self._add_comment_occurrences(target, "", affected_files, edits_by_file)
+
+        # Build preview with guidance
+        preview = self._build_delete_preview(target, edits_by_file)
+        self._pending[refactor_id] = preview
+
+        return RefactorResult(
+            refactor_id=refactor_id,
+            status="previewed",
+            preview=preview,
+        )
+
+    async def _find_file_references(
+        self,
+        file_path: str,
+        seen_locations: set[tuple[str, int]],
+        edits_by_file: dict[str, list[EditHunk]],
+    ) -> None:
+        """Find all imports referencing a file/module."""
+        from codeplane.index.models import ImportFact
+
+        # Normalize and convert to module path
+        file_path = file_path.lstrip("./").rstrip("/")
+        module_path = self._path_to_module(file_path)
+
+        with self._coordinator.db.session() as session:
+            from sqlmodel import select
+
+            imports = session.exec(select(ImportFact)).all()
+
+            for imp in imports:
+                matches = False
+
+                # Check source_literal
+                if imp.source_literal and (
+                    imp.source_literal == module_path
+                    or imp.source_literal.startswith(module_path + ".")
+                ):
+                    matches = True
+
+                # Check imported_name for direct imports
+                if imp.imported_name == module_path.split(".")[-1]:
+                    matches = True
+
+                if matches:
+                    ref_file = await self._get_file_path(imp.file_id)
+                    if ref_file:
+                        full_path = self._repo_root / ref_file
+                        if full_path.exists():
+                            try:
+                                content = full_path.read_text(encoding="utf-8")
+                                lines = content.splitlines()
+                                # Find the import line
+                                search_term = imp.source_literal or imp.imported_name
+                                for i, line in enumerate(lines, 1):
+                                    if search_term in line and ("import" in line.lower()):
+                                        loc = (ref_file, i)
+                                        if loc not in seen_locations:
+                                            seen_locations.add(loc)
+                                            edits_by_file.setdefault(ref_file, []).append(
+                                                EditHunk(
+                                                    old=line.strip(),
+                                                    new="",  # Deletion marker
+                                                    line=i,
+                                                    certainty="high",
+                                                )
+                                            )
+                                        break
+                            except (OSError, UnicodeDecodeError):
+                                pass
+
+    async def _find_symbol_references(
+        self,
+        symbol: str,
+        seen_locations: set[tuple[str, int]],
+        edits_by_file: dict[str, list[EditHunk]],
+    ) -> None:
+        """Find all references to a symbol."""
+        # Get all definitions with this name
+        all_defs = await self._coordinator.get_all_defs(symbol)
+
+        for def_fact in all_defs:
+            # Mark the definition site
+            def_file = await self._get_file_path(def_fact.file_id)
+            if def_file:
+                loc = (def_file, def_fact.start_line)
+                if loc not in seen_locations:
+                    seen_locations.add(loc)
+                    edits_by_file.setdefault(def_file, []).append(
+                        EditHunk(
+                            old=def_fact.name,
+                            new="",  # Deletion marker
+                            line=def_fact.start_line,
+                            certainty="high",
+                        )
+                    )
+
+            # Get all references
+            refs = await self._coordinator.get_references(def_fact, _context_id=0)
+            for ref in refs:
+                ref_file = await self._get_file_path(ref.file_id)
+                if ref_file:
+                    loc = (ref_file, ref.start_line)
+                    if loc not in seen_locations:
+                        seen_locations.add(loc)
+                        cert: Literal["high", "medium", "low"] = (
+                            "high" if ref.certainty == "CERTAIN" else "low"
+                        )
+                        edits_by_file.setdefault(ref_file, []).append(
+                            EditHunk(
+                                old=symbol,
+                                new="",
+                                line=ref.start_line,
+                                certainty=cert,
+                            )
+                        )
+
+    async def _add_delete_lexical_fallback(
+        self,
+        target: str,
+        seen_locations: set[tuple[str, int]],
+        edits_by_file: dict[str, list[EditHunk]],
+    ) -> None:
+        """Lexical fallback for delete - find all occurrences."""
+        from codeplane.index.models import File
+
+        with self._coordinator.db.session() as session:
+            from sqlmodel import select
+
+            files = session.exec(select(File)).all()
+
+        # Handle both file path and symbol patterns
+        patterns = [target]
+        if "/" in target or target.endswith(".py"):
+            # Also search for module form
+            patterns.append(self._path_to_module(target))
+
+        for file_record in files:
+            full_path = self._repo_root / file_record.path
+            if not full_path.exists():
+                continue
+
+            try:
+                content = full_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+
+            lines = content.splitlines()
+            for i, line in enumerate(lines, 1):
+                loc = (file_record.path, i)
+                if loc in seen_locations:
+                    continue
+
+                for pattern in patterns:
+                    if _word_boundary_match(line, pattern):
+                        seen_locations.add(loc)
+                        edits_by_file.setdefault(file_record.path, []).append(
+                            EditHunk(
+                                old=pattern,
+                                new="",
+                                line=i,
+                                certainty="low",
+                            )
+                        )
+                        break
+
+    def _build_delete_preview(
+        self,
+        target: str,
+        edits_by_file: dict[str, list[EditHunk]],
+    ) -> RefactorPreview:
+        """Build preview with delete-specific guidance."""
+        preview = self._build_preview(edits_by_file)
+
+        # Override guidance for delete operation
+        total_refs = sum(len(fe.hunks) for fe in preview.edits)
+        preview.verification_required = True
+        preview.verification_guidance = (
+            f"Found {total_refs} references to '{target}' that need cleanup.\n\n"
+            f"Delete does NOT auto-remove references. You must:\n"
+            f"  1. Review each reference with refactor_inspect\n"
+            f"  2. Decide how to handle: remove import, replace with alternative, etc.\n"
+            f"  3. Use atomic_edit_files to make changes manually\n"
+            f"  4. Call refactor_cancel to clear this preview\n\n"
+            f"High certainty: {preview.high_certainty_count} (index-backed)\n"
+            f"Low certainty: {preview.low_certainty_count} (lexical matches)"
+        )
+
+        return preview
 
     async def apply(self, refactor_id: str, mutation_ops: MutationOps) -> RefactorResult:
         """Apply a previewed refactoring.
