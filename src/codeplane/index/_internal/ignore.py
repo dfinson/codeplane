@@ -97,7 +97,7 @@ class IgnoreChecker:
         extra_patterns: list[str] | None = None,
     ) -> None:
         self._root = root
-        self._patterns: list[str] = []
+        self._patterns: list[str] = list(PRUNABLE_DIRS)
         self._load_cplignore(root / ".codeplane" / ".cplignore")
         if extra_patterns:
             self._patterns.extend(extra_patterns)
