@@ -42,7 +42,7 @@ class FileWatcher:
 
     repo_root: Path
     on_change: Callable[[list[Path]], None]
-    poll_interval: float = 5.0  # Seconds between git status polls
+    poll_interval: float = 1.0  # Seconds between mtime polls (cross-filesystem)
 
     _ignore_checker: IgnoreChecker = field(init=False)
     _watch_task: asyncio.Task[None] | None = field(default=None, init=False)

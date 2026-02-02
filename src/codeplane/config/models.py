@@ -39,6 +39,8 @@ class ServerConfig(BaseModel):
     host: str = "127.0.0.1"
     port: int = 7654
     shutdown_timeout_sec: int = 5
+    poll_interval_sec: float = 1.0  # File watcher polling interval (cross-filesystem)
+    debounce_sec: float = 0.3  # Debounce interval before triggering reindex
 
     @field_validator("port")
     @classmethod

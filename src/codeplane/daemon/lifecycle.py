@@ -47,16 +47,17 @@ class ServerController:
 
     def __post_init__(self) -> None:
         """Initialize components."""
-        # Create indexer
+        # Create indexer with configurable debounce
         self.indexer = BackgroundIndexer(
             coordinator=self.coordinator,
-            debounce_seconds=0.5,
+            debounce_seconds=self.config.debounce_sec,
         )
 
-        # Create watcher (uses IgnoreChecker internally)
+        # Create watcher with configurable poll interval
         self.watcher = FileWatcher(
             repo_root=self.repo_root,
             on_change=self.indexer.queue_paths,
+            poll_interval=self.config.poll_interval_sec,
         )
 
     async def start(self) -> None:
