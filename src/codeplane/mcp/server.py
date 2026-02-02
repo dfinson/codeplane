@@ -49,13 +49,12 @@ def create_mcp_server(context: AppContext) -> FastMCP:
 def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
     """Wire a single tool spec to FastMCP."""
 
-    # Create a wrapper that validates params and calls the registered handler
-    async def handler(**params: Any) -> dict[str, Any]:
-        validated = spec.params_model(**params)
-        result: dict[str, Any] = await spec.handler(context, validated)
+    # Create a wrapper that takes the pydantic model and calls the registered handler
+    async def handler(params: spec.params_model) -> dict[str, Any]:
+        result: dict[str, Any] = await spec.handler(context, params)
         return result
 
-    # Register with FastMCP
+    # Register with FastMCP - it will extract schema from the pydantic model
     mcp.tool(name=spec.name, description=spec.description)(handler)
 
 
