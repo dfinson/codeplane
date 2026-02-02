@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from codeplane.mcp.errors import InvalidRangeError, MCPError
 from codeplane.mcp.registry import registry
 from codeplane.mcp.tools.base import BaseParams
 
@@ -29,7 +28,7 @@ class RangeParam(BaseModel):
     end: int = Field(..., gt=0, description="End line (1-indexed, inclusive)")
 
     @model_validator(mode="after")
-    def validate_range(self) -> "RangeParam":
+    def validate_range(self) -> RangeParam:
         if self.end < self.start:
             raise ValueError(f"end ({self.end}) must be >= start ({self.start})")
         return self
