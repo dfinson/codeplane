@@ -201,24 +201,21 @@ async def run_server(
     codeplane_dir = repo_root / ".codeplane"
     write_pid_file(codeplane_dir, config.port)
 
-    # Setup signal handlers
+    # Setup signal handlers - just set should_exit, uvicorn handles the rest
     loop = asyncio.get_event_loop()
 
     def signal_handler() -> None:
         logger.info("shutdown_signal_received")
-        asyncio.create_task(server.shutdown())
+        server.should_exit = True
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, signal_handler)
 
     try:
-        logger.info(
-            "server listening",
-            host=config.host,
-            port=config.port,
-        )
+        await controller.start()
         await server.serve()
     finally:
+        await controller.stop()
         remove_pid_file(codeplane_dir)
 
 
