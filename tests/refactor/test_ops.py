@@ -149,6 +149,8 @@ class TestRefactorMove:
         coordinator = MagicMock()
         coordinator.db = MagicMock()
         coordinator.db.session = MagicMock()
+        # search is async, must return awaitable
+        coordinator.search = AsyncMock(return_value=[])
         return coordinator
 
     @pytest.fixture
@@ -201,6 +203,8 @@ class TestRefactorDelete:
         coordinator.db = MagicMock()
         coordinator.db.session = MagicMock()
         coordinator.get_all_defs = AsyncMock(return_value=[])
+        # search is async, must return awaitable
+        coordinator.search = AsyncMock(return_value=[])
         return coordinator
 
     @pytest.fixture

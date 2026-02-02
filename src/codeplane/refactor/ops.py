@@ -370,48 +370,30 @@ class RefactorOps:
         seen_locations: set[tuple[str, int]],
         edits_by_file: dict[str, list[EditHunk]],
     ) -> None:
-        """Codebase-wide lexical search as low-certainty fallback.
+        """Use Tantivy index for lexical fallback - NOT filesystem scan.
 
-        Finds all occurrences of the symbol as a whole word across the
-        entire codebase. These are marked as low certainty since we can't
-        semantically verify they refer to the same symbol.
+        Queries the index for the symbol, then validates matches.
+        Much faster than scanning all files.
         """
-        from codeplane.index.models import File
+        # Search the index for the symbol
+        search_results = await self._coordinator.search(symbol, limit=500)
 
-        # Get all indexed files
-        with self._coordinator.db.session() as session:
-            from sqlmodel import select
-
-            files = session.exec(select(File)).all()
-
-        for file_record in files:
-            full_path = self._repo_root / file_record.path
-            if not full_path.exists():
+        for hit in search_results:
+            loc = (hit.path, hit.line)
+            if loc in seen_locations:
                 continue
 
-            try:
-                content = full_path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-
-            # Search for whole-word matches
-            pattern = rf"\b{re.escape(symbol)}\b"
-            lines = content.splitlines()
-            for i, line in enumerate(lines, 1):
-                loc = (file_record.path, i)
-                if loc in seen_locations:
-                    continue
-
-                if re.search(pattern, line):
-                    seen_locations.add(loc)
-                    edits_by_file.setdefault(file_record.path, []).append(
-                        EditHunk(
-                            old=symbol,
-                            new=new_name,
-                            line=i,
-                            certainty="low",
-                        )
+            # Verify it's a word boundary match (index may return partial matches)
+            if hit.snippet and _word_boundary_match(hit.snippet, symbol):
+                seen_locations.add(loc)
+                edits_by_file.setdefault(hit.path, []).append(
+                    EditHunk(
+                        old=symbol,
+                        new=new_name,
+                        line=hit.line,
+                        certainty="low",
                     )
+                )
 
     async def inspect(
         self,
@@ -607,48 +589,31 @@ class RefactorOps:
         seen_locations: set[tuple[str, int]],
         edits_by_file: dict[str, list[EditHunk]],
     ) -> None:
-        """Lexical search for module references not captured by ImportFact."""
-        from codeplane.index.models import File
+        """Use Tantivy index for move lexical fallback - NOT filesystem scan.
 
-        with self._coordinator.db.session() as session:
-            from sqlmodel import select
+        Searches for quoted module/path strings via the index.
+        """
+        # Search for module path in quotes
+        for old_val, new_val in [(from_module, to_module), (from_path, to_path)]:
+            # Search for the value (index will find files containing it)
+            search_results = await self._coordinator.search(f'"{old_val}"', limit=200)
 
-            files = session.exec(select(File)).all()
+            for hit in search_results:
+                loc = (hit.path, hit.line)
+                if loc in seen_locations:
+                    continue
 
-        # Patterns to search for
-        patterns = [
-            (from_module, to_module),  # Dotted module path
-            (from_path, to_path),  # File path
-        ]
-
-        for file_record in files:
-            full_path = self._repo_root / file_record.path
-            if not full_path.exists():
-                continue
-
-            try:
-                content = full_path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-
-            lines = content.splitlines()
-            for i, line in enumerate(lines, 1):
-                for old_val, new_val in patterns:
-                    loc = (file_record.path, i)
-                    if loc in seen_locations:
-                        continue
-
-                    # Check for quoted strings containing the path/module
-                    if f'"{old_val}"' in line or f"'{old_val}'" in line:
-                        seen_locations.add(loc)
-                        edits_by_file.setdefault(file_record.path, []).append(
-                            EditHunk(
-                                old=old_val,
-                                new=new_val,
-                                line=i,
-                                certainty="low",
-                            )
+                # Verify quoted string match
+                if hit.snippet and (f'"{old_val}"' in hit.snippet or f"'{old_val}'" in hit.snippet):
+                    seen_locations.add(loc)
+                    edits_by_file.setdefault(hit.path, []).append(
+                        EditHunk(
+                            old=old_val,
+                            new=new_val,
+                            line=hit.line,
+                            certainty="low",
                         )
+                    )
 
     def _path_to_module(self, path: str) -> str:
         """Convert file path to Python module path."""
@@ -862,48 +827,31 @@ class RefactorOps:
         seen_locations: set[tuple[str, int]],
         edits_by_file: dict[str, list[EditHunk]],
     ) -> None:
-        """Lexical fallback for delete - find all occurrences."""
-        from codeplane.index.models import File
-
-        with self._coordinator.db.session() as session:
-            from sqlmodel import select
-
-            files = session.exec(select(File)).all()
-
-        # Handle both file path and symbol patterns
+        """Use Tantivy index for delete lexical fallback - NOT filesystem scan."""
+        # Build search patterns
         patterns = [target]
         if "/" in target or target.endswith(".py"):
-            # Also search for module form
             patterns.append(self._path_to_module(target))
 
-        for file_record in files:
-            full_path = self._repo_root / file_record.path
-            if not full_path.exists():
-                continue
+        for pattern in patterns:
+            search_results = await self._coordinator.search(pattern, limit=500)
 
-            try:
-                content = full_path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-
-            lines = content.splitlines()
-            for i, line in enumerate(lines, 1):
-                loc = (file_record.path, i)
+            for hit in search_results:
+                loc = (hit.path, hit.line)
                 if loc in seen_locations:
                     continue
 
-                for pattern in patterns:
-                    if _word_boundary_match(line, pattern):
-                        seen_locations.add(loc)
-                        edits_by_file.setdefault(file_record.path, []).append(
-                            EditHunk(
-                                old=pattern,
-                                new="",
-                                line=i,
-                                certainty="low",
-                            )
+                # Verify word boundary match
+                if hit.snippet and _word_boundary_match(hit.snippet, pattern):
+                    seen_locations.add(loc)
+                    edits_by_file.setdefault(hit.path, []).append(
+                        EditHunk(
+                            old=pattern,
+                            new="",
+                            line=hit.line,
+                            certainty="low",
                         )
-                        break
+                    )
 
     def _build_delete_preview(
         self,
