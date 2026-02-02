@@ -82,13 +82,6 @@ make lint        # Ruff
 make typecheck   # Mypy
 ```
 
-## Design Authority
-
-[SPEC.md](SPEC.md) is the single source of truth. Key sections:
-
-- §7: Index Architecture (Tier 0 + Tier 1)
-- §19: Semantic Support Exploration (design archaeology)
-
 ## License
 
 [MIT](LICENSE)
