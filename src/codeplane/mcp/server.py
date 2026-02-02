@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from fastmcp.utilities.json_schema import compress_schema
 from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
@@ -63,18 +64,27 @@ def create_mcp_server(context: AppContext) -> FastMCP:
 
 
 def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
-    """Wire a single tool spec to FastMCP."""
-    # Capture spec in closure by binding to default argument
+    """Wire a single tool spec to FastMCP.
+
+    Creates a handler function with the params model's fields as direct
+    parameters, ensuring FastMCP generates a flat schema compatible with
+    all MCP clients including Claude.
+    """
+    from fastmcp.tools.tool import FunctionTool
+
     params_model = spec.params_model
     spec_handler = spec.handler
 
-    # Create handler with explicit type annotation set after definition
-    async def handler(params: Any) -> dict[str, Any]:
-        # Extract session_id from params if present
-        # Most params models are Pydantic models, but some might be dicts or None?
-        # FastMCP / Pydantic ensures params is an instance of params_model.
-        session_id = getattr(params, "session_id", None)
+    # Get the JSON schema from the params model and flatten it
+    raw_schema = params_model.model_json_schema()
+    flat_schema = compress_schema(raw_schema)
 
+    # Create handler that accepts **kwargs and reconstructs the params model
+    async def handler(**kwargs: Any) -> dict[str, Any]:
+        # Reconstruct the params model from kwargs
+        params = params_model(**kwargs)
+
+        session_id = getattr(params, "session_id", None)
         session = context.session_manager.get_or_create(session_id)
 
         try:
@@ -88,8 +98,6 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
                 },
             ).model_dump()
         except Exception as e:
-            # We catch all exceptions to ensure we return a structured error response
-            # instead of crashing the MCP connection or returning an RPC error.
             return ToolResponse(
                 success=False,
                 result=None,
@@ -99,11 +107,15 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
                 },
             ).model_dump()
 
-    # Set the type hint explicitly so FastMCP can introspect it
-    handler.__annotations__["params"] = params_model
+    # Create a FunctionTool with the flattened schema
+    tool = FunctionTool(
+        name=spec.name,
+        description=spec.description,
+        parameters=flat_schema,
+        fn=handler,
+    )
 
-    # Register with FastMCP - it will extract schema from the pydantic model
-    mcp.tool(name=spec.name, description=spec.description)(handler)
+    mcp.add_tool(tool)
 
 
 def run_server(repo_root: Path, db_path: Path, tantivy_path: Path) -> None:
