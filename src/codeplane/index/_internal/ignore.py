@@ -156,10 +156,7 @@ class IgnoreChecker:
                     line = line[1:]
 
                 # Directory patterns (ending in /) match all contents
-                if line.endswith("/"):
-                    pattern = f"{line}**"
-                else:
-                    pattern = line
+                pattern = f"{line}**" if line.endswith("/") else line
 
                 # Apply prefix for nested .gitignore
                 if prefix:

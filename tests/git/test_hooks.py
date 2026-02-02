@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import stat
 from pathlib import Path
-
-import pytest
 
 from codeplane.git._internal.hooks import HookResult, run_hook
 
@@ -69,9 +66,7 @@ class TestRunHook:
         hooks_dir = tmp_path / ".git" / "hooks"
         hooks_dir.mkdir(parents=True)
         hook = hooks_dir / "pre-commit"
-        hook.write_text(
-            "#!/bin/sh\necho 'stdout message'\necho 'stderr message' >&2\nexit 0\n"
-        )
+        hook.write_text("#!/bin/sh\necho 'stdout message'\necho 'stderr message' >&2\nexit 0\n")
         hook.chmod(hook.stat().st_mode | stat.S_IXUSR)
 
         result = run_hook(tmp_path, "pre-commit")

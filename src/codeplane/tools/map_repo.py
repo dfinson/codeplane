@@ -191,10 +191,7 @@ class RepoMapper:
 
         # Check include globs (empty = include all)
         if include_globs:
-            for pattern in include_globs:
-                if matches_glob(path, pattern):
-                    return True
-            return False
+            return any(matches_glob(path, pattern) for pattern in include_globs)
 
         return True
 
@@ -301,9 +298,7 @@ class RepoMapper:
     ) -> list[LanguageStats]:
         """Analyze language distribution from File.language_family."""
         # Get all files with language info
-        stmt = select(File.path, File.language_family).where(
-            col(File.language_family).isnot(None)
-        )
+        stmt = select(File.path, File.language_family).where(col(File.language_family).isnot(None))
         results = list(self._session.exec(stmt).all())
 
         # Filter and count

@@ -133,16 +133,13 @@ class ShapeInferenceResolver:
         stats = ShapeInferenceStats()
 
         with self._db.session() as session:
-            stmt = (
-                select(ReceiverShapeFact)
-                .where(
-                    col(ReceiverShapeFact.file_id).in_(file_ids),
-                    (ReceiverShapeFact.best_match_type == None)  # noqa: E711
-                    | (
-                        (ReceiverShapeFact.match_confidence != None)  # noqa: E711
-                        & (ReceiverShapeFact.match_confidence < self.CONFIDENCE_THRESHOLD)  # type: ignore[operator]
-                    ),
-                )
+            stmt = select(ReceiverShapeFact).where(
+                col(ReceiverShapeFact.file_id).in_(file_ids),
+                (ReceiverShapeFact.best_match_type == None)  # noqa: E711
+                | (
+                    (ReceiverShapeFact.match_confidence != None)  # noqa: E711
+                    & (ReceiverShapeFact.match_confidence < self.CONFIDENCE_THRESHOLD)  # type: ignore[operator]
+                ),
             )
             shapes = list(session.exec(stmt).all())
             stats.shapes_processed = len(shapes)
@@ -193,19 +190,21 @@ class ShapeInferenceResolver:
             # Confidence = what fraction of observed members exist in this type
             # Plus bonus for methods (stronger signal than fields)
             method_matches = set(observed.get("methods", [])) & type_members
-            field_matches = set(observed.get("fields", [])) & type_members
+            set(observed.get("fields", [])) & type_members
 
             base_confidence = len(matched) / len(observed_set)
             # Bonus: methods are stronger evidence
             method_bonus = 0.1 * len(method_matches) if method_matches else 0
             confidence = min(1.0, base_confidence + method_bonus)
 
-            matches.append(TypeMatch(
-                type_name=type_name,
-                confidence=confidence,
-                matched_members=list(matched),
-                unmatched_members=list(unmatched),
-            ))
+            matches.append(
+                TypeMatch(
+                    type_name=type_name,
+                    confidence=confidence,
+                    matched_members=list(matched),
+                    unmatched_members=list(unmatched),
+                )
+            )
 
         if not matches:
             return "unmatched"
@@ -215,24 +214,24 @@ class ShapeInferenceResolver:
         best = matches[0]
 
         # Check for ambiguity (multiple high-confidence matches)
-        high_confidence_matches = [
-            m for m in matches if m.confidence >= self.CONFIDENCE_THRESHOLD
-        ]
+        high_confidence_matches = [m for m in matches if m.confidence >= self.CONFIDENCE_THRESHOLD]
         if len(high_confidence_matches) > 1:
             # Multiple candidates - record all but mark ambiguous
-            shape.matched_types_json = json.dumps([
-                {"type": m.type_name, "confidence": m.confidence}
-                for m in matches[:5]  # Top 5
-            ])
+            shape.matched_types_json = json.dumps(
+                [
+                    {"type": m.type_name, "confidence": m.confidence}
+                    for m in matches[:5]  # Top 5
+                ]
+            )
             shape.best_match_type = best.type_name
             shape.match_confidence = best.confidence
             return "ambiguous"
 
         # Single good match
         if best.confidence >= self.CONFIDENCE_THRESHOLD:
-            shape.matched_types_json = json.dumps([
-                {"type": best.type_name, "confidence": best.confidence}
-            ])
+            shape.matched_types_json = json.dumps(
+                [{"type": best.type_name, "confidence": best.confidence}]
+            )
             shape.best_match_type = best.type_name
             shape.match_confidence = best.confidence
 
@@ -249,10 +248,9 @@ class ShapeInferenceResolver:
             return "matched"
 
         # Low confidence - record but don't upgrade
-        shape.matched_types_json = json.dumps([
-            {"type": m.type_name, "confidence": m.confidence}
-            for m in matches[:3]
-        ])
+        shape.matched_types_json = json.dumps(
+            [{"type": m.type_name, "confidence": m.confidence} for m in matches[:3]]
+        )
         if matches:
             shape.best_match_type = best.type_name
             shape.match_confidence = best.confidence
@@ -314,7 +312,7 @@ class ShapeInferenceResolver:
         line: int,
         token: str,
         target_def_uid: str,
-        confidence: float,
+        _confidence: float,
     ) -> None:
         """Upgrade a RefFact based on shape inference."""
         stmt = select(RefFact).where(
@@ -343,9 +341,7 @@ class ShapeInferenceResolver:
             self._type_member_uids[type_name][member.member_name] = member.member_def_uid
 
 
-def resolve_shape_inference(
-    db: Database, file_ids: list[int] | None = None
-) -> ShapeInferenceStats:
+def resolve_shape_inference(db: Database, file_ids: list[int] | None = None) -> ShapeInferenceStats:
     """Convenience function to run shape inference.
 
     Args:

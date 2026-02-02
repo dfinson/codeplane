@@ -1253,7 +1253,7 @@ def long_sig(
         param_anns = [a for a in annotations if a.target_kind == "parameter"]
         if param_anns:
             # Scope lookup should work (exact result depends on tree positions)
-            assert isinstance(param_anns[0].scope_id, (int, type(None)))
+            assert isinstance(param_anns[0].scope_id, int | type(None))
 
 
 # =============================================================================

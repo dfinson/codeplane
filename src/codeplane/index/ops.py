@@ -912,6 +912,10 @@ class IndexCoordinator:
         self,
         include: list[IncludeOption] | None = None,
         depth: int = 3,
+        limit: int = 100,
+        include_globs: list[str] | None = None,
+        exclude_globs: list[str] | None = None,
+        respect_gitignore: bool = True,
     ) -> MapRepoResult:
         """Build repository mental model from indexed data.
 
@@ -921,6 +925,10 @@ class IndexCoordinator:
             include: Sections to include. Defaults to structure, languages, entry_points.
                 Options: structure, languages, entry_points, dependencies, test_layout, public_api
             depth: Directory tree depth (default 3)
+            limit: Maximum entries to return (default 100)
+            include_globs: Glob patterns to include (e.g., ['src/**', 'lib/**'])
+            exclude_globs: Glob patterns to exclude (e.g., ['**/output/**'])
+            respect_gitignore: Honor .gitignore patterns (default True)
 
         Returns:
             MapRepoResult with requested sections populated.
@@ -928,7 +936,14 @@ class IndexCoordinator:
         await self.wait_for_freshness()
         with self.db.session() as session:
             mapper = RepoMapper(session, self.repo_root)
-            return mapper.map(include=include, depth=depth)
+            return mapper.map(
+                include=include,
+                depth=depth,
+                limit=limit,
+                include_globs=include_globs,
+                exclude_globs=exclude_globs,
+                respect_gitignore=respect_gitignore,
+            )
 
     async def verify_integrity(self) -> IntegrityReport:
         """Verify index integrity (FK violations, missing files, Tantivy sync).

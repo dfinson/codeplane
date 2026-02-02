@@ -61,7 +61,7 @@ class ListWorkflowsParams(BaseParams):
     "Get detailed documentation for a specific tool",
     DescribeToolParams,
 )
-async def describe_tool(ctx: AppContext, params: DescribeToolParams) -> dict[str, Any]:
+async def describe_tool(_ctx: AppContext, params: DescribeToolParams) -> dict[str, Any]:
     """Return full documentation for a tool."""
     doc = get_tool_documentation(params.name)
 
@@ -93,7 +93,7 @@ async def describe_tool(ctx: AppContext, params: DescribeToolParams) -> dict[str
     "Get detailed documentation for an error code",
     DescribeErrorParams,
 )
-async def describe_error(ctx: AppContext, params: DescribeErrorParams) -> dict[str, Any]:
+async def describe_error(_ctx: AppContext, params: DescribeErrorParams) -> dict[str, Any]:
     """Return documentation for an error code including remediation steps."""
     doc = get_error_documentation(params.code)
 
@@ -119,7 +119,7 @@ async def describe_error(ctx: AppContext, params: DescribeErrorParams) -> dict[s
     "Query recent mutation operations for debugging",
     ListOperationsParams,
 )
-async def list_operations(ctx: AppContext, params: ListOperationsParams) -> dict[str, Any]:
+async def list_operations(_ctx: AppContext, params: ListOperationsParams) -> dict[str, Any]:
     """List recent mutation operations from the ledger."""
     ledger = get_ledger()
 
@@ -141,7 +141,7 @@ async def list_operations(ctx: AppContext, params: ListOperationsParams) -> dict
     "Get common tool workflow patterns",
     ListWorkflowsParams,
 )
-async def list_workflows(ctx: AppContext, params: ListWorkflowsParams) -> dict[str, Any]:
+async def list_workflows(_ctx: AppContext, _params: ListWorkflowsParams) -> dict[str, Any]:
     """Return common workflow patterns for tool usage."""
     return {
         "workflows": get_common_workflows(),
