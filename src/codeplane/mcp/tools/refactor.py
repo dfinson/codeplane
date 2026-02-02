@@ -95,14 +95,14 @@ async def refactor_rename(ctx: AppContext, params: RefactorRenameParams) -> dict
 #         params.target,
 #         include_comments=params.include_comments,
 #     )
-    result = await ctx.refactor_ops.apply(params.refactor_id, ctx.mutation_ops)
+#     result = await ctx.refactor_ops.apply(params.refactor_id, ctx.mutation_ops)
 #     return _serialize_refactor_result(result)
 
 
 @registry.register("refactor_apply", "Apply a previewed refactoring", RefactorApplyParams)
 async def refactor_apply(ctx: AppContext, params: RefactorApplyParams) -> dict[str, Any]:
     """Apply pending refactor."""
-    result = await ctx.refactor_ops.apply(params.refactor_id)
+    result = await ctx.refactor_ops.apply(params.refactor_id, ctx.mutation_ops)
     return _serialize_refactor_result(result)
 
 
