@@ -17,11 +17,15 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
+class RangeParam(BaseModel):
+    start: int
+    end: int
+
+
 class PatchParam(BaseModel):
     """A line-level patch."""
 
-    start: int
-    end: int
+    range: RangeParam
     replacement: str
 
 
@@ -57,7 +61,8 @@ async def mutate(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
         patches = None
         if e.patches:
             patches = [
-                Patch(start=p.start, end=p.end, replacement=p.replacement) for p in e.patches
+                Patch(start=p.range.start, end=p.range.end, replacement=p.replacement)
+                for p in e.patches
             ]
         edits.append(
             Edit(

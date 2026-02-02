@@ -5,10 +5,21 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel, Field
+
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from codeplane.mcp.context import AppContext
+
+
+class ToolResponse(BaseModel):
+    """Standardized tool response envelope per Spec §23.3."""
+
+    success: bool
+    data: Any
+    error: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 def create_mcp_server(context: AppContext) -> FastMCP:
@@ -53,9 +64,14 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
     spec_handler = spec.handler
 
     # Create handler with explicit type annotation set after definition
-    async def handler(params: Any) -> dict[str, Any]:
-        result: dict[str, Any] = await spec_handler(context, params)
-        return result
+    async def handler(params: Any) -> ToolResponse:
+        try:
+            result: dict[str, Any] = await spec_handler(context, params)
+            return ToolResponse(success=True, data=result)
+        except Exception as e:
+            # We catch all exceptions to ensure we return a structured error response
+            # instead of crashing the MCP connection or returning an RPC error.
+            return ToolResponse(success=False, data=None, error=str(e))
 
     # Set the type hint explicitly so FastMCP can introspect it
     handler.__annotations__["params"] = params_model
