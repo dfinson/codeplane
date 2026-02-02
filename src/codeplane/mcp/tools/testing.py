@@ -74,34 +74,37 @@ async def test_discover(ctx: AppContext, params: TestDiscoverParams) -> dict[str
     }
 
 
-@registry.register("test_run", "Run tests", TestRunParams)
-async def test_run(ctx: AppContext, params: TestRunParams) -> dict[str, Any]:
-    """Run tests."""
-    result = await ctx.test_ops.run(
-        targets=params.targets,
-        _pattern=params.pattern,
-        _tags=params.tags,
-        _failed_only=params.failed_only,
-        _parallelism=params.parallelism,
-        _timeout_sec=params.timeout_sec,
-        _fail_fast=params.fail_fast,
-    )
-
-    return _serialize_test_result(result)
-
-
-@registry.register("test_status", "Get status of a test run", TestStatusParams)
-async def test_status(ctx: AppContext, params: TestStatusParams) -> dict[str, Any]:
-    """Get test run status."""
-    result = await ctx.test_ops.status(params.run_id)
-    return _serialize_test_result(result)
+# TODO: Implement TestOps.run() subprocess execution before enabling
+# @registry.register("test_run", "Run tests", TestRunParams)
+# async def test_run(ctx: AppContext, params: TestRunParams) -> dict[str, Any]:
+#     """Run tests."""
+#     result = await ctx.test_ops.run(
+#         targets=params.targets,
+#         _pattern=params.pattern,
+#         _tags=params.tags,
+#         _failed_only=params.failed_only,
+#         _parallelism=params.parallelism,
+#         _timeout_sec=params.timeout_sec,
+#         _fail_fast=params.fail_fast,
+#     )
+#
+#     return _serialize_test_result(result)
 
 
-@registry.register("test_cancel", "Cancel a running test", TestCancelParams)
-async def test_cancel(ctx: AppContext, params: TestCancelParams) -> dict[str, Any]:
-    """Cancel test run."""
-    result = await ctx.test_ops.cancel(params.run_id)
-    return _serialize_test_result(result)
+# TODO: Implement TestOps.status() run tracking before enabling
+# @registry.register("test_status", "Get status of a test run", TestStatusParams)
+# async def test_status(ctx: AppContext, params: TestStatusParams) -> dict[str, Any]:
+#     """Get test run status."""
+#     result = await ctx.test_ops.status(params.run_id)
+#     return _serialize_test_result(result)
+
+
+# TODO: Implement TestOps.cancel() run management before enabling
+# @registry.register("test_cancel", "Cancel a running test", TestCancelParams)
+# async def test_cancel(ctx: AppContext, params: TestCancelParams) -> dict[str, Any]:
+#     """Cancel test run."""
+#     result = await ctx.test_ops.cancel(params.run_id)
+#     return _serialize_test_result(result)
 
 
 def _serialize_test_result(result: TestResult) -> dict[str, Any]:
