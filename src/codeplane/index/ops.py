@@ -895,6 +895,9 @@ class IndexCoordinator:
         """Close all resources."""
         self._lexical = None
         self._initialized = False
+        # Dispose DB engine to release file handles
+        if hasattr(self, "db") and self.db is not None:
+            self.db.engine.dispose()
 
     async def _index_all_files(self) -> tuple[int, list[str], dict[str, int]]:
         """Index all files in valid contexts.
