@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from fastmcp import FastMCP  # type: ignore[import-not-found]
+    from fastmcp import FastMCP
 
     from codeplane.mcp.context import AppContext
 
@@ -48,11 +48,17 @@ def create_mcp_server(context: AppContext) -> FastMCP:
 
 def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
     """Wire a single tool spec to FastMCP."""
+    # Capture spec in closure by binding to default argument
+    params_model = spec.params_model
+    spec_handler = spec.handler
 
-    # Create a wrapper that takes the pydantic model and calls the registered handler
-    async def handler(params: spec.params_model) -> dict[str, Any]:
-        result: dict[str, Any] = await spec.handler(context, params)
+    # Create handler with explicit type annotation set after definition
+    async def handler(params: Any) -> dict[str, Any]:
+        result: dict[str, Any] = await spec_handler(context, params)
         return result
+
+    # Set the type hint explicitly so FastMCP can introspect it
+    handler.__annotations__["params"] = params_model
 
     # Register with FastMCP - it will extract schema from the pydantic model
     mcp.tool(name=spec.name, description=spec.description)(handler)

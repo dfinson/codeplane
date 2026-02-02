@@ -16,7 +16,7 @@ REPO_HEADER = "X-CodePlane-Repo"
 CallNext = Callable[[Request], Awaitable[Response]]
 
 
-class RepoHeaderMiddleware(BaseHTTPMiddleware):  # type: ignore[misc]
+class RepoHeaderMiddleware(BaseHTTPMiddleware):
     """Inject X-CodePlane-Repo header into all responses."""
 
     def __init__(self, app: Any, repo_root: Path) -> None:
