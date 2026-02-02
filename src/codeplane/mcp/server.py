@@ -49,23 +49,13 @@ def create_mcp_server(context: AppContext) -> FastMCP:
 def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
     """Wire a single tool spec to FastMCP."""
 
-    # Create handler that validates params and calls registered handler
-    async def make_handler(s: Any = spec, ctx: AppContext = context) -> Any:
-        async def handler(**params: Any) -> dict[str, Any]:
-            validated = s.params_model(**params)
-            result: dict[str, Any] = await s.handler(ctx, validated)
-            return result
-
-        return handler
-
-    # Get the async handler
-    import asyncio
-
-    handler = asyncio.get_event_loop().run_until_complete(make_handler())
+    # Create a wrapper that validates params and calls the registered handler
+    async def handler(**params: Any) -> dict[str, Any]:
+        validated = spec.params_model(**params)
+        result: dict[str, Any] = await spec.handler(context, validated)
+        return result
 
     # Register with FastMCP
-    # FastMCP infers schema from function signature, so we need to
-    # dynamically create a function with the right signature
     mcp.tool(name=spec.name, description=spec.description)(handler)
 
 
