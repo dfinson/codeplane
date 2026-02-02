@@ -34,17 +34,34 @@ class AppContext:
     test_ops: TestOps
 
     @classmethod
-    def create(cls, repo_root: Path, db_path: Path, tantivy_path: Path) -> AppContext:
-        """Factory to create context with all ops wired together."""
+    def create(
+        cls,
+        repo_root: Path,
+        db_path: Path,
+        tantivy_path: Path,
+        coordinator: IndexCoordinator | None = None,
+    ) -> AppContext:
+        """Factory to create context with all ops wired together.
+
+        Args:
+            repo_root: Repository root path
+            db_path: Path to SQLite database
+            tantivy_path: Path to Tantivy index directory
+            coordinator: Optional existing IndexCoordinator (reuses if provided)
+        """
         from codeplane.files.ops import FileOps
         from codeplane.git.ops import GitOps
-        from codeplane.index.ops import IndexCoordinator
+        from codeplane.index.ops import IndexCoordinator as IC
         from codeplane.mutation.ops import MutationOps
         from codeplane.refactor.ops import RefactorOps
         from codeplane.testing.ops import TestOps
 
         git_ops = GitOps(repo_root)
-        coordinator = IndexCoordinator(repo_root, db_path, tantivy_path)
+
+        # Reuse existing coordinator or create new one
+        if coordinator is None:
+            coordinator = IC(repo_root, db_path, tantivy_path)
+
         file_ops = FileOps(repo_root)
 
         # MutationOps triggers reindex on mutation

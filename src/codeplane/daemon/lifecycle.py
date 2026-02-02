@@ -173,7 +173,7 @@ async def run_server(
         config=config,
     )
 
-    app = create_app(controller, repo_root)
+    app = create_app(controller, repo_root, coordinator)
 
     # Configure uvicorn
     uvicorn_config = uvicorn.Config(
