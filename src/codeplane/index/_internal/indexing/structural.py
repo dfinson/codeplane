@@ -374,7 +374,7 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
 def _extract_type_aware_facts(
     extraction: ExtractionResult,
     tree: Any,
-    content: bytes,
+    _content: bytes,
     unit_id: int,
     file_path: str,
 ) -> None:
@@ -423,14 +423,16 @@ def _extract_type_aware_facts(
                     "unit_id": unit_id,
                     "target_kind": ann.target_kind,
                     "target_name": ann.target_name,
-                    "type_text": ann.raw_annotation,
-                    "type_origin": ann.base_type,
+                    "raw_annotation": ann.raw_annotation,
+                    "canonical_type": ann.canonical_type,
+                    "base_type": ann.base_type,
+                    "is_optional": ann.is_optional,
+                    "is_array": ann.is_array,
                     "is_generic": ann.is_generic,
-                    "certainty": Certainty.CERTAIN.value,
+                    "is_reference": ann.is_reference,
+                    "is_mutable": ann.is_mutable,
                     "start_line": ann.start_line,
                     "start_col": ann.start_col,
-                    "end_line": ann.start_line,  # Single line for annotations
-                    "end_col": ann.start_col + len(ann.raw_annotation),
                 }
             )
 
@@ -440,31 +442,39 @@ def _extract_type_aware_facts(
             extraction.type_members.append(
                 {
                     "unit_id": unit_id,
+                    "parent_def_uid": mem.parent_def_uid,
+                    "parent_type_name": mem.parent_type_name,
                     "parent_kind": mem.parent_kind,
-                    "parent_name": mem.parent_type_name,
                     "member_kind": mem.member_kind,
                     "member_name": mem.member_name,
-                    "member_type": mem.type_annotation,
-                    "is_static": mem.is_static,
+                    "member_def_uid": mem.member_def_uid,
+                    "type_annotation": mem.type_annotation,
+                    "canonical_type": mem.canonical_type,
+                    "base_type": mem.base_type,
                     "visibility": mem.visibility,
+                    "is_static": mem.is_static,
+                    "is_abstract": mem.is_abstract,
                     "start_line": mem.start_line,
                     "start_col": mem.start_col,
-                    "end_line": mem.start_line,
-                    "end_col": mem.start_col,
                 }
             )
 
         # Extract member accesses
-        accesses = extractor.extract_member_accesses(tree, file_path, extraction.scopes, annotations)
+        accesses = extractor.extract_member_accesses(
+            tree, file_path, extraction.scopes, annotations
+        )
         for acc in accesses:
             extraction.member_accesses.append(
                 {
                     "unit_id": unit_id,
-                    "receiver_text": acc.receiver_name,
-                    "access_chain": acc.member_chain,
-                    "final_member": acc.final_member,
                     "access_style": acc.access_style,
-                    "has_call": acc.is_invocation,
+                    "full_expression": acc.full_expression,
+                    "receiver_name": acc.receiver_name,
+                    "member_chain": acc.member_chain,
+                    "final_member": acc.final_member,
+                    "chain_depth": acc.chain_depth,
+                    "is_invocation": acc.is_invocation,
+                    "arg_count": acc.arg_count,
                     "start_line": acc.start_line,
                     "start_col": acc.start_col,
                     "end_line": acc.end_line,
@@ -478,10 +488,11 @@ def _extract_type_aware_facts(
             extraction.interface_impls.append(
                 {
                     "unit_id": unit_id,
+                    "implementor_def_uid": impl.implementor_def_uid,
                     "implementor_name": impl.implementor_name,
                     "interface_name": impl.interface_name,
+                    "interface_def_uid": impl.interface_def_uid,
                     "impl_style": impl.impl_style,
-                    "certainty": Certainty.CERTAIN.value,
                     "start_line": impl.start_line,
                     "start_col": impl.start_col,
                 }
