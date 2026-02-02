@@ -156,7 +156,7 @@ class ReferenceResolver:
                 LocalBindFact.name == ref.token_text,
             )
         )
-        bind = session.exec(bind_stmt).first()  # type: ignore[union-attr]
+        bind = session.exec(bind_stmt).first()  # type: ignore[attr-defined]
 
         if bind is None:
             return False
@@ -178,7 +178,7 @@ class ReferenceResolver:
         """Resolve a reference via import chain."""
         # Find the ImportFact
         import_stmt = select(ImportFact).where(ImportFact.import_uid == import_uid)
-        imp = session.exec(import_stmt).first()  # type: ignore[union-attr]
+        imp = session.exec(import_stmt).first()  # type: ignore[attr-defined]
 
         if imp is None:
             return False
@@ -214,7 +214,7 @@ class ReferenceResolver:
         self._module_to_file = {}
 
         stmt = select(File.id, File.path)
-        files = session.exec(stmt).all()  # type: ignore[union-attr]
+        files = session.exec(stmt).all()  # type: ignore[attr-defined]
 
         for file_id, path in files:
             if file_id is None:
@@ -232,7 +232,7 @@ class ReferenceResolver:
         stmt = select(DefFact).where(
             col(DefFact.kind).in_(["function", "class", "variable"]),
         )
-        defs = session.exec(stmt).all()  # type: ignore[union-attr]
+        defs = session.exec(stmt).all()  # type: ignore[attr-defined]
 
         for d in defs:
             if d.file_id not in self._file_exports:

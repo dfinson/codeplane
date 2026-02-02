@@ -40,11 +40,16 @@ from codeplane.index.models import (
     DynamicAccessSite,
     File,
     ImportFact,
+    InterfaceImplFact,
     LocalBindFact,
+    MemberAccessFact,
+    ReceiverShapeFact,
     RefFact,
     RefTier,
     Role,
     ScopeFact,
+    TypeAnnotationFact,
+    TypeMemberFact,
 )
 
 
@@ -76,6 +81,12 @@ class ExtractionResult:
     imports: list[dict[str, Any]] = field(default_factory=list)
     binds: list[dict[str, Any]] = field(default_factory=list)
     dynamic_sites: list[dict[str, Any]] = field(default_factory=list)
+    # Type-aware facts (Tier 2)
+    type_annotations: list[dict[str, Any]] = field(default_factory=list)
+    type_members: list[dict[str, Any]] = field(default_factory=list)
+    member_accesses: list[dict[str, Any]] = field(default_factory=list)
+    interface_impls: list[dict[str, Any]] = field(default_factory=list)
+    receiver_shapes: list[dict[str, Any]] = field(default_factory=list)
     interface_hash: str | None = None
     content_hash: str | None = None
     line_count: int = 0
@@ -94,6 +105,12 @@ class BatchResult:
     imports_extracted: int = 0
     binds_extracted: int = 0
     dynamic_sites_extracted: int = 0
+    # Type-aware facts (Tier 2)
+    type_annotations_extracted: int = 0
+    type_members_extracted: int = 0
+    member_accesses_extracted: int = 0
+    interface_impls_extracted: int = 0
+    receiver_shapes_extracted: int = 0
     errors: list[str] = field(default_factory=list)
     duration_ms: int = 0
 
@@ -343,12 +360,139 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
             }
             result.dynamic_sites.append(dyn_dict)
 
+        # Extract type-aware facts (Tier 2) using language-specific extractors
+        _extract_type_aware_facts(result, parse_result, content, unit_id, file_path)
+
         result.parse_time_ms = int((time.monotonic() - start) * 1000)
 
     except Exception as e:
         result.error = str(e)
 
     return result
+
+
+def _extract_type_aware_facts(
+    extraction: ExtractionResult,
+    tree: Any,
+    content: bytes,
+    unit_id: int,
+    file_path: str,
+) -> None:
+    """Extract type-aware facts using language-specific extractors.
+
+    Populates extraction.type_annotations, type_members, member_accesses.
+    This is called after the base extraction for Tier 2 indexing.
+    """
+    try:
+        from codeplane.index._internal.extraction import get_registry
+
+        # Get language family from file extension
+        ext = Path(file_path).suffix.lower()
+        ext_to_family = {
+            ".py": "python",
+            ".pyi": "python",
+            ".js": "javascript",
+            ".jsx": "javascript",
+            ".ts": "typescript",
+            ".tsx": "typescript",
+            ".go": "go",
+            ".rs": "rust",
+            ".java": "java",
+            ".kt": "kotlin",
+            ".scala": "scala",
+            ".cs": "csharp",
+            ".cpp": "cpp",
+            ".c": "c",
+            ".h": "cpp",
+            ".rb": "ruby",
+            ".php": "php",
+            ".swift": "swift",
+        }
+        language = ext_to_family.get(ext)
+        if not language:
+            return
+
+        registry = get_registry()
+        extractor = registry.get_or_fallback(language)
+
+        # Extract type annotations
+        annotations = extractor.extract_type_annotations(tree, file_path, extraction.scopes)
+        for ann in annotations:
+            extraction.type_annotations.append(
+                {
+                    "unit_id": unit_id,
+                    "target_kind": ann.target_kind,
+                    "target_name": ann.target_name,
+                    "type_text": ann.raw_annotation,
+                    "type_origin": ann.base_type,
+                    "is_generic": ann.is_generic,
+                    "certainty": Certainty.CERTAIN.value,
+                    "start_line": ann.start_line,
+                    "start_col": ann.start_col,
+                    "end_line": ann.start_line,  # Single line for annotations
+                    "end_col": ann.start_col + len(ann.raw_annotation),
+                }
+            )
+
+        # Extract type members
+        members = extractor.extract_type_members(tree, file_path, extraction.defs)
+        for mem in members:
+            extraction.type_members.append(
+                {
+                    "unit_id": unit_id,
+                    "parent_kind": mem.parent_kind,
+                    "parent_name": mem.parent_type_name,
+                    "member_kind": mem.member_kind,
+                    "member_name": mem.member_name,
+                    "member_type": mem.type_annotation,
+                    "is_static": mem.is_static,
+                    "visibility": mem.visibility,
+                    "start_line": mem.start_line,
+                    "start_col": mem.start_col,
+                    "end_line": mem.start_line,
+                    "end_col": mem.start_col,
+                }
+            )
+
+        # Extract member accesses
+        accesses = extractor.extract_member_accesses(tree, file_path, extraction.scopes, annotations)
+        for acc in accesses:
+            extraction.member_accesses.append(
+                {
+                    "unit_id": unit_id,
+                    "receiver_text": acc.receiver_name,
+                    "access_chain": acc.member_chain,
+                    "final_member": acc.final_member,
+                    "access_style": acc.access_style,
+                    "has_call": acc.is_invocation,
+                    "start_line": acc.start_line,
+                    "start_col": acc.start_col,
+                    "end_line": acc.end_line,
+                    "end_col": acc.end_col,
+                }
+            )
+
+        # Extract interface implementations (if extractor supports it)
+        impls = extractor.extract_interface_impls(tree, file_path, extraction.defs)
+        for impl in impls:
+            extraction.interface_impls.append(
+                {
+                    "unit_id": unit_id,
+                    "implementor_name": impl.implementor_name,
+                    "interface_name": impl.interface_name,
+                    "impl_style": impl.impl_style,
+                    "certainty": Certainty.CERTAIN.value,
+                    "start_line": impl.start_line,
+                    "start_col": impl.start_col,
+                }
+            )
+
+    except ImportError:
+        # Extraction module not available - skip type-aware extraction
+        pass
+    except Exception:
+        # Don't fail extraction for type-aware facts - they're supplementary
+        pass
 
 
 def _find_containing_scope(scopes: list[SyntacticScope], line: int, col: int) -> int:
@@ -464,6 +608,11 @@ class StructuralIndexer:
                     ImportFact,
                     LocalBindFact,
                     DynamicAccessSite,
+                    TypeAnnotationFact,
+                    TypeMemberFact,
+                    MemberAccessFact,
+                    InterfaceImplFact,
+                    ReceiverShapeFact,
                 ):
                     writer.delete_where(fact_model, "file_id = :fid", {"fid": file_id})
 
@@ -521,6 +670,36 @@ class StructuralIndexer:
                     dyn_dict["file_id"] = file_id
                     writer.insert_many(DynamicAccessSite, [dyn_dict])
                     result.dynamic_sites_extracted += 1
+
+                # Insert TypeAnnotationFacts (Tier 2)
+                for ann_dict in extraction.type_annotations:
+                    ann_dict["file_id"] = file_id
+                    writer.insert_many(TypeAnnotationFact, [ann_dict])
+                    result.type_annotations_extracted += 1
+
+                # Insert TypeMemberFacts (Tier 2)
+                for mem_dict in extraction.type_members:
+                    mem_dict["file_id"] = file_id
+                    writer.insert_many(TypeMemberFact, [mem_dict])
+                    result.type_members_extracted += 1
+
+                # Insert MemberAccessFacts (Tier 2)
+                for acc_dict in extraction.member_accesses:
+                    acc_dict["file_id"] = file_id
+                    writer.insert_many(MemberAccessFact, [acc_dict])
+                    result.member_accesses_extracted += 1
+
+                # Insert InterfaceImplFacts (Tier 2)
+                for impl_dict in extraction.interface_impls:
+                    impl_dict["file_id"] = file_id
+                    writer.insert_many(InterfaceImplFact, [impl_dict])
+                    result.interface_impls_extracted += 1
+
+                # Insert ReceiverShapeFacts (Tier 2) - computed during resolution, not extraction
+                for shape_dict in extraction.receiver_shapes:
+                    shape_dict["file_id"] = file_id
+                    writer.insert_many(ReceiverShapeFact, [shape_dict])
+                    result.receiver_shapes_extracted += 1
 
         result.duration_ms = int((time.monotonic() - start) * 1000)
         return result

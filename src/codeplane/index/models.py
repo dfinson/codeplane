@@ -289,6 +289,69 @@ class MarkerTier(str, Enum):
     PACKAGE = "package"
 
 
+class AccessStyle(str, Enum):
+    """Member access syntax style."""
+
+    DOT = "dot"  # obj.member (most languages)
+    ARROW = "arrow"  # obj->member (C, C++, PHP)
+    SCOPE = "scope"  # Namespace::member (C++, Rust, PHP)
+    BRACKET = "bracket"  # obj["member"] (dynamic access)
+
+
+class ResolutionMethod(str, Enum):
+    """How a reference was resolved to its target."""
+
+    TYPE_TRACED = "type_traced"  # Via type annotation chain
+    IMPORT_TRACED = "import_traced"  # Via import resolution
+    INTERFACE_MATCHED = "interface_matched"  # Via interface/trait impl
+    SHAPE_MATCHED = "shape_matched"  # Via duck-type shape inference
+    LEXICAL = "lexical"  # Lexical search only (lowest confidence)
+    UNRESOLVED = "unresolved"  # Could not resolve
+
+
+class AnnotationTargetKind(str, Enum):
+    """What kind of entity has a type annotation."""
+
+    PARAMETER = "parameter"  # Function/method parameter
+    VARIABLE = "variable"  # Local variable
+    FIELD = "field"  # Class/struct field
+    PROPERTY = "property"  # Property (getter/setter)
+    RETURN = "return"  # Function return type
+    CLASS_VAR = "class_var"  # Class-level variable
+
+
+class MemberKind(str, Enum):
+    """Kind of type member."""
+
+    FIELD = "field"  # Instance field
+    METHOD = "method"  # Instance method
+    PROPERTY = "property"  # Property
+    STATIC_FIELD = "static_field"  # Static/class field
+    STATIC_METHOD = "static_method"  # Static method
+    CLASS_METHOD = "class_method"  # Class method (Python)
+    CONSTRUCTOR = "constructor"  # Constructor/initializer
+
+
+class TypeParentKind(str, Enum):
+    """Kind of type that contains members."""
+
+    CLASS = "class"
+    STRUCT = "struct"
+    INTERFACE = "interface"
+    TRAIT = "trait"
+    PROTOCOL = "protocol"  # Swift
+    MODULE = "module"  # Module-level namespace
+    ENUM = "enum"
+
+
+class ImplStyle(str, Enum):
+    """How interface implementation is declared."""
+
+    EXPLICIT = "explicit"  # implements/impl keyword
+    STRUCTURAL = "structural"  # Go-style implicit (shape match)
+    INFERRED = "inferred"  # Type inference
+
+
 # ============================================================================
 # TIER 1 FACT TABLES (per SPEC.md §7.3)
 # ============================================================================
@@ -593,6 +656,210 @@ class DynamicAccessSite(SQLModel, table=True):
         if self.extracted_literals is None:
             return []
         result: list[str] = json.loads(self.extracted_literals)
+        return result
+
+
+# ============================================================================
+# TIER 2 TYPE-AWARE FACT TABLES (Type-traced refactoring support)
+# ============================================================================
+
+
+class TypeAnnotationFact(SQLModel, table=True):
+    """Type annotation extracted from source code.
+
+    Captures explicit type annotations from any language that supports them.
+    Used by Pass 3 (type-traced resolution) to resolve member accesses.
+    """
+
+    __tablename__ = "type_annotation_facts"
+
+    annotation_id: int | None = Field(default=None, primary_key=True)
+    file_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("files.id", ondelete="CASCADE"), index=True)
+    )
+    unit_id: int = Field(foreign_key="contexts.id", index=True)
+    scope_id: int | None = Field(default=None, foreign_key="scope_facts.scope_id", index=True)
+
+    # What's annotated
+    target_kind: str  # AnnotationTargetKind value
+    target_name: str = Field(index=True)  # Variable/param name
+
+    # The annotation (as written and normalized)
+    raw_annotation: str  # As written: "List[int]", "int[]", "[]int"
+    canonical_type: str = Field(index=True)  # Normalized: "List<int>"
+    base_type: str = Field(index=True)  # Just the base: "List", "int"
+
+    # Type modifiers (language-agnostic flags)
+    is_optional: bool = Field(default=False)  # None/null/nil allowed
+    is_array: bool = Field(default=False)  # Collection type
+    is_generic: bool = Field(default=False)  # Has type parameters
+    is_reference: bool = Field(default=False)  # Pointer/ref type
+    is_mutable: bool = Field(default=True)  # const/final/let vs var
+
+    # Generic parameters (if applicable)
+    type_args_json: str | None = None  # ["int"] for List<int>
+
+    # Source info
+    start_line: int
+    start_col: int
+
+    def get_type_args(self) -> list[str]:
+        """Parse type_args_json to list."""
+        if self.type_args_json is None:
+            return []
+        result: list[str] = json.loads(self.type_args_json)
+        return result
+
+
+class TypeMemberFact(SQLModel, table=True):
+    """Member of a type definition (class field, struct field, interface method, etc.).
+
+    Used to resolve attribute chains like `obj.field.method()`.
+    """
+
+    __tablename__ = "type_member_facts"
+
+    member_id: int | None = Field(default=None, primary_key=True)
+    file_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("files.id", ondelete="CASCADE"), index=True)
+    )
+    unit_id: int = Field(foreign_key="contexts.id", index=True)
+
+    # Parent type
+    parent_def_uid: str = Field(index=True)  # DefFact.def_uid of class/struct/interface
+    parent_type_name: str = Field(index=True)  # "AppContext", "MutationOps"
+    parent_kind: str  # TypeParentKind value
+
+    # Member info
+    member_kind: str  # MemberKind value
+    member_name: str = Field(index=True)
+    member_def_uid: str | None = None  # DefFact.def_uid if method/property
+
+    # Type info (for fields/properties)
+    type_annotation: str | None = None  # "MutationOps", "str | None"
+    canonical_type: str | None = Field(default=None, index=True)  # Normalized
+    base_type: str | None = Field(default=None, index=True)  # Base type only
+
+    # Visibility
+    visibility: str | None = None  # "public", "private", "protected", "internal"
+    is_static: bool = Field(default=False)
+    is_abstract: bool = Field(default=False)
+
+    start_line: int
+    start_col: int
+
+
+class MemberAccessFact(SQLModel, table=True):
+    """Member access chain extracted from source code.
+
+    Captures `obj.field.method()` patterns for type-traced resolution.
+    """
+
+    __tablename__ = "member_access_facts"
+
+    access_id: int | None = Field(default=None, primary_key=True)
+    file_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("files.id", ondelete="CASCADE"), index=True)
+    )
+    unit_id: int = Field(foreign_key="contexts.id", index=True)
+    scope_id: int | None = Field(default=None, foreign_key="scope_facts.scope_id", index=True)
+
+    # Access pattern
+    access_style: str  # AccessStyle value: dot, arrow, scope
+
+    # The chain
+    full_expression: str  # "ctx.mutation_ops.mutate"
+    receiver_name: str = Field(index=True)  # Leftmost identifier: "ctx"
+    member_chain: str  # Rest of chain: "mutation_ops.mutate"
+    final_member: str = Field(index=True)  # Rightmost: "mutate"
+    chain_depth: int  # Number of accesses: 2
+
+    # Call info
+    is_invocation: bool = Field(default=False)  # Ends with ()
+    arg_count: int | None = None  # Number of arguments if call
+
+    # Receiver type (from annotation in scope, if found)
+    receiver_declared_type: str | None = Field(default=None, index=True)
+
+    # Resolution results (filled by Pass 3)
+    resolved_type_path: str | None = None  # "AppContext.MutationOps"
+    final_target_def_uid: str | None = Field(default=None, index=True)
+    resolution_method: str | None = None  # ResolutionMethod value
+    resolution_confidence: float | None = None  # 0.0-1.0
+
+    start_line: int
+    start_col: int
+    end_line: int
+    end_col: int
+
+
+class InterfaceImplFact(SQLModel, table=True):
+    """Interface/trait implementation relationship.
+
+    Used for Go, Rust, TypeScript interface matching.
+    """
+
+    __tablename__ = "interface_impl_facts"
+
+    impl_id: int | None = Field(default=None, primary_key=True)
+    file_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("files.id", ondelete="CASCADE"), index=True)
+    )
+    unit_id: int = Field(foreign_key="contexts.id", index=True)
+
+    # The implementing type
+    implementor_def_uid: str = Field(index=True)
+    implementor_name: str = Field(index=True)
+
+    # The interface/trait
+    interface_name: str = Field(index=True)
+    interface_def_uid: str | None = None  # If found in same codebase
+
+    # How declared
+    impl_style: str  # ImplStyle value: explicit, structural, inferred
+
+    start_line: int
+    start_col: int
+
+
+class ReceiverShapeFact(SQLModel, table=True):
+    """Observed shape for duck-typing inference.
+
+    Aggregates all member accesses on a receiver to infer its type.
+    Used for dynamic languages without type annotations.
+    """
+
+    __tablename__ = "receiver_shape_facts"
+
+    shape_id: int | None = Field(default=None, primary_key=True)
+    file_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("files.id", ondelete="CASCADE"), index=True)
+    )
+    unit_id: int = Field(foreign_key="contexts.id", index=True)
+    scope_id: int | None = Field(default=None, foreign_key="scope_facts.scope_id", index=True)
+
+    receiver_name: str = Field(index=True)  # "ctx", "self", "obj"
+    declared_type: str | None = Field(default=None, index=True)  # If annotated
+
+    # Observed shape (all members accessed on this receiver in this scope)
+    shape_hash: str = Field(index=True)  # Hash for fast comparison
+    observed_members_json: str  # {"fields": ["x"], "methods": ["run"]}
+
+    # Inference results (filled by Pass 5)
+    matched_types_json: str | None = None  # [{"type": "Foo", "confidence": 0.9}]
+    best_match_type: str | None = Field(default=None, index=True)
+    match_confidence: float | None = None  # 0.0-1.0
+
+    def get_observed_members(self) -> dict[str, list[str]]:
+        """Parse observed_members_json to dict."""
+        result: dict[str, list[str]] = json.loads(self.observed_members_json)
+        return result
+
+    def get_matched_types(self) -> list[dict[str, float | str]]:
+        """Parse matched_types_json to list."""
+        if self.matched_types_json is None:
+            return []
+        result: list[dict[str, float | str]] = json.loads(self.matched_types_json)
         return result
 
 
