@@ -48,6 +48,7 @@ def create_mcp_server(context: AppContext) -> FastMCP:
         files,
         git,
         index,
+        introspection,
         mutation,
         refactor,
         testing,
@@ -81,6 +82,9 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
     all MCP clients including Claude.
     """
     from fastmcp.tools.tool import FunctionTool
+    from pydantic import ValidationError
+
+    from codeplane.mcp.errors import MCPError
 
     params_model = spec.params_model
     spec_handler = spec.handler
@@ -96,7 +100,23 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
         log.debug("mcp_tool_call_start", tool=tool_name, kwargs=list(kwargs.keys()))
 
         # Reconstruct the params model from kwargs
-        params = params_model(**kwargs)
+        try:
+            params = params_model(**kwargs)
+        except ValidationError as e:
+            # Return structured validation error
+            log.warning("mcp_tool_validation_error", tool=tool_name, errors=e.error_count())
+            return ToolResponse(
+                success=False,
+                result=None,
+                error=f"Validation error: {e.errors()[0]['msg'] if e.errors() else str(e)}",
+                meta={
+                    "error_type": "validation",
+                    "validation_errors": [
+                        {"field": ".".join(str(x) for x in err["loc"]), "message": err["msg"]}
+                        for err in e.errors()[:5]  # Limit to first 5 errors
+                    ],
+                },
+            ).model_dump()
 
         session_id = getattr(params, "session_id", None)
         session = context.session_manager.get_or_create(session_id)
@@ -112,6 +132,25 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
                     "timestamp": int(time.time() * 1000),
                 },
             ).model_dump()
+
+        except MCPError as e:
+            # Structured error response
+            log.warning(
+                "mcp_tool_error",
+                tool=tool_name,
+                error_code=e.code.value,
+                path=e.path,
+            )
+            return ToolResponse(
+                success=False,
+                result=None,
+                error=e.message,
+                meta={
+                    "session_id": session.session_id,
+                    "error": e.to_response().to_dict(),
+                },
+            ).model_dump()
+
         except Exception as e:
             log.error("mcp_tool_call_error", tool=tool_name, error=str(e), exc_info=True)
             return ToolResponse(
