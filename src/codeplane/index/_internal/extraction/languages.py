@@ -219,7 +219,7 @@ GO_CONFIG = LanguageQueryConfig(
   result: (_) @type) @return
 
 (method_declaration
-  name: (identifier) @name
+  name: (field_identifier) @name
   result: (_) @type) @return
 
 ; Variable declarations
@@ -242,16 +242,15 @@ GO_CONFIG = LanguageQueryConfig(
     type: (struct_type
       (field_declaration_list
         (field_declaration
-          name: (identifier) @member
-          type: (_) @type)))))
+          name: (field_identifier) @member)))))
 
 ; Interface methods
 (type_declaration
   (type_spec
     name: (type_identifier) @parent
     type: (interface_type
-      (method_spec
-        name: (identifier) @member) @method)))
+      (method_elem
+        (field_identifier) @member) @method)))
 """,
     member_access_query="""
 (selector_expression
@@ -404,15 +403,13 @@ JAVA_CONFIG = LanguageQueryConfig(
   name: (identifier) @parent
   body: (class_body
     (method_declaration
-      name: (identifier) @member
-      type: (_) @type?) @method))
+      name: (identifier) @member) @method))
 
 ; Class fields
 (class_declaration
   name: (identifier) @parent
   body: (class_body
     (field_declaration
-      type: (_) @type
       declarator: (variable_declarator
         name: (identifier) @member))))
 
@@ -470,7 +467,7 @@ CSHARP_CONFIG = LanguageQueryConfig(
 
 ; Method return types
 (method_declaration
-  type: (_) @type
+  returns: (_) @type
   name: (identifier) @name) @return
 
 ; Property declarations
@@ -498,15 +495,13 @@ CSHARP_CONFIG = LanguageQueryConfig(
   name: (identifier) @parent
   body: (declaration_list
     (method_declaration
-      name: (identifier) @member
-      type: (_) @type?) @method))
+      name: (identifier) @member) @method))
 
 ; Class properties
 (class_declaration
   name: (identifier) @parent
   body: (declaration_list
     (property_declaration
-      type: (_) @type
       name: (identifier) @member)))
 
 ; Class fields
@@ -515,7 +510,6 @@ CSHARP_CONFIG = LanguageQueryConfig(
   body: (declaration_list
     (field_declaration
       (variable_declaration
-        type: (_) @type
         (variable_declarator
           (identifier) @member)))))
 
@@ -540,12 +534,12 @@ CSHARP_CONFIG = LanguageQueryConfig(
     interface_impl_query="""
 (class_declaration
   name: (identifier) @implementor
-  bases: (base_list
+  (base_list
     (_) @interface))
 
 (struct_declaration
   name: (identifier) @implementor
-  bases: (base_list
+  (base_list
     (_) @interface))
 """,
 )

@@ -493,7 +493,13 @@ def _register_builtin_extractors(registry: ExtractorRegistry) -> None:
     from codeplane.index._internal.extraction.query_based import QueryBasedExtractor
 
     # Register query-based extractors for all configured languages
-    for config in set(ALL_LANGUAGE_CONFIGS.values()):
+    # Use dict to dedupe by id since configs with list fields aren't hashable
+    seen_configs: dict[int, bool] = {}
+    for config in ALL_LANGUAGE_CONFIGS.values():
+        config_id = id(config)
+        if config_id in seen_configs:
+            continue
+        seen_configs[config_id] = True
         try:
             extractor = QueryBasedExtractor(config)
             registry.register(extractor)
