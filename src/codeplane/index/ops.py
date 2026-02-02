@@ -31,6 +31,7 @@ from codeplane.index._internal.db import (
     IntegrityChecker,
     IntegrityReport,
     Reconciler,
+    ReconcileResult,
     create_additional_indexes,
 )
 from codeplane.index._internal.discovery import (
@@ -645,7 +646,10 @@ class IndexCoordinator:
 
     async def reindex_full(self) -> IndexStats:
         """
-        Full reindex of entire repository.
+        Full repository reindex - idempotent and incremental.
+
+        Reconciles filesystem against index state and only processes deltas.
+        Safe to call at any time; does minimal work if index is up-to-date.
 
         SERIALIZED: Acquires reconcile_lock and tantivy_write_lock.
         """
@@ -654,41 +658,95 @@ class IndexCoordinator:
             raise RuntimeError(msg)
 
         start_time = time.time()
+        files_added = 0
+        files_updated = 0
+        files_removed = 0
 
         with self._reconcile_lock:
-            # Full reconcile
+            # Reconcile all tracked files - detects adds, modifications, deletions
+            reconcile_result: ReconcileResult | None = None
             if self._reconciler is not None:
-                self._reconciler.reconcile(None)
+                reconcile_result = self._reconciler.reconcile(None)
 
-            # Rebuild Tantivy index - clear first, then index
-            # Note: _index_all_files acquires tantivy_write_lock internally
-            if self._lexical is not None:
-                with self._tantivy_write_lock:
-                    self._lexical.clear()
+            # Get files that need indexing (no indexed_at or hash changed)
+            with self.db.session() as session:
+                # Files needing initial index or reindex
+                stale_stmt = select(File).where(File.indexed_at == None)  # noqa: E711
+                stale_files = list(session.exec(stale_stmt).all())
 
-            # Clear structural facts before full reindex
-            self._clear_all_structural_facts()
+            if not stale_files and (
+                reconcile_result is None or reconcile_result.files_changed == 0
+            ):
+                # Index is already up-to-date
+                duration = time.time() - start_time
+                return IndexStats(
+                    files_processed=0,
+                    files_added=0,
+                    files_updated=0,
+                    files_removed=0,
+                    symbols_indexed=0,
+                    duration_seconds=duration,
+                )
 
-            files_indexed, indexed_paths, _ = await self._index_all_files()
+            # Process stale files
+            with self._tantivy_write_lock:
+                for file_record in stale_files:
+                    full_path = self.repo_root / file_record.path
+                    if full_path.exists():
+                        try:
+                            content = full_path.read_text()
+                            symbols = self._extract_symbols(full_path)
+                            if self._lexical is not None:
+                                self._lexical.add_file(
+                                    file_record.path,
+                                    content,
+                                    context_id=0,
+                                    symbols=symbols,
+                                )
+                            # Mark as indexed
+                            with self.db.session() as session:
+                                f = session.get(File, file_record.id)
+                                if f:
+                                    f.indexed_at = time.time()
+                                    session.commit()
+                            files_added += 1
+                        except (OSError, UnicodeDecodeError):
+                            continue
+                    else:
+                        # File was deleted - remove from index
+                        if self._lexical is not None:
+                            self._lexical.remove_file(file_record.path)
+                        with self.db.session() as session:
+                            f = session.get(File, file_record.id)
+                            if f:
+                                session.delete(f)
+                                session.commit()
+                        files_removed += 1
 
             # Reload index so searcher sees committed changes
             if self._lexical is not None:
                 self._lexical.reload()
 
-            # Publish epoch with indexed paths
+            # Update structural index for changed files
+            if stale_files:
+                await self._update_structural_index(
+                    [Path(f.path) for f in stale_files if (self.repo_root / f.path).exists()]
+                )
+
+            # Publish epoch
             if self._epoch_manager is not None:
                 self._epoch_manager.publish_epoch(
-                    files_indexed=files_indexed,
-                    indexed_paths=indexed_paths,
+                    files_indexed=files_added + files_updated,
+                    indexed_paths=[f.path for f in stale_files],
                 )
 
         duration = time.time() - start_time
 
         return IndexStats(
-            files_processed=files_indexed,
-            files_added=files_indexed,
-            files_updated=0,
-            files_removed=0,
+            files_processed=len(stale_files),
+            files_added=files_added,
+            files_updated=files_updated,
+            files_removed=files_removed,
             symbols_indexed=0,
             duration_seconds=duration,
         )

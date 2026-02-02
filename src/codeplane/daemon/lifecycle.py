@@ -161,15 +161,20 @@ async def run_server(
 
     console = Console(stderr=True)
 
-    # Run initial full index BEFORE accepting connections
-    console.print("[cyan]Building initial index...[/cyan]")
-    with console.status("[cyan]Indexing repository...[/cyan]", spinner="dots"):
+    # Ensure index is up-to-date (idempotent - does minimal work if already current)
+    with console.status("[cyan]Synchronizing index...[/cyan]", spinner="dots"):
         stats = await coordinator.reindex_full()
-    console.print(
-        f"  [green]✓[/green] Indexed {stats.files_added} files in {stats.duration_seconds:.2f}s"
-    )
 
-    # Print banner AFTER indexing completes
+    if stats.files_processed > 0:
+        console.print(
+            f"  [green]✓[/green] Indexed {stats.files_added} new, "
+            f"{stats.files_updated} updated, {stats.files_removed} removed "
+            f"in {stats.duration_seconds:.2f}s"
+        )
+    else:
+        console.print("  [green]✓[/green] Index up-to-date")
+
+    # Print banner
     ver = version("codeplane")
     console.print()
     console.print(f"  [cyan bold]CodePlane[/cyan bold] v{ver}")
