@@ -2,6 +2,7 @@
 
 from codeplane.git._internal.access import RepoAccess
 from codeplane.git._internal.flows import WriteFlows
+from codeplane.git._internal.hooks import HookResult, run_hook
 from codeplane.git._internal.parsing import (
     extract_local_branch_from_remote,
     extract_tag_name,
@@ -21,6 +22,7 @@ from codeplane.git._internal.rebase import RebaseFlow, RebasePlanner
 __all__ = [
     "CheckoutPlanner",
     "DiffPlanner",
+    "HookResult",
     "RebaseFlow",
     "RebasePlanner",
     "RepoAccess",
@@ -34,4 +36,5 @@ __all__ = [
     "require_current_branch",
     "require_not_current_branch",
     "require_not_unborn",
+    "run_hook",
 ]

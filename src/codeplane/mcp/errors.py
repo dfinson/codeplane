@@ -38,6 +38,7 @@ class ErrorCode(str, Enum):
     REF_NOT_FOUND = "REF_NOT_FOUND"
     MERGE_CONFLICT = "MERGE_CONFLICT"
     DIRTY_WORKING_TREE = "DIRTY_WORKING_TREE"
+    HOOK_FAILED = "HOOK_FAILED"
 
     # System errors
     IO_ERROR = "IO_ERROR"
@@ -180,6 +181,29 @@ class DryRunExpiredError(MCPError):
         )
 
 
+class HookFailedError(MCPError):
+    """Raised when a git hook fails."""
+
+    def __init__(
+        self,
+        hook_type: str,
+        exit_code: int,
+        stdout: str,
+        stderr: str,
+        modified_files: list[str] | None = None,
+    ) -> None:
+        super().__init__(
+            code=ErrorCode.HOOK_FAILED,
+            message=f"{hook_type} hook failed with exit code {exit_code}",
+            remediation="Fix the issues reported below. Auto-fixes may have been applied - check git status.",
+            hook_type=hook_type,
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            modified_files=modified_files or [],
+        )
+
+
 # =============================================================================
 # Error Catalog for Introspection
 # =============================================================================
@@ -297,6 +321,23 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
         remediation=[
             "Use action='update' instead of 'create' for existing files",
             "Choose a different path for new file",
+        ],
+    ),
+    ErrorCode.HOOK_FAILED.value: ErrorDocumentation(
+        code=ErrorCode.HOOK_FAILED,
+        category="git",
+        description="A git hook (pre-commit, commit-msg, etc.) failed.",
+        causes=[
+            "Lint errors detected by pre-commit hooks",
+            "Formatting issues that couldn't be auto-fixed",
+            "Type errors or other code quality violations",
+            "Hook scripts exited with non-zero status",
+        ],
+        remediation=[
+            "Read stdout/stderr in the error response for specific issues",
+            "Check modified_files - hooks may have auto-fixed some issues",
+            "Fix remaining errors and retry the commit",
+            "If auto-fixes were applied, stage them and retry",
         ],
     ),
 }

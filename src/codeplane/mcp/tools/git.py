@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import contextlib
 from dataclasses import asdict
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydantic import Field
 
+from codeplane.git._internal.hooks import run_hook
+from codeplane.mcp.errors import HookFailedError
 from codeplane.mcp.registry import registry
 from codeplane.mcp.tools.base import BaseParams
 
@@ -276,9 +279,23 @@ async def git_diff(ctx: AppContext, params: GitDiffParams) -> dict[str, Any]:
 
 @registry.register("git_commit", "Create a commit", GitCommitParams)
 async def git_commit(ctx: AppContext, params: GitCommitParams) -> dict[str, Any]:
-    """Create commit."""
+    """Create commit with pre-commit hook execution."""
     if params.paths:
         ctx.git_ops.stage(params.paths)
+
+    # Run pre-commit hook before committing
+    repo_path = Path(ctx.git_ops.repo.workdir)
+    hook_result = run_hook(repo_path, "pre-commit")
+
+    if not hook_result.success:
+        raise HookFailedError(
+            hook_type="pre-commit",
+            exit_code=hook_result.exit_code,
+            stdout=hook_result.stdout,
+            stderr=hook_result.stderr,
+            modified_files=hook_result.modified_files,
+        )
+
     sha = ctx.git_ops.commit(params.message, allow_empty=params.allow_empty)
     return {"oid": sha, "short_oid": sha[:7]}
 
