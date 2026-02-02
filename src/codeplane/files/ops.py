@@ -55,12 +55,15 @@ class FileOps:
         if isinstance(paths, str):
             paths = [paths]
 
-        # Build range lookup
+        # Build range lookup - expects 'start' and 'end' keys (1-indexed)
         range_map: dict[str, tuple[int, int]] = {}
         if ranges:
             for r in ranges:
-                path_key = str(r["path"]) if "path" in r else ""
-                range_map[path_key] = (int(r["start_line"]), int(r["end_line"]))
+                path_key = str(r.get("path", ""))
+                start = r.get("start")
+                end = r.get("end")
+                if start is not None and end is not None:
+                    range_map[path_key] = (int(start), int(end))
 
         results: list[FileResult] = []
         for rel_path in paths:
