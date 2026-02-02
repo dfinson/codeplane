@@ -374,7 +374,7 @@ Unified operational interpretation:
 ### 5.1 Design Goals
 
 - Correctly reflect repository state on disk, even across external edits.
-- Never atomic_edit_files Git state unless explicitly triggered by a CodePlane operation.
+- Never mutate Git state unless explicitly triggered by a CodePlane operation.
 - Cheap, deterministic reconciliation before/after every CodePlane operation.
 - No reliance on OS watchers (watchers optional and narrow at most).
 - Works across:

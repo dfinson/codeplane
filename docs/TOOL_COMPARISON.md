@@ -43,7 +43,7 @@ Remove the deprecated line-based patch mode from the mutation system, keeping on
 
 ## Method 2: CodePlane MCP Tools
 
-**Tools used:** `mcp_codeplane_read_files`, `mcp_codeplane_mutate`
+**Tools used:** `mcp_codeplane_read_files`, `mcp_codeplane_atomic_edit_files`
 
 ### Metrics
 | Metric | Value |
@@ -98,7 +98,7 @@ Remove the deprecated line-based patch mode from the mutation system, keeping on
 
 ---
 
-## Task 2: Rename atomic_edit_files to atomic_edit_files
+## Task 2: Rename mutate to atomic_edit_files
 
 **Skipped** - This task involves renaming a tool, which requires:
 1. String literal replacement (registry name)
