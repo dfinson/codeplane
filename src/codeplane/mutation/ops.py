@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Literal
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     pass
