@@ -472,7 +472,7 @@ class RefactorOps:
             edits.append(Edit(path=file_edit.path, action="update", content=new_content))
 
         # Execute mutation
-        mutation_result = mutation_ops.mutate(edits)
+        mutation_result = mutation_ops.atomic_edit_files(edits)
 
         # Clear pending
         del self._pending[refactor_id]

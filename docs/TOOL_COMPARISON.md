@@ -51,12 +51,12 @@ Remove the deprecated line-based patch mode from the mutation system, keeping on
 | Start Time | 19:58:00 UTC |
 | End Time | 19:58:45 UTC |
 | Duration | ~45 seconds |
-| Tool Calls | 2 (1 read, 1 mutate with 9 edits) |
+| Tool Calls | 2 (1 read, 1 atomic_edit_files with 9 edits) |
 | Errors/Retries | 0 |
 
 ### Observations
 - Single read_files call got all 3 files in one request
-- Single mutate call applied all 9 edits atomically
+- Single atomic_edit_files call applied all 9 edits atomically
 - No intermediate verification needed - atomicity guaranteed
 - No file corruption risk - edits validated before apply
 - Each edit tracked with content hash
@@ -98,7 +98,7 @@ Remove the deprecated line-based patch mode from the mutation system, keeping on
 
 ---
 
-## Task 2: Rename mutate to atomic_edit_files
+## Task 2: Rename atomic_edit_files to atomic_edit_files
 
 **Skipped** - This task involves renaming a tool, which requires:
 1. String literal replacement (registry name)

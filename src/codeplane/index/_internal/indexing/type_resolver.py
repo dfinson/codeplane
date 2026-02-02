@@ -1,7 +1,7 @@
 """Type-traced reference resolution (Pass 3).
 
 Resolves member accesses by tracing through type annotations.
-For example: ctx.mutation_ops.mutate() -> MutationOps.mutate def_uid.
+For example: ctx.mutation_ops.atomic_edit_files() -> MutationOps.atomic_edit_files def_uid.
 
 This module runs AFTER Pass 2 (import resolution) and uses:
 - TypeAnnotationFact: What type a variable/parameter has
@@ -9,7 +9,7 @@ This module runs AFTER Pass 2 (import resolution) and uses:
 - MemberAccessFact: What member chains appear in code
 
 The output is updated MemberAccessFact records with:
-- resolved_type_path: e.g., "AppContext.MutationOps.mutate"
+- resolved_type_path: e.g., "AppContext.MutationOps.atomic_edit_files"
 - final_target_def_uid: The def_uid of the final member
 - resolution_method: "type_traced"
 - resolution_confidence: 1.0 (type-traced is authoritative)
@@ -121,12 +121,9 @@ class TypeTracedResolver:
         stats = TypeTracedStats()
 
         with self._db.session() as session:
-            stmt = (
-                select(MemberAccessFact)
-                .where(
-                    col(MemberAccessFact.file_id).in_(file_ids),
-                    MemberAccessFact.final_target_def_uid == None,  # noqa: E711
-                )
+            stmt = select(MemberAccessFact).where(
+                col(MemberAccessFact.file_id).in_(file_ids),
+                MemberAccessFact.final_target_def_uid == None,  # noqa: E711
             )
             unresolved = list(session.exec(stmt).all())
             stats.accesses_processed = len(unresolved)
@@ -158,9 +155,7 @@ class TypeTracedResolver:
         receiver_type = access.receiver_declared_type
         if not receiver_type:
             # Try to look up from our cache
-            receiver_type = self._type_map.get(
-                (access.receiver_name, access.scope_id)
-            )
+            receiver_type = self._type_map.get((access.receiver_name, access.scope_id))
             if not receiver_type:
                 # Also try without scope (file-level)
                 receiver_type = self._type_map.get((access.receiver_name, None))
@@ -216,7 +211,7 @@ class TypeTracedResolver:
 
         # Partial resolution - record what we did resolve
         if resolved_depth > 0:
-            access.resolved_type_path = ".".join(type_path[:resolved_depth + 1])
+            access.resolved_type_path = ".".join(type_path[: resolved_depth + 1])
             access.resolution_method = "type_traced"
             access.resolution_confidence = resolved_depth / len(chain_parts)
             return "partial"
@@ -235,13 +230,10 @@ class TypeTracedResolver:
         if not target_def_uid:
             return False
 
-        stmt = (
-            select(RefFact)
-            .where(
-                RefFact.file_id == file_id,
-                RefFact.start_line == line,
-                RefFact.token_text == token,
-            )
+        stmt = select(RefFact).where(
+            RefFact.file_id == file_id,
+            RefFact.start_line == line,
+            RefFact.token_text == token,
         )
         ref = session.exec(stmt).first()  # type: ignore[attr-defined]
 
@@ -280,9 +272,7 @@ class TypeTracedResolver:
             self._member_map[key] = member
 
 
-def resolve_type_traced(
-    db: Database, file_ids: list[int] | None = None
-) -> TypeTracedStats:
+def resolve_type_traced(db: Database, file_ids: list[int] | None = None) -> TypeTracedStats:
     """Convenience function to run type-traced resolution.
 
     Args:

@@ -1,4 +1,4 @@
-"""Mutation MCP tools - mutate handler."""
+"""Mutation MCP tools - atomic_edit_files handler."""
 
 from __future__ import annotations
 
@@ -37,7 +37,9 @@ class EditParam(BaseModel):
     action: Literal["create", "update", "delete"]
 
     # Full content replacement (create, or update without exact matching)
-    content: str | None = Field(None, description="Full file content for create or full replacement")
+    content: str | None = Field(
+        None, description="Full file content for create or full replacement"
+    )
 
     # Exact mode (update only) - content-addressed replacement
     old_content: str | None = Field(None, description="Exact content to find and replace")
@@ -46,7 +48,7 @@ class EditParam(BaseModel):
 
 
 class MutateParams(BaseParams):
-    """Parameters for mutate."""
+    """Parameters for atomic_edit_files."""
 
     edits: list[EditParam] = Field(..., description="List of file edits to apply atomically")
     dry_run: bool = Field(False, description="Preview changes without applying")
@@ -57,8 +59,10 @@ class MutateParams(BaseParams):
 # =============================================================================
 
 
-@registry.register("mutate", "Atomic file edits with structured delta response", MutateParams)
-async def mutate(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
+@registry.register(
+    "atomic_edit_files", "Atomic file edits with structured delta response", MutateParams
+)
+async def atomic_edit_files(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
     """Apply atomic file edits.
 
     For updates, provide old_content and new_content. The tool will:
@@ -89,12 +93,12 @@ async def mutate(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
         )
 
     try:
-        result = ctx.mutation_ops.mutate(edits, dry_run=params.dry_run)
+        result = ctx.mutation_ops.atomic_edit_files(edits, dry_run=params.dry_run)
 
         # Log successful operation
         for file_delta in result.delta.files:
             ledger.log_operation(
-                tool="mutate",
+                tool="atomic_edit_files",
                 success=True,
                 path=file_delta.path,
                 action=file_delta.action,
@@ -149,7 +153,7 @@ async def mutate(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
             error_code = ErrorCode.CONTENT_NOT_FOUND.value
             error_path = e.path
             ledger.log_operation(
-                tool="mutate",
+                tool="atomic_edit_files",
                 success=False,
                 error_code=error_code,
                 error_message=str(e),
@@ -162,7 +166,7 @@ async def mutate(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
             error_code = ErrorCode.MULTIPLE_MATCHES.value
             error_path = e.path
             ledger.log_operation(
-                tool="mutate",
+                tool="atomic_edit_files",
                 success=False,
                 error_code=error_code,
                 error_message=str(e),
@@ -174,7 +178,7 @@ async def mutate(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
         elif isinstance(e, FileNotFoundError):
             error_code = ErrorCode.FILE_NOT_FOUND.value
             ledger.log_operation(
-                tool="mutate",
+                tool="atomic_edit_files",
                 success=False,
                 error_code=error_code,
                 error_message=str(e),
@@ -189,7 +193,7 @@ async def mutate(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
         elif isinstance(e, FileExistsError):
             error_code = ErrorCode.FILE_EXISTS.value
             ledger.log_operation(
-                tool="mutate",
+                tool="atomic_edit_files",
                 success=False,
                 error_code=error_code,
                 error_message=str(e),
@@ -203,11 +207,10 @@ async def mutate(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
 
         # Re-raise unknown errors
         ledger.log_operation(
-            tool="mutate",
+            tool="atomic_edit_files",
             success=False,
             error_code=ErrorCode.INTERNAL_ERROR.value,
             error_message=str(e),
             session_id=params.session_id,
         )
         raise
-

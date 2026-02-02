@@ -35,7 +35,7 @@ def _derive_features(tool_names: list[str]) -> list[str]:
             features.add("testing")
         elif name == "search":
             features.add("search")
-        elif name == "mutate":
+        elif name == "atomic_edit_files":
             features.add("mutation")
         elif name == "map_repo":
             features.add("map_repo")
@@ -63,8 +63,10 @@ class CapabilitiesParams(BaseParams):
 # =============================================================================
 
 
-@registry.register("capabilities", "List server capabilities and available tools", CapabilitiesParams)
-async def capabilities(ctx: AppContext, params: CapabilitiesParams) -> dict[str, Any]:
+@registry.register(
+    "capabilities", "List server capabilities and available tools", CapabilitiesParams
+)
+async def capabilities(ctx: AppContext, _params: CapabilitiesParams) -> dict[str, Any]:
     """Return server capabilities, available tools, and index status."""
     # Get all registered tools
     all_tools = registry.get_all()

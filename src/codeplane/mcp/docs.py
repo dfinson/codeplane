@@ -113,7 +113,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         hints_after=None,
         alternatives=["search"],
         commonly_preceded_by=["map_repo", "search"],
-        commonly_followed_by=["mutate"],
+        commonly_followed_by=["atomic_edit_files"],
         behavior=BehaviorFlags(idempotent=True, has_side_effects=False, atomic=True),
         possible_errors=["FILE_NOT_FOUND", "ENCODING_ERROR", "INVALID_RANGE"],
         examples=[
@@ -130,8 +130,8 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             },
         ],
     ),
-    "mutate": ToolDocumentation(
-        name="mutate",
+    "atomic_edit_files": ToolDocumentation(
+        name="atomic_edit_files",
         description="Atomic file edits with structured delta response.",
         category=ToolCategory.MUTATION,
         when_to_use=[
@@ -257,7 +257,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         ],
         hints_before="Use git_status to see what will be committed.",
         hints_after="Use git_push to share the commit.",
-        commonly_preceded_by=["git_stage", "mutate"],
+        commonly_preceded_by=["git_stage", "atomic_edit_files"],
         commonly_followed_by=["git_push"],
         behavior=BehaviorFlags(has_side_effects=True, atomic=True),
         possible_errors=["DIRTY_WORKING_TREE"],
@@ -268,10 +268,10 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         category=ToolCategory.GIT,
         when_to_use=[
             "Preparing files for commit",
-            "After making changes with mutate",
+            "After making changes with atomic_edit_files",
         ],
         when_not_to_use=[],
-        commonly_preceded_by=["mutate"],
+        commonly_preceded_by=["atomic_edit_files"],
         commonly_followed_by=["git_commit"],
         behavior=BehaviorFlags(has_side_effects=True),
         possible_errors=["FILE_NOT_FOUND"],
@@ -306,7 +306,7 @@ def get_common_workflows() -> list[dict[str, Any]]:
         {
             "name": "modification",
             "description": "Making code changes",
-            "tools": ["read_files", "mutate", "git_stage", "git_commit"],
+            "tools": ["read_files", "atomic_edit_files", "git_stage", "git_commit"],
         },
         {
             "name": "refactoring",

@@ -163,7 +163,7 @@ class DryRunRequiredError(MCPError):
         super().__init__(
             code=ErrorCode.DRY_RUN_REQUIRED,
             message=f"Line-range edit on {path} requires prior dry_run",
-            remediation="Call mutate with dry_run=True first to get content_hash, then call again with the hash.",
+            remediation="Call atomic_edit_files with dry_run=True first to get content_hash, then call again with the hash.",
             path=path,
         )
 
@@ -275,7 +275,7 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
             "Missing content_hash parameter",
         ],
         remediation=[
-            "First call mutate with dry_run=True to preview and get content_hash",
+            "First call atomic_edit_files with dry_run=True to preview and get content_hash",
             "Then call again with the content_hash to apply",
             "Or use 'exact' mode which doesn't require dry_run",
         ],
