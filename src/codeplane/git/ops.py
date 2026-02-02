@@ -266,6 +266,23 @@ class GitOps:
             self._access.index_reset_entry(self._access.normalize_path(p), head_tree)
         self._access.index.write()
 
+    def discard(self, paths: Sequence[str | Path]) -> None:
+        """Discard working tree changes, restoring files to index state."""
+        repo = self._access.repo
+        for p in paths:
+            norm = self._access.normalize_path(p)
+            full_path = self._access.path / norm
+            if norm in self._access.index:
+                # Restore from index
+                entry = self._access.index[norm]
+                blob = repo[entry.id]
+                if isinstance(blob, pygit2.Blob):
+                    full_path.parent.mkdir(parents=True, exist_ok=True)
+                    full_path.write_bytes(blob.data)
+            elif full_path.exists():
+                # Untracked file not in index - delete it
+                full_path.unlink()
+
     def commit(self, message: str, allow_empty: bool = False) -> str:
         """Create commit from staged changes. Returns commit sha."""
         check_nothing_to_commit(self._access, allow_empty)

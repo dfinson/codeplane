@@ -776,6 +776,51 @@ class TestStageUnstage:
         assert not (flags & pygit2.GIT_STATUS_INDEX_NEW)
 
 
+class TestDiscard:
+    """Tests for discard (restore working tree from index)."""
+
+    def test_discard_modified_file(self, temp_repo: pygit2.Repository) -> None:
+        """Discarding modified file restores index content."""
+        workdir = Path(temp_repo.workdir)
+        ops = GitOps(temp_repo.workdir)
+        readme = workdir / "README.md"
+        original = readme.read_text()
+
+        readme.write_text("modified content")
+        assert readme.read_text() == "modified content"
+
+        ops.discard(["README.md"])
+
+        assert readme.read_text() == original
+
+    def test_discard_deleted_file(self, temp_repo: pygit2.Repository) -> None:
+        """Discarding deleted file restores it."""
+        workdir = Path(temp_repo.workdir)
+        ops = GitOps(temp_repo.workdir)
+        readme = workdir / "README.md"
+        original = readme.read_text()
+
+        readme.unlink()
+        assert not readme.exists()
+
+        ops.discard(["README.md"])
+
+        assert readme.exists()
+        assert readme.read_text() == original
+
+    def test_discard_untracked_file(self, temp_repo: pygit2.Repository) -> None:
+        """Discarding untracked file that's not in index does nothing harmful."""
+        workdir = Path(temp_repo.workdir)
+        ops = GitOps(temp_repo.workdir)
+        untracked = workdir / "untracked.txt"
+        untracked.write_text("untracked")
+
+        # Should not raise, file not in index so gets deleted
+        ops.discard(["untracked.txt"])
+
+        assert not untracked.exists()
+
+
 class TestReset:
     """Tests for reset operations."""
 
