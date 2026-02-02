@@ -39,6 +39,7 @@ def create_mcp_server(context: AppContext) -> FastMCP:
     Returns:
         Configured FastMCP server ready to run
     """
+    import fastmcp
     from fastmcp import FastMCP
 
     from codeplane.mcp.registry import registry
@@ -56,11 +57,13 @@ def create_mcp_server(context: AppContext) -> FastMCP:
 
     log.info("mcp_server_creating", repo_root=str(context.repo_root))
 
+    # Configure FastMCP global settings for HTTP transport
+    fastmcp.settings.stateless_http = True
+    fastmcp.settings.json_response = True
+
     mcp = FastMCP(
         "codeplane",
         instructions="CodePlane repository control plane for AI coding agents.",
-        stateless_http=True,
-        json_response=True,  # Use JSON responses instead of SSE for broader client compatibility
     )
 
     # Wire all registered tools
