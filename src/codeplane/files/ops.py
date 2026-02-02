@@ -1,4 +1,4 @@
-"""File operations - read_files tool implementation.
+"""File operations - read_files, list_files tool implementation.
 
 Pure filesystem I/O. No index dependency.
 Per SPEC.md §23.7 read_files tool specification.
@@ -6,8 +6,10 @@ Per SPEC.md §23.7 read_files tool specification.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import fnmatch
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Literal
 
 
 @dataclass
@@ -29,17 +31,152 @@ class ReadFilesResult:
     files: list[FileResult]
 
 
+@dataclass
+class FileEntry:
+    """A single file or directory entry."""
+
+    name: str
+    path: str  # Relative to repo root
+    type: Literal["file", "directory"]
+    size: int | None = None
+    modified_at: int | None = None
+
+
+@dataclass
+class ListFilesResult:
+    """Result of list_files operation."""
+
+    path: str  # Directory listed (relative to repo root)
+    entries: list[FileEntry] = field(default_factory=list)
+    total: int = 0
+    truncated: bool = False
+
+
 class FileOps:
-    """File operations for read_files tool."""
+    """File operations for read_files and list_files tools."""
 
     def __init__(self, repo_root: Path) -> None:
         self._repo_root = repo_root
+
+    def list_files(
+        self,
+        path: str | None = None,
+        *,
+        pattern: str | None = None,
+        recursive: bool = False,
+        include_hidden: bool = False,
+        include_metadata: bool = False,
+        file_type: Literal["all", "file", "directory"] = "all",
+        limit: int = 200,
+    ) -> ListFilesResult:
+        """List files in a directory with optional filtering.
+
+        Args:
+            path: Directory path relative to repo root (default: repo root)
+            pattern: Glob pattern to filter (e.g., "*.py", "**/*.ts")
+            recursive: Recurse into subdirectories
+            include_hidden: Include dotfiles/dotdirs
+            include_metadata: Include size and mtime
+            file_type: Filter by type - "all", "file", or "directory"
+            limit: Maximum entries to return
+
+        Returns:
+            ListFilesResult with matching entries
+        """
+        # Resolve directory
+        if path:
+            target_dir = self._repo_root / path
+            rel_base = path.rstrip("/")
+        else:
+            target_dir = self._repo_root
+            rel_base = ""
+
+        if not target_dir.is_dir():
+            return ListFilesResult(path=rel_base or ".", entries=[], total=0)
+
+        entries: list[FileEntry] = []
+        total_count = 0
+
+        # Choose iteration method
+        if recursive or (pattern and "**" in pattern):
+            iterator = target_dir.rglob("*")
+        else:
+            iterator = target_dir.iterdir()
+
+        for item in iterator:
+            # Skip hidden unless requested
+            if not include_hidden and item.name.startswith("."):
+                continue
+
+            # Skip hidden parent directories in recursive mode
+            if not include_hidden:
+                try:
+                    rel = item.relative_to(target_dir)
+                    if any(part.startswith(".") for part in rel.parts[:-1]):
+                        continue
+                except ValueError:
+                    continue
+
+            # Apply file_type filter
+            if file_type == "file" and not item.is_file():
+                continue
+            if file_type == "directory" and not item.is_dir():
+                continue
+
+            # Apply pattern filter
+            if pattern:
+                try:
+                    rel_path = item.relative_to(target_dir)
+                    rel_str = str(rel_path)
+                except ValueError:
+                    continue
+
+                if not fnmatch.fnmatch(rel_str, pattern) and not fnmatch.fnmatch(
+                    item.name, pattern
+                ):
+                    continue
+
+            total_count += 1
+
+            # Only collect up to limit
+            if len(entries) < limit:
+                try:
+                    full_rel = item.relative_to(self._repo_root)
+                    rel_path_str = str(full_rel)
+                except ValueError:
+                    rel_path_str = item.name
+
+                entry = FileEntry(
+                    name=item.name,
+                    path=rel_path_str,
+                    type="directory" if item.is_dir() else "file",
+                )
+
+                if include_metadata and item.is_file():
+                    try:
+                        stat = item.stat()
+                        entry.size = stat.st_size
+                        entry.modified_at = int(stat.st_mtime)
+                    except OSError:
+                        pass
+
+                entries.append(entry)
+
+        # Sort: directories first, then alphabetically
+        entries.sort(key=lambda e: (e.type != "directory", e.name.lower()))
+
+        return ListFilesResult(
+            path=rel_base or ".",
+            entries=entries,
+            total=total_count,
+            truncated=total_count > limit,
+        )
 
     def read_files(
         self,
         paths: str | list[str],
         *,
-        ranges: list[dict[str, int]] | None = None,
+        ranges: list[dict[str, Any]] | None = None,
         include_metadata: bool = False,
     ) -> ReadFilesResult:
         """Read file contents with optional line ranges.

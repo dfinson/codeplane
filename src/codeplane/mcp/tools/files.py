@@ -1,8 +1,8 @@
-"""Files MCP tools - read_files handler."""
+"""Files MCP tools - read_files, list_files handlers."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -23,7 +23,9 @@ class RangeParam(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str | None = Field(None, description="File path this range applies to (optional if single file)")
+    path: str | None = Field(
+        None, description="File path this range applies to (optional if single file)"
+    )
     start: int = Field(..., gt=0, description="Start line (1-indexed, inclusive)")
     end: int = Field(..., gt=0, description="End line (1-indexed, inclusive)")
 
@@ -45,6 +47,24 @@ class ReadFilesParams(BaseParams):
     include_metadata: bool = Field(False, description="Include file stats (size, mtime)")
 
 
+class ListFilesParams(BaseParams):
+    """Parameters for list_files."""
+
+    path: str | None = Field(
+        None, description="Directory path relative to repo root (default: repo root)"
+    )
+    pattern: str | None = Field(
+        None, description="Glob pattern to filter (e.g., '*.py', '**/*.ts')"
+    )
+    recursive: bool = Field(False, description="Recurse into subdirectories")
+    include_hidden: bool = Field(False, description="Include dotfiles and dotdirs")
+    include_metadata: bool = Field(False, description="Include size and mtime for files")
+    file_type: Literal["all", "file", "directory"] = Field(
+        "all", description="Filter by entry type"
+    )
+    limit: int = Field(200, ge=1, le=1000, description="Maximum entries to return")
+
+
 # =============================================================================
 # Tool Handlers
 # =============================================================================
@@ -57,8 +77,7 @@ async def read_files(ctx: AppContext, params: ReadFilesParams) -> dict[str, Any]
     ranges_dict = None
     if params.ranges:
         ranges_dict = [
-            {"path": r.path or "", "start": r.start, "end": r.end}
-            for r in params.ranges
+            {"path": r.path or "", "start": r.start, "end": r.end} for r in params.ranges
         ]
 
     result = ctx.file_ops.read_files(
@@ -81,3 +100,40 @@ async def read_files(ctx: AppContext, params: ReadFilesParams) -> dict[str, Any]
         ]
     }
 
+
+@registry.register(
+    "list_files", "List files in a directory with optional filtering", ListFilesParams
+)
+async def list_files(ctx: AppContext, params: ListFilesParams) -> dict[str, Any]:
+    """List files and directories."""
+    result = ctx.file_ops.list_files(
+        path=params.path,
+        pattern=params.pattern,
+        recursive=params.recursive,
+        include_hidden=params.include_hidden,
+        include_metadata=params.include_metadata,
+        file_type=params.file_type,
+        limit=params.limit,
+    )
+
+    return {
+        "path": result.path,
+        "entries": [
+            {
+                "name": e.name,
+                "path": e.path,
+                "type": e.type,
+                **(
+                    {
+                        "size": e.size,
+                        "modified_at": e.modified_at,
+                    }
+                    if params.include_metadata and e.type == "file"
+                    else {}
+                ),
+            }
+            for e in result.entries
+        ],
+        "total": result.total,
+        "truncated": result.truncated,
+    }
