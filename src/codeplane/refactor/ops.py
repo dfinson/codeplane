@@ -30,7 +30,6 @@ class EditHunk:
     new: str
     line: int
     certainty: Literal["high", "medium", "low"]
-    snippet: str | None = None  # Context line for agent verification
 
 
 @dataclass
@@ -49,11 +48,20 @@ class RefactorPreview:
     edits: list[FileEdit] = field(default_factory=list)
     contexts_used: list[str] = field(default_factory=list)
     high_certainty_count: int = 0
-    medium_certainty_count: int = 0  # Comment/docstring occurrences
+    medium_certainty_count: int = 0
     low_certainty_count: int = 0
-    # Actionable guidance for agents
+    # Verification guidance for agents
     verification_required: bool = False
+    low_certainty_files: list[str] = field(default_factory=list)
     verification_guidance: str | None = None
+
+
+@dataclass
+class InspectResult:
+    """Result of inspecting low-certainty matches in a file."""
+
+    path: str
+    matches: list[dict[str, str | int]]  # {line, snippet, context_before, context_after}
 
 
 @dataclass
@@ -264,23 +272,32 @@ class RefactorOps:
         medium_count = sum(1 for fe in file_edits for h in fe.hunks if h.certainty == "medium")
         low_count = sum(1 for fe in file_edits for h in fe.hunks if h.certainty == "low")
 
-        # Build verification guidance if there are low-certainty matches
+        # Build compact verification guidance if there are low-certainty matches
         verification_required = low_count > 0
+        low_certainty_files: list[str] = []
         verification_guidance = None
+
         if verification_required:
-            low_hunks = [
-                f"  - {fe.path}:{h.line}: {h.snippet or '(no snippet)'}"
-                for fe in file_edits
-                for h in fe.hunks
-                if h.certainty == "low"
-            ]
+            # Collect files with low-certainty matches and their counts
+            file_counts: dict[str, int] = {}
+            for fe in file_edits:
+                low_in_file = sum(1 for h in fe.hunks if h.certainty == "low")
+                if low_in_file > 0:
+                    file_counts[fe.path] = low_in_file
+                    low_certainty_files.append(fe.path)
+
+            files_summary = ", ".join(f"{p} ({c})" for p, c in list(file_counts.items())[:5])
+            if len(file_counts) > 5:
+                files_summary += f", ... and {len(file_counts) - 5} more files"
+
             verification_guidance = (
-                f"Found {low_count} low-certainty matches that may be false positives.\n"
-                f"BEFORE applying, verify these are actual references to '{symbol}' "
-                f"(not the English word or a different symbol):\n"
-                + "\n".join(low_hunks[:10])  # Show first 10
-                + (f"\n  ... and {low_count - 10} more" if low_count > 10 else "")
-                + "\n\nUse read_files to inspect these locations before calling refactor_apply."
+                f"{low_count} low-certainty lexical matches may include false positives "
+                f"(e.g., English word vs symbol name).\n\n"
+                f"Files: {files_summary}\n\n"
+                f"BEFORE calling refactor_apply:\n"
+                f"  1. Use refactor_inspect(refactor_id, path) to review matches with context\n"
+                f"  2. Or use read_files / search to verify manually\n"
+                f"  3. If false positives exist, use refactor_cancel and handle manually"
             )
 
         preview = RefactorPreview(
@@ -290,6 +307,7 @@ class RefactorOps:
             medium_certainty_count=medium_count,
             low_certainty_count=low_count,
             verification_required=verification_required,
+            low_certainty_files=low_certainty_files,
             verification_guidance=verification_guidance,
         )
 
@@ -386,17 +404,72 @@ class RefactorOps:
 
                 if re.search(pattern, line):
                     seen_locations.add(loc)
-                    # Capture snippet for agent verification (trimmed)
-                    snippet = line.strip()[:80]
                     edits_by_file.setdefault(file_record.path, []).append(
                         EditHunk(
                             old=symbol,
                             new=new_name,
                             line=i,
                             certainty="low",
-                            snippet=snippet,
                         )
                     )
+
+    async def inspect(
+        self,
+        refactor_id: str,
+        path: str,
+        *,
+        context_lines: int = 2,
+    ) -> InspectResult:
+        """Inspect low-certainty matches in a file with surrounding context.
+
+        Use this to verify lexical matches before applying a refactor.
+
+        Args:
+            refactor_id: ID from refactor_rename preview
+            path: File path to inspect
+            context_lines: Lines of context before/after (default 2)
+
+        Returns:
+            InspectResult with snippets and context for each match
+        """
+        preview = self._pending.get(refactor_id)
+        if preview is None:
+            return InspectResult(path=path, matches=[])
+
+        # Find the file in the preview
+        file_edit = next((fe for fe in preview.edits if fe.path == path), None)
+        if file_edit is None:
+            return InspectResult(path=path, matches=[])
+
+        # Read the file
+        full_path = self._repo_root / path
+        try:
+            content = full_path.read_text(encoding="utf-8")
+            lines = content.splitlines()
+        except (OSError, UnicodeDecodeError):
+            return InspectResult(path=path, matches=[])
+
+        matches: list[dict[str, str | int]] = []
+        for hunk in file_edit.hunks:
+            if hunk.certainty != "low":
+                continue
+
+            line_idx = hunk.line - 1  # 0-indexed
+            if 0 <= line_idx < len(lines):
+                # Get context
+                start = max(0, line_idx - context_lines)
+                end = min(len(lines), line_idx + context_lines + 1)
+
+                matches.append(
+                    {
+                        "line": hunk.line,
+                        "snippet": lines[line_idx].strip(),
+                        "context_before": "\n".join(lines[start:line_idx]),
+                        "context_after": "\n".join(lines[line_idx + 1 : end]),
+                    }
+                )
+
+        return InspectResult(path=path, matches=matches)
 
     async def _get_file_path(self, file_id: int) -> str | None:
         """Look up file path from file_id."""

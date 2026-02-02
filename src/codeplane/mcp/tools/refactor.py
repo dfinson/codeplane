@@ -53,6 +53,14 @@ class RefactorCancelParams(BaseParams):
     refactor_id: str
 
 
+class RefactorInspectParams(BaseParams):
+    """Parameters for refactor_inspect."""
+
+    refactor_id: str
+    path: str
+    context_lines: int = 2
+
+
 # =============================================================================
 # Tool Handlers
 # =============================================================================
@@ -112,6 +120,28 @@ async def refactor_cancel(ctx: AppContext, params: RefactorCancelParams) -> dict
     return _serialize_refactor_result(result)
 
 
+@registry.register(
+    "refactor_inspect",
+    "Inspect low-certainty matches in a file with context",
+    RefactorInspectParams,
+)
+async def refactor_inspect(ctx: AppContext, params: RefactorInspectParams) -> dict[str, Any]:
+    """Inspect low-certainty matches before applying.
+
+    Returns snippets with surrounding context for verification.
+    Use this to check if lexical matches are true references or false positives.
+    """
+    result = await ctx.refactor_ops.inspect(
+        params.refactor_id,
+        params.path,
+        context_lines=params.context_lines,
+    )
+    return {
+        "path": result.path,
+        "matches": result.matches,
+    }
+
+
 def _serialize_refactor_result(result: RefactorResult) -> dict[str, Any]:
     """Convert RefactorResult to dict."""
     output: dict[str, Any] = {
@@ -120,7 +150,7 @@ def _serialize_refactor_result(result: RefactorResult) -> dict[str, Any]:
     }
 
     if result.preview:
-        output["preview"] = {
+        preview_dict: dict[str, Any] = {
             "files_affected": result.preview.files_affected,
             "high_certainty_count": result.preview.high_certainty_count,
             "medium_certainty_count": result.preview.medium_certainty_count,
@@ -141,6 +171,12 @@ def _serialize_refactor_result(result: RefactorResult) -> dict[str, Any]:
                 for fe in result.preview.edits
             ],
         }
+        # Add verification fields if present
+        if result.preview.verification_required:
+            preview_dict["verification_required"] = True
+            preview_dict["low_certainty_files"] = result.preview.low_certainty_files
+            preview_dict["verification_guidance"] = result.preview.verification_guidance
+        output["preview"] = preview_dict
 
     if result.divergence:
         output["divergence"] = {
