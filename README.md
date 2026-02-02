@@ -19,7 +19,7 @@
 
 ## The Problem
 
-AI coding agents lose **5-10x time** on tasks that should be instant:
+AI coding agents lose a **lot** of time and waste a lot of token cosumption on tasks that should be much closer to instant.
 
 - **Exploratory thrash** — repeated grep, file opens, and retries to build a mental model
 - **Terminal mediation** — deterministic operations (git status, diff, run test) produce unstructured text and loops
