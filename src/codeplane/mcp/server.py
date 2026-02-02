@@ -52,6 +52,7 @@ def create_mcp_server(context: AppContext) -> FastMCP:
     mcp = FastMCP(
         "codeplane",
         instructions="CodePlane repository control plane for AI coding agents.",
+        stateless_http=True,
     )
 
     # Wire all registered tools
@@ -68,7 +69,7 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
     spec_handler = spec.handler
 
     # Create handler with explicit type annotation set after definition
-    async def handler(params: Any) -> ToolResponse:
+    async def handler(params: Any) -> dict[str, Any]:
         # Extract session_id from params if present
         # Most params models are Pydantic models, but some might be dicts or None?
         # FastMCP / Pydantic ensures params is an instance of params_model.
@@ -85,7 +86,7 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
                     "session_id": session.session_id,
                     "timestamp": int(time.time() * 1000),
                 },
-            )
+            ).model_dump()
         except Exception as e:
             # We catch all exceptions to ensure we return a structured error response
             # instead of crashing the MCP connection or returning an RPC error.
@@ -96,7 +97,7 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
                 meta={
                     "session_id": session.session_id,
                 },
-            )
+            ).model_dump()
 
     # Set the type hint explicitly so FastMCP can introspect it
     handler.__annotations__["params"] = params_model

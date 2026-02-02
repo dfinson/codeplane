@@ -27,6 +27,7 @@ class SearchParams(BaseParams):
     scope_languages: list[str] | None = None
     scope_kinds: list[str] | None = None
     limit: int = Field(default=20, le=100)
+    cursor: str | None = None
     include_snippets: bool = True
 
 
@@ -47,6 +48,8 @@ class MapRepoParams(BaseParams):
         | None
     ) = None
     depth: int = Field(default=3, le=10)
+    cursor: str | None = None
+    limit: int = Field(default=100, le=1000)
 
 
 class GetDefParams(BaseParams):
@@ -85,7 +88,11 @@ async def search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
         # Use get_def for definition search
         def_fact = await ctx.coordinator.get_def(params.query, context_id=None)
         if def_fact is None:
-            return {"results": [], "query_time_ms": 0}
+            return {
+                "results": [],
+                "pagination": {},
+                "query_time_ms": 0,
+            }
         return {
             "results": [
                 {
@@ -102,6 +109,7 @@ async def search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
                     "match_type": "exact",
                 }
             ],
+            "pagination": {},
             "query_time_ms": 0,
         }
 
@@ -109,7 +117,11 @@ async def search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
         # First find the definition, then get references
         def_fact = await ctx.coordinator.get_def(params.query, context_id=None)
         if def_fact is None:
-            return {"results": [], "query_time_ms": 0}
+            return {
+                "results": [],
+                "pagination": {},
+                "query_time_ms": 0,
+            }
 
         refs = await ctx.coordinator.get_references(def_fact, _context_id=0, limit=params.limit)
         ref_results: list[dict[str, Any]] = []
@@ -125,6 +137,11 @@ async def search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
                     "match_type": "exact" if ref.certainty == "CERTAIN" else "fuzzy",
                 }
             )
+        return {
+            "results": ref_results,
+            "pagination": {},
+            "query_time_ms": 0,
+        }
         return {"results": ref_results, "query_time_ms": 0}
 
     # Lexical or symbol search
@@ -146,6 +163,7 @@ async def search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
             }
             for r in search_results
         ],
+        "pagination": {},
         "query_time_ms": 0,
     }
 

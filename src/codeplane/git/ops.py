@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 
 import pygit2
@@ -173,14 +174,45 @@ class GitOps:
             kwargs["max_line"] = max_line
         return BlameInfo.from_pygit2(path, self._access.blame(path, **kwargs))
 
-    def log(self, ref: str = "HEAD", limit: int = 50) -> list[CommitInfo]:
+    def log(
+        self,
+        ref: str = "HEAD",
+        limit: int = 50,
+        since: str | None = None,
+        until: str | None = None,
+        paths: Sequence[str] | None = None,
+    ) -> list[CommitInfo]:
         """Get commit history."""
         try:
             start = self._access.resolve_ref_oid(ref)
         except RefNotFoundError:
             return []
+
+        # Parse timestamps
+        since_ts = datetime.fromisoformat(since).timestamp() if since else None
+        until_ts = datetime.fromisoformat(until).timestamp() if until else None
+
         result: list[CommitInfo] = []
         for commit in self._access.walk_commits(start, SORT_TIME):
+            # Time filtering
+            if until_ts is not None and commit.commit_time > until_ts:
+                continue
+            if since_ts is not None and commit.commit_time < since_ts:
+                break
+
+            # Path filtering
+            if paths:
+                parent = commit.parents[0] if commit.parents else None
+                # Diff parent -> commit
+                diff = self._access.repo.diff(parent, commit)
+                match = False
+                for delta in diff.deltas:
+                    if any(delta.new_file.path.startswith(p) for p in paths):
+                        match = True
+                        break
+                if not match:
+                    continue
+
             result.append(CommitInfo.from_pygit2(commit))
             if len(result) >= limit:
                 break

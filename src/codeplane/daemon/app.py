@@ -29,7 +29,6 @@ def create_app(
 
     routes: list[BaseRoute] = list(create_routes(controller))
 
-    # Create MCP server and get its ASGI app
     codeplane_dir = repo_root / ".codeplane"
     context = AppContext.create(
         repo_root=repo_root,
@@ -38,10 +37,8 @@ def create_app(
         coordinator=coordinator,
     )
     mcp = create_mcp_server(context)
-    mcp_app = mcp.http_app(transport="sse")
-
-    # Mount MCP at /mcp
-    routes.append(Mount("/mcp", app=mcp_app))
+    mcp_app = mcp.http_app(path="/mcp")
+    routes.append(Mount("/", app=mcp_app))
 
     @asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
@@ -49,9 +46,14 @@ def create_app(
         yield
         await controller.stop()
 
+    @asynccontextmanager
+    async def combined_lifespan(app: Starlette) -> AsyncIterator[None]:
+        async with mcp_app.lifespan(app), lifespan(app):
+            yield
+
     app = Starlette(
         routes=routes,
-        lifespan=lifespan,
+        lifespan=combined_lifespan,
     )
 
     # Add middleware to inject repo header into responses

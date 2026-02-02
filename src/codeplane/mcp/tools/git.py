@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
@@ -46,6 +47,10 @@ class GitLogParams(BaseParams):
 
     ref: str = "HEAD"
     limit: int = Field(default=50, le=100)
+    cursor: str | None = None
+    since: str | None = None
+    until: str | None = None
+    paths: list[str] | None = None
 
 
 class GitBranchCreateParams(BaseParams):
@@ -110,6 +115,10 @@ class GitBlameParams(BaseParams):
     """Parameters for git_blame."""
 
     path: str
+    start_line: int | None = None
+    end_line: int | None = None
+    cursor: str | None = None
+    limit: int = Field(default=100, le=1000)
 
 
 class GitShowParams(BaseParams):
@@ -175,6 +184,61 @@ class GitPullParams(BaseParams):
     remote: str = "origin"
 
 
+class GitSubmoduleAddParams(BaseParams):
+    """Parameters for git_submodule_add."""
+
+    url: str
+    path: str
+    branch: str | None = None
+
+
+class GitSubmoduleUpdateParams(BaseParams):
+    """Parameters for git_submodule_update."""
+
+    paths: list[str] | None = None
+    recursive: bool = False
+    init: bool = True
+
+
+class GitSubmoduleInitParams(BaseParams):
+    """Parameters for git_submodule_init."""
+
+    paths: list[str] | None = None
+
+
+class GitSubmoduleRemoveParams(BaseParams):
+    """Parameters for git_submodule_remove."""
+
+    path: str
+
+
+class GitWorktreeAddParams(BaseParams):
+    """Parameters for git_worktree_add."""
+
+    path: str
+    ref: str
+
+
+class GitWorktreeRemoveParams(BaseParams):
+    """Parameters for git_worktree_remove."""
+
+    name: str
+    force: bool = False
+
+
+class GitWorktreeLockParams(BaseParams):
+    """Parameters for git_worktree_lock."""
+
+    name: str
+    reason: str | None = None
+
+
+class GitWorktreeUnlockParams(BaseParams):
+    """Parameters for git_worktree_unlock."""
+
+    name: str
+
+
 # =============================================================================
 # Tool Handlers
 # =============================================================================
@@ -222,8 +286,28 @@ async def git_commit(ctx: AppContext, params: GitCommitParams) -> dict[str, Any]
 @registry.register("git_log", "Get commit history", GitLogParams)
 async def git_log(ctx: AppContext, params: GitLogParams) -> dict[str, Any]:
     """Get commit log."""
-    commits = ctx.git_ops.log(ref=params.ref, limit=params.limit)
-    return {"commits": [asdict(c) for c in commits]}
+    commits = ctx.git_ops.log(
+        ref=params.ref,
+        limit=params.limit + 1,  # Fetch one extra to detect if more exist
+        since=params.since,
+        until=params.until,
+        paths=params.paths,
+    )
+
+    # Check if there are more results
+    has_more = len(commits) > params.limit
+    if has_more:
+        commits = commits[: params.limit]
+
+    pagination: dict[str, Any] = {}
+    if has_more and commits:
+        # Use last commit SHA as cursor
+        pagination["next_cursor"] = commits[-1].sha
+
+    return {
+        "results": [asdict(c) for c in commits],
+        "pagination": pagination,
+    }
 
 
 @registry.register("git_branches", "List branches", EmptyParams)
@@ -313,8 +397,34 @@ async def git_merge(ctx: AppContext, params: GitMergeParams) -> dict[str, Any]:
 @registry.register("git_blame", "Get line authorship", GitBlameParams)
 async def git_blame(ctx: AppContext, params: GitBlameParams) -> dict[str, Any]:
     """Get blame."""
-    blame = ctx.git_ops.blame(params.path)
-    return asdict(blame)
+    blame = ctx.git_ops.blame(
+        params.path,
+        min_line=params.start_line,
+        max_line=params.end_line,
+    )
+    blame_dict = asdict(blame)
+    lines = blame_dict.pop("lines", [])
+
+    # Apply limit and cursor logic
+    start_idx = 0
+    if params.cursor:
+        with contextlib.suppress(ValueError):
+            start_idx = int(params.cursor)
+
+    end_idx = start_idx + params.limit
+    page = lines[start_idx:end_idx]
+    has_more = end_idx < len(lines)
+
+    pagination: dict[str, Any] = {}
+    if has_more:
+        pagination["next_cursor"] = str(end_idx)
+        pagination["total_estimate"] = len(lines)
+
+    return {
+        "results": page,
+        "pagination": pagination,
+        **blame_dict,
+    }
 
 
 @registry.register("git_show", "Show commit details", GitShowParams)
@@ -409,3 +519,82 @@ async def git_pull(ctx: AppContext, params: GitPullParams) -> dict[str, Any]:
     """Pull from remote."""
     result = ctx.git_ops.pull(remote=params.remote)
     return asdict(result)
+
+
+@registry.register("git_submodules", "List submodules", EmptyParams)
+async def git_submodules(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
+    """List submodules."""
+    submodules = ctx.git_ops.submodules()
+    return {"submodules": [asdict(s) for s in submodules]}
+
+
+@registry.register("git_submodule_add", "Add a submodule", GitSubmoduleAddParams)
+async def git_submodule_add(ctx: AppContext, params: GitSubmoduleAddParams) -> dict[str, Any]:
+    """Add submodule."""
+    sm = ctx.git_ops.submodule_add(params.url, params.path, params.branch)
+    return asdict(sm)
+
+
+@registry.register("git_submodule_update", "Update submodules", GitSubmoduleUpdateParams)
+async def git_submodule_update(ctx: AppContext, params: GitSubmoduleUpdateParams) -> dict[str, Any]:
+    """Update submodules."""
+    result = ctx.git_ops.submodule_update(params.paths, params.recursive, params.init)
+    return asdict(result)
+
+
+@registry.register("git_submodule_init", "Initialize submodules", GitSubmoduleInitParams)
+async def git_submodule_init(ctx: AppContext, params: GitSubmoduleInitParams) -> dict[str, Any]:
+    """Init submodules."""
+    paths = ctx.git_ops.submodule_init(params.paths)
+    return {"initialized": paths}
+
+
+@registry.register("git_submodule_remove", "Remove a submodule", GitSubmoduleRemoveParams)
+async def git_submodule_remove(ctx: AppContext, params: GitSubmoduleRemoveParams) -> dict[str, Any]:
+    """Remove submodule."""
+    ctx.git_ops.submodule_remove(params.path)
+    return {"removed": params.path}
+
+
+@registry.register("git_worktrees", "List worktrees", EmptyParams)
+async def git_worktrees(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
+    """List worktrees."""
+    worktrees = ctx.git_ops.worktrees()
+    return {"worktrees": [asdict(w) for w in worktrees]}
+
+
+@registry.register("git_worktree_add", "Add a worktree", GitWorktreeAddParams)
+async def git_worktree_add(ctx: AppContext, params: GitWorktreeAddParams) -> dict[str, Any]:
+    """Add worktree."""
+    from pathlib import Path
+
+    ctx.git_ops.worktree_add(Path(params.path), params.ref)
+    return {"created": params.path, "ref": params.ref}
+
+
+@registry.register("git_worktree_remove", "Remove a worktree", GitWorktreeRemoveParams)
+async def git_worktree_remove(ctx: AppContext, params: GitWorktreeRemoveParams) -> dict[str, Any]:
+    """Remove worktree."""
+    ctx.git_ops.worktree_remove(params.name, params.force)
+    return {"removed": params.name}
+
+
+@registry.register("git_worktree_lock", "Lock a worktree", GitWorktreeLockParams)
+async def git_worktree_lock(ctx: AppContext, params: GitWorktreeLockParams) -> dict[str, Any]:
+    """Lock worktree."""
+    ctx.git_ops.worktree_lock(params.name, params.reason)
+    return {"locked": params.name}
+
+
+@registry.register("git_worktree_unlock", "Unlock a worktree", GitWorktreeUnlockParams)
+async def git_worktree_unlock(ctx: AppContext, params: GitWorktreeUnlockParams) -> dict[str, Any]:
+    """Unlock worktree."""
+    ctx.git_ops.worktree_unlock(params.name)
+    return {"unlocked": params.name}
+
+
+@registry.register("git_worktree_prune", "Prune worktrees", EmptyParams)
+async def git_worktree_prune(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
+    """Prune worktrees."""
+    pruned = ctx.git_ops.worktree_prune()
+    return {"pruned": pruned}
