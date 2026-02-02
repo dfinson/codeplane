@@ -12,6 +12,7 @@ Discovery -> Authority -> Membership -> Probe -> Router -> Index
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import threading
@@ -156,6 +157,9 @@ class IndexCoordinator:
         # Serialization locks
         self._reconcile_lock = threading.Lock()
         self._tantivy_write_lock = threading.Lock()
+
+        # Consistency gating
+        self._fresh_event = asyncio.Event()
 
         # Components (initialized lazily in initialize())
         self._lexical: LexicalIndex | None = None
@@ -334,6 +338,7 @@ class IndexCoordinator:
             )
 
         self._initialized = True
+        self._fresh_event.set()
 
         return InitResult(
             contexts_discovered=len(all_candidates),
@@ -392,9 +397,24 @@ class IndexCoordinator:
             self._lexical.reload()
 
         self._initialized = True
+        self._fresh_event.set()
         return True
 
     async def reindex_incremental(self, changed_paths: list[Path]) -> IndexStats:
+        """
+        Incremental reindex for changed files.
+
+        SERIALIZED: Acquires reconcile_lock and tantivy_write_lock.
+
+        If .cplignore changes, triggers a full reindex to apply new patterns.
+        """
+        self._fresh_event.clear()
+        try:
+            return await self._reindex_incremental_impl(changed_paths)
+        finally:
+            self._fresh_event.set()
+
+    async def _reindex_incremental_impl(self, changed_paths: list[Path]) -> IndexStats:
         """
         Incremental reindex for changed files.
 
@@ -645,6 +665,16 @@ class IndexCoordinator:
     async def reindex_full(self) -> IndexStats:
         """
         Full repository reindex - idempotent and incremental.
+        """
+        self._fresh_event.clear()
+        try:
+            return await self._reindex_full_impl()
+        finally:
+            self._fresh_event.set()
+
+    async def _reindex_full_impl(self) -> IndexStats:
+        """
+        Full repository reindex - idempotent and incremental.
 
         Checks for stale files (indexed_at == NULL) and only processes those.
         Safe to call at any time; returns immediately if index is up-to-date.
@@ -741,6 +771,13 @@ class IndexCoordinator:
             duration_seconds=duration,
         )
 
+    async def wait_for_freshness(self) -> None:
+        """Block unti index is fresh (no pending writes)."""
+        if not self._initialized:
+            msg = "Coordinator not initialized"
+            raise RuntimeError(msg)
+        await self._fresh_event.wait()
+
     async def search(
         self,
         query: str,
@@ -758,6 +795,7 @@ class IndexCoordinator:
         Returns:
             List of SearchResult objects
         """
+        await self.wait_for_freshness()
         if self._lexical is None:
             return []
 
@@ -796,6 +834,7 @@ class IndexCoordinator:
         Returns:
             DefFact if found, None otherwise
         """
+        await self.wait_for_freshness()
         with self.db.session() as session:
             stmt = select(DefFact).where(DefFact.name == name)
             if context_id is not None:
@@ -819,12 +858,14 @@ class IndexCoordinator:
         Returns:
             List of RefFact objects
         """
+        await self.wait_for_freshness()
         with self.db.session() as session:
             facts = FactQueries(session)
             return facts.list_refs_by_def_uid(def_fact.def_uid, limit=limit)
 
     async def get_file_state(self, file_id: int, context_id: int) -> FileState:
         """Get computed file state for mutation gating."""
+        await self.wait_for_freshness()
         if self._state is None:
             from codeplane.index.models import FileState, Freshness
 
@@ -849,6 +890,7 @@ class IndexCoordinator:
         Returns:
             MapRepoResult with requested sections populated.
         """
+        await self.wait_for_freshness()
         with self.db.session() as session:
             mapper = RepoMapper(session, self.repo_root)
             return mapper.map(include=include, depth=depth)
