@@ -228,7 +228,9 @@ class IndexCoordinator:
 
         probe_iter: Iterable[CandidateContext] = resolved_candidates
         if not self._quiet:
-            probe_iter = progress(resolved_candidates, desc="Validating", unit="roots", force=True)
+            probe_iter = progress(
+                resolved_candidates, desc="Validating contexts", unit="contexts", force=True
+            )
 
         for candidate in probe_iter:
             probe_result = probe.validate(candidate)
