@@ -156,5 +156,18 @@ def _serialize_test_result(result: TestResult) -> dict[str, Any]:
                 }
                 for f in status.failures
             ]
+        if status.diagnostics:
+            output["run_status"]["diagnostics"] = [
+                {
+                    "target_id": d.target_id,
+                    "error_type": d.error_type,
+                    "error_detail": d.error_detail,
+                    "suggested_action": d.suggested_action,
+                    "command": d.command,
+                    "working_directory": d.working_directory,
+                    "exit_code": d.exit_code,
+                }
+                for d in status.diagnostics
+            ]
 
     return output

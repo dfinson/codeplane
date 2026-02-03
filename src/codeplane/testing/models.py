@@ -149,6 +149,30 @@ class ParsedTestCase:
     line_number: int | None = None
 
 
+# Error types for explicit failure classification
+ErrorType = Literal[
+    "none",  # No error
+    "command_not_found",  # Executable doesn't exist
+    "command_failed",  # Command ran but returned non-zero
+    "timeout",  # Command exceeded timeout
+    "parse_failed",  # Output exists but couldn't be parsed
+    "output_missing",  # Expected output file doesn't exist
+    "unknown",  # Unclassified error
+]
+"""Explicit error classification for diagnostic clarity."""
+
+
+@dataclass
+class ExecutionContext:
+    """Captured execution context for diagnostics."""
+
+    command: list[str] | None = None
+    working_directory: str | None = None
+    exit_code: int | None = None
+    raw_stdout: str | None = None
+    raw_stderr: str | None = None
+
+
 @dataclass
 class ParsedTestSuite:
     """Parsed test suite result (from a single target)."""
@@ -163,6 +187,14 @@ class ParsedTestSuite:
     duration_seconds: float = 0.0
     target_selector: str | None = None
     workspace_root: str | None = None
+
+    # Execution context for diagnostics
+    execution: ExecutionContext | None = None
+
+    # Error classification
+    error_type: ErrorType = "none"
+    error_detail: str | None = None
+    suggested_action: str | None = None
 
 
 @dataclass
@@ -194,6 +226,19 @@ class ParsedTestRun:
 
 
 @dataclass
+class ExecutionDiagnostic:
+    """Diagnostic information for a target execution."""
+
+    target_id: str
+    error_type: ErrorType
+    error_detail: str | None
+    suggested_action: str | None
+    command: list[str] | None = None
+    working_directory: str | None = None
+    exit_code: int | None = None
+
+
+@dataclass
 class TestRunStatus:
     """Status of a test run."""
 
@@ -203,6 +248,8 @@ class TestRunStatus:
     failures: list[TestFailure] = field(default_factory=list)
     duration_seconds: float = 0.0
     artifact_dir: str | None = None  # .codeplane/artifacts/tests/<run_id>/
+    # Execution diagnostics for errors that aren't test failures
+    diagnostics: list[ExecutionDiagnostic] = field(default_factory=list)
 
 
 @dataclass
