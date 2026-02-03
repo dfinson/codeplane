@@ -1,8 +1,8 @@
-"""Refactor MCP tool - unified refactoring handler."""
+"""Refactor MCP tools - refactor_* handlers."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from codeplane.mcp.registry import registry
 from codeplane.mcp.tools.base import BaseParams
@@ -13,36 +13,52 @@ if TYPE_CHECKING:
 
 
 # =============================================================================
-# Parameter Model
+# Parameter Models
 # =============================================================================
 
 
-class RefactorParams(BaseParams):
-    """Parameters for refactor tool."""
+class RefactorRenameParams(BaseParams):
+    """Parameters for refactor_rename."""
 
-    action: Literal["rename", "move", "delete", "apply", "cancel", "inspect"]
-
-    # rename params
-    symbol: str | None = None  # Symbol name or path:line:col locator
-    new_name: str | None = None
-
-    # move params
-    from_path: str | None = None
-    to_path: str | None = None
-
-    # delete params
-    target: str | None = None  # Symbol or path
-
-    # apply/cancel/inspect params
-    refactor_id: str | None = None
-
-    # inspect params
-    path: str | None = None
-    context_lines: int = 2
-
-    # shared options
+    symbol: str  # Symbol name or path:line:col locator
+    new_name: str
     include_comments: bool = True
     contexts: list[str] | None = None
+
+
+class RefactorMoveParams(BaseParams):
+    """Parameters for refactor_move."""
+
+    from_path: str
+    to_path: str
+    include_comments: bool = True
+
+
+class RefactorDeleteParams(BaseParams):
+    """Parameters for refactor_delete."""
+
+    target: str  # Symbol or path
+    include_comments: bool = True
+
+
+class RefactorApplyParams(BaseParams):
+    """Parameters for refactor_apply."""
+
+    refactor_id: str
+
+
+class RefactorCancelParams(BaseParams):
+    """Parameters for refactor_cancel."""
+
+    refactor_id: str
+
+
+class RefactorInspectParams(BaseParams):
+    """Parameters for refactor_inspect."""
+
+    refactor_id: str
+    path: str
+    context_lines: int = 2
 
 
 # =============================================================================
@@ -69,92 +85,78 @@ def _summarize_refactor(status: str, files_affected: int, preview: Any) -> str:
 
 
 # =============================================================================
-# Tool Handler
+# Tool Handlers
 # =============================================================================
 
 
+@registry.register("refactor_rename", "Rename a symbol across the codebase", RefactorRenameParams)
+async def refactor_rename(ctx: AppContext, params: RefactorRenameParams) -> dict[str, Any]:
+    """Rename symbol with certainty-scored candidates."""
+    result = await ctx.refactor_ops.rename(
+        params.symbol,
+        params.new_name,
+        _include_comments=params.include_comments,
+        _contexts=params.contexts,
+    )
+    return _serialize_refactor_result(result)
+
+
+@registry.register("refactor_move", "Move a file/module, updating imports", RefactorMoveParams)
+async def refactor_move(ctx: AppContext, params: RefactorMoveParams) -> dict[str, Any]:
+    """Move file/module and update all import references."""
+    result = await ctx.refactor_ops.move(
+        params.from_path,
+        params.to_path,
+        include_comments=params.include_comments,
+    )
+    return _serialize_refactor_result(result)
+
+
 @registry.register(
-    "refactor",
-    "Refactoring operations: rename symbols, move files, find references for deletion",
-    RefactorParams,
+    "refactor_delete",
+    "Find all references to a symbol/file for manual cleanup",
+    RefactorDeleteParams,
 )
-async def refactor(ctx: AppContext, params: RefactorParams) -> dict[str, Any]:
-    """Unified refactoring tool.
+async def refactor_delete(ctx: AppContext, params: RefactorDeleteParams) -> dict[str, Any]:
+    """Find references that need cleanup when deleting."""
+    result = await ctx.refactor_ops.delete(
+        params.target,
+        include_comments=params.include_comments,
+    )
+    return _serialize_refactor_result(result)
 
-    Actions:
-    - rename: Rename a symbol across the codebase
-    - move: Move a file/module, updating imports
-    - delete: Find all references for manual cleanup
-    - apply: Apply a previewed refactoring
-    - cancel: Cancel a pending refactoring
-    - inspect: Inspect low-certainty matches with context
-    """
-    if params.action == "rename":
-        if not params.symbol or not params.new_name:
-            return {
-                "error": "rename requires 'symbol' and 'new_name'",
-                "summary": "error: missing params",
-            }
-        result = await ctx.refactor_ops.rename(
-            params.symbol,
-            params.new_name,
-            _include_comments=params.include_comments,
-            _contexts=params.contexts,
-        )
-        return _serialize_refactor_result(result)
 
-    if params.action == "move":
-        if not params.from_path or not params.to_path:
-            return {
-                "error": "move requires 'from_path' and 'to_path'",
-                "summary": "error: missing params",
-            }
-        result = await ctx.refactor_ops.move(
-            params.from_path,
-            params.to_path,
-            include_comments=params.include_comments,
-        )
-        return _serialize_refactor_result(result)
+@registry.register("refactor_apply", "Apply a previewed refactoring", RefactorApplyParams)
+async def refactor_apply(ctx: AppContext, params: RefactorApplyParams) -> dict[str, Any]:
+    """Apply pending refactor."""
+    result = await ctx.refactor_ops.apply(params.refactor_id, ctx.mutation_ops)
+    return _serialize_refactor_result(result)
 
-    if params.action == "delete":
-        if not params.target:
-            return {"error": "delete requires 'target'", "summary": "error: missing params"}
-        result = await ctx.refactor_ops.delete(
-            params.target,
-            include_comments=params.include_comments,
-        )
-        return _serialize_refactor_result(result)
 
-    if params.action == "apply":
-        if not params.refactor_id:
-            return {"error": "apply requires 'refactor_id'", "summary": "error: missing params"}
-        result = await ctx.refactor_ops.apply(params.refactor_id, ctx.mutation_ops)
-        return _serialize_refactor_result(result)
+@registry.register("refactor_cancel", "Cancel a pending refactoring", RefactorCancelParams)
+async def refactor_cancel(ctx: AppContext, params: RefactorCancelParams) -> dict[str, Any]:
+    """Cancel pending refactor."""
+    result = await ctx.refactor_ops.cancel(params.refactor_id)
+    return _serialize_refactor_result(result)
 
-    if params.action == "cancel":
-        if not params.refactor_id:
-            return {"error": "cancel requires 'refactor_id'", "summary": "error: missing params"}
-        result = await ctx.refactor_ops.cancel(params.refactor_id)
-        return _serialize_refactor_result(result)
 
-    if params.action == "inspect":
-        if not params.refactor_id or not params.path:
-            return {
-                "error": "inspect requires 'refactor_id' and 'path'",
-                "summary": "error: missing params",
-            }
-        insp = await ctx.refactor_ops.inspect(
-            params.refactor_id,
-            params.path,
-            context_lines=params.context_lines,
-        )
-        return {
-            "path": insp.path,
-            "matches": insp.matches,
-            "summary": f"{len(insp.matches)} matches in {insp.path}",
-        }
-
-    return {"error": f"unknown action: {params.action}", "summary": "error: unknown action"}
+@registry.register(
+    "refactor_inspect",
+    "Inspect low-certainty matches in a file with context",
+    RefactorInspectParams,
+)
+async def refactor_inspect(ctx: AppContext, params: RefactorInspectParams) -> dict[str, Any]:
+    """Inspect low-certainty matches before applying."""
+    result = await ctx.refactor_ops.inspect(
+        params.refactor_id,
+        params.path,
+        context_lines=params.context_lines,
+    )
+    return {
+        "path": result.path,
+        "matches": result.matches,
+        "summary": f"{len(result.matches)} matches in {result.path}",
+    }
 
 
 def _serialize_refactor_result(result: RefactorResult) -> dict[str, Any]:

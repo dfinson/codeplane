@@ -56,7 +56,7 @@ def _derive_features(tool_names: list[str]) -> list[str]:
     for name in tool_names:
         if name.startswith("git_"):
             features.add("git_ops")
-        elif name == "refactor":
+        elif name.startswith("refactor_"):
             features.add("refactoring")
         elif name == "session":
             features.add("session_management")
@@ -173,11 +173,7 @@ async def describe(ctx: AppContext, params: DescribeParams) -> dict[str, Any]:
             {
                 "name": "refactor_symbol",
                 "description": "Safely rename a symbol across codebase",
-                "steps": [
-                    "refactor (action=rename)",
-                    "refactor (action=inspect)",
-                    "refactor (action=apply)",
-                ],
+                "steps": ["refactor_rename", "refactor_inspect", "refactor_apply"],
             },
             {
                 "name": "explore_codebase",
