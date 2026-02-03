@@ -1,4 +1,4 @@
-"""Lint MCP tools - lint_check handler."""
+"""Lint MCP tools - lint.check handler."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 
 class LintCheckParams(BaseParams):
-    """Parameters for lint_check."""
+    """Parameters for lint.check."""
 
     paths: list[str] | None = None  # Paths to check (default: entire repo)
     tools: list[str] | None = None  # Specific tool IDs (default: auto-detect)
@@ -26,10 +26,28 @@ class LintCheckParams(BaseParams):
 
 
 class LintToolsParams(BaseParams):
-    """Parameters for lint_tools."""
+    """Parameters for lint.tools."""
 
     language: str | None = None  # Filter by language
     category: str | None = None  # Filter by category
+
+
+# =============================================================================
+# Summary Helpers
+# =============================================================================
+
+
+def _summarize_lint(status: str, total_diagnostics: int, files_modified: int, dry_run: bool) -> str:
+    """Generate summary for lint.check."""
+    prefix = "(dry-run) " if dry_run else ""
+    if status == "clean":
+        return f"{prefix}clean, no issues"
+    parts = [status]
+    if total_diagnostics:
+        parts.append(f"{total_diagnostics} diagnostics")
+    if files_modified:
+        parts.append(f"{files_modified} files fixed")
+    return f"{prefix}{', '.join(parts)}"
 
 
 # =============================================================================
@@ -38,7 +56,7 @@ class LintToolsParams(BaseParams):
 
 
 @mcp_registry.register(
-    "lint_check",
+    "lint.check",
     "Run linters, formatters, and type checkers. Applies fixes by default.",
     LintCheckParams,
 )
@@ -50,7 +68,7 @@ async def lint_check(ctx: AppContext, params: LintCheckParams) -> dict[str, Any]
     Available categories: type_check, lint, format, security
 
     Tools are auto-detected based on config files in your repository.
-    Use lint_tools to see available tools.
+    Use lint.tools to see available tools.
     """
     result = await ctx.lint_ops.check(
         paths=params.paths,
@@ -92,6 +110,9 @@ async def lint_check(ctx: AppContext, params: LintCheckParams) -> dict[str, Any]
             }
             for t in result.tools_run
         ],
+        "summary": _summarize_lint(
+            result.status, result.total_diagnostics, result.total_files_modified, result.dry_run
+        ),
     }
 
     # Include agentic hint if present (for edge cases like no tools detected)
@@ -102,7 +123,7 @@ async def lint_check(ctx: AppContext, params: LintCheckParams) -> dict[str, Any]
 
 
 @mcp_registry.register(
-    "lint_tools",
+    "lint.tools",
     "List available lint tools and their detection status",
     LintToolsParams,
 )
@@ -147,4 +168,5 @@ async def lint_tools(ctx: AppContext, params: LintToolsParams) -> dict[str, Any]
         ],
         "detected_count": len(detected),
         "total_count": len(all_tools),
+        "summary": f"{len(detected)} of {len(all_tools)} tools detected",
     }

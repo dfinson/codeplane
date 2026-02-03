@@ -1,4 +1,4 @@
-"""Refactor MCP tools - refactor_* handlers."""
+"""Refactor MCP tools - refactor.* handlers."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 
 class RefactorRenameParams(BaseParams):
-    """Parameters for refactor_rename."""
+    """Parameters for refactor.rename."""
 
     symbol: str  # Symbol name or path:line:col locator
     new_name: str
@@ -27,7 +27,7 @@ class RefactorRenameParams(BaseParams):
 
 
 class RefactorMoveParams(BaseParams):
-    """Parameters for refactor_move."""
+    """Parameters for refactor.move."""
 
     from_path: str
     to_path: str
@@ -35,26 +35,26 @@ class RefactorMoveParams(BaseParams):
 
 
 class RefactorDeleteParams(BaseParams):
-    """Parameters for refactor_delete."""
+    """Parameters for refactor.delete."""
 
     target: str  # Symbol or path
     include_comments: bool = True
 
 
 class RefactorApplyParams(BaseParams):
-    """Parameters for refactor_apply."""
+    """Parameters for refactor.apply."""
 
     refactor_id: str
 
 
 class RefactorCancelParams(BaseParams):
-    """Parameters for refactor_cancel."""
+    """Parameters for refactor.cancel."""
 
     refactor_id: str
 
 
 class RefactorInspectParams(BaseParams):
-    """Parameters for refactor_inspect."""
+    """Parameters for refactor.inspect."""
 
     refactor_id: str
     path: str
@@ -62,11 +62,34 @@ class RefactorInspectParams(BaseParams):
 
 
 # =============================================================================
+# Summary Helpers
+# =============================================================================
+
+
+def _summarize_refactor(status: str, files_affected: int, preview: Any) -> str:
+    """Generate summary for refactor operations."""
+    if status == "cancelled":
+        return "refactoring cancelled"
+    if status == "applied":
+        return f"applied to {files_affected} files"
+    if status == "pending" and preview:
+        high = preview.high_certainty_count or 0
+        med = preview.medium_certainty_count or 0
+        low = preview.low_certainty_count or 0
+        total = high + med + low
+        parts = [f"preview: {total} changes in {files_affected} files"]
+        if low:
+            parts.append(f"({low} need review)")
+        return " ".join(parts)
+    return status
+
+
+# =============================================================================
 # Tool Handlers
 # =============================================================================
 
 
-@registry.register("refactor_rename", "Rename a symbol across the codebase", RefactorRenameParams)
+@registry.register("refactor.rename", "Rename a symbol across the codebase", RefactorRenameParams)
 async def refactor_rename(ctx: AppContext, params: RefactorRenameParams) -> dict[str, Any]:
     """Rename symbol with certainty-scored candidates."""
     result = await ctx.refactor_ops.rename(
@@ -79,7 +102,7 @@ async def refactor_rename(ctx: AppContext, params: RefactorRenameParams) -> dict
     return _serialize_refactor_result(result)
 
 
-@registry.register("refactor_move", "Move a file/module, updating imports", RefactorMoveParams)
+@registry.register("refactor.move", "Move a file/module, updating imports", RefactorMoveParams)
 async def refactor_move(ctx: AppContext, params: RefactorMoveParams) -> dict[str, Any]:
     """Move file/module and update all import references."""
     result = await ctx.refactor_ops.move(
@@ -91,7 +114,7 @@ async def refactor_move(ctx: AppContext, params: RefactorMoveParams) -> dict[str
 
 
 @registry.register(
-    "refactor_delete",
+    "refactor.delete",
     "Find all references to a symbol/file for manual cleanup",
     RefactorDeleteParams,
 )
@@ -108,14 +131,14 @@ async def refactor_delete(ctx: AppContext, params: RefactorDeleteParams) -> dict
     return _serialize_refactor_result(result)
 
 
-@registry.register("refactor_apply", "Apply a previewed refactoring", RefactorApplyParams)
+@registry.register("refactor.apply", "Apply a previewed refactoring", RefactorApplyParams)
 async def refactor_apply(ctx: AppContext, params: RefactorApplyParams) -> dict[str, Any]:
     """Apply pending refactor."""
     result = await ctx.refactor_ops.apply(params.refactor_id, ctx.mutation_ops)
     return _serialize_refactor_result(result)
 
 
-@registry.register("refactor_cancel", "Cancel a pending refactoring", RefactorCancelParams)
+@registry.register("refactor.cancel", "Cancel a pending refactoring", RefactorCancelParams)
 async def refactor_cancel(ctx: AppContext, params: RefactorCancelParams) -> dict[str, Any]:
     """Cancel pending refactor."""
     result = await ctx.refactor_ops.cancel(params.refactor_id)
@@ -123,7 +146,7 @@ async def refactor_cancel(ctx: AppContext, params: RefactorCancelParams) -> dict
 
 
 @registry.register(
-    "refactor_inspect",
+    "refactor.inspect",
     "Inspect low-certainty matches in a file with context",
     RefactorInspectParams,
 )
@@ -141,14 +164,17 @@ async def refactor_inspect(ctx: AppContext, params: RefactorInspectParams) -> di
     return {
         "path": result.path,
         "matches": result.matches,
+        "summary": f"{len(result.matches)} matches in {result.path}",
     }
 
 
 def _serialize_refactor_result(result: RefactorResult) -> dict[str, Any]:
     """Convert RefactorResult to dict."""
+    files_affected = result.preview.files_affected if result.preview else 0
     output: dict[str, Any] = {
         "refactor_id": result.refactor_id,
         "status": result.status,
+        "summary": _summarize_refactor(result.status, files_affected, result.preview),
     }
 
     if result.preview:

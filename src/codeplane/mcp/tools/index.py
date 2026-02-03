@@ -1,4 +1,4 @@
-"""Index MCP tools - search, map_repo handlers."""
+"""Index MCP tools - index.search, index.map handlers."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 
 class SearchParams(BaseParams):
-    """Parameters for search."""
+    """Parameters for index.search."""
 
     query: str
     mode: Literal["lexical", "symbol", "references", "definitions"] = "lexical"
@@ -32,7 +32,7 @@ class SearchParams(BaseParams):
 
 
 class MapRepoParams(BaseParams):
-    """Parameters for map_repo."""
+    """Parameters for index.map."""
 
     include: (
         list[
@@ -64,17 +64,40 @@ class MapRepoParams(BaseParams):
 
 
 class GetDefParams(BaseParams):
-    """Parameters for get_def (search definitions mode)."""
+    """Parameters for index.search definitions mode."""
 
     name: str
     context_id: int | None = None
 
 
 class GetReferencesParams(BaseParams):
-    """Parameters for get_references."""
+    """Parameters for index.search references mode."""
 
     symbol: str
     limit: int = Field(default=100, le=500)
+
+
+# =============================================================================
+# Summary Helpers
+# =============================================================================
+
+
+def _summarize_search(count: int, mode: str, query: str) -> str:
+    """Generate summary for index.search."""
+    if count == 0:
+        return f'no {mode} results for "{query}"'
+    q = query[:30] + "..." if len(query) > 30 else query
+    return f'{count} {mode} results for "{q}"'
+
+
+def _summarize_map(file_count: int, sections: list[str], truncated: bool) -> str:
+    """Generate summary for index.map."""
+    parts = [f"{file_count} files"]
+    if sections:
+        parts.append(f"sections: {', '.join(sections)}")
+    if truncated:
+        parts.append("(truncated)")
+    return ", ".join(parts)
 
 
 # =============================================================================
@@ -82,8 +105,8 @@ class GetReferencesParams(BaseParams):
 # =============================================================================
 
 
-@registry.register("search", "Search code, symbols, or references", SearchParams)
-async def search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
+@registry.register("index.search", "Search code, symbols, or references", SearchParams)
+async def index_search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
     """Unified search across lexical index, symbols, and references."""
     from codeplane.index.ops import SearchMode
 
@@ -103,6 +126,7 @@ async def search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
                 "results": [],
                 "pagination": {},
                 "query_time_ms": 0,
+                "summary": _summarize_search(0, "definitions", params.query),
             }
         return {
             "results": [
@@ -122,6 +146,7 @@ async def search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
             ],
             "pagination": {},
             "query_time_ms": 0,
+            "summary": _summarize_search(1, "definitions", params.query),
         }
 
     if params.mode == "references":
@@ -132,6 +157,7 @@ async def search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
                 "results": [],
                 "pagination": {},
                 "query_time_ms": 0,
+                "summary": _summarize_search(0, "references", params.query),
             }
 
         refs = await ctx.coordinator.get_references(def_fact, _context_id=0, limit=params.limit)
@@ -152,6 +178,7 @@ async def search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
             "results": ref_results,
             "pagination": {},
             "query_time_ms": 0,
+            "summary": _summarize_search(len(ref_results), "references", params.query),
         }
 
     # Lexical or symbol search
@@ -175,11 +202,12 @@ async def search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
         ],
         "pagination": {},
         "query_time_ms": 0,
+        "summary": _summarize_search(len(search_results), params.mode, params.query),
     }
 
 
-@registry.register("map_repo", "Get repository mental model", MapRepoParams)
-async def map_repo(ctx: AppContext, params: MapRepoParams) -> dict[str, Any]:
+@registry.register("index.map", "Get repository mental model", MapRepoParams)
+async def index_map(ctx: AppContext, params: MapRepoParams) -> dict[str, Any]:
     """Build repository mental model from indexed data."""
     result = await ctx.coordinator.map_repo(
         include=params.include,
@@ -253,6 +281,24 @@ async def map_repo(ctx: AppContext, params: MapRepoParams) -> dict[str, Any]:
         output["pagination"]["next_cursor"] = result.next_cursor
     if result.total_estimate:
         output["pagination"]["total_estimate"] = result.total_estimate
+
+    # Build sections list for summary
+    sections: list[str] = []
+    if result.structure:
+        sections.append("structure")
+    if result.languages:
+        sections.append("languages")
+    if result.entry_points:
+        sections.append("entry_points")
+    if result.dependencies:
+        sections.append("dependencies")
+    if result.test_layout:
+        sections.append("test_layout")
+    if result.public_api:
+        sections.append("public_api")
+
+    file_count = result.structure.file_count if result.structure else 0
+    output["summary"] = _summarize_map(file_count, sections, result.truncated)
 
     return output
 

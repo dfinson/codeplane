@@ -1,4 +1,4 @@
-"""Mutation MCP tools - atomic_edit_files handler."""
+"""Mutation MCP tools - files.edit handler."""
 
 from __future__ import annotations
 
@@ -48,10 +48,23 @@ class EditParam(BaseModel):
 
 
 class MutateParams(BaseParams):
-    """Parameters for atomic_edit_files."""
+    """Parameters for files.edit."""
 
     edits: list[EditParam] = Field(..., description="List of file edits to apply atomically")
     dry_run: bool = Field(False, description="Preview changes without applying")
+
+
+# =============================================================================
+# Summary Helpers
+# =============================================================================
+
+
+def _summarize_edit(files_changed: int, insertions: int, deletions: int, dry_run: bool) -> str:
+    """Generate summary for files.edit."""
+    prefix = "(dry-run) " if dry_run else ""
+    if files_changed == 0:
+        return f"{prefix}no changes"
+    return f"{prefix}{files_changed} files (+{insertions}/-{deletions})"
 
 
 # =============================================================================
@@ -59,10 +72,8 @@ class MutateParams(BaseParams):
 # =============================================================================
 
 
-@registry.register(
-    "atomic_edit_files", "Atomic file edits with structured delta response", MutateParams
-)
-async def atomic_edit_files(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
+@registry.register("files.edit", "Atomic file edits with structured delta response", MutateParams)
+async def files_edit(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
     """Apply atomic file edits.
 
     For updates, provide old_content and new_content. The tool will:
@@ -98,7 +109,7 @@ async def atomic_edit_files(ctx: AppContext, params: MutateParams) -> dict[str, 
         # Log successful operation
         for file_delta in result.delta.files:
             ledger.log_operation(
-                tool="atomic_edit_files",
+                tool="files.edit",
                 success=True,
                 path=file_delta.path,
                 action=file_delta.action,
@@ -130,6 +141,12 @@ async def atomic_edit_files(ctx: AppContext, params: MutateParams) -> dict[str, 
                     for f in result.delta.files
                 ],
             },
+            "summary": _summarize_edit(
+                result.delta.files_changed,
+                result.delta.insertions,
+                result.delta.deletions,
+                result.dry_run,
+            ),
         }
 
         # Add dry run info if present
@@ -153,7 +170,7 @@ async def atomic_edit_files(ctx: AppContext, params: MutateParams) -> dict[str, 
             error_code = ErrorCode.CONTENT_NOT_FOUND.value
             error_path = e.path
             ledger.log_operation(
-                tool="atomic_edit_files",
+                tool="files.edit",
                 success=False,
                 error_code=error_code,
                 error_message=str(e),
@@ -166,7 +183,7 @@ async def atomic_edit_files(ctx: AppContext, params: MutateParams) -> dict[str, 
             error_code = ErrorCode.MULTIPLE_MATCHES.value
             error_path = e.path
             ledger.log_operation(
-                tool="atomic_edit_files",
+                tool="files.edit",
                 success=False,
                 error_code=error_code,
                 error_message=str(e),
@@ -178,7 +195,7 @@ async def atomic_edit_files(ctx: AppContext, params: MutateParams) -> dict[str, 
         elif isinstance(e, FileNotFoundError):
             error_code = ErrorCode.FILE_NOT_FOUND.value
             ledger.log_operation(
-                tool="atomic_edit_files",
+                tool="files.edit",
                 success=False,
                 error_code=error_code,
                 error_message=str(e),
@@ -187,13 +204,13 @@ async def atomic_edit_files(ctx: AppContext, params: MutateParams) -> dict[str, 
             raise MCPError(
                 code=ErrorCode.FILE_NOT_FOUND,
                 message=str(e),
-                remediation="Check the file path. Use map_repo to see available files.",
+                remediation="Check the file path. Use index.map to see available files.",
             ) from e
 
         elif isinstance(e, FileExistsError):
             error_code = ErrorCode.FILE_EXISTS.value
             ledger.log_operation(
-                tool="atomic_edit_files",
+                tool="files.edit",
                 success=False,
                 error_code=error_code,
                 error_message=str(e),
@@ -207,7 +224,7 @@ async def atomic_edit_files(ctx: AppContext, params: MutateParams) -> dict[str, 
 
         # Re-raise unknown errors
         ledger.log_operation(
-            tool="atomic_edit_files",
+            tool="files.edit",
             success=False,
             error_code=ErrorCode.INTERNAL_ERROR.value,
             error_message=str(e),

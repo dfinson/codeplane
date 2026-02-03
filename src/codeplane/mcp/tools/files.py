@@ -1,4 +1,4 @@
-"""Files MCP tools - read_files, list_files handlers."""
+"""Files MCP tools - files.read, files.list handlers."""
 
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ class RangeParam(BaseModel):
 
 
 class ReadFilesParams(BaseParams):
-    """Parameters for read_files."""
+    """Parameters for files.read."""
 
     paths: list[str] = Field(..., description="File paths relative to repo root")
     ranges: list[RangeParam] | None = Field(
@@ -53,7 +53,7 @@ class ReadFilesParams(BaseParams):
 
 
 class ListFilesParams(BaseParams):
-    """Parameters for list_files."""
+    """Parameters for files.list."""
 
     path: str | None = Field(
         None, description="Directory path relative to repo root (default: repo root)"
@@ -71,12 +71,47 @@ class ListFilesParams(BaseParams):
 
 
 # =============================================================================
+# Summary Helpers
+# =============================================================================
+
+
+def _summarize_read(files: list[dict[str, Any]], not_found: int = 0) -> str:
+    """Generate summary for files.read."""
+    if not files and not_found:
+        return f"{not_found} file(s) not found"
+
+    total_lines = sum(f.get("line_count", 0) for f in files)
+    paths = [f["path"] for f in files]
+
+    if len(paths) == 1:
+        rng = files[0].get("range")
+        if rng:
+            return f"1 file ({paths[0]}:{rng[0]}-{rng[1]}), {total_lines} lines"
+        return f"1 file ({paths[0]}), {total_lines} lines"
+
+    if len(paths) <= 3:
+        path_list = ", ".join(paths)
+    else:
+        path_list = f"{paths[0]}, {paths[1]}, +{len(paths) - 2} more"
+
+    suffix = f", {not_found} not found" if not_found else ""
+    return f"{len(files)} files ({path_list}), {total_lines} lines{suffix}"
+
+
+def _summarize_list(path: str, total: int, truncated: bool) -> str:
+    """Generate summary for files.list."""
+    loc = path or "repo root"
+    trunc = " (truncated)" if truncated else ""
+    return f"{total} entries in {loc}{trunc}"
+
+
+# =============================================================================
 # Tool Handlers
 # =============================================================================
 
 
-@registry.register("read_files", "Read file contents with optional line ranges", ReadFilesParams)
-async def read_files(ctx: AppContext, params: ReadFilesParams) -> dict[str, Any]:
+@registry.register("files.read", "Read file contents with optional line ranges", ReadFilesParams)
+async def files_read(ctx: AppContext, params: ReadFilesParams) -> dict[str, Any]:
     """Read file contents."""
     # Convert RangeParam models to dict format expected by FileOps
     ranges_dict = None
@@ -91,25 +126,30 @@ async def read_files(ctx: AppContext, params: ReadFilesParams) -> dict[str, Any]
         include_metadata=params.include_metadata,
     )
 
+    files = [
+        {
+            "path": f.path,
+            "content": f.content,
+            "language": f.language,
+            "line_count": f.line_count,
+            "range": f.range,
+            "metadata": f.metadata,
+        }
+        for f in result.files
+    ]
+
+    not_found = len(params.paths) - len(files)
+
     return {
-        "files": [
-            {
-                "path": f.path,
-                "content": f.content,
-                "language": f.language,
-                "line_count": f.line_count,
-                "range": f.range,
-                "metadata": f.metadata,
-            }
-            for f in result.files
-        ]
+        "files": files,
+        "summary": _summarize_read(files, not_found),
     }
 
 
 @registry.register(
-    "list_files", "List files in a directory with optional filtering", ListFilesParams
+    "files.list", "List files in a directory with optional filtering", ListFilesParams
 )
-async def list_files(ctx: AppContext, params: ListFilesParams) -> dict[str, Any]:
+async def files_list(ctx: AppContext, params: ListFilesParams) -> dict[str, Any]:
     """List files and directories."""
     result = ctx.file_ops.list_files(
         path=params.path,
@@ -141,4 +181,5 @@ async def list_files(ctx: AppContext, params: ListFilesParams) -> dict[str, Any]
         ],
         "total": result.total,
         "truncated": result.truncated,
+        "summary": _summarize_list(result.path, result.total, result.truncated),
     }
