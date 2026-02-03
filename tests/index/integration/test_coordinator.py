@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pygit2
 import pytest
 
 from codeplane.index.ops import (
@@ -210,7 +209,7 @@ def new_function():
 
     @pytest.mark.asyncio
     async def test_reindex_full(self, integration_repo: Path, tmp_path: Path) -> None:
-        """Should perform full reindex."""
+        """Should perform full reindex and discover new files."""
         db_path = tmp_path / "index.db"
         tantivy_path = tmp_path / "tantivy"
 
@@ -219,18 +218,18 @@ def new_function():
         try:
             await coordinator.initialize()
 
-            # Add a new file
+            # Add a new file (no git commit needed - we index all files)
             (integration_repo / "src" / "new_module.py").write_text('''"""New module."""
 
 def new_func():
     return "new"
 ''')
 
-            # Full reindex
+            # Full reindex should discover the new file
             stats = await coordinator.reindex_full()
 
             assert isinstance(stats, IndexStats)
-            assert stats.files_processed >= 1
+            assert stats.files_added >= 1
         finally:
             coordinator.close()
 
@@ -477,11 +476,6 @@ class TestCplignoreChangeHandling:
             "GENERATED_CONTENT = 'marker_for_test'\n"
         )
 
-        # Add to git index
-        repo = pygit2.Repository(str(integration_repo))
-        repo.index.add("src/generated_code.py")
-        repo.index.write()
-
         # Add *generated* pattern to .cplignore BEFORE initialization
         cplignore_path = integration_repo / ".codeplane" / ".cplignore"
         original_content = cplignore_path.read_text()
@@ -521,11 +515,6 @@ class TestCplignoreChangeHandling:
         """When .cplignore adds a pattern, matching .py files should be removed from index."""
         # Create a Python file that will be indexed initially
         (integration_repo / "src" / "temporary.py").write_text("TEMP_CODE = True\n")
-
-        # Add to git index
-        repo = pygit2.Repository(str(integration_repo))
-        repo.index.add("src/temporary.py")
-        repo.index.write()
 
         db_path = tmp_path / "index.db"
         tantivy_path = tmp_path / "tantivy"

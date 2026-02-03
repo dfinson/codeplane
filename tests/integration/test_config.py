@@ -58,7 +58,7 @@ class TestConfigCascade:
             yaml.dump(
                 {
                     "logging": {"level": "WARNING"},
-                    "daemon": {"port": 8000, "host": "0.0.0.0"},
+                    "server": {"port": 8000, "host": "0.0.0.0"},
                 },
                 f,
             )
@@ -70,7 +70,7 @@ class TestConfigCascade:
             yaml.dump({"logging": {"level": "DEBUG"}}, f)
 
         # Given - env var overrides one value
-        os.environ["CODEPLANE__DAEMON__PORT"] = "9999"
+        os.environ["CODEPLANE__SERVER__PORT"] = "9999"
 
         # When
         config = load_config(repo_root=temp_repo)

@@ -559,8 +559,7 @@ class TestTestOpsStatus:
 
             assert status_result.action == "status"
             assert status_result.run_status is not None
-            # Unknown runs return completed status
-            assert status_result.run_status.status == "completed"
+            assert status_result.run_status.status == "not_found"
 
     @pytest.mark.asyncio
     async def test_status_loads_persisted_result(self) -> None:

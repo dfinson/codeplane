@@ -97,7 +97,7 @@ class TestLoggingConfiguration:
             data = json.loads(lines[-1])
             assert data["event"] == "test message"
             assert data["key"] == "value"
-            assert "ts" in data
+            assert "timestamp" in data
             assert data["level"] == "info"
 
     def test_given_module_name_when_get_logger_then_binds_name(self) -> None:

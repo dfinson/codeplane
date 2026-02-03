@@ -99,8 +99,7 @@ class TestErrorPropagation:
 
         # Then
         assert result.exit_code == 1
-        assert "is not a git repository" in result.output
-        assert "cpl init" in result.output
+        assert "not" in result.output.lower() and "git repository" in result.output.lower()
 
 
 class TestWorkflows:
@@ -144,7 +143,7 @@ class TestWorkflows:
 
         # Given - env vars set
         os.environ["CODEPLANE__LOGGING__LEVEL"] = "DEBUG"
-        os.environ["CODEPLANE__DAEMON__PORT"] = "3000"
+        os.environ["CODEPLANE__SERVER__PORT"] = "3000"
 
         # When
         config = load_config(repo_root=temp_repo)

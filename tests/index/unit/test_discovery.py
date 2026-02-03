@@ -199,15 +199,15 @@ class TestContextDiscovery:
         repo_path.mkdir()
 
         # Root workspace marker
-        (repo_path / "pnpm-workspace.yaml").write_text("packages:\n  - 'packages/*'\n")
+        (repo_path / "pnpm-workspace.yaml").write_text("pkgs:\n  - 'pkgs/*'\n")
 
         # Two packages
-        (repo_path / "packages").mkdir()
-        (repo_path / "packages" / "pkg-a").mkdir()
-        (repo_path / "packages" / "pkg-a" / "package.json").write_text('{"name": "a"}\n')
+        (repo_path / "pkgs").mkdir()
+        (repo_path / "pkgs" / "pkg-a").mkdir()
+        (repo_path / "pkgs" / "pkg-a" / "package.json").write_text('{"name": "a"}\n')
 
-        (repo_path / "packages" / "pkg-b").mkdir()
-        (repo_path / "packages" / "pkg-b" / "package.json").write_text('{"name": "b"}\n')
+        (repo_path / "pkgs" / "pkg-b").mkdir()
+        (repo_path / "pkgs" / "pkg-b" / "package.json").write_text('{"name": "b"}\n')
 
         discovery = ContextDiscovery(repo_path)
         result = discovery.discover_all()

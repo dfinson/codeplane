@@ -97,7 +97,7 @@ def integration_monorepo(tmp_path: Path) -> Generator[Path, None, None]:
 
     # Create pnpm-workspace.yaml
     (repo_path / "pnpm-workspace.yaml").write_text("""packages:
-  - 'packages/*'
+  - 'pkgs/*'
 """)
 
     # Create .codeplane/.cplignore (simulating cpl init)
@@ -111,12 +111,12 @@ def integration_monorepo(tmp_path: Path) -> Generator[Path, None, None]:
     (repo_path / "package.json").write_text("""{
   "name": "monorepo",
   "private": true,
-  "workspaces": ["packages/*"]
+  "workspaces": ["pkgs/*"]
 }
 """)
 
     # Create package A
-    pkg_a = repo_path / "packages" / "pkg-a"
+    pkg_a = repo_path / "pkgs" / "pkg-a"
     pkg_a.mkdir(parents=True)
     (pkg_a / "package.json").write_text("""{
   "name": "@monorepo/pkg-a",
@@ -132,7 +132,7 @@ module.exports = { hello };
 """)
 
     # Create package B
-    pkg_b = repo_path / "packages" / "pkg-b"
+    pkg_b = repo_path / "pkgs" / "pkg-b"
     pkg_b.mkdir(parents=True)
     (pkg_b / "package.json").write_text("""{
   "name": "@monorepo/pkg-b",
