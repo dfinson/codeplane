@@ -1,8 +1,15 @@
-"""Testing MCP tool - unified test handler."""
+"""Testing MCP tools - test discovery and execution.
+
+Split into verb-first tools:
+- discover_test_targets: Find test targets
+- run_test_targets: Execute tests
+- get_test_run_status: Check run progress
+- cancel_test_run: Abort a run
+"""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any
 
 from codeplane.mcp.registry import registry
 from codeplane.mcp.tools.base import BaseParams
@@ -13,19 +20,19 @@ if TYPE_CHECKING:
 
 
 # =============================================================================
-# Parameter Model
+# Parameter Models
 # =============================================================================
 
 
-class TestParams(BaseParams):
-    """Parameters for test tool."""
+class DiscoverTestTargetsParams(BaseParams):
+    """Parameters for discover_test_targets."""
 
-    action: Literal["discover", "run", "status", "cancel"]
-
-    # discover params
     paths: list[str] | None = None
 
-    # run params
+
+class RunTestTargetsParams(BaseParams):
+    """Parameters for run_test_targets."""
+
     targets: list[str] | None = None
     pattern: str | None = None
     tags: list[str] | None = None
@@ -35,8 +42,17 @@ class TestParams(BaseParams):
     fail_fast: bool = False
     coverage: bool = False
 
-    # status/cancel params
-    run_id: str | None = None
+
+class GetTestRunStatusParams(BaseParams):
+    """Parameters for get_test_run_status."""
+
+    run_id: str
+
+
+class CancelTestRunParams(BaseParams):
+    """Parameters for cancel_test_run."""
+
+    run_id: str
 
 
 # =============================================================================
@@ -67,79 +83,6 @@ def _summarize_run(result: TestResult) -> str:
         return ", ".join(parts)
 
     return status.status
-
-
-# =============================================================================
-# Tool Handler
-# =============================================================================
-
-
-@registry.register(
-    "test",
-    "Test operations: discover, run, check status, or cancel test runs",
-    TestParams,
-)
-async def test(ctx: AppContext, params: TestParams) -> dict[str, Any]:
-    """Unified test tool.
-
-    Actions:
-    - discover: Find test targets in the repository
-    - run: Execute tests with optional filters
-    - status: Check status of a running test
-    - cancel: Cancel a running test
-    """
-    if params.action == "discover":
-        result = await ctx.test_ops.discover(paths=params.paths)
-        targets = result.targets or []
-        output: dict[str, Any] = {
-            "action": result.action,
-            "targets": [
-                {
-                    "target_id": t.target_id,
-                    "selector": t.selector,
-                    "kind": t.kind,
-                    "language": t.language,
-                    "runner_pack_id": t.runner_pack_id,
-                    "workspace_root": t.workspace_root,
-                    "estimated_cost": t.estimated_cost,
-                    "test_count": t.test_count,
-                    "path": t.path,
-                    "runner": t.runner,
-                }
-                for t in targets
-            ],
-            "summary": _summarize_discover(len(targets)),
-        }
-        if result.agentic_hint:
-            output["agentic_hint"] = result.agentic_hint
-        return output
-
-    if params.action == "run":
-        result = await ctx.test_ops.run(
-            targets=params.targets,
-            pattern=params.pattern,
-            tags=params.tags,
-            failed_only=params.failed_only,
-            parallelism=params.parallelism,
-            timeout_sec=params.timeout_sec,
-            fail_fast=params.fail_fast,
-            coverage=params.coverage,
-        )
-        return _serialize_test_result(result)
-
-    if params.action == "status":
-        if not params.run_id:
-            return {"error": "status requires 'run_id'", "summary": "error: missing params"}
-        result = await ctx.test_ops.status(params.run_id)
-        return _serialize_test_result(result)
-
-    if params.action == "cancel":
-        if not params.run_id:
-            return {"error": "cancel requires 'run_id'", "summary": "error: missing params"}
-        result = await ctx.test_ops.cancel(params.run_id)
-        return _serialize_test_result(result)
-
-    return {"error": f"unknown action: {params.action}", "summary": "error: unknown action"}
 
 
 def _serialize_test_result(result: TestResult) -> dict[str, Any]:
@@ -212,3 +155,85 @@ def _serialize_test_result(result: TestResult) -> dict[str, Any]:
         output["agentic_hint"] = result.agentic_hint
 
     return output
+
+
+# =============================================================================
+# Tool Handlers
+# =============================================================================
+
+
+@registry.register(
+    "discover_test_targets",
+    "Find test targets in the repository. Returns testable files/directories with runner info.",
+    DiscoverTestTargetsParams,
+)
+async def discover_test_targets(
+    ctx: AppContext, params: DiscoverTestTargetsParams
+) -> dict[str, Any]:
+    """Discover test targets in the repository."""
+    result = await ctx.test_ops.discover(paths=params.paths)
+    targets = result.targets or []
+    output: dict[str, Any] = {
+        "action": result.action,
+        "targets": [
+            {
+                "target_id": t.target_id,
+                "selector": t.selector,
+                "kind": t.kind,
+                "language": t.language,
+                "runner_pack_id": t.runner_pack_id,
+                "workspace_root": t.workspace_root,
+                "estimated_cost": t.estimated_cost,
+                "test_count": t.test_count,
+                "path": t.path,
+                "runner": t.runner,
+            }
+            for t in targets
+        ],
+        "summary": _summarize_discover(len(targets)),
+    }
+    if result.agentic_hint:
+        output["agentic_hint"] = result.agentic_hint
+    return output
+
+
+@registry.register(
+    "run_test_targets",
+    "Execute tests. Pass target_ids from discover, or use pattern/tags to filter.",
+    RunTestTargetsParams,
+)
+async def run_test_targets(ctx: AppContext, params: RunTestTargetsParams) -> dict[str, Any]:
+    """Run tests on specified targets."""
+    result = await ctx.test_ops.run(
+        targets=params.targets,
+        pattern=params.pattern,
+        tags=params.tags,
+        failed_only=params.failed_only,
+        parallelism=params.parallelism,
+        timeout_sec=params.timeout_sec,
+        fail_fast=params.fail_fast,
+        coverage=params.coverage,
+    )
+    return _serialize_test_result(result)
+
+
+@registry.register(
+    "get_test_run_status",
+    "Check progress of a running test. Returns pass/fail counts and any failures.",
+    GetTestRunStatusParams,
+)
+async def get_test_run_status(ctx: AppContext, params: GetTestRunStatusParams) -> dict[str, Any]:
+    """Get status of a test run."""
+    result = await ctx.test_ops.status(params.run_id)
+    return _serialize_test_result(result)
+
+
+@registry.register(
+    "cancel_test_run",
+    "Abort a running test execution.",
+    CancelTestRunParams,
+)
+async def cancel_test_run(ctx: AppContext, params: CancelTestRunParams) -> dict[str, Any]:
+    """Cancel a running test."""
+    result = await ctx.test_ops.cancel(params.run_id)
+    return _serialize_test_result(result)
