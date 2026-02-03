@@ -89,7 +89,7 @@ def _summarize_refactor(status: str, files_affected: int, preview: Any) -> str:
 # =============================================================================
 
 
-@registry.register("refactor.rename", "Rename a symbol across the codebase", RefactorRenameParams)
+@registry.register("refactor_rename", "Rename a symbol across the codebase", RefactorRenameParams)
 async def refactor_rename(ctx: AppContext, params: RefactorRenameParams) -> dict[str, Any]:
     """Rename symbol with certainty-scored candidates."""
     result = await ctx.refactor_ops.rename(
@@ -102,7 +102,7 @@ async def refactor_rename(ctx: AppContext, params: RefactorRenameParams) -> dict
     return _serialize_refactor_result(result)
 
 
-@registry.register("refactor.move", "Move a file/module, updating imports", RefactorMoveParams)
+@registry.register("refactor_move", "Move a file/module, updating imports", RefactorMoveParams)
 async def refactor_move(ctx: AppContext, params: RefactorMoveParams) -> dict[str, Any]:
     """Move file/module and update all import references."""
     result = await ctx.refactor_ops.move(
@@ -114,7 +114,7 @@ async def refactor_move(ctx: AppContext, params: RefactorMoveParams) -> dict[str
 
 
 @registry.register(
-    "refactor.delete",
+    "refactor_delete",
     "Find all references to a symbol/file for manual cleanup",
     RefactorDeleteParams,
 )
@@ -131,14 +131,14 @@ async def refactor_delete(ctx: AppContext, params: RefactorDeleteParams) -> dict
     return _serialize_refactor_result(result)
 
 
-@registry.register("refactor.apply", "Apply a previewed refactoring", RefactorApplyParams)
+@registry.register("refactor_apply", "Apply a previewed refactoring", RefactorApplyParams)
 async def refactor_apply(ctx: AppContext, params: RefactorApplyParams) -> dict[str, Any]:
     """Apply pending refactor."""
     result = await ctx.refactor_ops.apply(params.refactor_id, ctx.mutation_ops)
     return _serialize_refactor_result(result)
 
 
-@registry.register("refactor.cancel", "Cancel a pending refactoring", RefactorCancelParams)
+@registry.register("refactor_cancel", "Cancel a pending refactoring", RefactorCancelParams)
 async def refactor_cancel(ctx: AppContext, params: RefactorCancelParams) -> dict[str, Any]:
     """Cancel pending refactor."""
     result = await ctx.refactor_ops.cancel(params.refactor_id)
@@ -146,7 +146,7 @@ async def refactor_cancel(ctx: AppContext, params: RefactorCancelParams) -> dict
 
 
 @registry.register(
-    "refactor.inspect",
+    "refactor_inspect",
     "Inspect low-certainty matches in a file with context",
     RefactorInspectParams,
 )

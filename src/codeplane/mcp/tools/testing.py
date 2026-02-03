@@ -86,7 +86,7 @@ def _summarize_run(result: TestResult) -> str:
 
 
 @registry.register(
-    "testing.discover", "Discover test targets in the repository", TestDiscoverParams
+    "testing_discover", "Discover test targets in the repository", TestDiscoverParams
 )
 async def testing_discover(ctx: AppContext, params: TestDiscoverParams) -> dict[str, Any]:
     """Discover tests."""
@@ -121,7 +121,7 @@ async def testing_discover(ctx: AppContext, params: TestDiscoverParams) -> dict[
     return output
 
 
-@registry.register("testing.run", "Run tests", TestRunParams)
+@registry.register("testing_run", "Run tests", TestRunParams)
 async def testing_run(ctx: AppContext, params: TestRunParams) -> dict[str, Any]:
     """Run tests."""
     result = await ctx.test_ops.run(
@@ -137,14 +137,14 @@ async def testing_run(ctx: AppContext, params: TestRunParams) -> dict[str, Any]:
     return _serialize_test_result(result)
 
 
-@registry.register("testing.status", "Get status of a test run", TestStatusParams)
+@registry.register("testing_status", "Get status of a test run", TestStatusParams)
 async def testing_status(ctx: AppContext, params: TestStatusParams) -> dict[str, Any]:
     """Get test run status."""
     result = await ctx.test_ops.status(params.run_id)
     return _serialize_test_result(result)
 
 
-@registry.register("testing.cancel", "Cancel a running test", TestCancelParams)
+@registry.register("testing_cancel", "Cancel a running test", TestCancelParams)
 async def testing_cancel(ctx: AppContext, params: TestCancelParams) -> dict[str, Any]:
     """Cancel test run."""
     result = await ctx.test_ops.cancel(params.run_id)

@@ -25,22 +25,22 @@ def _derive_features(tool_names: list[str]) -> list[str]:
     features: set[str] = set()
 
     for name in tool_names:
-        # Handle new dot-namespaced format
-        if name.startswith("git."):
+        # Handle underscore-namespaced format (domain_action)
+        if name.startswith("git_"):
             features.add("git_ops")
-        elif name.startswith("refactor."):
+        elif name.startswith("refactor_"):
             features.add("refactoring")
-        elif name.startswith("session."):
+        elif name.startswith("session_"):
             features.add("session_management")
-        elif name.startswith("testing."):
+        elif name.startswith("testing_"):
             features.add("testing")
-        elif name.startswith("lint."):
+        elif name.startswith("lint_"):
             features.add("linting")
-        elif name.startswith("index."):
+        elif name.startswith("index_"):
             features.add("indexing")
-        elif name.startswith("files."):
+        elif name.startswith("files_"):
             features.add("file_ops")
-        elif name.startswith("meta."):
+        elif name.startswith("meta_"):
             features.add("introspection")
 
     return sorted(features)
@@ -52,19 +52,19 @@ def _derive_features(tool_names: list[str]) -> list[str]:
 
 
 class CapabilitiesParams(BaseParams):
-    """Parameters for meta.capabilities (none required)."""
+    """Parameters for meta_capabilities (none required)."""
 
     pass
 
 
 class WorkflowsParams(BaseParams):
-    """Parameters for meta.workflows (none required)."""
+    """Parameters for meta_workflows (none required)."""
 
     pass
 
 
 class OperationsParams(BaseParams):
-    """Parameters for meta.operations."""
+    """Parameters for meta_operations."""
 
     path: str | None = None
     success_only: bool = False
@@ -77,7 +77,7 @@ class OperationsParams(BaseParams):
 
 
 @registry.register(
-    "meta.capabilities", "List server capabilities and available tools", CapabilitiesParams
+    "meta_capabilities", "List server capabilities and available tools", CapabilitiesParams
 )
 async def meta_capabilities(ctx: AppContext, _params: CapabilitiesParams) -> dict[str, Any]:
     """Return server capabilities, available tools, and index status."""
@@ -114,29 +114,29 @@ async def meta_capabilities(ctx: AppContext, _params: CapabilitiesParams) -> dic
     }
 
 
-@registry.register("meta.workflows", "Get common tool workflow patterns", WorkflowsParams)
+@registry.register("meta_workflows", "Get common tool workflow patterns", WorkflowsParams)
 async def meta_workflows(_ctx: AppContext, _params: WorkflowsParams) -> dict[str, Any]:
     """Return common workflow patterns for tool usage."""
     workflows = [
         {
             "name": "code_review",
             "description": "Review code changes before commit",
-            "steps": ["git.status", "git.diff", "lint.check", "testing.run"],
+            "steps": ["git_status", "git_diff", "lint_check", "testing_run"],
         },
         {
             "name": "refactor_symbol",
             "description": "Safely rename a symbol across codebase",
-            "steps": ["refactor.rename", "refactor.inspect", "refactor.apply"],
+            "steps": ["refactor_rename", "refactor_inspect", "refactor_apply"],
         },
         {
             "name": "explore_codebase",
             "description": "Understand repository structure",
-            "steps": ["index.map", "index.search", "files.read"],
+            "steps": ["index_map", "index_search", "files_read"],
         },
         {
             "name": "fix_and_commit",
             "description": "Edit files, lint, test, and commit",
-            "steps": ["files.edit", "lint.check", "testing.run", "git.commit"],
+            "steps": ["files_edit", "lint_check", "testing_run", "git_commit"],
         },
     ]
     return {
@@ -146,7 +146,7 @@ async def meta_workflows(_ctx: AppContext, _params: WorkflowsParams) -> dict[str
 
 
 @registry.register(
-    "meta.operations", "Query recent mutation operations for debugging", OperationsParams
+    "meta_operations", "Query recent mutation operations for debugging", OperationsParams
 )
 async def meta_operations(_ctx: AppContext, params: OperationsParams) -> dict[str, Any]:
     """Query recent operations from the ledger."""

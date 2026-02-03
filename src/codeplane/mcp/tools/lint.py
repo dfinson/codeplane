@@ -56,7 +56,7 @@ def _summarize_lint(status: str, total_diagnostics: int, files_modified: int, dr
 
 
 @mcp_registry.register(
-    "lint.check",
+    "lint_check",
     "Run linters, formatters, and type checkers. Applies fixes by default.",
     LintCheckParams,
 )
@@ -123,7 +123,7 @@ async def lint_check(ctx: AppContext, params: LintCheckParams) -> dict[str, Any]
 
 
 @mcp_registry.register(
-    "lint.tools",
+    "lint_tools",
     "List available lint tools and their detection status",
     LintToolsParams,
 )

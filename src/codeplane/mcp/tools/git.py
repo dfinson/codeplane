@@ -324,7 +324,7 @@ def _summarize_paths(action: str, paths: list[str]) -> str:
 # =============================================================================
 
 
-@registry.register("git.status", "Get repository status", GitStatusParams)
+@registry.register("git_status", "Get repository status", GitStatusParams)
 async def git_status(ctx: AppContext, _params: GitStatusParams) -> dict[str, Any]:
     """Get repository status."""
     status = ctx.git_ops.status()
@@ -343,7 +343,7 @@ async def git_status(ctx: AppContext, _params: GitStatusParams) -> dict[str, Any
     }
 
 
-@registry.register("git.diff", "Get diff between refs or working tree", GitDiffParams)
+@registry.register("git_diff", "Get diff between refs or working tree", GitDiffParams)
 async def git_diff(ctx: AppContext, params: GitDiffParams) -> dict[str, Any]:
     """Get diff."""
     diff = ctx.git_ops.diff(
@@ -359,7 +359,7 @@ async def git_diff(ctx: AppContext, params: GitDiffParams) -> dict[str, Any]:
     return result
 
 
-@registry.register("git.commit", "Create a commit", GitCommitParams)
+@registry.register("git_commit", "Create a commit", GitCommitParams)
 async def git_commit(ctx: AppContext, params: GitCommitParams) -> dict[str, Any]:
     """Create commit with pre-commit hook execution."""
     if params.paths:
@@ -386,7 +386,7 @@ async def git_commit(ctx: AppContext, params: GitCommitParams) -> dict[str, Any]
     }
 
 
-@registry.register("git.log", "Get commit history", GitLogParams)
+@registry.register("git_log", "Get commit history", GitLogParams)
 async def git_log(ctx: AppContext, params: GitLogParams) -> dict[str, Any]:
     """Get commit log."""
     commits = ctx.git_ops.log(
@@ -414,7 +414,7 @@ async def git_log(ctx: AppContext, params: GitLogParams) -> dict[str, Any]:
     }
 
 
-@registry.register("git.branches", "List branches", EmptyParams)
+@registry.register("git_branches", "List branches", EmptyParams)
 async def git_branches(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
     """List branches."""
     branches = ctx.git_ops.branches(include_remote=True)
@@ -425,7 +425,7 @@ async def git_branches(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
     }
 
 
-@registry.register("git.tags", "List tags", EmptyParams)
+@registry.register("git_tags", "List tags", EmptyParams)
 async def git_tags(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
     """List tags."""
     tags = ctx.git_ops.tags()
@@ -435,7 +435,7 @@ async def git_tags(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
     }
 
 
-@registry.register("git.remotes", "List remotes", EmptyParams)
+@registry.register("git_remotes", "List remotes", EmptyParams)
 async def git_remotes(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
     """List remotes."""
     remotes = ctx.git_ops.remotes()
@@ -445,7 +445,7 @@ async def git_remotes(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
     }
 
 
-@registry.register("git.stage", "Stage files", GitStageParams)
+@registry.register("git_stage", "Stage files", GitStageParams)
 async def git_stage(ctx: AppContext, params: GitStageParams) -> dict[str, Any]:
     """Stage files."""
     ctx.git_ops.stage(params.paths)
@@ -455,7 +455,7 @@ async def git_stage(ctx: AppContext, params: GitStageParams) -> dict[str, Any]:
     }
 
 
-@registry.register("git.stage_all", "Stage all changed files", EmptyParams)
+@registry.register("git_stage_all", "Stage all changed files", EmptyParams)
 async def git_stage_all(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
     """Stage all changed files."""
     staged = ctx.git_ops.stage_all()
@@ -465,7 +465,7 @@ async def git_stage_all(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]
     }
 
 
-@registry.register("git.unstage", "Unstage files", GitUnstageParams)
+@registry.register("git_unstage", "Unstage files", GitUnstageParams)
 async def git_unstage(ctx: AppContext, params: GitUnstageParams) -> dict[str, Any]:
     """Unstage files."""
     ctx.git_ops.unstage(params.paths)
@@ -475,7 +475,7 @@ async def git_unstage(ctx: AppContext, params: GitUnstageParams) -> dict[str, An
     }
 
 
-@registry.register("git.discard", "Discard working tree changes", GitDiscardParams)
+@registry.register("git_discard", "Discard working tree changes", GitDiscardParams)
 async def git_discard(ctx: AppContext, params: GitDiscardParams) -> dict[str, Any]:
     """Discard changes."""
     ctx.git_ops.discard(params.paths)
@@ -485,7 +485,7 @@ async def git_discard(ctx: AppContext, params: GitDiscardParams) -> dict[str, An
     }
 
 
-@registry.register("git.amend", "Amend last commit", GitAmendParams)
+@registry.register("git_amend", "Amend last commit", GitAmendParams)
 async def git_amend(ctx: AppContext, params: GitAmendParams) -> dict[str, Any]:
     """Amend commit."""
     sha = ctx.git_ops.amend(message=params.message)
@@ -496,7 +496,7 @@ async def git_amend(ctx: AppContext, params: GitAmendParams) -> dict[str, Any]:
     }
 
 
-@registry.register("git.branch_create", "Create a new branch", GitBranchCreateParams)
+@registry.register("git_branch_create", "Create a new branch", GitBranchCreateParams)
 async def git_branch_create(ctx: AppContext, params: GitBranchCreateParams) -> dict[str, Any]:
     """Create branch."""
     branch = ctx.git_ops.create_branch(params.name, ref=params.ref)
@@ -505,7 +505,7 @@ async def git_branch_create(ctx: AppContext, params: GitBranchCreateParams) -> d
     return result
 
 
-@registry.register("git.checkout", "Checkout a ref", GitCheckoutParams)
+@registry.register("git_checkout", "Checkout a ref", GitCheckoutParams)
 async def git_checkout(ctx: AppContext, params: GitCheckoutParams) -> dict[str, Any]:
     """Checkout ref."""
     ctx.git_ops.checkout(params.ref, create=params.create)
@@ -516,7 +516,7 @@ async def git_checkout(ctx: AppContext, params: GitCheckoutParams) -> dict[str, 
     }
 
 
-@registry.register("git.branch_delete", "Delete a branch", GitDeleteBranchParams)
+@registry.register("git_branch_delete", "Delete a branch", GitDeleteBranchParams)
 async def git_branch_delete(ctx: AppContext, params: GitDeleteBranchParams) -> dict[str, Any]:
     """Delete branch."""
     ctx.git_ops.delete_branch(params.name, force=params.force)
@@ -526,7 +526,7 @@ async def git_branch_delete(ctx: AppContext, params: GitDeleteBranchParams) -> d
     }
 
 
-@registry.register("git.reset", "Reset HEAD to a ref", GitResetParams)
+@registry.register("git_reset", "Reset HEAD to a ref", GitResetParams)
 async def git_reset(ctx: AppContext, params: GitResetParams) -> dict[str, Any]:
     """Reset HEAD."""
     ctx.git_ops.reset(params.ref, mode=params.mode)
@@ -537,7 +537,7 @@ async def git_reset(ctx: AppContext, params: GitResetParams) -> dict[str, Any]:
     }
 
 
-@registry.register("git.merge", "Merge a branch", GitMergeParams)
+@registry.register("git_merge", "Merge a branch", GitMergeParams)
 async def git_merge(ctx: AppContext, params: GitMergeParams) -> dict[str, Any]:
     """Merge branch."""
     result = ctx.git_ops.merge(params.ref)
@@ -549,7 +549,7 @@ async def git_merge(ctx: AppContext, params: GitMergeParams) -> dict[str, Any]:
     return res
 
 
-@registry.register("git.blame", "Get line authorship", GitBlameParams)
+@registry.register("git_blame", "Get line authorship", GitBlameParams)
 async def git_blame(ctx: AppContext, params: GitBlameParams) -> dict[str, Any]:
     """Get blame."""
     blame = ctx.git_ops.blame(
@@ -583,7 +583,7 @@ async def git_blame(ctx: AppContext, params: GitBlameParams) -> dict[str, Any]:
     }
 
 
-@registry.register("git.show", "Show commit details", GitShowParams)
+@registry.register("git_show", "Show commit details", GitShowParams)
 async def git_show(ctx: AppContext, params: GitShowParams) -> dict[str, Any]:
     """Show commit."""
     commit = ctx.git_ops.show(ref=params.ref)
@@ -592,7 +592,7 @@ async def git_show(ctx: AppContext, params: GitShowParams) -> dict[str, Any]:
     return result
 
 
-@registry.register("git.stash_push", "Stash changes", GitStashPushParams)
+@registry.register("git_stash_push", "Stash changes", GitStashPushParams)
 async def git_stash_push(ctx: AppContext, params: GitStashPushParams) -> dict[str, Any]:
     """Push to stash."""
     sha = ctx.git_ops.stash_push(
@@ -606,7 +606,7 @@ async def git_stash_push(ctx: AppContext, params: GitStashPushParams) -> dict[st
     }
 
 
-@registry.register("git.stash_pop", "Pop from stash", GitStashPopParams)
+@registry.register("git_stash_pop", "Pop from stash", GitStashPopParams)
 async def git_stash_pop(ctx: AppContext, params: GitStashPopParams) -> dict[str, Any]:
     """Pop from stash."""
     ctx.git_ops.stash_pop(index=params.index)
@@ -616,7 +616,7 @@ async def git_stash_pop(ctx: AppContext, params: GitStashPopParams) -> dict[str,
     }
 
 
-@registry.register("git.stash_list", "List stash entries", EmptyParams)
+@registry.register("git_stash_list", "List stash entries", EmptyParams)
 async def git_stash_list(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
     """List stash."""
     entries = ctx.git_ops.stash_list()
@@ -626,7 +626,7 @@ async def git_stash_list(ctx: AppContext, _params: EmptyParams) -> dict[str, Any
     }
 
 
-@registry.register("git.rebase_plan", "Plan a rebase", GitRebasePlanParams)
+@registry.register("git_rebase_plan", "Plan a rebase", GitRebasePlanParams)
 async def git_rebase_plan(ctx: AppContext, params: GitRebasePlanParams) -> dict[str, Any]:
     """Plan rebase."""
     plan = ctx.git_ops.rebase_plan(params.upstream, onto=params.onto)
@@ -636,7 +636,7 @@ async def git_rebase_plan(ctx: AppContext, params: GitRebasePlanParams) -> dict[
     return result
 
 
-@registry.register("git.rebase_continue", "Continue rebase", EmptyParams)
+@registry.register("git_rebase_continue", "Continue rebase", EmptyParams)
 async def git_rebase_continue(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
     """Continue rebase."""
     result = ctx.git_ops.rebase_continue()
@@ -645,7 +645,7 @@ async def git_rebase_continue(ctx: AppContext, _params: EmptyParams) -> dict[str
     return res
 
 
-@registry.register("git.rebase_abort", "Abort rebase", EmptyParams)
+@registry.register("git_rebase_abort", "Abort rebase", EmptyParams)
 async def git_rebase_abort(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
     """Abort rebase."""
     ctx.git_ops.rebase_abort()
@@ -655,7 +655,7 @@ async def git_rebase_abort(ctx: AppContext, _params: EmptyParams) -> dict[str, A
     }
 
 
-@registry.register("git.rebase_skip", "Skip current rebase commit", EmptyParams)
+@registry.register("git_rebase_skip", "Skip current rebase commit", EmptyParams)
 async def git_rebase_skip(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
     """Skip rebase commit."""
     result = ctx.git_ops.rebase_skip()
@@ -664,7 +664,7 @@ async def git_rebase_skip(ctx: AppContext, _params: EmptyParams) -> dict[str, An
     return res
 
 
-@registry.register("git.cherrypick", "Cherry-pick a commit", GitCherrypickParams)
+@registry.register("git_cherrypick", "Cherry-pick a commit", GitCherrypickParams)
 async def git_cherrypick(ctx: AppContext, params: GitCherrypickParams) -> dict[str, Any]:
     """Cherry-pick commit."""
     result = ctx.git_ops.cherrypick(params.commit)
@@ -673,7 +673,7 @@ async def git_cherrypick(ctx: AppContext, params: GitCherrypickParams) -> dict[s
     return res
 
 
-@registry.register("git.revert", "Revert a commit", GitRevertParams)
+@registry.register("git_revert", "Revert a commit", GitRevertParams)
 async def git_revert(ctx: AppContext, params: GitRevertParams) -> dict[str, Any]:
     """Revert commit."""
     result = ctx.git_ops.revert(params.commit)
@@ -682,7 +682,7 @@ async def git_revert(ctx: AppContext, params: GitRevertParams) -> dict[str, Any]
     return res
 
 
-@registry.register("git.fetch", "Fetch from remote", GitFetchParams)
+@registry.register("git_fetch", "Fetch from remote", GitFetchParams)
 async def git_fetch(ctx: AppContext, params: GitFetchParams) -> dict[str, Any]:
     """Fetch from remote."""
     ctx.git_ops.fetch(remote=params.remote)
@@ -692,7 +692,7 @@ async def git_fetch(ctx: AppContext, params: GitFetchParams) -> dict[str, Any]:
     }
 
 
-@registry.register("git.push", "Push to remote", GitPushParams)
+@registry.register("git_push", "Push to remote", GitPushParams)
 async def git_push(ctx: AppContext, params: GitPushParams) -> dict[str, Any]:
     """Push to remote."""
     ctx.git_ops.push(remote=params.remote, force=params.force)
@@ -703,7 +703,7 @@ async def git_push(ctx: AppContext, params: GitPushParams) -> dict[str, Any]:
     }
 
 
-@registry.register("git.pull", "Pull from remote", GitPullParams)
+@registry.register("git_pull", "Pull from remote", GitPullParams)
 async def git_pull(ctx: AppContext, params: GitPullParams) -> dict[str, Any]:
     """Pull from remote."""
     result = ctx.git_ops.pull(remote=params.remote)
@@ -712,7 +712,7 @@ async def git_pull(ctx: AppContext, params: GitPullParams) -> dict[str, Any]:
     return res
 
 
-@registry.register("git.submodules", "List submodules", EmptyParams)
+@registry.register("git_submodules", "List submodules", EmptyParams)
 async def git_submodules(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
     """List submodules."""
     submodules = ctx.git_ops.submodules()
@@ -722,7 +722,7 @@ async def git_submodules(ctx: AppContext, _params: EmptyParams) -> dict[str, Any
     }
 
 
-@registry.register("git.submodule_add", "Add a submodule", GitSubmoduleAddParams)
+@registry.register("git_submodule_add", "Add a submodule", GitSubmoduleAddParams)
 async def git_submodule_add(ctx: AppContext, params: GitSubmoduleAddParams) -> dict[str, Any]:
     """Add submodule."""
     sm = ctx.git_ops.submodule_add(params.url, params.path, params.branch)
@@ -731,7 +731,7 @@ async def git_submodule_add(ctx: AppContext, params: GitSubmoduleAddParams) -> d
     return result
 
 
-@registry.register("git.submodule_update", "Update submodules", GitSubmoduleUpdateParams)
+@registry.register("git_submodule_update", "Update submodules", GitSubmoduleUpdateParams)
 async def git_submodule_update(ctx: AppContext, params: GitSubmoduleUpdateParams) -> dict[str, Any]:
     """Update submodules."""
     result = ctx.git_ops.submodule_update(params.paths, params.recursive, params.init)
@@ -740,7 +740,7 @@ async def git_submodule_update(ctx: AppContext, params: GitSubmoduleUpdateParams
     return res
 
 
-@registry.register("git.submodule_init", "Initialize submodules", GitSubmoduleInitParams)
+@registry.register("git_submodule_init", "Initialize submodules", GitSubmoduleInitParams)
 async def git_submodule_init(ctx: AppContext, params: GitSubmoduleInitParams) -> dict[str, Any]:
     """Init submodules."""
     paths = ctx.git_ops.submodule_init(params.paths)
@@ -750,7 +750,7 @@ async def git_submodule_init(ctx: AppContext, params: GitSubmoduleInitParams) ->
     }
 
 
-@registry.register("git.submodule_remove", "Remove a submodule", GitSubmoduleRemoveParams)
+@registry.register("git_submodule_remove", "Remove a submodule", GitSubmoduleRemoveParams)
 async def git_submodule_remove(ctx: AppContext, params: GitSubmoduleRemoveParams) -> dict[str, Any]:
     """Remove submodule."""
     ctx.git_ops.submodule_remove(params.path)
@@ -760,7 +760,7 @@ async def git_submodule_remove(ctx: AppContext, params: GitSubmoduleRemoveParams
     }
 
 
-@registry.register("git.worktrees", "List worktrees", EmptyParams)
+@registry.register("git_worktrees", "List worktrees", EmptyParams)
 async def git_worktrees(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
     """List worktrees."""
     worktrees = ctx.git_ops.worktrees()
@@ -770,7 +770,7 @@ async def git_worktrees(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]
     }
 
 
-@registry.register("git.worktree_add", "Add a worktree", GitWorktreeAddParams)
+@registry.register("git_worktree_add", "Add a worktree", GitWorktreeAddParams)
 async def git_worktree_add(ctx: AppContext, params: GitWorktreeAddParams) -> dict[str, Any]:
     """Add worktree."""
     from pathlib import Path
@@ -783,7 +783,7 @@ async def git_worktree_add(ctx: AppContext, params: GitWorktreeAddParams) -> dic
     }
 
 
-@registry.register("git.worktree_remove", "Remove a worktree", GitWorktreeRemoveParams)
+@registry.register("git_worktree_remove", "Remove a worktree", GitWorktreeRemoveParams)
 async def git_worktree_remove(ctx: AppContext, params: GitWorktreeRemoveParams) -> dict[str, Any]:
     """Remove worktree."""
     ctx.git_ops.worktree_remove(params.name, params.force)
@@ -793,7 +793,7 @@ async def git_worktree_remove(ctx: AppContext, params: GitWorktreeRemoveParams) 
     }
 
 
-@registry.register("git.worktree_lock", "Lock a worktree", GitWorktreeLockParams)
+@registry.register("git_worktree_lock", "Lock a worktree", GitWorktreeLockParams)
 async def git_worktree_lock(ctx: AppContext, params: GitWorktreeLockParams) -> dict[str, Any]:
     """Lock worktree."""
     ctx.git_ops.worktree_lock(params.name, params.reason)
@@ -803,7 +803,7 @@ async def git_worktree_lock(ctx: AppContext, params: GitWorktreeLockParams) -> d
     }
 
 
-@registry.register("git.worktree_unlock", "Unlock a worktree", GitWorktreeUnlockParams)
+@registry.register("git_worktree_unlock", "Unlock a worktree", GitWorktreeUnlockParams)
 async def git_worktree_unlock(ctx: AppContext, params: GitWorktreeUnlockParams) -> dict[str, Any]:
     """Unlock worktree."""
     ctx.git_ops.worktree_unlock(params.name)
@@ -813,7 +813,7 @@ async def git_worktree_unlock(ctx: AppContext, params: GitWorktreeUnlockParams) 
     }
 
 
-@registry.register("git.worktree_prune", "Prune worktrees", EmptyParams)
+@registry.register("git_worktree_prune", "Prune worktrees", EmptyParams)
 async def git_worktree_prune(ctx: AppContext, _params: EmptyParams) -> dict[str, Any]:
     """Prune worktrees."""
     pruned = ctx.git_ops.worktree_prune()

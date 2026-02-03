@@ -31,7 +31,7 @@ class SessionInfoParams(BaseParams):
     session_id: str | None = None
 
 
-@registry.register("session.create", "Create a new session", SessionCreateParams)
+@registry.register("session_create", "Create a new session", SessionCreateParams)
 async def session_create(ctx: AppContext, params: SessionCreateParams) -> dict[str, Any]:
     """Create a new session."""
     # If session_id is provided, try to use it
@@ -50,7 +50,7 @@ async def session_create(ctx: AppContext, params: SessionCreateParams) -> dict[s
     }
 
 
-@registry.register("session.close", "Close a session", SessionCloseParams)
+@registry.register("session_close", "Close a session", SessionCloseParams)
 async def session_close(ctx: AppContext, params: SessionCloseParams) -> dict[str, Any]:
     """Close an active session."""
     # If no session_id provided, the wrapper logic in server.py might have
@@ -89,7 +89,7 @@ async def session_close(ctx: AppContext, params: SessionCloseParams) -> dict[str
     }
 
 
-@registry.register("session.info", "Get session status", SessionInfoParams)
+@registry.register("session_info", "Get session status", SessionInfoParams)
 async def session_info(ctx: AppContext, params: SessionInfoParams) -> dict[str, Any]:
     """Get info about a session."""
     if not params.session_id:

@@ -105,7 +105,7 @@ def _summarize_map(file_count: int, sections: list[str], truncated: bool) -> str
 # =============================================================================
 
 
-@registry.register("index.search", "Search code, symbols, or references", SearchParams)
+@registry.register("index_search", "Search code, symbols, or references", SearchParams)
 async def index_search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
     """Unified search across lexical index, symbols, and references."""
     from codeplane.index.ops import SearchMode
@@ -206,7 +206,7 @@ async def index_search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
     }
 
 
-@registry.register("index.map", "Get repository mental model", MapRepoParams)
+@registry.register("index_map", "Get repository mental model", MapRepoParams)
 async def index_map(ctx: AppContext, params: MapRepoParams) -> dict[str, Any]:
     """Build repository mental model from indexed data."""
     result = await ctx.coordinator.map_repo(

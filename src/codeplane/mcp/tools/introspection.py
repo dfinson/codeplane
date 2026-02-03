@@ -1,4 +1,4 @@
-"""Introspection MCP tools - meta.describe_* handlers."""
+"""Introspection MCP tools - meta_describe_* handlers."""
 
 from __future__ import annotations
 
@@ -23,13 +23,13 @@ if TYPE_CHECKING:
 
 
 class DescribeToolParams(BaseParams):
-    """Parameters for meta.describe_tool."""
+    """Parameters for meta_describe_tool."""
 
     name: str = Field(..., description="Name of the tool to describe")
 
 
 class DescribeErrorParams(BaseParams):
-    """Parameters for meta.describe_error."""
+    """Parameters for meta_describe_error."""
 
     code: str = Field(..., description="Error code to describe (e.g., 'CONTENT_NOT_FOUND')")
 
@@ -40,7 +40,7 @@ class DescribeErrorParams(BaseParams):
 
 
 @registry.register(
-    "meta.describe_tool",
+    "meta_describe_tool",
     "Get detailed documentation for a specific tool",
     DescribeToolParams,
 )
@@ -75,7 +75,7 @@ async def meta_describe_tool(_ctx: AppContext, params: DescribeToolParams) -> di
 
 
 @registry.register(
-    "meta.describe_error",
+    "meta_describe_error",
     "Get detailed documentation for an error code",
     DescribeErrorParams,
 )

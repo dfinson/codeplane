@@ -110,7 +110,7 @@ def _summarize_list(path: str, total: int, truncated: bool) -> str:
 # =============================================================================
 
 
-@registry.register("files.read", "Read file contents with optional line ranges", ReadFilesParams)
+@registry.register("files_read", "Read file contents with optional line ranges", ReadFilesParams)
 async def files_read(ctx: AppContext, params: ReadFilesParams) -> dict[str, Any]:
     """Read file contents."""
     # Convert RangeParam models to dict format expected by FileOps
@@ -147,7 +147,7 @@ async def files_read(ctx: AppContext, params: ReadFilesParams) -> dict[str, Any]
 
 
 @registry.register(
-    "files.list", "List files in a directory with optional filtering", ListFilesParams
+    "files_list", "List files in a directory with optional filtering", ListFilesParams
 )
 async def files_list(ctx: AppContext, params: ListFilesParams) -> dict[str, Any]:
     """List files and directories."""

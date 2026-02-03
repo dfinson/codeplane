@@ -72,7 +72,7 @@ def _summarize_edit(files_changed: int, insertions: int, deletions: int, dry_run
 # =============================================================================
 
 
-@registry.register("files.edit", "Atomic file edits with structured delta response", MutateParams)
+@registry.register("files_edit", "Atomic file edits with structured delta response", MutateParams)
 async def files_edit(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
     """Apply atomic file edits.
 
