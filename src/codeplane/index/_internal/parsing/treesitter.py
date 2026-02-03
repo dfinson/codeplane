@@ -389,7 +389,7 @@ class TreeSitterParser:
         if lang_name in self._languages:
             return self._languages[lang_name]
 
-        # Special handling for typescript/tsx which have separate language functions
+        # Special handling for languages with non-standard function names
         if lang_name in ("typescript", "tsx"):
             try:
                 ts_module = importlib.import_module("tree_sitter_typescript")
@@ -397,6 +397,24 @@ class TreeSitterParser:
                     lang = tree_sitter.Language(ts_module.language_typescript())
                 else:
                     lang = tree_sitter.Language(ts_module.language_tsx())
+                self._languages[lang_name] = lang
+                return lang
+            except ImportError as err:
+                raise ValueError(f"Language not available: {lang_name}") from err
+
+        if lang_name == "xml":
+            try:
+                xml_module = importlib.import_module("tree_sitter_xml")
+                lang = tree_sitter.Language(xml_module.language_xml())
+                self._languages[lang_name] = lang
+                return lang
+            except ImportError as err:
+                raise ValueError(f"Language not available: {lang_name}") from err
+
+        if lang_name == "php":
+            try:
+                php_module = importlib.import_module("tree_sitter_php")
+                lang = tree_sitter.Language(php_module.language_php())
                 self._languages[lang_name] = lang
                 return lang
             except ImportError as err:

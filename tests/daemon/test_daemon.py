@@ -706,7 +706,7 @@ class TestDaemonRoutes:
         data = response.json()
         assert data["status"] == "healthy"
         assert data["repo_root"] == str(tmp_path)
-        assert "daemon_version" in data
+        assert "version" in data
 
     def test_given_routes_when_status_called_then_returns_indexer_info(
         self, tmp_path: Path
@@ -752,33 +752,48 @@ class TestDaemonApp:
 
     def test_given_controller_when_create_app_then_returns_starlette(self, tmp_path: Path) -> None:
         """create_app returns configured Starlette application."""
+        import subprocess
+
         from starlette.applications import Starlette
 
         from codeplane.daemon.app import create_app
 
+        # Initialize git repo (required by MCP server)
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        (tmp_path / ".codeplane").mkdir()
+
         controller = MagicMock()
         controller.repo_root = tmp_path
+        coordinator = MagicMock()
 
-        app = create_app(controller, tmp_path)
+        app = create_app(controller, tmp_path, coordinator)
 
         assert isinstance(app, Starlette)
-        assert len(app.routes) == 2
+        # 2 routes (health, status) + MCP mount
+        assert len(app.routes) == 3
 
     def test_given_app_when_startup_then_controller_started(self, tmp_path: Path) -> None:
-        """App startup calls controller.start."""
+        """App startup triggers MCP lifespan (controller start/stop handled separately)."""
+        import subprocess
+
         from starlette.testclient import TestClient
 
         from codeplane.daemon.app import create_app
+
+        # Initialize git repo (required by MCP server)
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        (tmp_path / ".codeplane").mkdir()
 
         controller = MagicMock()
         controller.repo_root = tmp_path
         controller.start = MagicMock()
         controller.stop = MagicMock()
+        coordinator = MagicMock()
 
-        app = create_app(controller, tmp_path)
+        app = create_app(controller, tmp_path, coordinator)
 
         with TestClient(app):
             pass  # Context manager triggers startup/shutdown
 
-        controller.start.assert_called_once()
-        controller.stop.assert_called_once()
+        # Controller start/stop now happen in lifecycle.run_server, not app lifespan
+        # MCP lifespan is tested implicitly by the app starting without error

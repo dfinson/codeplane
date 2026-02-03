@@ -80,11 +80,16 @@ class ServerController:
         """Stop all daemon components gracefully."""
         logger.info("server stopping")
 
-        # Stop watcher first (no new events)
-        await self.watcher.stop()
+        # Stop with timeout to prevent hanging
+        try:
+            async with asyncio.timeout(5.0):
+                # Stop watcher first (no new events)
+                await self.watcher.stop()
 
-        # Stop indexer (complete pending work)
-        await self.indexer.stop()
+                # Stop indexer (complete pending work)
+                await self.indexer.stop()
+        except TimeoutError:
+            logger.warning("server_stop_timeout", message="Shutdown timed out after 5s")
 
         # Signal shutdown complete
         self._shutdown_event.set()
@@ -201,12 +206,30 @@ async def run_server(
     codeplane_dir = repo_root / ".codeplane"
     write_pid_file(codeplane_dir, config.port)
 
-    # Setup signal handlers - just set should_exit, uvicorn handles the rest
+    # Setup signal handlers with force exit on second signal
     loop = asyncio.get_event_loop()
+    shutdown_count = 0
+    force_exit_task: asyncio.Task[None] | None = None
+
+    async def force_exit_after_timeout() -> None:
+        """Force exit if graceful shutdown takes too long."""
+        await asyncio.sleep(3.0)
+        logger.info("forcing_exit_after_timeout")
+        server.force_exit = True
 
     def signal_handler() -> None:
-        logger.info("shutdown_signal_received")
+        nonlocal shutdown_count, force_exit_task
+        shutdown_count += 1
+        logger.info("shutdown_signal_received", count=shutdown_count)
         server.should_exit = True
+        if shutdown_count == 1:
+            # Schedule force exit after timeout
+            force_exit_task = loop.create_task(force_exit_after_timeout())
+        else:
+            # Second signal - force immediate exit
+            server.force_exit = True
+            if force_exit_task:
+                force_exit_task.cancel()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, signal_handler)

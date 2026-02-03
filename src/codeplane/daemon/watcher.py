@@ -78,8 +78,8 @@ class FileWatcher:
 
         if self._watch_task is not None:
             self._watch_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._watch_task
+            with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
+                await asyncio.wait_for(self._watch_task, timeout=2.0)
             self._watch_task = None
 
         logger.info("file_watcher_stopped")

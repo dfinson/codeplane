@@ -85,9 +85,9 @@ class BackgroundIndexer:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._debounce_task
 
-        # Shutdown executor
+        # Shutdown executor with timeout to prevent hanging
         if self._executor is not None:
-            self._executor.shutdown(wait=True)
+            self._executor.shutdown(wait=False, cancel_futures=True)
             self._executor = None
 
         self._state = IndexerState.STOPPED
