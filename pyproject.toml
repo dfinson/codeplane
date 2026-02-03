@@ -52,6 +52,7 @@ dev = [
     "pytest>=9.0.0",
     "pytest-asyncio>=1.3.0",
     "pytest-cov>=7.0.0",
+    "pytest-timeout>=2.3.0",
     "ruff>=0.14.0",
     "mypy>=1.19.0",
     "pre-commit>=4.2.0",
@@ -129,15 +130,19 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-v --cov=src/codeplane --cov-report=term-missing"
+addopts = "-v"
+timeout = 600
+timeout_method = "signal"
 markers = [
     "integration: marks tests requiring external resources (deselect with '-m \"not integration\"')",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "serial: marks tests that must run serially (not in parallel)",
 ]
 
 [tool.coverage.run]
 source = ["src/codeplane"]
 branch = true
+parallel = true
 
 [tool.coverage.report]
 exclude_lines = [
