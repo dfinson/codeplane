@@ -38,6 +38,7 @@ from codeplane.testing.models import (
     TestTarget,
 )
 from codeplane.testing.runner_pack import RunnerPack, runner_registry
+from codeplane.testing.safe_execution import SafeExecutionConfig, SafeExecutionContext
 
 if TYPE_CHECKING:
     from codeplane.index.ops import IndexCoordinator
@@ -709,6 +710,9 @@ class TestOps:
     ) -> tuple[ParsedTestSuite, CoverageArtifact | None]:
         """Run a single test target using its runner pack.
 
+        Uses SafeExecutionContext to protect against misconfigurations in
+        target repositories (coverage DB corruption, hanging tests, etc.).
+
         Returns:
             Tuple of (test results, coverage artifact if collected)
         """
@@ -758,6 +762,7 @@ class TestOps:
         # Handle coverage
         cov_artifact: CoverageArtifact | None = None
         emitter = get_emitter(target.runner_pack_id) if coverage else None
+        strip_coverage_flags = False
         if emitter:
             # Check capability
             runtime = PackRuntime(
@@ -774,11 +779,30 @@ class TestOps:
                     pack_id=target.runner_pack_id,
                     invocation_id=target.target_id,
                 )
+                # Strip any existing coverage flags from command since we're injecting our own
+                strip_coverage_flags = True
+
+        # Create safe execution context to protect against repo misconfigurations
+        safe_ctx = SafeExecutionContext(
+            SafeExecutionConfig(
+                artifact_dir=artifact_dir,
+                workspace_root=Path(target.workspace_root),
+                timeout_sec=timeout_sec,
+                strip_coverage_flags=strip_coverage_flags,
+            )
+        )
+
+        # Sanitize command (removes dangerous flags, adds safety flags)
+        cmd = safe_ctx.sanitize_command(cmd, target.runner_pack_id)
+
+        # Prepare safe environment (overrides project configs to prevent corruption)
+        safe_env = safe_ctx.prepare_environment(target.runner_pack_id)
 
         # Verify executable exists
         executable = cmd[0]
         resolved_executable = shutil.which(executable)
         if not resolved_executable:
+            safe_ctx.cleanup()
             return (
                 ParsedTestSuite(
                     name=target.selector,
@@ -807,6 +831,7 @@ class TestOps:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
+                env=safe_env,  # Use safe environment with defensive overrides
             )
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 proc.communicate(), timeout=timeout_sec
@@ -858,6 +883,7 @@ class TestOps:
             return (result, cov_artifact)
 
         except TimeoutError:
+            safe_ctx.cleanup()
             return (
                 ParsedTestSuite(
                     name=target.selector,
@@ -877,6 +903,7 @@ class TestOps:
                 None,
             )
         except OSError as e:
+            safe_ctx.cleanup()
             return (
                 ParsedTestSuite(
                     name=target.selector,
@@ -893,6 +920,9 @@ class TestOps:
                 ),
                 None,
             )
+        finally:
+            # Always cleanup safe execution context
+            safe_ctx.cleanup()
 
     def _persist_result(self, artifact_dir: Path, status: TestRunStatus) -> None:
         """Persist test run result to artifact directory."""
