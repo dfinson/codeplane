@@ -908,6 +908,83 @@ class IndexCoordinator:
 
         return self._state.get_file_state(file_id, context_id)
 
+    async def get_file_stats(self) -> dict[str, int]:
+        """Get file counts by language family from the index.
+
+        Returns:
+            Dict mapping language_family to file count (e.g., {"python": 42, "javascript": 15})
+        """
+        await self.wait_for_freshness()
+        with self.db.session() as session:
+            from sqlalchemy import func
+
+            stmt = (
+                select(File.language_family, func.count())
+                .where(File.language_family != None)  # noqa: E711
+                .group_by(File.language_family)
+            )
+            results = session.exec(stmt).all()
+            return {lang: count for lang, count in results if lang}
+
+    async def get_indexed_file_count(self, language_family: str | None = None) -> int:
+        """Get count of indexed files, optionally filtered by language.
+
+        Args:
+            language_family: Optional language family filter (e.g., "python", "javascript")
+
+        Returns:
+            Number of indexed files matching the criteria
+        """
+        await self.wait_for_freshness()
+        with self.db.session() as session:
+            from sqlalchemy import func
+
+            stmt = select(func.count()).select_from(File)
+            if language_family:
+                stmt = stmt.where(File.language_family == language_family)
+            result = session.exec(stmt).one()
+            return result or 0
+
+    async def get_indexed_files(
+        self,
+        language_family: str | None = None,
+        path_prefix: str | None = None,
+        limit: int = 1000,
+    ) -> list[str]:
+        """Get paths of indexed files.
+
+        Args:
+            language_family: Optional language family filter
+            path_prefix: Optional path prefix filter (e.g., "src/")
+            limit: Maximum files to return
+
+        Returns:
+            List of file paths relative to repo root
+        """
+        await self.wait_for_freshness()
+        with self.db.session() as session:
+            stmt = select(File.path)
+            if language_family:
+                stmt = stmt.where(File.language_family == language_family)
+            if path_prefix:
+                stmt = stmt.where(File.path.startswith(path_prefix))
+            stmt = stmt.limit(limit)
+            return list(session.exec(stmt).all())
+
+    async def get_contexts(self) -> list[Context]:
+        """Get all valid contexts from the index.
+
+        Returns:
+            List of Context objects for valid, enabled contexts
+        """
+        await self.wait_for_freshness()
+        with self.db.session() as session:
+            stmt = select(Context).where(
+                Context.probe_status == ProbeStatus.VALID.value,
+                Context.enabled == True,  # noqa: E712
+            )
+            return list(session.exec(stmt).all())
+
     async def map_repo(
         self,
         include: list[IncludeOption] | None = None,

@@ -301,6 +301,7 @@ class TestOps:
     """Test discovery and execution operations.
 
     Uses runner packs for detection-driven execution.
+    Leverages the index for context-aware workspace detection.
     """
 
     def __init__(
@@ -320,10 +321,18 @@ class TestOps:
     ) -> TestResult:
         """Discover test targets in the repository.
 
-        Uses runner packs for accurate detection per workspace.
+        Uses index contexts for workspace detection, then runner packs for
+        accurate test discovery per workspace. Falls back to agentic hints
+        when no runners are detected.
         """
         all_targets: list[TestTarget] = []
-        workspaces = detect_workspaces(self._repo_root)
+
+        # Use index contexts to find workspaces (leverages already-indexed data)
+        workspaces = await self._detect_workspaces_from_index()
+
+        # If index doesn't have contexts yet, fall back to filesystem detection
+        if not workspaces:
+            workspaces = detect_workspaces(self._repo_root)
 
         for ws in workspaces:
             try:
@@ -348,7 +357,97 @@ class TestOps:
                 seen.add(t.target_id)
                 unique_targets.append(t)
 
-        return TestResult(action="discover", targets=unique_targets)
+        # If no targets found, provide agentic fallback
+        agentic_hint = None
+        if not unique_targets:
+            agentic_hint = await self._generate_agentic_hint()
+
+        return TestResult(action="discover", targets=unique_targets, agentic_hint=agentic_hint)
+
+    async def _detect_workspaces_from_index(self) -> list[DetectedWorkspace]:
+        """Detect workspaces using index contexts.
+
+        The index already knows about project contexts (Python packages,
+        JS projects, Go modules, etc.) - leverage that instead of re-scanning.
+        """
+        workspaces: list[DetectedWorkspace] = []
+
+        try:
+            contexts = await self._coordinator.get_contexts()
+        except Exception:
+            # Index not ready, return empty to trigger filesystem fallback
+            return []
+
+        # Group contexts by root path to find workspaces
+        roots_seen: set[str] = set()
+
+        for ctx in contexts:
+            root_path = ctx.root_path or ""
+            if root_path in roots_seen:
+                continue
+            roots_seen.add(root_path)
+
+            # Resolve workspace path
+            ws_root = self._repo_root / root_path if root_path else self._repo_root
+
+            # Detect runners for this workspace
+            for pack_class, confidence in runner_registry.detect_all(ws_root):
+                workspaces.append(
+                    DetectedWorkspace(
+                        root=ws_root,
+                        pack=pack_class(),
+                        confidence=confidence,
+                    )
+                )
+
+        # Deduplicate by (root, pack_id), keeping highest confidence
+        seen: dict[tuple[Path, str], DetectedWorkspace] = {}
+        for ws in workspaces:
+            key = (ws.root, ws.pack.pack_id)
+            if key not in seen or ws.confidence > seen[key].confidence:
+                seen[key] = ws
+
+        return list(seen.values())
+
+    async def _generate_agentic_hint(self) -> str:
+        """Generate agentic hint for running tests when no targets detected."""
+        hints: list[str] = []
+
+        # Get languages from index
+        try:
+            file_stats = await self._coordinator.get_file_stats()
+            languages = set(file_stats.keys())
+        except Exception:
+            languages = set()
+
+        if "python" in languages:
+            hints.append("Python: Run `pytest` or `python -m pytest`")
+        if "javascript" in languages:
+            hints.append("JavaScript: Run `npm test`, `yarn test`, or `jest`")
+        if "go" in languages:
+            hints.append("Go: Run `go test ./...`")
+        if "rust" in languages:
+            hints.append("Rust: Run `cargo test`")
+        if "jvm" in languages:
+            hints.append("Java/Kotlin: Run `./gradlew test` or `mvn test`")
+        if "ruby" in languages:
+            hints.append("Ruby: Run `bundle exec rspec` or `rake test`")
+        if "dotnet" in languages:
+            hints.append("C#/.NET: Run `dotnet test`")
+        if "php" in languages:
+            hints.append("PHP: Run `phpunit` or `./vendor/bin/phpunit`")
+        if "elixir" in languages:
+            hints.append("Elixir: Run `mix test`")
+
+        if not hints:
+            hints.append(
+                "No test framework detected. Check for test files and install "
+                "appropriate test runner (pytest, jest, go test, cargo test, etc.)"
+            )
+
+        return "No test targets detected automatically. Manual test commands:\n\n" + "\n".join(
+            f"  - {h}" for h in hints
+        )
 
     async def run(
         self,

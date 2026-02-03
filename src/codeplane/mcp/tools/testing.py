@@ -58,7 +58,7 @@ async def test_discover(ctx: AppContext, params: TestDiscoverParams) -> dict[str
     """Discover tests."""
     result = await ctx.test_ops.discover(paths=params.paths)
 
-    return {
+    output: dict[str, Any] = {
         "action": result.action,
         "targets": [
             {
@@ -77,6 +77,12 @@ async def test_discover(ctx: AppContext, params: TestDiscoverParams) -> dict[str
             for t in (result.targets or [])
         ],
     }
+
+    # Include agentic hint if present (for edge cases like no runners detected)
+    if result.agentic_hint:
+        output["agentic_hint"] = result.agentic_hint
+
+    return output
 
 
 @registry.register("test_run", "Run tests", TestRunParams)

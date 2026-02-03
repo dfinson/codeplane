@@ -261,3 +261,5 @@ class TestResult:
     action: Literal["discover", "run", "status", "cancel"]
     targets: list[TestTarget] | None = None
     run_status: TestRunStatus | None = None
+    # Agentic fallback - when no runners detected, suggest what agent should run
+    agentic_hint: str | None = None
