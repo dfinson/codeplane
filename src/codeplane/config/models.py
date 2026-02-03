@@ -58,9 +58,52 @@ class IndexConfig(BaseModel):
     index_path: str | None = None  # Override index storage location (for WSL/cross-fs)
 
 
+class TimeoutsConfig(BaseModel):
+    """Timeout configuration for daemon components."""
+
+    server_stop_sec: float = 5.0
+    force_exit_sec: float = 3.0
+    watcher_stop_sec: float = 2.0
+    epoch_await_sec: float = 5.0
+    session_idle_sec: float = 1800.0  # 30 minutes
+    dry_run_ttl_sec: float = 60.0
+
+
+class IndexerConfig(BaseModel):
+    """Background indexer configuration."""
+
+    debounce_sec: float = 0.5
+    max_workers: int = 1
+    queue_max_size: int = 10000
+
+
+class LimitsConfig(BaseModel):
+    """Pagination and query limit defaults."""
+
+    search_default: int = 20
+    map_depth_default: int = 3
+    map_limit_default: int = 100
+    files_list_default: int = 200
+    git_log_default: int = 50
+    git_blame_default: int = 100
+    indexed_files_max: int = 1000
+    operation_records_max: int = 1000
+
+
+class TestingConfig(BaseModel):
+    """Testing subsystem configuration."""
+
+    default_parallelism: int = 4
+    default_timeout_sec: int = 300
+
+
 class CodePlaneConfig(BaseModel):
     """Root configuration."""
 
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     index: IndexConfig = Field(default_factory=IndexConfig)
+    timeouts: TimeoutsConfig = Field(default_factory=TimeoutsConfig)
+    indexer: IndexerConfig = Field(default_factory=IndexerConfig)
+    limits: LimitsConfig = Field(default_factory=LimitsConfig)
+    testing: TestingConfig = Field(default_factory=TestingConfig)

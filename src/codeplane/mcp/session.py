@@ -9,6 +9,8 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
+from codeplane.config.models import TimeoutsConfig
+
 
 @dataclass
 class SessionState:
@@ -29,9 +31,9 @@ class SessionState:
 class SessionManager:
     """Manages active sessions."""
 
-    def __init__(self) -> None:
+    def __init__(self, config: TimeoutsConfig | None = None) -> None:
         self._sessions: dict[str, SessionState] = {}
-        self._default_timeout = 1800.0  # 30 minutes
+        self._config = config or TimeoutsConfig()
 
     def get_or_create(self, session_id: str | None = None) -> SessionState:
         """Get existing session or create new one.
@@ -74,7 +76,9 @@ class SessionManager:
         """
         now = time.time()
         to_remove = [
-            sid for sid, s in self._sessions.items() if now - s.last_active > self._default_timeout
+            sid
+            for sid, s in self._sessions.items()
+            if now - s.last_active > self._config.session_idle_sec
         ]
         for sid in to_remove:
             del self._sessions[sid]

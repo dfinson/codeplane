@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field
 
+from codeplane.config.constants import MAP_DEPTH_MAX, MAP_LIMIT_MAX, SEARCH_MAX_LIMIT
 from codeplane.mcp.registry import registry
 from codeplane.mcp.tools.base import BaseParams
 
@@ -23,10 +24,10 @@ class SearchParams(BaseParams):
 
     query: str
     mode: Literal["lexical", "symbol", "references", "definitions"] = "lexical"
-    scope_paths: list[str] | None = None
-    scope_languages: list[str] | None = None
-    scope_kinds: list[str] | None = None
-    limit: int = Field(default=20, le=100)
+    filter_paths: list[str] | None = None
+    filter_languages: list[str] | None = None
+    filter_kinds: list[str] | None = None
+    limit: int = Field(default=20, le=SEARCH_MAX_LIMIT)
     cursor: str | None = None
     include_snippets: bool = True
 
@@ -47,9 +48,9 @@ class MapRepoParams(BaseParams):
         ]
         | None
     ) = None
-    depth: int = Field(default=3, le=10)
+    depth: int = Field(default=3, le=MAP_DEPTH_MAX)
     cursor: str | None = None
-    limit: int = Field(default=100, le=1000)
+    limit: int = Field(default=100, le=MAP_LIMIT_MAX)
     # Filtering options
     include_globs: list[str] | None = Field(
         default=None, description="Glob patterns to include (e.g., ['src/**', 'lib/**'])"
@@ -66,7 +67,7 @@ class MapRepoParams(BaseParams):
 class GetDefParams(BaseParams):
     """Parameters for index.search definitions mode."""
 
-    name: str
+    symbol_name: str
     context_id: int | None = None
 
 

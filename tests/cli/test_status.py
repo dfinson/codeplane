@@ -70,7 +70,7 @@ class TestStatusCommand:
         """Status fails with error when run outside git repository."""
         result = runner.invoke(cli, ["status", str(temp_non_git)])
         assert result.exit_code != 0
-        assert "not a git repository" in result.output
+        assert "Not inside a git repository" in result.output
 
     def test_given_uninitialized_repo_when_status_then_reports_not_initialized(
         self, temp_git_repo: Path

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from codeplane.config.models import IndexerConfig
 from codeplane.daemon.indexer import BackgroundIndexer, IndexerState
 
 
@@ -35,7 +36,9 @@ class TestBackgroundIndexer:
         """Queuing paths adds them to pending set."""
         # Given
         coordinator = MagicMock()
-        indexer = BackgroundIndexer(coordinator=coordinator, debounce_seconds=10.0)
+        indexer = BackgroundIndexer(
+            coordinator=coordinator, config=IndexerConfig(debounce_sec=10.0)
+        )
         indexer.start()
 
         # When
@@ -556,7 +559,7 @@ class TestServerController:
         controller = ServerController(
             repo_root=tmp_path,
             coordinator=coordinator,
-            config=config,
+            server_config=config,
         )
 
         assert controller.indexer is not None
@@ -580,7 +583,7 @@ class TestServerController:
         controller = ServerController(
             repo_root=tmp_path,
             coordinator=coordinator,
-            config=config,
+            server_config=config,
         )
 
         await controller.start()
@@ -608,7 +611,7 @@ class TestServerController:
         controller = ServerController(
             repo_root=tmp_path,
             coordinator=coordinator,
-            config=config,
+            server_config=config,
         )
 
         await controller.start()

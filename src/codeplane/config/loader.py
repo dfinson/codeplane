@@ -7,7 +7,15 @@ import yaml
 from pydantic import ValidationError
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
-from codeplane.config.models import IndexConfig, LoggingConfig, ServerConfig
+from codeplane.config.models import (
+    IndexConfig,
+    IndexerConfig,
+    LimitsConfig,
+    LoggingConfig,
+    ServerConfig,
+    TestingConfig,
+    TimeoutsConfig,
+)
 from codeplane.core.errors import ConfigError
 
 GLOBAL_CONFIG_PATH = Path("~/.config/codeplane/config.yaml").expanduser()
@@ -67,6 +75,10 @@ def _make_settings_class(yaml_config: dict[str, Any]) -> type[BaseSettings]:
         logging: LoggingConfig = LoggingConfig()
         server: ServerConfig = ServerConfig()
         index: IndexConfig = IndexConfig()
+        timeouts: TimeoutsConfig = TimeoutsConfig()
+        indexer: IndexerConfig = IndexerConfig()
+        limits: LimitsConfig = LimitsConfig()
+        testing: TestingConfig = TestingConfig()
 
         @classmethod
         def settings_customise_sources(

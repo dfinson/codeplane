@@ -68,7 +68,7 @@ class TestConfigModels:
 
         # When / Then
         if valid:
-            config = CodePlaneConfig(daemon=daemon_config)
+            config = CodePlaneConfig(server=daemon_config)
             assert config.server.port == port
         else:
             with pytest.raises(ValidationError):
@@ -148,7 +148,7 @@ class TestConfigLoading:
         config_dir = temp_repo / ".codeplane"
         config_dir.mkdir()
         with (config_dir / "config.yaml").open("w") as f:
-            yaml.dump({"daemon": {"port": -999}}, f)
+            yaml.dump({"server": {"port": -999}}, f)
 
         # When / Then
         with pytest.raises(ConfigError) as exc_info:

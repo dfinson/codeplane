@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import structlog
 import uvicorn
 
-from codeplane.config.models import ServerConfig
+from codeplane.config.models import CodePlaneConfig, IndexerConfig, ServerConfig, TimeoutsConfig
 from codeplane.daemon.indexer import BackgroundIndexer
 from codeplane.daemon.watcher import FileWatcher
 
@@ -39,7 +39,9 @@ class ServerController:
 
     repo_root: Path
     coordinator: IndexCoordinator
-    config: ServerConfig
+    server_config: ServerConfig
+    timeouts_config: TimeoutsConfig = field(default_factory=TimeoutsConfig)
+    indexer_config: IndexerConfig = field(default_factory=IndexerConfig)
 
     indexer: BackgroundIndexer = field(init=False)
     watcher: FileWatcher = field(init=False)
@@ -47,17 +49,17 @@ class ServerController:
 
     def __post_init__(self) -> None:
         """Initialize components."""
-        # Create indexer with configurable debounce
+        # Create indexer with config
         self.indexer = BackgroundIndexer(
             coordinator=self.coordinator,
-            debounce_seconds=self.config.debounce_sec,
+            config=self.indexer_config,
         )
 
         # Create watcher with configurable poll interval
         self.watcher = FileWatcher(
             repo_root=self.repo_root,
             on_change=self.indexer.queue_paths,
-            poll_interval=self.config.poll_interval_sec,
+            poll_interval=self.server_config.poll_interval_sec,
         )
 
     async def start(self) -> None:
@@ -70,7 +72,7 @@ class ServerController:
         # Start file watcher
         await self.watcher.start()
 
-        base_url = f"http://{self.config.host}:{self.config.port}"
+        base_url = f"http://{self.server_config.host}:{self.server_config.port}"
         logger.info("server started")
         logger.info("endpoint", name="mcp", url=f"{base_url}/mcp")
         logger.info("endpoint", name="health", url=f"{base_url}/health")
@@ -82,14 +84,17 @@ class ServerController:
 
         # Stop with timeout to prevent hanging
         try:
-            async with asyncio.timeout(5.0):
+            async with asyncio.timeout(self.timeouts_config.server_stop_sec):
                 # Stop watcher first (no new events)
                 await self.watcher.stop()
 
                 # Stop indexer (complete pending work)
                 await self.indexer.stop()
         except TimeoutError:
-            logger.warning("server_stop_timeout", message="Shutdown timed out after 5s")
+            logger.warning(
+                "server_stop_timeout",
+                message=f"Shutdown timed out after {self.timeouts_config.server_stop_sec}s",
+            )
 
         # Signal shutdown complete
         self._shutdown_event.set()
@@ -160,7 +165,7 @@ def is_server_running(codeplane_dir: Path) -> bool:
 async def run_server(
     repo_root: Path,
     coordinator: IndexCoordinator,
-    config: ServerConfig,
+    config: CodePlaneConfig,
 ) -> None:
     """Run the daemon until shutdown signal."""
     from rich.console import Console
@@ -182,12 +187,14 @@ async def run_server(
     # Print banner
     from codeplane.cli.up import _print_banner
 
-    _print_banner(config.host, config.port)
+    _print_banner(config.server.host, config.server.port)
 
     controller = ServerController(
         repo_root=repo_root,
         coordinator=coordinator,
-        config=config,
+        server_config=config.server,
+        timeouts_config=config.timeouts,
+        indexer_config=config.indexer,
     )
 
     app = create_app(controller, repo_root, coordinator)
@@ -195,8 +202,8 @@ async def run_server(
     # Configure uvicorn
     uvicorn_config = uvicorn.Config(
         app,
-        host=config.host,
-        port=config.port,
+        host=config.server.host,
+        port=config.server.port,
         log_level="warning",  # Use structlog instead
         ws="none",  # Disable websockets - we use SSE for MCP
     )
@@ -204,7 +211,7 @@ async def run_server(
 
     # Write PID file
     codeplane_dir = repo_root / ".codeplane"
-    write_pid_file(codeplane_dir, config.port)
+    write_pid_file(codeplane_dir, config.server.port)
 
     # Setup signal handlers with force exit on second signal
     loop = asyncio.get_event_loop()
@@ -213,7 +220,7 @@ async def run_server(
 
     async def force_exit_after_timeout() -> None:
         """Force exit if graceful shutdown takes too long."""
-        await asyncio.sleep(3.0)
+        await asyncio.sleep(config.timeouts.force_exit_sec)
         logger.info("forcing_exit_after_timeout")
         server.force_exit = True
 

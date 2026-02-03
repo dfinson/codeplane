@@ -106,7 +106,7 @@ def up_command(path: Path | None, port: int | None) -> None:
         loop.close()
 
     try:
-        asyncio.run(run_server(repo_root, coordinator, config.server))
+        asyncio.run(run_server(repo_root, coordinator, config))
     except KeyboardInterrupt:
         click.echo("\nStopped")
     finally:

@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from codeplane.config.models import IndexerConfig
+
 if TYPE_CHECKING:
     from codeplane.index.ops import IndexCoordinator, IndexStats
 
@@ -52,8 +54,7 @@ class BackgroundIndexer:
     """
 
     coordinator: IndexCoordinator
-    debounce_seconds: float = 0.5
-    max_workers: int = 1  # Single worker for serialization
+    config: IndexerConfig = field(default_factory=IndexerConfig)
 
     _state: IndexerState = field(default=IndexerState.IDLE, init=False)
     _executor: ThreadPoolExecutor | None = field(default=None, init=False)
@@ -69,11 +70,11 @@ class BackgroundIndexer:
         if self._executor is not None:
             return
         self._executor = ThreadPoolExecutor(
-            max_workers=self.max_workers,
+            max_workers=self.config.max_workers,
             thread_name_prefix="codeplane-indexer",
         )
         self._state = IndexerState.IDLE
-        logger.info("background_indexer_started", max_workers=self.max_workers)
+        logger.info("background_indexer_started", max_workers=self.config.max_workers)
 
     async def stop(self) -> None:
         """Stop the background indexer gracefully."""
@@ -117,7 +118,7 @@ class BackgroundIndexer:
     async def _debounced_flush(self) -> None:
         """Wait for debounce period then flush."""
         try:
-            await asyncio.sleep(self.debounce_seconds)
+            await asyncio.sleep(self.config.debounce_sec)
             await self._flush()
         except asyncio.CancelledError:
             pass

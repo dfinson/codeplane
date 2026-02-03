@@ -50,7 +50,7 @@ def initialized_repo(temp_git_repo: Path) -> Path:
     codeplane_dir = temp_git_repo / ".codeplane"
     codeplane_dir.mkdir()
     (codeplane_dir / "config.yaml").write_text(
-        "logging:\n  level: INFO\ndaemon:\n  host: 127.0.0.1\n  port: 0\n"
+        "logging:\n  level: INFO\nserver:\n  host: 127.0.0.1\n  port: 0\n"
     )
     (codeplane_dir / ".cplignore").write_text("# Test\n")
     return temp_git_repo
@@ -63,10 +63,10 @@ class TestUpCommand:
         """Up fails with error when run outside git repository."""
         result = runner.invoke(cli, ["up", str(temp_non_git)])
         assert result.exit_code != 0
-        assert "not a git repository" in result.output
+        assert "Not inside a git repository" in result.output
 
-    @patch("codeplane.cli.up.read_server_info")
-    @patch("codeplane.cli.up.is_server_running")
+    @patch("codeplane.daemon.lifecycle.read_server_info")
+    @patch("codeplane.daemon.lifecycle.is_server_running")
     def test_given_already_running_when_up_then_reports_running(
         self,
         mock_is_running: MagicMock,
@@ -83,38 +83,38 @@ class TestUpCommand:
         assert "12345" in result.output
         assert "8765" in result.output
 
-    @patch("codeplane.cli.up.os.fork")
+    @patch("codeplane.daemon.lifecycle.run_server")
+    @patch("codeplane.daemon.lifecycle.is_server_running")
     @patch("codeplane.cli.up.IndexCoordinator")
-    @patch("codeplane.cli.up.is_server_running")
-    def test_given_not_running_when_up_then_forks_daemon(
+    def test_given_not_running_when_up_then_starts_server(
         self,
-        mock_is_running: MagicMock,
         mock_coordinator_class: MagicMock,
-        mock_fork: MagicMock,
+        mock_is_running: MagicMock,
+        mock_run_server: MagicMock,
         initialized_repo: Path,
     ) -> None:
-        """Up forks a daemon process when not running."""
+        """Up starts the server in foreground when not running."""
         mock_is_running.return_value = False
 
-        # Mock the coordinator
         mock_coordinator = MagicMock()
-        mock_coordinator.initialize = AsyncMock()
+        mock_coordinator.load_existing = AsyncMock(return_value=True)
+        mock_coordinator.close = MagicMock()
         mock_coordinator_class.return_value = mock_coordinator
 
-        # Simulate parent process (fork returns child PID)
-        mock_fork.return_value = 54321
+        # Make run_server raise KeyboardInterrupt to simulate Ctrl+C
+        mock_run_server.side_effect = KeyboardInterrupt()
 
         result = runner.invoke(cli, ["up", str(initialized_repo)])
-        # Parent exits with 0 after fork
-        # The CLI runner captures SystemExit
-        assert "started" in result.output.lower() or result.exit_code == 0
+        # Should complete after KeyboardInterrupt
+        assert "stopped" in result.output.lower() or result.exit_code == 0
+        mock_coordinator.close.assert_called()
 
+    @patch("codeplane.daemon.lifecycle.is_server_running")
     @patch("codeplane.cli.up.initialize_repo")
-    @patch("codeplane.cli.up.is_server_running")
     def test_given_uninitialized_repo_when_up_then_auto_inits(
         self,
-        mock_is_running: MagicMock,
         mock_init: MagicMock,
+        mock_is_running: MagicMock,
         temp_git_repo: Path,
     ) -> None:
         """Up auto-initializes the repo if not initialized."""
@@ -125,42 +125,16 @@ class TestUpCommand:
         # Should call initialize_repo
         mock_init.assert_called_once_with(temp_git_repo.resolve())
 
-    @patch("codeplane.cli.up.run_server")
-    @patch("codeplane.cli.up.IndexCoordinator")
-    @patch("codeplane.cli.up.is_server_running")
-    def test_given_foreground_flag_when_up_then_runs_in_foreground(
-        self,
-        mock_is_running: MagicMock,
-        mock_coordinator_class: MagicMock,
-        mock_run_server: MagicMock,
-        initialized_repo: Path,
-    ) -> None:
-        """Up --foreground runs daemon in foreground without forking."""
-        mock_is_running.return_value = False
-
-        mock_coordinator = MagicMock()
-        mock_coordinator.initialize = AsyncMock()
-        mock_coordinator.close = MagicMock()
-        mock_coordinator_class.return_value = mock_coordinator
-
-        # Make run_server raise KeyboardInterrupt to simulate Ctrl+C
-        mock_run_server.side_effect = KeyboardInterrupt()
-
-        result = runner.invoke(cli, ["up", "--foreground", str(initialized_repo)])
-        # Should complete (KeyboardInterrupt is caught)
-        assert "stopped" in result.output.lower() or result.exit_code == 0
-        mock_coordinator.close.assert_called()
-
-    @patch("codeplane.cli.up.os.fork")
+    @patch("codeplane.daemon.lifecycle.run_server")
+    @patch("codeplane.daemon.lifecycle.is_server_running")
     @patch("codeplane.cli.up.IndexCoordinator")
     @patch("codeplane.cli.up.load_config")
-    @patch("codeplane.cli.up.is_server_running")
     def test_given_port_option_when_up_then_uses_specified_port(
         self,
-        mock_is_running: MagicMock,
         mock_load_config: MagicMock,
         mock_coordinator_class: MagicMock,
-        mock_fork: MagicMock,
+        mock_is_running: MagicMock,
+        mock_run_server: MagicMock,
         initialized_repo: Path,
     ) -> None:
         """Up --port overrides configured port."""
@@ -173,10 +147,11 @@ class TestUpCommand:
         mock_load_config.return_value = mock_config
 
         mock_coordinator = MagicMock()
-        mock_coordinator.initialize = AsyncMock()
+        mock_coordinator.load_existing = AsyncMock(return_value=True)
+        mock_coordinator.close = MagicMock()
         mock_coordinator_class.return_value = mock_coordinator
 
-        mock_fork.return_value = 54321  # Parent process
+        mock_run_server.side_effect = KeyboardInterrupt()
 
         runner.invoke(cli, ["up", "--port", "9999", str(initialized_repo)])
 

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import Field
 
+from codeplane.config.constants import GIT_BLAME_MAX, GIT_LOG_MAX
 from codeplane.git._internal.hooks import run_hook
 from codeplane.mcp.errors import HookFailedError
 from codeplane.mcp.registry import registry
@@ -32,8 +33,8 @@ class GitStatusParams(BaseParams):
 class GitDiffParams(BaseParams):
     """Parameters for git.diff."""
 
-    base: str | None = None
-    target: str | None = None
+    base_ref: str | None = None
+    target_ref: str | None = None
     staged: bool = False
 
 
@@ -49,7 +50,7 @@ class GitLogParams(BaseParams):
     """Parameters for git.log."""
 
     ref: str = "HEAD"
-    limit: int = Field(default=50, le=100)
+    limit: int = Field(default=50, le=GIT_LOG_MAX)
     cursor: str | None = None
     since: str | None = None
     until: str | None = None
@@ -59,7 +60,7 @@ class GitLogParams(BaseParams):
 class GitBranchCreateParams(BaseParams):
     """Parameters for git.branch_create."""
 
-    name: str
+    branch_name: str
     ref: str = "HEAD"
 
 
@@ -73,7 +74,7 @@ class GitCheckoutParams(BaseParams):
 class GitDeleteBranchParams(BaseParams):
     """Parameters for git.branch_delete."""
 
-    name: str
+    branch_name: str
     force: bool = False
 
 
@@ -121,7 +122,7 @@ class GitBlameParams(BaseParams):
     start_line: int | None = None
     end_line: int | None = None
     cursor: str | None = None
-    limit: int = Field(default=100, le=1000)
+    limit: int = Field(default=100, le=GIT_BLAME_MAX)
 
 
 class GitShowParams(BaseParams):
@@ -225,21 +226,21 @@ class GitWorktreeAddParams(BaseParams):
 class GitWorktreeRemoveParams(BaseParams):
     """Parameters for git.worktree_remove."""
 
-    name: str
+    worktree_name: str
     force: bool = False
 
 
 class GitWorktreeLockParams(BaseParams):
     """Parameters for git.worktree_lock."""
 
-    name: str
+    worktree_name: str
     reason: str | None = None
 
 
 class GitWorktreeUnlockParams(BaseParams):
     """Parameters for git.worktree_unlock."""
 
-    name: str
+    worktree_name: str
 
 
 # =============================================================================
@@ -347,8 +348,8 @@ async def git_status(ctx: AppContext, _params: GitStatusParams) -> dict[str, Any
 async def git_diff(ctx: AppContext, params: GitDiffParams) -> dict[str, Any]:
     """Get diff."""
     diff = ctx.git_ops.diff(
-        base=params.base,
-        target=params.target,
+        base=params.base_ref,
+        target=params.target_ref,
         staged=params.staged,
         include_patch=True,
     )
@@ -499,9 +500,9 @@ async def git_amend(ctx: AppContext, params: GitAmendParams) -> dict[str, Any]:
 @registry.register("git_branch_create", "Create a new branch", GitBranchCreateParams)
 async def git_branch_create(ctx: AppContext, params: GitBranchCreateParams) -> dict[str, Any]:
     """Create branch."""
-    branch = ctx.git_ops.create_branch(params.name, ref=params.ref)
+    branch = ctx.git_ops.create_branch(params.branch_name, ref=params.ref)
     result = asdict(branch)
-    result["summary"] = f"created branch {params.name}"
+    result["summary"] = f"created branch {params.branch_name}"
     return result
 
 
@@ -519,10 +520,10 @@ async def git_checkout(ctx: AppContext, params: GitCheckoutParams) -> dict[str, 
 @registry.register("git_branch_delete", "Delete a branch", GitDeleteBranchParams)
 async def git_branch_delete(ctx: AppContext, params: GitDeleteBranchParams) -> dict[str, Any]:
     """Delete branch."""
-    ctx.git_ops.delete_branch(params.name, force=params.force)
+    ctx.git_ops.delete_branch(params.branch_name, force=params.force)
     return {
-        "deleted": params.name,
-        "summary": f"deleted branch {params.name}",
+        "deleted": params.branch_name,
+        "summary": f"deleted branch {params.branch_name}",
     }
 
 
@@ -786,30 +787,30 @@ async def git_worktree_add(ctx: AppContext, params: GitWorktreeAddParams) -> dic
 @registry.register("git_worktree_remove", "Remove a worktree", GitWorktreeRemoveParams)
 async def git_worktree_remove(ctx: AppContext, params: GitWorktreeRemoveParams) -> dict[str, Any]:
     """Remove worktree."""
-    ctx.git_ops.worktree_remove(params.name, params.force)
+    ctx.git_ops.worktree_remove(params.worktree_name, params.force)
     return {
-        "removed": params.name,
-        "summary": f"removed worktree {params.name}",
+        "removed": params.worktree_name,
+        "summary": f"removed worktree {params.worktree_name}",
     }
 
 
 @registry.register("git_worktree_lock", "Lock a worktree", GitWorktreeLockParams)
 async def git_worktree_lock(ctx: AppContext, params: GitWorktreeLockParams) -> dict[str, Any]:
     """Lock worktree."""
-    ctx.git_ops.worktree_lock(params.name, params.reason)
+    ctx.git_ops.worktree_lock(params.worktree_name, params.reason)
     return {
-        "locked": params.name,
-        "summary": f"locked worktree {params.name}",
+        "locked": params.worktree_name,
+        "summary": f"locked worktree {params.worktree_name}",
     }
 
 
 @registry.register("git_worktree_unlock", "Unlock a worktree", GitWorktreeUnlockParams)
 async def git_worktree_unlock(ctx: AppContext, params: GitWorktreeUnlockParams) -> dict[str, Any]:
     """Unlock worktree."""
-    ctx.git_ops.worktree_unlock(params.name)
+    ctx.git_ops.worktree_unlock(params.worktree_name)
     return {
-        "unlocked": params.name,
-        "summary": f"unlocked worktree {params.name}",
+        "unlocked": params.worktree_name,
+        "summary": f"unlocked worktree {params.worktree_name}",
     }
 
 

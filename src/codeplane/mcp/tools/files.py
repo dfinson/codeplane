@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from codeplane.config.constants import FILES_LIST_MAX
 from codeplane.mcp.registry import registry
 from codeplane.mcp.tools.base import BaseParams
 
@@ -27,13 +28,15 @@ class RangeParam(BaseModel):
         None,
         description="File path this range applies to. Required when reading multiple files with different ranges.",
     )
-    start: int = Field(..., gt=0, description="Start line (1-indexed, inclusive)")
-    end: int = Field(..., gt=0, description="End line (1-indexed, inclusive)")
+    start_line: int = Field(..., gt=0, description="Start line (1-indexed, inclusive)")
+    end_line: int = Field(..., gt=0, description="End line (1-indexed, inclusive)")
 
     @model_validator(mode="after")
     def validate_range(self) -> RangeParam:
-        if self.end < self.start:
-            raise ValueError(f"end ({self.end}) must be >= start ({self.start})")
+        if self.end_line < self.start_line:
+            raise ValueError(
+                f"end_line ({self.end_line}) must be >= start_line ({self.start_line})"
+            )
         return self
 
 
@@ -46,7 +49,7 @@ class ReadFilesParams(BaseParams):
         description=(
             "Optional line ranges per file. Each range can specify a 'path' to apply "
             "different ranges to different files in one call. Example: "
-            "[{path: 'a.py', start: 1, end: 50}, {path: 'b.py', start: 100, end: 150}]"
+            "[{path: 'a.py', start_line: 1, end_line: 50}, {path: 'b.py', start_line: 100, end_line: 150}]"
         ),
     )
     include_metadata: bool = Field(False, description="Include file stats (size, mtime)")
@@ -67,7 +70,7 @@ class ListFilesParams(BaseParams):
     file_type: Literal["all", "file", "directory"] = Field(
         "all", description="Filter by entry type"
     )
-    limit: int = Field(200, ge=1, le=1000, description="Maximum entries to return")
+    limit: int = Field(200, ge=1, le=FILES_LIST_MAX, description="Maximum entries to return")
 
 
 # =============================================================================
@@ -117,7 +120,7 @@ async def files_read(ctx: AppContext, params: ReadFilesParams) -> dict[str, Any]
     ranges_dict = None
     if params.ranges:
         ranges_dict = [
-            {"path": r.path or "", "start": r.start, "end": r.end} for r in params.ranges
+            {"path": r.path or "", "start": r.start_line, "end": r.end_line} for r in params.ranges
         ]
 
     result = ctx.file_ops.read_files(

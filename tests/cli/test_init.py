@@ -88,7 +88,7 @@ class TestInitCommand:
         with config_path.open() as f:
             config = yaml.safe_load(f)
         assert "logging" in config
-        assert "daemon" in config
+        assert "server" in config
 
     def test_given_non_git_dir_when_init_then_fails(self, temp_non_git: Path) -> None:
         """Init fails with error when run outside git repository."""
@@ -100,8 +100,8 @@ class TestInitCommand:
 
         # Then
         assert result.exit_code == 1
-        assert "is not a git repository" in result.output
-        assert "cpl init" in result.output
+        assert "Not inside a git repository" in result.output
+        assert "CodePlane commands must be run from within a git repository" in result.output
 
     def test_given_initialized_repo_when_init_again_then_idempotent(
         self, temp_git_repo: Path
