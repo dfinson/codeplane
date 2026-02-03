@@ -1,0 +1,14 @@
+{"Action":"run","Package":"github.com/example/pkg","Test":"TestExample"}
+{"Action":"output","Package":"github.com/example/pkg","Test":"TestExample","Output":"=== RUN   TestExample\n"}
+{"Action":"output","Package":"github.com/example/pkg","Test":"TestExample","Output":"--- PASS: TestExample (0.00s)\n"}
+{"Action":"pass","Package":"github.com/example/pkg","Test":"TestExample","Elapsed":0.001}
+{"Action":"run","Package":"github.com/example/pkg","Test":"TestFailing"}
+{"Action":"output","Package":"github.com/example/pkg","Test":"TestFailing","Output":"=== RUN   TestFailing\n"}
+{"Action":"output","Package":"github.com/example/pkg","Test":"TestFailing","Output":"    example_test.go:15: Expected 1, got 2\n"}
+{"Action":"output","Package":"github.com/example/pkg","Test":"TestFailing","Output":"--- FAIL: TestFailing (0.00s)\n"}
+{"Action":"fail","Package":"github.com/example/pkg","Test":"TestFailing","Elapsed":0.002}
+{"Action":"run","Package":"github.com/example/pkg","Test":"TestSkipped"}
+{"Action":"output","Package":"github.com/example/pkg","Test":"TestSkipped","Output":"=== RUN   TestSkipped\n"}
+{"Action":"output","Package":"github.com/example/pkg","Test":"TestSkipped","Output":"--- SKIP: TestSkipped (0.00s)\n"}
+{"Action":"skip","Package":"github.com/example/pkg","Test":"TestSkipped","Elapsed":0.001}
+{"Action":"pass","Package":"github.com/example/pkg","Elapsed":0.005}
