@@ -67,6 +67,29 @@ def _summarize_write(files_changed: int, insertions: int, deletions: int, dry_ru
     return f"{prefix}{files_changed} files (+{insertions}/-{deletions})"
 
 
+def _display_write(files: list[Any], dry_run: bool) -> str:
+    """Human-friendly message for write_files action."""
+    if not files:
+        return "No changes applied." if not dry_run else "Dry run: no changes would be applied."
+
+    actions = {"created": 0, "updated": 0, "deleted": 0}
+    for f in files:
+        action = f.action if hasattr(f, "action") else f.get("action", "updated")
+        actions[action] = actions.get(action, 0) + 1
+
+    parts = []
+    if actions.get("created"):
+        parts.append(f"{actions['created']} created")
+    if actions.get("updated"):
+        parts.append(f"{actions['updated']} updated")
+    if actions.get("deleted"):
+        parts.append(f"{actions['deleted']} deleted")
+
+    prefix = "Dry run: would have " if dry_run else ""
+    suffix = " files." if dry_run else " files."
+    return f"{prefix}{', '.join(parts)}{suffix}"
+
+
 # =============================================================================
 # Tool Handlers
 # =============================================================================
@@ -147,6 +170,7 @@ async def write_files(ctx: AppContext, params: WriteFilesParams) -> dict[str, An
                 result.delta.deletions,
                 result.dry_run,
             ),
+            "display_to_user": _display_write(result.delta.files, result.dry_run),
         }
 
         # Add dry run info if present

@@ -66,6 +66,48 @@ def _summarize_discover(count: int) -> str:
     return f"{count} test targets discovered"
 
 
+def _display_discover(count: int, targets: list[Any]) -> str:
+    """Human-friendly message for discover action."""
+    if count == 0:
+        return "No test targets found in this repository."
+    # Group by language
+    by_lang: dict[str, int] = {}
+    for t in targets:
+        lang = t.language if hasattr(t, "language") else "unknown"
+        by_lang[lang] = by_lang.get(lang, 0) + 1
+    lang_parts = [f"{v} {k}" for k, v in sorted(by_lang.items(), key=lambda x: -x[1])]
+    return f"Found {count} test targets: {', '.join(lang_parts)}."
+
+
+def _display_run_start(result: TestResult) -> str:
+    """Human-friendly message for run action."""
+    if not result.run_status:
+        return "Test run initiated."
+    status = result.run_status
+    total = status.progress.targets.total if status.progress else 0
+    return f"Test run started: {total} targets. Run ID: {status.run_id}"
+
+
+def _display_run_status(result: TestResult) -> str | None:
+    """Human-friendly message for status - only on completion or failure."""
+    if not result.run_status:
+        return None
+    status = result.run_status
+    if status.status == "completed":
+        p = status.progress
+        if p and p.cases.failed > 0:
+            return f"Tests completed: {p.cases.passed} passed, {p.cases.failed} FAILED in {status.duration_seconds:.1f}s."
+        elif p:
+            return f"Tests completed: {p.cases.passed} passed in {status.duration_seconds:.1f}s."
+        return "Tests completed."
+    elif status.status == "cancelled":
+        return "Test run was cancelled."
+    elif status.status == "failed":
+        return "Test run failed to start."
+    # Running - no display needed (avoid noise on polling)
+    return None
+
+
 def _summarize_run(result: TestResult) -> str:
     if not result.run_status:
         return "no run status"
@@ -85,12 +127,25 @@ def _summarize_run(result: TestResult) -> str:
     return status.status
 
 
-def _serialize_test_result(result: TestResult) -> dict[str, Any]:
-    """Convert TestResult to dict."""
+def _serialize_test_result(result: TestResult, is_action: bool = False) -> dict[str, Any]:
+    """Convert TestResult to dict.
+
+    Args:
+        result: The test result to serialize
+        is_action: If True, include display_to_user for run start
+    """
     output: dict[str, Any] = {
         "action": result.action,
         "summary": _summarize_run(result),
     }
+
+    # Add display_to_user for actions and terminal states
+    if is_action:
+        output["display_to_user"] = _display_run_start(result)
+    else:
+        display = _display_run_status(result)
+        if display:
+            output["display_to_user"] = display
 
     if result.run_status:
         status = result.run_status
@@ -195,6 +250,7 @@ async def discover_test_targets(
             for t in targets
         ],
         "summary": _summarize_discover(len(targets)),
+        "display_to_user": _display_discover(len(targets), targets),
     }
     if result.agentic_hint:
         output["agentic_hint"] = result.agentic_hint
@@ -218,7 +274,7 @@ async def run_test_targets(ctx: AppContext, params: RunTestTargetsParams) -> dic
         fail_fast=params.fail_fast,
         coverage=params.coverage,
     )
-    return _serialize_test_result(result)
+    return _serialize_test_result(result, is_action=True)
 
 
 @registry.register(
@@ -229,7 +285,7 @@ async def run_test_targets(ctx: AppContext, params: RunTestTargetsParams) -> dic
 async def get_test_run_status(ctx: AppContext, params: GetTestRunStatusParams) -> dict[str, Any]:
     """Get status of a test run."""
     result = await ctx.test_ops.status(params.run_id)
-    return _serialize_test_result(result)
+    return _serialize_test_result(result, is_action=False)
 
 
 @registry.register(
@@ -240,4 +296,4 @@ async def get_test_run_status(ctx: AppContext, params: GetTestRunStatusParams) -
 async def cancel_test_run(ctx: AppContext, params: CancelTestRunParams) -> dict[str, Any]:
     """Cancel a running test."""
     result = await ctx.test_ops.cancel(params.run_id)
-    return _serialize_test_result(result)
+    return _serialize_test_result(result, is_action=True)

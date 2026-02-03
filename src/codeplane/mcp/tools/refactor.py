@@ -84,6 +84,24 @@ def _summarize_refactor(status: str, files_affected: int, preview: Any) -> str:
     return status
 
 
+def _display_refactor(status: str, files_affected: int, preview: Any, refactor_id: str) -> str:
+    """Human-friendly message for refactor operations."""
+    if status == "cancelled":
+        return "Refactoring cancelled."
+    if status == "applied":
+        return f"Refactoring applied: {files_affected} files modified."
+    if status == "pending" and preview:
+        high = preview.high_certainty_count or 0
+        low = preview.low_certainty_count or 0
+        total = high + (preview.medium_certainty_count or 0) + low
+        if low > 0:
+            return f"Preview ready: {total} changes in {files_affected} files ({low} require review). Refactor ID: {refactor_id}"
+        return (
+            f"Preview ready: {total} changes in {files_affected} files. Refactor ID: {refactor_id}"
+        )
+    return f"Refactoring {status}."
+
+
 # =============================================================================
 # Tool Handlers
 # =============================================================================
@@ -166,6 +184,9 @@ def _serialize_refactor_result(result: RefactorResult) -> dict[str, Any]:
         "refactor_id": result.refactor_id,
         "status": result.status,
         "summary": _summarize_refactor(result.status, files_affected, result.preview),
+        "display_to_user": _display_refactor(
+            result.status, files_affected, result.preview, result.refactor_id
+        ),
     }
 
     if result.preview:
