@@ -213,31 +213,16 @@ UNIVERSAL_EXCLUDES: list[str] = [
 
 
 def _walk_with_pruning(root: Path) -> list[tuple[str, str]]:
-    """Get all tracked files from git index (fast).
+    """Walk all files in repo, pruning PRUNABLE_DIRS.
 
     Returns list of (rel_dir_posix, filename) tuples.
-    Falls back to os.walk with pruning if git isn't available.
-    """
-    from codeplane.git import GitOps
 
+    Git-tracking is irrelevant for indexing. Index artifacts (.codeplane/)
+    are gitignored, so it's safe to index all files. Only PRUNABLE_DIRS
+    and .cplignore patterns exclude files from indexing.
+    """
     results: list[tuple[str, str]] = []
 
-    try:
-        git_ops = GitOps(root)
-        for rel_path in git_ops.tracked_files():
-            # Split into directory and filename
-            if "/" in rel_path:
-                rel_dir = rel_path.rsplit("/", 1)[0]
-                filename = rel_path.rsplit("/", 1)[1]
-            else:
-                rel_dir = ""
-                filename = rel_path
-            results.append((rel_dir, filename))
-        return results
-    except Exception:
-        pass
-
-    # Fallback to os.walk with pruning
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in PRUNABLE_DIRS]
 
