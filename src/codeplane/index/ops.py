@@ -1356,53 +1356,17 @@ class IndexCoordinator:
         except (UnicodeDecodeError, OSError):
             return ""
 
-    def _load_cplignore_patterns(self) -> list[str]:
-        """Load ignore patterns from .codeplane/.cplignore.
-
-        This file must exist (created by `cpl init`).
-        """
-        cplignore_path = self.repo_root / ".codeplane" / ".cplignore"
-        if not cplignore_path.exists():
-            msg = f".codeplane/.cplignore not found at {cplignore_path}. Run `cpl init` first."
-            raise FileNotFoundError(msg)
-
-        content = self._safe_read_text(cplignore_path)
-        patterns: list[str] = []
-
-        for line in content.splitlines():
-            line = line.strip()
-            # Skip comments and empty lines
-            if not line or line.startswith("#"):
-                continue
-            # Normalize directory patterns
-            if line.endswith("/"):
-                patterns.append(f"{line}**")
-            else:
-                patterns.append(line)
-
-        return patterns
-
     def _walk_all_files(self) -> list[str]:
         """Walk filesystem once, return all indexable file paths (relative to repo root).
 
-        Applies PRUNABLE_DIRS pruning and cplignore filtering.
+        Uses IgnoreChecker for hierarchical .cplignore support.
+        Applies PRUNABLE_DIRS pruning and .cplignore filtering.
         Does NOT use git - indexes any file on disk that isn't in .cplignore.
         """
-        from codeplane.index._internal.ignore import PRUNABLE_DIRS
+        from codeplane.index._internal.ignore import PRUNABLE_DIRS, IgnoreChecker
 
-        cplignore_patterns = self._load_cplignore_patterns()
-
-        def should_ignore(rel_str: str) -> bool:
-            if rel_str.startswith(".codeplane") or ".codeplane/" in rel_str:
-                return True
-            for pattern in cplignore_patterns:
-                if pattern.startswith("!"):
-                    if _matches_glob(rel_str, pattern[1:]):
-                        return False
-                    continue
-                if _matches_glob(rel_str, pattern):
-                    return True
-            return False
+        # IgnoreChecker handles hierarchical .cplignore loading
+        checker = IgnoreChecker(self.repo_root)
 
         all_files: list[str] = []
         for dirpath, dirnames, filenames in os.walk(self.repo_root):
@@ -1413,7 +1377,12 @@ class IndexCoordinator:
                 full_path = Path(dirpath) / filename
                 rel_str = str(full_path.relative_to(self.repo_root)).replace("\\", "/")
 
-                if not should_ignore(rel_str):
+                # Skip .codeplane dir but NOT .cplignore files (they need to be indexed)
+                if rel_str.startswith(".codeplane/") and filename != ".cplignore":
+                    continue
+
+                # Use IgnoreChecker for pattern matching
+                if not checker.is_excluded_rel(rel_str):
                     all_files.append(rel_str)
 
         return all_files

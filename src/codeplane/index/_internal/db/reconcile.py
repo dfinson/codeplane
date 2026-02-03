@@ -67,6 +67,7 @@ class Reconciler:
 
     @property
     def cplignore_path(self) -> Path:
+        """Legacy: primary .cplignore path (for backward compat)."""
         return self.repo_root / ".codeplane" / ".cplignore"
 
     @property
@@ -83,7 +84,8 @@ class Reconciler:
         If paths is None, reconcile all tracked files in the repository.
         If paths is provided, only reconcile those specific files.
 
-        Also detects .cplignore changes and sets cplignore_changed flag.
+        Also detects .cplignore changes (ANY .cplignore file anywhere in repo)
+        and sets cplignore_changed flag to trigger full reindex.
 
         Uses immediate_transaction for RepoState to prevent race conditions.
         Uses BulkWriter for file operations for performance.
@@ -261,10 +263,20 @@ class Reconciler:
         return self.git.head().target_sha
 
     def _compute_cplignore_hash(self) -> str | None:
-        """Compute hash of .cplignore file content, or None if it doesn't exist."""
-        if not self.cplignore_path.exists():
-            return None
-        return self._compute_hash(self.cplignore_path)
+        """Compute combined hash of ALL .cplignore files in repo.
+
+        Uses IgnoreChecker to find all .cplignore files hierarchically,
+        then computes a combined hash. Any change to any .cplignore file
+        will change this hash, triggering a full reindex.
+
+        Returns None if no .cplignore files exist.
+        """
+        from codeplane.index._internal.ignore import IgnoreChecker
+
+        # Create a fresh IgnoreChecker to discover all .cplignore files
+        # We don't need the patterns - just the file discovery
+        checker = IgnoreChecker(self.repo_root)
+        return checker.compute_combined_hash()
 
     def _get_all_tracked_files(self) -> list[str]:
         """Get all files tracked by git."""

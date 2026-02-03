@@ -100,3 +100,122 @@ class TestIgnoreChecker:
         assert checker.should_ignore(tmp_path / "debug.log")
         # Comments/empty aren't patterns
         assert not checker.should_ignore(tmp_path / "# This is a comment")
+
+
+class TestHierarchicalCplignore:
+    """Tests for hierarchical .cplignore support (files anywhere in repo)."""
+
+    def test_loads_root_cplignore(self, tmp_path: Path) -> None:
+        """IgnoreChecker loads .cplignore from repo root."""
+        root_cplignore = tmp_path / ".cplignore"
+        root_cplignore.write_text("*.log\n")
+
+        checker = IgnoreChecker(tmp_path)
+        assert checker.should_ignore(tmp_path / "debug.log")
+        assert root_cplignore in checker.cplignore_paths
+
+    def test_loads_nested_cplignore(self, tmp_path: Path) -> None:
+        """IgnoreChecker loads .cplignore from subdirectories."""
+        # Create nested .cplignore in subdir
+        subdir = tmp_path / "src" / "lib"
+        subdir.mkdir(parents=True)
+        nested_cplignore = subdir / ".cplignore"
+        nested_cplignore.write_text("*.tmp\n")
+
+        checker = IgnoreChecker(tmp_path)
+
+        # Nested pattern is prefixed with its directory
+        # "src/lib/*.tmp" should match
+        assert checker.is_excluded_rel("src/lib/cache.tmp")
+        # But not files outside that directory
+        assert not checker.is_excluded_rel("other.tmp")
+        assert nested_cplignore in checker.cplignore_paths
+
+    def test_loads_both_legacy_and_root_cplignore(self, tmp_path: Path) -> None:
+        """IgnoreChecker loads both .codeplane/.cplignore and root .cplignore."""
+        # Legacy location
+        legacy = tmp_path / ".codeplane" / ".cplignore"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("*.pyc\n")
+
+        # Root location
+        root = tmp_path / ".cplignore"
+        root.write_text("*.log\n")
+
+        checker = IgnoreChecker(tmp_path)
+
+        # Both patterns should be active
+        assert checker.is_excluded_rel("module.pyc")
+        assert checker.is_excluded_rel("debug.log")
+        assert legacy in checker.cplignore_paths
+        assert root in checker.cplignore_paths
+
+    def test_cplignore_paths_property(self, tmp_path: Path) -> None:
+        """cplignore_paths returns all loaded .cplignore files."""
+        # Create multiple .cplignore files
+        (tmp_path / ".codeplane").mkdir()
+        (tmp_path / ".codeplane" / ".cplignore").write_text("*.a\n")
+        (tmp_path / ".cplignore").write_text("*.b\n")
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / ".cplignore").write_text("*.c\n")
+
+        checker = IgnoreChecker(tmp_path)
+
+        # All three should be tracked
+        assert len(checker.cplignore_paths) == 3
+        assert tmp_path / ".codeplane" / ".cplignore" in checker.cplignore_paths
+        assert tmp_path / ".cplignore" in checker.cplignore_paths
+        assert tmp_path / "sub" / ".cplignore" in checker.cplignore_paths
+
+    def test_compute_combined_hash(self, tmp_path: Path) -> None:
+        """compute_combined_hash returns hash of all .cplignore contents."""
+        (tmp_path / ".cplignore").write_text("*.log\n")
+
+        checker = IgnoreChecker(tmp_path)
+        hash1 = checker.compute_combined_hash()
+
+        assert hash1 is not None
+        assert len(hash1) == 64  # SHA-256 hex digest
+
+        # Changing content changes hash
+        (tmp_path / ".cplignore").write_text("*.log\n*.tmp\n")
+        checker2 = IgnoreChecker(tmp_path)
+        hash2 = checker2.compute_combined_hash()
+
+        assert hash2 != hash1
+
+    def test_compute_combined_hash_none_when_no_files(self, tmp_path: Path) -> None:
+        """compute_combined_hash returns None when no .cplignore files exist."""
+        checker = IgnoreChecker(tmp_path)
+        assert checker.compute_combined_hash() is None
+
+    def test_compute_combined_hash_includes_multiple_files(self, tmp_path: Path) -> None:
+        """compute_combined_hash includes all .cplignore files."""
+        (tmp_path / ".cplignore").write_text("*.log\n")
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / ".cplignore").write_text("*.tmp\n")
+
+        checker = IgnoreChecker(tmp_path)
+        hash1 = checker.compute_combined_hash()
+
+        # Changing nested file changes overall hash
+        (tmp_path / "sub" / ".cplignore").write_text("*.bak\n")
+        checker2 = IgnoreChecker(tmp_path)
+        hash2 = checker2.compute_combined_hash()
+
+        assert hash2 != hash1
+
+    def test_nested_pattern_prefix_is_correct(self, tmp_path: Path) -> None:
+        """Nested .cplignore patterns are prefixed with relative directory."""
+        # Create deeply nested .cplignore
+        deep = tmp_path / "a" / "b" / "c"
+        deep.mkdir(parents=True)
+        (deep / ".cplignore").write_text("secret.txt\n")
+
+        checker = IgnoreChecker(tmp_path)
+
+        # Pattern "a/b/c/secret.txt" should match
+        assert checker.is_excluded_rel("a/b/c/secret.txt")
+        # But not same filename elsewhere
+        assert not checker.is_excluded_rel("secret.txt")
+        assert not checker.is_excluded_rel("a/secret.txt")

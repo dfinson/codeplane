@@ -83,14 +83,20 @@ PRUNABLE_DIRS: frozenset[str] = frozenset(
 class IgnoreChecker:
     """Checks if paths should be ignored based on patterns.
 
-    Loads patterns from .cplignore and accepts additional patterns
-    (e.g., UNIVERSAL_EXCLUDES) via constructor.
+    Loads patterns from .cplignore files anywhere in the repo (hierarchical,
+    like .gitignore) and accepts additional patterns via constructor.
 
     Pattern syntax:
     - Standard glob patterns (fnmatch)
     - Directory patterns ending in / match contents
     - Negation with ! prefix
+
+    .cplignore files themselves are NOT excluded - they need to be indexed
+    so file watchers can detect changes and trigger reindexing.
     """
+
+    # Filename for ignore files (like .gitignore but for CodePlane)
+    CPLIGNORE_NAME = ".cplignore"
 
     def __init__(
         self,
@@ -101,16 +107,84 @@ class IgnoreChecker:
     ) -> None:
         self._root = root
         self._patterns: list[str] = list(PRUNABLE_DIRS)
-        self._load_cplignore(root / ".codeplane" / ".cplignore")
+        self._cplignore_paths: list[Path] = []  # Track all loaded .cplignore files
+        self._load_cplignore_recursive(root)
         if respect_gitignore:
             self._load_gitignore_recursive(root)
         if extra_patterns:
             self._patterns.extend(extra_patterns)
 
-    def _load_cplignore(self, cplignore_path: Path) -> None:
-        if not cplignore_path.exists():
-            return
-        self._load_ignore_file(cplignore_path)
+    @property
+    def cplignore_paths(self) -> list[Path]:
+        """Return list of all .cplignore files that were loaded.
+
+        Used by Reconciler to track hashes and detect changes.
+        """
+        return self._cplignore_paths.copy()
+
+    def compute_combined_hash(self) -> str | None:
+        """Compute combined hash of all .cplignore file contents.
+
+        Returns a hash that changes if ANY .cplignore file changes.
+        Returns None if no .cplignore files exist.
+
+        Used by Reconciler to detect .cplignore changes and trigger reindex.
+        """
+        import hashlib
+
+        if not self._cplignore_paths:
+            return None
+
+        hasher = hashlib.sha256()
+        # Sort paths for deterministic ordering
+        for path in sorted(self._cplignore_paths):
+            try:
+                content = path.read_bytes()
+                # Include path in hash so moving files is detected
+                hasher.update(str(path).encode())
+                hasher.update(content)
+            except OSError:
+                # File was deleted between loading and hashing
+                hasher.update(str(path).encode())
+                hasher.update(b"__DELETED__")
+        return hasher.hexdigest()
+
+    def _load_cplignore_recursive(self, root: Path) -> None:
+        """Load .cplignore from root and all subdirectories.
+
+        Handles nested .cplignore files by prefixing patterns with their
+        relative directory path (same behavior as .gitignore).
+
+        Also loads legacy .codeplane/.cplignore if it exists.
+        """
+        # Load legacy .codeplane/.cplignore first (highest priority)
+        legacy_path = root / ".codeplane" / self.CPLIGNORE_NAME
+        if legacy_path.exists():
+            self._load_ignore_file(legacy_path)
+            self._cplignore_paths.append(legacy_path)
+
+        # Load root .cplignore (if not the same as legacy)
+        root_cplignore = root / self.CPLIGNORE_NAME
+        if root_cplignore.exists():
+            self._load_ignore_file(root_cplignore)
+            self._cplignore_paths.append(root_cplignore)
+
+        # Walk for nested .cplignore files
+        for dirpath, dirnames, filenames in root.walk():
+            # Skip prunable dirs (but allow walking into .codeplane)
+            dirnames[:] = [d for d in dirnames if d not in PRUNABLE_DIRS or d == ".codeplane"]
+
+            # Skip root (already loaded) and .codeplane (legacy already loaded)
+            if dirpath == root:
+                continue
+            if dirpath == root / ".codeplane":
+                continue
+
+            if self.CPLIGNORE_NAME in filenames:
+                cplignore_path = dirpath / self.CPLIGNORE_NAME
+                rel_dir = dirpath.relative_to(root)
+                self._load_ignore_file(cplignore_path, prefix=str(rel_dir))
+                self._cplignore_paths.append(cplignore_path)
 
     def _load_gitignore_recursive(self, root: Path) -> None:
         """Load .gitignore from root and all subdirectories.
