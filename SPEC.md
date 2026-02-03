@@ -396,30 +396,22 @@ RepoVersion = (HEAD SHA, .git/index stat metadata, submodule SHAs)
 
 ### 5.3 File Type Classification
 
-| Type | Defined By | Tracked In | Checked During Reconcile? | Indexed? |
-|---|---|---|---|---|
-| 1. Git-tracked | Git | Git index | Yes (stat + hash fallback) | Yes (shared and local) |
-| 2. CPL-tracked (Git-ignored) | `.cplignore` opt-in via negation patterns (e.g., `!.env.local`) | CPL overlay index | Yes (stat + hash) | Yes (local only) |
-| 3. Ignored | `.cplignore` hard-excluded | None | No | No |
+| Type | Defined By | Indexed? |
+|---|---|---|
+| 1. Indexable | All files not excluded by `.cplignore` or PRUNABLE_DIRS | Yes |
+| 2. Ignored | Excluded via `.cplignore` or PRUNABLE_DIRS | No |
 
-**Note:** To include a Git-ignored file in the local overlay index, add a negation pattern to `.cplignore`. For example, `!.env.local` will opt that file into CPL tracking even though it's Git-ignored.
+**Note:** Git-tracking is irrelevant for indexing. The index artifacts (`.codeplane/`) are gitignored by design, so it is safe to index sensitive files like `.env`. The only exclusion mechanism is `.cplignore` patterns and PRUNABLE_DIRS (e.g., `node_modules/`, `.git/`).
 
 ### 5.4 Change Detection Strategy
 
-Git-tracked files use Git-style status logic:
+All indexable files use stat-based change detection:
 
-1. Load Git index entries.
-2. For each tracked file:
+1. Walk all files (excluding PRUNABLE_DIRS and `.cplignore` patterns).
+2. For each file:
    - `stat()` compare to cached metadata (mtime, size, inode).
-   - If metadata differs → hash file content and compare to index SHA.
+   - If metadata differs → hash file content and compare to stored hash.
    - If confirmed changed → reindex file and invalidate relevant caches.
-
-CPL-tracked files (not in Git):
-
-- Maintain internal CPL index entries.
-- Compare stat against cached metadata.
-- If metadata differs → hash file content to confirm.
-- Reindex only changed files.
 
 ### 5.5 Reconciliation Triggers
 
@@ -502,83 +494,38 @@ def reconcile(repo):
 
 ---
 
-## 6. Ignore Rules, Two-Tier Index Model, and Security Posture
+## 6. Ignore Rules and Security Posture
 
 ### 6.1 Security Guarantees
 
-- No shared artifact includes secrets. Only Git-tracked files are eligible.
-- Local overlay index may include sensitive files, but it is never uploaded/shared/in CI artifacts.
+- Index artifacts (`.codeplane/`) are gitignored by design, so sensitive files can be indexed safely.
 - All indexing and mutation actions are scoped, audited, deterministic.
 
 ### 6.2 Threat Assumptions
 
 - Runs under trusted OS user account.
 - Does not defend against compromised OS or user session.
-- Assumes Git is canonical truth for tracked file truth.
 
 ### 6.3 `.cplignore` Role and Semantics
 
-`.cplignore` is a superset of `.gitignore` and defines what CodePlane never indexes.
+`.cplignore` defines what CodePlane never indexes. Follows `.gitignore` syntax.
 
-Security-focused posture defines `.cplignore` defaults that block secrets and noise. See defaults below.
+Security-focused posture defines `.cplignore` defaults that block noise. See defaults below.
 
-### 6.4 Indexing Model (Security View)
+### 6.4 Indexing Model
 
-| Tier | Contents | Shared? | Indexed? | Example Files |
-|---|---|---:|---:|---|
-| Git-tracked | Tracked source files | Yes | Yes | `src/main.py` |
-| CPL overlay | Git-ignored but whitelisted | No | Yes | `.env.local` |
-| Ignored (CPL) | Blocked via `.cplignore` | No | No | `secrets/`, `*.pem` |
+| Type | Defined By | Indexed? |
+|---|---|---|
+| Indexable | All files not excluded by `.cplignore` or PRUNABLE_DIRS | Yes |
+| Ignored | Blocked via `.cplignore` or PRUNABLE_DIRS | No |
 
-Shared artifact = Git-tracked only. Overlay = local-only. Ignored = excluded.
+Git-tracking is irrelevant for indexing. Index artifacts are gitignored, so it's safe to index all files including `.env`.
 
-### 6.5 Shared Artifact Safety
+### 6.5 `.cplignore` Defaults
 
-- Inclusion rule: Only files explicitly tracked by Git are considered.
-- Build rule: CI artifact construction begins from a clean Git clone.
-- Validation rule: Enterprises can hash-check artifacts and run secret scanners.
-
-### 6.6 `.gitignore` Defaults (Security-Relevant)
-
-Recommended baseline:
+Default ignore patterns for efficiency (block noisy directories):
 
 ```
-# Secrets and tokens
-.env
-*.pem
-*.key
-*.p12
-*.crt
-*.aws
-
-# Build and runtime artifacts
-node_modules/
-dist/
-build/
-.venv/
-__pycache__/
-*.pyc
-
-# IDE and OS junk
-.vscode/
-.idea/
-.DS_Store
-*.log
-*.lock
-```
-
-### 6.7 `.cplignore` Defaults (Security + Efficiency)
-
-Superset ignore file blocks noisy, unsafe, irrelevant paths:
-
-```
-# Always ignored for indexing
-.env
-*.pem
-*.key
-*.p12
-*.crt
-*.aws
 node_modules/
 dist/
 build/
@@ -590,29 +537,18 @@ coverage/
 pytest_cache/
 ```
 
-These files are never indexed even locally.
-
-### 6.8 Failure Modes and Protections
+### 6.6 Failure Modes and Protections
 
 | Misconfig | Result | Mitigation |
 |---|---|---|
-| Secrets committed to Git | Artifact leaks secret | Prevent via pre-commit hooks, Git scanning |
-| Missing `.cplignore` | Sensitive files indexed locally | Defaults applied automatically |
-| Lax Git hygiene | Build includes unintended files | Clean clone + hash match required |
+| Missing `.cplignore` | All files indexed (may be slow) | Defaults applied automatically |
 
-### 6.9 Security-Auditability Notes
+### 6.7 Security-Auditability Notes
 
 - All mutations emit structured deltas.
 - Index is deterministic and reproducible.
 - Operation history is append-only (SQLite-backed).
 - No automatic retries or implicit mutations.
-
-### 6.10 `.env` Overlay Indexing: Resolved
-
-One source explicitly stated local overlay may include `.env` and local config.
-Another source's `.cplignore` default explicitly blocks `.env` from indexing even locally.
-
-**Resolution:** Default-blocked in `.cplignore` for security. Users who need `.env` indexed locally can explicitly whitelist via negation pattern (e.g., `!.env` or `!.env.local`) in `.cplignore`. This preserves security-first defaults while allowing explicit opt-in.
 
 ---
 
