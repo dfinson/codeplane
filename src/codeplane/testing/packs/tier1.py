@@ -19,6 +19,7 @@ import shutil
 from pathlib import Path
 from typing import Literal
 
+from codeplane.index._internal.ignore import PRUNABLE_DIRS
 from codeplane.testing.models import ParsedTestCase, ParsedTestSuite, TestTarget
 from codeplane.testing.runner_pack import (
     MarkerRule,
@@ -27,6 +28,33 @@ from codeplane.testing.runner_pack import (
     RunnerPack,
     runner_registry,
 )
+
+
+def _is_prunable_path(
+    path: Path,
+    workspace_root: Path,
+    *,
+    allowed_dirs: frozenset[str] | None = None,
+) -> bool:
+    """Check if path contains any prunable directory components.
+
+    Args:
+        path: Path to check
+        workspace_root: Root directory for relative path calculation
+        allowed_dirs: Optional set of directories that should be allowed
+            even if they appear in PRUNABLE_DIRS (e.g., 'pkg' for Go)
+    """
+    try:
+        rel = path.relative_to(workspace_root)
+        for part in rel.parts:
+            if part in PRUNABLE_DIRS:
+                if allowed_dirs and part in allowed_dirs:
+                    continue
+                return True
+        return False
+    except ValueError:
+        return True
+
 
 # =============================================================================
 # Python - pytest
@@ -86,6 +114,9 @@ class PytestPack(RunnerPack):
 
         for pattern in patterns:
             for path in workspace_root.glob(pattern):
+                # Skip prunable directories (.venv, __pycache__, etc.)
+                if _is_prunable_path(path, workspace_root):
+                    continue
                 if path.name.startswith("_") or path.name == "conftest.py":
                     continue
                 rel = str(path.relative_to(workspace_root))
@@ -186,7 +217,7 @@ class JestPack(RunnerPack):
 
         for pattern in patterns:
             for path in workspace_root.glob(pattern):
-                if "node_modules" in str(path):
+                if _is_prunable_path(path, workspace_root):
                     continue
                 rel = str(path.relative_to(workspace_root))
                 if rel in seen:
@@ -331,7 +362,7 @@ class VitestPack(RunnerPack):
 
         for pattern in patterns:
             for path in workspace_root.glob(pattern):
-                if "node_modules" in str(path):
+                if _is_prunable_path(path, workspace_root):
                     continue
                 rel = str(path.relative_to(workspace_root))
                 if rel in seen:
@@ -417,9 +448,11 @@ class GoTestPack(RunnerPack):
     async def discover(self, workspace_root: Path) -> list[TestTarget]:
         targets: list[TestTarget] = []
         seen_packages: set[str] = set()
+        # Go standard directories that may be in PRUNABLE_DIRS (e.g., 'pkg' for Ruby)
+        go_allowed = frozenset({"pkg", "internal", "cmd"})
 
         for path in workspace_root.glob("**/*_test.go"):
-            if "vendor" in str(path):
+            if _is_prunable_path(path, workspace_root, allowed_dirs=go_allowed):
                 continue
             pkg_dir = path.parent
             rel_pkg = str(pkg_dir.relative_to(workspace_root))
@@ -931,6 +964,8 @@ class DotnetTestPack(RunnerPack):
         targets: list[TestTarget] = []
         # Find test projects
         for csproj in workspace_root.glob("**/*.csproj"):
+            if _is_prunable_path(csproj, workspace_root):
+                continue
             try:
                 content = csproj.read_text()
                 # Check if it's a test project
@@ -1122,6 +1157,8 @@ class RSpecPack(RunnerPack):
     async def discover(self, workspace_root: Path) -> list[TestTarget]:
         targets: list[TestTarget] = []
         for path in workspace_root.glob("spec/**/*_spec.rb"):
+            if _is_prunable_path(path, workspace_root):
+                continue
             rel = str(path.relative_to(workspace_root))
             targets.append(
                 TestTarget(
@@ -1213,6 +1250,8 @@ class PHPUnitPack(RunnerPack):
     async def discover(self, workspace_root: Path) -> list[TestTarget]:
         targets: list[TestTarget] = []
         for path in workspace_root.glob("tests/**/*Test.php"):
+            if _is_prunable_path(path, workspace_root):
+                continue
             rel = str(path.relative_to(workspace_root))
             targets.append(
                 TestTarget(

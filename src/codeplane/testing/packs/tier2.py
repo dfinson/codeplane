@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 from typing import Literal
 
+from codeplane.index._internal.ignore import PRUNABLE_DIRS
 from codeplane.testing.models import ParsedTestCase, ParsedTestSuite, TestTarget
 from codeplane.testing.runner_pack import (
     MarkerRule,
@@ -24,6 +25,33 @@ from codeplane.testing.runner_pack import (
     RunnerPack,
     runner_registry,
 )
+
+
+def _is_prunable_path(
+    path: Path,
+    workspace_root: Path,
+    *,
+    allowed_dirs: frozenset[str] | None = None,
+) -> bool:
+    """Check if path contains any prunable directory components.
+
+    Args:
+        path: Path to check
+        workspace_root: Root directory for relative path calculation
+        allowed_dirs: Optional set of directories that should be allowed
+            even if they appear in PRUNABLE_DIRS
+    """
+    try:
+        rel = path.relative_to(workspace_root)
+        for part in rel.parts:
+            if part in PRUNABLE_DIRS:
+                if allowed_dirs and part in allowed_dirs:
+                    continue
+                return True
+        return False
+    except ValueError:
+        return True
+
 
 # =============================================================================
 # Kotlin - Gradle with Kotlin DSL
@@ -337,6 +365,8 @@ class DartTestPack(RunnerPack):
     async def discover(self, workspace_root: Path) -> list[TestTarget]:
         targets: list[TestTarget] = []
         for path in workspace_root.glob("test/**/*_test.dart"):
+            if _is_prunable_path(path, workspace_root):
+                continue
             rel = str(path.relative_to(workspace_root))
             targets.append(
                 TestTarget(
@@ -450,6 +480,8 @@ class FlutterTestPack(RunnerPack):
     async def discover(self, workspace_root: Path) -> list[TestTarget]:
         targets: list[TestTarget] = []
         for path in workspace_root.glob("test/**/*_test.dart"):
+            if _is_prunable_path(path, workspace_root):
+                continue
             rel = str(path.relative_to(workspace_root))
             targets.append(
                 TestTarget(
@@ -522,6 +554,8 @@ class BatsPack(RunnerPack):
     async def discover(self, workspace_root: Path) -> list[TestTarget]:
         targets: list[TestTarget] = []
         for path in workspace_root.glob("**/*.bats"):
+            if _is_prunable_path(path, workspace_root):
+                continue
             rel = str(path.relative_to(workspace_root))
             targets.append(
                 TestTarget(
@@ -597,6 +631,8 @@ class PesterPack(RunnerPack):
     async def discover(self, workspace_root: Path) -> list[TestTarget]:
         targets: list[TestTarget] = []
         for path in workspace_root.glob("**/*.Tests.ps1"):
+            if _is_prunable_path(path, workspace_root):
+                continue
             rel = str(path.relative_to(workspace_root))
             targets.append(
                 TestTarget(
@@ -679,6 +715,8 @@ class BustedPack(RunnerPack):
     async def discover(self, workspace_root: Path) -> list[TestTarget]:
         targets: list[TestTarget] = []
         for path in workspace_root.glob("**/*_spec.lua"):
+            if _is_prunable_path(path, workspace_root):
+                continue
             rel = str(path.relative_to(workspace_root))
             targets.append(
                 TestTarget(

@@ -33,6 +33,7 @@ class TestRunParams(BaseParams):
     parallelism: int | None = None
     timeout_sec: int | None = None
     fail_fast: bool = False
+    coverage: bool = False
 
 
 class TestStatusParams(BaseParams):
@@ -89,6 +90,7 @@ async def test_run(ctx: AppContext, params: TestRunParams) -> dict[str, Any]:
         parallelism=params.parallelism,
         timeout_sec=params.timeout_sec,
         fail_fast=params.fail_fast,
+        coverage=params.coverage,
     )
     return _serialize_test_result(result)
 
@@ -169,5 +171,7 @@ def _serialize_test_result(result: TestResult) -> dict[str, Any]:
                 }
                 for d in status.diagnostics
             ]
+        if status.coverage:
+            output["run_status"]["coverage"] = status.coverage
 
     return output

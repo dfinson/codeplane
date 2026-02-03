@@ -15,8 +15,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from codeplane.index._internal.ignore import PRUNABLE_DIRS
+
 # Import packs to trigger registration
 from codeplane.testing import packs as _packs  # noqa: F401
+from codeplane.testing.coverage import (
+    CoverageArtifact,
+    CoverageCapability,
+    PackRuntime,
+    get_emitter,
+)
 from codeplane.testing.models import (
     ExecutionContext,
     ExecutionDiagnostic,
@@ -116,10 +124,28 @@ class DetectedWorkspace:
     confidence: float
 
 
+def _is_prunable_path(rel_path: Path) -> bool:
+    """Check if relative path contains any prunable directory components.
+
+    Note: 'packages' is in PRUNABLE_DIRS for .NET, but is also a common JS
+    monorepo pattern. We only consider a path prunable if it has nested
+    prunable dirs or is clearly not a project directory.
+    """
+    parts = rel_path.parts
+    for part in parts:
+        # Skip 'packages' at root level since it's commonly used in JS monorepos
+        if part == "packages" and parts.index(part) == 0:
+            continue
+        if part in PRUNABLE_DIRS:
+            return True
+    return False
+
+
 def detect_workspaces(repo_root: Path) -> list[DetectedWorkspace]:
     """Detect all workspaces and their runners in a repo.
 
     Supports monorepos by finding nested workspace roots.
+    Respects PRUNABLE_DIRS to avoid scanning .venv, node_modules, etc.
     """
     workspaces: list[DetectedWorkspace] = []
 
@@ -150,7 +176,11 @@ def detect_workspaces(repo_root: Path) -> list[DetectedWorkspace]:
             for pattern in patterns:
                 # Expand glob patterns
                 for ws_path in repo_root.glob(pattern):
-                    if ws_path.is_dir() and (ws_path / "package.json").exists():
+                    if (
+                        ws_path.is_dir()
+                        and not _is_prunable_path(ws_path.relative_to(repo_root))
+                        and (ws_path / "package.json").exists()
+                    ):
                         workspace_dirs.add(ws_path)
         except Exception:
             pass
@@ -164,7 +194,11 @@ def detect_workspaces(repo_root: Path) -> list[DetectedWorkspace]:
             data = yaml.safe_load(pnpm_ws.read_text()) or {}
             for pattern in data.get("packages", []):
                 for ws_path in repo_root.glob(pattern):
-                    if ws_path.is_dir() and (ws_path / "package.json").exists():
+                    if (
+                        ws_path.is_dir()
+                        and not _is_prunable_path(ws_path.relative_to(repo_root))
+                        and (ws_path / "package.json").exists()
+                    ):
                         workspace_dirs.add(ws_path)
         except Exception:
             pass
@@ -175,9 +209,13 @@ def detect_workspaces(repo_root: Path) -> list[DetectedWorkspace]:
         # Nx projects can be in apps/, libs/, packages/
         for subdir in ["apps", "libs", "packages", "projects"]:
             for project_dir in (repo_root / subdir).glob("*"):
-                if project_dir.is_dir() and (
-                    (project_dir / "package.json").exists()
-                    or (project_dir / "project.json").exists()
+                if (
+                    project_dir.is_dir()
+                    and not _is_prunable_path(project_dir.relative_to(repo_root))
+                    and (
+                        (project_dir / "package.json").exists()
+                        or (project_dir / "project.json").exists()
+                    )
                 ):
                     workspace_dirs.add(project_dir)
 
@@ -188,7 +226,11 @@ def detect_workspaces(repo_root: Path) -> list[DetectedWorkspace]:
         # But also check common patterns
         for subdir in ["apps", "packages"]:
             for project_dir in (repo_root / subdir).glob("*"):
-                if project_dir.is_dir() and (project_dir / "package.json").exists():
+                if (
+                    project_dir.is_dir()
+                    and not _is_prunable_path(project_dir.relative_to(repo_root))
+                    and (project_dir / "package.json").exists()
+                ):
                     workspace_dirs.add(project_dir)
 
     # Check for Lerna
@@ -198,7 +240,11 @@ def detect_workspaces(repo_root: Path) -> list[DetectedWorkspace]:
             data = json.loads(lerna_json.read_text())
             for pattern in data.get("packages", ["packages/*"]):
                 for ws_path in repo_root.glob(pattern):
-                    if ws_path.is_dir() and (ws_path / "package.json").exists():
+                    if (
+                        ws_path.is_dir()
+                        and not _is_prunable_path(ws_path.relative_to(repo_root))
+                        and (ws_path / "package.json").exists()
+                    ):
                         workspace_dirs.add(ws_path)
         except Exception:
             pass
@@ -219,9 +265,13 @@ def detect_workspaces(repo_root: Path) -> list[DetectedWorkspace]:
 
     # Legacy: Check for packages/* pattern (fallback)
     for pkg_json in repo_root.glob("packages/*/package.json"):
-        workspace_dirs.add(pkg_json.parent)
+        if not _is_prunable_path(pkg_json.parent.relative_to(repo_root)):
+            workspace_dirs.add(pkg_json.parent)
 
     # Detect runners in each workspace
+    # Note: workspace_dirs comes from intentional workspace detection (package.json workspaces,
+    # monorepo configs, etc.) so we don't re-filter them. The prunable path check was already
+    # applied during collection where appropriate.
     for ws_root in workspace_dirs:
         for pack_class, confidence in runner_registry.detect_all(ws_root):
             workspaces.append(
@@ -310,8 +360,20 @@ class TestOps:
         parallelism: int | None = None,
         timeout_sec: int | None = None,
         fail_fast: bool = False,
+        coverage: bool = False,
     ) -> TestResult:
-        """Run tests using runner packs."""
+        """Run tests using runner packs.
+
+        Args:
+            targets: Specific target IDs to run, or None for all
+            pattern: Test name pattern filter
+            tags: Test tag filters
+            failed_only: Only run previously failed tests
+            parallelism: Max concurrent test invocations
+            timeout_sec: Per-target timeout
+            fail_fast: Stop on first failure
+            coverage: Enable coverage collection if supported
+        """
         run_id = str(uuid.uuid4())[:8]
         cancel_event = asyncio.Event()
 
@@ -351,6 +413,7 @@ class TestOps:
                 parallelism=parallelism or 4,
                 timeout_sec=timeout_sec or 300,
                 fail_fast=fail_fast,
+                coverage=coverage,
             )
         )
 
@@ -387,10 +450,12 @@ class TestOps:
         parallelism: int,
         timeout_sec: int,
         fail_fast: bool,
+        coverage: bool,
     ) -> TestRunStatus:
         """Execute tests grouped by runner pack."""
         start_time = time.time()
         diagnostics: list[ExecutionDiagnostic] = []
+        coverage_artifacts: list[CoverageArtifact] = []
 
         # Group targets by (workspace_root, runner_pack_id)
         groups: dict[tuple[str, str], list[TestTarget]] = {}
@@ -401,18 +466,21 @@ class TestOps:
         # Create semaphore for parallelism
         sem = asyncio.Semaphore(parallelism)
 
-        async def run_target(target: TestTarget) -> tuple[TestTarget, ParsedTestSuite | None]:
+        async def run_target(
+            target: TestTarget,
+        ) -> tuple[TestTarget, ParsedTestSuite | None, CoverageArtifact | None]:
             if cancel_event.is_set():
-                return (target, None)
+                return (target, None, None)
             async with sem:
-                result = await self._run_single_target(
+                result, cov_artifact = await self._run_single_target(
                     target=target,
                     artifact_dir=artifact_dir,
                     pattern=pattern,
                     tags=tags,
                     timeout_sec=timeout_sec,
+                    coverage=coverage,
                 )
-                return (target, result)
+                return (target, result, cov_artifact)
 
         # Run each group
         for (_ws_root, _pack_id), group_targets in groups.items():
@@ -427,7 +495,9 @@ class TestOps:
                         t.cancel()
                     break
 
-                target, result = await coro
+                target, result, cov_artifact = await coro
+                if cov_artifact:
+                    coverage_artifacts.append(cov_artifact)
                 if result:
                     progress.targets.completed += 1
                     progress.cases.passed += result.passed
@@ -477,7 +547,13 @@ class TestOps:
         if run_id in self._active_runs:
             del self._active_runs[run_id]
 
-        return TestRunStatus(
+        # Convert coverage artifacts to serializable dicts
+        coverage_dicts = [
+            {"format": c.format, "path": str(c.path), "pack_id": c.pack_id}
+            for c in coverage_artifacts
+        ]
+
+        final_status = TestRunStatus(
             run_id=run_id,
             status=status,
             progress=progress,
@@ -485,7 +561,13 @@ class TestOps:
             diagnostics=diagnostics,
             duration_seconds=duration,
             artifact_dir=str(artifact_dir),
+            coverage=coverage_dicts,
         )
+
+        # Persist result to artifacts for later retrieval
+        self._persist_result(artifact_dir, final_status)
+
+        return final_status
 
     async def _run_single_target(
         self,
@@ -494,18 +576,26 @@ class TestOps:
         pattern: str | None,
         tags: list[str] | None,
         timeout_sec: int,
-    ) -> ParsedTestSuite:
-        """Run a single test target using its runner pack."""
+        coverage: bool,
+    ) -> tuple[ParsedTestSuite, CoverageArtifact | None]:
+        """Run a single test target using its runner pack.
+
+        Returns:
+            Tuple of (test results, coverage artifact if collected)
+        """
         pack_class = runner_registry.get(target.runner_pack_id)
         if not pack_class:
-            return ParsedTestSuite(
-                name=target.selector,
-                errors=1,
-                error_type="unknown",
-                error_detail=f"Runner pack not found: {target.runner_pack_id}",
-                suggested_action="Check that the runner pack is registered",
-                target_selector=target.selector,
-                workspace_root=target.workspace_root,
+            return (
+                ParsedTestSuite(
+                    name=target.selector,
+                    errors=1,
+                    error_type="unknown",
+                    error_detail=f"Runner pack not found: {target.runner_pack_id}",
+                    suggested_action="Check that the runner pack is registered",
+                    target_selector=target.selector,
+                    workspace_root=target.workspace_root,
+                ),
+                None,
             )
 
         pack = pack_class()
@@ -523,32 +613,58 @@ class TestOps:
         )
 
         if not cmd:
-            return ParsedTestSuite(
-                name=target.selector,
-                errors=1,
-                error_type="unknown",
-                error_detail="Runner pack returned empty command",
-                suggested_action="Check target configuration",
-                target_selector=target.selector,
-                workspace_root=target.workspace_root,
+            return (
+                ParsedTestSuite(
+                    name=target.selector,
+                    errors=1,
+                    error_type="unknown",
+                    error_detail="Runner pack returned empty command",
+                    suggested_action="Check target configuration",
+                    target_selector=target.selector,
+                    workspace_root=target.workspace_root,
+                ),
+                None,
             )
+
+        # Handle coverage
+        cov_artifact: CoverageArtifact | None = None
+        emitter = get_emitter(target.runner_pack_id) if coverage else None
+        if emitter:
+            # Check capability
+            runtime = PackRuntime(
+                workspace_root=Path(target.workspace_root),
+                runner_available=True,
+                coverage_tools={},  # TODO: detect coverage tools
+            )
+            capability = emitter.capability(runtime)
+            if capability == CoverageCapability.AVAILABLE:
+                cmd = emitter.modify_command(cmd, artifact_dir)
+                cov_artifact = CoverageArtifact(
+                    format=emitter.format_id,
+                    path=emitter.artifact_path(artifact_dir),
+                    pack_id=target.runner_pack_id,
+                    invocation_id=target.target_id,
+                )
 
         # Verify executable exists
         executable = cmd[0]
         resolved_executable = shutil.which(executable)
         if not resolved_executable:
-            return ParsedTestSuite(
-                name=target.selector,
-                errors=1,
-                error_type="command_not_found",
-                error_detail=f"Executable not found: {executable}",
-                suggested_action=f"Install {executable} or activate the correct environment",
-                execution=ExecutionContext(
-                    command=cmd,
-                    working_directory=str(pack.get_cwd(target)),
+            return (
+                ParsedTestSuite(
+                    name=target.selector,
+                    errors=1,
+                    error_type="command_not_found",
+                    error_detail=f"Executable not found: {executable}",
+                    suggested_action=f"Install {executable} or activate the correct environment",
+                    execution=ExecutionContext(
+                        command=cmd,
+                        working_directory=str(pack.get_cwd(target)),
+                    ),
+                    target_selector=target.selector,
+                    workspace_root=target.workspace_root,
                 ),
-                target_selector=target.selector,
-                workspace_root=target.workspace_root,
+                None,
             )
 
         cwd = pack.get_cwd(target)
@@ -610,41 +726,165 @@ class TestOps:
                 result.suggested_action = "Check stderr for error messages"
                 result.errors = 1
 
-            return result
+            return (result, cov_artifact)
 
         except TimeoutError:
-            return ParsedTestSuite(
-                name=target.selector,
-                errors=1,
-                error_type="timeout",
-                error_detail=f"Command timed out after {timeout_sec} seconds",
-                suggested_action="Increase timeout or run fewer tests",
-                execution=ExecutionContext(
-                    command=cmd,
-                    working_directory=str(cwd),
-                    raw_stdout=stdout if stdout else None,
-                    raw_stderr=stderr if stderr else None,
+            return (
+                ParsedTestSuite(
+                    name=target.selector,
+                    errors=1,
+                    error_type="timeout",
+                    error_detail=f"Command timed out after {timeout_sec} seconds",
+                    suggested_action="Increase timeout or run fewer tests",
+                    execution=ExecutionContext(
+                        command=cmd,
+                        working_directory=str(cwd),
+                        raw_stdout=stdout if stdout else None,
+                        raw_stderr=stderr if stderr else None,
+                    ),
+                    target_selector=target.selector,
+                    workspace_root=target.workspace_root,
                 ),
-                target_selector=target.selector,
-                workspace_root=target.workspace_root,
+                None,
             )
         except OSError as e:
-            return ParsedTestSuite(
-                name=target.selector,
-                errors=1,
-                error_type="command_failed",
-                error_detail=f"OS error executing command: {e}",
-                suggested_action="Check that the command and working directory are valid",
-                execution=ExecutionContext(
-                    command=cmd,
-                    working_directory=str(cwd),
+            return (
+                ParsedTestSuite(
+                    name=target.selector,
+                    errors=1,
+                    error_type="command_failed",
+                    error_detail=f"OS error executing command: {e}",
+                    suggested_action="Check that the command and working directory are valid",
+                    execution=ExecutionContext(
+                        command=cmd,
+                        working_directory=str(cwd),
+                    ),
+                    target_selector=target.selector,
+                    workspace_root=target.workspace_root,
                 ),
-                target_selector=target.selector,
-                workspace_root=target.workspace_root,
+                None,
             )
+
+    def _persist_result(self, artifact_dir: Path, status: TestRunStatus) -> None:
+        """Persist test run result to artifact directory."""
+        result_path = artifact_dir / "result.json"
+        result_data = {
+            "run_id": status.run_id,
+            "status": status.status,
+            "duration_seconds": status.duration_seconds,
+            "artifact_dir": status.artifact_dir,
+            "progress": {
+                "targets": {
+                    "total": status.progress.targets.total if status.progress else 0,
+                    "completed": status.progress.targets.completed if status.progress else 0,
+                    "running": status.progress.targets.running if status.progress else 0,
+                    "failed": status.progress.targets.failed if status.progress else 0,
+                },
+                "cases": {
+                    "total": status.progress.cases.total if status.progress else 0,
+                    "passed": status.progress.cases.passed if status.progress else 0,
+                    "failed": status.progress.cases.failed if status.progress else 0,
+                    "skipped": status.progress.cases.skipped if status.progress else 0,
+                    "errors": status.progress.cases.errors if status.progress else 0,
+                },
+            }
+            if status.progress
+            else None,
+            "failures": [
+                {
+                    "name": f.name,
+                    "path": f.path,
+                    "line": f.line,
+                    "message": f.message,
+                    "traceback": f.traceback,
+                    "classname": f.classname,
+                    "duration_seconds": f.duration_seconds,
+                }
+                for f in (status.failures or [])
+            ],
+            "diagnostics": [
+                {
+                    "target_id": d.target_id,
+                    "error_type": d.error_type,
+                    "error_detail": d.error_detail,
+                    "suggested_action": d.suggested_action,
+                    "command": d.command,
+                    "working_directory": d.working_directory,
+                    "exit_code": d.exit_code,
+                }
+                for d in (status.diagnostics or [])
+            ],
+        }
+        result_path.write_text(json.dumps(result_data, indent=2))
+
+    def _load_result(self, artifact_dir: Path) -> TestRunStatus | None:
+        """Load test run result from artifact directory."""
+        result_path = artifact_dir / "result.json"
+        if not result_path.exists():
+            return None
+
+        try:
+            data = json.loads(result_path.read_text())
+            progress = None
+            if data.get("progress"):
+                p = data["progress"]
+                progress = TestProgress(
+                    targets=TargetProgress(
+                        total=p["targets"]["total"],
+                        completed=p["targets"]["completed"],
+                        running=p["targets"]["running"],
+                        failed=p["targets"]["failed"],
+                    ),
+                    cases=TestCaseProgress(
+                        total=p["cases"]["total"],
+                        passed=p["cases"]["passed"],
+                        failed=p["cases"]["failed"],
+                        skipped=p["cases"]["skipped"],
+                        errors=p["cases"]["errors"],
+                    ),
+                )
+
+            failures = [
+                TestFailure(
+                    name=f["name"],
+                    path=f["path"],
+                    line=f.get("line"),
+                    message=f["message"],
+                    traceback=f.get("traceback"),
+                    classname=f.get("classname"),
+                    duration_seconds=f.get("duration_seconds"),
+                )
+                for f in data.get("failures", [])
+            ]
+
+            diagnostics = [
+                ExecutionDiagnostic(
+                    target_id=d["target_id"],
+                    error_type=d["error_type"],
+                    error_detail=d.get("error_detail"),
+                    suggested_action=d.get("suggested_action"),
+                    command=d.get("command"),
+                    working_directory=d.get("working_directory"),
+                    exit_code=d.get("exit_code"),
+                )
+                for d in data.get("diagnostics", [])
+            ]
+
+            return TestRunStatus(
+                run_id=data["run_id"],
+                status=data["status"],
+                progress=progress,
+                failures=failures,
+                diagnostics=diagnostics,
+                duration_seconds=data.get("duration_seconds"),
+                artifact_dir=data.get("artifact_dir"),
+            )
+        except (json.JSONDecodeError, KeyError):
+            return None
 
     async def status(self, run_id: str) -> TestResult:
         """Get status of a test run."""
+        # Check active runs first
         if run_id in self._active_runs:
             active = self._active_runs[run_id]
             duration = time.time() - active.start_time
@@ -670,6 +910,14 @@ class TestOps:
                 ),
             )
 
+        # Check for persisted result in artifacts
+        artifact_dir = self._artifacts_base / run_id
+        if artifact_dir.exists():
+            loaded_status = self._load_result(artifact_dir)
+            if loaded_status:
+                return TestResult(action="status", run_status=loaded_status)
+
+        # Run not found
         return TestResult(
             action="status",
             run_status=TestRunStatus(run_id=run_id, status="completed"),

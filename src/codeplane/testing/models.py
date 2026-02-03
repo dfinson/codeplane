@@ -250,6 +250,8 @@ class TestRunStatus:
     artifact_dir: str | None = None  # .codeplane/artifacts/tests/<run_id>/
     # Execution diagnostics for errors that aren't test failures
     diagnostics: list[ExecutionDiagnostic] = field(default_factory=list)
+    # Coverage artifacts if coverage was enabled
+    coverage: list[dict[str, str]] = field(default_factory=list)  # [{format, path, pack_id}]
 
 
 @dataclass
