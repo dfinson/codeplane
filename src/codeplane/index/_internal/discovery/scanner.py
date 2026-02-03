@@ -1,24 +1,24 @@
 """Context discovery for automatic project boundary detection.
 
-This module implements Phase A of SPEC.md §8.4: Discovery (Candidate Generation).
-It scans for marker files (package.json, go.mod, Cargo.toml, etc.) and generates
-CandidateContext objects.
-
-Key concepts:
-- Tier 1 markers: Workspace fences (define authority boundaries)
-- Tier 2 markers: Package roots (potential contexts)
-- Ambient families: Fallback contexts at repo root for marker-less families
+Implements Phase A of SPEC.md §8.4: Discovery (Candidate Generation).
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from codeplane.index._internal.ignore import PRUNABLE_DIRS
+from codeplane.core.excludes import PRUNABLE_DIRS, UNIVERSAL_EXCLUDE_GLOBS
+from codeplane.core.languages import (
+    AMBIENT_FAMILIES as _AMBIENT_FAMILIES_STR,
+)
+from codeplane.core.languages import (
+    build_include_specs,
+    build_marker_definitions,
+)
 from codeplane.index.models import (
     CandidateContext,
     LanguageFamily,
@@ -26,280 +26,77 @@ from codeplane.index.models import (
     ProbeStatus,
 )
 
-if TYPE_CHECKING:
-    pass
+# Build from canonical registry
+_MARKER_DEFS = build_marker_definitions()
+_INCLUDE_SPECS = build_include_specs()
+UNIVERSAL_EXCLUDES: list[str] = list(UNIVERSAL_EXCLUDE_GLOBS)
 
+# Convert to LanguageFamily-keyed dicts for runtime use
+MARKER_DEFINITIONS: dict[LanguageFamily, dict[MarkerTier, list[str]]] = {}
+for family_str, tiers in _MARKER_DEFS.items():
+    with contextlib.suppress(ValueError):
+        family = LanguageFamily(family_str)
+        MARKER_DEFINITIONS[family] = {
+            MarkerTier.WORKSPACE: list(tiers["workspace"]),
+            MarkerTier.PACKAGE: list(tiers["package"]),
+        }
 
-# Marker file definitions per language family
-# WORKSPACE: Monorepo/workspace boundaries that define authority
-# PACKAGE: Individual package roots (potential contexts)
-MARKER_DEFINITIONS: dict[LanguageFamily, dict[MarkerTier, list[str]]] = {
-    LanguageFamily.JAVASCRIPT: {
-        MarkerTier.WORKSPACE: [
-            "pnpm-workspace.yaml",
-            "lerna.json",
-            "nx.json",
-            "turbo.json",
-            "rush.json",
-        ],
-        MarkerTier.PACKAGE: [
-            "package.json",
-            "deno.json",
-            "deno.jsonc",
-            "tsconfig.json",
-            "jsconfig.json",
-        ],
-    },
-    LanguageFamily.PYTHON: {
-        MarkerTier.WORKSPACE: [
-            "uv.lock",
-            "poetry.lock",
-            "Pipfile.lock",
-        ],
-        MarkerTier.PACKAGE: [
-            "pyproject.toml",
-            "setup.py",
-            "setup.cfg",
-            "requirements.txt",
-            "Pipfile",
-        ],
-    },
-    LanguageFamily.GO: {
-        MarkerTier.WORKSPACE: ["go.work"],
-        MarkerTier.PACKAGE: ["go.mod"],
-    },
-    LanguageFamily.RUST: {
-        MarkerTier.WORKSPACE: [],  # Cargo.toml with [workspace] is handled specially
-        MarkerTier.PACKAGE: ["Cargo.toml"],
-    },
-    LanguageFamily.JVM: {
-        MarkerTier.WORKSPACE: ["settings.gradle", "settings.gradle.kts"],
-        MarkerTier.PACKAGE: [
-            "build.gradle",
-            "build.gradle.kts",
-            "pom.xml",
-            "build.sbt",
-        ],
-    },
-    LanguageFamily.DOTNET: {
-        MarkerTier.WORKSPACE: [],  # .sln files handled via glob
-        MarkerTier.PACKAGE: [],  # .csproj, .fsproj handled via glob
-    },
-    LanguageFamily.CPP: {
-        MarkerTier.WORKSPACE: [],
-        MarkerTier.PACKAGE: [
-            "CMakeLists.txt",
-            "Makefile",
-            "meson.build",
-            "BUILD",
-            "BUILD.bazel",
-            "compile_commands.json",
-        ],
-    },
-    LanguageFamily.TERRAFORM: {
-        MarkerTier.WORKSPACE: [".terraform.lock.hcl"],
-        MarkerTier.PACKAGE: ["main.tf", "versions.tf"],
-    },
-    LanguageFamily.RUBY: {
-        MarkerTier.WORKSPACE: ["Gemfile.lock"],
-        MarkerTier.PACKAGE: ["Gemfile"],
-    },
-    LanguageFamily.PHP: {
-        MarkerTier.WORKSPACE: ["composer.lock"],
-        MarkerTier.PACKAGE: ["composer.json"],
-    },
-    LanguageFamily.CONFIG: {
-        MarkerTier.WORKSPACE: ["flake.lock"],
-        MarkerTier.PACKAGE: ["flake.nix"],
-    },
-    LanguageFamily.PROTOBUF: {
-        MarkerTier.WORKSPACE: ["buf.work.yaml"],
-        MarkerTier.PACKAGE: ["buf.yaml"],
-    },
-}
+INCLUDE_SPECS: dict[LanguageFamily, list[str]] = {}
+for family_str, globs in _INCLUDE_SPECS.items():
+    with contextlib.suppress(ValueError):
+        INCLUDE_SPECS[LanguageFamily(family_str)] = list(globs)
 
-# Families that get ambient (root-level) contexts if no markers found
+# Convert to LanguageFamily enum for runtime use
 AMBIENT_FAMILIES: frozenset[LanguageFamily] = frozenset(
-    {
-        LanguageFamily.SQL,
-        LanguageFamily.DOCKER,
-        LanguageFamily.MARKDOWN,
-        LanguageFamily.JSON_YAML,
-        LanguageFamily.GRAPHQL,
-    }
+    LanguageFamily(f) for f in _AMBIENT_FAMILIES_STR if f in [e.value for e in LanguageFamily]
 )
-
-# Include specs per family (canonical globs from SPEC.md §8.4.4)
-INCLUDE_SPECS: dict[LanguageFamily, list[str]] = {
-    LanguageFamily.JAVASCRIPT: [
-        "**/*.js",
-        "**/*.jsx",
-        "**/*.mjs",
-        "**/*.cjs",
-        "**/*.vue",
-        "**/*.svelte",
-        "**/*.astro",
-        "**/*.ts",
-        "**/*.tsx",
-        "**/*.cts",
-        "**/*.mts",
-    ],
-    LanguageFamily.PYTHON: [
-        "**/*.py",
-        "**/*.pyi",
-        "**/*.pyw",
-        "**/*.pyx",
-        "**/*.pxd",
-        "**/*.pxi",
-    ],
-    LanguageFamily.GO: ["**/*.go"],
-    LanguageFamily.RUST: ["**/*.rs"],
-    LanguageFamily.JVM: [
-        "**/*.java",
-        "**/*.kt",
-        "**/*.kts",
-        "**/*.scala",
-        "**/*.sc",
-    ],
-    LanguageFamily.DOTNET: ["**/*.cs", "**/*.fs", "**/*.fsx", "**/*.vb"],
-    LanguageFamily.CPP: [
-        "**/*.cpp",
-        "**/*.cc",
-        "**/*.cxx",
-        "**/*.c",
-        "**/*.h",
-        "**/*.hpp",
-        "**/*.hxx",
-    ],
-    LanguageFamily.RUBY: ["**/*.rb", "**/*.rake", "**/Gemfile"],
-    LanguageFamily.PHP: ["**/*.php"],
-    LanguageFamily.SWIFT: ["**/*.swift"],
-    LanguageFamily.ELIXIR: ["**/*.ex", "**/*.exs"],
-    LanguageFamily.HASKELL: ["**/*.hs"],
-    LanguageFamily.TERRAFORM: ["**/*.tf", "**/*.hcl"],
-    LanguageFamily.SQL: ["**/*.sql"],
-    LanguageFamily.DOCKER: [
-        "**/Dockerfile",
-        "**/*.Dockerfile",
-        "**/docker-compose.yml",
-        "**/docker-compose.yaml",
-    ],
-    LanguageFamily.MARKDOWN: ["**/*.md", "**/*.markdown", "**/*.mdx"],
-    LanguageFamily.JSON_YAML: [
-        "**/*.json",
-        "**/*.yaml",
-        "**/*.yml",
-        "**/*.toml",
-        "**/*.jsonc",
-    ],
-    LanguageFamily.PROTOBUF: ["**/*.proto"],
-    LanguageFamily.GRAPHQL: ["**/*.graphql", "**/*.gql"],
-    LanguageFamily.CONFIG: ["**/*.nix"],
-}
-
-# Universal excludes (applied to all contexts)
-UNIVERSAL_EXCLUDES: list[str] = [
-    "**/node_modules/**",
-    "**/venv/**",
-    "**/__pycache__/**",
-    "**/.git/**",
-    "**/.codeplane/**",
-    ".codeplane/**",
-    "**/target/**",
-    "**/dist/**",
-    "**/build/**",
-    "**/vendor/**",
-]
 
 
 def _walk_with_pruning(root: Path) -> list[tuple[str, str]]:
-    """Walk all files in repo, pruning PRUNABLE_DIRS.
-
-    Returns list of (rel_dir_posix, filename) tuples.
-
-    Git-tracking is irrelevant for indexing. Index artifacts (.codeplane/)
-    are gitignored, so it's safe to index all files. Only PRUNABLE_DIRS
-    and .cplignore patterns exclude files from indexing.
-    """
+    """Walk all files, pruning PRUNABLE_DIRS. Returns (rel_dir_posix, filename)."""
     results: list[tuple[str, str]] = []
-
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d not in PRUNABLE_DIRS]
-
         rel_dir_path = Path(dirpath).relative_to(root)
         rel_dir_posix = str(rel_dir_path).replace("\\", "/")
         if rel_dir_posix == ".":
             rel_dir_posix = ""
-
         for filename in filenames:
             results.append((rel_dir_posix, filename))
-
     return results
 
 
 @dataclass
 class DiscoveredMarker:
-    """A marker file discovered during scanning."""
-
-    path: str  # Relative POSIX path
+    path: str
     family: LanguageFamily
     tier: MarkerTier
 
 
 @dataclass
 class DiscoveryResult:
-    """Result of context discovery."""
-
     candidates: list[CandidateContext] = field(default_factory=list)
     markers: list[DiscoveredMarker] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
 
 class ContextDiscovery:
-    """
-    Discovers project contexts by scanning for marker files.
-
-    Implements Phase A of SPEC.md §8.4: Discovery (Candidate Generation).
-
-    Usage::
-
-        discovery = ContextDiscovery(repo_root)
-        result = discovery.discover_all()
-
-        for candidate in result.candidates:
-            print(f"{candidate.language_family}: {candidate.root_path}")
-    """
+    """Discovers project contexts by scanning for marker files."""
 
     def __init__(self, repo_root: Path) -> None:
-        """
-        Initialize context discovery.
-
-        Args:
-            repo_root: Path to repository root
-        """
         self.repo_root = repo_root
 
     def discover_all(self) -> DiscoveryResult:
-        """
-        Discover all candidate contexts in the repository.
-
-        Returns:
-            DiscoveryResult with candidates and discovered markers.
-        """
         result = DiscoveryResult()
-
-        # Phase A.1: Scan for markers
         markers = self._scan_markers()
         result.markers = markers
 
-        # Phase A.2: Generate candidates from markers
         candidates_by_family: dict[LanguageFamily, list[CandidateContext]] = {}
 
         for marker in markers:
             if marker.family not in candidates_by_family:
                 candidates_by_family[marker.family] = []
 
-            # Find or create candidate for this marker's directory
             marker_dir = str(Path(marker.path).parent)
             if marker_dir == ".":
                 marker_dir = ""
@@ -311,7 +108,6 @@ class ContextDiscovery:
 
             if existing:
                 existing.markers.append(marker.path)
-                # Upgrade tier if needed
                 if marker.tier == MarkerTier.WORKSPACE and existing.tier != 1:
                     existing.tier = 1
             else:
@@ -321,57 +117,47 @@ class ContextDiscovery:
                     tier=1 if marker.tier == MarkerTier.WORKSPACE else 2,
                     markers=[marker.path],
                     include_spec=INCLUDE_SPECS.get(marker.family, []),
-                    exclude_spec=list(UNIVERSAL_EXCLUDES),
+                    exclude_spec=UNIVERSAL_EXCLUDES,
                     probe_status=ProbeStatus.PENDING,
                 )
                 candidates_by_family[marker.family].append(candidate)
 
-        # Phase A.3: Add ambient contexts for families without markers
+        # Add ambient contexts
         for family in AMBIENT_FAMILIES:
             if family not in candidates_by_family:
-                candidate = CandidateContext(
-                    language_family=family,
-                    root_path="",
-                    tier=None,  # Ambient
-                    markers=[],
-                    include_spec=INCLUDE_SPECS.get(family, []),
-                    exclude_spec=list(UNIVERSAL_EXCLUDES),
-                    probe_status=ProbeStatus.PENDING,
-                )
-                candidates_by_family[family] = [candidate]
+                candidates_by_family[family] = [
+                    CandidateContext(
+                        language_family=family,
+                        root_path="",
+                        tier=None,
+                        markers=[],
+                        include_spec=INCLUDE_SPECS.get(family, []),
+                        exclude_spec=UNIVERSAL_EXCLUDES,
+                        probe_status=ProbeStatus.PENDING,
+                    )
+                ]
 
-        # Phase A.4: Add root fallback context (tier 3)
-        # This catches all files not claimed by marker-based or ambient contexts
-        root_fallback = CandidateContext(
-            language_family=LanguageFamily.CONFIG,  # Placeholder, actual detection per-file
-            root_path="",
-            tier=3,  # Lowest priority
-            markers=[],
-            include_spec=["**/*"],  # Include everything
-            exclude_spec=list(UNIVERSAL_EXCLUDES),
-            probe_status=ProbeStatus.VALID,  # Always valid
-            is_root_fallback=True,  # Flag for special handling
+        # Root fallback (tier 3)
+        result.candidates.append(
+            CandidateContext(
+                language_family=LanguageFamily.CONFIG,
+                root_path="",
+                tier=3,
+                markers=[],
+                include_spec=["**/*"],
+                exclude_spec=UNIVERSAL_EXCLUDES,
+                probe_status=ProbeStatus.VALID,
+                is_root_fallback=True,
+            )
         )
-        result.candidates.append(root_fallback)
 
-        # Flatten to list
         for family_candidates in candidates_by_family.values():
             result.candidates.extend(family_candidates)
 
         return result
 
     def discover_family(self, family: LanguageFamily) -> DiscoveryResult:
-        """
-        Discover contexts for a specific language family.
-
-        Args:
-            family: Language family to discover
-
-        Returns:
-            DiscoveryResult with candidates for the family.
-        """
         result = DiscoveryResult()
-
         markers = self._scan_markers_for_family(family)
         result.markers = markers
 
@@ -382,28 +168,25 @@ class ContextDiscovery:
             if marker_dir == ".":
                 marker_dir = ""
 
-            existing = next(
-                (c for c in candidates if c.root_path == marker_dir),
-                None,
-            )
+            existing = next((c for c in candidates if c.root_path == marker_dir), None)
 
             if existing:
                 existing.markers.append(marker.path)
                 if marker.tier == MarkerTier.WORKSPACE and existing.tier != 1:
                     existing.tier = 1
             else:
-                candidate = CandidateContext(
-                    language_family=family,
-                    root_path=marker_dir,
-                    tier=1 if marker.tier == MarkerTier.WORKSPACE else 2,
-                    markers=[marker.path],
-                    include_spec=INCLUDE_SPECS.get(family, []),
-                    exclude_spec=list(UNIVERSAL_EXCLUDES),
-                    probe_status=ProbeStatus.PENDING,
+                candidates.append(
+                    CandidateContext(
+                        language_family=family,
+                        root_path=marker_dir,
+                        tier=1 if marker.tier == MarkerTier.WORKSPACE else 2,
+                        markers=[marker.path],
+                        include_spec=INCLUDE_SPECS.get(family, []),
+                        exclude_spec=UNIVERSAL_EXCLUDES,
+                        probe_status=ProbeStatus.PENDING,
+                    )
                 )
-                candidates.append(candidate)
 
-        # Add ambient if no markers and family is ambient
         if not candidates and family in AMBIENT_FAMILIES:
             candidates.append(
                 CandidateContext(
@@ -412,7 +195,7 @@ class ContextDiscovery:
                     tier=None,
                     markers=[],
                     include_spec=INCLUDE_SPECS.get(family, []),
-                    exclude_spec=list(UNIVERSAL_EXCLUDES),
+                    exclude_spec=UNIVERSAL_EXCLUDES,
                     probe_status=ProbeStatus.PENDING,
                 )
             )
@@ -421,31 +204,24 @@ class ContextDiscovery:
         return result
 
     def _scan_markers(self) -> list[DiscoveredMarker]:
-        """Scan repository for all marker files using fast directory walk."""
-        # Walk once, filter many - much faster than multiple rglob calls
         all_files = _walk_with_pruning(self.repo_root)
 
-        # Build lookup of marker names to (family, tier)
         marker_lookup: dict[str, list[tuple[LanguageFamily, MarkerTier]]] = {}
         for family, tier_markers in MARKER_DEFINITIONS.items():
             for tier, marker_names in tier_markers.items():
                 for name in marker_names:
                     marker_lookup.setdefault(name, []).append((family, tier))
 
-        # Extension-based markers for dotnet
         dotnet_extensions = {".sln", ".csproj", ".fsproj", ".vbproj"}
-
         markers: list[DiscoveredMarker] = []
 
         for rel_dir, filename in all_files:
             rel_path = f"{rel_dir}/{filename}" if rel_dir else filename
 
-            # Check exact marker name match
             if filename in marker_lookup:
                 for family, tier in marker_lookup[filename]:
                     markers.append(DiscoveredMarker(path=rel_path, family=family, tier=tier))
 
-            # Check dotnet extension-based markers
             ext = Path(filename).suffix.lower()
             if ext in dotnet_extensions:
                 tier = MarkerTier.WORKSPACE if ext == ".sln" else MarkerTier.PACKAGE
@@ -453,7 +229,6 @@ class ContextDiscovery:
                     DiscoveredMarker(path=rel_path, family=LanguageFamily.DOTNET, tier=tier)
                 )
 
-        # Post-process markers for workspace detection
         markers = self._handle_rust_workspaces(markers)
         markers = self._handle_js_workspaces(markers)
         markers = self._handle_maven_modules(markers)
@@ -461,109 +236,70 @@ class ContextDiscovery:
         return markers
 
     def _scan_markers_for_family(self, family: LanguageFamily) -> list[DiscoveredMarker]:
-        """Scan for markers of a specific family using fast directory walk."""
         all_files = _walk_with_pruning(self.repo_root)
-
         tier_markers = MARKER_DEFINITIONS.get(family, {})
         markers: list[DiscoveredMarker] = []
 
         for rel_dir, filename in all_files:
             rel_path = f"{rel_dir}/{filename}" if rel_dir else filename
-
             for tier, marker_names in tier_markers.items():
                 if filename in marker_names:
                     markers.append(DiscoveredMarker(path=rel_path, family=family, tier=tier))
 
         return markers
 
-    def _is_excluded(self, path: str) -> bool:
-        """Check if path matches universal excludes."""
-        parts = path.split("/")
-        return any(part in PRUNABLE_DIRS for part in parts)
-
     def _handle_rust_workspaces(self, markers: list[DiscoveredMarker]) -> list[DiscoveredMarker]:
-        """Upgrade Cargo.toml with [workspace] to Tier 1."""
         result: list[DiscoveredMarker] = []
-
         for marker in markers:
             if marker.family == LanguageFamily.RUST and marker.path.endswith("Cargo.toml"):
-                full_path = self.repo_root / marker.path
                 try:
-                    content = full_path.read_text()
+                    content = (self.repo_root / marker.path).read_text()
                     if "[workspace]" in content:
                         result.append(
-                            DiscoveredMarker(
-                                path=marker.path,
-                                family=marker.family,
-                                tier=MarkerTier.WORKSPACE,
-                            )
+                            DiscoveredMarker(marker.path, marker.family, MarkerTier.WORKSPACE)
                         )
-                    else:
-                        result.append(marker)
+                        continue
                 except (OSError, UnicodeDecodeError):
-                    result.append(marker)
-            else:
-                result.append(marker)
-
+                    pass
+            result.append(marker)
         return result
 
     def _handle_js_workspaces(self, markers: list[DiscoveredMarker]) -> list[DiscoveredMarker]:
-        """Upgrade package.json with workspaces to Tier 1."""
         result: list[DiscoveredMarker] = []
-
         for marker in markers:
             if (
                 marker.family == LanguageFamily.JAVASCRIPT
                 and marker.path.endswith("package.json")
                 and marker.tier == MarkerTier.PACKAGE
             ):
-                full_path = self.repo_root / marker.path
                 try:
-                    content = full_path.read_text()
-                    data = json.loads(content)
+                    data = json.loads((self.repo_root / marker.path).read_text())
                     if "workspaces" in data:
                         result.append(
-                            DiscoveredMarker(
-                                path=marker.path,
-                                family=marker.family,
-                                tier=MarkerTier.WORKSPACE,
-                            )
+                            DiscoveredMarker(marker.path, marker.family, MarkerTier.WORKSPACE)
                         )
-                    else:
-                        result.append(marker)
+                        continue
                 except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-                    result.append(marker)
-            else:
-                result.append(marker)
-
+                    pass
+            result.append(marker)
         return result
 
     def _handle_maven_modules(self, markers: list[DiscoveredMarker]) -> list[DiscoveredMarker]:
-        """Upgrade pom.xml with <modules> to Tier 1."""
         result: list[DiscoveredMarker] = []
-
         for marker in markers:
             if (
                 marker.family == LanguageFamily.JVM
                 and marker.path.endswith("pom.xml")
                 and marker.tier == MarkerTier.PACKAGE
             ):
-                full_path = self.repo_root / marker.path
                 try:
-                    content = full_path.read_text()
+                    content = (self.repo_root / marker.path).read_text()
                     if "<modules>" in content:
                         result.append(
-                            DiscoveredMarker(
-                                path=marker.path,
-                                family=marker.family,
-                                tier=MarkerTier.WORKSPACE,
-                            )
+                            DiscoveredMarker(marker.path, marker.family, MarkerTier.WORKSPACE)
                         )
-                    else:
-                        result.append(marker)
+                        continue
                 except (OSError, UnicodeDecodeError):
-                    result.append(marker)
-            else:
-                result.append(marker)
-
+                    pass
+            result.append(marker)
         return result

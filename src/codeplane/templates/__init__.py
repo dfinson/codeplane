@@ -1,8 +1,17 @@
-"""Template files for cpl init and other commands."""
+"""Template files for cpl init and other commands.
 
-from importlib import resources
+NOTE: Templates are now generated from canonical definitions in core.excludes.
+"""
+
+from codeplane.core.excludes import generate_cplignore_template
 
 
 def get_cplignore_template() -> str:
-    """Load the default .cplignore template."""
-    return resources.files(__package__).joinpath("cplignore.template").read_text()
+    """Get the default .cplignore template.
+
+    Returns generated template from canonical exclude patterns.
+    """
+    return generate_cplignore_template()
+
+
+__all__ = ["get_cplignore_template"]

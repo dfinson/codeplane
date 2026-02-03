@@ -136,6 +136,35 @@ There is no third option. Quick fixes become permanent technical debt. Every hac
 
 ---
 
+## 🔴 ABSOLUTE: Fix ALL Failures
+
+**There is no such thing as a failure that is "unrelated to our changes."**
+
+This entire repository is our responsibility. Every test failure, every lint error, every type error, every CI failure — all of it must pass. Period.
+
+**Forbidden rationalizations:**
+
+- "This error is pre-existing" — Irrelevant. Fix it.
+- "This failure is unrelated to the current changes" — Wrong. If it fails, it's related.
+- "These are just warnings" — Warnings become errors. Fix them now.
+- "The tests pass, it's just mypy/lint" — Type errors and lint failures are failures. Fix them.
+- "This was already broken" — Now it's your job to fix it.
+
+**The standard:**
+
+1. `make lint` must pass with zero warnings
+2. `make typecheck` must pass with zero errors
+3. `make test` must pass with zero failures
+4. CI must be green
+
+If any of these fail, you are not done. Do not report completion. Do not move on. Fix the failures.
+
+**No exceptions. No excuses. No "I'll note that these are pre-existing."**
+
+The repo must work. All of it. Always.
+
+---
+
 ## A. Development Workflow
 
 When implementing features, fixing bugs, or making changes:

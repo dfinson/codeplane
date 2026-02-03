@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from codeplane.core.languages import EXTENSION_TO_FAMILY
+
 
 @dataclass
 class FileResult:
@@ -225,7 +227,7 @@ class FileOps:
                 line_count = len(lines)
 
             # Detect language from extension
-            lang = _detect_language(full_path.suffix)
+            lang = EXTENSION_TO_FAMILY.get(full_path.suffix.lower(), "unknown")
 
             metadata: dict[str, int] | None = None
             if include_metadata:
@@ -247,39 +249,3 @@ class FileOps:
             )
 
         return ReadFilesResult(files=results)
-
-
-def _detect_language(suffix: str) -> str:
-    """Simple language detection from file extension."""
-    mapping = {
-        ".py": "python",
-        ".js": "javascript",
-        ".ts": "typescript",
-        ".tsx": "typescript",
-        ".jsx": "javascript",
-        ".rs": "rust",
-        ".go": "go",
-        ".java": "java",
-        ".c": "c",
-        ".cpp": "cpp",
-        ".h": "c",
-        ".hpp": "cpp",
-        ".rb": "ruby",
-        ".php": "php",
-        ".cs": "csharp",
-        ".swift": "swift",
-        ".kt": "kotlin",
-        ".scala": "scala",
-        ".md": "markdown",
-        ".json": "json",
-        ".yaml": "yaml",
-        ".yml": "yaml",
-        ".toml": "toml",
-        ".xml": "xml",
-        ".html": "html",
-        ".css": "css",
-        ".sql": "sql",
-        ".sh": "shell",
-        ".bash": "shell",
-    }
-    return mapping.get(suffix.lower(), "unknown")

@@ -116,13 +116,10 @@ class ReferenceResolver:
 
         with self._db.session() as session:
             # Find STRONG refs in these files with no target_def_uid
-            stmt = (
-                select(RefFact)
-                .where(
-                    col(RefFact.file_id).in_(file_ids),
-                    RefFact.ref_tier == RefTier.STRONG.value,
-                    RefFact.target_def_uid == None,  # noqa: E711
-                )
+            stmt = select(RefFact).where(
+                col(RefFact.file_id).in_(file_ids),
+                RefFact.ref_tier == RefTier.STRONG.value,
+                RefFact.target_def_uid == None,  # noqa: E711
             )
             unresolved_refs = list(session.exec(stmt).all())
             stats.refs_processed = len(unresolved_refs)
@@ -149,12 +146,9 @@ class ReferenceResolver:
         Returns True if resolution succeeded.
         """
         # Find the LocalBindFact that binds this name
-        bind_stmt = (
-            select(LocalBindFact)
-            .where(
-                LocalBindFact.file_id == ref.file_id,
-                LocalBindFact.name == ref.token_text,
-            )
+        bind_stmt = select(LocalBindFact).where(
+            LocalBindFact.file_id == ref.file_id,
+            LocalBindFact.name == ref.token_text,
         )
         bind = session.exec(bind_stmt).first()  # type: ignore[attr-defined]
 

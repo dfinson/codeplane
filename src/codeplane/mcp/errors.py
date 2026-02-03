@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Any
 
 
-class ErrorCode(str, Enum):
+class MCPErrorCode(str, Enum):
     """Machine-readable error codes for MCP tool failures."""
 
     # Validation errors - agent should fix input
@@ -49,7 +49,7 @@ class ErrorCode(str, Enum):
 class ErrorResponse:
     """Structured error response for MCP tools."""
 
-    code: ErrorCode
+    code: MCPErrorCode
     message: str
     remediation: str
     path: str | None = None
@@ -71,7 +71,7 @@ class MCPError(Exception):
 
     def __init__(
         self,
-        code: ErrorCode,
+        code: MCPErrorCode,
         message: str,
         remediation: str,
         path: str | None = None,
@@ -105,7 +105,7 @@ class ContentNotFoundError(MCPError):
 
     def __init__(self, path: str, snippet: str | None = None) -> None:
         super().__init__(
-            code=ErrorCode.CONTENT_NOT_FOUND,
+            code=MCPErrorCode.CONTENT_NOT_FOUND,
             message=f"Content not found in {path}",
             remediation="Re-read the file to get current content. Ensure exact whitespace match.",
             path=path,
@@ -118,7 +118,7 @@ class MultipleMatchesError(MCPError):
 
     def __init__(self, path: str, count: int, lines: list[int]) -> None:
         super().__init__(
-            code=ErrorCode.MULTIPLE_MATCHES,
+            code=MCPErrorCode.MULTIPLE_MATCHES,
             message=f"Content found {count} times in {path}, expected 1",
             remediation="Add more context lines to old_content to make it unique, or set expected_occurrences.",
             path=path,
@@ -132,7 +132,7 @@ class InvalidRangeError(MCPError):
 
     def __init__(self, path: str, start: int, end: int, line_count: int) -> None:
         super().__init__(
-            code=ErrorCode.INVALID_RANGE,
+            code=MCPErrorCode.INVALID_RANGE,
             message=f"Invalid range [{start}, {end}] for file with {line_count} lines",
             remediation="Ensure start <= end and both are within file bounds (1 to line_count).",
             path=path,
@@ -147,7 +147,7 @@ class HashMismatchError(MCPError):
 
     def __init__(self, path: str, expected: str, actual: str) -> None:
         super().__init__(
-            code=ErrorCode.HASH_MISMATCH,
+            code=MCPErrorCode.HASH_MISMATCH,
             message=f"File {path} was modified since dry run",
             remediation="Re-read the file and re-run with dry_run=True to get new hash.",
             path=path,
@@ -161,7 +161,7 @@ class DryRunRequiredError(MCPError):
 
     def __init__(self, path: str) -> None:
         super().__init__(
-            code=ErrorCode.DRY_RUN_REQUIRED,
+            code=MCPErrorCode.DRY_RUN_REQUIRED,
             message=f"Line-range edit on {path} requires prior dry_run",
             remediation="Call atomic_edit_files with dry_run=True first to get content_hash, then call again with the hash.",
             path=path,
@@ -173,7 +173,7 @@ class DryRunExpiredError(MCPError):
 
     def __init__(self, dry_run_id: str, age_seconds: float) -> None:
         super().__init__(
-            code=ErrorCode.DRY_RUN_EXPIRED,
+            code=MCPErrorCode.DRY_RUN_EXPIRED,
             message=f"Dry run {dry_run_id} expired ({age_seconds:.1f}s old, max 60s)",
             remediation="Re-run with dry_run=True to get a fresh validation token.",
             dry_run_id=dry_run_id,
@@ -193,7 +193,7 @@ class HookFailedError(MCPError):
         modified_files: list[str] | None = None,
     ) -> None:
         super().__init__(
-            code=ErrorCode.HOOK_FAILED,
+            code=MCPErrorCode.HOOK_FAILED,
             message=f"{hook_type} hook failed with exit code {exit_code}",
             remediation="Fix the issues reported below. Auto-fixes may have been applied - check git status.",
             hook_type=hook_type,
@@ -213,7 +213,7 @@ class HookFailedError(MCPError):
 class ErrorDocumentation:
     """Documentation for an error code."""
 
-    code: ErrorCode
+    code: MCPErrorCode
     category: str  # validation, state, file, git, system
     description: str
     causes: list[str]
@@ -221,8 +221,8 @@ class ErrorDocumentation:
 
 
 ERROR_CATALOG: dict[str, ErrorDocumentation] = {
-    ErrorCode.CONTENT_NOT_FOUND.value: ErrorDocumentation(
-        code=ErrorCode.CONTENT_NOT_FOUND,
+    MCPErrorCode.CONTENT_NOT_FOUND.value: ErrorDocumentation(
+        code=MCPErrorCode.CONTENT_NOT_FOUND,
         category="validation",
         description="The specified old_content was not found in the file.",
         causes=[
@@ -237,8 +237,8 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
             "Check for invisible characters or encoding issues",
         ],
     ),
-    ErrorCode.MULTIPLE_MATCHES.value: ErrorDocumentation(
-        code=ErrorCode.MULTIPLE_MATCHES,
+    MCPErrorCode.MULTIPLE_MATCHES.value: ErrorDocumentation(
+        code=MCPErrorCode.MULTIPLE_MATCHES,
         category="validation",
         description="The old_content matched multiple locations in the file.",
         causes=[
@@ -251,8 +251,8 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
             "Use line numbers from the error response to identify which match you want",
         ],
     ),
-    ErrorCode.HASH_MISMATCH.value: ErrorDocumentation(
-        code=ErrorCode.HASH_MISMATCH,
+    MCPErrorCode.HASH_MISMATCH.value: ErrorDocumentation(
+        code=MCPErrorCode.HASH_MISMATCH,
         category="state",
         description="The file was modified between dry_run and apply.",
         causes=[
@@ -266,8 +266,8 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
             "Apply changes more quickly after dry_run",
         ],
     ),
-    ErrorCode.DRY_RUN_REQUIRED.value: ErrorDocumentation(
-        code=ErrorCode.DRY_RUN_REQUIRED,
+    MCPErrorCode.DRY_RUN_REQUIRED.value: ErrorDocumentation(
+        code=MCPErrorCode.DRY_RUN_REQUIRED,
         category="validation",
         description="Line-range edits require a prior dry_run for safety.",
         causes=[
@@ -280,8 +280,8 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
             "Or use 'exact' mode which doesn't require dry_run",
         ],
     ),
-    ErrorCode.INVALID_RANGE.value: ErrorDocumentation(
-        code=ErrorCode.INVALID_RANGE,
+    MCPErrorCode.INVALID_RANGE.value: ErrorDocumentation(
+        code=MCPErrorCode.INVALID_RANGE,
         category="validation",
         description="The specified line range is invalid.",
         causes=[
@@ -295,8 +295,8 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
             "Ensure start <= end",
         ],
     ),
-    ErrorCode.FILE_NOT_FOUND.value: ErrorDocumentation(
-        code=ErrorCode.FILE_NOT_FOUND,
+    MCPErrorCode.FILE_NOT_FOUND.value: ErrorDocumentation(
+        code=MCPErrorCode.FILE_NOT_FOUND,
         category="file",
         description="The specified file does not exist.",
         causes=[
@@ -310,8 +310,8 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
             "Check for typos in directory names",
         ],
     ),
-    ErrorCode.FILE_EXISTS.value: ErrorDocumentation(
-        code=ErrorCode.FILE_EXISTS,
+    MCPErrorCode.FILE_EXISTS.value: ErrorDocumentation(
+        code=MCPErrorCode.FILE_EXISTS,
         category="file",
         description="Cannot create file that already exists.",
         causes=[
@@ -323,8 +323,8 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
             "Choose a different path for new file",
         ],
     ),
-    ErrorCode.HOOK_FAILED.value: ErrorDocumentation(
-        code=ErrorCode.HOOK_FAILED,
+    MCPErrorCode.HOOK_FAILED.value: ErrorDocumentation(
+        code=MCPErrorCode.HOOK_FAILED,
         category="git",
         description="A git hook (pre-commit, commit-msg, etc.) failed.",
         causes=[

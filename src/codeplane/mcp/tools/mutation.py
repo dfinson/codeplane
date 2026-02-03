@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from codeplane.mcp.errors import (
     ContentNotFoundError,
-    ErrorCode,
     MCPError,
+    MCPErrorCode,
     MultipleMatchesError,
 )
 from codeplane.mcp.ledger import get_ledger
@@ -191,7 +191,7 @@ async def write_files(ctx: AppContext, params: WriteFilesParams) -> dict[str, An
         error_path = None
 
         if isinstance(e, OpsContentNotFound):
-            error_code = ErrorCode.CONTENT_NOT_FOUND.value
+            error_code = MCPErrorCode.CONTENT_NOT_FOUND.value
             error_path = e.path
             ledger.log_operation(
                 tool="write_files",
@@ -204,7 +204,7 @@ async def write_files(ctx: AppContext, params: WriteFilesParams) -> dict[str, An
             raise ContentNotFoundError(e.path, e.snippet) from e
 
         elif isinstance(e, OpsMultipleMatches):
-            error_code = ErrorCode.MULTIPLE_MATCHES.value
+            error_code = MCPErrorCode.MULTIPLE_MATCHES.value
             error_path = e.path
             ledger.log_operation(
                 tool="write_files",
@@ -217,7 +217,7 @@ async def write_files(ctx: AppContext, params: WriteFilesParams) -> dict[str, An
             raise MultipleMatchesError(e.path, e.count, e.lines) from e
 
         elif isinstance(e, FileNotFoundError):
-            error_code = ErrorCode.FILE_NOT_FOUND.value
+            error_code = MCPErrorCode.FILE_NOT_FOUND.value
             ledger.log_operation(
                 tool="write_files",
                 success=False,
@@ -226,13 +226,13 @@ async def write_files(ctx: AppContext, params: WriteFilesParams) -> dict[str, An
                 session_id=params.session_id,
             )
             raise MCPError(
-                code=ErrorCode.FILE_NOT_FOUND,
+                code=MCPErrorCode.FILE_NOT_FOUND,
                 message=str(e),
                 remediation="Check the file path. Use index.map to see available files.",
             ) from e
 
         elif isinstance(e, FileExistsError):
-            error_code = ErrorCode.FILE_EXISTS.value
+            error_code = MCPErrorCode.FILE_EXISTS.value
             ledger.log_operation(
                 tool="write_files",
                 success=False,
@@ -241,7 +241,7 @@ async def write_files(ctx: AppContext, params: WriteFilesParams) -> dict[str, An
                 session_id=params.session_id,
             )
             raise MCPError(
-                code=ErrorCode.FILE_EXISTS,
+                code=MCPErrorCode.FILE_EXISTS,
                 message=str(e),
                 remediation="Use action='update' instead of 'create' for existing files.",
             ) from e
@@ -250,7 +250,7 @@ async def write_files(ctx: AppContext, params: WriteFilesParams) -> dict[str, An
         ledger.log_operation(
             tool="files.edit",
             success=False,
-            error_code=ErrorCode.INTERNAL_ERROR.value,
+            error_code=MCPErrorCode.INTERNAL_ERROR.value,
             error_message=str(e),
             session_id=params.session_id,
         )

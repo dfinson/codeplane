@@ -3,8 +3,8 @@
 from codeplane.core.errors import (
     CodePlaneError,
     ConfigError,
-    ErrorCode,
     InternalError,
+    InternalErrorCode,
 )
 from codeplane.core.logging import (
     clear_request_id,
@@ -19,7 +19,7 @@ __all__ = [
     # Errors
     "CodePlaneError",
     "ConfigError",
-    "ErrorCode",
+    "InternalErrorCode",
     "InternalError",
     # Logging
     "clear_request_id",

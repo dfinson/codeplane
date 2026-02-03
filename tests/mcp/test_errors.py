@@ -5,41 +5,41 @@ from codeplane.mcp.errors import (
     ContentNotFoundError,
     DryRunExpiredError,
     DryRunRequiredError,
-    ErrorCode,
     ErrorResponse,
     HashMismatchError,
     HookFailedError,
     InvalidRangeError,
     MCPError,
+    MCPErrorCode,
     MultipleMatchesError,
     get_error_documentation,
 )
 
 
-class TestErrorCode:
-    """Tests for ErrorCode enum."""
+class TestMCPErrorCode:
+    """Tests for MCPErrorCode enum."""
 
     def test_all_codes_have_unique_values(self):
         """All error codes have unique string values."""
-        values = [code.value for code in ErrorCode]
+        values = [code.value for code in MCPErrorCode]
         assert len(values) == len(set(values))
 
     def test_common_codes_exist(self):
         """Common error codes are defined."""
-        assert hasattr(ErrorCode, "INTERNAL_ERROR")
-        assert hasattr(ErrorCode, "INVALID_RANGE")
-        assert hasattr(ErrorCode, "FILE_NOT_FOUND")
-        assert hasattr(ErrorCode, "PERMISSION_DENIED")
+        assert hasattr(MCPErrorCode, "INTERNAL_ERROR")
+        assert hasattr(MCPErrorCode, "INVALID_RANGE")
+        assert hasattr(MCPErrorCode, "FILE_NOT_FOUND")
+        assert hasattr(MCPErrorCode, "PERMISSION_DENIED")
 
     def test_mutation_codes_exist(self):
         """Mutation-related error codes are defined."""
-        assert hasattr(ErrorCode, "CONTENT_NOT_FOUND")
-        assert hasattr(ErrorCode, "MULTIPLE_MATCHES")
-        assert hasattr(ErrorCode, "HASH_MISMATCH")
+        assert hasattr(MCPErrorCode, "CONTENT_NOT_FOUND")
+        assert hasattr(MCPErrorCode, "MULTIPLE_MATCHES")
+        assert hasattr(MCPErrorCode, "HASH_MISMATCH")
 
     def test_range_code_exists(self):
         """Range-related error code is defined."""
-        assert hasattr(ErrorCode, "INVALID_RANGE")
+        assert hasattr(MCPErrorCode, "INVALID_RANGE")
 
 
 class TestErrorResponse:
@@ -48,11 +48,11 @@ class TestErrorResponse:
     def test_create_minimal(self):
         """Create ErrorResponse with required fields."""
         resp = ErrorResponse(
-            code=ErrorCode.INTERNAL_ERROR,
+            code=MCPErrorCode.INTERNAL_ERROR,
             message="Something went wrong",
             remediation="Try again",
         )
-        assert resp.code == ErrorCode.INTERNAL_ERROR
+        assert resp.code == MCPErrorCode.INTERNAL_ERROR
         assert resp.message == "Something went wrong"
         assert resp.remediation == "Try again"
         assert resp.context == {}
@@ -60,7 +60,7 @@ class TestErrorResponse:
     def test_create_with_context(self):
         """Create ErrorResponse with context."""
         resp = ErrorResponse(
-            code=ErrorCode.FILE_NOT_FOUND,
+            code=MCPErrorCode.FILE_NOT_FOUND,
             message="File not found",
             remediation="Check the path",
             context={"path": "missing.py"},
@@ -70,13 +70,13 @@ class TestErrorResponse:
     def test_to_dict(self):
         """to_dict produces correct structure."""
         resp = ErrorResponse(
-            code=ErrorCode.INVALID_RANGE,
+            code=MCPErrorCode.INVALID_RANGE,
             message="Bad range",
             remediation="Fix lines",
             context={"start": 10, "end": 5},
         )
         d = resp.to_dict()
-        assert d["code"] == ErrorCode.INVALID_RANGE.value
+        assert d["code"] == MCPErrorCode.INVALID_RANGE.value
         assert d["message"] == "Bad range"
         assert d["remediation"] == "Fix lines"
         assert d["context"] == {"start": 10, "end": 5}
@@ -88,11 +88,11 @@ class TestMCPError:
     def test_create_basic(self):
         """Create MCPError with code and message."""
         err = MCPError(
-            code=ErrorCode.INTERNAL_ERROR,
+            code=MCPErrorCode.INTERNAL_ERROR,
             message="Test error",
             remediation="Fix it",
         )
-        assert err.code == ErrorCode.INTERNAL_ERROR
+        assert err.code == MCPErrorCode.INTERNAL_ERROR
         assert err.message == "Test error"
         assert err.remediation == "Fix it"
         assert err.context == {}
@@ -100,7 +100,7 @@ class TestMCPError:
     def test_create_with_context(self):
         """Create MCPError with context kwargs."""
         err = MCPError(
-            code=ErrorCode.FILE_NOT_FOUND,
+            code=MCPErrorCode.FILE_NOT_FOUND,
             message="Resource missing",
             remediation="Check path",
             path="test.py",
@@ -112,7 +112,7 @@ class TestMCPError:
     def test_str_representation(self):
         """String representation includes message."""
         err = MCPError(
-            code=ErrorCode.INVALID_RANGE,
+            code=MCPErrorCode.INVALID_RANGE,
             message="Bad input",
             remediation="Fix",
         )
@@ -122,14 +122,14 @@ class TestMCPError:
     def test_to_response(self):
         """to_response creates ErrorResponse."""
         err = MCPError(
-            code=ErrorCode.PERMISSION_DENIED,
+            code=MCPErrorCode.PERMISSION_DENIED,
             message="No access",
             remediation="Check permissions",
             path="file.py",
         )
         resp = err.to_response()
         assert isinstance(resp, ErrorResponse)
-        assert resp.code == ErrorCode.PERMISSION_DENIED
+        assert resp.code == MCPErrorCode.PERMISSION_DENIED
         assert resp.message == "No access"
 
 
@@ -139,7 +139,7 @@ class TestContentNotFoundError:
     def test_creates_with_correct_code(self):
         """Uses CONTENT_NOT_FOUND error code."""
         err = ContentNotFoundError("test.py", "needle")
-        assert err.code == ErrorCode.CONTENT_NOT_FOUND
+        assert err.code == MCPErrorCode.CONTENT_NOT_FOUND
 
     def test_message_format(self):
         """Message includes path."""
@@ -159,7 +159,7 @@ class TestMultipleMatchesError:
     def test_creates_with_correct_code(self):
         """Uses MULTIPLE_MATCHES error code."""
         err = MultipleMatchesError("test.py", count=3, lines=[10, 20, 30])
-        assert err.code == ErrorCode.MULTIPLE_MATCHES
+        assert err.code == MCPErrorCode.MULTIPLE_MATCHES
 
     def test_context_contain_counts(self):
         """Context includes match count and lines."""
@@ -174,7 +174,7 @@ class TestInvalidRangeError:
     def test_creates_with_correct_code(self):
         """Uses INVALID_RANGE error code."""
         err = InvalidRangeError("test.py", start=100, end=50, line_count=200)
-        assert err.code == ErrorCode.INVALID_RANGE
+        assert err.code == MCPErrorCode.INVALID_RANGE
 
     def test_has_remediation(self):
         """Error has remediation hint."""
@@ -188,7 +188,7 @@ class TestHashMismatchError:
     def test_creates_with_correct_code(self):
         """Uses HASH_MISMATCH error code."""
         err = HashMismatchError("test.py", expected="abc123", actual="def456")
-        assert err.code == ErrorCode.HASH_MISMATCH
+        assert err.code == MCPErrorCode.HASH_MISMATCH
 
     def test_has_path(self):
         """Error includes path."""
@@ -202,7 +202,7 @@ class TestHookFailedError:
     def test_creates_with_correct_code(self):
         """Uses HOOK_FAILED error code."""
         err = HookFailedError("pre-commit", exit_code=1, stdout="", stderr="lint failed")
-        assert err.code == ErrorCode.HOOK_FAILED
+        assert err.code == MCPErrorCode.HOOK_FAILED
 
     def test_context_contain_hook_info(self):
         """Context includes hook type and exit code."""
@@ -217,7 +217,7 @@ class TestDryRunRequiredError:
     def test_creates_with_correct_code(self):
         """Uses DRY_RUN_REQUIRED error code."""
         err = DryRunRequiredError("test.py")
-        assert err.code == ErrorCode.DRY_RUN_REQUIRED
+        assert err.code == MCPErrorCode.DRY_RUN_REQUIRED
 
     def test_message_includes_path(self):
         """Message includes file path."""
@@ -231,7 +231,7 @@ class TestDryRunExpiredError:
     def test_creates_with_correct_code(self):
         """Uses DRY_RUN_EXPIRED error code."""
         err = DryRunExpiredError("dry_123", 120.5)
-        assert err.code == ErrorCode.DRY_RUN_EXPIRED
+        assert err.code == MCPErrorCode.DRY_RUN_EXPIRED
 
     def test_message_includes_age(self):
         """Message includes age in seconds."""
@@ -244,9 +244,9 @@ class TestErrorDocumentation:
 
     def test_get_error_documentation_found(self):
         """Returns documentation for known error code."""
-        doc = get_error_documentation(ErrorCode.CONTENT_NOT_FOUND.value)
+        doc = get_error_documentation(MCPErrorCode.CONTENT_NOT_FOUND.value)
         assert doc is not None
-        assert doc.code == ErrorCode.CONTENT_NOT_FOUND
+        assert doc.code == MCPErrorCode.CONTENT_NOT_FOUND
         assert doc.category == "validation"
         assert len(doc.causes) > 0
         assert len(doc.remediation) > 0
@@ -258,9 +258,9 @@ class TestErrorDocumentation:
 
     def test_catalog_has_common_errors(self):
         """Catalog includes common error types."""
-        assert ErrorCode.CONTENT_NOT_FOUND.value in ERROR_CATALOG
-        assert ErrorCode.MULTIPLE_MATCHES.value in ERROR_CATALOG
-        assert ErrorCode.HASH_MISMATCH.value in ERROR_CATALOG
-        assert ErrorCode.INVALID_RANGE.value in ERROR_CATALOG
-        assert ErrorCode.FILE_NOT_FOUND.value in ERROR_CATALOG
-        assert ErrorCode.HOOK_FAILED.value in ERROR_CATALOG
+        assert MCPErrorCode.CONTENT_NOT_FOUND.value in ERROR_CATALOG
+        assert MCPErrorCode.MULTIPLE_MATCHES.value in ERROR_CATALOG
+        assert MCPErrorCode.HASH_MISMATCH.value in ERROR_CATALOG
+        assert MCPErrorCode.INVALID_RANGE.value in ERROR_CATALOG
+        assert MCPErrorCode.FILE_NOT_FOUND.value in ERROR_CATALOG
+        assert MCPErrorCode.HOOK_FAILED.value in ERROR_CATALOG
