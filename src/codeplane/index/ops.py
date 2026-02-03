@@ -674,10 +674,10 @@ class IndexCoordinator:
 
     async def _reindex_full_impl(self) -> IndexStats:
         """
-        Full repository reindex - idempotent and incremental.
+        Full repository reindex.
 
-        Checks for stale files (indexed_at == NULL) and only processes those.
-        Safe to call at any time; returns immediately if index is up-to-date.
+        Discovers all files on disk, compares against DB, and indexes new/changed files.
+        Removes files that no longer exist.
 
         SERIALIZED: Acquires reconcile_lock and tantivy_write_lock.
         """
@@ -689,85 +689,129 @@ class IndexCoordinator:
         files_added = 0
         files_updated = 0
         files_removed = 0
+        symbols_indexed = 0
 
         with self._reconcile_lock:
-            # Check for stale files FIRST (fast DB query) before expensive reconcile
+            # Get currently indexed files from database
             with self.db.session() as session:
-                stale_stmt = select(File).where(File.indexed_at == None)  # noqa: E711
-                stale_files = list(session.exec(stale_stmt).all())
+                file_stmt = select(File.path)
+                indexed_paths = set(session.exec(file_stmt).all())
 
-            # If no stale files, index is already up-to-date - skip reconcile
-            if not stale_files:
-                duration = time.time() - start_time
-                return IndexStats(
-                    files_processed=0,
-                    files_added=0,
-                    files_updated=0,
-                    files_removed=0,
-                    symbols_indexed=0,
-                    duration_seconds=duration,
+            # Get files that should be indexed (walk filesystem)
+            should_index: set[str] = set()
+            file_to_context: dict[str, int] = {}
+
+            with self.db.session() as session:
+                ctx_stmt = select(Context).where(
+                    Context.probe_status == ProbeStatus.VALID.value,
+                    Context.enabled == True,  # noqa: E712
                 )
+                contexts = list(session.exec(ctx_stmt).all())
 
-            # Process stale files
+            all_files = self._walk_all_files()
+
+            for context in contexts:
+                context_root = self.repo_root / context.root_path
+                if not context_root.exists():
+                    continue
+                include_globs = context.get_include_globs()
+                exclude_globs = context.get_exclude_globs()
+                context_id = context.id or 1
+
+                for file_path in self._filter_files_for_context(
+                    all_files, context_root, include_globs, exclude_globs
+                ):
+                    rel_path = str(file_path.relative_to(self.repo_root))
+                    if rel_path not in should_index:
+                        should_index.add(rel_path)
+                        file_to_context[rel_path] = context_id
+
+            # Compute diff
+            to_remove = indexed_paths - should_index
+            to_add = should_index - indexed_paths
+
+            # Process removals and additions
             with self._tantivy_write_lock:
-                for file_record in stale_files:
-                    full_path = self.repo_root / file_record.path
+                # Remove files that no longer exist or are now ignored
+                for rel_path in to_remove:
+                    if self._lexical is not None:
+                        self._lexical.remove_file(rel_path)
+                    files_removed += 1
+
+                # Add new files
+                for rel_path in to_add:
+                    full_path = self.repo_root / rel_path
                     if full_path.exists():
                         try:
                             content = self._safe_read_text(full_path)
                             symbols = self._extract_symbols(full_path)
+                            ctx_id = file_to_context.get(rel_path, 1)
                             if self._lexical is not None:
                                 self._lexical.add_file(
-                                    file_record.path,
-                                    content,
-                                    context_id=0,
-                                    symbols=symbols,
+                                    rel_path, content, context_id=ctx_id, symbols=symbols
                                 )
-                            # Mark as indexed
-                            with self.db.session() as session:
-                                f = session.get(File, file_record.id)
-                                if f:
-                                    f.indexed_at = time.time()
-                                    session.commit()
                             files_added += 1
+                            symbols_indexed += len(symbols)
                         except (OSError, UnicodeDecodeError):
                             continue
-                    else:
-                        # File was deleted - remove from index
-                        if self._lexical is not None:
-                            self._lexical.remove_file(file_record.path)
-                        with self.db.session() as session:
-                            f = session.get(File, file_record.id)
-                            if f:
-                                session.delete(f)
-                                session.commit()
-                        files_removed += 1
 
-            # Reload index so searcher sees committed changes
+            # Reload index
             if self._lexical is not None:
                 self._lexical.reload()
 
-            # Update structural index for changed files
-            if stale_files:
-                await self._update_structural_index(
-                    [Path(f.path) for f in stale_files if (self.repo_root / f.path).exists()]
-                )
+            # Create File records for added files
+            if to_add:
+                import hashlib
+
+                with self.db.session() as session:
+                    for rel_path in to_add:
+                        full_path = self.repo_root / rel_path
+                        if not full_path.exists():
+                            continue
+                        content_hash = hashlib.sha256(full_path.read_bytes()).hexdigest()
+                        ext = full_path.suffix.lower()
+                        lang_map = {
+                            ".py": "python",
+                            ".pyi": "python",
+                            ".js": "javascript",
+                            ".jsx": "javascript",
+                            ".ts": "javascript",
+                            ".tsx": "javascript",
+                            ".go": "go",
+                            ".rs": "rust",
+                        }
+                        lang = lang_map.get(ext)
+
+                        file_record = File(
+                            path=rel_path,
+                            content_hash=content_hash,
+                            language_family=lang,
+                            indexed_at=time.time(),
+                        )
+                        session.add(file_record)
+                    session.commit()
+
+            # Remove File records for removed paths
+            if to_remove:
+                with self.db.bulk_writer() as writer:
+                    for rel_path in to_remove:
+                        writer.delete_where(File, "path = :p", {"p": rel_path})
 
             # Publish epoch
             if self._epoch_manager is not None:
                 self._epoch_manager.publish_epoch(
-                    files_indexed=files_added + files_updated,
-                    indexed_paths=[f.path for f in stale_files],
+                    files_indexed=files_added,
+                    indexed_paths=list(to_add),
                 )
 
         duration = time.time() - start_time
 
         return IndexStats(
-            files_processed=len(stale_files),
+            files_processed=len(to_add) + len(to_remove),
             files_added=files_added,
             files_updated=files_updated,
             files_removed=files_removed,
-            symbols_indexed=0,
+            symbols_indexed=symbols_indexed,
             duration_seconds=duration,
         )
 
