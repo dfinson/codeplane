@@ -4,6 +4,22 @@ Local repository control plane for AI coding agents. Exposes repository operatio
 
 **Status:** Design + scaffolding phase. See `SPEC.md` for authoritative design.
 
+---
+
+## 🔴 MANDATORY: Use CodePlane MCP Tools First
+
+**When CodePlane MCP endpoints are available for an action, you MUST use them instead of alternatives.**
+
+This means:
+- **File operations** → Use `mcp_codeplane_read_files`, `mcp_codeplane_atomic_edit_files`, `mcp_codeplane_list_files` — NOT grep, cat, sed, find
+- **Repository mapping** → Use `mcp_codeplane_map_repo` — NOT manual directory traversal
+- **Git operations** → Use CodePlane git tools when available — NOT raw git commands
+- **Search** → Use CodePlane search tools — NOT grep/ripgrep
+
+CodePlane tools provide structured, validated responses. Terminal commands are fragile, require parsing, and lose context.
+
+**The only exception:** When a CodePlane tool genuinely does not exist for the operation needed.
+
 ## Technology Stack
 
 - **CLI:** Click
@@ -353,3 +369,18 @@ make lint        # Ruff
 make typecheck   # Mypy
 make test        # Pytest
 ```
+
+---
+
+## 🔴 REMINDER: Use CodePlane MCP Tools First
+
+**This is repeated intentionally. When CodePlane MCP endpoints are available for an action, you MUST use them.**
+
+- `mcp_codeplane_read_files` — NOT cat, head, tail
+- `mcp_codeplane_atomic_edit_files` — NOT sed, awk, echo >>
+- `mcp_codeplane_list_files` — NOT ls, find
+- `mcp_codeplane_map_repo` — NOT manual tree walking
+- CodePlane git tools — NOT raw git commands
+- CodePlane search — NOT grep, ripgrep, ag
+
+**Terminal commands are the fallback, not the default.**
