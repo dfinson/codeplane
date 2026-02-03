@@ -453,3 +453,172 @@ ok 2 - test two
         result = auto_parse(content, runner="pytest")
 
         assert result.total == 1
+
+
+# =============================================================================
+# Pytest JSON Parser
+# =============================================================================
+
+
+class TestPytestJsonParser:
+    """Tests for pytest JSON output parser."""
+
+    def test_parse_basic_success(self) -> None:
+        from codeplane.testing.parsers import parse_pytest_json
+
+        content = """{
+            "summary": {"total": 2, "passed": 2, "failed": 0, "skipped": 0, "error": 0},
+            "tests": [
+                {"nodeid": "tests/test_one.py::test_a", "outcome": "passed", "duration": 0.01},
+                {"nodeid": "tests/test_one.py::test_b", "outcome": "passed", "duration": 0.02}
+            ],
+            "duration": 0.03
+        }"""
+
+        result = parse_pytest_json(content)
+
+        assert result.total == 2
+        assert result.passed == 2
+        assert result.failed == 0
+        assert len(result.tests) == 2
+
+    def test_parse_with_failures(self) -> None:
+        from codeplane.testing.parsers import parse_pytest_json
+
+        content = """{
+            "summary": {"total": 3, "passed": 2, "failed": 1, "skipped": 0, "error": 0},
+            "tests": [
+                {"nodeid": "test_one.py::test_a", "outcome": "passed", "duration": 0.01},
+                {"nodeid": "test_one.py::test_b", "outcome": "failed", "duration": 0.02,
+                 "call": {"outcome": "failed", "crash": {"message": "AssertionError"}, "longrepr": "Traceback..."}},
+                {"nodeid": "test_one.py::test_c", "outcome": "passed", "duration": 0.01}
+            ],
+            "duration": 0.04
+        }"""
+
+        result = parse_pytest_json(content)
+
+        assert result.total == 3
+        assert result.passed == 2
+        assert result.failed == 1
+        # Check the failure details
+        failed_test = next((t for t in result.tests if t.status == "failed"), None)
+        assert failed_test is not None
+        assert failed_test.message == "AssertionError"
+        assert failed_test.traceback == "Traceback..."
+
+    def test_parse_with_skipped(self) -> None:
+        from codeplane.testing.parsers import parse_pytest_json
+
+        content = """{
+            "summary": {"total": 2, "passed": 1, "failed": 0, "skipped": 1, "error": 0},
+            "tests": [
+                {"nodeid": "test_one.py::test_a", "outcome": "passed", "duration": 0.01},
+                {"nodeid": "test_one.py::test_skip", "outcome": "skipped", "duration": 0.0}
+            ],
+            "duration": 0.01
+        }"""
+
+        result = parse_pytest_json(content)
+
+        assert result.total == 2
+        assert result.passed == 1
+        assert result.skipped == 1
+
+    def test_parse_with_errors(self) -> None:
+        from codeplane.testing.parsers import parse_pytest_json
+
+        content = """{
+            "summary": {"total": 2, "passed": 1, "failed": 0, "skipped": 0, "error": 1},
+            "tests": [
+                {"nodeid": "test_one.py::test_a", "outcome": "passed", "duration": 0.01},
+                {"nodeid": "test_one.py::test_error", "outcome": "error", "duration": 0.0}
+            ],
+            "duration": 0.01
+        }"""
+
+        result = parse_pytest_json(content)
+
+        assert result.total == 2
+        assert result.passed == 1
+        assert result.errors == 1
+
+    def test_parse_extracts_file_path(self) -> None:
+        from codeplane.testing.parsers import parse_pytest_json
+
+        content = """{
+            "summary": {"total": 1, "passed": 1},
+            "tests": [
+                {"nodeid": "tests/unit/test_module.py::TestClass::test_method", "outcome": "passed", "duration": 0.01, "lineno": 42}
+            ],
+            "duration": 0.01
+        }"""
+
+        result = parse_pytest_json(content)
+
+        assert len(result.tests) == 1
+        test = result.tests[0]
+        assert test.file_path == "tests/unit/test_module.py"
+        assert test.line_number == 42
+        assert test.name == "test_method"
+        assert test.classname == "tests/unit/test_module.py::TestClass"
+
+    def test_parse_invalid_json(self) -> None:
+        from codeplane.testing.parsers import parse_pytest_json
+
+        result = parse_pytest_json("not valid json")
+
+        # Should return error result
+        assert result.errors >= 1
+        assert len(result.tests) >= 1
+        assert result.tests[0].status == "error"
+
+    def test_parse_empty_tests_array(self) -> None:
+        from codeplane.testing.parsers import parse_pytest_json
+
+        content = """{
+            "summary": {"total": 0, "passed": 0, "failed": 0, "skipped": 0, "error": 0},
+            "tests": [],
+            "duration": 0.0
+        }"""
+
+        result = parse_pytest_json(content)
+
+        assert result.total == 0
+        assert len(result.tests) == 0
+
+    def test_parse_without_summary(self) -> None:
+        from codeplane.testing.parsers import parse_pytest_json
+
+        content = """{
+            "tests": [
+                {"nodeid": "test.py::test_one", "outcome": "passed", "duration": 0.01},
+                {"nodeid": "test.py::test_two", "outcome": "failed", "duration": 0.02}
+            ],
+            "duration": 0.03
+        }"""
+
+        result = parse_pytest_json(content)
+
+        # Should compute summary from tests
+        assert result.total == 2
+        assert result.passed == 1
+        assert result.failed == 1
+
+    def test_parse_simple_nodeid(self) -> None:
+        from codeplane.testing.parsers import parse_pytest_json
+
+        content = """{
+            "tests": [
+                {"nodeid": "test_simple", "outcome": "passed", "duration": 0.01}
+            ],
+            "duration": 0.01
+        }"""
+
+        result = parse_pytest_json(content)
+
+        assert len(result.tests) == 1
+        test = result.tests[0]
+        assert test.name == "test_simple"
+        assert test.file_path is None  # No :: separator
+        assert test.classname is None

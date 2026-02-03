@@ -148,3 +148,262 @@ class TestArtifactPaths:
             path = emitter.artifact_path(output_dir)
 
             assert str(path).endswith("coverage.out")
+
+
+# =============================================================================
+# Additional Emitter Tests
+# =============================================================================
+
+
+class TestVitestEmitter:
+    """Tests for Vitest coverage emitter."""
+
+    def test_capability_available_when_runner_present(self) -> None:
+        from codeplane.testing.coverage import VitestCoverageEmitter
+
+        emitter = VitestCoverageEmitter()
+        runtime = PackRuntime(
+            workspace_root=Path("/repo"),
+            runner_available=True,
+            coverage_tools={},
+        )
+        assert emitter.capability(runtime) == CoverageCapability.AVAILABLE
+
+    def test_format_id(self) -> None:
+        from codeplane.testing.coverage import VitestCoverageEmitter
+
+        emitter = VitestCoverageEmitter()
+        assert emitter.format_id == "istanbul"
+
+    def test_modify_command(self) -> None:
+        from codeplane.testing.coverage import VitestCoverageEmitter
+
+        emitter = VitestCoverageEmitter()
+        with TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            modified = emitter.modify_command(["npx", "vitest"], output_dir)
+            assert "--coverage" in modified
+
+    def test_artifact_path(self) -> None:
+        from codeplane.testing.coverage import VitestCoverageEmitter
+
+        emitter = VitestCoverageEmitter()
+        with TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            path = emitter.artifact_path(output_dir)
+            assert "coverage" in str(path)
+
+
+class TestCargoLlvmCovEmitter:
+    """Tests for Rust cargo-llvm-cov emitter."""
+
+    def test_capability_unsupported_when_runner_unavailable(self) -> None:
+        from codeplane.testing.coverage import CargoLlvmCovEmitter
+
+        emitter = CargoLlvmCovEmitter()
+        runtime = PackRuntime(
+            workspace_root=Path("/repo"),
+            runner_available=False,
+            coverage_tools={},
+        )
+        assert emitter.capability(runtime) == CoverageCapability.UNSUPPORTED
+
+    def test_format_id(self) -> None:
+        from codeplane.testing.coverage import CargoLlvmCovEmitter
+
+        emitter = CargoLlvmCovEmitter()
+        assert emitter.format_id == "lcov"
+
+    def test_modify_command(self) -> None:
+        from codeplane.testing.coverage import CargoLlvmCovEmitter
+
+        emitter = CargoLlvmCovEmitter()
+        with TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            modified = emitter.modify_command(["cargo", "test"], output_dir)
+            assert "llvm-cov" in modified
+            assert "--lcov" in modified
+
+    def test_artifact_path(self) -> None:
+        from codeplane.testing.coverage import CargoLlvmCovEmitter
+
+        emitter = CargoLlvmCovEmitter()
+        with TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            path = emitter.artifact_path(output_dir)
+            assert str(path).endswith("lcov.info")
+
+
+class TestMavenJacocoEmitter:
+    """Tests for Maven JaCoCo emitter."""
+
+    def test_capability_available_when_runner_present(self) -> None:
+        from codeplane.testing.coverage import MavenJacocoEmitter
+
+        emitter = MavenJacocoEmitter()
+        runtime = PackRuntime(
+            workspace_root=Path("/repo"),
+            runner_available=True,
+            coverage_tools={},
+        )
+        assert emitter.capability(runtime) == CoverageCapability.AVAILABLE
+
+    def test_format_id(self) -> None:
+        from codeplane.testing.coverage import MavenJacocoEmitter
+
+        emitter = MavenJacocoEmitter()
+        assert emitter.format_id == "jacoco"
+
+    def test_modify_command(self) -> None:
+        from codeplane.testing.coverage import MavenJacocoEmitter
+
+        emitter = MavenJacocoEmitter()
+        with TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            modified = emitter.modify_command(["mvn", "test"], output_dir)
+            assert "jacoco:report" in modified
+
+
+class TestGradleJacocoEmitter:
+    """Tests for Gradle JaCoCo emitter."""
+
+    def test_capability_available_when_runner_present(self) -> None:
+        from codeplane.testing.coverage import GradleJacocoEmitter
+
+        emitter = GradleJacocoEmitter()
+        runtime = PackRuntime(
+            workspace_root=Path("/repo"),
+            runner_available=True,
+            coverage_tools={},
+        )
+        assert emitter.capability(runtime) == CoverageCapability.AVAILABLE
+
+    def test_modify_command(self) -> None:
+        from codeplane.testing.coverage import GradleJacocoEmitter
+
+        emitter = GradleJacocoEmitter()
+        with TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            modified = emitter.modify_command(["./gradlew", "test"], output_dir)
+            assert "jacocoTestReport" in modified
+
+
+class TestDotnetCoverletEmitter:
+    """Tests for .NET Coverlet emitter."""
+
+    def test_capability_unsupported_when_runner_unavailable(self) -> None:
+        from codeplane.testing.coverage import DotnetCoverletEmitter
+
+        emitter = DotnetCoverletEmitter()
+        runtime = PackRuntime(
+            workspace_root=Path("/repo"),
+            runner_available=False,
+            coverage_tools={},
+        )
+        assert emitter.capability(runtime) == CoverageCapability.UNSUPPORTED
+
+    def test_format_id(self) -> None:
+        from codeplane.testing.coverage import DotnetCoverletEmitter
+
+        emitter = DotnetCoverletEmitter()
+        assert emitter.format_id == "cobertura"
+
+    def test_modify_command(self) -> None:
+        from codeplane.testing.coverage import DotnetCoverletEmitter
+
+        emitter = DotnetCoverletEmitter()
+        with TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            modified = emitter.modify_command(["dotnet", "test"], output_dir)
+            assert "--collect:XPlat Code Coverage" in modified or "--collect" in modified
+
+
+class TestSimpleCovEmitter:
+    """Tests for Ruby SimpleCov emitter."""
+
+    def test_capability_unsupported_when_runner_unavailable(self) -> None:
+        from codeplane.testing.coverage import SimpleCovEmitter
+
+        emitter = SimpleCovEmitter()
+        runtime = PackRuntime(
+            workspace_root=Path("/repo"),
+            runner_available=False,
+            coverage_tools={},
+        )
+        assert emitter.capability(runtime) == CoverageCapability.UNSUPPORTED
+
+    def test_format_id(self) -> None:
+        from codeplane.testing.coverage import SimpleCovEmitter
+
+        emitter = SimpleCovEmitter()
+        assert emitter.format_id == "simplecov"
+
+    def test_modify_command(self) -> None:
+        from codeplane.testing.coverage import SimpleCovEmitter
+
+        emitter = SimpleCovEmitter()
+        with TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            modified = emitter.modify_command(["bundle", "exec", "rspec"], output_dir)
+            # SimpleCov doesn't modify command - it's configured in code
+            assert modified is not None
+
+
+class TestPHPUnitCoverageEmitter:
+    """Tests for PHPUnit coverage emitter."""
+
+    def test_capability_unsupported_when_runner_unavailable(self) -> None:
+        from codeplane.testing.coverage import PHPUnitCoverageEmitter
+
+        emitter = PHPUnitCoverageEmitter()
+        runtime = PackRuntime(
+            workspace_root=Path("/repo"),
+            runner_available=False,
+            coverage_tools={},
+        )
+        assert emitter.capability(runtime) == CoverageCapability.UNSUPPORTED
+
+    def test_format_id(self) -> None:
+        from codeplane.testing.coverage import PHPUnitCoverageEmitter
+
+        emitter = PHPUnitCoverageEmitter()
+        assert emitter.format_id == "clover"
+
+    def test_modify_command(self) -> None:
+        from codeplane.testing.coverage import PHPUnitCoverageEmitter
+
+        emitter = PHPUnitCoverageEmitter()
+        with TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            modified = emitter.modify_command(["phpunit"], output_dir)
+            assert "--coverage-clover" in " ".join(modified)
+
+
+class TestDartCoverageEmitter:
+    """Tests for Dart coverage emitter."""
+
+    def test_capability_unsupported_when_runner_unavailable(self) -> None:
+        from codeplane.testing.coverage import DartCoverageEmitter
+
+        emitter = DartCoverageEmitter()
+        runtime = PackRuntime(
+            workspace_root=Path("/repo"),
+            runner_available=False,
+            coverage_tools={},
+        )
+        assert emitter.capability(runtime) == CoverageCapability.UNSUPPORTED
+
+    def test_format_id(self) -> None:
+        from codeplane.testing.coverage import DartCoverageEmitter
+
+        emitter = DartCoverageEmitter()
+        assert emitter.format_id == "dart"
+
+    def test_modify_command(self) -> None:
+        from codeplane.testing.coverage import DartCoverageEmitter
+
+        emitter = DartCoverageEmitter()
+        with TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            modified = emitter.modify_command(["dart", "test"], output_dir)
+            assert any("--coverage" in arg for arg in modified)
