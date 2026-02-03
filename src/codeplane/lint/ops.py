@@ -95,13 +95,42 @@ class LintOps:
         start_time = time.time()
         action: Literal["check", "fix"] = "check" if dry_run else "fix"
 
+        # Validate tools if specified
+        invalid_tools: list[str] = []
+        if tools:
+            for tid in tools:
+                if not registry.get(tid):
+                    invalid_tools.append(tid)
+            if invalid_tools:
+                return LintResult(
+                    action=action,
+                    dry_run=dry_run,
+                    tools_run=[],
+                    duration_seconds=time.time() - start_time,
+                    agentic_hint=f"Unknown tool(s): {', '.join(invalid_tools)}. "
+                    f"Use lint_tools to see available tools.",
+                )
+
+        # Validate categories if specified
+        valid_categories = {e.value for e in ToolCategory}
+        if categories:
+            invalid_cats = [c for c in categories if c not in valid_categories]
+            if invalid_cats:
+                return LintResult(
+                    action=action,
+                    dry_run=dry_run,
+                    tools_run=[],
+                    duration_seconds=time.time() - start_time,
+                    agentic_hint=f"Unknown category(s): {', '.join(invalid_cats)}. "
+                    f"Valid categories: {', '.join(sorted(valid_categories))}",
+                )
+
         # Resolve which tools to run
         tools_to_run = self._resolve_tools(tools, categories)
 
         # If no tools detected, provide agentic fallback
         if not tools_to_run:
-            file_stats = await self._coordinator.get_file_stats()
-            detected_languages = list(file_stats.keys())
+            detected_languages = await self._get_detected_languages()
             no_tools_hint = _generate_agentic_hint(detected_languages)
 
             return LintResult(
@@ -123,8 +152,7 @@ class LintOps:
         errored_tools = [r for r in results if r.status == "error"]
         agentic_hint: str | None = None
         if errored_tools:
-            file_stats = await self._coordinator.get_file_stats()
-            detected_languages = list(file_stats.keys())
+            detected_languages = await self._get_detected_languages()
             error_details = "; ".join(
                 f"{r.tool_id}: {r.error_detail}" for r in errored_tools if r.error_detail
             )
@@ -140,6 +168,15 @@ class LintOps:
             duration_seconds=time.time() - start_time,
             agentic_hint=agentic_hint,
         )
+
+    async def _get_detected_languages(self) -> list[str]:
+        """Get detected languages, gracefully handling uninitialized coordinator."""
+        try:
+            file_stats = await self._coordinator.get_file_stats()
+            return list(file_stats.keys())
+        except RuntimeError:
+            # Coordinator not initialized - return common defaults
+            return ["python", "javascript"]
 
     def _resolve_tools(
         self, tool_ids: list[str] | None, categories: list[str] | None
@@ -245,36 +282,43 @@ class LintOps:
             )
 
     async def _get_file_count_from_index(self, tool: LintTool, paths: list[Path]) -> int:
-        """Get file count from index based on tool's language."""
-        # Map tool language to index language family
-        tool_lang = tool.tool_id.split(".")[0]  # e.g., "python" from "python.ruff"
+        """Get file count from index based on tool's language.
 
-        # Reverse lookup from tool prefix to language family
-        lang_family = None
-        for family, prefix in _LANGUAGE_TO_TOOL_PREFIX.items():
-            if prefix == tool_lang:
-                lang_family = family
-                break
+        Falls back to 0 if coordinator is not initialized.
+        """
+        try:
+            # Map tool language to index language family
+            tool_lang = tool.tool_id.split(".")[0]  # e.g., "python" from "python.ruff"
 
-        if not lang_family:
-            # Fallback: count all indexed files
-            return await self._coordinator.get_indexed_file_count()
-
-        # Get count for specific language
-        # If paths specified, we'd need to filter - for now just get language count
-        if len(paths) == 1 and paths[0] == self._repo_root:
-            return await self._coordinator.get_indexed_file_count(lang_family)
-
-        # For specific paths, get files and count those matching
-        indexed_files = await self._coordinator.get_indexed_files(lang_family, limit=10000)
-        count = 0
-        for f in indexed_files:
-            for p in paths:
-                rel_path = p.relative_to(self._repo_root) if p.is_absolute() else p
-                if f.startswith(str(rel_path)):
-                    count += 1
+            # Reverse lookup from tool prefix to language family
+            lang_family = None
+            for family, prefix in _LANGUAGE_TO_TOOL_PREFIX.items():
+                if prefix == tool_lang:
+                    lang_family = family
                     break
-        return count
+
+            if not lang_family:
+                # Fallback: count all indexed files
+                return await self._coordinator.get_indexed_file_count()
+
+            # Get count for specific language
+            # If paths specified, we'd need to filter - for now just get language count
+            if len(paths) == 1 and paths[0] == self._repo_root:
+                return await self._coordinator.get_indexed_file_count(lang_family)
+
+            # For specific paths, get files and count those matching
+            indexed_files = await self._coordinator.get_indexed_files(lang_family, limit=10000)
+            count = 0
+            for f in indexed_files:
+                for p in paths:
+                    rel_path = p.relative_to(self._repo_root) if p.is_absolute() else p
+                    if f.startswith(str(rel_path)):
+                        count += 1
+                        break
+            return count
+        except RuntimeError:
+            # Coordinator not initialized - return 0 as fallback
+            return 0
 
     def _build_command(
         self,

@@ -243,7 +243,7 @@ class TestRunStatus:
     """Status of a test run."""
 
     run_id: str
-    status: Literal["running", "completed", "cancelled", "failed"]
+    status: Literal["running", "completed", "cancelled", "failed", "not_found"]
     progress: TestProgress | None = None
     failures: list[TestFailure] = field(default_factory=list)
     duration_seconds: float = 0.0

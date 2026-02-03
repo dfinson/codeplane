@@ -141,17 +141,36 @@ async def lint_tools(ctx: AppContext, params: LintToolsParams) -> dict[str, Any]
     detected = registry.detect(ctx.lint_ops._repo_root)
     detected_ids = {t.tool_id for t in detected}
 
-    # Filter by language if specified
+    # Validate and filter by language if specified
     if params.language:
-        all_tools = [t for t in all_tools if params.language in t.languages]
+        matching = [t for t in all_tools if params.language in t.languages]
+        if not matching:
+            return {
+                "tools": [],
+                "detected_count": 0,
+                "total_count": 0,
+                "summary": f"No tools available for language '{params.language}'",
+                "agentic_hint": f"Language '{params.language}' is not supported. "
+                f"Supported languages include: python, javascript, typescript, go, rust, ruby, php, java, kotlin",
+            }
+        all_tools = matching
 
-    # Filter by category if specified
+    # Validate and filter by category if specified
     if params.category:
-        try:
-            cat = ToolCategory(params.category)
-            all_tools = [t for t in all_tools if t.category == cat]
-        except ValueError:
-            pass
+        valid_categories = {e.value for e in ToolCategory}
+        if params.category not in valid_categories:
+            return {
+                "tools": [],
+                "detected_count": 0,
+                "total_count": 0,
+                "summary": f"Invalid category '{params.category}'",
+                "agentic_hint": f"Valid categories: {', '.join(sorted(valid_categories))}",
+            }
+        cat = ToolCategory(params.category)
+        all_tools = [t for t in all_tools if t.category == cat]
+
+    # Recalculate detected_count based on filtered tools
+    filtered_detected = [t for t in all_tools if t.tool_id in detected_ids]
 
     return {
         "tools": [
@@ -166,7 +185,7 @@ async def lint_tools(ctx: AppContext, params: LintToolsParams) -> dict[str, Any]
             }
             for t in sorted(all_tools, key=lambda x: (x.category.value, x.tool_id))
         ],
-        "detected_count": len(detected),
+        "detected_count": len(filtered_detected),
         "total_count": len(all_tools),
-        "summary": f"{len(detected)} of {len(all_tools)} tools detected",
+        "summary": f"{len(filtered_detected)} of {len(all_tools)} tools detected",
     }

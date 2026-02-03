@@ -219,4 +219,8 @@ def _serialize_test_result(result: TestResult) -> dict[str, Any]:
         if status.coverage:
             output["run_status"]["coverage"] = status.coverage
 
+    # Include agentic hint if present
+    if result.agentic_hint:
+        output["agentic_hint"] = result.agentic_hint
+
     return output

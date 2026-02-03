@@ -473,6 +473,19 @@ class TestOps:
             fail_fast: Stop on first failure
             coverage: Enable coverage collection if supported
         """
+        # Validate that targets is not an empty list
+        if targets is not None and len(targets) == 0:
+            return TestResult(
+                action="run",
+                run_status=TestRunStatus(
+                    run_id="",
+                    status="failed",
+                ),
+                agentic_hint="Empty targets list provided. Either omit targets "
+                "to run all tests, or specify at least one target. "
+                "Use testing_discover to find available targets.",
+            )
+
         run_id = str(uuid.uuid4())[:8]
         cancel_event = asyncio.Event()
 
@@ -495,6 +508,23 @@ class TestOps:
         else:
             discover_result = await self.discover()
             resolved_targets = discover_result.targets or []
+
+        # Check if we have any targets to run
+        if not resolved_targets:
+            return TestResult(
+                action="run",
+                run_status=TestRunStatus(
+                    run_id=run_id,
+                    status="completed",
+                    progress=progress,
+                    artifact_dir=str(artifact_dir),
+                ),
+                agentic_hint="No test targets found to run. "
+                + (
+                    discover_result.agentic_hint
+                    or "Use testing_discover to check available targets."
+                ),
+            )
 
         progress.targets.total = len(resolved_targets)
 
@@ -1019,7 +1049,9 @@ class TestOps:
         # Run not found
         return TestResult(
             action="status",
-            run_status=TestRunStatus(run_id=run_id, status="completed"),
+            run_status=TestRunStatus(run_id=run_id, status="not_found"),
+            agentic_hint=f"No test run found with ID '{run_id}'. "
+            "Use testing_run to start a new test run.",
         )
 
     async def cancel(self, run_id: str) -> TestResult:
