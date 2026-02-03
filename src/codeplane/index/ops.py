@@ -51,6 +51,7 @@ from codeplane.index.models import (
     ContextMarker,
     DefFact,
     File,
+    IndexedLintTool,
     ProbeStatus,
     RefFact,
     TestTarget,
@@ -310,6 +311,9 @@ class IndexCoordinator:
 
         # Step 7.5: Discover test targets
         await self._discover_test_targets()
+
+        # Step 7.6: Discover lint tools
+        await self._discover_lint_tools()
 
         # Step 8: Initialize router
         self._router = ContextRouter()
@@ -1056,6 +1060,32 @@ class IndexCoordinator:
                 stmt = stmt.where(col(TestTarget.target_id).in_(target_ids))
             return list(session.exec(stmt).all())
 
+    async def get_lint_tools(
+        self,
+        tool_ids: list[str] | None = None,
+        category: str | None = None,
+    ) -> list[IndexedLintTool]:
+        """Get lint tools from the index.
+
+        Args:
+            tool_ids: Optional list of specific tool IDs to fetch.
+                     If None, returns all tools.
+            category: Optional category filter ("lint", "format", "type_check", "security").
+
+        Returns:
+            List of IndexedLintTool objects
+        """
+        await self.wait_for_freshness()
+        with self.db.session() as session:
+            stmt = select(IndexedLintTool)
+            if tool_ids:
+                from sqlmodel import col
+
+                stmt = stmt.where(col(IndexedLintTool.tool_id).in_(tool_ids))
+            if category:
+                stmt = stmt.where(IndexedLintTool.category == category)
+            return list(session.exec(stmt).all())
+
     async def map_repo(
         self,
         include: list[IncludeOption] | None = None,
@@ -1201,6 +1231,48 @@ class IndexCoordinator:
             session.commit()
 
         return targets_discovered
+
+    async def _discover_lint_tools(self) -> int:
+        """Discover and persist lint tools for all workspaces.
+
+        Uses lint tool registry to find configured tools. Called during init()
+        after contexts are persisted. Returns count of tools discovered.
+        """
+        import json as json_module
+
+        from codeplane.lint.tools import registry as lint_registry
+
+        tools_discovered = 0
+        discovered_at = time.time()
+
+        with self.db.session() as session:
+            # Detect configured tools for the repo
+            detected_tools = lint_registry.detect(self.repo_root)
+
+            for tool in detected_tools:
+                # Find which config file triggered detection
+                config_file: str | None = None
+                for cf in tool.config_files:
+                    if (self.repo_root / cf).exists():
+                        config_file = cf
+                        break
+
+                indexed_tool = IndexedLintTool(
+                    tool_id=tool.tool_id,
+                    name=tool.name,
+                    category=tool.category.value,
+                    languages=json_module.dumps(sorted(tool.languages)),
+                    executable=tool.executable,
+                    workspace_root=str(self.repo_root),
+                    config_file=config_file,
+                    discovered_at=discovered_at,
+                )
+                session.add(indexed_tool)
+                tools_discovered += 1
+
+            session.commit()
+
+        return tools_discovered
 
     async def _index_all_files(self) -> tuple[int, list[str], dict[str, int]]:
         """Index all files in valid contexts.

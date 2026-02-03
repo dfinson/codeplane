@@ -124,8 +124,21 @@ async def lint(ctx: AppContext, params: LintParams) -> dict[str, Any]:
         from codeplane.lint.models import ToolCategory
 
         all_tools = registry.all()
-        detected = registry.detect(ctx.lint_ops._repo_root)
-        detected_ids = {t.tool_id for t in detected}
+
+        # Try to get detected tools from index first, fall back to runtime detection
+        detected_ids: set[str] = set()
+        try:
+            indexed_tools = await ctx.coordinator.get_lint_tools()
+            if indexed_tools:
+                detected_ids = {t.tool_id for t in indexed_tools}
+            else:
+                # Index empty, fall back to runtime detection
+                detected = registry.detect(ctx.lint_ops._repo_root)
+                detected_ids = {t.tool_id for t in detected}
+        except (RuntimeError, AttributeError):
+            # Coordinator not initialized, fall back to runtime detection
+            detected = registry.detect(ctx.lint_ops._repo_root)
+            detected_ids = {t.tool_id for t in detected}
 
         # Filter by language if specified
         if params.language:

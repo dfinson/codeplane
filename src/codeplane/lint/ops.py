@@ -126,7 +126,7 @@ class LintOps:
                 )
 
         # Resolve which tools to run
-        tools_to_run = self._resolve_tools(tools, categories)
+        tools_to_run = await self._resolve_tools(tools, categories)
 
         # If no tools detected, provide agentic fallback
         if not tools_to_run:
@@ -178,10 +178,14 @@ class LintOps:
             # Coordinator not initialized - return common defaults
             return ["python", "javascript"]
 
-    def _resolve_tools(
+    async def _resolve_tools(
         self, tool_ids: list[str] | None, categories: list[str] | None
     ) -> list[LintTool]:
-        """Resolve which tools to run."""
+        """Resolve which tools to run.
+
+        Queries the index first for pre-discovered tools, falls back to
+        runtime detection if index is empty or not initialized.
+        """
         if tool_ids:
             # Specific tools requested
             tools = []
@@ -191,7 +195,32 @@ class LintOps:
                     tools.append(tool)
             return tools
 
-        # Auto-detect configured tools
+        # Try to get tools from index first
+        try:
+            indexed_tools = await self._coordinator.get_lint_tools(
+                category=categories[0] if categories and len(categories) == 1 else None
+            )
+            if indexed_tools:
+                # Convert indexed tools back to LintTool objects
+                detected: list[LintTool] = []
+                for indexed in indexed_tools:
+                    tool = registry.get(indexed.tool_id)
+                    if tool:
+                        detected.append(tool)
+
+                # Filter by category if multiple specified
+                if categories and len(categories) > 1:
+                    category_set = {
+                        ToolCategory(c) for c in categories if c in [e.value for e in ToolCategory]
+                    }
+                    detected = [t for t in detected if t.category in category_set]
+
+                return detected
+        except (RuntimeError, AttributeError):
+            # Coordinator not initialized or doesn't have get_lint_tools
+            pass
+
+        # Fallback: runtime detection
         detected = registry.detect(self._repo_root)
 
         # Filter by category if specified

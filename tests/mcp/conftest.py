@@ -87,6 +87,8 @@ def mock_coordinator() -> MagicMock:
     mock.search = AsyncMock(return_value=[])
     mock.get_def = AsyncMock(return_value=None)
     mock.get_references = AsyncMock(return_value=[])
+    mock.get_lint_tools = AsyncMock(return_value=[])
+    mock.get_test_targets = AsyncMock(return_value=[])
     mock.map_repo = AsyncMock(
         return_value=MagicMock(
             structure=None,

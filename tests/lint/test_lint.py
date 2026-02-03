@@ -27,6 +27,7 @@ def create_mock_coordinator() -> MagicMock:
     coordinator.get_indexed_file_count = AsyncMock(return_value=10)
     coordinator.get_indexed_files = AsyncMock(return_value=["src/foo.py", "src/bar.py"])
     coordinator.get_contexts = AsyncMock(return_value=[])
+    coordinator.get_lint_tools = AsyncMock(return_value=[])
     return coordinator
 
 
@@ -885,7 +886,7 @@ class TestLintOps:
             coordinator = create_mock_coordinator()
             ops = LintOps(root, coordinator)
 
-            tools = ops._resolve_tools(["python.ruff"], None)
+            tools = await ops._resolve_tools(["python.ruff"], None)
             assert len(tools) == 1
             assert tools[0].tool_id == "python.ruff"
 
@@ -897,7 +898,7 @@ class TestLintOps:
             (root / "pyproject.toml").write_text("[tool.ruff]\n")
             ops = LintOps(root, coordinator)
 
-            tools = ops._resolve_tools(None, ["lint"])
+            tools = await ops._resolve_tools(None, ["lint"])
             # Should filter detected tools by category
             assert all(t.category == ToolCategory.LINT for t in tools)
 

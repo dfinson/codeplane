@@ -398,6 +398,22 @@ class TestTarget(SQLModel, table=True):
     discovered_at: float | None = None
 
 
+class IndexedLintTool(SQLModel, table=True):
+    """Lint tool discovered during indexing."""
+
+    __tablename__ = "indexed_lint_tools"
+
+    id: int | None = Field(default=None, primary_key=True)
+    tool_id: str = Field(unique=True, index=True)  # "python.ruff", "js.eslint", etc.
+    name: str
+    category: str = Field(index=True)  # "lint", "format", "type_check", "security"
+    languages: str  # JSON array of language strings
+    executable: str
+    workspace_root: str
+    config_file: str | None = None  # Which config file triggered detection
+    discovered_at: float | None = None
+
+
 class Context(SQLModel, table=True):
     """Indexing context (package, workspace, etc) - represents a build unit."""
 
