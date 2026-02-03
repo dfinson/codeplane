@@ -40,13 +40,14 @@ class TestTarget:
     estimated_cost: float = 1.0
     test_count: int | None = None
 
-    # Compatibility shim for legacy code
     @property
     def path(self) -> str:
+        """Alias for selector."""
         return self.selector
 
     @property
     def runner(self) -> str:
+        """Extract runner name from pack_id."""
         return (
             self.runner_pack_id.split(".")[-1]
             if "." in self.runner_pack_id
