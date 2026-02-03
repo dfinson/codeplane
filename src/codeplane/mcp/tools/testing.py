@@ -9,7 +9,7 @@ from codeplane.mcp.tools.base import BaseParams
 
 if TYPE_CHECKING:
     from codeplane.mcp.context import AppContext
-    from codeplane.testing.ops import TestResult
+    from codeplane.testing.models import TestResult
 
 
 # =============================================================================
@@ -62,48 +62,49 @@ async def test_discover(ctx: AppContext, params: TestDiscoverParams) -> dict[str
         "targets": [
             {
                 "target_id": t.target_id,
-                "path": t.path,
+                "selector": t.selector,
+                "kind": t.kind,
                 "language": t.language,
-                "runner": t.runner,
+                "runner_pack_id": t.runner_pack_id,
+                "workspace_root": t.workspace_root,
                 "estimated_cost": t.estimated_cost,
                 "test_count": t.test_count,
+                # Legacy compatibility
+                "path": t.path,
+                "runner": t.runner,
             }
             for t in (result.targets or [])
         ],
     }
 
 
-# TODO: Implement TestOps.run() subprocess execution before enabling
-# @registry.register("test_run", "Run tests", TestRunParams)
-# async def test_run(ctx: AppContext, params: TestRunParams) -> dict[str, Any]:
-#     """Run tests."""
-#     result = await ctx.test_ops.run(
-#         targets=params.targets,
-#         _pattern=params.pattern,
-#         _tags=params.tags,
-#         _failed_only=params.failed_only,
-#         _parallelism=params.parallelism,
-#         _timeout_sec=params.timeout_sec,
-#         _fail_fast=params.fail_fast,
-#     )
-#
-#     return _serialize_test_result(result)
+@registry.register("test_run", "Run tests", TestRunParams)
+async def test_run(ctx: AppContext, params: TestRunParams) -> dict[str, Any]:
+    """Run tests."""
+    result = await ctx.test_ops.run(
+        targets=params.targets,
+        pattern=params.pattern,
+        tags=params.tags,
+        failed_only=params.failed_only,
+        parallelism=params.parallelism,
+        timeout_sec=params.timeout_sec,
+        fail_fast=params.fail_fast,
+    )
+    return _serialize_test_result(result)
 
 
-# TODO: Implement TestOps.status() run tracking before enabling
-# @registry.register("test_status", "Get status of a test run", TestStatusParams)
-# async def test_status(ctx: AppContext, params: TestStatusParams) -> dict[str, Any]:
-#     """Get test run status."""
-#     result = await ctx.test_ops.status(params.run_id)
-#     return _serialize_test_result(result)
+@registry.register("test_status", "Get status of a test run", TestStatusParams)
+async def test_status(ctx: AppContext, params: TestStatusParams) -> dict[str, Any]:
+    """Get test run status."""
+    result = await ctx.test_ops.status(params.run_id)
+    return _serialize_test_result(result)
 
 
-# TODO: Implement TestOps.cancel() run management before enabling
-# @registry.register("test_cancel", "Cancel a running test", TestCancelParams)
-# async def test_cancel(ctx: AppContext, params: TestCancelParams) -> dict[str, Any]:
-#     """Cancel test run."""
-#     result = await ctx.test_ops.cancel(params.run_id)
-#     return _serialize_test_result(result)
+@registry.register("test_cancel", "Cancel a running test", TestCancelParams)
+async def test_cancel(ctx: AppContext, params: TestCancelParams) -> dict[str, Any]:
+    """Cancel test run."""
+    result = await ctx.test_ops.cancel(params.run_id)
+    return _serialize_test_result(result)
 
 
 def _serialize_test_result(result: TestResult) -> dict[str, Any]:
@@ -116,14 +117,31 @@ def _serialize_test_result(result: TestResult) -> dict[str, Any]:
             "run_id": status.run_id,
             "status": status.status,
             "duration_seconds": status.duration_seconds,
+            "artifact_dir": status.artifact_dir,
         }
         if status.progress:
+            progress = status.progress
             output["run_status"]["progress"] = {
-                "total": status.progress.total,
-                "completed": status.progress.completed,
-                "passed": status.progress.passed,
-                "failed": status.progress.failed,
-                "skipped": status.progress.skipped,
+                # New structured progress
+                "targets": {
+                    "total": progress.targets.total,
+                    "completed": progress.targets.completed,
+                    "running": progress.targets.running,
+                    "failed": progress.targets.failed,
+                },
+                "cases": {
+                    "total": progress.cases.total,
+                    "passed": progress.cases.passed,
+                    "failed": progress.cases.failed,
+                    "skipped": progress.cases.skipped,
+                    "errors": progress.cases.errors,
+                },
+                # Legacy flat fields for compatibility
+                "total": progress.total,
+                "completed": progress.completed,
+                "passed": progress.passed,
+                "failed": progress.failed,
+                "skipped": progress.skipped,
             }
         if status.failures:
             output["run_status"]["failures"] = [
@@ -133,6 +151,8 @@ def _serialize_test_result(result: TestResult) -> dict[str, Any]:
                     "line": f.line,
                     "message": f.message,
                     "traceback": f.traceback,
+                    "classname": f.classname,
+                    "duration_seconds": f.duration_seconds,
                 }
                 for f in status.failures
             ]
