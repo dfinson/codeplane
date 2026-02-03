@@ -238,7 +238,8 @@ registry.register(
         languages=frozenset({"go"}),
         category=ToolCategory.LINT,
         executable="staticcheck",
-        config_files=["go.mod", "staticcheck.conf"],
+        # Only detect if explicitly configured (not just any Go project)
+        config_files=["staticcheck.conf"],
         check_args=["-f", "json", "./..."],
         fix_args=["-f", "json", "./..."],  # staticcheck doesn't fix
         dry_run_args=["-f", "json", "./..."],
@@ -343,7 +344,8 @@ registry.register(
         languages=frozenset({"rust"}),
         category=ToolCategory.SECURITY,
         executable="cargo",
-        config_files=["Cargo.toml", "Cargo.lock"],
+        # Only detect if Cargo.lock exists (indicates dependencies to audit)
+        config_files=["Cargo.lock"],
         check_args=["audit", "--json"],
         fix_args=["audit", "--json"],  # audit doesn't fix
         dry_run_args=["audit", "--json"],
@@ -381,7 +383,7 @@ registry.register(
         languages=frozenset({"kotlin"}),
         category=ToolCategory.LINT,
         executable="ktlint",
-        config_files=[".editorconfig", ".ktlint"],
+        config_files=[".ktlint"],
         check_args=["--reporter=json"],
         fix_args=["-F", "--reporter=json"],
         dry_run_args=["--reporter=json"],
@@ -402,7 +404,8 @@ registry.register(
         languages=frozenset({"csharp", "vb"}),
         category=ToolCategory.FORMAT,
         executable="dotnet",
-        config_files=[".editorconfig"],
+        # Detect via .NET-specific files, not generic .editorconfig
+        config_files=["Directory.Build.props", "global.json"],
         check_args=["format", "--verify-no-changes"],
         fix_args=["format"],
         dry_run_args=["format", "--verify-no-changes"],
@@ -514,7 +517,8 @@ registry.register(
         languages=frozenset({"bash", "sh", "shell"}),
         category=ToolCategory.FORMAT,
         executable="shfmt",
-        config_files=[".editorconfig"],
+        # No dedicated config file - detect via shellcheck config as proxy
+        config_files=[".shellcheckrc"],
         check_args=["-l"],
         fix_args=["-w"],
         dry_run_args=["-l", "-d"],
@@ -583,7 +587,7 @@ registry.register(
         languages=frozenset({"sql"}),
         category=ToolCategory.LINT,
         executable="sqlfluff",
-        config_files=[".sqlfluff", "setup.cfg", "pyproject.toml"],
+        config_files=[".sqlfluff", "setup.cfg:sqlfluff", "pyproject.toml:tool.sqlfluff"],
         check_args=["lint", "--format", "json"],
         fix_args=["fix", "--force"],
         dry_run_args=["lint", "--format", "json"],
