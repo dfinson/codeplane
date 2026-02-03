@@ -8,6 +8,7 @@ from typing import cast
 import click
 
 from codeplane.cli.init import initialize_repo
+from codeplane.cli.utils import find_repo_root
 from codeplane.config.loader import load_config
 from codeplane.config.models import CodePlaneConfig
 from codeplane.index.ops import IndexCoordinator
@@ -50,20 +51,19 @@ def _print_banner(host: str, port: int) -> None:
 
 
 @click.command()
-@click.argument("path", default=".", type=click.Path(exists=True, path_type=Path))
+@click.argument("path", default=None, required=False, type=click.Path(exists=True, path_type=Path))
 @click.option("--port", "-p", type=int, help="Override server port")
-def up_command(path: Path, port: int | None) -> None:
+def up_command(path: Path | None, port: int | None) -> None:
     """Start the CodePlane server for this repository.
 
     If already running, reports the existing instance. Runs in foreground.
 
-    PATH is the repository root (default: current directory).
+    PATH is the repository root. If not specified, auto-detects by walking
+    up from the current directory to find the git root.
     """
     from codeplane.daemon.lifecycle import is_server_running, read_server_info, run_server
 
-    repo_root = path.resolve()
-    if not (repo_root / ".git").exists():
-        raise click.ClickException(f"Not a git repository: {repo_root}")
+    repo_root = find_repo_root(path)
 
     codeplane_dir = repo_root / ".codeplane"
 

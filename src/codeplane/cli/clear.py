@@ -8,6 +8,7 @@ import questionary
 from rich.console import Console
 
 from codeplane.cli.init import _get_xdg_index_dir
+from codeplane.cli.utils import find_repo_root
 
 
 def clear_repo(repo_root: Path, *, force: bool = False) -> bool:
@@ -90,23 +91,18 @@ def clear_repo(repo_root: Path, *, force: bool = False) -> bool:
 
 
 @click.command()
-@click.argument("path", default=".", type=click.Path(exists=True, path_type=Path))
+@click.argument("path", default=None, required=False, type=click.Path(exists=True, path_type=Path))
 @click.option("--force", "-f", is_flag=True, help="Skip confirmation prompt")
-def clear_command(path: Path, force: bool) -> None:
+def clear_command(path: Path | None, force: bool) -> None:
     """Remove all CodePlane data from a repository.
 
     This removes the .codeplane/ directory and any associated index files
     (including cross-filesystem index storage for WSL setups).
 
-    PATH is the repository root (default: current directory).
+    PATH is the repository root. If not specified, auto-detects by walking
+    up from the current directory to find the git root.
     """
-    repo_root = path.resolve()
-
-    if not (repo_root / ".git").exists():
-        raise click.ClickException(
-            f"'{repo_root}' is not a git repository. "
-            "Run from a git repository root, or pass a path: cpl clear PATH"
-        )
+    repo_root = find_repo_root(path)
 
     if not clear_repo(repo_root, force=force):
         if not force:

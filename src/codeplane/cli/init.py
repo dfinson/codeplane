@@ -168,22 +168,20 @@ def initialize_repo(repo_root: Path, *, force: bool = False, quiet: bool = False
 
 
 @click.command()
-@click.argument("path", default=".", type=click.Path(exists=True, path_type=Path))
+@click.argument("path", default=None, required=False, type=click.Path(exists=True, path_type=Path))
 @click.option("--force", "-f", is_flag=True, help="Overwrite existing .codeplane directory")
-def init_command(path: Path, force: bool) -> None:
+def init_command(path: Path | None, force: bool) -> None:
     """Initialize a repository for CodePlane management.
 
     Creates .codeplane/ directory with default configuration and builds
-    the initial index. Must be run from the git repository root.
+    the initial index.
 
-    PATH is the repository root (default: current directory).
+    PATH is the repository root. If not specified, auto-detects by walking
+    up from the current directory to find the git root.
     """
-    repo_root = path.resolve()
-    if not (repo_root / ".git").exists():
-        raise click.ClickException(
-            f"'{repo_root}' is not a git repository. "
-            "CodePlane must be run from a git repository root, or pass a path: cpl init PATH"
-        )
+    from codeplane.cli.utils import find_repo_root
+
+    repo_root = find_repo_root(path)
 
     if not initialize_repo(repo_root, force=force):
         if not force:

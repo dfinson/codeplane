@@ -6,23 +6,20 @@ from pathlib import Path
 import click
 import httpx
 
+from codeplane.cli.utils import find_repo_root
 from codeplane.daemon.lifecycle import is_server_running, read_server_info
 
 
 @click.command()
-@click.argument("path", default=".", type=click.Path(exists=True, path_type=Path))
+@click.argument("path", default=None, required=False, type=click.Path(exists=True, path_type=Path))
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
-def status_command(path: Path, as_json: bool) -> None:
+def status_command(path: Path | None, as_json: bool) -> None:
     """Show CodePlane daemon status.
 
-    PATH is the repository root (default: current directory).
+    PATH is the repository root. If not specified, auto-detects by walking
+    up from the current directory to find the git root.
     """
-    repo_root = path.resolve()
-    if not (repo_root / ".git").exists():
-        raise click.ClickException(
-            f"'{repo_root}' is not a git repository. "
-            "CodePlane must be run from a git repository root, or pass a path: cpl status PATH"
-        )
+    repo_root = find_repo_root(path)
 
     codeplane_dir = repo_root / ".codeplane"
     if not codeplane_dir.exists():
