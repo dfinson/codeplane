@@ -1246,17 +1246,10 @@ class IndexCoordinator:
         discovered_at = time.time()
 
         with self.db.session() as session:
-            # Detect configured tools for the repo
-            detected_tools = lint_registry.detect(self.repo_root)
+            # Detect configured tools for the repo (returns (tool, config_file) tuples)
+            detected_pairs = lint_registry.detect(self.repo_root)
 
-            for tool in detected_tools:
-                # Find which config file triggered detection
-                config_file: str | None = None
-                for cf in tool.config_files:
-                    if (self.repo_root / cf).exists():
-                        config_file = cf
-                        break
-
+            for tool, config_file in detected_pairs:
                 indexed_tool = IndexedLintTool(
                     tool_id=tool.tool_id,
                     name=tool.name,

@@ -260,8 +260,8 @@ class TestRegistry:
             root = Path(tmpdir)
             (root / "pyproject.toml").write_text("[tool.ruff]\n")
 
-            detected = registry.detect(root)
-            tool_ids = [t.tool_id for t in detected]
+            detected_pairs = registry.detect(root)
+            tool_ids = [t.tool_id for t, _ in detected_pairs]
             assert "python.ruff" in tool_ids
 
     def test_registry_detect_multiple(self) -> None:
@@ -270,8 +270,8 @@ class TestRegistry:
             (root / "pyproject.toml").write_text("[tool.ruff]\n[tool.mypy]\n")
             (root / ".eslintrc.json").write_text("{}")
 
-            detected = registry.detect(root)
-            tool_ids = [t.tool_id for t in detected]
+            detected_pairs = registry.detect(root)
+            tool_ids = [t.tool_id for t, _ in detected_pairs]
             assert "python.ruff" in tool_ids
             assert "python.mypy" in tool_ids
             assert "js.eslint" in tool_ids
@@ -281,6 +281,24 @@ class TestRegistry:
             root = Path(tmpdir)
             detected = registry.detect(root)
             assert detected == []
+
+    def test_registry_detect_section_aware(self) -> None:
+        """Only detects tools that have their section in pyproject.toml."""
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            # Only configure ruff, NOT black/isort
+            (root / "pyproject.toml").write_text("[tool.ruff]\nline-length = 88\n")
+
+            detected_pairs = registry.detect(root)
+            tool_ids = {t.tool_id for t, _ in detected_pairs}
+
+            # ruff and ruff-format should be detected (both use [tool.ruff])
+            assert "python.ruff" in tool_ids
+            assert "python.ruff-format" in tool_ids
+
+            # black and isort should NOT be detected (no [tool.black] or [tool.isort])
+            assert "python.black" not in tool_ids
+            assert "python.isort" not in tool_ids
 
 
 class TestLintTool:

@@ -221,7 +221,8 @@ class LintOps:
             pass
 
         # Fallback: runtime detection
-        detected = registry.detect(self._repo_root)
+        detected_pairs = registry.detect(self._repo_root)
+        detected = [t for t, _ in detected_pairs]
 
         # Filter by category if specified
         if categories:

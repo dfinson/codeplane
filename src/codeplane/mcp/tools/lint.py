@@ -133,12 +133,12 @@ async def lint(ctx: AppContext, params: LintParams) -> dict[str, Any]:
                 detected_ids = {t.tool_id for t in indexed_tools}
             else:
                 # Index empty, fall back to runtime detection
-                detected = registry.detect(ctx.lint_ops._repo_root)
-                detected_ids = {t.tool_id for t in detected}
+                detected_pairs = registry.detect(ctx.lint_ops._repo_root)
+                detected_ids = {t.tool_id for t, _ in detected_pairs}
         except (RuntimeError, AttributeError):
             # Coordinator not initialized, fall back to runtime detection
-            detected = registry.detect(ctx.lint_ops._repo_root)
-            detected_ids = {t.tool_id for t in detected}
+            detected_pairs = registry.detect(ctx.lint_ops._repo_root)
+            detected_ids = {t.tool_id for t, _ in detected_pairs}
 
         # Filter by language if specified
         if params.language:
