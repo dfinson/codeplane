@@ -58,8 +58,6 @@ def _derive_features(tool_names: list[str]) -> list[str]:
             features.add("git_ops")
         elif name.startswith("refactor_"):
             features.add("refactoring")
-        elif name == "session":
-            features.add("session_management")
         elif name == "test":
             features.add("testing")
         elif name == "lint":

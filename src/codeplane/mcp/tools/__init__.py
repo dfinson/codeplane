@@ -8,7 +8,6 @@ from codeplane.mcp.tools import (
     lint,
     mutation,
     refactor,
-    session,
     testing,
 )
 
@@ -20,6 +19,5 @@ __all__ = [
     "lint",
     "mutation",
     "refactor",
-    "session",
     "testing",
 ]
