@@ -1,7 +1,6 @@
 """MCP tool handlers."""
 
 from codeplane.mcp.tools import (
-    capabilities,
     files,
     git,
     index,
@@ -14,7 +13,6 @@ from codeplane.mcp.tools import (
 )
 
 __all__ = [
-    "capabilities",
     "files",
     "git",
     "index",

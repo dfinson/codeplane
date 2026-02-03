@@ -1,8 +1,8 @@
-"""Testing MCP tools - testing.* handlers."""
+"""Testing MCP tool - unified test handler."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from codeplane.mcp.registry import registry
 from codeplane.mcp.tools.base import BaseParams
@@ -13,19 +13,19 @@ if TYPE_CHECKING:
 
 
 # =============================================================================
-# Parameter Models
+# Parameter Model
 # =============================================================================
 
 
-class TestDiscoverParams(BaseParams):
-    """Parameters for testing.discover."""
+class TestParams(BaseParams):
+    """Parameters for test tool."""
 
+    action: Literal["discover", "run", "status", "cancel"]
+
+    # discover params
     paths: list[str] | None = None
 
-
-class TestRunParams(BaseParams):
-    """Parameters for testing.run."""
-
+    # run params
     targets: list[str] | None = None
     pattern: str | None = None
     tags: list[str] | None = None
@@ -35,17 +35,8 @@ class TestRunParams(BaseParams):
     fail_fast: bool = False
     coverage: bool = False
 
-
-class TestStatusParams(BaseParams):
-    """Parameters for testing.status."""
-
-    run_id: str
-
-
-class TestCancelParams(BaseParams):
-    """Parameters for testing.cancel."""
-
-    run_id: str
+    # status/cancel params
+    run_id: str | None = None
 
 
 # =============================================================================
@@ -54,14 +45,12 @@ class TestCancelParams(BaseParams):
 
 
 def _summarize_discover(count: int) -> str:
-    """Generate summary for testing.discover."""
     if count == 0:
         return "no test targets found"
     return f"{count} test targets discovered"
 
 
 def _summarize_run(result: TestResult) -> str:
-    """Generate summary for testing.run/status."""
     if not result.run_status:
         return "no run status"
 
@@ -81,74 +70,76 @@ def _summarize_run(result: TestResult) -> str:
 
 
 # =============================================================================
-# Tool Handlers
+# Tool Handler
 # =============================================================================
 
 
 @registry.register(
-    "testing_discover", "Discover test targets in the repository", TestDiscoverParams
+    "test",
+    "Test operations: discover, run, check status, or cancel test runs",
+    TestParams,
 )
-async def testing_discover(ctx: AppContext, params: TestDiscoverParams) -> dict[str, Any]:
-    """Discover tests."""
-    result = await ctx.test_ops.discover(paths=params.paths)
+async def test(ctx: AppContext, params: TestParams) -> dict[str, Any]:
+    """Unified test tool.
 
-    targets = result.targets or []
-    output: dict[str, Any] = {
-        "action": result.action,
-        "targets": [
-            {
-                "target_id": t.target_id,
-                "selector": t.selector,
-                "kind": t.kind,
-                "language": t.language,
-                "runner_pack_id": t.runner_pack_id,
-                "workspace_root": t.workspace_root,
-                "estimated_cost": t.estimated_cost,
-                "test_count": t.test_count,
-                # Legacy compatibility
-                "path": t.path,
-                "runner": t.runner,
-            }
-            for t in targets
-        ],
-        "summary": _summarize_discover(len(targets)),
-    }
+    Actions:
+    - discover: Find test targets in the repository
+    - run: Execute tests with optional filters
+    - status: Check status of a running test
+    - cancel: Cancel a running test
+    """
+    if params.action == "discover":
+        result = await ctx.test_ops.discover(paths=params.paths)
+        targets = result.targets or []
+        output: dict[str, Any] = {
+            "action": result.action,
+            "targets": [
+                {
+                    "target_id": t.target_id,
+                    "selector": t.selector,
+                    "kind": t.kind,
+                    "language": t.language,
+                    "runner_pack_id": t.runner_pack_id,
+                    "workspace_root": t.workspace_root,
+                    "estimated_cost": t.estimated_cost,
+                    "test_count": t.test_count,
+                    "path": t.path,
+                    "runner": t.runner,
+                }
+                for t in targets
+            ],
+            "summary": _summarize_discover(len(targets)),
+        }
+        if result.agentic_hint:
+            output["agentic_hint"] = result.agentic_hint
+        return output
 
-    # Include agentic hint if present (for edge cases like no runners detected)
-    if result.agentic_hint:
-        output["agentic_hint"] = result.agentic_hint
+    if params.action == "run":
+        result = await ctx.test_ops.run(
+            targets=params.targets,
+            pattern=params.pattern,
+            tags=params.tags,
+            failed_only=params.failed_only,
+            parallelism=params.parallelism,
+            timeout_sec=params.timeout_sec,
+            fail_fast=params.fail_fast,
+            coverage=params.coverage,
+        )
+        return _serialize_test_result(result)
 
-    return output
+    if params.action == "status":
+        if not params.run_id:
+            return {"error": "status requires 'run_id'", "summary": "error: missing params"}
+        result = await ctx.test_ops.status(params.run_id)
+        return _serialize_test_result(result)
 
+    if params.action == "cancel":
+        if not params.run_id:
+            return {"error": "cancel requires 'run_id'", "summary": "error: missing params"}
+        result = await ctx.test_ops.cancel(params.run_id)
+        return _serialize_test_result(result)
 
-@registry.register("testing_run", "Run tests", TestRunParams)
-async def testing_run(ctx: AppContext, params: TestRunParams) -> dict[str, Any]:
-    """Run tests."""
-    result = await ctx.test_ops.run(
-        targets=params.targets,
-        pattern=params.pattern,
-        tags=params.tags,
-        failed_only=params.failed_only,
-        parallelism=params.parallelism,
-        timeout_sec=params.timeout_sec,
-        fail_fast=params.fail_fast,
-        coverage=params.coverage,
-    )
-    return _serialize_test_result(result)
-
-
-@registry.register("testing_status", "Get status of a test run", TestStatusParams)
-async def testing_status(ctx: AppContext, params: TestStatusParams) -> dict[str, Any]:
-    """Get test run status."""
-    result = await ctx.test_ops.status(params.run_id)
-    return _serialize_test_result(result)
-
-
-@registry.register("testing_cancel", "Cancel a running test", TestCancelParams)
-async def testing_cancel(ctx: AppContext, params: TestCancelParams) -> dict[str, Any]:
-    """Cancel test run."""
-    result = await ctx.test_ops.cancel(params.run_id)
-    return _serialize_test_result(result)
+    return {"error": f"unknown action: {params.action}", "summary": "error: unknown action"}
 
 
 def _serialize_test_result(result: TestResult) -> dict[str, Any]:
@@ -169,7 +160,6 @@ def _serialize_test_result(result: TestResult) -> dict[str, Any]:
         if status.progress:
             progress = status.progress
             output["run_status"]["progress"] = {
-                # New structured progress
                 "targets": {
                     "total": progress.targets.total,
                     "completed": progress.targets.completed,
@@ -183,7 +173,6 @@ def _serialize_test_result(result: TestResult) -> dict[str, Any]:
                     "skipped": progress.cases.skipped,
                     "errors": progress.cases.errors,
                 },
-                # Legacy flat fields for compatibility
                 "total": progress.total,
                 "completed": progress.completed,
                 "passed": progress.passed,
@@ -219,7 +208,6 @@ def _serialize_test_result(result: TestResult) -> dict[str, Any]:
         if status.coverage:
             output["run_status"]["coverage"] = status.coverage
 
-    # Include agentic hint if present
     if result.agentic_hint:
         output["agentic_hint"] = result.agentic_hint
 

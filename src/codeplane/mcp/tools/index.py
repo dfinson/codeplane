@@ -1,4 +1,4 @@
-"""Index MCP tools - index.search, index.map handlers."""
+"""Index MCP tools - search, map_repo handlers."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 
 class SearchParams(BaseParams):
-    """Parameters for index.search."""
+    """Parameters for search."""
 
     query: str
     mode: Literal["lexical", "symbol", "references", "definitions"] = "lexical"
@@ -33,7 +33,7 @@ class SearchParams(BaseParams):
 
 
 class MapRepoParams(BaseParams):
-    """Parameters for index.map."""
+    """Parameters for map_repo."""
 
     include: (
         list[
@@ -84,7 +84,7 @@ class GetReferencesParams(BaseParams):
 
 
 def _summarize_search(count: int, mode: str, query: str) -> str:
-    """Generate summary for index.search."""
+    """Generate summary for search."""
     if count == 0:
         return f'no {mode} results for "{query}"'
     q = query[:30] + "..." if len(query) > 30 else query
@@ -92,7 +92,7 @@ def _summarize_search(count: int, mode: str, query: str) -> str:
 
 
 def _summarize_map(file_count: int, sections: list[str], truncated: bool) -> str:
-    """Generate summary for index.map."""
+    """Generate summary for map_repo."""
     parts = [f"{file_count} files"]
     if sections:
         parts.append(f"sections: {', '.join(sections)}")
@@ -106,8 +106,8 @@ def _summarize_map(file_count: int, sections: list[str], truncated: bool) -> str
 # =============================================================================
 
 
-@registry.register("index_search", "Search code, symbols, or references", SearchParams)
-async def index_search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
+@registry.register("search", "Search code, symbols, or references", SearchParams)
+async def search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
     """Unified search across lexical index, symbols, and references."""
     from codeplane.index.ops import SearchMode
 
@@ -207,8 +207,8 @@ async def index_search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
     }
 
 
-@registry.register("index_map", "Get repository mental model", MapRepoParams)
-async def index_map(ctx: AppContext, params: MapRepoParams) -> dict[str, Any]:
+@registry.register("map_repo", "Get repository mental model", MapRepoParams)
+async def map_repo(ctx: AppContext, params: MapRepoParams) -> dict[str, Any]:
     """Build repository mental model from indexed data."""
     result = await ctx.coordinator.map_repo(
         include=params.include,

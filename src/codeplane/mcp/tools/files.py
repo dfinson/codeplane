@@ -1,4 +1,4 @@
-"""Files MCP tools - files.read, files.list handlers."""
+"""Files MCP tools - read_files, list_files, write_files handlers."""
 
 from __future__ import annotations
 
@@ -113,8 +113,8 @@ def _summarize_list(path: str, total: int, truncated: bool) -> str:
 # =============================================================================
 
 
-@registry.register("files_read", "Read file contents with optional line ranges", ReadFilesParams)
-async def files_read(ctx: AppContext, params: ReadFilesParams) -> dict[str, Any]:
+@registry.register("read_files", "Read file contents with optional line ranges", ReadFilesParams)
+async def read_files(ctx: AppContext, params: ReadFilesParams) -> dict[str, Any]:
     """Read file contents."""
     # Convert RangeParam models to dict format expected by FileOps
     ranges_dict = None
@@ -150,9 +150,9 @@ async def files_read(ctx: AppContext, params: ReadFilesParams) -> dict[str, Any]
 
 
 @registry.register(
-    "files_list", "List files in a directory with optional filtering", ListFilesParams
+    "list_files", "List files in a directory with optional filtering", ListFilesParams
 )
-async def files_list(ctx: AppContext, params: ListFilesParams) -> dict[str, Any]:
+async def list_files(ctx: AppContext, params: ListFilesParams) -> dict[str, Any]:
     """List files and directories."""
     result = ctx.file_ops.list_files(
         path=params.path,

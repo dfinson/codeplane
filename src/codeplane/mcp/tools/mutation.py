@@ -1,4 +1,4 @@
-"""Mutation MCP tools - files.edit handler."""
+"""Mutation MCP tools - write_files handler."""
 
 from __future__ import annotations
 
@@ -47,8 +47,8 @@ class EditParam(BaseModel):
     expected_occurrences: int = Field(1, ge=1, description="Expected number of old_content matches")
 
 
-class MutateParams(BaseParams):
-    """Parameters for files.edit."""
+class WriteFilesParams(BaseParams):
+    """Parameters for write_files."""
 
     edits: list[EditParam] = Field(..., description="List of file edits to apply atomically")
     dry_run: bool = Field(False, description="Preview changes without applying")
@@ -59,8 +59,8 @@ class MutateParams(BaseParams):
 # =============================================================================
 
 
-def _summarize_edit(files_changed: int, insertions: int, deletions: int, dry_run: bool) -> str:
-    """Generate summary for files.edit."""
+def _summarize_write(files_changed: int, insertions: int, deletions: int, dry_run: bool) -> str:
+    """Generate summary for write_files."""
     prefix = "(dry-run) " if dry_run else ""
     if files_changed == 0:
         return f"{prefix}no changes"
@@ -72,8 +72,8 @@ def _summarize_edit(files_changed: int, insertions: int, deletions: int, dry_run
 # =============================================================================
 
 
-@registry.register("files_edit", "Atomic file edits with structured delta response", MutateParams)
-async def files_edit(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
+@registry.register("write_files", "Create, update, or delete files atomically", WriteFilesParams)
+async def write_files(ctx: AppContext, params: WriteFilesParams) -> dict[str, Any]:
     """Apply atomic file edits.
 
     For updates, provide old_content and new_content. The tool will:
@@ -109,7 +109,7 @@ async def files_edit(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
         # Log successful operation
         for file_delta in result.delta.files:
             ledger.log_operation(
-                tool="files.edit",
+                tool="write_files",
                 success=True,
                 path=file_delta.path,
                 action=file_delta.action,
@@ -141,7 +141,7 @@ async def files_edit(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
                     for f in result.delta.files
                 ],
             },
-            "summary": _summarize_edit(
+            "summary": _summarize_write(
                 result.delta.files_changed,
                 result.delta.insertions,
                 result.delta.deletions,
@@ -170,7 +170,7 @@ async def files_edit(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
             error_code = ErrorCode.CONTENT_NOT_FOUND.value
             error_path = e.path
             ledger.log_operation(
-                tool="files.edit",
+                tool="write_files",
                 success=False,
                 error_code=error_code,
                 error_message=str(e),
@@ -183,7 +183,7 @@ async def files_edit(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
             error_code = ErrorCode.MULTIPLE_MATCHES.value
             error_path = e.path
             ledger.log_operation(
-                tool="files.edit",
+                tool="write_files",
                 success=False,
                 error_code=error_code,
                 error_message=str(e),
@@ -195,7 +195,7 @@ async def files_edit(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
         elif isinstance(e, FileNotFoundError):
             error_code = ErrorCode.FILE_NOT_FOUND.value
             ledger.log_operation(
-                tool="files.edit",
+                tool="write_files",
                 success=False,
                 error_code=error_code,
                 error_message=str(e),
@@ -210,7 +210,7 @@ async def files_edit(ctx: AppContext, params: MutateParams) -> dict[str, Any]:
         elif isinstance(e, FileExistsError):
             error_code = ErrorCode.FILE_EXISTS.value
             ledger.log_operation(
-                tool="files.edit",
+                tool="write_files",
                 success=False,
                 error_code=error_code,
                 error_message=str(e),
