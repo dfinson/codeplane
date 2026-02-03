@@ -53,6 +53,7 @@ from codeplane.index.models import (
     File,
     ProbeStatus,
     RefFact,
+    TestTarget,
 )
 from codeplane.tools.map_repo import IncludeOption, MapRepoResult, RepoMapper
 
@@ -306,6 +307,9 @@ class IndexCoordinator:
                 session.add(context)
 
             session.commit()
+
+        # Step 7.5: Discover test targets
+        await self._discover_test_targets()
 
         # Step 8: Initialize router
         self._router = ContextRouter()
@@ -1029,6 +1033,29 @@ class IndexCoordinator:
             )
             return list(session.exec(stmt).all())
 
+    async def get_test_targets(
+        self,
+        target_ids: list[str] | None = None,
+    ) -> list[TestTarget]:
+        """Get test targets from the index.
+
+        Args:
+            target_ids: Optional list of specific target IDs to fetch.
+                       If None, returns all targets.
+
+        Returns:
+            List of TestTarget objects
+        """
+        await self.wait_for_freshness()
+        with self.db.session() as session:
+            stmt = select(TestTarget)
+            if target_ids:
+                # Use col() for SQLAlchemy column access
+                from sqlmodel import col
+
+                stmt = stmt.where(col(TestTarget.target_id).in_(target_ids))
+            return list(session.exec(stmt).all())
+
     async def map_repo(
         self,
         include: list[IncludeOption] | None = None,
@@ -1111,6 +1138,69 @@ class IndexCoordinator:
         # Dispose DB engine to release file handles
         if hasattr(self, "db") and self.db is not None:
             self.db.engine.dispose()
+
+    async def _discover_test_targets(self) -> int:
+        """Discover and persist test targets for all workspaces.
+
+        Uses runner packs to find test files. Called during init() after
+        contexts are persisted. Returns count of targets discovered.
+        """
+        from codeplane.testing.runner_pack import runner_registry
+
+        targets_discovered = 0
+        discovered_at = time.time()
+
+        with self.db.session() as session:
+            # Get all valid contexts
+            stmt = select(Context).where(
+                Context.probe_status == ProbeStatus.VALID.value,
+                Context.enabled == True,  # noqa: E712
+            )
+            contexts = list(session.exec(stmt).all())
+
+            # Group by workspace root to avoid duplicate discovery
+            roots_to_contexts: dict[Path, list[Context]] = {}
+            for ctx in contexts:
+                ws_root = self.repo_root / ctx.root_path if ctx.root_path else self.repo_root
+                roots_to_contexts.setdefault(ws_root, []).append(ctx)
+
+            # Detect and discover for each workspace
+            for ws_root, ws_contexts in roots_to_contexts.items():
+                # Find applicable runner packs
+                detected_packs = runner_registry.detect_all(ws_root)
+                if not detected_packs:
+                    continue
+
+                # Use primary context for this workspace
+                primary_ctx = ws_contexts[0]
+
+                for pack_class, _confidence in detected_packs:
+                    pack = pack_class()
+                    try:
+                        targets = await pack.discover(ws_root)
+                    except Exception:
+                        continue
+
+                    for target in targets:
+                        test_target = TestTarget(
+                            context_id=primary_ctx.id,
+                            target_id=target.target_id,
+                            selector=target.selector,
+                            kind=target.kind,
+                            language=target.language,
+                            runner_pack_id=target.runner_pack_id,
+                            workspace_root=target.workspace_root,
+                            estimated_cost=target.estimated_cost,
+                            test_count=target.test_count,
+                            path=target.path,
+                            discovered_at=discovered_at,
+                        )
+                        session.add(test_target)
+                        targets_discovered += 1
+
+            session.commit()
+
+        return targets_discovered
 
     async def _index_all_files(self) -> tuple[int, list[str], dict[str, int]]:
         """Index all files in valid contexts.

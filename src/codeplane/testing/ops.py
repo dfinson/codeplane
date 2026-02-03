@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import shutil
 import time
 import uuid
@@ -91,6 +92,13 @@ def detect_node_package_manager(workspace_root: Path) -> str:
     if (workspace_root / "bun.lockb").exists():
         return "bun"
     return "npm"
+
+
+def _default_parallelism() -> int:
+    """Compute default parallelism based on CPU count."""
+    cpu_count = os.cpu_count() or 4
+    # Use 2x CPU count for I/O-bound test execution, capped at reasonable max
+    return min(cpu_count * 2, 16)
 
 
 # =============================================================================
@@ -322,10 +330,53 @@ class TestOps:
     ) -> TestResult:
         """Discover test targets in the repository.
 
-        Uses index contexts for workspace detection, then runner packs for
-        accurate test discovery per workspace. Falls back to agentic hints
-        when no runners are detected.
+        Queries indexed test targets. Falls back to filesystem discovery
+        if index is not available.
         """
+        from typing import cast
+
+        from codeplane.testing.models import TargetKind
+
+        # Try to get targets from index first
+        try:
+            indexed_targets = await self._coordinator.get_test_targets()
+        except Exception:
+            indexed_targets = []
+
+        # If we have indexed targets, use them
+        if indexed_targets:
+            all_targets = [
+                TestTarget(
+                    target_id=t.target_id,
+                    selector=t.selector,
+                    kind=cast(TargetKind, t.kind),
+                    language=t.language,
+                    runner_pack_id=t.runner_pack_id,
+                    workspace_root=t.workspace_root,
+                    estimated_cost=1.0,
+                    test_count=t.test_count,
+                )
+                for t in indexed_targets
+            ]
+
+            # Filter by paths if specified
+            if paths:
+                all_targets = [
+                    t
+                    for t in all_targets
+                    if any(t.selector.startswith(p) or p.startswith(t.selector) for p in paths)
+                ]
+
+            return TestResult(action="discover", targets=all_targets, agentic_hint=None)
+
+        # Fallback to filesystem discovery if index not available
+        return await self._discover_from_filesystem(paths)
+
+    async def _discover_from_filesystem(
+        self,
+        paths: list[str] | None = None,
+    ) -> TestResult:
+        """Fallback filesystem-based discovery."""
         all_targets: list[TestTarget] = []
 
         # Use index contexts to find workspaces (leverages already-indexed data)
@@ -409,6 +460,31 @@ class TestOps:
                 seen[key] = ws
 
         return list(seen.values())
+
+    async def _get_targets_by_id(self, target_ids: list[str]) -> list[TestTarget]:
+        """Get test targets by ID from the index."""
+        from typing import cast
+
+        from codeplane.testing.models import TargetKind
+
+        try:
+            indexed_targets = await self._coordinator.get_test_targets(target_ids=target_ids)
+        except Exception:
+            indexed_targets = []
+
+        return [
+            TestTarget(
+                target_id=t.target_id,
+                selector=t.selector,
+                kind=cast(TargetKind, t.kind),
+                language=t.language,
+                runner_pack_id=t.runner_pack_id,
+                workspace_root=t.workspace_root,
+                estimated_cost=1.0,
+                test_count=t.test_count,
+            )
+            for t in indexed_targets
+        ]
 
     async def _generate_agentic_hint(self) -> str:
         """Generate agentic hint for running tests when no targets detected."""
@@ -500,15 +576,16 @@ class TestOps:
         )
         failures: list[TestFailure] = []
 
-        # Resolve targets
+        # Resolve targets - query index directly when IDs are provided
+        agentic_hint_for_empty: str | None = None
         if targets:
-            # Parse target IDs to get actual targets
-            discover_result = await self.discover()
-            target_map = {t.target_id: t for t in (discover_result.targets or [])}
-            resolved_targets = [target_map[tid] for tid in targets if tid in target_map]
+            # Direct index lookup by ID - no filesystem scan
+            resolved_targets = await self._get_targets_by_id(targets)
         else:
+            # Run all: use discover() which queries the index
             discover_result = await self.discover()
             resolved_targets = discover_result.targets or []
+            agentic_hint_for_empty = discover_result.agentic_hint
 
         # Check if we have any targets to run
         if not resolved_targets:
@@ -521,10 +598,7 @@ class TestOps:
                     artifact_dir=str(artifact_dir),
                 ),
                 agentic_hint="No test targets found to run. "
-                + (
-                    discover_result.agentic_hint
-                    or "Use testing_discover to check available targets."
-                ),
+                + (agentic_hint_for_empty or "Use testing_discover to check available targets."),
             )
 
         progress.targets.total = len(resolved_targets)
@@ -540,7 +614,7 @@ class TestOps:
                 artifact_dir=artifact_dir,
                 pattern=pattern,
                 tags=tags,
-                parallelism=parallelism or 4,
+                parallelism=parallelism or _default_parallelism(),
                 timeout_sec=timeout_sec or 300,
                 fail_fast=fail_fast,
                 coverage=coverage,
@@ -582,16 +656,10 @@ class TestOps:
         fail_fast: bool,
         coverage: bool,
     ) -> TestRunStatus:
-        """Execute tests grouped by runner pack."""
+        """Execute tests concurrently with semaphore-limited parallelism."""
         start_time = time.time()
         diagnostics: list[ExecutionDiagnostic] = []
         coverage_artifacts: list[CoverageArtifact] = []
-
-        # Group targets by (workspace_root, runner_pack_id)
-        groups: dict[tuple[str, str], list[TestTarget]] = {}
-        for target in targets:
-            key = (target.workspace_root, target.runner_pack_id)
-            groups.setdefault(key, []).append(target)
 
         # Create semaphore for parallelism
         sem = asyncio.Semaphore(parallelism)
@@ -612,62 +680,58 @@ class TestOps:
                 )
                 return (target, result, cov_artifact)
 
-        # Run each group
-        for (_ws_root, _pack_id), group_targets in groups.items():
-            if cancel_event.is_set():
+        # Run ALL targets concurrently (semaphore limits parallelism)
+        all_tasks = [asyncio.create_task(run_target(t)) for t in targets]
+
+        for coro in asyncio.as_completed(all_tasks):
+            if cancel_event.is_set() or (fail_fast and progress.cases.failed > 0):
+                for t in all_tasks:
+                    t.cancel()
                 break
 
-            tasks = [asyncio.create_task(run_target(t)) for t in group_targets]
+            target, result, cov_artifact = await coro
+            if cov_artifact:
+                coverage_artifacts.append(cov_artifact)
+            if result:
+                progress.targets.completed += 1
+                progress.cases.passed += result.passed
+                progress.cases.failed += result.failed
+                progress.cases.skipped += result.skipped
+                progress.cases.errors += result.errors
+                progress.cases.total += result.total
 
-            for coro in asyncio.as_completed(tasks):
-                if cancel_event.is_set() or (fail_fast and progress.cases.failed > 0):
-                    for t in tasks:
-                        t.cancel()
-                    break
+                if result.failed > 0 or result.errors > 0:
+                    progress.targets.failed += 1
 
-                target, result, cov_artifact = await coro
-                if cov_artifact:
-                    coverage_artifacts.append(cov_artifact)
-                if result:
-                    progress.targets.completed += 1
-                    progress.cases.passed += result.passed
-                    progress.cases.failed += result.failed
-                    progress.cases.skipped += result.skipped
-                    progress.cases.errors += result.errors
-                    progress.cases.total += result.total
+                # Collect execution-level diagnostics (non-test errors)
+                if result.error_type != "none":
+                    diagnostics.append(
+                        ExecutionDiagnostic(
+                            target_id=target.target_id,
+                            error_type=result.error_type,
+                            error_detail=result.error_detail,
+                            suggested_action=result.suggested_action,
+                            command=result.execution.command if result.execution else None,
+                            working_directory=(
+                                result.execution.working_directory if result.execution else None
+                            ),
+                            exit_code=result.execution.exit_code if result.execution else None,
+                        )
+                    )
 
-                    if result.failed > 0 or result.errors > 0:
-                        progress.targets.failed += 1
-
-                    # Collect execution-level diagnostics (non-test errors)
-                    if result.error_type != "none":
-                        diagnostics.append(
-                            ExecutionDiagnostic(
-                                target_id=target.target_id,
-                                error_type=result.error_type,
-                                error_detail=result.error_detail,
-                                suggested_action=result.suggested_action,
-                                command=result.execution.command if result.execution else None,
-                                working_directory=(
-                                    result.execution.working_directory if result.execution else None
-                                ),
-                                exit_code=result.execution.exit_code if result.execution else None,
+                for test in result.tests:
+                    if test.status in ("failed", "error"):
+                        failures.append(
+                            TestFailure(
+                                name=test.name,
+                                path=test.file_path or test.classname or "",
+                                line=test.line_number,
+                                message=test.message or "Test failed",
+                                traceback=test.traceback,
+                                classname=test.classname,
+                                duration_seconds=test.duration_seconds,
                             )
                         )
-
-                    for test in result.tests:
-                        if test.status in ("failed", "error"):
-                            failures.append(
-                                TestFailure(
-                                    name=test.name,
-                                    path=test.file_path or test.classname or "",
-                                    line=test.line_number,
-                                    message=test.message or "Test failed",
-                                    traceback=test.traceback,
-                                    classname=test.classname,
-                                    duration_seconds=test.duration_seconds,
-                                )
-                            )
 
         duration = time.time() - start_time
         status: Literal["running", "completed", "cancelled", "failed"] = (

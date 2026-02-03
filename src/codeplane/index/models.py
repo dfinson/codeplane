@@ -379,6 +379,25 @@ class File(SQLModel, table=True):
     dynamic_sites: list["DynamicAccessSite"] = Relationship(back_populates="file")
 
 
+class TestTarget(SQLModel, table=True):
+    """Test target discovered during indexing."""
+
+    __tablename__ = "test_targets"
+
+    id: int | None = Field(default=None, primary_key=True)
+    context_id: int = Field(foreign_key="contexts.id", index=True)
+    target_id: str = Field(unique=True, index=True)  # Stable ID for run()
+    selector: str  # Path or pattern
+    kind: str = Field(index=True)  # "file", "directory", "module"
+    language: str = Field(index=True)
+    runner_pack_id: str = Field(index=True)  # "python.pytest", "js.vitest", etc.
+    workspace_root: str
+    estimated_cost: str = "medium"  # "low", "medium", "high"
+    test_count: int | None = None
+    path: str | None = None  # File path if kind is "file"
+    discovered_at: float | None = None
+
+
 class Context(SQLModel, table=True):
     """Indexing context (package, workspace, etc) - represents a build unit."""
 

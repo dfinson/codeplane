@@ -19,6 +19,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
+# Sentinel value indicating a key should be removed from the environment.
+# Used by _unknown_env() to strip language-specific variables that may have
+# leaked from CodePlane's own environment (e.g., COVERAGE_FILE).
+_DELETE_KEY = object()
+
 
 @dataclass
 class SafeExecutionConfig:
@@ -128,7 +133,14 @@ class SafeExecutionContext:
         # Apply language-specific protections
         lang = _get_language_family(pack_id)
         strategy = self._get_env_strategy(lang)
-        env.update(strategy())
+        overrides = strategy()
+
+        # Apply overrides: _DELETE_KEY sentinel means "remove this key"
+        for key, value in overrides.items():
+            if value is _DELETE_KEY:
+                env.pop(key, None)
+            else:
+                env[key] = value  # type: ignore[assignment]
 
         return env
 
@@ -202,9 +214,9 @@ class SafeExecutionContext:
     # Language-Specific Environment Strategies
     # =========================================================================
 
-    def _get_env_strategy(self, lang: LanguageFamily) -> Callable[[], dict[str, str]]:
+    def _get_env_strategy(self, lang: LanguageFamily) -> Callable[[], dict[str, str | object]]:
         """Get environment strategy for language family."""
-        strategies: dict[LanguageFamily, Callable[[], dict[str, str]]] = {
+        strategies: dict[LanguageFamily, Callable[[], dict[str, str | object]]] = {
             "python": self._python_env,
             "javascript": self._javascript_env,
             "typescript": self._javascript_env,  # Same as JS
@@ -220,11 +232,28 @@ class SafeExecutionContext:
             "elixir": self._elixir_env,
             "dart": self._dart_env,
             "swift": self._swift_env,
-            "unknown": lambda: {},
+            "unknown": self._unknown_env,
         }
-        return strategies.get(lang, lambda: {})
+        return strategies.get(lang, self._unknown_env)
 
-    def _python_env(self) -> dict[str, str]:
+    def _unknown_env(self) -> dict[str, str | object]:
+        """Environment overrides for unknown language families.
+
+        Explicitly removes language-specific variables that may have leaked from
+        the parent environment (e.g., COVERAGE_FILE when CodePlane itself runs
+        under coverage). Unknown languages should get a minimal, predictable
+        environment without Python/Node/etc-specific tooling configuration.
+
+        Uses _DELETE_KEY sentinel to indicate keys that should be removed.
+        """
+        return {
+            # Remove Python coverage variables - these should not leak
+            # into tests for unknown languages
+            "COVERAGE_FILE": _DELETE_KEY,
+            "COVERAGE_PROCESS_START": _DELETE_KEY,
+        }
+
+    def _python_env(self) -> dict[str, str | object]:
         """Python-specific environment overrides.
 
         Key protections:
@@ -264,7 +293,7 @@ class SafeExecutionContext:
             "PYTEST_ADDOPTS": "--tb=short -q",  # Override verbose project settings
         }
 
-    def _javascript_env(self) -> dict[str, str]:
+    def _javascript_env(self) -> dict[str, str | object]:
         """JavaScript/TypeScript environment overrides.
 
         Key protections:
@@ -301,7 +330,7 @@ class SafeExecutionContext:
             "TURBO_TELEMETRY_DISABLED": "1",
         }
 
-    def _go_env(self) -> dict[str, str]:
+    def _go_env(self) -> dict[str, str | object]:
         """Go environment overrides.
 
         Key protections:
@@ -327,7 +356,7 @@ class SafeExecutionContext:
             "GOTELEMETRY": "off",
         }
 
-    def _rust_env(self) -> dict[str, str]:
+    def _rust_env(self) -> dict[str, str | object]:
         """Rust environment overrides.
 
         Key protections:
@@ -350,7 +379,7 @@ class SafeExecutionContext:
             "CARGO_HTTP_CHECK_REVOKE": "false",  # ...skip cert checks for speed
         }
 
-    def _java_env(self) -> dict[str, str]:
+    def _java_env(self) -> dict[str, str | object]:
         """Java/Kotlin/Scala environment overrides.
 
         Key protections:
@@ -377,7 +406,7 @@ class SafeExecutionContext:
             "KOTLIN_DAEMON_ENABLED": "false",
         }
 
-    def _csharp_env(self) -> dict[str, str]:
+    def _csharp_env(self) -> dict[str, str | object]:
         """C#/.NET environment overrides.
 
         Key protections:
@@ -404,7 +433,7 @@ class SafeExecutionContext:
             "MSBUILDDISABLENODEREUSE": "1",
         }
 
-    def _cpp_env(self) -> dict[str, str]:
+    def _cpp_env(self) -> dict[str, str | object]:
         """C/C++ environment overrides.
 
         Key protections:
@@ -427,7 +456,7 @@ class SafeExecutionContext:
             "CTEST_PARALLEL_LEVEL": "4",
         }
 
-    def _ruby_env(self) -> dict[str, str]:
+    def _ruby_env(self) -> dict[str, str | object]:
         """Ruby environment overrides.
 
         Key protections:
@@ -454,7 +483,7 @@ class SafeExecutionContext:
             "SPEC_OPTS": "--no-color --format documentation",
         }
 
-    def _php_env(self) -> dict[str, str]:
+    def _php_env(self) -> dict[str, str | object]:
         """PHP environment overrides.
 
         Key protections:
@@ -480,7 +509,7 @@ class SafeExecutionContext:
             "PHP_MEMORY_LIMIT": "-1",
         }
 
-    def _elixir_env(self) -> dict[str, str]:
+    def _elixir_env(self) -> dict[str, str | object]:
         """Elixir environment overrides.
 
         Key protections:
@@ -503,7 +532,7 @@ class SafeExecutionContext:
             "HEX_HTTP_TIMEOUT": "60",
         }
 
-    def _dart_env(self) -> dict[str, str]:
+    def _dart_env(self) -> dict[str, str | object]:
         """Dart/Flutter environment overrides.
 
         Key protections:
@@ -523,7 +552,7 @@ class SafeExecutionContext:
             "DART_COVERAGE_DIR": str(coverage_dir),
         }
 
-    def _swift_env(self) -> dict[str, str]:
+    def _swift_env(self) -> dict[str, str | object]:
         """Swift environment overrides.
 
         Key protections:

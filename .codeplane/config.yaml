@@ -17,3 +17,26 @@ index:
   - .min.css
   - .map
   index_path: /home/dave01/wsl-repos/codeplane/.codeplane
+timeouts:
+  server_stop_sec: 5.0
+  force_exit_sec: 3.0
+  watcher_stop_sec: 2.0
+  epoch_await_sec: 5.0
+  session_idle_sec: 1800.0
+  dry_run_ttl_sec: 60.0
+indexer:
+  debounce_sec: 0.5
+  max_workers: 1
+  queue_max_size: 10000
+limits:
+  search_default: 20
+  map_depth_default: 3
+  map_limit_default: 100
+  files_list_default: 200
+  git_log_default: 50
+  git_blame_default: 100
+  indexed_files_max: 1000
+  operation_records_max: 1000
+testing:
+  default_parallelism: 4
+  default_timeout_sec: 300

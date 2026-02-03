@@ -94,11 +94,15 @@ def _serialize_test_result(result: TestResult) -> dict[str, Any]:
 
     if result.run_status:
         status = result.run_status
+        # Compute poll hint based on current progress
+        poll_hint = status.compute_poll_hint()
+
         output["run_status"] = {
             "run_id": status.run_id,
             "status": status.status,
             "duration_seconds": status.duration_seconds,
             "artifact_dir": status.artifact_dir,
+            "poll_after_seconds": poll_hint,
         }
         if status.progress:
             progress = status.progress
