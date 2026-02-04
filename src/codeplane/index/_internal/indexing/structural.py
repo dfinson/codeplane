@@ -386,7 +386,7 @@ def _extract_type_aware_facts(
     try:
         from codeplane.index._internal.extraction import get_registry
 
-        # Get language family from file extension
+        # Get language name from file extension
         ext = Path(file_path).suffix.lower()
         ext_to_family = {
             ".py": "python",
@@ -774,7 +774,7 @@ class StructuralIndexer:
             return file.id if file.id is not None else 0
 
     def _detect_family(self, file_path: str) -> str | None:
-        """Detect language family from file path."""
+        """Detect language name from file path."""
         ext = Path(file_path).suffix.lower()
         ext_map = {
             ".py": "python",

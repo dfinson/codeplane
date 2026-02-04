@@ -175,6 +175,103 @@ class IndexCoordinator:
 
         self._initialized = False
 
+    def _format_discovery_summary(self, projects: list[CandidateContext]) -> str:
+        """Format project discovery summary for UX logging (Issue #1).
+
+        Returns human-readable summary like:
+        - "1 Python project"
+        - "2 Python projects, 1 Node.js module"
+        """
+        from collections import Counter
+
+        from codeplane.index.models import LanguageFamily
+
+        # Map language families to human-readable names
+        family_names: dict[str, str] = {
+            LanguageFamily.PYTHON.value: "Python project",
+            LanguageFamily.JAVASCRIPT.value: "Node.js module",
+            LanguageFamily.GO.value: "Go module",
+            LanguageFamily.RUST.value: "Rust crate",
+            LanguageFamily.JAVA.value: "Java project",
+            LanguageFamily.KOTLIN.value: "Kotlin project",
+            LanguageFamily.SCALA.value: "Scala project",
+            LanguageFamily.GROOVY.value: "Groovy project",
+            LanguageFamily.CSHARP.value: "C# project",
+            LanguageFamily.FSHARP.value: "F# project",
+            LanguageFamily.VBNET.value: "VB.NET project",
+            LanguageFamily.RUBY.value: "Ruby project",
+            LanguageFamily.PHP.value: "PHP project",
+            LanguageFamily.ELIXIR.value: "Elixir project",
+        }
+
+        # Count by family
+        counts: Counter[str] = Counter()
+        for p in projects:
+            family_val = (
+                p.language_family.value
+                if hasattr(p.language_family, "value")
+                else str(p.language_family)
+            )
+            counts[family_val] += 1
+
+        if not counts:
+            return ""
+
+        parts: list[str] = []
+        for family, count in counts.most_common():
+            name = family_names.get(family, f"{family} project")
+            # Handle pluralization
+            if count > 1:
+                # "Python project" -> "Python projects"
+                if name.endswith("project"):
+                    name = name[:-7] + "projects"
+                elif name.endswith("module"):
+                    name = name[:-6] + "modules"
+                elif name.endswith("crate"):
+                    name = name[:-5] + "crates"
+            parts.append(f"{count} {name}")
+
+        return ", ".join(parts)
+
+    def _format_ambient_summary(self, ambient: list[CandidateContext]) -> str:
+        """Format ambient/loose file detection summary (Issue #1).
+
+        Returns human-readable summary for auto-detected file types:
+        - "markdown, json, yaml"
+        """
+        from codeplane.index.models import LanguageFamily
+
+        # Map ambient families to human-readable names
+        ambient_names: dict[str, str] = {
+            LanguageFamily.MARKDOWN.value: "markdown",
+            LanguageFamily.JSON.value: "json",
+            LanguageFamily.YAML.value: "yaml",
+            LanguageFamily.TOML.value: "toml",
+            LanguageFamily.DOCKER.value: "Docker",
+            LanguageFamily.MAKE.value: "Makefiles",
+            LanguageFamily.SHELL.value: "shell scripts",
+            LanguageFamily.HTML.value: "HTML",
+            LanguageFamily.CSS.value: "CSS",
+            LanguageFamily.SQL.value: "SQL",
+            LanguageFamily.XML.value: "XML",
+            LanguageFamily.GRAPHQL.value: "GraphQL",
+        }
+
+        families = set()
+        for a in ambient:
+            family_val = (
+                a.language_family.value
+                if hasattr(a.language_family, "value")
+                else str(a.language_family)
+            )
+            if family_val in ambient_names:
+                families.add(ambient_names[family_val])
+
+        if not families:
+            return ""
+
+        return ", ".join(sorted(families))
+
     async def initialize(self) -> InitResult:
         """
         Full initialization: discover, probe, index.
@@ -203,6 +300,11 @@ class IndexCoordinator:
         self._epoch_manager = EpochManager(self.db, self._lexical)
 
         # Step 3: Discover contexts
+        if not self._quiet:
+            from codeplane.core.progress import status
+
+            status("Discovering files...", style="none", indent=4)
+
         discovery = ContextDiscovery(self.repo_root)
         discovery_result = discovery.discover_all()
         all_candidates = discovery_result.candidates
@@ -228,15 +330,17 @@ class IndexCoordinator:
         resolved_candidates = membership_result.contexts
 
         # Step 6: Probe contexts (validate each has parseable files)
-        from codeplane.core.progress import progress
+        # Improved logging: categorize by type (Issue #1)
+        from codeplane.core.progress import progress, status
 
         probe = ContextProbe(self.repo_root, parser=self._parser)
         probed_candidates: list[CandidateContext] = []
 
+        # Probe all candidates first (before logging summary)
         probe_iter: Iterable[CandidateContext] = resolved_candidates
-        if not self._quiet:
+        if not self._quiet and len(resolved_candidates) > 5:
             probe_iter = progress(
-                resolved_candidates, desc="Validating contexts", unit="contexts", force=True
+                resolved_candidates, desc="Scanning projects", unit="projects", force=True
             )
 
         for candidate in probe_iter:
@@ -248,6 +352,28 @@ class IndexCoordinator:
             else:
                 candidate.probe_status = ProbeStatus.FAILED
             probed_candidates.append(candidate)
+
+        # Categorize VALID candidates for UX logging (only show confirmed projects)
+        valid_projects: list[CandidateContext] = []  # Tier 1/2 with markers
+        valid_ambient: list[CandidateContext] = []  # No markers, auto-detected
+
+        for candidate in probed_candidates:
+            if candidate.probe_status != ProbeStatus.VALID:
+                continue  # Skip failed/empty contexts from summary
+            if candidate.tier is None or candidate.tier > 2:
+                valid_ambient.append(candidate)
+            else:
+                valid_projects.append(candidate)
+
+        if not self._quiet:
+            # Log discovery summary with human-readable categories (valid contexts only)
+            project_summary = self._format_discovery_summary(valid_projects)
+            ambient_summary = self._format_ambient_summary(valid_ambient)
+
+            if project_summary:
+                status(f"Found {project_summary}", style="success", indent=4)
+            if ambient_summary:
+                status(f"Auto-detected: {ambient_summary}", style="info", indent=4)
 
         # Add root fallback back (already marked VALID, bypasses probing)
         if root_fallback is not None:
@@ -429,12 +555,16 @@ class IndexCoordinator:
         SERIALIZED: Acquires reconcile_lock and tantivy_write_lock.
 
         If .cplignore changes, triggers a full reindex to apply new patterns.
+
+        File record creation is handled before structural indexing to ensure
+        FK constraints are satisfied.
         """
         if not self._initialized:
             msg = "Coordinator not initialized"
             raise RuntimeError(msg)
 
         start_time = time.time()
+        files_added = 0
         files_updated = 0
         files_removed = 0
         symbols_indexed = 0
@@ -448,39 +578,126 @@ class IndexCoordinator:
                 if reconcile_result.cplignore_changed:
                     return await self._reindex_for_cplignore_change()
 
-            # Update Tantivy
-            with self._tantivy_write_lock:
-                for path in changed_paths:
-                    full_path = self.repo_root / path
-                    if full_path.exists():
-                        content = self._safe_read_text(full_path)
-                        symbols = self._extract_symbols(full_path)
-                        if self._lexical is not None:
-                            self._lexical.add_file(
-                                str(path),
-                                content,
-                                context_id=0,
-                                symbols=symbols,
-                            )
-                        files_updated += 1
-                        symbols_indexed += len(symbols)
+            # Separate existing vs new files
+            existing_paths: list[Path] = []
+            new_paths: list[Path] = []
+            removed_paths: list[Path] = []
+
+            with self.db.session() as session:
+                indexed_set = set(session.exec(select(File.path)).all())
+
+            for path in changed_paths:
+                full_path = self.repo_root / path
+                str_path = str(path)
+                if full_path.exists():
+                    if str_path in indexed_set:
+                        existing_paths.append(path)
                     else:
-                        if self._lexical is not None:
-                            self._lexical.remove_file(str(path))
-                        files_removed += 1
+                        new_paths.append(path)
+                else:
+                    if str_path in indexed_set:
+                        removed_paths.append(path)
 
-            # Reload index so searcher sees committed changes
-            if self._lexical is not None:
-                self._lexical.reload()
+            # Create File records for new files BEFORE structural indexing
+            file_id_map: dict[str, int] = {}
+            if new_paths:
+                import hashlib
 
-            # Update structural index
-            await self._update_structural_index(changed_paths)
+                from codeplane.index._internal.discovery.language_detect import (
+                    detect_language_family,
+                )
+
+                with self.db.session() as session:
+                    for path in new_paths:
+                        full_path = self.repo_root / path
+                        if not full_path.exists():
+                            continue
+                        try:
+                            content_hash = hashlib.sha256(full_path.read_bytes()).hexdigest()
+                            # Use canonical language detection
+                            lang_family = detect_language_family(full_path)
+                            lang = lang_family.value if lang_family else None
+                            file_record = File(
+                                path=str(path),
+                                content_hash=content_hash,
+                                language_family=lang,
+                            )
+                            session.add(file_record)
+                            session.flush()  # Get ID
+                            if file_record.id is not None:
+                                file_id_map[str(path)] = file_record.id
+                            files_added += 1
+                        except (OSError, UnicodeDecodeError):
+                            continue
+                    session.commit()
+
+            # Update Tantivy (use staging for atomicity with epoch)
+            with self._tantivy_write_lock:
+                # Stage updates for existing files
+                for path in existing_paths:
+                    full_path = self.repo_root / path
+                    content = self._safe_read_text(full_path)
+                    symbols = self._extract_symbols(full_path)
+                    if self._lexical is not None:
+                        self._lexical.stage_file(
+                            str(path),
+                            content,
+                            context_id=0,
+                            symbols=symbols,
+                        )
+                    files_updated += 1
+                    symbols_indexed += len(symbols)
+
+                # Stage additions for new files
+                for path in new_paths:
+                    full_path = self.repo_root / path
+                    if not full_path.exists():
+                        continue
+                    content = self._safe_read_text(full_path)
+                    symbols = self._extract_symbols(full_path)
+                    if self._lexical is not None:
+                        file_id = file_id_map.get(str(path), 0)
+                        self._lexical.stage_file(
+                            str(path),
+                            content,
+                            context_id=0,
+                            file_id=file_id,
+                            symbols=symbols,
+                        )
+                    symbols_indexed += len(symbols)
+
+                # Stage removals
+                for path in removed_paths:
+                    if self._lexical is not None:
+                        self._lexical.stage_remove(str(path))
+                    files_removed += 1
+
+            # Update structural index with file_id_map for new files
+            all_changed = existing_paths + new_paths
+            if all_changed:
+                await self._update_structural_index(all_changed)
+
+            # Remove structural facts for removed files
+            if removed_paths:
+                self._remove_structural_facts_for_paths([str(p) for p in removed_paths])
+
+            # Remove File records for removed paths
+            if removed_paths:
+                with self.db.bulk_writer() as writer:
+                    for path in removed_paths:
+                        writer.delete_where(File, "path = :p", {"p": str(path)})
+
+            # Incrementally update test targets for changed test files
+            await self._update_test_targets_incremental(new_paths, existing_paths, removed_paths)
+
+            # Incrementally update lint tools if config files changed
+            await self._update_lint_tools_incremental(changed_paths)
 
         duration = time.time() - start_time
 
         return IndexStats(
             files_processed=len(changed_paths),
-            files_added=0,
+            files_added=files_added,
             files_updated=files_updated,
             files_removed=files_removed,
             symbols_indexed=symbols_indexed,
@@ -718,7 +935,15 @@ class IndexCoordinator:
 
             all_files = self._walk_all_files()
 
-            for context in contexts:
+            # Sort contexts by root_path depth descending (deepest first)
+            # This ensures the most specific context claims each file
+            sorted_contexts = sorted(
+                contexts,
+                key=lambda c: c.root_path.count("/") if c.root_path else 0,
+                reverse=True,
+            )
+
+            for context in sorted_contexts:
                 context_root = self.repo_root / context.root_path
                 if not context_root.exists():
                     continue
@@ -730,7 +955,8 @@ class IndexCoordinator:
                     all_files, context_root, include_globs, exclude_globs
                 ):
                     rel_path = str(file_path.relative_to(self.repo_root))
-                    if rel_path not in should_index:
+                    # Only claim file if not already claimed by a more specific context
+                    if rel_path not in file_to_context:
                         should_index.add(rel_path)
                         file_to_context[rel_path] = context_id
 
@@ -771,24 +997,19 @@ class IndexCoordinator:
             if to_add:
                 import hashlib
 
+                from codeplane.index._internal.discovery.language_detect import (
+                    detect_language_family,
+                )
+
                 with self.db.session() as session:
                     for rel_path in to_add:
                         full_path = self.repo_root / rel_path
                         if not full_path.exists():
                             continue
                         content_hash = hashlib.sha256(full_path.read_bytes()).hexdigest()
-                        ext = full_path.suffix.lower()
-                        lang_map = {
-                            ".py": "python",
-                            ".pyi": "python",
-                            ".js": "javascript",
-                            ".jsx": "javascript",
-                            ".ts": "javascript",
-                            ".tsx": "javascript",
-                            ".go": "go",
-                            ".rs": "rust",
-                        }
-                        lang = lang_map.get(ext)
+                        # Use canonical language detection
+                        lang_family = detect_language_family(full_path)
+                        lang = lang_family.value if lang_family else None
 
                         file_record = File(
                             path=rel_path,
@@ -1267,6 +1488,240 @@ class IndexCoordinator:
 
         return tools_discovered
 
+    async def _rediscover_test_targets(self) -> int:
+        """Clear and re-discover all test targets.
+
+        Called during incremental reindex to pick up new test files.
+        TODO: Make incremental - only process changed paths.
+        """
+        # Clear existing test targets
+        with self.db.session() as session:
+            session.exec(select(TestTarget)).all()  # Load for delete
+            from sqlalchemy import delete
+
+            session.execute(delete(TestTarget))
+            session.commit()
+
+        # Re-run discovery
+        return await self._discover_test_targets()
+
+    async def _rediscover_lint_tools(self) -> int:
+        """Clear and re-discover all lint tools.
+
+        Called during incremental reindex to pick up new tool configs.
+        TODO: Make incremental - only process changed paths.
+        """
+        # Clear existing lint tools
+        with self.db.session() as session:
+            from sqlalchemy import delete
+
+            session.execute(delete(IndexedLintTool))
+            session.commit()
+
+        # Re-run discovery
+        return await self._discover_lint_tools()
+
+    async def _update_test_targets_incremental(
+        self,
+        new_paths: list[Path],
+        existing_paths: list[Path],
+        removed_paths: list[Path],
+    ) -> int:
+        """Incrementally update test targets for changed files.
+
+        Only processes files matching test patterns (test_*.py, *_test.py, etc.).
+        Does NOT walk the entire filesystem.
+
+        Args:
+            new_paths: Newly added files
+            existing_paths: Modified existing files
+            removed_paths: Deleted files
+
+        Returns:
+            Count of test targets added/updated
+        """
+        from codeplane.testing.runner_pack import runner_registry
+
+        # Test file patterns by language
+        test_patterns = {
+            "python": ["test_", "_test.py"],
+            "javascript": [".test.", ".spec.", "__tests__"],
+            "typescript": [".test.", ".spec.", "__tests__"],
+            "go": ["_test.go"],
+            "rust": ["tests/"],
+            "java": ["Test.java", "Tests.java"],
+            "kotlin": ["Test.kt", "Tests.kt"],
+        }
+
+        def is_test_file(path: Path) -> bool:
+            """Check if path matches any test file pattern."""
+            path_str = str(path)
+            name = path.name
+            for patterns in test_patterns.values():
+                for pattern in patterns:
+                    if pattern in name or pattern in path_str:
+                        return True
+            return False
+
+        # Filter to only test files
+        new_test_files = [p for p in new_paths if is_test_file(p)]
+        modified_test_files = [p for p in existing_paths if is_test_file(p)]
+        removed_test_files = [p for p in removed_paths if is_test_file(p)]
+
+        if not new_test_files and not modified_test_files and not removed_test_files:
+            return 0
+
+        targets_changed = 0
+        discovered_at = time.time()
+
+        with self.db.session() as session:
+            # Remove targets for deleted test files
+            if removed_test_files:
+                for path in removed_test_files:
+                    rel_path = str(path)
+                    # Delete targets where path matches
+                    from sqlalchemy import delete
+                    from sqlmodel import col
+
+                    session.execute(delete(TestTarget).where(col(TestTarget.path) == rel_path))
+                    # Also try selector match (some targets use selector=path)
+                    session.execute(delete(TestTarget).where(col(TestTarget.selector) == rel_path))
+                    targets_changed += 1
+
+            # For new/modified test files, detect runner and create target
+            files_to_process = new_test_files + modified_test_files
+            if files_to_process:
+                # Get primary context
+                ctx_stmt = select(Context).where(
+                    Context.probe_status == ProbeStatus.VALID.value,
+                    Context.enabled == True,  # noqa: E712
+                )
+                contexts = list(session.exec(ctx_stmt).all())
+                if not contexts:
+                    session.commit()
+                    return targets_changed
+
+                primary_ctx = contexts[0]
+
+                # Detect applicable runner packs once
+                detected_packs = runner_registry.detect_all(self.repo_root)
+
+                for path in files_to_process:
+                    rel_path = str(path)
+                    full_path = self.repo_root / path
+
+                    if not full_path.exists():
+                        continue
+
+                    # Delete existing target for this path (if modified)
+                    if path in modified_test_files:
+                        from sqlalchemy import delete
+                        from sqlmodel import col
+
+                        session.execute(delete(TestTarget).where(col(TestTarget.path) == rel_path))
+                        session.execute(
+                            delete(TestTarget).where(col(TestTarget.selector) == rel_path)
+                        )
+
+                    # Find matching runner pack
+                    for pack_class, _confidence in detected_packs:
+                        pack = pack_class()
+                        # Check if this pack handles this file type
+                        if (
+                            pack.language == "python"
+                            and path.suffix == ".py"
+                            or pack.language == "javascript"
+                            and path.suffix
+                            in (
+                                ".js",
+                                ".ts",
+                                ".jsx",
+                                ".tsx",
+                            )
+                            or pack.language == "go"
+                            and path.suffix == ".go"
+                        ):
+                            target = TestTarget(
+                                context_id=primary_ctx.id,
+                                target_id=f"test:{rel_path}",
+                                selector=rel_path,
+                                kind="file",
+                                language=pack.language,
+                                runner_pack_id=pack.pack_id,
+                                workspace_root=str(self.repo_root),
+                                path=rel_path,
+                                discovered_at=discovered_at,
+                            )
+                            session.add(target)
+                            targets_changed += 1
+                            break
+
+            session.commit()
+
+        return targets_changed
+
+    async def _update_lint_tools_incremental(self, changed_paths: list[Path]) -> int:
+        """Incrementally update lint tools if config files changed.
+
+        Only re-detects tools when their config files are modified.
+        Does NOT walk the entire filesystem.
+
+        Args:
+            changed_paths: All changed file paths
+
+        Returns:
+            Count of tools updated
+        """
+        from codeplane.lint.tools import registry as lint_registry
+
+        # Get all known config files from registered tools
+        config_filenames: set[str] = set()
+        for tool in lint_registry.all():
+            for config_spec in tool.config_files:
+                # Handle section-aware specs like "pyproject.toml:tool.ruff"
+                filename = config_spec.split(":")[0] if ":" in config_spec else config_spec
+                config_filenames.add(filename)
+
+        # Check if any changed path is a config file
+        changed_configs = [p for p in changed_paths if p.name in config_filenames]
+
+        if not changed_configs:
+            return 0
+
+        # Config file changed - re-detect all tools (config may affect multiple)
+        # This is still efficient because we only do this when configs change
+        tools_updated = 0
+        discovered_at = time.time()
+
+        with self.db.session() as session:
+            # Clear existing tools
+            from sqlalchemy import delete
+
+            session.execute(delete(IndexedLintTool))
+
+            # Re-detect
+            import json as json_module
+
+            detected_pairs = lint_registry.detect(self.repo_root)
+
+            for tool, config_file in detected_pairs:
+                indexed_tool = IndexedLintTool(
+                    tool_id=tool.tool_id,
+                    name=tool.name,
+                    category=tool.category.value,
+                    languages=json_module.dumps(sorted(tool.languages)),
+                    executable=tool.executable,
+                    workspace_root=str(self.repo_root),
+                    config_file=config_file,
+                    discovered_at=discovered_at,
+                )
+                session.add(indexed_tool)
+                tools_updated += 1
+
+            session.commit()
+
+        return tools_updated
+
     async def _index_all_files(self) -> tuple[int, list[str], dict[str, int]]:
         """Index all files in valid contexts.
 
@@ -1277,7 +1732,7 @@ class IndexCoordinator:
         Returns:
             Tuple of (count of files indexed, list of indexed file paths, files by language).
         """
-        from codeplane.core.progress import progress, status
+        from codeplane.core.progress import progress
         from codeplane.index._internal.discovery.language_detect import detect_language_family
 
         if self._lexical is None or self._parser is None:
@@ -1300,9 +1755,6 @@ class IndexCoordinator:
             root_context = next((c for c in all_contexts if c.tier == 3), None)
 
             # Walk filesystem ONCE - applies PRUNABLE_DIRS and cplignore
-            if not self._quiet:
-                status("Discovering files...", style="none", indent=4)
-
             all_files = self._walk_all_files()
 
             files_to_index: list[tuple[Path, str, int, str | None]] = []
@@ -1349,32 +1801,37 @@ class IndexCoordinator:
                     claimed_paths.add(rel_str)
                     files_to_index.append((file_path, rel_str, root_context_id, lang_value))
 
-            # Third pass: index files with progress bar
+            # Third pass: index files with streaming progress (Issue #2)
             context_files: dict[int, list[str]] = {}
             files_by_ext: dict[str, int] = {}
 
-            file_iter: Iterable[tuple[Path, str, int, str | None]] = files_to_index
+            # Stream file type counts during indexing for responsive UX
             if not self._quiet:
-                file_iter = progress(files_to_index, desc="Indexing", unit="files")
-
-            for file_path, rel_str, context_id, _lang_family in file_iter:
-                try:
-                    content = self._safe_read_text(file_path)
-                    symbols = self._extract_symbols(file_path)
-                    self._lexical.add_file(
-                        rel_str,
-                        content,
-                        context_id=context_id,
-                        symbols=symbols,
-                    )
-                    count += 1
-                    indexed_paths.append(rel_str)
-                    context_files.setdefault(context_id, []).append(rel_str)
-                    # Track by file extension
-                    ext = file_path.suffix.lower() or file_path.name.lower()
-                    files_by_ext[ext] = files_by_ext.get(ext, 0) + 1
-                except (OSError, UnicodeDecodeError):
-                    continue
+                (
+                    count,
+                    indexed_paths,
+                    files_by_ext,
+                    context_files,
+                ) = await self._index_with_streaming_progress(files_to_index)
+            else:
+                # Quiet mode: no progress display
+                for file_path, rel_str, context_id, _lang_family in files_to_index:
+                    try:
+                        content = self._safe_read_text(file_path)
+                        symbols = self._extract_symbols(file_path)
+                        self._lexical.add_file(
+                            rel_str,
+                            content,
+                            context_id=context_id,
+                            symbols=symbols,
+                        )
+                        count += 1
+                        indexed_paths.append(rel_str)
+                        context_files.setdefault(context_id, []).append(rel_str)
+                        ext = file_path.suffix.lower() or file_path.name.lower()
+                        files_by_ext[ext] = files_by_ext.get(ext, 0) + 1
+                    except (OSError, UnicodeDecodeError):
+                        continue
 
             # Run structural indexer for each context
             if self._structural is not None:
@@ -1388,6 +1845,103 @@ class IndexCoordinator:
                         self._structural.index_files(file_paths, context_id)
 
         return count, indexed_paths, files_by_ext
+
+    async def _index_with_streaming_progress(
+        self,
+        files_to_index: list[tuple[Path, str, int, str | None]],
+    ) -> tuple[int, list[str], dict[str, int], dict[int, list[str]]]:
+        """Index files with streaming file type table display (Issue #2).
+
+        Shows a live-updating table of file types being indexed, providing
+        responsive UX feedback even during long indexing operations.
+
+        Returns:
+            Tuple of (count, indexed_paths, files_by_ext, context_files)
+        """
+        import math
+
+        from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
+        from rich.table import Table
+
+        from codeplane.core.progress import get_console, suppress_console_logs
+
+        console = get_console()
+        count = 0
+        indexed_paths: list[str] = []
+        files_by_ext: dict[str, int] = {}
+        context_files: dict[int, list[str]] = {}
+        total = len(files_to_index)
+
+        def build_file_type_table() -> Table:
+            """Build current state of file type table."""
+            if not files_by_ext:
+                return Table(show_header=False, box=None)
+
+            sorted_exts = sorted(
+                files_by_ext.items(),
+                key=lambda x: -x[1],
+            )
+            max_count = sorted_exts[0][1] if sorted_exts else 1
+            max_sqrt = math.sqrt(max_count)
+
+            table = Table(show_header=False, box=None, padding=(0, 1), pad_edge=False)
+            table.add_column("ext", style="cyan", width=12)
+            table.add_column("count", style="white", justify="right", width=4)
+            table.add_column("bar")
+
+            for ext, ext_count in sorted_exts[:8]:
+                bar_width = max(1, int(math.sqrt(ext_count) / max_sqrt * 20))
+                bar = f"[green]{'━' * bar_width}[/green][dim]{'━' * (20 - bar_width)}[/dim]"
+                table.add_row(ext, str(ext_count), bar)
+
+            rest = sorted_exts[8:]
+            if rest:
+                rest_count = sum(c for _, c in rest)
+                bar_width = max(1, int(math.sqrt(rest_count) / max_sqrt * 20))
+                bar = f"[dim green]{'━' * bar_width}[/dim green][dim]{'━' * (20 - bar_width)}[/dim]"
+                table.add_row("other", str(rest_count), bar, style="dim")
+
+            return table
+
+        # Use Live display with progress bar and streaming table
+        with suppress_console_logs():
+            progress_bar = Progress(
+                TextColumn("    {task.description}:"),
+                BarColumn(bar_width=25, style="cyan", complete_style="cyan"),
+                TaskProgressColumn(),
+                TextColumn("{task.completed}/{task.total} files"),
+                console=console,
+                transient=False,
+            )
+
+            with progress_bar:
+                task_id = progress_bar.add_task("Indexing", total=total)
+
+                for _i, (file_path, rel_str, context_id, _lang_family) in enumerate(files_to_index):
+                    try:
+                        content = self._safe_read_text(file_path)
+                        symbols = self._extract_symbols(file_path)
+                        if self._lexical is not None:
+                            self._lexical.add_file(
+                                rel_str,
+                                content,
+                                context_id=context_id,
+                                symbols=symbols,
+                            )
+                        count += 1
+                        indexed_paths.append(rel_str)
+                        context_files.setdefault(context_id, []).append(rel_str)
+
+                        # Track by file extension
+                        ext = file_path.suffix.lower() or file_path.name.lower()
+                        files_by_ext[ext] = files_by_ext.get(ext, 0) + 1
+
+                    except (OSError, UnicodeDecodeError):
+                        pass
+
+                    progress_bar.advance(task_id)
+
+        return count, indexed_paths, files_by_ext, context_files
 
     async def _update_structural_index(self, changed_paths: list[Path]) -> None:
         """Update structural index for changed files.

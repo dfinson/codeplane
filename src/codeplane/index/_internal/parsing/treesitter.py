@@ -1370,9 +1370,28 @@ class TreeSitterParser:
         return check(node)
 
     def _extract_python_symbols(self, root: Any) -> list[SyntacticSymbol]:
-        """Extract symbols from Python AST."""
+        """Extract symbols from Python AST.
+
+        Extracts:
+        - Classes
+        - Functions (module-level)
+        - Methods (inside classes)
+        - Module-level constants (UPPERCASE names or type-annotated assignments)
+        """
         symbols: list[SyntacticSymbol] = []
         current_class: str | None = None
+
+        def is_constant_name(name: str) -> bool:
+            """Check if name follows constant naming convention (UPPER_CASE)."""
+            # Must have at least one letter and be all uppercase letters/digits/underscores
+            return (
+                name.isupper()
+                or (
+                    name[0].isupper()
+                    and "_" in name
+                    and all(c.isupper() or c == "_" or c.isdigit() for c in name)
+                )
+            ) and not name.startswith("_")
 
         def walk(node: Any, class_name: str | None = None) -> None:
             nonlocal current_class
@@ -1418,6 +1437,48 @@ class TreeSitterParser:
                             parent_name=class_name,
                         )
                     )
+
+            # Module-level constant/variable assignments (not inside classes)
+            elif node.type == "expression_statement" and class_name is None:
+                for child in node.children:
+                    # Handle simple assignment: NAME = value
+                    if child.type == "assignment":
+                        left = child.child_by_field_name("left")
+                        if left and left.type == "identifier":
+                            name = left.text.decode("utf-8")
+                            # Only index UPPERCASE constants
+                            if is_constant_name(name):
+                                symbols.append(
+                                    SyntacticSymbol(
+                                        name=name,
+                                        kind="variable",
+                                        line=node.start_point[0] + 1,
+                                        column=node.start_point[1],
+                                        end_line=node.end_point[0] + 1,
+                                        end_column=node.end_point[1],
+                                    )
+                                )
+                    # Handle annotated assignment: NAME: type = value
+                    elif child.type == "type" or node.type == "typed_assignment":
+                        pass  # These are handled in the next branch
+
+            # Handle typed module-level assignments: NAME: Type = value
+            elif (node.type in ("assignment", "typed_assignment")) and class_name is None:
+                # Check if this is at module level (parent is module or expression_statement)
+                left = node.child_by_field_name("left") or node.child_by_field_name("name")
+                if left and left.type == "identifier":
+                    name = left.text.decode("utf-8")
+                    if is_constant_name(name):
+                        symbols.append(
+                            SyntacticSymbol(
+                                name=name,
+                                kind="variable",
+                                line=node.start_point[0] + 1,
+                                column=node.start_point[1],
+                                end_line=node.end_point[0] + 1,
+                                end_column=node.end_point[1],
+                            )
+                        )
 
             for child in node.children:
                 walk(child, class_name)
