@@ -140,7 +140,7 @@ class TestStatusEndpoint:
         data = response.json()
         assert isinstance(data, dict)
 
-    def test_status_contains_repo_root(self, client: TestClient, _tmp_path: Path) -> None:
+    def test_status_contains_repo_root(self, client: TestClient, tmp_path: Path) -> None:  # noqa: ARG002
         """Status response contains repo_root."""
         response = client.get("/status")
         data = response.json()

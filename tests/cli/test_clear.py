@@ -27,7 +27,9 @@ class TestClearRepoNothingToRemove:
         assert result is False
 
     def test_prints_message_when_nothing_to_clear(
-        self, tmp_path: Path, _capsys: pytest.CaptureFixture[str]
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],  # noqa: ARG002
     ) -> None:
         """Prints 'nothing to clear' message."""
         clear_repo(tmp_path, force=True)
