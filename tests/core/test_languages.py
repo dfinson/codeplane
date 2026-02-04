@@ -15,10 +15,10 @@ import pytest
 
 from codeplane.core.languages import (
     ALL_LANGUAGES,
-    AMBIENT_FAMILIES,
-    EXTENSION_TO_FAMILY,
-    FILENAME_TO_FAMILY,
-    LANGUAGES_BY_FAMILY,
+    AMBIENT_NAMES,
+    EXTENSION_TO_NAME,
+    FILENAME_TO_NAME,
+    LANGUAGES_BY_NAME,
     Language,
     build_include_specs,
     build_marker_definitions,
@@ -39,13 +39,12 @@ class TestLanguageDataclass:
 
     def test_create_minimal_language(self) -> None:
         """Create language with minimal required fields."""
-        lang = Language(family="test", extensions=frozenset({".test"}))
-        assert lang.family == "test"
+        lang = Language(name="test", extensions=frozenset({".test"}))
+        assert lang.name == "test"
         assert lang.extensions == frozenset({".test"})
         assert lang.filenames == frozenset()
         assert lang.markers_workspace == ()
         assert lang.markers_package == ()
-        assert lang.include_globs == ()
         assert lang.grammar is None
         assert lang.test_patterns == ()
         assert lang.ambient is False
@@ -53,24 +52,23 @@ class TestLanguageDataclass:
     def test_create_full_language(self) -> None:
         """Create language with all fields."""
         lang = Language(
-            family="python",
+            name="python",
             extensions=frozenset({".py", ".pyi"}),
             filenames=frozenset({"pyproject.toml"}),
             markers_workspace=("uv.lock",),
             markers_package=("pyproject.toml",),
-            include_globs=("**/*.py",),
             grammar="python",
             test_patterns=("test_*.py",),
             ambient=False,
         )
-        assert lang.family == "python"
+        assert lang.name == "python"
         assert lang.grammar == "python"
 
     def test_language_is_frozen(self) -> None:
         """Language is a frozen dataclass."""
-        lang = Language(family="x", extensions=frozenset({".x"}))
+        lang = Language(name="x", extensions=frozenset({".x"}))
         with pytest.raises(AttributeError):
-            lang.family = "y"  # type: ignore[misc]
+            lang.name = "y"  # type: ignore[misc]
 
 
 class TestAllLanguages:
@@ -87,90 +85,90 @@ class TestAllLanguages:
 
     def test_contains_common_languages(self) -> None:
         """ALL_LANGUAGES contains common languages."""
-        families = {lang.family for lang in ALL_LANGUAGES}
-        common = {"python", "javascript", "go", "rust", "jvm"}
-        assert common.issubset(families)
+        names = {lang.name for lang in ALL_LANGUAGES}
+        common = {"python", "javascript", "go", "rust", "java"}
+        assert common.issubset(names)
 
-    def test_unique_families(self) -> None:
-        """Each language has a unique family."""
-        families = [lang.family for lang in ALL_LANGUAGES]
-        assert len(families) == len(set(families))
+    def test_unique_names(self) -> None:
+        """Each language has a unique name."""
+        names = [lang.name for lang in ALL_LANGUAGES]
+        assert len(names) == len(set(names))
 
 
 class TestLanguagesByFamily:
-    """Tests for LANGUAGES_BY_FAMILY dict."""
+    """Tests for LANGUAGES_BY_NAME dict."""
 
     def test_is_dict(self) -> None:
-        """LANGUAGES_BY_FAMILY is a dict."""
-        assert isinstance(LANGUAGES_BY_FAMILY, dict)
+        """LANGUAGES_BY_NAME is a dict."""
+        assert isinstance(LANGUAGES_BY_NAME, dict)
 
     def test_lookup_python(self) -> None:
         """Can look up Python language."""
-        python = LANGUAGES_BY_FAMILY.get("python")
+        python = LANGUAGES_BY_NAME.get("python")
         assert python is not None
-        assert python.family == "python"
+        assert python.name == "python"
         assert ".py" in python.extensions
 
     def test_lookup_nonexistent(self) -> None:
         """Returns None for non-existent family."""
-        result = LANGUAGES_BY_FAMILY.get("nonexistent")
+        result = LANGUAGES_BY_NAME.get("nonexistent")
         assert result is None
 
 
 class TestExtensionToFamily:
-    """Tests for EXTENSION_TO_FAMILY mapping."""
+    """Tests for EXTENSION_TO_NAME mapping."""
 
     def test_python_extensions(self) -> None:
         """Python extensions map to python family."""
-        assert EXTENSION_TO_FAMILY.get(".py") == "python"
-        assert EXTENSION_TO_FAMILY.get(".pyi") == "python"
+        assert EXTENSION_TO_NAME.get(".py") == "python"
+        assert EXTENSION_TO_NAME.get(".pyi") == "python"
 
     def test_javascript_extensions(self) -> None:
         """JavaScript extensions map correctly."""
-        assert EXTENSION_TO_FAMILY.get(".js") == "javascript"
-        assert EXTENSION_TO_FAMILY.get(".ts") == "javascript"
-        assert EXTENSION_TO_FAMILY.get(".tsx") == "javascript"
+        assert EXTENSION_TO_NAME.get(".js") == "javascript"
+        assert EXTENSION_TO_NAME.get(".ts") == "javascript"
+        assert EXTENSION_TO_NAME.get(".tsx") == "javascript"
 
     def test_nonexistent_extension(self) -> None:
         """Nonexistent extensions return None."""
-        assert EXTENSION_TO_FAMILY.get(".unknown") is None
+        assert EXTENSION_TO_NAME.get(".unknown") is None
 
 
 class TestFilenameToFamily:
-    """Tests for FILENAME_TO_FAMILY mapping."""
+    """Tests for FILENAME_TO_NAME mapping."""
 
     def test_python_filenames(self) -> None:
         """Python filenames map correctly."""
-        assert FILENAME_TO_FAMILY.get("pyproject.toml") == "python"
-        assert FILENAME_TO_FAMILY.get("setup.py") == "python"
+        assert FILENAME_TO_NAME.get("pyproject.toml") == "python"
+        assert FILENAME_TO_NAME.get("setup.py") == "python"
 
     def test_javascript_filenames(self) -> None:
         """JavaScript filenames map correctly."""
-        assert FILENAME_TO_FAMILY.get("package.json") == "javascript"
+        assert FILENAME_TO_NAME.get("package.json") == "javascript"
 
     def test_case_insensitive(self) -> None:
         """Filenames are case-insensitive."""
         # Files are stored lowercase
-        assert "dockerfile" in FILENAME_TO_FAMILY
+        assert "dockerfile" in FILENAME_TO_NAME
 
 
 class TestAmbientFamilies:
-    """Tests for AMBIENT_FAMILIES set."""
+    """Tests for AMBIENT_NAMES set."""
 
     def test_is_frozenset(self) -> None:
-        """AMBIENT_FAMILIES is a frozenset."""
-        assert isinstance(AMBIENT_FAMILIES, frozenset)
+        """AMBIENT_NAMES is a frozenset."""
+        assert isinstance(AMBIENT_NAMES, frozenset)
 
     def test_contains_ambient_languages(self) -> None:
         """Contains languages marked as ambient."""
         # These should be ambient: sql, docker, markdown, json_yaml, graphql
-        assert "sql" in AMBIENT_FAMILIES
-        assert "markdown" in AMBIENT_FAMILIES
+        assert "sql" in AMBIENT_NAMES
+        assert "markdown" in AMBIENT_NAMES
 
     def test_does_not_contain_non_ambient(self) -> None:
         """Does not contain non-ambient languages."""
-        assert "python" not in AMBIENT_FAMILIES
-        assert "javascript" not in AMBIENT_FAMILIES
+        assert "python" not in AMBIENT_NAMES
+        assert "javascript" not in AMBIENT_NAMES
 
 
 class TestDetectLanguageFamily:

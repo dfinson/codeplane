@@ -242,7 +242,7 @@ class TestAuthorityResult:
 
 
 class TestDotNetAuthority:
-    """Tests for .NET solution file authority filtering."""
+    """Tests for .NET solution file authority filtering (applies to C#/F#/VB)."""
 
     def test_sln_workspace_authority(self, temp_dir: Path) -> None:
         """Solution file should define authority for projects."""
@@ -266,25 +266,25 @@ EndProject
 
         candidates = [
             make_candidate(
-                LanguageFamily.DOTNET,
+                LanguageFamily.CSHARP,
                 "",
                 1,
                 ["Solution.sln"],
             ),
             make_candidate(
-                LanguageFamily.DOTNET,
+                LanguageFamily.CSHARP,
                 "src/Core",
                 2,
                 ["src/Core/Core.csproj"],
             ),
             make_candidate(
-                LanguageFamily.DOTNET,
+                LanguageFamily.CSHARP,
                 "src/Api",
                 2,
                 ["src/Api/Api.csproj"],
             ),
             make_candidate(
-                LanguageFamily.DOTNET,
+                LanguageFamily.CSHARP,
                 "src/Orphan",
                 2,
                 ["src/Orphan/Orphan.csproj"],
@@ -311,13 +311,13 @@ EndProject
 
         candidates = [
             make_candidate(
-                LanguageFamily.DOTNET,
+                LanguageFamily.CSHARP,
                 "",
                 1,
                 ["Empty.sln"],
             ),
             make_candidate(
-                LanguageFamily.DOTNET,
+                LanguageFamily.CSHARP,
                 "src/Lib",
                 2,
                 ["src/Lib/Lib.csproj"],
@@ -333,7 +333,7 @@ EndProject
 
 
 class TestJvmAuthority:
-    """Tests for JVM (Gradle/Maven) authority filtering."""
+    """Tests for JVM (Gradle/Maven) authority filtering (applies to Java/Kotlin/Scala/Groovy)."""
 
     def test_gradle_settings_authority(self, temp_dir: Path) -> None:
         """settings.gradle should define authority."""
@@ -355,25 +355,25 @@ include('lib')
 
         candidates = [
             make_candidate(
-                LanguageFamily.JVM,
+                LanguageFamily.JAVA,
                 "",
                 1,
                 ["settings.gradle"],
             ),
             make_candidate(
-                LanguageFamily.JVM,
+                LanguageFamily.JAVA,
                 "app",
                 2,
                 ["app/build.gradle"],
             ),
             make_candidate(
-                LanguageFamily.JVM,
+                LanguageFamily.JAVA,
                 "lib",
                 2,
                 ["lib/build.gradle"],
             ),
             make_candidate(
-                LanguageFamily.JVM,
+                LanguageFamily.JAVA,
                 "orphan",
                 2,
                 ["orphan/build.gradle"],
@@ -403,13 +403,13 @@ include("${dynamicProject}")
 
         candidates = [
             make_candidate(
-                LanguageFamily.JVM,
+                LanguageFamily.JAVA,
                 "",
                 1,
                 ["settings.gradle"],
             ),
             make_candidate(
-                LanguageFamily.JVM,
+                LanguageFamily.JAVA,
                 "any-project",
                 2,
                 ["any-project/build.gradle"],
@@ -444,25 +444,25 @@ include("${dynamicProject}")
 
         candidates = [
             make_candidate(
-                LanguageFamily.JVM,
+                LanguageFamily.JAVA,
                 "",
                 1,
                 ["pom.xml"],
             ),
             make_candidate(
-                LanguageFamily.JVM,
+                LanguageFamily.JAVA,
                 "core",
                 2,
                 ["core/pom.xml"],
             ),
             make_candidate(
-                LanguageFamily.JVM,
+                LanguageFamily.JAVA,
                 "api",
                 2,
                 ["api/pom.xml"],
             ),
             make_candidate(
-                LanguageFamily.JVM,
+                LanguageFamily.JAVA,
                 "orphan",
                 2,
                 ["orphan/pom.xml"],

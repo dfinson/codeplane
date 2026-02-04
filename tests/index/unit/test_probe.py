@@ -148,7 +148,7 @@ class TestContextProbe:
         pkg_path.mkdir()
         (pkg_path / "settings.json").write_text('{"key": "value"}\n')
 
-        candidate = make_candidate(LanguageFamily.JSON_YAML, "config", include_spec=["*.json"])
+        candidate = make_candidate(LanguageFamily.JSON, "config", include_spec=["*.json"])
 
         parser = TreeSitterParser()
         probe = ContextProbe(repo_path, parser=parser)

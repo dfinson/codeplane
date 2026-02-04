@@ -1,7 +1,7 @@
 """Unit tests for Membership Resolver (membership.py).
 
 Tests cover:
-- Include spec assignment per language family
+- Include spec assignment per language name
 - Exclude spec assignment (universal excludes + hole-punches)
 - Hole-punch rule: nested contexts excluded from parent
 - Segment-safe containment ("apps" doesn't contain "apps-legacy")

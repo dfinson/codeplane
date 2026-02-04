@@ -1,11 +1,11 @@
 """Unit tests for Context Discovery (discovery.py, scanner.py).
 
 Tests cover:
-- Marker file detection for each language family
+- Marker file detection for each language name
 - Tier 1 vs Tier 2 marker classification
 - Candidate context generation from markers
 - Full repository scan for contexts
-- Ambient family fallback contexts
+- Ambient name fallback contexts
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from codeplane.index._internal.discovery import (
-    AMBIENT_FAMILIES,
+    AMBIENT_NAMES,
     INCLUDE_SPECS,
     MARKER_DEFINITIONS,
     UNIVERSAL_EXCLUDES,
@@ -32,7 +32,7 @@ class TestMarkerDefinitions:
         assert len(MARKER_DEFINITIONS) > 0
 
     def test_javascript_markers(self) -> None:
-        """JavaScript family should have package.json markers."""
+        """JavaScript name should have package.json markers."""
         js_markers = MARKER_DEFINITIONS.get(LanguageFamily.JAVASCRIPT, {})
         workspace = js_markers.get(MarkerTier.WORKSPACE, [])
         package = js_markers.get(MarkerTier.PACKAGE, [])
@@ -43,7 +43,7 @@ class TestMarkerDefinitions:
         assert "package.json" in all_markers
 
     def test_python_markers(self) -> None:
-        """Python family should have pyproject.toml markers."""
+        """Python name should have pyproject.toml markers."""
         py_markers = MARKER_DEFINITIONS.get(LanguageFamily.PYTHON, {})
         workspace = py_markers.get(MarkerTier.WORKSPACE, [])
         package = py_markers.get(MarkerTier.PACKAGE, [])
@@ -52,7 +52,7 @@ class TestMarkerDefinitions:
         assert "pyproject.toml" in all_markers or "setup.py" in all_markers
 
     def test_go_markers(self) -> None:
-        """Go family should have go.mod markers."""
+        """Go name should have go.mod markers."""
         go_markers = MARKER_DEFINITIONS.get(LanguageFamily.GO, {})
         workspace = go_markers.get(MarkerTier.WORKSPACE, [])
         package = go_markers.get(MarkerTier.PACKAGE, [])
@@ -61,7 +61,7 @@ class TestMarkerDefinitions:
         assert "go.mod" in all_markers
 
     def test_rust_markers(self) -> None:
-        """Rust family should have Cargo.toml markers."""
+        """Rust name should have Cargo.toml markers."""
         rust_markers = MARKER_DEFINITIONS.get(LanguageFamily.RUST, {})
         workspace = rust_markers.get(MarkerTier.WORKSPACE, [])
         package = rust_markers.get(MarkerTier.PACKAGE, [])
@@ -108,19 +108,18 @@ class TestUniversalExcludes:
 
 
 class TestAmbientFamilies:
-    """Tests for ambient family definitions."""
+    """Tests for ambient name definitions."""
 
     def test_ambient_families_exist(self) -> None:
-        """AMBIENT_FAMILIES should be defined."""
-        assert AMBIENT_FAMILIES is not None
-        assert len(AMBIENT_FAMILIES) > 0
+        """AMBIENT_NAMES should be defined."""
+        assert AMBIENT_NAMES is not None
+        assert len(AMBIENT_NAMES) > 0
 
-    def test_ambient_families_are_data_families(self) -> None:
-        """Ambient families should typically be data families."""
-        for family in AMBIENT_FAMILIES:
-            # Most ambient families are data families (markdown, json_yaml, etc.)
-            # But this is not a strict requirement
-            assert isinstance(family, LanguageFamily)
+    def test_ambient_families_are_strings(self) -> None:
+        """Ambient names should be strings."""
+        for name in AMBIENT_NAMES:
+            # AMBIENT_NAMES contains language name strings
+            assert isinstance(name, str)
 
 
 class TestContextDiscovery:
@@ -270,7 +269,7 @@ class TestScannerEdgeCases:
     """Tests for scanner edge cases."""
 
     def test_discover_single_family(self, temp_dir: Path) -> None:
-        """discover_family should return results for specific family."""
+        """discover_name should return results for specific name."""
         repo_path = temp_dir / "repo"
         repo_path.mkdir()
         (repo_path / "pyproject.toml").write_text('[project]\nname = "test"\n')
@@ -295,7 +294,7 @@ class TestScannerEdgeCases:
         result = discovery.discover_all()
 
         dotnet_candidates = [
-            c for c in result.candidates if c.language_family == LanguageFamily.DOTNET
+            c for c in result.candidates if c.language_family == LanguageFamily.CSHARP
         ]
         assert len(dotnet_candidates) >= 1
         # sln file should be Tier 1
@@ -314,7 +313,7 @@ class TestScannerEdgeCases:
         result = discovery.discover_all()
 
         dotnet_candidates = [
-            c for c in result.candidates if c.language_family == LanguageFamily.DOTNET
+            c for c in result.candidates if c.language_family == LanguageFamily.CSHARP
         ]
         assert len(dotnet_candidates) >= 1
 
@@ -353,7 +352,7 @@ class TestScannerEdgeCases:
         discovery = ContextDiscovery(repo_path)
         result = discovery.discover_all()
 
-        jvm_candidates = [c for c in result.candidates if c.language_family == LanguageFamily.JVM]
+        jvm_candidates = [c for c in result.candidates if c.language_family == LanguageFamily.JAVA]
         tier1 = [c for c in jvm_candidates if c.tier == 1]
         assert len(tier1) >= 1
 
@@ -405,7 +404,7 @@ class TestScannerEdgeCases:
         assert len(root_candidates[0].markers) >= 1
 
     def test_discover_ambient_family_fallback(self, temp_dir: Path) -> None:
-        """Ambient family should get fallback context if no markers."""
+        """Ambient name should get fallback context if no markers."""
         repo_path = temp_dir / "repo"
         repo_path.mkdir()
 

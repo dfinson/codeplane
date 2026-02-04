@@ -35,7 +35,7 @@ class TestGrammarPackages:
         assert LanguageFamily.JAVASCRIPT in GRAMMAR_PACKAGES
         assert LanguageFamily.GO in GRAMMAR_PACKAGES
         assert LanguageFamily.RUST in GRAMMAR_PACKAGES
-        assert LanguageFamily.JVM in GRAMMAR_PACKAGES
+        assert LanguageFamily.JAVA in GRAMMAR_PACKAGES
 
     def test_python_grammar(self) -> None:
         """Python grammar should have correct package."""
@@ -62,8 +62,8 @@ class TestExtraPackages:
         assert "tree-sitter-typescript" in pkg_names
 
     def test_cpp_has_c(self) -> None:
-        """C++ family should include C."""
-        extras = EXTRA_PACKAGES.get(LanguageFamily.CPP, [])
+        """C/C++ family should include C."""
+        extras = EXTRA_PACKAGES.get(LanguageFamily.C_CPP, [])
         pkg_names = [e[0] for e in extras]
         assert "tree-sitter-c" in pkg_names
 

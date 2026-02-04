@@ -17,10 +17,10 @@ from codeplane.index.models import LanguageFamily
 
 
 class TestExtensionToFamily:
-    """Tests for EXTENSION_TO_FAMILY mapping."""
+    """Tests for EXTENSION_TO_NAME mapping."""
 
     def test_is_dict(self) -> None:
-        """EXTENSION_TO_FAMILY is a dictionary."""
+        """EXTENSION_TO_NAME is a dictionary."""
         assert isinstance(EXTENSION_TO_FAMILY, dict)
 
     def test_values_are_language_family(self) -> None:
@@ -40,10 +40,10 @@ class TestExtensionToFamily:
 
 
 class TestFilenameToFamily:
-    """Tests for FILENAME_TO_FAMILY mapping."""
+    """Tests for FILENAME_TO_NAME mapping."""
 
     def test_is_dict(self) -> None:
-        """FILENAME_TO_FAMILY is a dictionary."""
+        """FILENAME_TO_NAME is a dictionary."""
         assert isinstance(FILENAME_TO_FAMILY, dict)
 
     def test_values_are_language_family(self) -> None:
@@ -69,8 +69,8 @@ class TestDetectLanguageFamily:
             ("component.ts", LanguageFamily.JAVASCRIPT),
             ("main.go", LanguageFamily.GO),
             ("lib.rs", LanguageFamily.RUST),
-            ("App.java", LanguageFamily.JVM),
-            ("Program.cs", LanguageFamily.DOTNET),
+            ("App.java", LanguageFamily.JAVA),
+            ("Program.cs", LanguageFamily.CSHARP),
             ("app.rb", LanguageFamily.RUBY),
             ("index.php", LanguageFamily.PHP),
             ("script.sh", LanguageFamily.SHELL),

@@ -2,7 +2,7 @@
 
 Tests cover:
 - File-to-context routing
-- Single owner per (file, family) invariant
+- Single owner per (file, name) invariant
 - Nested context priority (most specific wins)
 - Segment-safe containment
 """
@@ -59,7 +59,7 @@ class TestContextRouter:
         assert not result.routes[0].routed
 
     def test_route_respects_family(self) -> None:
-        """Should only match contexts with same language family."""
+        """Should only match contexts with same language name."""
         contexts = [
             make_candidate(LanguageFamily.PYTHON, "backend"),
             make_candidate(LanguageFamily.JAVASCRIPT, "frontend"),
@@ -206,7 +206,7 @@ class TestRouterEdgeCases:
         assert "Unknown extension" in result.routes[0].reason
 
     def test_route_no_contexts_for_family(self) -> None:
-        """No contexts for family should result in unrouted."""
+        """No contexts for name should result in unrouted."""
         contexts = [make_candidate(LanguageFamily.PYTHON, "src")]
         router = ContextRouter()
         # Route a JavaScript file with no JS contexts

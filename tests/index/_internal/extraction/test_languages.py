@@ -49,9 +49,11 @@ class TestAllLanguageConfigs:
     def test_aliases_map_to_same_config(self) -> None:
         """Language aliases map to same configs."""
         assert ALL_LANGUAGE_CONFIGS["javascript"] is ALL_LANGUAGE_CONFIGS["typescript"]
-        assert ALL_LANGUAGE_CONFIGS["jvm"] is ALL_LANGUAGE_CONFIGS["java"]
-        assert ALL_LANGUAGE_CONFIGS["dotnet"] is ALL_LANGUAGE_CONFIGS["csharp"]
         assert ALL_LANGUAGE_CONFIGS["c"] is ALL_LANGUAGE_CONFIGS["cpp"]
+        # Split JVM/dotnet languages share similar structure with their primary config
+        assert ALL_LANGUAGE_CONFIGS["groovy"] is ALL_LANGUAGE_CONFIGS["java"]
+        assert ALL_LANGUAGE_CONFIGS["fsharp"] is ALL_LANGUAGE_CONFIGS["csharp"]
+        assert ALL_LANGUAGE_CONFIGS["vbnet"] is ALL_LANGUAGE_CONFIGS["csharp"]
 
 
 class TestGetConfigForLanguage:
@@ -103,7 +105,7 @@ class TestPythonConfig:
     """Tests for PYTHON_CONFIG."""
 
     def test_language_family(self) -> None:
-        """Python config has correct language family."""
+        """Python config has correct language name."""
         assert PYTHON_CONFIG.language_family == "python"
 
     def test_grammar_name(self) -> None:
@@ -139,7 +141,7 @@ class TestTypescriptConfig:
     """Tests for TYPESCRIPT_CONFIG."""
 
     def test_language_family(self) -> None:
-        """TypeScript config has correct language family."""
+        """TypeScript config has correct language name."""
         assert TYPESCRIPT_CONFIG.language_family == "javascript"
 
     def test_grammar_name(self) -> None:
@@ -170,7 +172,7 @@ class TestGoConfig:
     """Tests for GO_CONFIG."""
 
     def test_language_family(self) -> None:
-        """Go config has correct language family."""
+        """Go config has correct language name."""
         assert GO_CONFIG.language_family == "go"
 
     def test_grammar_name(self) -> None:
@@ -190,7 +192,7 @@ class TestRustConfig:
     """Tests for RUST_CONFIG."""
 
     def test_language_family(self) -> None:
-        """Rust config has correct language family."""
+        """Rust config has correct language name."""
         assert RUST_CONFIG.language_family == "rust"
 
     def test_access_styles(self) -> None:
@@ -212,7 +214,7 @@ class TestJavaConfig:
     """Tests for JAVA_CONFIG."""
 
     def test_language_family(self) -> None:
-        """Java config has correct language family."""
+        """Java config has correct language name."""
         assert JAVA_CONFIG.language_family == "jvm"
 
     def test_grammar_name(self) -> None:
@@ -228,7 +230,7 @@ class TestRubyConfig:
     """Tests for RUBY_CONFIG."""
 
     def test_language_family(self) -> None:
-        """Ruby config has correct language family."""
+        """Ruby config has correct language name."""
         assert RUBY_CONFIG.language_family == "ruby"
 
     def test_no_type_annotations(self) -> None:
@@ -248,7 +250,7 @@ class TestCppConfig:
     """Tests for CPP_CONFIG."""
 
     def test_language_family(self) -> None:
-        """C++ config has correct language family."""
+        """C++ config has correct language name."""
         assert CPP_CONFIG.language_family == "cpp"
 
     def test_access_styles(self) -> None:

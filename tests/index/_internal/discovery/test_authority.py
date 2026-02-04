@@ -282,7 +282,7 @@ class TestRustFiltering:
 
 
 class TestJvmFiltering:
-    """Tests for JVM workspace filtering."""
+    """Tests for JVM workspace filtering (applies to Java/Kotlin/Scala/Groovy)."""
 
     def test_gradle_includes(self) -> None:
         """Extracts includes from settings.gradle."""
@@ -292,7 +292,7 @@ class TestJvmFiltering:
             settings.write_text("include(':app')\ninclude ':lib'\n")
 
             f = Tier1AuthorityFilter(root)
-            t1 = make_candidate("", 1, LanguageFamily.JVM, ["settings.gradle"])
+            t1 = make_candidate("", 1, LanguageFamily.JAVA, ["settings.gradle"])
             includes, is_strict = f._get_gradle_includes(t1)
 
             assert ":app" in includes or "app" in includes
@@ -307,7 +307,7 @@ class TestJvmFiltering:
             )
 
             f = Tier1AuthorityFilter(root)
-            t1 = make_candidate("", 1, LanguageFamily.JVM, ["pom.xml"])
+            t1 = make_candidate("", 1, LanguageFamily.JAVA, ["pom.xml"])
             modules = f._get_maven_modules(t1)
 
             assert "core" in modules
@@ -315,7 +315,7 @@ class TestJvmFiltering:
 
 
 class TestDotNetFiltering:
-    """Tests for .NET solution filtering."""
+    """Tests for .NET solution filtering (applies to C#/F#/VB)."""
 
     def test_sln_projects(self) -> None:
         """Extracts projects from .sln file."""
@@ -328,7 +328,7 @@ class TestDotNetFiltering:
             )
 
             f = Tier1AuthorityFilter(root)
-            t1 = make_candidate("", 1, LanguageFamily.DOTNET, ["Test.sln"])
+            t1 = make_candidate("", 1, LanguageFamily.CSHARP, ["Test.sln"])
             projects = f._get_sln_projects(t1)
 
             assert any("App.csproj" in p for p in projects)

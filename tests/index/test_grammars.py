@@ -36,8 +36,8 @@ class TestGetNeededGrammars:
     def test_unknown_language(self) -> None:
         """Skips languages not in GRAMMAR_PACKAGES."""
         # Create a fake language family value that's not mapped
-        result = get_needed_grammars({LanguageFamily.CONFIG})
-        # CONFIG is not in GRAMMAR_PACKAGES, should be skipped
+        result = get_needed_grammars({LanguageFamily.MATLAB})
+        # MATLAB has no grammar in GRAMMAR_PACKAGES, should be skipped
         assert result == []
 
     @patch("codeplane.index._internal.grammars.is_grammar_installed")
