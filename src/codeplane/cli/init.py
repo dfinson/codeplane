@@ -108,8 +108,7 @@ def initialize_repo(repo_root: Path, *, force: bool = False, show_cpl_up_hint: b
         task_id = phase.add_progress("Scanning", total=100)
         languages = scan_repo_languages(repo_root)
         phase.advance(task_id, 100)
-        lang_names = ", ".join(sorted(str(lang) for lang in languages)) if languages else "none"
-        phase.complete(f"{len(languages)} languages: {lang_names}")
+        phase.complete(f"{len(languages)} languages detected")
 
         # Step 2: Install grammars if needed
         needed = get_needed_grammars(languages)
