@@ -51,18 +51,25 @@ class LexicalIndex:
     - Symbol names (for quick navigation)
     - Documentation strings
 
+    Supports staged writes for epoch atomicity:
+    - stage_file() / stage_remove() buffer changes in memory
+    - commit_staged() commits all staged changes atomically
+    - discard_staged() discards uncommitted changes
+
     Usage::
 
         index = LexicalIndex(index_path)
 
-        # Index files
+        # Staged writes (for epoch atomicity)
+        index.stage_file("src/foo.py", content, context_id=1)
+        index.stage_file("src/bar.py", content, context_id=1)
+        index.commit_staged()  # Single atomic commit
+
+        # Or direct writes (backward compatible)
         index.add_file("src/foo.py", content, context_id=1)
 
         # Search
         results = index.search("class MyClass", limit=10)
-
-        # Search within context
-        results = index.search_context("def foo", context_id=1)
     """
 
     def __init__(self, index_path: Path | str):
@@ -77,6 +84,9 @@ class LexicalIndex:
         self._writer: Any = None
         self._schema: Any = None
         self._initialized = False
+        # Staging buffer for atomic epoch commits
+        self._staged_adds: list[dict[str, Any]] = []
+        self._staged_removes: list[str] = []
 
     def _ensure_initialized(self) -> None:
         """Lazily initialize the Tantivy index."""
@@ -177,7 +187,7 @@ class LexicalIndex:
         return count
 
     def remove_file(self, file_path: str) -> bool:
-        """Remove a file from the index."""
+        """Remove a file from the index (immediate commit)."""
         self._ensure_initialized()
 
         writer = self._index.writer()
@@ -188,6 +198,124 @@ class LexicalIndex:
             return bool(deleted > 0)
         finally:
             pass
+
+    # =========================================================================
+    # Staged Operations (for epoch atomicity)
+    # =========================================================================
+
+    def stage_file(
+        self,
+        file_path: str,
+        content: str,
+        context_id: int,
+        file_id: int = 0,
+        symbols: list[str] | None = None,
+    ) -> None:
+        """
+        Stage a file for later atomic commit.
+
+        Changes are buffered in memory until commit_staged() is called.
+        This enables atomic epoch publishing where SQLite and Tantivy
+        commits happen together.
+
+        Args:
+            file_path: Relative file path
+            content: File content as string
+            context_id: Context this file belongs to
+            file_id: Database file ID
+            symbols: List of symbol names in this file
+        """
+        self._staged_adds.append(
+            {
+                "path": file_path,
+                "content": content,
+                "context_id": context_id,
+                "file_id": file_id,
+                "symbols": symbols or [],
+            }
+        )
+
+    def stage_remove(self, file_path: str) -> None:
+        """
+        Stage a file removal for later atomic commit.
+
+        Args:
+            file_path: Relative file path to remove
+        """
+        self._staged_removes.append(file_path)
+
+    def has_staged_changes(self) -> bool:
+        """Return True if there are uncommitted staged changes."""
+        return bool(self._staged_adds or self._staged_removes)
+
+    def staged_count(self) -> tuple[int, int]:
+        """Return (additions, removals) count of staged changes."""
+        return len(self._staged_adds), len(self._staged_removes)
+
+    def commit_staged(self) -> int:
+        """
+        Commit all staged changes atomically.
+
+        This is the Tantivy-side of epoch publishing. Call this
+        immediately before committing the SQLite epoch record.
+
+        Returns:
+            Number of documents affected (adds + removes)
+        """
+        if not self.has_staged_changes():
+            return 0
+
+        self._ensure_initialized()
+
+        writer = self._index.writer()
+        count = 0
+        try:
+            # Process removals first
+            for file_path in self._staged_removes:
+                writer.delete_documents("path_exact", file_path)
+                count += 1
+
+            # Process additions (which also delete existing)
+            for f in self._staged_adds:
+                # Delete existing document
+                writer.delete_documents("path_exact", f["path"])
+
+                # Add new document
+                doc = tantivy.Document()
+                doc.add_text("path", f["path"])
+                doc.add_text("path_exact", f["path"])
+                doc.add_text("content", f.get("content", ""))
+                doc.add_text("symbols", " ".join(f.get("symbols", [])))
+                doc.add_integer("context_id", f.get("context_id", 0))
+                doc.add_integer("file_id", f.get("file_id", 0))
+                writer.add_document(doc)
+                count += 1
+
+            # Single atomic commit
+            writer.commit()
+        except Exception:
+            # On failure, changes are discarded (Tantivy writer rollback)
+            self._staged_adds.clear()
+            self._staged_removes.clear()
+            raise
+
+        # Clear staging buffers on success
+        self._staged_adds.clear()
+        self._staged_removes.clear()
+
+        return count
+
+    def discard_staged(self) -> int:
+        """
+        Discard all staged changes without committing.
+
+        Returns:
+            Number of staged changes discarded
+        """
+        count = len(self._staged_adds) + len(self._staged_removes)
+        self._staged_adds.clear()
+        self._staged_removes.clear()
+        return count
 
     def search(
         self,
@@ -227,13 +355,13 @@ class LexicalIndex:
             for score, doc_addr in top_docs:
                 doc = searcher.doc(doc_addr)
 
-                # Extract snippet around match
+                # Extract snippet around match and get line number
                 content = doc.get_first("content") or ""
-                snippet = self._extract_snippet(content, query, max_lines=3)
+                snippet, line_num = self._extract_snippet(content, query, max_lines=3)
 
                 result = SearchResult(
                     file_path=doc.get_first("path") or "",
-                    line=1,  # Would need highlighting to get actual line
+                    line=line_num,
                     column=0,
                     snippet=snippet,
                     score=score,
@@ -276,21 +404,42 @@ class LexicalIndex:
         content: str,
         query: str,
         max_lines: int = 3,
-    ) -> str:
-        """Extract a snippet around the query match."""
+    ) -> tuple[str, int]:
+        """Extract a snippet around the query match.
+
+        Returns:
+            Tuple of (snippet_text, line_number) where line_number is 1-indexed.
+            If no match found, returns (first lines, 1).
+        """
         lines = content.split("\n")
         query_lower = query.lower()
 
-        # Find first matching line
+        # Handle query syntax - extract actual search terms
+        # Remove field prefixes like "symbols:" or "path:"
+        search_terms = []
+        for term in query_lower.split():
+            if ":" in term:
+                # Field-prefixed term - take the value part
+                _, value = term.split(":", 1)
+                if value:
+                    search_terms.append(value)
+            else:
+                # Skip boolean operators
+                if term not in ("and", "or", "not"):
+                    search_terms.append(term)
+
+        # Find first line matching any search term
         for i, line in enumerate(lines):
-            if query_lower in line.lower():
-                # Return context around match
-                start = max(0, i - 1)
-                end = min(len(lines), i + max_lines)
-                return "\n".join(lines[start:end])
+            line_lower = line.lower()
+            for term in search_terms:
+                if term in line_lower:
+                    # Return context around match (1-indexed line number)
+                    start = max(0, i - 1)
+                    end = min(len(lines), i + max_lines)
+                    return "\n".join(lines[start:end]), i + 1
 
         # No match found, return first lines
-        return "\n".join(lines[:max_lines])
+        return "\n".join(lines[:max_lines]), 1
 
     def clear(self) -> None:
         """Clear all documents from the index."""

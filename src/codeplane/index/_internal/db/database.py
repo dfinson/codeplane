@@ -4,6 +4,7 @@ This module provides:
 - Database: Connection manager with WAL mode for concurrent access
 - BulkWriter: High-performance bulk inserts with FK resolution
 - Session utilities for ORM and serializable transactions
+- Retry logic for SQLite busy timeout handling
 
 The hybrid pattern:
 - Use ORM sessions for low-volume operations (config, job management)
@@ -13,23 +14,52 @@ The hybrid pattern:
 
 from __future__ import annotations
 
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import structlog
 from sqlalchemy import event, text
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Session, SQLModel, create_engine
 
 if TYPE_CHECKING:
     from sqlalchemy import Engine
 
+logger = structlog.get_logger()
+
+# Retry configuration for SQLite busy handling
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_RETRY_BASE_DELAY = 0.1  # 100ms base
+DEFAULT_RETRY_MAX_DELAY = 2.0  # 2s max
+
+
+def _is_database_locked_error(error: Exception) -> bool:
+    """Check if error is a SQLite database locked error."""
+    error_str = str(error).lower()
+    return "database is locked" in error_str or "database is busy" in error_str
+
 
 class Database:
-    """SQLite connection manager with WAL mode for concurrent access."""
+    """SQLite connection manager with WAL mode for concurrent access.
 
-    def __init__(self, db_path: Path) -> None:
+    Includes retry logic with exponential backoff for handling
+    SQLite busy timeouts during concurrent writes.
+    """
+
+    def __init__(
+        self,
+        db_path: Path,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_base_delay: float = DEFAULT_RETRY_BASE_DELAY,
+        retry_max_delay: float = DEFAULT_RETRY_MAX_DELAY,
+    ) -> None:
         self.db_path = db_path
+        self._max_retries = max_retries
+        self._retry_base_delay = retry_base_delay
+        self._retry_max_delay = retry_max_delay
         self.engine = self._create_engine()
 
     def _create_engine(self) -> Engine:
@@ -56,9 +86,15 @@ class Database:
             yield session
 
     @contextmanager
-    def immediate_transaction(self) -> Generator[Session, None, None]:
+    def immediate_transaction(
+        self,
+        max_retries: int | None = None,
+    ) -> Generator[Session, None, None]:
         """
         Session with BEGIN IMMEDIATE for serializable writes.
+
+        Includes retry logic with exponential backoff for handling
+        SQLite busy timeouts.
 
         Use for RepoState updates to prevent race conditions.
         BEGIN IMMEDIATE acquires a RESERVED lock immediately,
@@ -66,15 +102,47 @@ class Database:
 
         The session auto-commits on successful exit and rolls back
         on exception.
+
+        Args:
+            max_retries: Override default max retries (default: 3)
         """
-        with Session(self.engine) as session:
-            session.execute(text("BEGIN IMMEDIATE"))
+        retries = max_retries if max_retries is not None else self._max_retries
+        last_error: Exception | None = None
+
+        for attempt in range(retries + 1):  # +1 for initial attempt
             try:
-                yield session
-                session.commit()
-            except Exception:
-                session.rollback()
+                with Session(self.engine) as session:
+                    session.execute(text("BEGIN IMMEDIATE"))
+                    try:
+                        yield session
+                        session.commit()
+                        return  # Success - exit generator
+                    except Exception:
+                        session.rollback()
+                        raise
+            except OperationalError as e:
+                if _is_database_locked_error(e) and attempt < retries:
+                    # Calculate backoff delay with jitter
+                    delay = min(
+                        self._retry_base_delay * (2**attempt),
+                        self._retry_max_delay,
+                    )
+                    logger.warning(
+                        "sqlite_busy_retry",
+                        attempt=attempt + 1,
+                        max_retries=retries,
+                        delay_sec=delay,
+                    )
+                    time.sleep(delay)
+                    last_error = e
+                    continue
                 raise
+            except Exception:
+                raise
+
+        # Should not reach here, but handle edge case
+        if last_error:
+            raise last_error
 
     @contextmanager
     def bulk_writer(self) -> Generator[BulkWriter, None, None]:
@@ -99,6 +167,20 @@ class Database:
             result = conn.execute(text(sql), params or {})
             conn.commit()
             return result
+
+    def checkpoint(self, mode: str = "PASSIVE") -> None:
+        """Run WAL checkpoint.
+
+        Args:
+            mode: PASSIVE (default), FULL, RESTART, or TRUNCATE
+        """
+        valid_modes = {"PASSIVE", "FULL", "RESTART", "TRUNCATE"}
+        if mode.upper() not in valid_modes:
+            raise ValueError(f"Invalid checkpoint mode: {mode}. Must be one of {valid_modes}")
+
+        with self.engine.connect() as conn:
+            conn.execute(text(f"PRAGMA wal_checkpoint({mode.upper()})"))
+            logger.debug("wal_checkpoint_completed", mode=mode)
 
 
 def _configure_pragmas(dbapi_conn: Any, _connection_record: Any) -> None:

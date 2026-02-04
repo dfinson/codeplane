@@ -32,7 +32,7 @@ ADDITIONAL_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_local_bind_facts_scope ON local_bind_facts(scope_id)",
     # ExportSurface queries by unit
     "CREATE INDEX IF NOT EXISTS idx_export_surfaces_unit ON export_surfaces(unit_id)",
-    # Context queries by family and status
+    # Context queries by name and status
     "CREATE INDEX IF NOT EXISTS idx_contexts_family_status ON contexts(language_family, probe_status)",
     # AnchorGroup queries by unit (not file)
     "CREATE INDEX IF NOT EXISTS idx_anchor_groups_unit ON anchor_groups(unit_id)",
