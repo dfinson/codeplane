@@ -63,6 +63,9 @@ UNIVERSAL_EXCLUDE_GLOBS: tuple[str, ...] = tuple(f"**/{d}/**" for d in sorted(PR
 _CPLIGNORE = """\
 # CodePlane ignore patterns (gitignore syntax)
 
+# VCS
+.git/
+
 # Dependencies/caches
 node_modules/
 vendor/

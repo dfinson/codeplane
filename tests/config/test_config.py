@@ -29,6 +29,11 @@ def clean_env() -> Generator[None, None, None]:
     for k in orig:
         del os.environ[k]
     yield
+    # Clean up any new CODEPLANE__* env vars set during the test
+    current_keys = [k for k in os.environ if k.startswith("CODEPLANE__")]
+    for k in current_keys:
+        del os.environ[k]
+    # Restore original values
     os.environ.update(orig)
 
 
