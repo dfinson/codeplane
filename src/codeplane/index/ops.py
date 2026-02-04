@@ -17,7 +17,7 @@ import json
 import os
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -144,14 +144,11 @@ class IndexCoordinator:
         repo_root: Path,
         db_path: Path,
         tantivy_path: Path,
-        *,
-        quiet: bool = False,
     ) -> None:
         """Initialize coordinator with paths."""
         self.repo_root = repo_root
         self.db_path = db_path
         self.tantivy_path = tantivy_path
-        self._quiet = quiet
 
         # Database
         self.db = Database(db_path)
@@ -175,106 +172,16 @@ class IndexCoordinator:
 
         self._initialized = False
 
-    def _format_discovery_summary(self, projects: list[CandidateContext]) -> str:
-        """Format project discovery summary for UX logging (Issue #1).
-
-        Returns human-readable summary like:
-        - "1 Python project"
-        - "2 Python projects, 1 Node.js module"
-        """
-        from collections import Counter
-
-        from codeplane.index.models import LanguageFamily
-
-        # Map language families to human-readable names
-        family_names: dict[str, str] = {
-            LanguageFamily.PYTHON.value: "Python project",
-            LanguageFamily.JAVASCRIPT.value: "Node.js module",
-            LanguageFamily.GO.value: "Go module",
-            LanguageFamily.RUST.value: "Rust crate",
-            LanguageFamily.JAVA.value: "Java project",
-            LanguageFamily.KOTLIN.value: "Kotlin project",
-            LanguageFamily.SCALA.value: "Scala project",
-            LanguageFamily.GROOVY.value: "Groovy project",
-            LanguageFamily.CSHARP.value: "C# project",
-            LanguageFamily.FSHARP.value: "F# project",
-            LanguageFamily.VBNET.value: "VB.NET project",
-            LanguageFamily.RUBY.value: "Ruby project",
-            LanguageFamily.PHP.value: "PHP project",
-            LanguageFamily.ELIXIR.value: "Elixir project",
-        }
-
-        # Count by family
-        counts: Counter[str] = Counter()
-        for p in projects:
-            family_val = (
-                p.language_family.value
-                if hasattr(p.language_family, "value")
-                else str(p.language_family)
-            )
-            counts[family_val] += 1
-
-        if not counts:
-            return ""
-
-        parts: list[str] = []
-        for family, count in counts.most_common():
-            name = family_names.get(family, f"{family} project")
-            # Handle pluralization
-            if count > 1:
-                # "Python project" -> "Python projects"
-                if name.endswith("project"):
-                    name = name[:-7] + "projects"
-                elif name.endswith("module"):
-                    name = name[:-6] + "modules"
-                elif name.endswith("crate"):
-                    name = name[:-5] + "crates"
-            parts.append(f"{count} {name}")
-
-        return ", ".join(parts)
-
-    def _format_ambient_summary(self, ambient: list[CandidateContext]) -> str:
-        """Format ambient/loose file detection summary (Issue #1).
-
-        Returns human-readable summary for auto-detected file types:
-        - "markdown, json, yaml"
-        """
-        from codeplane.index.models import LanguageFamily
-
-        # Map ambient families to human-readable names
-        ambient_names: dict[str, str] = {
-            LanguageFamily.MARKDOWN.value: "markdown",
-            LanguageFamily.JSON.value: "json",
-            LanguageFamily.YAML.value: "yaml",
-            LanguageFamily.TOML.value: "toml",
-            LanguageFamily.DOCKER.value: "Docker",
-            LanguageFamily.MAKE.value: "Makefiles",
-            LanguageFamily.SHELL.value: "shell scripts",
-            LanguageFamily.HTML.value: "HTML",
-            LanguageFamily.CSS.value: "CSS",
-            LanguageFamily.SQL.value: "SQL",
-            LanguageFamily.XML.value: "XML",
-            LanguageFamily.GRAPHQL.value: "GraphQL",
-        }
-
-        families = set()
-        for a in ambient:
-            family_val = (
-                a.language_family.value
-                if hasattr(a.language_family, "value")
-                else str(a.language_family)
-            )
-            if family_val in ambient_names:
-                families.add(ambient_names[family_val])
-
-        if not families:
-            return ""
-
-        return ", ".join(sorted(families))
-
-    async def initialize(self) -> InitResult:
+    async def initialize(
+        self,
+        on_index_progress: Callable[[int, int, dict[str, int]], None],
+    ) -> InitResult:
         """
         Full initialization: discover, probe, index.
+
+        Args:
+            on_index_progress: Callback(indexed_count, total_count, files_by_ext)
+                              called during indexing for progress updates
 
         Flow:
         1. Create database schema
@@ -300,10 +207,6 @@ class IndexCoordinator:
         self._epoch_manager = EpochManager(self.db, self._lexical)
 
         # Step 3: Discover contexts
-        if not self._quiet:
-            from codeplane.core.progress import status
-
-            status("Discovering files...", style="none", indent=4)
 
         discovery = ContextDiscovery(self.repo_root)
         discovery_result = discovery.discover_all()
@@ -330,20 +233,10 @@ class IndexCoordinator:
         resolved_candidates = membership_result.contexts
 
         # Step 6: Probe contexts (validate each has parseable files)
-        # Improved logging: categorize by type (Issue #1)
-        from codeplane.core.progress import progress, status
-
         probe = ContextProbe(self.repo_root, parser=self._parser)
         probed_candidates: list[CandidateContext] = []
 
-        # Probe all candidates first (before logging summary)
-        probe_iter: Iterable[CandidateContext] = resolved_candidates
-        if not self._quiet and len(resolved_candidates) > 5:
-            probe_iter = progress(
-                resolved_candidates, desc="Scanning projects", unit="projects", force=True
-            )
-
-        for candidate in probe_iter:
+        for candidate in resolved_candidates:
             probe_result = probe.validate(candidate)
             if probe_result.valid:
                 candidate.probe_status = ProbeStatus.VALID
@@ -352,28 +245,6 @@ class IndexCoordinator:
             else:
                 candidate.probe_status = ProbeStatus.FAILED
             probed_candidates.append(candidate)
-
-        # Categorize VALID candidates for UX logging (only show confirmed projects)
-        valid_projects: list[CandidateContext] = []  # Tier 1/2 with markers
-        valid_ambient: list[CandidateContext] = []  # No markers, auto-detected
-
-        for candidate in probed_candidates:
-            if candidate.probe_status != ProbeStatus.VALID:
-                continue  # Skip failed/empty contexts from summary
-            if candidate.tier is None or candidate.tier > 2:
-                valid_ambient.append(candidate)
-            else:
-                valid_projects.append(candidate)
-
-        if not self._quiet:
-            # Log discovery summary with human-readable categories (valid contexts only)
-            project_summary = self._format_discovery_summary(valid_projects)
-            ambient_summary = self._format_ambient_summary(valid_ambient)
-
-            if project_summary:
-                status(f"Found {project_summary}", style="success", indent=4)
-            if ambient_summary:
-                status(f"Auto-detected: {ambient_summary}", style="info", indent=4)
 
         # Add root fallback back (already marked VALID, bypasses probing)
         if root_fallback is not None:
@@ -458,7 +329,9 @@ class IndexCoordinator:
         self._facts = None  # Created on demand in session context
 
         # Step 9: Index all files
-        files_indexed, indexed_paths, files_by_ext = await self._index_all_files()
+        files_indexed, indexed_paths, files_by_ext = await self._index_all_files(
+            on_progress=on_index_progress
+        )
 
         # Reload index so searcher sees committed changes
         if self._lexical is not None:
@@ -1722,24 +1595,27 @@ class IndexCoordinator:
 
         return tools_updated
 
-    async def _index_all_files(self) -> tuple[int, list[str], dict[str, int]]:
+    async def _index_all_files(
+        self,
+        on_progress: Callable[[int, int, dict[str, int]], None],
+    ) -> tuple[int, list[str], dict[str, int]]:
         """Index all files in valid contexts.
 
         Populates both:
         - Tantivy (lexical search)
         - SQLite fact tables (DefFact, RefFact, etc.)
 
+        Args:
+            on_progress: Callback(indexed_count, total_count, files_by_ext)
+                         called after each file for progress updates
+
         Returns:
-            Tuple of (count of files indexed, list of indexed file paths, files by language).
+            Tuple of (count of files indexed, list of indexed file paths, files by extension).
         """
-        from codeplane.core.progress import progress
         from codeplane.index._internal.discovery.language_detect import detect_language_family
 
         if self._lexical is None or self._parser is None:
             return 0, [], {}
-
-        count = 0
-        indexed_paths: list[str] = []
 
         with self._tantivy_write_lock:
             # Get all valid contexts, separating root fallback from others
@@ -1801,145 +1677,66 @@ class IndexCoordinator:
                     claimed_paths.add(rel_str)
                     files_to_index.append((file_path, rel_str, root_context_id, lang_value))
 
-            # Third pass: index files with streaming progress (Issue #2)
-            context_files: dict[int, list[str]] = {}
-            files_by_ext: dict[str, int] = {}
-
-            # Stream file type counts during indexing for responsive UX
-            if not self._quiet:
-                (
-                    count,
-                    indexed_paths,
-                    files_by_ext,
-                    context_files,
-                ) = await self._index_with_streaming_progress(files_to_index)
-            else:
-                # Quiet mode: no progress display
-                for file_path, rel_str, context_id, _lang_family in files_to_index:
-                    try:
-                        content = self._safe_read_text(file_path)
-                        symbols = self._extract_symbols(file_path)
-                        self._lexical.add_file(
-                            rel_str,
-                            content,
-                            context_id=context_id,
-                            symbols=symbols,
-                        )
-                        count += 1
-                        indexed_paths.append(rel_str)
-                        context_files.setdefault(context_id, []).append(rel_str)
-                        ext = file_path.suffix.lower() or file_path.name.lower()
-                        files_by_ext[ext] = files_by_ext.get(ext, 0) + 1
-                    except (OSError, UnicodeDecodeError):
-                        continue
+            # Index files with progress callback
+            count, indexed_paths, files_by_ext, context_files = self._index_files_with_progress(
+                files_to_index, on_progress
+            )
 
             # Run structural indexer for each context
             if self._structural is not None:
-                struct_iter: Iterable[tuple[int, list[str]]] = context_files.items()
-                if not self._quiet:
-                    struct_iter = progress(
-                        list(context_files.items()), desc="Extracting symbols", unit="contexts"
-                    )
-                for context_id, file_paths in struct_iter:
+                for context_id, file_paths in context_files.items():
                     if file_paths:
                         self._structural.index_files(file_paths, context_id)
 
         return count, indexed_paths, files_by_ext
 
-    async def _index_with_streaming_progress(
+    def _index_files_with_progress(
         self,
         files_to_index: list[tuple[Path, str, int, str | None]],
+        on_progress: Callable[[int, int, dict[str, int]], None],
     ) -> tuple[int, list[str], dict[str, int], dict[int, list[str]]]:
-        """Index files with streaming file type table display (Issue #2).
+        """Index files, calling progress callback after each file.
 
-        Shows a live-updating table of file types being indexed, providing
-        responsive UX feedback even during long indexing operations.
+        Pure data operation - no UI rendering. Caller owns presentation.
+
+        Args:
+            files_to_index: List of (file_path, rel_str, context_id, lang_family)
+            on_progress: Callback(indexed_count, total_count, files_by_ext)
+                         called after each file for progress updates
 
         Returns:
             Tuple of (count, indexed_paths, files_by_ext, context_files)
         """
-        import math
-
-        from rich.progress import BarColumn, Progress, TaskProgressColumn, TextColumn
-        from rich.table import Table
-
-        from codeplane.core.progress import get_console, suppress_console_logs
-
-        console = get_console()
         count = 0
         indexed_paths: list[str] = []
         files_by_ext: dict[str, int] = {}
         context_files: dict[int, list[str]] = {}
         total = len(files_to_index)
 
-        def build_file_type_table() -> Table:
-            """Build current state of file type table."""
-            if not files_by_ext:
-                return Table(show_header=False, box=None)
+        for file_path, rel_str, context_id, _lang_family in files_to_index:
+            try:
+                content = self._safe_read_text(file_path)
+                symbols = self._extract_symbols(file_path)
+                if self._lexical is not None:
+                    self._lexical.add_file(
+                        rel_str,
+                        content,
+                        context_id=context_id,
+                        symbols=symbols,
+                    )
+                count += 1
+                indexed_paths.append(rel_str)
+                context_files.setdefault(context_id, []).append(rel_str)
 
-            sorted_exts = sorted(
-                files_by_ext.items(),
-                key=lambda x: -x[1],
-            )
-            max_count = sorted_exts[0][1] if sorted_exts else 1
-            max_sqrt = math.sqrt(max_count)
+                # Track by file extension
+                ext = file_path.suffix.lower() or file_path.name.lower()
+                files_by_ext[ext] = files_by_ext.get(ext, 0) + 1
 
-            table = Table(show_header=False, box=None, padding=(0, 1), pad_edge=False)
-            table.add_column("ext", style="cyan", width=12)
-            table.add_column("count", style="white", justify="right", width=4)
-            table.add_column("bar")
+                # Report progress
+                on_progress(count, total, files_by_ext)
 
-            for ext, ext_count in sorted_exts[:8]:
-                bar_width = max(1, int(math.sqrt(ext_count) / max_sqrt * 20))
-                bar = f"[green]{'━' * bar_width}[/green][dim]{'━' * (20 - bar_width)}[/dim]"
-                table.add_row(ext, str(ext_count), bar)
-
-            rest = sorted_exts[8:]
-            if rest:
-                rest_count = sum(c for _, c in rest)
-                bar_width = max(1, int(math.sqrt(rest_count) / max_sqrt * 20))
-                bar = f"[dim green]{'━' * bar_width}[/dim green][dim]{'━' * (20 - bar_width)}[/dim]"
-                table.add_row("other", str(rest_count), bar, style="dim")
-
-            return table
-
-        # Use Live display with progress bar and streaming table
-        with suppress_console_logs():
-            progress_bar = Progress(
-                TextColumn("    {task.description}:"),
-                BarColumn(bar_width=25, style="cyan", complete_style="cyan"),
-                TaskProgressColumn(),
-                TextColumn("{task.completed}/{task.total} files"),
-                console=console,
-                transient=False,
-            )
-
-            with progress_bar:
-                task_id = progress_bar.add_task("Indexing", total=total)
-
-                for _i, (file_path, rel_str, context_id, _lang_family) in enumerate(files_to_index):
-                    try:
-                        content = self._safe_read_text(file_path)
-                        symbols = self._extract_symbols(file_path)
-                        if self._lexical is not None:
-                            self._lexical.add_file(
-                                rel_str,
-                                content,
-                                context_id=context_id,
-                                symbols=symbols,
-                            )
-                        count += 1
-                        indexed_paths.append(rel_str)
-                        context_files.setdefault(context_id, []).append(rel_str)
-
-                        # Track by file extension
-                        ext = file_path.suffix.lower() or file_path.name.lower()
-                        files_by_ext[ext] = files_by_ext.get(ext, 0) + 1
-
-                    except (OSError, UnicodeDecodeError):
-                        pass
-
-                    progress_bar.advance(task_id)
+            except (OSError, UnicodeDecodeError):
+                pass
 
         return count, indexed_paths, files_by_ext, context_files
 

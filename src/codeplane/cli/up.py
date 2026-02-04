@@ -116,12 +116,11 @@ def up_command(path: Path | None, port: int | None) -> None:
 
     db_path, tantivy_path = get_index_paths(repo_root)
 
-    # Now create coordinator and load (quiet=True since lifecycle.py handles progress)
+    # Create coordinator and load existing index
     coordinator = IndexCoordinator(
         repo_root=repo_root,
         db_path=db_path,
         tantivy_path=tantivy_path,
-        quiet=True,
     )
 
     loop = asyncio.new_event_loop()

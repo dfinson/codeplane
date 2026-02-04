@@ -19,6 +19,11 @@ from codeplane.index.ops import (
 )
 
 
+def _noop_progress(indexed: int, total: int, files_by_ext: dict[str, int]) -> None:
+    """No-op progress callback for tests."""
+    pass
+
+
 class TestCoordinatorInitialization:
     """Tests for IndexCoordinator.initialize()."""
 
@@ -31,7 +36,7 @@ class TestCoordinatorInitialization:
         coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
 
         try:
-            result = await coordinator.initialize()
+            result = await coordinator.initialize(on_index_progress=_noop_progress)
 
             assert isinstance(result, InitResult)
             assert result.contexts_discovered >= 1  # At least Python context
@@ -53,7 +58,7 @@ class TestCoordinatorInitialization:
         coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
 
         try:
-            await coordinator.initialize()
+            await coordinator.initialize(on_index_progress=_noop_progress)
             assert db_path.exists()
         finally:
             coordinator.close()
@@ -71,7 +76,7 @@ class TestCoordinatorInitialization:
         coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
 
         try:
-            await coordinator.initialize()
+            await coordinator.initialize(on_index_progress=_noop_progress)
             assert tantivy_path.exists()
         finally:
             coordinator.close()
@@ -87,11 +92,43 @@ class TestCoordinatorInitialization:
         coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
 
         try:
-            result = await coordinator.initialize()
+            result = await coordinator.initialize(on_index_progress=_noop_progress)
 
             # Should have indexed at least the main files
             # src/__init__.py, src/main.py, src/utils.py, tests/__init__.py, tests/test_main.py
             assert result.files_indexed >= 4
+        finally:
+            coordinator.close()
+
+    @pytest.mark.asyncio
+    async def test_initialize_calls_progress_callback(
+        self, integration_repo: Path, tmp_path: Path
+    ) -> None:
+        """Should call progress callback during indexing."""
+        db_path = tmp_path / "index.db"
+        tantivy_path = tmp_path / "tantivy"
+
+        coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
+        progress_calls: list[tuple[int, int, dict[str, int]]] = []
+
+        def track_progress(indexed: int, total: int, files_by_ext: dict[str, int]) -> None:
+            progress_calls.append((indexed, total, files_by_ext.copy()))
+
+        try:
+            result = await coordinator.initialize(on_index_progress=track_progress)
+
+            # Should have called progress at least once per file indexed
+            assert len(progress_calls) >= result.files_indexed
+
+            # Progress should increase monotonically
+            for i in range(1, len(progress_calls)):
+                assert progress_calls[i][0] >= progress_calls[i - 1][0]
+
+            # Final call should have indexed == total
+            if progress_calls:
+                final_indexed, final_total, final_ext = progress_calls[-1]
+                assert final_indexed == final_total
+                assert sum(final_ext.values()) == result.files_indexed
         finally:
             coordinator.close()
 
@@ -108,7 +145,7 @@ class TestCoordinatorSearch:
         coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
 
         try:
-            await coordinator.initialize()
+            await coordinator.initialize(on_index_progress=_noop_progress)
 
             # Search for content that exists
             results = await coordinator.search("Hello", mode=SearchMode.TEXT)
@@ -127,7 +164,7 @@ class TestCoordinatorSearch:
         coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
 
         try:
-            await coordinator.initialize()
+            await coordinator.initialize(on_index_progress=_noop_progress)
 
             # Search for function name
             results = await coordinator.search("helper", mode=SearchMode.SYMBOL)
@@ -145,7 +182,7 @@ class TestCoordinatorSearch:
         coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
 
         try:
-            await coordinator.initialize()
+            await coordinator.initialize(on_index_progress=_noop_progress)
 
             # Search for path pattern
             results = await coordinator.search("utils", mode=SearchMode.PATH)
@@ -164,7 +201,7 @@ class TestCoordinatorSearch:
         coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
 
         try:
-            await coordinator.initialize()
+            await coordinator.initialize(on_index_progress=_noop_progress)
 
             results = await coordinator.search("xyznonexistent123")
 
@@ -185,7 +222,7 @@ class TestCoordinatorReindex:
         coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
 
         try:
-            await coordinator.initialize()
+            await coordinator.initialize(on_index_progress=_noop_progress)
 
             # Modify a file
             (integration_repo / "src" / "main.py").write_text('''"""Modified main."""
@@ -216,7 +253,7 @@ def new_function():
         coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
 
         try:
-            await coordinator.initialize()
+            await coordinator.initialize(on_index_progress=_noop_progress)
 
             # Add a new file (no git commit needed - we index all files)
             (integration_repo / "src" / "new_module.py").write_text('''"""New module."""
@@ -246,7 +283,7 @@ class TestCoordinatorMonorepo:
         coordinator = IndexCoordinator(integration_monorepo, db_path, tantivy_path)
 
         try:
-            result = await coordinator.initialize()
+            result = await coordinator.initialize(on_index_progress=_noop_progress)
 
             # Should discover JavaScript contexts for packages
             assert result.contexts_discovered >= 2  # pkg-a and pkg-b
@@ -262,7 +299,7 @@ class TestCoordinatorMonorepo:
         coordinator = IndexCoordinator(integration_monorepo, db_path, tantivy_path)
 
         try:
-            await coordinator.initialize()
+            await coordinator.initialize(on_index_progress=_noop_progress)
 
             # Search for something in both packages
             results = await coordinator.search("hello")
@@ -328,7 +365,7 @@ class TestCoordinatorCplignore:
         coordinator = IndexCoordinator(repo_root, db_path, tantivy_path)
 
         try:
-            await coordinator.initialize()
+            await coordinator.initialize(on_index_progress=_noop_progress)
 
             # Search for content that should NOT be indexed
             venv_results = await coordinator.search("VENV_CODE")
@@ -393,7 +430,7 @@ class TestCoordinatorCplignore:
         coordinator = IndexCoordinator(repo_root, db_path, tantivy_path)
 
         try:
-            await coordinator.initialize()
+            await coordinator.initialize(on_index_progress=_noop_progress)
 
             # Search for content that should NOT be indexed
             dist_results = await coordinator.search("BUNDLED")
@@ -450,7 +487,7 @@ class TestCoordinatorCplignore:
         coordinator = IndexCoordinator(repo_root, db_path, tantivy_path)
 
         try:
-            await coordinator.initialize()
+            await coordinator.initialize(on_index_progress=_noop_progress)
 
             # Search for content that should NOT be indexed
             config_results = await coordinator.search("CODEPLANE_CONFIG")
@@ -488,7 +525,7 @@ class TestCplignoreChangeHandling:
 
         try:
             # Initialize - generated_code.py should be ignored per .cplignore
-            await coordinator.initialize()
+            await coordinator.initialize(on_index_progress=_noop_progress)
 
             # Verify generated file is NOT indexed
             gen_results = await coordinator.search("GENERATED_CONTENT")
@@ -523,7 +560,7 @@ class TestCplignoreChangeHandling:
 
         try:
             # Initialize - temporary.py should be indexed
-            await coordinator.initialize()
+            await coordinator.initialize(on_index_progress=_noop_progress)
 
             # Verify temporary.py IS indexed
             temp_results = await coordinator.search("TEMP_CODE")
@@ -555,7 +592,7 @@ class TestCplignoreChangeHandling:
 
         try:
             # Initialize
-            await coordinator.initialize()
+            await coordinator.initialize(on_index_progress=_noop_progress)
 
             # Get initial file count
             initial_results = await coordinator.search("def")

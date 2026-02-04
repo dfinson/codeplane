@@ -37,30 +37,25 @@ def _get_xdg_index_dir(repo_root: Path) -> Path:
     return xdg_data / repo_hash
 
 
-def initialize_repo(
-    repo_root: Path, *, force: bool = False, quiet: bool = False, show_cpl_up_hint: bool = True
-) -> bool:
+def initialize_repo(repo_root: Path, *, force: bool = False, show_cpl_up_hint: bool = True) -> bool:
     """Initialize a repository for CodePlane, returning True on success.
 
     Args:
         repo_root: Path to the repository root
         force: Overwrite existing .codeplane directory
-        quiet: Suppress all output
         show_cpl_up_hint: Show "Run 'cpl up'" hint at end (False when auto-init from cpl up)
     """
     codeplane_dir = repo_root / ".codeplane"
     console = get_console()
 
     if codeplane_dir.exists() and not force:
-        if not quiet:
-            status(f"Already initialized: {codeplane_dir}", style="info")
-            status("Use --force to reinitialize", style="info")
+        status(f"Already initialized: {codeplane_dir}", style="info")
+        status("Use --force to reinitialize", style="info")
         return False
 
-    if not quiet:
-        console.print()
-        status(f"Initializing CodePlane in {repo_root}", style="none")
-        console.print()
+    console.print()
+    status(f"Initializing CodePlane in {repo_root}", style="none")
+    console.print()
 
     # If force is set and directory exists, remove it completely to start fresh
     if force and codeplane_dir.exists():
@@ -76,11 +71,10 @@ def initialize_repo(
     if _is_cross_filesystem(repo_root):
         index_dir = _get_xdg_index_dir(repo_root)
         index_dir.mkdir(parents=True, exist_ok=True)
-        if not quiet:
-            status(
-                f"Cross-filesystem detected, storing index at: {index_dir}",
-                style="info",
-            )
+        status(
+            f"Cross-filesystem detected, storing index at: {index_dir}",
+            style="info",
+        )
     else:
         index_dir = codeplane_dir
 
@@ -103,38 +97,32 @@ def initialize_repo(
         )
 
     # === Discovery Phase ===
-    if not quiet:
-        from codeplane.index._internal.grammars import (
-            get_needed_grammars,
-            install_grammars,
-            scan_repo_languages,
-        )
+    from codeplane.index._internal.grammars import (
+        get_needed_grammars,
+        install_grammars,
+        scan_repo_languages,
+    )
 
-        with phase_box("Discovery", width=60) as phase:
-            # Step 1: Scan languages
-            task_id = phase.add_progress("Scanning", total=100)
-            languages = scan_repo_languages(repo_root)
-            phase.advance(task_id, 100)
-            lang_names = ", ".join(sorted(str(lang) for lang in languages)) if languages else "none"
-            phase.complete(f"{len(languages)} languages: {lang_names}")
+    with phase_box("Discovery", width=60) as phase:
+        # Step 1: Scan languages
+        task_id = phase.add_progress("Scanning", total=100)
+        languages = scan_repo_languages(repo_root)
+        phase.advance(task_id, 100)
+        lang_names = ", ".join(sorted(str(lang) for lang in languages)) if languages else "none"
+        phase.complete(f"{len(languages)} languages: {lang_names}")
 
-            # Step 2: Install grammars if needed
-            needed = get_needed_grammars(languages)
-            if needed:
-                task_id = phase.add_progress("Installing grammars", total=len(needed))
-                success = install_grammars(needed, quiet=True, status_fn=None)
-                phase.advance(task_id, len(needed))
-                if success:
-                    phase.complete(f"{len(needed)} grammars installed")
-                else:
-                    phase.complete("Some grammars failed to install", style="yellow")
+        # Step 2: Install grammars if needed
+        needed = get_needed_grammars(languages)
+        if needed:
+            task_id = phase.add_progress("Installing grammars", total=len(needed))
+            success = install_grammars(needed, quiet=True, status_fn=None)
+            phase.advance(task_id, len(needed))
+            if success:
+                phase.complete(f"{len(needed)} grammars installed")
             else:
-                phase.complete("Grammars ready")
-    else:
-        # Quiet mode: just ensure grammars without UI
-        from codeplane.index._internal.grammars import ensure_grammars_for_repo
-
-        ensure_grammars_for_repo(repo_root, quiet=True, status_fn=None)
+                phase.complete("Some grammars failed to install", style="yellow")
+        else:
+            phase.complete("Grammars ready")
 
     # === Indexing Phase ===
     from codeplane.index.ops import IndexCoordinator
@@ -147,7 +135,6 @@ def initialize_repo(
         repo_root=repo_root,
         db_path=db_path,
         tantivy_path=tantivy_path,
-        quiet=True,  # We handle our own output
     )
 
     try:
@@ -155,58 +142,56 @@ def initialize_repo(
 
         start_time = time.time()
 
-        if not quiet:
-            # Run indexing with phase box
-            with phase_box("Indexing", width=60) as phase:
-                # We don't have a good file count upfront, so use indeterminate progress
-                # then show result
-                task_id = phase.add_progress("Indexing files", total=100)
+        # Run indexing with phase box and live table updates
+        with phase_box("Indexing", width=60) as phase:
+            # Progress callback to update the live table
+            def on_index_progress(indexed: int, total: int, files_by_ext: dict[str, int]) -> None:
+                # Update progress bar (scale to 100)
+                if total > 0:
+                    pct = int(indexed * 100 / total)
+                    phase._progress.update(task_id, completed=pct)  # type: ignore[union-attr]
+                # Update live table with current file type counts
+                if files_by_ext:
+                    table = _make_init_extension_table(files_by_ext)
+                    phase.set_live_table(table)
 
-                loop = asyncio.new_event_loop()
-                try:
-                    result = loop.run_until_complete(coord.initialize())
-                finally:
-                    loop.close()
+            task_id = phase.add_progress("Indexing files", total=100)
 
-                elapsed = time.time() - start_time
-                phase.advance(task_id, 100)
-
-                if result.errors:
-                    for err in result.errors:
-                        phase.add_text(f"Error: {err}", style="red")
-                    return False
-
-                phase.complete(f"{result.files_indexed} files indexed ({elapsed:.1f}s)")
-
-                # Add extension breakdown table
-                if result.files_by_ext:
-                    phase.add_text("")  # Spacer
-                    ext_table = _make_init_extension_table(result.files_by_ext)
-                    phase.add_table(ext_table)
-        else:
-            # Quiet mode
             loop = asyncio.new_event_loop()
             try:
-                result = loop.run_until_complete(coord.initialize())
+                result = loop.run_until_complete(
+                    coord.initialize(on_index_progress=on_index_progress)
+                )
             finally:
                 loop.close()
 
+            elapsed = time.time() - start_time
+
             if result.errors:
                 for err in result.errors:
-                    status(f"Error: {err}", style="error")
+                    phase.add_text(f"Error: {err}", style="red")
                 return False
+
+            # Final table state and completion message
+            phase.set_live_table(None)  # Remove live table
+            phase.complete(f"{result.files_indexed} files indexed ({elapsed:.1f}s)")
+
+            # Add final extension breakdown as static content
+            if result.files_by_ext:
+                phase.add_text("")  # Spacer
+                ext_table = _make_init_extension_table(result.files_by_ext)
+                phase.add_table(ext_table)
     finally:
         coord.close()
 
     # Final config confirmation
-    if not quiet:
-        console.print()
-        rel_config_path = config_path.relative_to(repo_root)
-        status(f"Config created at {rel_config_path}", style="success")
+    console.print()
+    rel_config_path = config_path.relative_to(repo_root)
+    status(f"Config created at {rel_config_path}", style="success")
 
-        if show_cpl_up_hint:
-            console.print()
-            status("Ready. Run 'cpl up' to start the server.", style="none")
+    if show_cpl_up_hint:
+        console.print()
+        status("Ready. Run 'cpl up' to start the server.", style="none")
 
     return True
 

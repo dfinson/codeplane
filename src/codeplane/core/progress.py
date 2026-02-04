@@ -286,6 +286,7 @@ class PhaseBox:
         self._progress: Progress | None = None
         self._live: Live | None = None
         self._suppress_token: object | None = None
+        self._live_table: Table | None = None  # Dynamically updated table
 
     def _render(self) -> Panel:
         """Render the current phase state as a Panel."""
@@ -294,6 +295,9 @@ class PhaseBox:
             items_to_render.append(item)
         if self._progress and self._progress.tasks:
             items_to_render.append(self._progress)
+        # Add live table at the end (below progress bar)
+        if self._live_table is not None:
+            items_to_render.append(self._live_table)
         content = Group(*items_to_render) if items_to_render else Text("")
         return Panel(
             content,
@@ -353,6 +357,18 @@ class PhaseBox:
     def add_table(self, table: Table) -> None:
         """Add a Rich Table to the phase content."""
         self._items.append(table)
+        self._update()
+
+    def set_live_table(self, table: Table | None) -> None:
+        """Set or update the live table that appears below the progress bar.
+
+        This table is rendered below the progress bar and can be updated
+        repeatedly to show dynamic content like file type counts.
+
+        Args:
+            table: Rich Table to display, or None to remove
+        """
+        self._live_table = table
         self._update()
 
     def __enter__(self) -> PhaseBox:
