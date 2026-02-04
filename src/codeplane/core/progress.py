@@ -518,10 +518,23 @@ def print_centered(text: str, *, style: str | None = None, console: Console | No
     c.print(Align.center(t), highlight=False)
 
 
-def print_rule(*, style: str = "dim", console: Console | None = None) -> None:
-    """Print a horizontal rule separator."""
+def print_rule(
+    *, style: str = "dim", width: int | None = None, console: Console | None = None
+) -> None:
+    """Print a horizontal rule separator.
+
+    Args:
+        style: Rich style for the rule
+        width: Fixed width (None = full terminal width)
+        console: Console to print to
+    """
     c = console or _console
-    c.print(Rule(style=style))
+    if width:
+        # Centered fixed-width rule
+        rule_text = "─" * width
+        c.print(Align.center(Text(rule_text, style=style)), highlight=False)
+    else:
+        c.print(Rule(style=style))
 
 
 def make_extension_table(extensions: dict[str, int], *, max_bar_width: int = 20) -> Table:

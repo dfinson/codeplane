@@ -67,12 +67,13 @@ def _print_banner(host: str, port: int, *, animate: bool = True) -> None:
     else:
         console.print(LOGO, highlight=False)
 
-    # Ready banner with rule separators
+    # Ready banner with rule separators (fixed width to match logo ~64 chars)
+    banner_width = 64
     console.print()
-    print_rule(style="dim cyan")
+    print_rule(style="dim cyan", width=banner_width)
     print_centered(f"CodePlane v{ver} · Ready", style="bold cyan")
     print_centered(f"Listening at http://{host}:{port}", style="green")
-    print_rule(style="dim cyan")
+    print_rule(style="dim cyan", width=banner_width)
     console.print()
 
 
