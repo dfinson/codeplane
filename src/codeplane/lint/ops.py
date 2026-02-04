@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from codeplane.index.ops import IndexCoordinator
 
 
-# Language family to tool language mapping
+# Language name to tool language mapping
 _LANGUAGE_TO_TOOL_PREFIX: dict[str, str] = {
     "python": "python",
     "javascript": "js",
@@ -317,14 +317,14 @@ class LintOps:
         Falls back to 0 if coordinator is not initialized.
         """
         try:
-            # Map tool language to index language family
+            # Map tool language to index language name
             tool_lang = tool.tool_id.split(".")[0]  # e.g., "python" from "python.ruff"
 
-            # Reverse lookup from tool prefix to language family
+            # Reverse lookup from tool prefix to language name
             lang_family = None
-            for family, prefix in _LANGUAGE_TO_TOOL_PREFIX.items():
+            for name, prefix in _LANGUAGE_TO_TOOL_PREFIX.items():
                 if prefix == tool_lang:
-                    lang_family = family
+                    lang_family = name
                     break
 
             if not lang_family:

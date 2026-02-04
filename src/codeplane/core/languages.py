@@ -1,16 +1,39 @@
-"""Canonical language definitions."""
+"""Canonical language definitions.
+
+This module defines the authoritative mapping of:
+- File extensions → language families
+- Filenames → language families
+- Project markers (workspace/package level)
+- Include globs for indexing
+- Tree-sitter grammar names
+- Test file patterns
+
+Design decisions:
+1. Extensions can map to MULTIPLE families (EXTENSION_TO_NAMES) for ambiguous cases
+2. detect_language_name() returns the PRIMARY name by priority;
+   use get_families_for_extension() to get all candidates for ambiguous extensions
+3. Markers are EXACT FILENAMES only (no globs, no suffix patterns).
+   If you need glob-based detection, implement it in the scanner layer.
+4. Include globs are auto-generated from BOTH extensions AND filenames
+5. Grammar is None only when no usable tree-sitter grammar exists
+
+KNOWN AMBIGUOUS EXTENSIONS (require context for correct classification):
+- .m: objc (priority 60) vs matlab (priority 50) - use Xcode/MATLAB markers to resolve
+- .h: c_cpp (C/C++ header) - truly ambiguous between C and C++
+- .v: verilog (priority 70) vs vlang (priority 30) - verilog wins by default
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from codeplane.index.models import LanguageFamily
 
 
-def _get_language_family() -> type:
+def _get_language_family() -> type[LanguageFamily]:
     from codeplane.index.models import LanguageFamily
 
     return LanguageFamily
@@ -18,183 +41,965 @@ def _get_language_family() -> type:
 
 @dataclass(frozen=True, slots=True)
 class Language:
-    family: str
+    """Canonical definition for a language name.
+
+    Attributes:
+        name: Unique identifier (lowercase, e.g., "python", "javascript")
+        extensions: File extensions including dot (e.g., ".py", ".js")
+        filenames: Special filenames to detect (lowercase, EXACT match only)
+        markers_workspace: Files indicating workspace root (EXACT filenames, lowercase)
+        markers_package: Files indicating package/module root (EXACT filenames, lowercase)
+        grammar: Tree-sitter grammar name, or None if no grammar available
+        test_patterns: Glob patterns for test files
+        ambient: If True, index files even without project markers
+        priority: Higher = preferred when extension is ambiguous (default 50)
+    """
+
+    name: str
     extensions: frozenset[str]
-    filenames: frozenset[str] = frozenset()
+    filenames: frozenset[str] = field(default_factory=frozenset)
     markers_workspace: tuple[str, ...] = ()
     markers_package: tuple[str, ...] = ()
-    include_globs: tuple[str, ...] = ()
     grammar: str | None = None
     test_patterns: tuple[str, ...] = ()
     ambient: bool = False
+    priority: int = 50
 
 
-# fmt: off
-_LANGS: tuple[tuple[Any, ...], ...] = (
-    # (family, extensions, filenames, ws_markers, pkg_markers, globs, grammar, tests, ambient)
-    ("python", {".py",".pyi",".pyw",".pyx",".pxd",".pxi"}, {"pipfile","setup.py","pyproject.toml"},
-     ("uv.lock","poetry.lock","Pipfile.lock","pdm.lock"),
-     ("pyproject.toml","setup.py","setup.cfg","requirements.txt","Pipfile"),
-     ("**/*.py","**/*.pyi"), "python", ("test_*.py","*_test.py"), False),
-    ("javascript", {".js",".jsx",".ts",".tsx",".mjs",".cjs",".mts",".cts",".vue",".svelte",".astro"},
-     {"package.json","deno.json","tsconfig.json","jsconfig.json"},
-     ("pnpm-workspace.yaml","lerna.json","nx.json","turbo.json"),
-     ("package.json","deno.json","tsconfig.json"),
-     ("**/*.js","**/*.jsx","**/*.ts","**/*.tsx","**/*.vue"), "javascript",
-     ("*.test.js","*.test.ts","*.spec.js","*.spec.ts"), False),
-    ("go", {".go"}, {"go.mod","go.sum"}, ("go.work",), ("go.mod",), ("**/*.go",), "go", ("*_test.go",), False),
-    ("rust", {".rs"}, {"cargo.toml","cargo.lock"}, (), ("Cargo.toml",), ("**/*.rs",), "rust", (), False),
-    ("jvm", {".java",".kt",".kts",".scala",".sc",".groovy",".gradle"},
-     {"build.gradle","build.gradle.kts","pom.xml","build.sbt"},
-     ("settings.gradle","settings.gradle.kts"), ("build.gradle","build.gradle.kts","pom.xml","build.sbt"),
-     ("**/*.java","**/*.kt","**/*.scala"), "java", ("*Test.java","*Spec.scala","*Test.kt"), False),
-    ("dotnet", {".cs",".fs",".fsx",".fsi",".vb"}, set(), (), (), ("**/*.cs","**/*.fs"), "c_sharp",
-     ("*Tests.cs","*Test.cs"), False),
-    ("cpp", {".c",".h",".cpp",".cc",".cxx",".hpp",".hxx",".hh",".ino",".m",".mm"},
-     {"cmakelists.txt","makefile","gnumakefile","meson.build"},
-     (), ("CMakeLists.txt","Makefile","meson.build","BUILD","compile_commands.json"),
-     ("**/*.cpp","**/*.cc","**/*.c","**/*.h","**/*.hpp"), "cpp", (), False),
-    ("ruby", {".rb",".rake",".gemspec",".erb"}, {"gemfile","rakefile","vagrantfile"},
-     ("Gemfile.lock",), ("Gemfile",), ("**/*.rb",), "ruby", ("*_spec.rb","*_test.rb"), False),
-    ("php", {".php",".phtml"}, set(), ("composer.lock",), ("composer.json",), ("**/*.php",), "php",
-     ("*Test.php",), False),
-    ("swift", {".swift"}, set(), (), ("Package.swift",), ("**/*.swift",), "swift", ("*Tests.swift",), False),
-    ("elixir", {".ex",".exs",".eex",".heex",".erl",".hrl"}, set(), (), ("mix.exs",),
-     ("**/*.ex","**/*.exs"), "elixir", ("*_test.exs",), False),
-    ("haskell", {".hs",".lhs",".cabal"}, set(), (), ("*.cabal","stack.yaml"), ("**/*.hs",), "haskell", (), False),
-    ("ocaml", {".ml",".mli",".mll",".mly",".re",".rei"}, set(), (), ("dune-project",),
-     ("**/*.ml","**/*.mli"), "ocaml", (), False),
-    ("clojure", {".clj",".cljs",".cljc",".edn"}, set(), (), ("project.clj","deps.edn"),
-     ("**/*.clj","**/*.cljs"), None, ("*_test.clj",), False),
-    ("elm", {".elm"}, set(), (), ("elm.json",), ("**/*.elm",), None, (), False),
-    ("shell", {".sh",".bash",".zsh",".fish",".ksh",".ps1",".psm1"}, set(), (), (),
-     ("**/*.sh","**/*.bash"), "bash", (), False),
-    ("lua", {".lua",".luau"}, set(), (), (), ("**/*.lua",), "lua", (), False),
-    ("perl", {".pl",".pm",".pod",".t"}, set(), (), ("Makefile.PL","Build.PL"), ("**/*.pl","**/*.pm"), None, ("*.t",), False),
-    ("r", {".r",".R",".rmd",".Rmd"}, set(), (), ("DESCRIPTION",), ("**/*.R",), None, (), False),
-    ("julia", {".jl"}, set(), (), ("Project.toml",), ("**/*.jl",), "julia", (), False),
-    ("zig", {".zig"}, set(), (), ("build.zig",), ("**/*.zig",), "zig", (), False),
-    ("nim", {".nim",".nims",".nimble"}, set(), (), ("*.nimble",), ("**/*.nim",), None, (), False),
-    ("d", {".d",".di"}, set(), (), ("dub.json","dub.sdl"), ("**/*.d",), None, (), False),
-    ("ada", {".adb",".ads"}, set(), (), ("*.gpr",), ("**/*.adb","**/*.ads"), "ada", (), False),
-    ("fortran", {".f",".f77",".f90",".f95",".f03",".f08"}, set(), (), (), ("**/*.f90",), "fortran", (), False),
-    ("pascal", {".pas",".pp",".lpr",".dpr"}, set(), (), (), ("**/*.pas",), None, (), False),
-    ("dart", {".dart"}, set(), (), ("pubspec.yaml",), ("**/*.dart",), None, ("*_test.dart",), False),
-    ("gleam", {".gleam"}, set(), (), ("gleam.toml",), ("**/*.gleam",), None, (), False),
-    ("crystal", {".cr"}, set(), (), ("shard.yml",), ("**/*.cr",), None, ("spec/**/*.cr",), False),
-    ("v", {".v",".vv"}, set(), (), ("v.mod",), ("**/*.v",), None, (), False),
-    ("odin", {".odin"}, set(), (), (), ("**/*.odin",), "odin", (), False),
-    ("html", {".html",".htm",".xhtml",".xml",".xsl",".svg"}, set(), (), (),
-     ("**/*.html","**/*.htm","**/*.xml"), "html", (), False),
-    ("css", {".css",".scss",".sass",".less"}, set(), (), (), ("**/*.css","**/*.scss"), "css", (), False),
-    ("verilog", {".v",".vh",".sv",".svh",".vhd",".vhdl"}, set(), (), (), ("**/*.v","**/*.sv"), "verilog", (), False),
-    ("terraform", {".tf",".tfvars",".hcl"}, {"terraform.tfvars"},
-     (".terraform.lock.hcl",), ("main.tf","versions.tf"), ("**/*.tf","**/*.hcl"), "hcl", (), False),
-    ("sql", {".sql",".mysql",".pgsql"}, set(), (), (), ("**/*.sql",), "sql", (), True),
-    ("docker", {".dockerfile"}, {"dockerfile","docker-compose.yml","docker-compose.yaml","compose.yml"},
-     (), (), ("**/Dockerfile","**/docker-compose.yml"), "dockerfile", (), True),
-    ("markdown", {".md",".mdx",".markdown",".rst",".adoc",".txt"},
-     {"readme","readme.md","changelog","license","contributing"},
-     (), (), ("**/*.md","**/*.markdown"), "markdown", (), True),
-    ("json_yaml", {".json",".jsonc",".json5",".yaml",".yml",".toml"}, set(), (), (),
-     ("**/*.json","**/*.yaml","**/*.yml","**/*.toml"), "json", (), True),
-    ("protobuf", {".proto"}, set(), ("buf.work.yaml",), ("buf.yaml",), ("**/*.proto",), None, (), False),
-    ("graphql", {".graphql",".gql"}, set(), (), (), ("**/*.graphql",), None, (), True),
-    ("config", {".ini",".cfg",".conf",".env",".envrc",".properties",".editorconfig",".gitignore",".nix"},
-     {".env",".editorconfig",".gitignore","flake.nix"},
-     ("flake.lock",), ("flake.nix",), ("**/*.nix",), None, (), False),
-    ("make", {".cmake",".meson",".ninja",".bazel",".bzl",".mk"},
-     {"makefile","gnumakefile","cmakelists.txt","meson.build","justfile"},
-     (), (), (), "make", (), False),
-    ("assembly", {".asm",".s",".S",".nasm"}, set(), (), (), ("**/*.asm","**/*.s"), None, (), False),
-)
-# fmt: on
+# =============================================================================
+# Language Definitions
+# =============================================================================
+# RULES:
+# 1. All filenames/markers MUST be lowercase (exact filenames, no globs/wildcards)
+# 2. Extensions are case-insensitive (normalized to lowercase during lookup)
+# 3. Priority determines winner for ambiguous extensions (higher wins)
+# 4. Grammar must be a real tree-sitter grammar name or None
 
-ALL_LANGUAGES: tuple[Language, ...] = tuple(
+ALL_LANGUAGES: tuple[Language, ...] = (
+    # =========================================================================
+    # Tier 1: Most common languages
+    # =========================================================================
     Language(
-        family=t[0],
-        extensions=frozenset(t[1]),
-        filenames=frozenset(t[2]),
-        markers_workspace=t[3],
-        markers_package=t[4],
-        include_globs=t[5],
-        grammar=t[6],
-        test_patterns=t[7],
-        ambient=t[8],
-    )
-    for t in _LANGS
+        name="python",
+        extensions=frozenset({".py", ".pyi", ".pyw", ".pyx", ".pxd", ".pxi"}),
+        filenames=frozenset({"pipfile", "setup.py", "pyproject.toml"}),
+        markers_workspace=("uv.lock", "poetry.lock", "pipfile.lock", "pdm.lock"),
+        markers_package=("pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "pipfile"),
+        grammar="python",
+        test_patterns=("test_*.py", "*_test.py"),
+        priority=80,
+    ),
+    Language(
+        name="javascript",
+        extensions=frozenset(
+            {
+                ".js",
+                ".jsx",
+                ".ts",
+                ".tsx",
+                ".mjs",
+                ".cjs",
+                ".mts",
+                ".cts",
+                ".vue",
+                ".svelte",
+                ".astro",
+            }
+        ),
+        filenames=frozenset({"package.json", "deno.json", "tsconfig.json", "jsconfig.json"}),
+        markers_workspace=("pnpm-workspace.yaml", "lerna.json", "nx.json", "turbo.json"),
+        markers_package=("package.json", "deno.json", "tsconfig.json"),
+        grammar="typescript",  # TypeScript grammar handles JS/TS/JSX/TSX
+        test_patterns=("*.test.js", "*.test.ts", "*.spec.js", "*.spec.ts"),
+        priority=80,
+    ),
+    Language(
+        name="go",
+        extensions=frozenset({".go"}),
+        filenames=frozenset({"go.mod", "go.sum"}),
+        markers_workspace=("go.work",),
+        markers_package=("go.mod",),
+        grammar="go",
+        test_patterns=("*_test.go",),
+        priority=80,
+    ),
+    Language(
+        name="rust",
+        extensions=frozenset({".rs"}),
+        filenames=frozenset({"cargo.toml", "cargo.lock"}),
+        # Note: Cargo.toml with [workspace] section is detected by scanner logic
+        markers_workspace=(),
+        markers_package=("cargo.toml",),
+        grammar="rust",
+        priority=80,
+    ),
+    # =========================================================================
+    # JVM Languages (each has its own grammar)
+    # =========================================================================
+    Language(
+        name="java",
+        extensions=frozenset({".java"}),
+        filenames=frozenset({"pom.xml"}),
+        markers_workspace=("settings.gradle", "settings.gradle.kts"),
+        markers_package=("pom.xml", "build.gradle", "build.gradle.kts"),
+        grammar="java",
+        test_patterns=("*Test.java", "Test*.java"),
+        priority=80,
+    ),
+    Language(
+        name="kotlin",
+        extensions=frozenset({".kt", ".kts"}),
+        filenames=frozenset({"build.gradle.kts"}),
+        markers_workspace=("settings.gradle.kts",),
+        markers_package=("build.gradle.kts",),
+        grammar="kotlin",
+        test_patterns=("*Test.kt", "Test*.kt"),
+        priority=75,
+    ),
+    Language(
+        name="scala",
+        extensions=frozenset({".scala", ".sc"}),
+        filenames=frozenset({"build.sbt"}),
+        markers_workspace=(),
+        markers_package=("build.sbt",),
+        grammar="scala",
+        test_patterns=("*Spec.scala", "*Test.scala"),
+        priority=75,
+    ),
+    Language(
+        name="groovy",
+        extensions=frozenset({".groovy", ".gradle"}),
+        filenames=frozenset({"build.gradle", "settings.gradle"}),
+        markers_workspace=("settings.gradle",),
+        markers_package=("build.gradle",),
+        grammar="groovy",
+        test_patterns=("*Test.groovy", "*Spec.groovy"),
+        priority=70,
+    ),
+    # =========================================================================
+    # .NET Languages (each has its own grammar)
+    # =========================================================================
+    Language(
+        name="csharp",
+        extensions=frozenset({".cs"}),
+        filenames=frozenset(),
+        # Note: .sln and .csproj detection is done by scanner which knows file extensions
+        markers_workspace=(),
+        markers_package=(),
+        grammar="c_sharp",
+        test_patterns=("*Tests.cs", "*Test.cs"),
+        priority=80,
+    ),
+    Language(
+        name="fsharp",
+        extensions=frozenset({".fs", ".fsx", ".fsi"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="fsharp",
+        test_patterns=("*Tests.fs", "*Test.fs"),
+        priority=75,
+    ),
+    Language(
+        name="vbnet",
+        extensions=frozenset({".vb"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="visual_basic",
+        test_patterns=("*Tests.vb", "*Test.vb"),
+        priority=70,
+    ),
+    # =========================================================================
+    # C/C++ (unified as c_cpp since .h is genuinely ambiguous)
+    # =========================================================================
+    Language(
+        name="c_cpp",
+        extensions=frozenset({".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh", ".ino"}),
+        filenames=frozenset({"cmakelists.txt", "meson.build"}),
+        markers_workspace=(),
+        markers_package=("cmakelists.txt", "meson.build", "compile_commands.json"),
+        grammar="cpp",  # C++ grammar handles both C and C++
+        priority=60,
+    ),
+    # =========================================================================
+    # Objective-C (separate; .m is AMBIGUOUS with MATLAB)
+    # =========================================================================
+    Language(
+        name="objc",
+        extensions=frozenset({".m", ".mm"}),
+        filenames=frozenset(),
+        # Xcode project markers help disambiguate .m files
+        markers_workspace=(),
+        markers_package=("podfile", "podfile.lock", "package.swift"),
+        grammar="objc",
+        priority=60,  # Higher than MATLAB for .m
+    ),
+    # =========================================================================
+    # MATLAB/Octave (.m is AMBIGUOUS with Objective-C)
+    # =========================================================================
+    Language(
+        name="matlab",
+        extensions=frozenset({".m", ".mlx"}),  # .m is ambiguous; .mlx is MATLAB-only
+        filenames=frozenset({"startup.m"}),  # MATLAB-specific startup file
+        markers_workspace=(),
+        # MATLAB project markers help disambiguate .m files
+        markers_package=("matlab.project",),
+        grammar=None,  # No tree-sitter-matlab in common registries
+        priority=50,  # Lower than objc for .m
+    ),
+    # =========================================================================
+    # Other mainstream languages
+    # =========================================================================
+    Language(
+        name="ruby",
+        extensions=frozenset({".rb", ".rake", ".gemspec", ".erb"}),
+        filenames=frozenset({"gemfile", "rakefile", "vagrantfile"}),
+        markers_workspace=("gemfile.lock",),
+        markers_package=("gemfile",),
+        grammar="ruby",
+        test_patterns=("*_spec.rb", "*_test.rb"),
+        priority=70,
+    ),
+    Language(
+        name="php",
+        extensions=frozenset({".php", ".phtml"}),
+        filenames=frozenset(),
+        markers_workspace=("composer.lock",),
+        markers_package=("composer.json",),
+        grammar="php",
+        test_patterns=("*Test.php",),
+        priority=70,
+    ),
+    Language(
+        name="swift",
+        extensions=frozenset({".swift"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=("package.swift",),
+        grammar="swift",
+        test_patterns=("*Tests.swift",),
+        priority=70,
+    ),
+    # =========================================================================
+    # Functional languages
+    # =========================================================================
+    Language(
+        name="elixir",
+        extensions=frozenset({".ex", ".exs", ".eex", ".heex"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=("mix.exs",),
+        grammar="elixir",
+        test_patterns=("*_test.exs",),
+        priority=70,
+    ),
+    Language(
+        name="erlang",
+        extensions=frozenset({".erl", ".hrl"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=("rebar.config",),
+        grammar="erlang",
+        priority=60,
+    ),
+    Language(
+        name="haskell",
+        extensions=frozenset({".hs", ".lhs", ".cabal"}),
+        filenames=frozenset({"stack.yaml", "package.yaml"}),
+        markers_workspace=(),
+        markers_package=("stack.yaml", "package.yaml"),
+        grammar="haskell",
+        priority=70,
+    ),
+    Language(
+        name="ocaml",
+        extensions=frozenset({".ml", ".mli", ".mll", ".mly"}),
+        filenames=frozenset({"dune-project", "dune"}),
+        markers_workspace=(),
+        markers_package=("dune-project", "dune"),
+        grammar="ocaml",
+        priority=70,
+    ),
+    Language(
+        name="reason",
+        extensions=frozenset({".re", ".rei"}),
+        filenames=frozenset({"bsconfig.json"}),
+        markers_workspace=(),
+        markers_package=("bsconfig.json",),
+        grammar="reason",
+        priority=60,
+    ),
+    Language(
+        name="clojure",
+        extensions=frozenset({".clj", ".cljs", ".cljc", ".edn"}),
+        filenames=frozenset({"project.clj", "deps.edn"}),
+        markers_workspace=(),
+        markers_package=("project.clj", "deps.edn"),
+        grammar="clojure",
+        test_patterns=("*_test.clj",),
+        priority=70,
+    ),
+    Language(
+        name="elm",
+        extensions=frozenset({".elm"}),
+        filenames=frozenset({"elm.json"}),
+        markers_workspace=(),
+        markers_package=("elm.json",),
+        grammar="elm",
+        priority=70,
+    ),
+    # =========================================================================
+    # Scripting languages
+    # =========================================================================
+    # Shell: bash/zsh/ksh (POSIX-compatible shells)
+    Language(
+        name="shell",
+        extensions=frozenset({".sh", ".bash", ".zsh", ".ksh"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="bash",
+        priority=50,
+    ),
+    # Fish shell is SEPARATE (incompatible syntax with bash)
+    Language(
+        name="fish",
+        extensions=frozenset({".fish"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="fish",
+        priority=50,
+    ),
+    # PowerShell is separate (completely different syntax)
+    Language(
+        name="powershell",
+        extensions=frozenset({".ps1", ".psm1", ".psd1"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="powershell",
+        priority=60,
+    ),
+    Language(
+        name="lua",
+        extensions=frozenset({".lua", ".luau"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="lua",
+        priority=60,
+    ),
+    Language(
+        name="perl",
+        extensions=frozenset({".pl", ".pm", ".pod", ".t"}),
+        filenames=frozenset({"makefile.pl", "build.pl", "cpanfile"}),
+        markers_workspace=(),
+        markers_package=("makefile.pl", "build.pl", "cpanfile"),
+        grammar="perl",
+        test_patterns=("*.t",),
+        priority=50,
+    ),
+    Language(
+        name="r",
+        extensions=frozenset({".r", ".rmd"}),
+        filenames=frozenset({"description"}),  # R package DESCRIPTION file
+        markers_workspace=(),
+        markers_package=("description",),
+        grammar="r",
+        priority=50,
+    ),
+    Language(
+        name="julia",
+        extensions=frozenset({".jl"}),
+        filenames=frozenset({"project.toml"}),
+        markers_workspace=(),
+        markers_package=("project.toml",),
+        grammar="julia",
+        priority=70,
+    ),
+    # =========================================================================
+    # Systems languages
+    # =========================================================================
+    Language(
+        name="zig",
+        extensions=frozenset({".zig"}),
+        filenames=frozenset({"build.zig"}),
+        markers_workspace=(),
+        markers_package=("build.zig",),
+        grammar="zig",
+        priority=70,
+    ),
+    Language(
+        name="nim",
+        extensions=frozenset({".nim", ".nims", ".nimble"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="nim",
+        priority=60,
+    ),
+    Language(
+        name="d",
+        extensions=frozenset({".d", ".di"}),
+        filenames=frozenset({"dub.json", "dub.sdl"}),
+        markers_workspace=(),
+        markers_package=("dub.json", "dub.sdl"),
+        grammar="d",
+        priority=50,
+    ),
+    Language(
+        name="ada",
+        extensions=frozenset({".adb", ".ads"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="ada",
+        priority=60,
+    ),
+    Language(
+        name="fortran",
+        extensions=frozenset({".f", ".f77", ".f90", ".f95", ".f03", ".f08", ".for"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="fortran",
+        priority=50,
+    ),
+    Language(
+        name="pascal",
+        extensions=frozenset({".pas", ".pp", ".lpr", ".dpr"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="pascal",
+        priority=50,
+    ),
+    Language(
+        name="dart",
+        extensions=frozenset({".dart"}),
+        filenames=frozenset({"pubspec.yaml"}),
+        markers_workspace=(),
+        markers_package=("pubspec.yaml",),
+        grammar="dart",
+        test_patterns=("*_test.dart",),
+        priority=70,
+    ),
+    Language(
+        name="gleam",
+        extensions=frozenset({".gleam"}),
+        filenames=frozenset({"gleam.toml"}),
+        markers_workspace=(),
+        markers_package=("gleam.toml",),
+        grammar="gleam",
+        priority=60,
+    ),
+    Language(
+        name="crystal",
+        extensions=frozenset({".cr"}),
+        filenames=frozenset({"shard.yml"}),
+        markers_workspace=(),
+        markers_package=("shard.yml",),
+        grammar="crystal",
+        test_patterns=("spec/**/*.cr",),
+        priority=60,
+    ),
+    Language(
+        name="vlang",
+        extensions=frozenset({".v", ".vv"}),
+        filenames=frozenset({"v.mod"}),
+        markers_workspace=(),
+        markers_package=("v.mod",),
+        grammar="v",
+        priority=30,  # Low priority - .v defaults to Verilog in most contexts
+    ),
+    Language(
+        name="odin",
+        extensions=frozenset({".odin"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="odin",
+        priority=60,
+    ),
+    # =========================================================================
+    # Hardware Description Languages
+    # =========================================================================
+    Language(
+        name="verilog",
+        extensions=frozenset({".v", ".vh", ".sv", ".svh"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="verilog",
+        priority=70,  # Higher than vlang for .v
+    ),
+    Language(
+        name="vhdl",
+        extensions=frozenset({".vhd", ".vhdl"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="vhdl",
+        priority=60,
+    ),
+    # =========================================================================
+    # Web/Markup
+    # =========================================================================
+    Language(
+        name="html",
+        extensions=frozenset({".html", ".htm", ".xhtml"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="html",
+        priority=50,
+    ),
+    Language(
+        name="xml",
+        extensions=frozenset({".xml", ".xsl", ".xslt", ".xsd", ".svg", ".plist"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="xml",
+        ambient=True,
+        priority=40,
+    ),
+    Language(
+        name="css",
+        extensions=frozenset({".css", ".scss", ".sass", ".less"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="css",
+        priority=50,
+    ),
+    # =========================================================================
+    # Infrastructure/Config
+    # =========================================================================
+    Language(
+        name="terraform",
+        extensions=frozenset({".tf", ".tfvars"}),
+        filenames=frozenset({"terraform.tfvars", "main.tf", "versions.tf"}),
+        markers_workspace=(".terraform.lock.hcl",),
+        markers_package=("main.tf", "versions.tf"),
+        grammar="hcl",
+        priority=70,
+    ),
+    Language(
+        name="hcl",
+        extensions=frozenset({".hcl"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="hcl",
+        priority=50,
+    ),
+    Language(
+        name="sql",
+        extensions=frozenset({".sql"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="sql",
+        ambient=True,
+        priority=50,
+    ),
+    Language(
+        name="docker",
+        extensions=frozenset(),  # Dockerfiles don't have extensions
+        filenames=frozenset(
+            {
+                "dockerfile",
+                "dockerfile.dev",
+                "dockerfile.prod",
+                "dockerfile.test",
+                "docker-compose.yml",
+                "docker-compose.yaml",
+                "compose.yml",
+                "compose.yaml",
+            }
+        ),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="dockerfile",
+        ambient=True,
+        priority=60,
+    ),
+    # =========================================================================
+    # Data/Documentation
+    # =========================================================================
+    Language(
+        name="markdown",
+        extensions=frozenset({".md", ".mdx", ".markdown"}),
+        filenames=frozenset({"readme", "changelog", "license", "contributing"}),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="markdown",
+        ambient=True,
+        priority=50,
+    ),
+    Language(
+        name="rst",
+        extensions=frozenset({".rst"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="rst",
+        ambient=True,
+        priority=40,
+    ),
+    Language(
+        name="asciidoc",
+        extensions=frozenset({".adoc", ".asciidoc"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="asciidoc",
+        ambient=True,
+        priority=40,
+    ),
+    Language(
+        name="json",
+        extensions=frozenset({".json", ".jsonc", ".json5"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="json",
+        ambient=True,
+        priority=50,
+    ),
+    Language(
+        name="yaml",
+        extensions=frozenset({".yaml", ".yml"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="yaml",
+        ambient=True,
+        priority=50,
+    ),
+    Language(
+        name="toml",
+        extensions=frozenset({".toml"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="toml",
+        ambient=True,
+        priority=50,
+    ),
+    Language(
+        name="protobuf",
+        extensions=frozenset({".proto"}),
+        filenames=frozenset({"buf.yaml", "buf.work.yaml"}),
+        markers_workspace=("buf.work.yaml",),
+        markers_package=("buf.yaml",),
+        grammar="proto",
+        priority=60,
+    ),
+    Language(
+        name="graphql",
+        extensions=frozenset({".graphql", ".gql"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="graphql",
+        ambient=True,
+        priority=60,
+    ),
+    Language(
+        name="nix",
+        extensions=frozenset({".nix"}),
+        filenames=frozenset({"flake.nix", "default.nix", "shell.nix"}),
+        markers_workspace=("flake.lock",),
+        markers_package=("flake.nix", "default.nix"),
+        grammar="nix",
+        priority=60,
+    ),
+    # =========================================================================
+    # Build systems (filename-based, not extension-based)
+    # =========================================================================
+    Language(
+        name="make",
+        extensions=frozenset({".mk"}),
+        filenames=frozenset({"makefile", "gnumakefile", "bsdmakefile"}),
+        markers_workspace=(),
+        markers_package=(),  # Makefile alone doesn't indicate a project
+        grammar="make",
+        priority=40,
+    ),
+    Language(
+        name="cmake",
+        extensions=frozenset({".cmake"}),
+        filenames=frozenset({"cmakelists.txt", "cmakepresets.json"}),
+        markers_workspace=(),
+        markers_package=("cmakelists.txt",),
+        grammar="cmake",
+        priority=50,
+    ),
+    Language(
+        name="meson",
+        extensions=frozenset(),  # Meson uses specific filenames
+        filenames=frozenset({"meson.build", "meson_options.txt"}),
+        markers_workspace=(),
+        markers_package=("meson.build",),
+        grammar="meson",
+        priority=50,
+    ),
+    Language(
+        name="bazel",
+        extensions=frozenset({".bazel", ".bzl"}),
+        filenames=frozenset({"build", "build.bazel", "workspace", "workspace.bazel"}),
+        markers_workspace=("workspace", "workspace.bazel"),
+        markers_package=("build", "build.bazel"),
+        grammar="starlark",
+        priority=60,
+    ),
+    Language(
+        name="just",
+        extensions=frozenset(),
+        filenames=frozenset({"justfile"}),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="just",
+        priority=50,
+    ),
+    # =========================================================================
+    # Other
+    # =========================================================================
+    Language(
+        name="assembly",
+        extensions=frozenset({".asm", ".s", ".nasm"}),
+        filenames=frozenset(),
+        markers_workspace=(),
+        markers_package=(),
+        grammar="asm",
+        priority=40,
+    ),
 )
-LANGUAGES_BY_FAMILY: dict[str, Language] = {lang.family: lang for lang in ALL_LANGUAGES}
+
+# =============================================================================
+# Lookup Tables (built from ALL_LANGUAGES)
+# =============================================================================
+
+LANGUAGES_BY_NAME: dict[str, Language] = {lang.name: lang for lang in ALL_LANGUAGES}
 
 
-def _build_map(attr: str, lower: bool = False) -> dict[str, str]:
-    result: dict[str, str] = {}
+def _build_extension_multimap() -> dict[str, tuple[str, ...]]:
+    """Build extension -> families mapping, sorted by priority (highest first).
+
+    Extensions that appear in multiple families (like .m, .v, .h) will have
+    all families listed, with highest-priority first.
+    """
+    ext_to_families: dict[str, list[tuple[int, str]]] = {}
     for lang in ALL_LANGUAGES:
-        for v in getattr(lang, attr):
-            k = v.lower() if lower else v
-            if k not in result:
-                result[k] = lang.family
+        for ext in lang.extensions:
+            key = ext.lower()
+            if key not in ext_to_families:
+                ext_to_families[key] = []
+            ext_to_families[key].append((lang.priority, lang.name))
+
+    # Sort by priority descending, return just families
+    result: dict[str, tuple[str, ...]] = {}
+    for ext, families in ext_to_families.items():
+        families.sort(key=lambda x: -x[0])  # Higher priority first
+        result[ext] = tuple(f for _, f in families)
     return result
 
 
-EXTENSION_TO_FAMILY: dict[str, str] = _build_map("extensions")
-FILENAME_TO_FAMILY: dict[str, str] = _build_map("filenames", lower=True)
-AMBIENT_FAMILIES: frozenset[str] = frozenset(lang.family for lang in ALL_LANGUAGES if lang.ambient)
+def _build_filename_map() -> dict[str, str]:
+    """Build lowercase filename -> primary name mapping."""
+    result: dict[str, str] = {}
+    # Process in priority order
+    sorted_langs = sorted(ALL_LANGUAGES, key=lambda lang: -lang.priority)
+    for lang in sorted_langs:
+        for filename in lang.filenames:
+            key = filename.lower()
+            if key not in result:
+                result[key] = lang.name
+    return result
+
+
+# Extension -> all names (highest priority first)
+EXTENSION_TO_NAMES: dict[str, tuple[str, ...]] = _build_extension_multimap()
+
+# Extension -> primary name (highest priority)
+EXTENSION_TO_NAME: dict[str, str] = {
+    ext: names[0] for ext, names in EXTENSION_TO_NAMES.items() if names
+}
+
+# Filename -> name
+FILENAME_TO_NAME: dict[str, str] = _build_filename_map()
+
+# Ambient names (indexed without project markers)
+AMBIENT_NAMES: frozenset[str] = frozenset(lang.name for lang in ALL_LANGUAGES if lang.ambient)
+
+# Compound suffixes that need special handling (longer compounds checked first)
+_COMPOUND_SUFFIXES: dict[str, str] = {
+    ".d.ts.map": "javascript",  # Source maps for TypeScript declarations
+    ".d.ts": "javascript",  # TypeScript declaration files
+    ".spec.ts": "javascript",  # Keep as JS name (test file)
+    ".test.ts": "javascript",  # Keep as JS name (test file)
+}
+
+
+# =============================================================================
+# Ambiguous Extension Documentation
+# =============================================================================
+# These extensions map to multiple families. Use context (project markers,
+# directory structure) to disambiguate when possible.
+
+AMBIGUOUS_EXTENSIONS: dict[str, tuple[str, ...]] = {
+    ext: families for ext, families in EXTENSION_TO_NAMES.items() if len(families) > 1
+}
+
+
+# =============================================================================
+# Detection Functions
+# =============================================================================
+
+
+def get_families_for_extension(ext: str) -> tuple[str, ...]:
+    """Get all language families that use this extension, ordered by priority.
+
+    For ambiguous extensions like .m (objc, matlab) or .v (verilog, vlang),
+    returns all matching families. Caller should use context to pick the right one.
+
+    Args:
+        ext: File extension including dot (e.g., ".py", ".m")
+
+    Returns:
+        Tuple of name names, highest priority first. Empty if unknown.
+    """
+    return EXTENSION_TO_NAMES.get(ext.lower(), ())
+
+
+def is_ambiguous_extension(ext: str) -> bool:
+    """Check if an extension maps to multiple language families."""
+    return len(get_families_for_extension(ext)) > 1
 
 
 def detect_language_family(path: str | Path) -> str | None:
+    """Detect the primary language name for a file path.
+
+    Detection order:
+    1. Exact filename match (e.g., "Makefile", "Dockerfile")
+    2. Compound suffix match (e.g., ".d.ts")
+    3. Simple suffix match (e.g., ".py")
+
+    For ambiguous extensions (e.g., .v, .m), returns the highest-priority name.
+    Use get_families_for_extension() if you need all candidates, or use
+    context-aware detection in the scanner layer.
+
+    Args:
+        path: File path (string or Path)
+
+    Returns:
+        Family name or None if unknown.
+    """
     p = Path(path) if isinstance(path, str) else path
-    if family := FILENAME_TO_FAMILY.get(p.name.lower()):
-        return family
-    return EXTENSION_TO_FAMILY.get(p.suffix.lower())
+    name_lower = p.name.lower()
+
+    # 1. Exact filename match
+    if name := FILENAME_TO_NAME.get(name_lower):
+        return name
+
+    # 2. Compound suffix match (check longer compounds first)
+    suffixes = p.suffixes
+    if len(suffixes) >= 2:
+        # Try 3-suffix compound
+        if len(suffixes) >= 3:
+            compound3 = "".join(suffixes[-3:]).lower()
+            if name := _COMPOUND_SUFFIXES.get(compound3):
+                return name
+        # Try 2-suffix compound
+        compound2 = "".join(suffixes[-2:]).lower()
+        if name := _COMPOUND_SUFFIXES.get(compound2):
+            return name
+
+    # 3. Simple suffix match (returns highest priority name)
+    suffix_lower = p.suffix.lower()
+    return EXTENSION_TO_NAME.get(suffix_lower)
 
 
 def detect_language_family_enum(path: str | Path) -> LanguageFamily | None:
-    if (family := detect_language_family(path)) is None:
+    """Detect language name and return as LanguageFamily enum.
+
+    Returns None if:
+    - File type is unknown
+    - Family string doesn't match any LanguageFamily value
+    """
+    if (name := detect_language_family(path)) is None:
         return None
     try:
-        result: LanguageFamily = _get_language_family()(family)
+        result: LanguageFamily = _get_language_family()(name)
         return result
     except ValueError:
         return None
 
 
-def get_include_globs(family: str) -> tuple[str, ...]:
-    return LANGUAGES_BY_FAMILY[family].include_globs if family in LANGUAGES_BY_FAMILY else ()
+# =============================================================================
+# Include Glob Generation
+# =============================================================================
 
 
-def get_markers(family: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    if (lang := LANGUAGES_BY_FAMILY.get(family)) is None:
+def _generate_include_globs(lang: Language) -> tuple[str, ...]:
+    """Generate include globs from BOTH extensions AND filenames.
+
+    This ensures all declared extensions and filenames are covered by globs.
+    """
+    globs: list[str] = []
+
+    # Add extension-based globs
+    for ext in sorted(lang.extensions):
+        globs.append(f"**/*{ext}")
+
+    # Add filename-based globs (exact filename matches at any depth)
+    for name in sorted(lang.filenames):
+        globs.append(f"**/{name}")
+        # Also match common variants (e.g., Dockerfile.dev, Dockerfile.prod)
+        if name in ("dockerfile",):
+            globs.append(f"**/{name}.*")
+
+    return tuple(globs)
+
+
+def get_include_globs(name: str) -> tuple[str, ...]:
+    """Get include globs for a language name.
+
+    Globs cover both extensions and special filenames.
+    """
+    if name not in LANGUAGES_BY_NAME:
+        return ()
+    return _generate_include_globs(LANGUAGES_BY_NAME[name])
+
+
+# =============================================================================
+# Marker Functions
+# =============================================================================
+
+
+def get_markers(name: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Get (workspace_markers, package_markers) for a name.
+
+    All markers are EXACT filenames (lowercase).
+    """
+    if (lang := LANGUAGES_BY_NAME.get(name)) is None:
         return (), ()
     return lang.markers_workspace, lang.markers_package
 
 
-def get_test_patterns(family: str) -> tuple[str, ...]:
-    return LANGUAGES_BY_FAMILY[family].test_patterns if family in LANGUAGES_BY_FAMILY else ()
-
-
-def get_grammar_name(family: str) -> str | None:
-    return LANGUAGES_BY_FAMILY[family].grammar if family in LANGUAGES_BY_FAMILY else None
-
-
-def has_grammar(family: str) -> bool:
-    return get_grammar_name(family) is not None
-
-
-def get_all_indexable_extensions() -> set[str]:
-    return set(EXTENSION_TO_FAMILY.keys())
-
-
-def get_all_indexable_filenames() -> set[str]:
-    return set(FILENAME_TO_FAMILY.keys())
-
-
 def build_marker_definitions() -> dict[str, dict[str, tuple[str, ...]]]:
-    """Build {family: {"workspace": (...), "package": (...)}} for scanner."""
+    """Build {name: {"workspace": (...), "package": (...)}} for scanner.
+
+    All marker strings are exact lowercase filenames.
+    """
     result: dict[str, dict[str, tuple[str, ...]]] = {}
     for lang in ALL_LANGUAGES:
         if lang.markers_workspace or lang.markers_package:
-            result[lang.family] = {
+            result[lang.name] = {
                 "workspace": lang.markers_workspace,
                 "package": lang.markers_package,
             }
@@ -202,5 +1007,97 @@ def build_marker_definitions() -> dict[str, dict[str, tuple[str, ...]]]:
 
 
 def build_include_specs() -> dict[str, tuple[str, ...]]:
-    """Build {family: globs} for scanner."""
-    return {lang.family: lang.include_globs for lang in ALL_LANGUAGES if lang.include_globs}
+    """Build {name: globs} for scanner.
+
+    Globs cover both extensions and filenames.
+    """
+    result: dict[str, tuple[str, ...]] = {}
+    for lang in ALL_LANGUAGES:
+        globs = _generate_include_globs(lang)
+        if globs:
+            result[lang.name] = globs
+    return result
+
+
+# =============================================================================
+# Other Accessors
+# =============================================================================
+
+
+def get_test_patterns(name: str) -> tuple[str, ...]:
+    """Get test file patterns for a name."""
+    return LANGUAGES_BY_NAME[name].test_patterns if name in LANGUAGES_BY_NAME else ()
+
+
+def get_grammar_name(name: str) -> str | None:
+    """Get tree-sitter grammar name for a name.
+
+    Returns None if no tree-sitter grammar is available for the language.
+    """
+    return LANGUAGES_BY_NAME[name].grammar if name in LANGUAGES_BY_NAME else None
+
+
+def has_grammar(name: str) -> bool:
+    """Check if name has a usable tree-sitter grammar."""
+    return get_grammar_name(name) is not None
+
+
+def get_all_indexable_extensions() -> set[str]:
+    """Get all known file extensions."""
+    return set(EXTENSION_TO_NAME.keys())
+
+
+def get_all_indexable_filenames() -> set[str]:
+    """Get all known special filenames."""
+    return set(FILENAME_TO_NAME.keys())
+
+
+# =============================================================================
+# Validation (for tests only - NOT run at import time)
+# =============================================================================
+
+
+def validate_language_families() -> list[str]:
+    """Validate that all name strings match LanguageFamily enum values.
+
+    Returns list of error messages (empty if valid).
+    Call this in a unit test to catch definition/enum mismatches.
+    """
+    errors: list[str] = []
+    try:
+        LanguageFamily = _get_language_family()
+        enum_values = {e.value for e in LanguageFamily}
+        defined_families = set(LANGUAGES_BY_NAME.keys())
+
+        missing_in_enum = defined_families - enum_values
+        if missing_in_enum:
+            errors.append(
+                f"Families defined in languages.py but missing from LanguageFamily enum: "
+                f"{sorted(missing_in_enum)}"
+            )
+    except Exception as e:
+        errors.append(f"Could not import LanguageFamily: {e}")
+
+    return errors
+
+
+def validate_markers_are_exact_filenames() -> list[str]:
+    """Validate that all markers are exact filenames (no wildcards/globs).
+
+    Returns list of error messages (empty if valid).
+    """
+    errors: list[str] = []
+    for lang in ALL_LANGUAGES:
+        for marker in lang.markers_workspace + lang.markers_package:
+            if "*" in marker or "?" in marker:
+                errors.append(
+                    f"{lang.name}: marker '{marker}' contains wildcards. "
+                    f"Markers must be exact filenames."
+                )
+            if marker.startswith(".") and marker.count(".") == 1 and len(marker) > 1:
+                # Looks like an extension (e.g., .csproj)
+                errors.append(
+                    f"{lang.name}: marker '{marker}' looks like an extension, not a filename. "
+                    f"Markers must be exact filenames."
+                )
+    return errors

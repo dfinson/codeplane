@@ -13,7 +13,7 @@ from pathlib import Path
 
 from codeplane.core.excludes import PRUNABLE_DIRS, UNIVERSAL_EXCLUDE_GLOBS
 from codeplane.core.languages import (
-    AMBIENT_FAMILIES as _AMBIENT_FAMILIES_STR,
+    AMBIENT_NAMES as _AMBIENT_NAMES_STR,
 )
 from codeplane.core.languages import (
     build_include_specs,
@@ -47,8 +47,8 @@ for family_str, globs in _INCLUDE_SPECS.items():
         INCLUDE_SPECS[LanguageFamily(family_str)] = list(globs)
 
 # Convert to LanguageFamily enum for runtime use
-AMBIENT_FAMILIES: frozenset[LanguageFamily] = frozenset(
-    LanguageFamily(f) for f in _AMBIENT_FAMILIES_STR if f in [e.value for e in LanguageFamily]
+AMBIENT_NAMES: frozenset[LanguageFamily] = frozenset(
+    LanguageFamily(f) for f in _AMBIENT_NAMES_STR if f in [e.value for e in LanguageFamily]
 )
 
 
@@ -123,7 +123,7 @@ class ContextDiscovery:
                 candidates_by_family[marker.family].append(candidate)
 
         # Add ambient contexts
-        for family in AMBIENT_FAMILIES:
+        for family in AMBIENT_NAMES:
             if family not in candidates_by_family:
                 candidates_by_family[family] = [
                     CandidateContext(
@@ -137,10 +137,10 @@ class ContextDiscovery:
                     )
                 ]
 
-        # Root fallback (tier 3)
+        # Root fallback (tier 3) - catch-all for unclaimed files
         result.candidates.append(
             CandidateContext(
-                language_family=LanguageFamily.CONFIG,
+                language_family=LanguageFamily.UNKNOWN,
                 root_path="",
                 tier=3,
                 markers=[],
@@ -187,7 +187,7 @@ class ContextDiscovery:
                     )
                 )
 
-        if not candidates and family in AMBIENT_FAMILIES:
+        if not candidates and family in AMBIENT_NAMES:
             candidates.append(
                 CandidateContext(
                     language_family=family,
@@ -226,7 +226,7 @@ class ContextDiscovery:
             if ext in dotnet_extensions:
                 tier = MarkerTier.WORKSPACE if ext == ".sln" else MarkerTier.PACKAGE
                 markers.append(
-                    DiscoveredMarker(path=rel_path, family=LanguageFamily.DOTNET, tier=tier)
+                    DiscoveredMarker(path=rel_path, family=LanguageFamily.CSHARP, tier=tier)
                 )
 
         markers = self._handle_rust_workspaces(markers)
@@ -288,7 +288,7 @@ class ContextDiscovery:
         result: list[DiscoveredMarker] = []
         for marker in markers:
             if (
-                marker.family == LanguageFamily.JVM
+                marker.family == LanguageFamily.JAVA
                 and marker.path.endswith("pom.xml")
                 and marker.tier == MarkerTier.PACKAGE
             ):

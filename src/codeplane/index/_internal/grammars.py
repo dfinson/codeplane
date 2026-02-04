@@ -22,38 +22,77 @@ GRAMMAR_PACKAGES: dict[LanguageFamily, tuple[str, str, str]] = {
     LanguageFamily.JAVASCRIPT: ("tree-sitter-javascript", "0.23.0", "tree_sitter_javascript"),
     LanguageFamily.GO: ("tree-sitter-go", "0.23.0", "tree_sitter_go"),
     LanguageFamily.RUST: ("tree-sitter-rust", "0.23.0", "tree_sitter_rust"),
-    LanguageFamily.JVM: ("tree-sitter-java", "0.23.0", "tree_sitter_java"),
-    LanguageFamily.DOTNET: ("tree-sitter-c-sharp", "0.23.0", "tree_sitter_c_sharp"),
+    # JVM languages
+    LanguageFamily.JAVA: ("tree-sitter-java", "0.23.0", "tree_sitter_java"),
+    LanguageFamily.KOTLIN: ("tree-sitter-kotlin", "1.0.0", "tree_sitter_kotlin"),
+    LanguageFamily.SCALA: ("tree-sitter-scala", "0.23.0", "tree_sitter_scala"),
+    LanguageFamily.GROOVY: ("tree-sitter-groovy", "0.1.0", "tree_sitter_groovy"),
+    # .NET languages
+    LanguageFamily.CSHARP: ("tree-sitter-c-sharp", "0.23.0", "tree_sitter_c_sharp"),
+    LanguageFamily.FSHARP: ("tree-sitter-fsharp", "0.1.0", "tree_sitter_fsharp"),
+    LanguageFamily.VBNET: ("tree-sitter-vb", "0.1.0", "tree_sitter_vb"),
     LanguageFamily.RUBY: ("tree-sitter-ruby", "0.23.0", "tree_sitter_ruby"),
     LanguageFamily.PHP: ("tree-sitter-php", "0.23.0", "tree_sitter_php"),
     LanguageFamily.SWIFT: ("tree-sitter-swift", "0.0.1", "tree_sitter_swift"),
-    LanguageFamily.CPP: ("tree-sitter-cpp", "0.23.0", "tree_sitter_cpp"),
+    LanguageFamily.C_CPP: ("tree-sitter-cpp", "0.23.0", "tree_sitter_cpp"),
+    LanguageFamily.OBJC: ("tree-sitter-objc", "0.1.0", "tree_sitter_objc"),
     # Functional
     LanguageFamily.ELIXIR: ("tree-sitter-elixir", "0.3.0", "tree_sitter_elixir"),
+    LanguageFamily.ERLANG: ("tree-sitter-erlang", "0.9.0", "tree_sitter_erlang"),
     LanguageFamily.HASKELL: ("tree-sitter-haskell", "0.23.0", "tree_sitter_haskell"),
     LanguageFamily.OCAML: ("tree-sitter-ocaml", "0.23.0", "tree_sitter_ocaml"),
+    LanguageFamily.REASON: ("tree-sitter-reason", "0.1.0", "tree_sitter_reason"),
+    LanguageFamily.CLOJURE: ("tree-sitter-clojure", "0.1.0", "tree_sitter_clojure"),
+    LanguageFamily.ELM: ("tree-sitter-elm", "5.8.0", "tree_sitter_elm"),
     # Scripting
     LanguageFamily.SHELL: ("tree-sitter-bash", "0.23.0", "tree_sitter_bash"),
+    LanguageFamily.FISH: ("tree-sitter-fish", "0.0.1", "tree_sitter_fish"),
+    LanguageFamily.POWERSHELL: ("tree-sitter-powershell", "0.2.0", "tree_sitter_powershell"),
     LanguageFamily.LUA: ("tree-sitter-lua", "0.2.0", "tree_sitter_lua"),
+    LanguageFamily.PERL: ("tree-sitter-perl", "0.1.0", "tree_sitter_perl"),
+    LanguageFamily.R: ("tree-sitter-r", "0.2.0", "tree_sitter_r"),
     LanguageFamily.JULIA: ("tree-sitter-julia", "0.23.0", "tree_sitter_julia"),
     # Systems
     LanguageFamily.ZIG: ("tree-sitter-zig", "1.1.0", "tree_sitter_zig"),
+    LanguageFamily.NIM: ("tree-sitter-nim", "0.6.0", "tree_sitter_nim"),
+    LanguageFamily.D: ("tree-sitter-d", "0.0.1", "tree_sitter_d"),
     LanguageFamily.ADA: ("tree-sitter-ada", "0.1.0", "tree_sitter_ada"),
     LanguageFamily.FORTRAN: ("tree-sitter-fortran", "0.5.0", "tree_sitter_fortran"),
+    LanguageFamily.PASCAL: ("tree-sitter-pascal", "0.1.0", "tree_sitter_pascal"),
     LanguageFamily.ODIN: ("tree-sitter-odin", "1.2.0", "tree_sitter_odin"),
+    LanguageFamily.DART: ("tree-sitter-dart", "0.1.0", "tree_sitter_dart"),
+    LanguageFamily.GLEAM: ("tree-sitter-gleam", "0.1.0", "tree_sitter_gleam"),
+    LanguageFamily.CRYSTAL: ("tree-sitter-crystal", "0.1.0", "tree_sitter_crystal"),
+    LanguageFamily.VLANG: ("tree-sitter-v", "0.1.0", "tree_sitter_v"),
     # Web
     LanguageFamily.HTML: ("tree-sitter-html", "0.23.0", "tree_sitter_html"),
+    LanguageFamily.XML: ("tree-sitter-xml", "0.6.0", "tree_sitter_xml"),
     LanguageFamily.CSS: ("tree-sitter-css", "0.23.0", "tree_sitter_css"),
     # Hardware
     LanguageFamily.VERILOG: ("tree-sitter-verilog", "1.0.0", "tree_sitter_verilog"),
+    LanguageFamily.VHDL: ("tree-sitter-vhdl", "0.2.0", "tree_sitter_vhdl"),
     # Data/Config
     LanguageFamily.TERRAFORM: ("tree-sitter-hcl", "1.0.0", "tree_sitter_hcl"),
+    LanguageFamily.HCL: ("tree-sitter-hcl", "1.0.0", "tree_sitter_hcl"),
     LanguageFamily.SQL: ("tree-sitter-sql", "0.3.0", "tree_sitter_sql"),
     LanguageFamily.DOCKER: ("tree-sitter-dockerfile", "0.2.0", "tree_sitter_dockerfile"),
     LanguageFamily.MARKDOWN: ("tree-sitter-markdown", "0.3.0", "tree_sitter_markdown"),
-    LanguageFamily.JSON_YAML: ("tree-sitter-json", "0.24.0", "tree_sitter_json"),
+    LanguageFamily.JSON: ("tree-sitter-json", "0.24.0", "tree_sitter_json"),
+    LanguageFamily.YAML: ("tree-sitter-yaml", "0.6.0", "tree_sitter_yaml"),
+    LanguageFamily.TOML: ("tree-sitter-toml", "0.6.0", "tree_sitter_toml"),
     LanguageFamily.GRAPHQL: ("tree-sitter-graphql", "0.1.0", "tree_sitter_graphql"),
+    LanguageFamily.NIX: ("tree-sitter-nix", "0.3.0", "tree_sitter_nix"),
+    LanguageFamily.PROTOBUF: ("tree-sitter-proto", "0.1.0", "tree_sitter_proto"),
+    # Build systems
     LanguageFamily.MAKE: ("tree-sitter-make", "1.1.0", "tree_sitter_make"),
+    LanguageFamily.CMAKE: ("tree-sitter-cmake", "0.5.0", "tree_sitter_cmake"),
+    LanguageFamily.MESON: ("tree-sitter-meson", "0.1.0", "tree_sitter_meson"),
+    LanguageFamily.BAZEL: ("tree-sitter-starlark", "0.1.0", "tree_sitter_starlark"),
+    LanguageFamily.JUST: ("tree-sitter-just", "0.1.0", "tree_sitter_just"),
+    # Other
+    LanguageFamily.ASSEMBLY: ("tree-sitter-asm", "0.1.0", "tree_sitter_asm"),
+    LanguageFamily.RST: ("tree-sitter-rst", "0.1.0", "tree_sitter_rst"),
+    LanguageFamily.ASCIIDOC: ("tree-sitter-asciidoc", "0.1.0", "tree_sitter_asciidoc"),
 }
 
 # Additional packages for language families that need multiple grammars
@@ -61,19 +100,8 @@ EXTRA_PACKAGES: dict[LanguageFamily, list[tuple[str, str, str]]] = {
     LanguageFamily.JAVASCRIPT: [
         ("tree-sitter-typescript", "0.23.0", "tree_sitter_typescript"),
     ],
-    LanguageFamily.CPP: [
+    LanguageFamily.C_CPP: [
         ("tree-sitter-c", "0.23.0", "tree_sitter_c"),
-    ],
-    LanguageFamily.JSON_YAML: [
-        ("tree-sitter-yaml", "0.6.0", "tree_sitter_yaml"),
-        ("tree-sitter-toml", "0.6.0", "tree_sitter_toml"),
-    ],
-    LanguageFamily.HTML: [
-        ("tree-sitter-xml", "0.6.0", "tree_sitter_xml"),
-    ],
-    LanguageFamily.JVM: [
-        ("tree-sitter-kotlin", "1.0.0", "tree_sitter_kotlin"),
-        ("tree-sitter-scala", "0.23.0", "tree_sitter_scala"),
     ],
 }
 

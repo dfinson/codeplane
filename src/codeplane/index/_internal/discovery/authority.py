@@ -87,9 +87,20 @@ class Tier1AuthorityFilter:
                 p, d = self._filter_go(family_candidates)
             elif family == LanguageFamily.RUST:
                 p, d = self._filter_rust(family_candidates)
-            elif family == LanguageFamily.JVM:
+            elif family in (
+                LanguageFamily.JAVA,
+                LanguageFamily.KOTLIN,
+                LanguageFamily.SCALA,
+                LanguageFamily.GROOVY,
+            ):
+                # JVM languages share Gradle/Maven workspace systems
                 p, d = self._filter_jvm(family_candidates)
-            elif family == LanguageFamily.DOTNET:
+            elif family in (
+                LanguageFamily.CSHARP,
+                LanguageFamily.FSHARP,
+                LanguageFamily.VBNET,
+            ):
+                # .NET languages share solution file workspace system
                 p, d = self._filter_dotnet(family_candidates)
             else:
                 # These families have no Tier 1 workspace mechanism -

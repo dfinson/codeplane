@@ -6,7 +6,7 @@ their parent, and assigns include/exclude specs.
 
 Key rules:
 1. Hole-punch: Nested contexts exclude from parent
-2. Include spec: File extensions per family
+2. Include spec: File extensions per name
 3. Exclude spec: Universal excludes + hole-punches
 """
 
@@ -35,9 +35,9 @@ class MembershipResolver:
 
     Implements Phase B of SPEC.md §8.4.4.
 
-    The key rule is "hole-punching": For every context C of family F,
-    all nested contexts of the same family must be excluded from C.
-    This ensures each file has exactly one owner per family.
+    The key rule is "hole-punching": For every context C of name F,
+    all nested contexts of the same name must be excluded from C.
+    This ensures each file has exactly one owner per name.
 
     Usage::
 
@@ -60,29 +60,29 @@ class MembershipResolver:
         """
         result = MembershipResult()
 
-        # Group by family
-        by_family: dict[LanguageFamily, list[CandidateContext]] = {}
+        # Group by name
+        by_name: dict[LanguageFamily, list[CandidateContext]] = {}
         for c in candidates:
-            if c.language_family not in by_family:
-                by_family[c.language_family] = []
-            by_family[c.language_family].append(c)
+            if c.language_family not in by_name:
+                by_name[c.language_family] = []
+            by_name[c.language_family].append(c)
 
-        # Process each family
-        for family, family_contexts in by_family.items():
-            resolved = self._resolve_family(family, family_contexts)
+        # Process each name
+        for name, name_contexts in by_name.items():
+            resolved = self._resolve_family(name, name_contexts)
             result.contexts.extend(resolved)
 
         return result
 
     def _resolve_family(
-        self, family: LanguageFamily, contexts: list[CandidateContext]
+        self, name: LanguageFamily, contexts: list[CandidateContext]
     ) -> list[CandidateContext]:
-        """Resolve membership for a single family."""
+        """Resolve membership for a single name."""
         # Sort by root path depth (shallowest first)
         sorted_contexts = sorted(contexts, key=lambda c: c.root_path.count("/"))
 
         # Apply include specs
-        include_spec = INCLUDE_SPECS.get(family, [])
+        include_spec = INCLUDE_SPECS.get(name, [])
         for ctx in sorted_contexts:
             if ctx.include_spec is None:
                 ctx.include_spec = list(include_spec)

@@ -23,7 +23,7 @@ from codeplane.index._internal.discovery.router import (
     route_single_file,
 )
 from codeplane.index._internal.discovery.scanner import (
-    AMBIENT_FAMILIES,
+    AMBIENT_NAMES,
     INCLUDE_SPECS,
     MARKER_DEFINITIONS,
     UNIVERSAL_EXCLUDES,
@@ -38,7 +38,7 @@ __all__ = [
     "DiscoveredMarker",
     "DiscoveryResult",
     "MARKER_DEFINITIONS",
-    "AMBIENT_FAMILIES",
+    "AMBIENT_NAMES",
     "INCLUDE_SPECS",
     "UNIVERSAL_EXCLUDES",
     # Authority

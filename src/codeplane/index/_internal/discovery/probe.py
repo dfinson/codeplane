@@ -81,9 +81,18 @@ class ContextProbe:
             LanguageFamily.JAVASCRIPT: {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"},
             LanguageFamily.GO: {".go"},
             LanguageFamily.RUST: {".rs"},
-            LanguageFamily.JVM: {".java", ".kt", ".scala", ".groovy"},
-            LanguageFamily.DOTNET: {".cs", ".fs", ".vb"},
-            LanguageFamily.CPP: {".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hxx"},
+            # JVM languages
+            LanguageFamily.JAVA: {".java"},
+            LanguageFamily.KOTLIN: {".kt", ".kts"},
+            LanguageFamily.SCALA: {".scala", ".sc"},
+            LanguageFamily.GROOVY: {".groovy", ".gradle"},
+            # .NET languages
+            LanguageFamily.CSHARP: {".cs"},
+            LanguageFamily.FSHARP: {".fs", ".fsx", ".fsi"},
+            LanguageFamily.VBNET: {".vb"},
+            LanguageFamily.C_CPP: {".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hxx"},
+            LanguageFamily.OBJC: {".m", ".mm"},
+            LanguageFamily.MATLAB: {".m", ".mlx"},
             LanguageFamily.SWIFT: {".swift"},
             LanguageFamily.PHP: {".php"},
             LanguageFamily.RUBY: {".rb"},
@@ -91,12 +100,13 @@ class ContextProbe:
             LanguageFamily.HASKELL: {".hs", ".lhs"},
             LanguageFamily.SQL: {".sql"},
             LanguageFamily.TERRAFORM: {".tf", ".tfvars"},
-            LanguageFamily.DOCKER: {"Dockerfile", ".dockerfile"},
+            LanguageFamily.DOCKER: {"dockerfile"},
             LanguageFamily.MARKDOWN: {".md", ".mdx"},
-            LanguageFamily.JSON_YAML: {".json", ".yaml", ".yml"},
+            LanguageFamily.JSON: {".json", ".jsonc"},
+            LanguageFamily.YAML: {".yaml", ".yml"},
+            LanguageFamily.TOML: {".toml"},
             LanguageFamily.PROTOBUF: {".proto"},
             LanguageFamily.GRAPHQL: {".graphql", ".gql"},
-            LanguageFamily.CONFIG: {".toml", ".ini", ".cfg"},
         }
 
     def validate(self, context: CandidateContext) -> ProbeResult:

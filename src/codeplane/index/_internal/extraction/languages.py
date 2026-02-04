@@ -1363,17 +1363,20 @@ ALL_LANGUAGE_CONFIGS: dict[str, LanguageQueryConfig] = {
     "typescript": TYPESCRIPT_CONFIG,
     "go": GO_CONFIG,
     "rust": RUST_CONFIG,
+    # JVM languages
     "java": JAVA_CONFIG,
-    "jvm": JAVA_CONFIG,
+    "kotlin": KOTLIN_CONFIG,
+    "scala": SCALA_CONFIG,
+    "groovy": JAVA_CONFIG,  # Groovy uses Java-like syntax
+    # .NET languages
     "csharp": CSHARP_CONFIG,
-    "dotnet": CSHARP_CONFIG,
+    "fsharp": CSHARP_CONFIG,  # F# uses similar structure (TODO: dedicated config)
+    "vbnet": CSHARP_CONFIG,  # VB.NET uses similar structure (TODO: dedicated config)
     "cpp": CPP_CONFIG,
     "c": CPP_CONFIG,
     "swift": SWIFT_CONFIG,
     "ruby": RUBY_CONFIG,
     "php": PHP_CONFIG,
-    "kotlin": KOTLIN_CONFIG,
-    "scala": SCALA_CONFIG,
     "dart": DART_CONFIG,
     "elixir": ELIXIR_CONFIG,
     "haskell": HASKELL_CONFIG,

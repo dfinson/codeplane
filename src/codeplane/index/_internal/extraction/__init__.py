@@ -1,7 +1,7 @@
 """Type extraction protocol and registry.
 
 Defines the interface for language-specific type extractors and provides
-a registry for looking up extractors by language family.
+a registry for looking up extractors by language name.
 """
 
 from __future__ import annotations
@@ -143,7 +143,7 @@ class TypeExtractionResult:
 class TypeExtractor(Protocol):
     """Protocol for language-specific type extraction.
 
-    Each language family implements this to extract type information
+    Each language name implements this to extract type information
     from its specific syntax.
     """
 
@@ -457,15 +457,15 @@ class ExtractorRegistry:
         self._fallback = ShapeOnlyExtractor()
 
     def register(self, extractor: BaseTypeExtractor) -> None:
-        """Register an extractor for its language family."""
+        """Register an extractor for its language name."""
         self._extractors[extractor.language_family] = extractor
 
     def get(self, language_family: str) -> BaseTypeExtractor | None:
-        """Get extractor for language family, or None."""
+        """Get extractor for language name, or None."""
         return self._extractors.get(language_family)
 
     def get_or_fallback(self, language_family: str) -> BaseTypeExtractor:
-        """Get extractor for language family, or fallback."""
+        """Get extractor for language name, or fallback."""
         return self._extractors.get(language_family, self._fallback)
 
     def supported_languages(self) -> list[str]:

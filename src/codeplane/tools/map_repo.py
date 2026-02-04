@@ -45,7 +45,7 @@ class DirectoryNode:
 
 @dataclass
 class LanguageStats:
-    """Statistics for a language family."""
+    """Statistics for a language name."""
 
     language: str
     file_count: int

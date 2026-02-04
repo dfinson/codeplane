@@ -2,13 +2,13 @@
 
 This module implements SPEC.md §8.4.5: File-to-Context Routing.
 The router assigns files to contexts, ensuring each file has
-exactly one owner per language family.
+exactly one owner per language name.
 
 Key invariants:
 1. Deepest match wins (most specific context)
 2. Must match include_spec
 3. Must not match exclude_spec
-4. One owner per family per file
+4. One owner per name per file
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ class ContextRouter:
     - Deepest context root wins
     - File must match include_spec
     - File must not match exclude_spec
-    - Each file has one owner per family
+    - Each file has one owner per name
 
     Usage::
 
@@ -77,9 +77,18 @@ class ContextRouter:
             (LanguageFamily.JAVASCRIPT, [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]),
             (LanguageFamily.GO, [".go"]),
             (LanguageFamily.RUST, [".rs"]),
-            (LanguageFamily.JVM, [".java", ".kt", ".scala", ".groovy"]),
-            (LanguageFamily.DOTNET, [".cs", ".fs", ".vb"]),
-            (LanguageFamily.CPP, [".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hxx"]),
+            # JVM languages
+            (LanguageFamily.JAVA, [".java"]),
+            (LanguageFamily.KOTLIN, [".kt", ".kts"]),
+            (LanguageFamily.SCALA, [".scala", ".sc"]),
+            (LanguageFamily.GROOVY, [".groovy", ".gradle"]),
+            # .NET languages
+            (LanguageFamily.CSHARP, [".cs"]),
+            (LanguageFamily.FSHARP, [".fs", ".fsx", ".fsi"]),
+            (LanguageFamily.VBNET, [".vb"]),
+            (LanguageFamily.C_CPP, [".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hxx"]),
+            (LanguageFamily.OBJC, [".m", ".mm"]),
+            (LanguageFamily.MATLAB, [".mlx"]),  # .m is ambiguous
             (LanguageFamily.SWIFT, [".swift"]),
             (LanguageFamily.PHP, [".php"]),
             (LanguageFamily.RUBY, [".rb"]),
@@ -88,10 +97,11 @@ class ContextRouter:
             (LanguageFamily.SQL, [".sql"]),
             (LanguageFamily.TERRAFORM, [".tf", ".tfvars"]),
             (LanguageFamily.MARKDOWN, [".md", ".mdx"]),
-            (LanguageFamily.JSON_YAML, [".json", ".yaml", ".yml"]),
+            (LanguageFamily.JSON, [".json", ".jsonc"]),
+            (LanguageFamily.YAML, [".yaml", ".yml"]),
+            (LanguageFamily.TOML, [".toml"]),
             (LanguageFamily.PROTOBUF, [".proto"]),
             (LanguageFamily.GRAPHQL, [".graphql", ".gql"]),
-            (LanguageFamily.CONFIG, [".toml", ".ini", ".cfg"]),
         ]
 
         for family, exts in ext_families:
@@ -113,7 +123,7 @@ class ContextRouter:
         """
         result = RoutingResult()
 
-        # Build context lookup by family
+        # Build context lookup by name
         contexts_by_family: dict[LanguageFamily, list[CandidateContext]] = {}
         for ctx in contexts:
             if ctx.language_family not in contexts_by_family:
@@ -141,14 +151,14 @@ class ContextRouter:
         contexts_by_family: dict[LanguageFamily, list[CandidateContext]],
     ) -> FileRoute:
         """Route a single file to its context."""
-        # Determine file's language family
+        # Determine file's language name
         ext = Path(file_path).suffix.lower()
         family = self._extension_to_family.get(ext)
 
         if family is None:
             return FileRoute(file_path=file_path, routed=False, reason=f"Unknown extension: {ext}")
 
-        # Get contexts for this family
+        # Get contexts for this name
         family_contexts = contexts_by_family.get(family, [])
         if not family_contexts:
             return FileRoute(
@@ -238,19 +248,19 @@ class ContextRouter:
             The owning Context, or None if no match.
         """
         ext = Path(file_path).suffix.lower()
-        family = self._extension_to_family.get(ext)
-        if family is None:
+        name = self._extension_to_family.get(ext)
+        if name is None:
             return None
 
-        # Filter to matching family and sort by depth (deepest first)
-        family_str = family.value
-        matching = [c for c in contexts if c.language_family == family_str]
+        # Filter to matching name and sort by depth (deepest first)
+        name_str = name.value
+        matching = [c for c in contexts if c.language_family == name_str]
         matching.sort(key=lambda c: -c.root_path.count("/"))
 
         for ctx in matching:
             candidate = CandidateContext(
                 root_path=ctx.root_path,
-                language_family=family,
+                language_family=name,
                 include_spec=ctx.get_include_globs(),
                 exclude_spec=ctx.get_exclude_globs(),
             )

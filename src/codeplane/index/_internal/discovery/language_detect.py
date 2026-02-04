@@ -14,10 +14,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from codeplane.core.languages import (
-    EXTENSION_TO_FAMILY as _EXT_MAP,
+    EXTENSION_TO_NAME as _EXT_MAP,
 )
 from codeplane.core.languages import (
-    FILENAME_TO_FAMILY as _NAME_MAP,
+    FILENAME_TO_NAME as _NAME_MAP,
 )
 from codeplane.core.languages import (
     detect_language_family as _detect,
@@ -51,8 +51,12 @@ def _build_enum_filename_map() -> dict[str, LanguageFamily]:
 
 
 # Backward-compatible exports with enum values
-EXTENSION_TO_FAMILY: dict[str, LanguageFamily] = _build_enum_extension_map()
-FILENAME_TO_FAMILY: dict[str, LanguageFamily] = _build_enum_filename_map()
+EXTENSION_TO_NAME: dict[str, LanguageFamily] = _build_enum_extension_map()
+FILENAME_TO_NAME: dict[str, LanguageFamily] = _build_enum_filename_map()
+
+# Backward compatibility aliases (deprecated)
+EXTENSION_TO_FAMILY = EXTENSION_TO_NAME
+FILENAME_TO_FAMILY = FILENAME_TO_NAME
 
 
 def detect_language_family(path: str | Path) -> LanguageFamily | None:
@@ -76,8 +80,10 @@ def detect_language_family(path: str | Path) -> LanguageFamily | None:
 
 
 __all__ = [
-    "EXTENSION_TO_FAMILY",
-    "FILENAME_TO_FAMILY",
+    "EXTENSION_TO_NAME",
+    "FILENAME_TO_NAME",
+    "EXTENSION_TO_FAMILY",  # Deprecated alias
+    "FILENAME_TO_FAMILY",  # Deprecated alias
     "detect_language_family",
     "get_all_indexable_extensions",
     "get_all_indexable_filenames",

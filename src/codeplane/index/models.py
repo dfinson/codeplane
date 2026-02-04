@@ -28,80 +28,107 @@ if TYPE_CHECKING:
 
 
 class LanguageFamily(str, Enum):
-    """Canonical language family identifiers for tree-sitter supported languages.
+    """Canonical language name identifiers.
 
     All languages get lexical indexing (full-text search).
-    Languages with tree-sitter grammars also get structural indexing (symbols, refs).
+    Languages with grammar != None also get structural indexing (symbols, refs).
 
-    Structural parsing available (grammar installed):
-        JAVASCRIPT, PYTHON, GO, RUST, JVM, DOTNET, RUBY, PHP, SWIFT, CPP,
-        ELIXIR, HASKELL, OCAML, SHELL, LUA, JULIA, ZIG, ADA, FORTRAN, ODIN,
-        HTML, CSS, VERILOG, TERRAFORM, SQL, DOCKER, MARKDOWN, JSON_YAML,
-        GRAPHQL, MAKE
-
-    Lexical-only (no grammar on PyPI):
-        CLOJURE, ELM, PERL, R, NIM, D, PASCAL, DART, GLEAM, CRYSTAL, V,
-        PROTOBUF, CONFIG, ASSEMBLY
+    NOTE: These values MUST match the 'name' strings in core/languages.py.
+    Run validate_language_families() to check for mismatches.
     """
 
-    # Code families - mainstream
+    # --- Code families - mainstream ---
     JAVASCRIPT = "javascript"  # JS, TS, JSX, TSX, Vue, Svelte
     PYTHON = "python"
     GO = "go"
     RUST = "rust"
-    JVM = "jvm"  # Java, Kotlin, Scala, Groovy
-    DOTNET = "dotnet"  # C#, F#, VB
+    # JVM languages (split for correct grammar selection)
+    JAVA = "java"
+    KOTLIN = "kotlin"
+    SCALA = "scala"
+    GROOVY = "groovy"
+    # .NET languages (split for correct grammar selection)
+    CSHARP = "csharp"
+    FSHARP = "fsharp"
+    VBNET = "vbnet"
     RUBY = "ruby"
     PHP = "php"
     SWIFT = "swift"
-    CPP = "cpp"  # C, C++, Objective-C
-    # Code families - functional
-    ELIXIR = "elixir"  # Elixir, Erlang
+    C_CPP = "c_cpp"  # C and C++ unified (header files are ambiguous)
+    OBJC = "objc"  # Objective-C, Objective-C++
+    MATLAB = "matlab"  # MATLAB/Octave
+
+    # --- Code families - functional ---
+    ELIXIR = "elixir"
+    ERLANG = "erlang"
     HASKELL = "haskell"
-    OCAML = "ocaml"  # OCaml, ReasonML
-    CLOJURE = "clojure"  # Clojure, other Lisps
+    OCAML = "ocaml"
+    REASON = "reason"  # ReasonML
+    CLOJURE = "clojure"
     ELM = "elm"
-    # Code families - scripting
-    SHELL = "shell"  # Bash, Zsh, Fish, PowerShell
+
+    # --- Code families - scripting ---
+    SHELL = "shell"  # Bash, Zsh, Ksh (POSIX-compatible)
+    FISH = "fish"  # Fish shell (separate - incompatible syntax)
+    POWERSHELL = "powershell"
     LUA = "lua"
     PERL = "perl"
     R = "r"
     JULIA = "julia"
-    # Code families - systems
+
+    # --- Code families - systems ---
     ZIG = "zig"
     NIM = "nim"
     D = "d"
     ADA = "ada"
     FORTRAN = "fortran"
     PASCAL = "pascal"
-    # Code families - other
+
+    # --- Code families - other ---
     DART = "dart"
     GLEAM = "gleam"
     CRYSTAL = "crystal"
-    V = "v"
+    VLANG = "vlang"  # V language
     ODIN = "odin"
-    # Web/markup
-    HTML = "html"  # HTML, XML, SVG
+
+    # --- Hardware description ---
+    VERILOG = "verilog"  # Verilog, SystemVerilog
+    VHDL = "vhdl"
+
+    # --- Web/markup ---
+    HTML = "html"
+    XML = "xml"
     CSS = "css"  # CSS, SCSS, Less
-    # Hardware description
-    VERILOG = "verilog"  # Verilog, SystemVerilog, VHDL
-    # Data/config families
-    TERRAFORM = "terraform"  # HCL, Terraform
+
+    # --- Data/config families ---
+    TERRAFORM = "terraform"
+    HCL = "hcl"
     SQL = "sql"
     DOCKER = "docker"
-    MARKDOWN = "markdown"  # Markdown, MDX, RST
-    JSON_YAML = "json_yaml"  # JSON, YAML, TOML
+    MARKDOWN = "markdown"
+    RST = "rst"  # reStructuredText
+    ASCIIDOC = "asciidoc"
+    JSON = "json"
+    YAML = "yaml"
+    TOML = "toml"
     PROTOBUF = "protobuf"
     GRAPHQL = "graphql"
-    CONFIG = "config"  # INI, TOML, env files, etc.
-    # Build systems
-    MAKE = "make"  # Make, CMake, Meson, Ninja
-    # Assembly
+    NIX = "nix"
+
+    # --- Build systems ---
+    MAKE = "make"
+    CMAKE = "cmake"
+    MESON = "meson"
+    BAZEL = "bazel"  # Starlark
+    JUST = "just"
+
+    # --- Other ---
     ASSEMBLY = "assembly"
+    UNKNOWN = "unknown"  # Root fallback for files not claimed by any project
 
     @classmethod
     def code_families(cls) -> "frozenset[LanguageFamily]":
-        """Return code families."""
+        """Return code families (programming languages)."""
         return frozenset(
             {
                 # Mainstream
@@ -109,20 +136,33 @@ class LanguageFamily(str, Enum):
                 cls.PYTHON,
                 cls.GO,
                 cls.RUST,
-                cls.JVM,
-                cls.DOTNET,
+                # JVM languages
+                cls.JAVA,
+                cls.KOTLIN,
+                cls.SCALA,
+                cls.GROOVY,
+                # .NET languages
+                cls.CSHARP,
+                cls.FSHARP,
+                cls.VBNET,
                 cls.RUBY,
                 cls.PHP,
                 cls.SWIFT,
-                cls.CPP,
+                cls.C_CPP,
+                cls.OBJC,
+                cls.MATLAB,
                 # Functional
                 cls.ELIXIR,
+                cls.ERLANG,
                 cls.HASKELL,
                 cls.OCAML,
+                cls.REASON,
                 cls.CLOJURE,
                 cls.ELM,
                 # Scripting
                 cls.SHELL,
+                cls.FISH,
+                cls.POWERSHELL,
                 cls.LUA,
                 cls.PERL,
                 cls.R,
@@ -138,41 +178,52 @@ class LanguageFamily(str, Enum):
                 cls.DART,
                 cls.GLEAM,
                 cls.CRYSTAL,
-                cls.V,
+                cls.VLANG,
                 cls.ODIN,
                 # Hardware
                 cls.VERILOG,
+                cls.VHDL,
                 cls.ASSEMBLY,
             }
         )
 
     @classmethod
     def data_families(cls) -> "frozenset[LanguageFamily]":
-        """Return data families."""
+        """Return data/config families."""
         return frozenset(
             {
                 cls.TERRAFORM,
+                cls.HCL,
                 cls.SQL,
                 cls.DOCKER,
                 cls.MARKDOWN,
-                cls.JSON_YAML,
+                cls.RST,
+                cls.ASCIIDOC,
+                cls.JSON,
+                cls.YAML,
+                cls.TOML,
                 cls.PROTOBUF,
                 cls.GRAPHQL,
-                cls.CONFIG,
+                cls.NIX,
                 cls.HTML,
+                cls.XML,
                 cls.CSS,
                 cls.MAKE,
+                cls.CMAKE,
+                cls.MESON,
+                cls.BAZEL,
+                cls.JUST,
             }
         )
 
     @property
     def is_code(self) -> bool:
-        """True if this is a code family."""
+        """True if this is a code name."""
         return self in self.code_families()
 
     @property
     def is_data(self) -> bool:
-        """True if this is a data family."""
+        """True if this is a data name."""
         return self in self.data_families()
 
 

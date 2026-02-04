@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
-from codeplane.core.languages import EXTENSION_TO_FAMILY
+from codeplane.core.languages import EXTENSION_TO_NAME
 
 
 @dataclass
@@ -227,7 +227,7 @@ class FileOps:
                 line_count = len(lines)
 
             # Detect language from extension
-            lang = EXTENSION_TO_FAMILY.get(full_path.suffix.lower(), "unknown")
+            lang = EXTENSION_TO_NAME.get(full_path.suffix.lower(), "unknown")
 
             metadata: dict[str, int] | None = None
             if include_metadata:
