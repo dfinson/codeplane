@@ -1,4 +1,10 @@
-"""Structured logging with request correlation and multi-output support."""
+"""Structured logging with request correlation and multi-output support.
+
+Supports:
+- Console suppression during Rich live displays (spinners, progress bars)
+- Separate console vs file log levels
+- Request correlation IDs
+"""
 
 from __future__ import annotations
 
@@ -51,6 +57,21 @@ _LEVEL_MAP = {
 }
 
 
+class ConsoleSuppressingFilter(logging.Filter):
+    """Filter that blocks console output when suppression is active.
+
+    This integrates with Rich live displays (spinners, progress bars)
+    to prevent log lines from colliding with animated UI elements.
+    File handlers continue to receive logs normally.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: ARG002
+        # Import here to avoid circular dependency
+        from codeplane.core.progress import is_console_suppressed
+
+        return not is_console_suppressed()
+
+
 def configure_logging(
     *,
     config: LoggingConfig | None = None,
@@ -79,15 +100,28 @@ def configure_logging(
     _configure_stdlib_logging(config, shared_processors, default_level)
 
 
-def _create_handler(destination: str) -> logging.Handler:
-    """Create handler for stderr, stdout, or file path."""
+def _create_handler(destination: str, is_console: bool = False) -> logging.Handler:
+    """Create handler for stderr, stdout, or file path.
+
+    Args:
+        destination: "stderr", "stdout", or a file path
+        is_console: If True, add console suppression filter
+    """
+    handler: logging.Handler
     if destination == "stderr":
-        return logging.StreamHandler(sys.stderr)
-    if destination == "stdout":
-        return logging.StreamHandler(sys.stdout)
-    path = Path(destination)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    return logging.FileHandler(path, mode="a")
+        handler = logging.StreamHandler(sys.stderr)
+    elif destination == "stdout":
+        handler = logging.StreamHandler(sys.stdout)
+    else:
+        path = Path(destination)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(path, mode="a")
+
+    # Add suppression filter only to console handlers
+    if is_console:
+        handler.addFilter(ConsoleSuppressingFilter())
+
+    return handler
 
 
 def _configure_stdlib_logging(
@@ -118,6 +152,8 @@ def _configure_stdlib_logging(
 
     for output in config.outputs:
         output_level = _LEVEL_MAP.get((output.level or config.level).upper(), default_level)
+        is_console = output.destination in ("stderr", "stdout")
+
         if output.format == "json":
             formatter = structlog.stdlib.ProcessorFormatter(
                 processor=structlog.processors.JSONRenderer(),
@@ -126,14 +162,14 @@ def _configure_stdlib_logging(
         else:
             formatter = structlog.stdlib.ProcessorFormatter(
                 processor=structlog.dev.ConsoleRenderer(
-                    colors=output.destination == "stderr" and sys.stderr.isatty(),
+                    colors=is_console and sys.stderr.isatty(),
                     pad_event_to=0,
                     pad_level=False,
                 ),
                 foreign_pre_chain=shared_processors,
             )
 
-        handler = _create_handler(output.destination)
+        handler = _create_handler(output.destination, is_console=is_console)
         handler.setLevel(output_level)
         handler.setFormatter(formatter)
         root_logger.addHandler(handler)

@@ -5,10 +5,11 @@ Design principles:
 - Progress bar if iterating >100 items
 - Single line updates, no spam
 - Graceful degradation in non-TTY (CI, pipes)
+- Suppress structlog during spinners to avoid line collision (Issue #5)
 
 Usage::
 
-    from codeplane.core.progress import progress, status
+    from codeplane.core.progress import progress, status, spinner
 
     # Simple status message
     status("Discovering files...")
@@ -20,11 +21,17 @@ Usage::
     # Success/error markers
     status("Ready", style="success")  # ✓ Ready
     status("Failed to connect", style="error")  # ✗ Failed to connect
+
+    # Spinner with log suppression
+    with spinner("Reindexing 3 files"):
+        do_work()  # structlog suppressed during this block
 """
 
 from __future__ import annotations
 
+import logging
 import sys
+import threading
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
@@ -45,9 +52,45 @@ _console = Console(stderr=True)
 _STYLES = {
     "success": "[green]✓[/green] ",
     "error": "[red]✗[/red] ",
+    "warning": "[yellow]![/yellow] ",
     "info": "  ",
     "none": "",
 }
+
+# Global flag to suppress console logging during spinners (Issue #5)
+_suppress_console_logs = threading.local()
+
+
+def is_console_suppressed() -> bool:
+    """Check if console logging is currently suppressed."""
+    return getattr(_suppress_console_logs, "active", False)
+
+
+@contextmanager
+def suppress_console_logs() -> Iterator[None]:
+    """Context manager to suppress structlog console output.
+
+    Used during spinners to prevent log lines from colliding with
+    Rich's live display. Logs are still written to file handlers.
+    """
+    _suppress_console_logs.active = True
+    try:
+        yield
+    finally:
+        _suppress_console_logs.active = False
+
+
+class ConsoleSuppressingFilter(logging.Filter):
+    """Filter that blocks console output when suppression is active.
+
+    Allows file handlers to continue receiving logs while console
+    output is paused during Rich live displays.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: ARG002
+        # Only filter if suppression is active AND this is a console handler
+        # File handlers should still receive logs
+        return not is_console_suppressed()
 
 
 def _get_logger() -> BoundLogger:
@@ -62,6 +105,11 @@ def _is_tty() -> bool:
     return hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
 
 
+def get_console() -> Console:
+    """Get the shared Rich console instance."""
+    return _console
+
+
 def status(message: str, *, style: str = "info", indent: int = 0) -> None:
     """Print a styled status message to stderr."""
     prefix = _STYLES.get(style, "")
@@ -70,6 +118,23 @@ def status(message: str, *, style: str = "info", indent: int = 0) -> None:
 
     # Log at DEBUG for observability (lazy to respect runtime config)
     _get_logger().debug("status", message=message, style=style)
+
+
+def pluralize(count: int, singular: str, plural: str | None = None) -> str:
+    """Return grammatically correct singular/plural form.
+
+    Args:
+        count: The number of items
+        singular: Singular form (e.g., "file")
+        plural: Plural form (default: singular + "s")
+
+    Returns:
+        Formatted string like "1 file" or "3 files"
+    """
+    if plural is None:
+        plural = singular + "s"
+    word = singular if count == 1 else plural
+    return f"{count} {word}"
 
 
 def progress[T](
@@ -92,14 +157,17 @@ def progress[T](
     show_bar = _is_tty() and total is not None and (force or total > _PROGRESS_THRESHOLD)
 
     if show_bar:
-        with Progress(
-            TextColumn("    {task.description}:"),
-            BarColumn(bar_width=25, style="cyan", complete_style="cyan"),
-            TaskProgressColumn(),
-            TextColumn("{task.completed}/{task.total} {task.fields[unit]}"),
-            console=_console,
-            transient=True,
-        ) as pbar:
+        with (
+            suppress_console_logs(),
+            Progress(
+                TextColumn("    {task.description}:"),
+                BarColumn(bar_width=25, style="cyan", complete_style="cyan"),
+                TaskProgressColumn(),
+                TextColumn("{task.completed}/{task.total} {task.fields[unit]}"),
+                console=_console,
+                transient=True,
+            ) as pbar,
+        ):
             task_id = pbar.add_task(desc or "Processing", total=total, unit=unit)
             for item in iterable:
                 yield item
@@ -113,6 +181,31 @@ def progress[T](
             yield item
         if desc and total:
             log.debug("progress_done", desc=desc, total=total)
+
+
+@contextmanager
+def spinner(message: str, *, indent: int = 0) -> Iterator[None]:
+    """Context manager for a spinner with log suppression.
+
+    Suppresses structlog console output during the spinner to prevent
+    log lines from colliding with Rich's live display (Issue #5).
+
+    Usage::
+
+        with spinner("Reindexing 3 files"):
+            do_work()
+    """
+    padding = " " * indent
+    if _is_tty():
+        with (
+            suppress_console_logs(),
+            _console.status(f"{padding}[cyan]{message}[/cyan]", spinner="dots"),
+        ):
+            yield
+    else:
+        # Non-TTY: just print the message
+        _console.print(f"{padding}{message}...")
+        yield
 
 
 @contextmanager
@@ -142,3 +235,18 @@ def task(name: str) -> Iterator[None]:
         status(f"{name} failed: {e}", style="error")
         log.error("task_failed", task=name, elapsed_s=elapsed, error=str(e))
         raise
+
+
+def animate_text(text: str, delay: float = 0.02) -> None:
+    """Print text line-by-line with a small delay for dramatic effect.
+
+    Args:
+        text: Multi-line text to animate
+        delay: Seconds between each line (default 0.02)
+    """
+    import time
+
+    for line in text.splitlines():
+        _console.print(line, highlight=False)
+        if delay > 0 and _is_tty():
+            time.sleep(delay)

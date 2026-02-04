@@ -1,4 +1,9 @@
-"""cpl up command - start the server."""
+"""cpl up command - start the server.
+
+Improved UX:
+- Logo renders line-by-line with animation delay (Issue #3)
+- Cleaner startup flow
+"""
 
 import asyncio
 from importlib.metadata import version
@@ -11,6 +16,7 @@ from codeplane.cli.init import initialize_repo
 from codeplane.cli.utils import find_repo_root
 from codeplane.config.loader import load_config
 from codeplane.config.models import CodePlaneConfig
+from codeplane.core.progress import animate_text
 from codeplane.index.ops import IndexCoordinator
 
 LOGO = r"""
@@ -37,11 +43,30 @@ LOGO = r"""
                            *++++++++++++++++++*
 """
 
+# Compact logo for subsequent runs (after first init)
+LOGO_COMPACT = r"""
+       ++++++++++     CodePlane v{version}
+    *++++++++++++++*  Local repository control plane
+   +++++*      *+++++
+"""
 
-def _print_banner(host: str, port: int) -> None:
-    """Print startup banner with logo and info."""
+
+def _print_banner(host: str, port: int, *, animate: bool = True) -> None:
+    """Print startup banner with logo and info.
+
+    Args:
+        host: Server host
+        port: Server port
+        animate: If True, render logo line-by-line with delay (Issue #3)
+    """
     ver = version("codeplane")
-    click.echo(LOGO)
+
+    if animate:
+        # Render logo line-by-line with small delay for dramatic effect
+        animate_text(LOGO, delay=0.015)
+    else:
+        click.echo(LOGO)
+
     click.echo(click.style("  CodePlane", fg="cyan", bold=True) + f" v{ver}")
     click.echo("  Local repository control plane for AI coding agents")
     click.echo()
