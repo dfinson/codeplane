@@ -444,6 +444,9 @@ class IndexCoordinator:
             msg = "Coordinator not initialized"
             raise RuntimeError(msg)
 
+        # Deduplicate paths to avoid UNIQUE constraint violations
+        changed_paths = list(dict.fromkeys(changed_paths))
+
         start_time = time.time()
         files_added = 0
         files_updated = 0
