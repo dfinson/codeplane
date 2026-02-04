@@ -1,64 +1,16 @@
 """Refactor MCP tools - refactor_* handlers."""
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, Any
 
-from codeplane.mcp.registry import registry
-from codeplane.mcp.tools.base import BaseParams
+from fastmcp import Context
+from fastmcp.utilities.json_schema import dereference_refs
+from pydantic import Field
 
 if TYPE_CHECKING:
+    from fastmcp import FastMCP
+
     from codeplane.mcp.context import AppContext
     from codeplane.refactor.ops import RefactorResult
-
-
-# =============================================================================
-# Parameter Models
-# =============================================================================
-
-
-class RefactorRenameParams(BaseParams):
-    """Parameters for refactor_rename."""
-
-    symbol: str  # Symbol name or path:line:col locator
-    new_name: str
-    include_comments: bool = True
-    contexts: list[str] | None = None
-
-
-class RefactorMoveParams(BaseParams):
-    """Parameters for refactor_move."""
-
-    from_path: str
-    to_path: str
-    include_comments: bool = True
-
-
-class RefactorDeleteParams(BaseParams):
-    """Parameters for refactor_delete."""
-
-    target: str  # Symbol or path
-    include_comments: bool = True
-
-
-class RefactorApplyParams(BaseParams):
-    """Parameters for refactor_apply."""
-
-    refactor_id: str
-
-
-class RefactorCancelParams(BaseParams):
-    """Parameters for refactor_cancel."""
-
-    refactor_id: str
-
-
-class RefactorInspectParams(BaseParams):
-    """Parameters for refactor_inspect."""
-
-    refactor_id: str
-    path: str
-    context_lines: int = 2
 
 
 # =============================================================================
@@ -102,82 +54,7 @@ def _display_refactor(status: str, files_affected: int, preview: Any, refactor_i
     return f"Refactoring {status}."
 
 
-# =============================================================================
-# Tool Handlers
-# =============================================================================
-
-
-@registry.register("refactor_rename", "Rename a symbol across the codebase", RefactorRenameParams)
-async def refactor_rename(ctx: AppContext, params: RefactorRenameParams) -> dict[str, Any]:
-    """Rename symbol with certainty-scored candidates."""
-    result = await ctx.refactor_ops.rename(
-        params.symbol,
-        params.new_name,
-        _include_comments=params.include_comments,
-        _contexts=params.contexts,
-    )
-    return _serialize_refactor_result(result)
-
-
-@registry.register("refactor_move", "Move a file/module, updating imports", RefactorMoveParams)
-async def refactor_move(ctx: AppContext, params: RefactorMoveParams) -> dict[str, Any]:
-    """Move file/module and update all import references."""
-    result = await ctx.refactor_ops.move(
-        params.from_path,
-        params.to_path,
-        include_comments=params.include_comments,
-    )
-    return _serialize_refactor_result(result)
-
-
-@registry.register(
-    "refactor_delete",
-    "Find all references to a symbol/file for manual cleanup",
-    RefactorDeleteParams,
-)
-async def refactor_delete(ctx: AppContext, params: RefactorDeleteParams) -> dict[str, Any]:
-    """Find references that need cleanup when deleting."""
-    result = await ctx.refactor_ops.delete(
-        params.target,
-        include_comments=params.include_comments,
-    )
-    return _serialize_refactor_result(result)
-
-
-@registry.register("refactor_apply", "Apply a previewed refactoring", RefactorApplyParams)
-async def refactor_apply(ctx: AppContext, params: RefactorApplyParams) -> dict[str, Any]:
-    """Apply pending refactor."""
-    result = await ctx.refactor_ops.apply(params.refactor_id, ctx.mutation_ops)
-    return _serialize_refactor_result(result)
-
-
-@registry.register("refactor_cancel", "Cancel a pending refactoring", RefactorCancelParams)
-async def refactor_cancel(ctx: AppContext, params: RefactorCancelParams) -> dict[str, Any]:
-    """Cancel pending refactor."""
-    result = await ctx.refactor_ops.cancel(params.refactor_id)
-    return _serialize_refactor_result(result)
-
-
-@registry.register(
-    "refactor_inspect",
-    "Inspect low-certainty matches in a file with context",
-    RefactorInspectParams,
-)
-async def refactor_inspect(ctx: AppContext, params: RefactorInspectParams) -> dict[str, Any]:
-    """Inspect low-certainty matches before applying."""
-    result = await ctx.refactor_ops.inspect(
-        params.refactor_id,
-        params.path,
-        context_lines=params.context_lines,
-    )
-    return {
-        "path": result.path,
-        "matches": result.matches,
-        "summary": f"{len(result.matches)} matches in {result.path}",
-    }
-
-
-def _serialize_refactor_result(result: RefactorResult) -> dict[str, Any]:
+def _serialize_refactor_result(result: "RefactorResult") -> dict[str, Any]:
     """Convert RefactorResult to dict."""
     # Get files_affected from preview or applied delta
     if result.preview:
@@ -232,3 +109,110 @@ def _serialize_refactor_result(result: RefactorResult) -> dict[str, Any]:
         }
 
     return output
+
+
+# =============================================================================
+# Tool Registration
+# =============================================================================
+
+
+def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
+    """Register refactor tools with FastMCP server."""
+
+    @mcp.tool
+    async def refactor_rename(
+        ctx: Context,
+        symbol: str = Field(..., description="Symbol name or path:line:col locator"),
+        new_name: str = Field(..., description="New name for the symbol"),
+        include_comments: bool = Field(True, description="Include comment references"),
+        contexts: list[str] | None = Field(None, description="Limit to specific contexts"),
+    ) -> dict[str, Any]:
+        """Rename a symbol across the codebase."""
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        result = await app_ctx.refactor_ops.rename(
+            symbol,
+            new_name,
+            _include_comments=include_comments,
+            _contexts=contexts,
+        )
+        return _serialize_refactor_result(result)
+
+    @mcp.tool
+    async def refactor_move(
+        ctx: Context,
+        from_path: str = Field(..., description="Source file path"),
+        to_path: str = Field(..., description="Destination file path"),
+        include_comments: bool = Field(True, description="Include comment references"),
+    ) -> dict[str, Any]:
+        """Move a file/module, updating imports."""
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        result = await app_ctx.refactor_ops.move(
+            from_path,
+            to_path,
+            include_comments=include_comments,
+        )
+        return _serialize_refactor_result(result)
+
+    @mcp.tool
+    async def refactor_delete(
+        ctx: Context,
+        target: str = Field(..., description="Symbol or path to delete"),
+        include_comments: bool = Field(True, description="Include comment references"),
+    ) -> dict[str, Any]:
+        """Find all references to a symbol/file for manual cleanup."""
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        result = await app_ctx.refactor_ops.delete(
+            target,
+            include_comments=include_comments,
+        )
+        return _serialize_refactor_result(result)
+
+    @mcp.tool
+    async def refactor_apply(
+        ctx: Context,
+        refactor_id: str = Field(..., description="ID of the refactoring to apply"),
+    ) -> dict[str, Any]:
+        """Apply a previewed refactoring."""
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        result = await app_ctx.refactor_ops.apply(refactor_id, app_ctx.mutation_ops)
+        return _serialize_refactor_result(result)
+
+    @mcp.tool
+    async def refactor_cancel(
+        ctx: Context,
+        refactor_id: str = Field(..., description="ID of the refactoring to cancel"),
+    ) -> dict[str, Any]:
+        """Cancel a pending refactoring."""
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        result = await app_ctx.refactor_ops.cancel(refactor_id)
+        return _serialize_refactor_result(result)
+
+    @mcp.tool
+    async def refactor_inspect(
+        ctx: Context,
+        refactor_id: str = Field(..., description="ID of the refactoring to inspect"),
+        path: str = Field(..., description="File path to inspect"),
+        context_lines: int = Field(2, description="Lines of context around matches"),
+    ) -> dict[str, Any]:
+        """Inspect low-certainty matches in a file with context."""
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        result = await app_ctx.refactor_ops.inspect(
+            refactor_id,
+            path,
+            context_lines=context_lines,
+        )
+        return {
+            "path": result.path,
+            "matches": result.matches,
+            "summary": f"{len(result.matches)} matches in {result.path}",
+        }
+
+    # Flatten schemas to remove $ref/$defs for Claude compatibility
+    for tool in mcp._tool_manager._tools.values():
+        tool.parameters = dereference_refs(tool.parameters)

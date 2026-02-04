@@ -1,40 +1,18 @@
 """Describe MCP tool - unified introspection handler."""
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, Any, Literal
 
+from fastmcp import Context
+from fastmcp.utilities.json_schema import dereference_refs
 from pydantic import Field
 
 from codeplane.mcp.docs import get_tool_documentation
 from codeplane.mcp.errors import ERROR_CATALOG, get_error_documentation
-from codeplane.mcp.registry import registry
-from codeplane.mcp.tools.base import BaseParams
 
 if TYPE_CHECKING:
+    from fastmcp import FastMCP
+
     from codeplane.mcp.context import AppContext
-
-
-# =============================================================================
-# Parameter Model
-# =============================================================================
-
-
-class DescribeParams(BaseParams):
-    """Parameters for describe tool."""
-
-    action: Literal["tool", "error", "capabilities", "workflows", "operations"]
-
-    # tool action params
-    name: str | None = Field(default=None, description="Tool name to describe")
-
-    # error action params
-    code: str | None = Field(default=None, description="Error code to describe")
-
-    # operations action params
-    path: str | None = None
-    success_only: bool = False
-    limit: int = 50
 
 
 # =============================================================================
@@ -72,148 +50,168 @@ def _derive_features(tool_names: list[str]) -> list[str]:
 
 
 # =============================================================================
-# Tool Handler
+# Tool Registration
 # =============================================================================
 
 
-@registry.register(
-    "describe",
-    "Introspection: describe tools, errors, capabilities, workflows, or operations",
-    DescribeParams,
-)
-async def describe(ctx: AppContext, params: DescribeParams) -> dict[str, Any]:
-    """Unified introspection tool.
+def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
+    """Register introspection tools with FastMCP server."""
 
-    Actions:
-    - tool: Get detailed documentation for a specific tool
-    - error: Get documentation for an error code
-    - capabilities: List server capabilities and available tools
-    - workflows: Get common tool workflow patterns
-    - operations: Query recent mutation operations for debugging
-    """
-    if params.action == "tool":
-        if not params.name:
-            return {"error": "tool action requires 'name'", "summary": "error: missing params"}
-        doc = get_tool_documentation(params.name)
-        if doc is None:
-            spec = registry.get(params.name)
-            if spec is None:
+    @mcp.tool
+    async def describe(
+        ctx: Context,
+        action: Literal["tool", "error", "capabilities", "workflows", "operations"] = Field(
+            ..., description="Introspection action"
+        ),
+        name: str | None = Field(None, description="Tool name to describe"),
+        code: str | None = Field(None, description="Error code to describe"),
+        path: str | None = Field(None, description="Filter operations by path"),
+        success_only: bool = Field(False, description="Show only successful operations"),
+        limit: int = Field(50, description="Maximum operations to return"),
+    ) -> dict[str, Any]:
+        """Introspection: describe tools, errors, capabilities, workflows, or operations.
+
+        Actions:
+        - tool: Get detailed documentation for a specific tool
+        - error: Get documentation for an error code
+        - capabilities: List server capabilities and available tools
+        - workflows: Get common tool workflow patterns
+        - operations: Query recent mutation operations for debugging
+        """
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        if action == "tool":
+            if not name:
+                return {"error": "tool action requires 'name'", "summary": "error: missing params"}
+            doc = get_tool_documentation(name)
+            if doc is None:
+                # Get available tools from MCP tool manager
+                available_tools = list(mcp._tool_manager._tools.keys())
+                if name not in available_tools:
+                    return {
+                        "found": False,
+                        "error": f"Tool '{name}' not found",
+                        "available_tools": available_tools,
+                        "summary": f"tool '{name}' not found",
+                    }
+                # Basic info from tool manager
+                tool_spec = mcp._tool_manager._tools.get(name)
                 return {
-                    "found": False,
-                    "error": f"Tool '{params.name}' not found",
-                    "available_tools": [s.name for s in registry.get_all()],
-                    "summary": f"tool '{params.name}' not found",
+                    "found": True,
+                    "name": name,
+                    "description": tool_spec.description if tool_spec else "",
+                    "extended_docs": False,
+                    "summary": f"basic docs for {name}",
                 }
             return {
                 "found": True,
-                "name": spec.name,
-                "description": spec.description,
-                "extended_docs": False,
-                "summary": f"basic docs for {spec.name}",
+                "extended_docs": True,
+                **doc.to_dict(),
+                "summary": f"full docs for {name}",
             }
-        return {
-            "found": True,
-            "extended_docs": True,
-            **doc.to_dict(),
-            "summary": f"full docs for {params.name}",
-        }
 
-    if params.action == "error":
-        if not params.code:
-            return {"error": "error action requires 'code'", "summary": "error: missing params"}
-        err_doc = get_error_documentation(params.code)
-        if err_doc is None:
-            return {
-                "found": False,
-                "error": f"Error code '{params.code}' not documented",
-                "available_codes": list(ERROR_CATALOG.keys()),
-                "summary": f"error code '{params.code}' not found",
-            }
-        return {
-            "found": True,
-            "code": err_doc.code.value,
-            "category": err_doc.category,
-            "description": err_doc.description,
-            "causes": err_doc.causes,
-            "remediation": err_doc.remediation,
-            "summary": f"{err_doc.code.value}: {err_doc.description}",
-        }
-
-    if params.action == "capabilities":
-        all_tools = registry.get_all()
-        tool_names = [spec.name for spec in all_tools]
-        tool_list = [{"name": spec.name, "description": spec.description} for spec in all_tools]
-        index_status: dict[str, Any] = {}
-        try:
-            epoch = ctx.coordinator.get_current_epoch()
-            index_status["current_epoch"] = epoch
-            index_status["initialized"] = ctx.coordinator._initialized
-        except Exception:
-            index_status["initialized"] = False
-        features = _derive_features(tool_names)
-        return {
-            "version": _get_version(),
-            "server": "codeplane",
-            "tool_count": len(tool_list),
-            "tools": tool_list,
-            "index_status": index_status,
-            "features": features,
-            "summary": f"{len(tool_list)} tools, {len(features)} feature domains",
-        }
-
-    if params.action == "workflows":
-        workflows = [
-            {
-                "name": "code_review",
-                "description": "Review code changes before commit",
-                "steps": ["git_status", "git_diff", "lint", "test"],
-            },
-            {
-                "name": "refactor_symbol",
-                "description": "Safely rename a symbol across codebase",
-                "steps": ["refactor_rename", "refactor_inspect", "refactor_apply"],
-            },
-            {
-                "name": "explore_codebase",
-                "description": "Understand repository structure",
-                "steps": ["map_repo", "search", "read_files"],
-            },
-            {
-                "name": "fix_and_commit",
-                "description": "Edit files, lint, test, and commit",
-                "steps": ["write_files", "lint", "test", "git_commit"],
-            },
-        ]
-        return {
-            "workflows": workflows,
-            "summary": f"{len(workflows)} workflow patterns",
-        }
-
-    if params.action == "operations":
-        from codeplane.mcp.ledger import get_ledger
-
-        ledger = get_ledger()
-        ops = ledger.list_operations(
-            path=params.path,
-            success_only=params.success_only,
-            limit=min(params.limit, 200),
-        )
-        return {
-            "operations": [
-                {
-                    "op_id": op.op_id,
-                    "tool": op.tool,
-                    "success": op.success,
-                    "timestamp": op.timestamp,
-                    "path": op.path,
-                    "action": op.action,
-                    "error_code": op.error_code,
-                    "error_message": op.error_message,
+        if action == "error":
+            if not code:
+                return {"error": "error action requires 'code'", "summary": "error: missing params"}
+            err_doc = get_error_documentation(code)
+            if err_doc is None:
+                return {
+                    "found": False,
+                    "error": f"Error code '{code}' not documented",
+                    "available_codes": list(ERROR_CATALOG.keys()),
+                    "summary": f"error code '{code}' not found",
                 }
-                for op in ops
-            ],
-            "count": len(ops),
-            "summary": f"{len(ops)} recent operations",
-        }
+            return {
+                "found": True,
+                "code": err_doc.code.value,
+                "category": err_doc.category,
+                "description": err_doc.description,
+                "causes": err_doc.causes,
+                "remediation": err_doc.remediation,
+                "summary": f"{err_doc.code.value}: {err_doc.description}",
+            }
 
-    return {"error": f"unknown action: {params.action}", "summary": "error: unknown action"}
+        if action == "capabilities":
+            all_tools = mcp._tool_manager._tools
+            tool_names = list(all_tools.keys())
+            tool_list = [
+                {"name": name, "description": spec.description} for name, spec in all_tools.items()
+            ]
+            index_status: dict[str, Any] = {}
+            try:
+                epoch = app_ctx.coordinator.get_current_epoch()
+                index_status["current_epoch"] = epoch
+                index_status["initialized"] = app_ctx.coordinator._initialized
+            except Exception:
+                index_status["initialized"] = False
+            features = _derive_features(tool_names)
+            return {
+                "version": _get_version(),
+                "server": "codeplane",
+                "tool_count": len(tool_list),
+                "tools": tool_list,
+                "index_status": index_status,
+                "features": features,
+                "summary": f"{len(tool_list)} tools, {len(features)} feature domains",
+            }
+
+        if action == "workflows":
+            workflows = [
+                {
+                    "name": "code_review",
+                    "description": "Review code changes before commit",
+                    "steps": ["git_status", "git_diff", "lint", "test"],
+                },
+                {
+                    "name": "refactor_symbol",
+                    "description": "Safely rename a symbol across codebase",
+                    "steps": ["refactor_rename", "refactor_inspect", "refactor_apply"],
+                },
+                {
+                    "name": "explore_codebase",
+                    "description": "Understand repository structure",
+                    "steps": ["map_repo", "search", "read_files"],
+                },
+                {
+                    "name": "fix_and_commit",
+                    "description": "Edit files, lint, test, and commit",
+                    "steps": ["write_files", "lint", "test", "git_commit"],
+                },
+            ]
+            return {
+                "workflows": workflows,
+                "summary": f"{len(workflows)} workflow patterns",
+            }
+
+        if action == "operations":
+            from codeplane.mcp.ledger import get_ledger
+
+            ledger = get_ledger()
+            ops = ledger.list_operations(
+                path=path,
+                success_only=success_only,
+                limit=min(limit, 200),
+            )
+            return {
+                "operations": [
+                    {
+                        "op_id": op.op_id,
+                        "tool": op.tool,
+                        "success": op.success,
+                        "timestamp": op.timestamp,
+                        "path": op.path,
+                        "action": op.action,
+                        "error_code": op.error_code,
+                        "error_message": op.error_message,
+                    }
+                    for op in ops
+                ],
+                "count": len(ops),
+                "summary": f"{len(ops)} recent operations",
+            }
+
+        return {"error": f"unknown action: {action}", "summary": "error: unknown action"}
+
+    # Flatten schemas to remove $ref/$defs for Claude compatibility
+    for tool in mcp._tool_manager._tools.values():
+        tool.parameters = dereference_refs(tool.parameters)
