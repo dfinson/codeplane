@@ -13,7 +13,7 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from codeplane.index.ops import IndexCoordinator
@@ -169,6 +169,37 @@ def _word_boundary_match(text: str, symbol: str) -> bool:
     return bool(re.search(pattern, text))
 
 
+def _compute_rename_certainty_from_ref(ref: Any) -> Literal["high", "medium", "low"]:
+    """
+    Compute certainty for a rename candidate based on RefFact properties.
+
+    Certainty tiers (per SPEC.md §7.3):
+    - PROVEN refs: Same-file lexical bind with LocalBindFact certainty=CERTAIN -> "high"
+    - STRONG refs: Cross-file with explicit ImportFact + ExportSurface trace -> "high"
+    - ANCHORED refs: Ambiguous but grouped in AnchorGroup -> "medium"
+    - UNKNOWN refs: Cannot classify -> "low"
+
+    Also considers the RefFact's own certainty field as a fallback.
+    """
+    # Check ref_tier first (most authoritative)
+    ref_tier = getattr(ref, "ref_tier", None)
+    if ref_tier:
+        if ref_tier in ("PROVEN", "proven"):
+            return "high"
+        elif ref_tier in ("STRONG", "strong"):
+            return "high"  # Explicit import trace
+        elif ref_tier in ("ANCHORED", "anchored"):
+            return "medium"
+        # UNKNOWN falls through to certainty check
+
+    # Fallback to certainty field
+    certainty = getattr(ref, "certainty", None)
+    if certainty in ("CERTAIN", "certain"):
+        return "high"
+
+    return "low"
+
+
 class RefactorOps:
     """Refactoring via index-based candidate discovery.
 
@@ -190,6 +221,13 @@ class RefactorOps:
         self._repo_root = repo_root
         self._coordinator = coordinator
         self._pending: dict[str, RefactorPreview] = {}
+
+    def _compute_rename_certainty(self, ref: Any) -> Literal["high", "medium", "low"]:
+        """Compute certainty for a rename candidate.
+
+        Delegates to module-level function for reusability.
+        """
+        return _compute_rename_certainty_from_ref(ref)
 
     async def rename(
         self,
@@ -246,9 +284,8 @@ class RefactorOps:
                     loc = (ref_file, ref.start_line)
                     if loc not in seen_locations:
                         seen_locations.add(loc)
-                        cert: Literal["high", "medium", "low"] = (
-                            "high" if ref.certainty == "CERTAIN" else "low"
-                        )
+                        # Compute certainty based on RefTier (per SPEC.md)
+                        cert = self._compute_rename_certainty(ref)
                         edits_by_file.setdefault(ref_file, []).append(
                             EditHunk(
                                 old=symbol,

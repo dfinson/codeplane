@@ -1,4 +1,9 @@
-"""FastMCP server creation and wiring."""
+"""FastMCP server creation and wiring.
+
+Includes improved logging:
+- Two-phase tool logging: tool_start with params, tool_complete with summary (Issue #7)
+- Categorized exception logging: console summary only, full traceback to file (Issue #9)
+"""
 
 from __future__ import annotations
 
@@ -28,6 +33,77 @@ class ToolResponse(BaseModel):
     # Robustness fields (implied by "structured error response")
     success: bool
     error: str | None = None
+
+
+def _extract_log_params(_tool_name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Extract relevant parameters for logging based on tool type.
+
+    Returns a dict of key params to include in tool_start log.
+    Omits session_id and limits long values.
+
+    Args:
+        _tool_name: Reserved for future tool-specific extraction logic.
+        kwargs: Tool keyword arguments to extract.
+    """
+    # Skip internal params
+    skip_keys = {"session_id"}
+    params: dict[str, Any] = {}
+
+    for key, value in kwargs.items():
+        if key in skip_keys:
+            continue
+        # Truncate long strings
+        if isinstance(value, str) and len(value) > 50:
+            params[key] = value[:50] + "..."
+        # Truncate long lists
+        elif isinstance(value, list) and len(value) > 3:
+            params[key] = f"[{len(value)} items]"
+        elif value is not None:
+            params[key] = value
+
+    return params
+
+
+def _extract_result_summary(tool_name: str, result: dict[str, Any]) -> dict[str, Any]:
+    """Extract summary metrics from tool result for logging.
+
+    Returns a dict with key metrics like counts, totals, etc.
+    """
+    summary: dict[str, Any] = {}
+
+    # Common result patterns
+    if "total" in result:
+        summary["total"] = result["total"]
+    if "count" in result:
+        summary["count"] = result["count"]
+    if "results" in result and isinstance(result["results"], list):
+        summary["results"] = len(result["results"])
+    if "files" in result and isinstance(result["files"], list):
+        summary["files"] = len(result["files"])
+    if "entries" in result and isinstance(result["entries"], list):
+        summary["entries"] = len(result["entries"])
+    if "query_time_ms" in result:
+        summary["query_time_ms"] = result["query_time_ms"]
+    if "passed" in result:
+        summary["passed"] = result["passed"]
+    if "failed" in result:
+        summary["failed"] = result["failed"]
+
+    # Tool-specific summaries
+    if tool_name == "search" and "results" in result:
+        summary["matches"] = len(result.get("results", []))
+    elif tool_name == "write_files" and "delta" in result:
+        delta = result["delta"]
+        summary["files_changed"] = delta.get("files_changed", 0)
+    elif tool_name in ("run_test_targets", "get_test_run_status") and "run_status" in result:
+        run_status = result.get("run_status", {})
+        if isinstance(run_status, dict):
+            progress = run_status.get("progress", {})
+            if isinstance(progress, dict):
+                summary["passed"] = progress.get("passed", 0)
+                summary["failed"] = progress.get("failed", 0)
+
+    return summary
 
 
 def create_mcp_server(context: AppContext) -> FastMCP:
@@ -100,14 +176,24 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
     # Create handler that accepts **kwargs and reconstructs the params model
     async def handler(**kwargs: Any) -> dict[str, Any]:
         tool_name = spec.name  # Capture for logging
-        log.info("tool_call", tool=tool_name)
+        start_time = time.perf_counter()
+
+        # Log tool start with relevant params (Issue #7)
+        log_params = _extract_log_params(tool_name, kwargs)
+        log.info("tool_start", tool=tool_name, **log_params)
 
         # Reconstruct the params model from kwargs
         try:
             params = params_model(**kwargs)
         except ValidationError as e:
-            # Return structured validation error
-            log.warning("mcp_tool_validation_error", tool=tool_name, errors=e.error_count())
+            # User input error - no traceback needed (Issue #9)
+            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+            log.warning(
+                "tool_validation_error",
+                tool=tool_name,
+                error=e.errors()[0]["msg"] if e.errors() else str(e),
+                elapsed_ms=elapsed_ms,
+            )
             return ToolResponse(
                 success=False,
                 result=None,
@@ -126,6 +212,12 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
 
         try:
             result_data: dict[str, Any] = await spec_handler(context, params)
+
+            # Log tool completion with summary (Issue #7)
+            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+            summary = _extract_result_summary(tool_name, result_data)
+            log.info("tool_complete", tool=tool_name, elapsed_ms=elapsed_ms, **summary)
+
             return ToolResponse(
                 success=True,
                 result=result_data,
@@ -136,12 +228,15 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
             ).model_dump()
 
         except MCPError as e:
-            # Structured error response
+            # Expected error - log warning, no traceback (Issue #9)
+            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
             log.warning(
-                "mcp_tool_error",
+                "tool_error",
                 tool=tool_name,
                 error_code=e.code.value,
+                error=e.message,
                 path=e.path,
+                elapsed_ms=elapsed_ms,
             )
             return ToolResponse(
                 success=False,
@@ -154,7 +249,17 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
             ).model_dump()
 
         except Exception as e:
-            log.error("mcp_tool_call_error", tool=tool_name, error=str(e), exc_info=True)
+            # Internal error - log error to console, full traceback to file only (Issue #9)
+            elapsed_ms = int((time.perf_counter() - start_time) * 1000)
+            # Console-friendly summary (no traceback)
+            log.error(
+                "tool_internal_error",
+                tool=tool_name,
+                error=str(e),
+                elapsed_ms=elapsed_ms,
+            )
+            # Full traceback at DEBUG level (goes to file only per logging config)
+            log.debug("tool_internal_error_traceback", tool=tool_name, exc_info=True)
             return ToolResponse(
                 success=False,
                 result=None,
@@ -182,6 +287,8 @@ def run_server(repo_root: Path, db_path: Path, tantivy_path: Path) -> None:
     from codeplane.mcp.context import AppContext
 
     # Configure logging to both stderr and a file for debugging
+    # Console: INFO level, no tracebacks
+    # File: DEBUG level with full tracebacks
     log_file = repo_root / ".codeplane" / "mcp-server.log"
     configure_logging(
         config=LoggingConfig(

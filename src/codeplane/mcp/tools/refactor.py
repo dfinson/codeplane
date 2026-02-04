@@ -179,7 +179,14 @@ async def refactor_inspect(ctx: AppContext, params: RefactorInspectParams) -> di
 
 def _serialize_refactor_result(result: RefactorResult) -> dict[str, Any]:
     """Convert RefactorResult to dict."""
-    files_affected = result.preview.files_affected if result.preview else 0
+    # Get files_affected from preview or applied delta
+    if result.preview:
+        files_affected = result.preview.files_affected
+    elif result.applied:
+        files_affected = result.applied.files_changed
+    else:
+        files_affected = 0
+
     output: dict[str, Any] = {
         "refactor_id": result.refactor_id,
         "status": result.status,
