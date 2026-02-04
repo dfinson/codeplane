@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from codeplane.config.models import IndexerConfig
-from codeplane.core.progress import get_console, pluralize, spinner
+from codeplane.core.progress import pluralize, spinner, status
 
 if TYPE_CHECKING:
     from codeplane.index.ops import IndexCoordinator, IndexStats
@@ -142,7 +142,6 @@ class BackgroundIndexer:
             self._pending_paths.clear()
 
         self._state = IndexerState.INDEXING
-        console = get_console()
 
         try:
             # Build spinner message with grammatical correctness
@@ -170,7 +169,7 @@ class BackgroundIndexer:
             if stats.files_removed:
                 parts.append(pluralize(stats.files_removed, "file") + " removed")
             summary = ", ".join(parts) if parts else "no changes"
-            console.print(f"  [green]✓[/green] {summary} in {stats.duration_seconds:.2f}s")
+            status(f"{summary} ({stats.duration_seconds:.1f}s)", style="success")
 
             # Notify completion callback
             if self._on_complete is not None:

@@ -58,18 +58,34 @@ _LEVEL_MAP = {
 
 
 class ConsoleSuppressingFilter(logging.Filter):
-    """Filter that blocks console output when suppression is active.
+    """Filter that blocks console output when suppression is active OR for info-level logs.
 
     This integrates with Rich live displays (spinners, progress bars)
     to prevent log lines from colliding with animated UI elements.
-    File handlers continue to receive logs normally.
+    Also suppresses info-level logs from console by default to keep
+    the CLI output clean (summaries only). File handlers receive all logs.
     """
 
-    def filter(self, record: logging.LogRecord) -> bool:  # noqa: ARG002
+    def __init__(self, suppress_info: bool = True) -> None:
+        """Initialize filter.
+
+        Args:
+            suppress_info: If True, suppress INFO and DEBUG from console.
+                          Only WARNING and above are shown.
+        """
+        super().__init__()
+        self.suppress_info = suppress_info
+
+    def filter(self, record: logging.LogRecord) -> bool:
         # Import here to avoid circular dependency
         from codeplane.core.progress import is_console_suppressed
 
-        return not is_console_suppressed()
+        # Block all logs during Live displays (spinners, progress bars)
+        if is_console_suppressed():
+            return False
+
+        # Suppress info-level logs from console for clean CLI output
+        return not (self.suppress_info and record.levelno < logging.WARNING)
 
 
 def configure_logging(

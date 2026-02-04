@@ -168,23 +168,27 @@ async def run_server(
     config: CodePlaneConfig,
 ) -> None:
     """Run the daemon until shutdown signal."""
-    from rich.console import Console
-
+    from codeplane.core.progress import summary_stream
     from codeplane.daemon.app import create_app
 
-    console = Console(stderr=True)
+    # Ensure index is up-to-date with summary stream output
+    with summary_stream() as stream:
+        # Reindex (shows progress bar if there are files to process)
+        stats = await coordinator.reindex_full()
 
-    # Ensure index is up-to-date (idempotent - does minimal work if already current)
-    stats = await coordinator.reindex_full()
+        if stats.files_processed > 0:
+            # Build summary message
+            parts = []
+            if stats.files_added > 0:
+                parts.append(f"{stats.files_added} new")
+            if stats.files_updated > 0:
+                parts.append(f"{stats.files_updated} updated")
+            if stats.files_removed > 0:
+                parts.append(f"{stats.files_removed} removed")
+            summary = ", ".join(parts) + f" ({stats.duration_seconds:.1f}s)"
+            stream.done(summary)
 
-    if stats.files_processed > 0:
-        console.print(
-            f"  [green]✓[/green] Indexed {stats.files_added} new, "
-            f"{stats.files_updated} updated, {stats.files_removed} removed "
-            f"in {stats.duration_seconds:.2f}s"
-        )
-
-    # Print banner
+    # Print banner with logo
     from codeplane.cli.up import _print_banner
 
     _print_banner(config.server.host, config.server.port)

@@ -2,7 +2,8 @@
 
 Improved UX:
 - Logo renders line-by-line with animation delay (Issue #3)
-- Cleaner startup flow
+- Rich-based banner with centered text and rules
+- Summary stream for startup progress
 """
 
 import asyncio
@@ -16,7 +17,12 @@ from codeplane.cli.init import initialize_repo
 from codeplane.cli.utils import find_repo_root
 from codeplane.config.loader import load_config
 from codeplane.config.models import CodePlaneConfig
-from codeplane.core.progress import animate_text
+from codeplane.core.progress import (
+    animate_text,
+    get_console,
+    print_centered,
+    print_rule,
+)
 from codeplane.index.ops import IndexCoordinator
 
 LOGO = r"""
@@ -43,16 +49,9 @@ LOGO = r"""
                            *++++++++++++++++++*
 """
 
-# Compact logo for subsequent runs (after first init)
-LOGO_COMPACT = r"""
-       ++++++++++     CodePlane v{version}
-    *++++++++++++++*  Local repository control plane
-   +++++*      *+++++
-"""
-
 
 def _print_banner(host: str, port: int, *, animate: bool = True) -> None:
-    """Print startup banner with logo and info.
+    """Print startup banner with logo and info using Rich.
 
     Args:
         host: Server host
@@ -60,19 +59,21 @@ def _print_banner(host: str, port: int, *, animate: bool = True) -> None:
         animate: If True, render logo line-by-line with delay (Issue #3)
     """
     ver = version("codeplane")
+    console = get_console()
 
     if animate:
         # Render logo line-by-line with small delay for dramatic effect
         animate_text(LOGO, delay=0.015)
     else:
-        click.echo(LOGO)
+        console.print(LOGO, highlight=False)
 
-    click.echo(click.style("  CodePlane", fg="cyan", bold=True) + f" v{ver}")
-    click.echo("  Local repository control plane for AI coding agents")
-    click.echo()
-    click.echo(f"  Listening on {click.style(f'http://{host}:{port}', fg='green')}")
-    click.echo(f"  Press {click.style('Ctrl+C', bold=True)} to stop")
-    click.echo()
+    # Ready banner with rule separators
+    console.print()
+    print_rule(style="dim cyan")
+    print_centered(f"CodePlane v{ver} · Ready", style="bold cyan")
+    print_centered(f"Listening at http://{host}:{port}", style="green")
+    print_rule(style="dim cyan")
+    console.print()
 
 
 @click.command()
@@ -107,7 +108,7 @@ def up_command(path: Path | None, port: int | None) -> None:
 
     # Initialize if needed (this creates config with correct index_path)
     codeplane_dir = repo_root / ".codeplane"
-    if not codeplane_dir.exists() and not initialize_repo(repo_root):
+    if not codeplane_dir.exists() and not initialize_repo(repo_root, show_cpl_up_hint=False):
         raise click.ClickException("Failed to initialize repository")
 
     # Get index paths from config AFTER init (so we read the created config)

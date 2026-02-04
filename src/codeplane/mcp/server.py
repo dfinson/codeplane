@@ -106,6 +106,62 @@ def _extract_result_summary(tool_name: str, result: dict[str, Any]) -> dict[str,
     return summary
 
 
+def _format_tool_summary(tool_name: str, result: dict[str, Any]) -> str:
+    """Format a human-readable summary for console output.
+
+    Returns a brief summary string suitable for display after tool completion.
+    Uses the MCP result's summary field as the primary source when available.
+    """
+    # Use explicit summary field if provided (MCP standard)
+    if "summary" in result and result["summary"]:
+        return str(result["summary"])
+
+    # Use display_to_user field (CodePlane convention)
+    if "display_to_user" in result and result["display_to_user"]:
+        return str(result["display_to_user"])
+
+    # Tool-specific formatting based on result structure
+    if tool_name == "search":
+        results = result.get("results", [])
+        return f"{len(results)} results"
+
+    if tool_name == "write_files":
+        delta = result.get("delta", {})
+        files_changed = delta.get("files_changed", 0)
+        return f"{files_changed} files updated"
+
+    if tool_name == "read_files":
+        files = result.get("files", [])
+        return f"{len(files)} files read"
+
+    if tool_name == "list_files":
+        entries = result.get("entries", [])
+        return f"{len(entries)} entries"
+
+    if tool_name in ("git_status", "git_diff", "git_commit", "git_branch"):
+        # Git tools often return text-based summaries
+        if "summary" in result:
+            return str(result["summary"])
+        return f"{tool_name} complete"
+
+    if tool_name in ("run_test_targets", "get_test_run_status"):
+        run_status = result.get("run_status", {})
+        if isinstance(run_status, dict):
+            progress = run_status.get("progress", {})
+            if isinstance(progress, dict):
+                passed = progress.get("passed", 0)
+                failed = progress.get("failed", 0)
+                return f"{passed} passed, {failed} failed"
+
+    if tool_name == "map_repo":
+        entry_points = result.get("entry_points", [])
+        languages = result.get("languages", [])
+        return f"{len(languages)} languages, {len(entry_points)} entry points"
+
+    # Default: return empty string (no summary shown)
+    return ""
+
+
 def create_mcp_server(context: AppContext) -> FastMCP:
     """Create FastMCP server with all tools wired to context.
 
@@ -175,8 +231,11 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
 
     # Create handler that accepts **kwargs and reconstructs the params model
     async def handler(**kwargs: Any) -> dict[str, Any]:
+        from codeplane.core.progress import get_console, is_console_suppressed, status
+
         tool_name = spec.name  # Capture for logging
         start_time = time.perf_counter()
+        console = get_console()
 
         # Log tool start with relevant params (Issue #7)
         log_params = _extract_log_params(tool_name, kwargs)
@@ -210,13 +269,26 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
         session_id = getattr(params, "session_id", None)
         session = context.session_manager.get_or_create(session_id)
 
+        # Show spinner during tool execution (only if console not suppressed)
+        show_ui = not is_console_suppressed()
+
         try:
-            result_data: dict[str, Any] = await spec_handler(context, params)
+            if show_ui:
+                with console.status(f"[cyan]{tool_name}[/cyan]", spinner="dots"):
+                    result_data: dict[str, Any] = await spec_handler(context, params)
+            else:
+                result_data = await spec_handler(context, params)
 
             # Log tool completion with summary (Issue #7)
             elapsed_ms = int((time.perf_counter() - start_time) * 1000)
             summary = _extract_result_summary(tool_name, result_data)
             log.info("tool_complete", tool=tool_name, elapsed_ms=elapsed_ms, **summary)
+
+            # Print summary to console (Issue #UX)
+            if show_ui:
+                summary_text = _format_tool_summary(tool_name, result_data)
+                if summary_text:
+                    status(summary_text, style="success")
 
             return ToolResponse(
                 success=True,
