@@ -1,35 +1,22 @@
-"""Lint MCP tool - unified lint handler."""
+"""Lint MCP tools - linting, formatting, and type checking.
+
+Split into action-based tools:
+- lint_check: Run linters/formatters/type checkers
+- lint_tools: List available lint tools
+"""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+import shutil
+from typing import TYPE_CHECKING, Any
 
-from codeplane.mcp.registry import registry as mcp_registry
-from codeplane.mcp.tools.base import BaseParams
+from fastmcp import Context
+from pydantic import Field
 
 if TYPE_CHECKING:
+    from fastmcp import FastMCP
+
     from codeplane.mcp.context import AppContext
-
-
-# =============================================================================
-# Parameter Model
-# =============================================================================
-
-
-class LintParams(BaseParams):
-    """Parameters for lint tool."""
-
-    action: Literal["check", "tools"]
-
-    # check params
-    paths: list[str] | None = None
-    tools: list[str] | None = None
-    categories: list[str] | None = None
-    dry_run: bool = False
-
-    # tools params (filter by language or category)
-    language: str | None = None
-    category: str | None = None
 
 
 # =============================================================================
@@ -49,29 +36,48 @@ def _summarize_lint(status: str, total_diagnostics: int, files_modified: int, dr
     return f"{prefix}{', '.join(parts)}"
 
 
+def _display_lint_check(
+    status: str, total_diagnostics: int, files_modified: int, dry_run: bool
+) -> str | None:
+    """Human-friendly message for lint check."""
+    if status == "clean":
+        return "All checks passed - no issues found."
+    prefix = "(dry-run) " if dry_run else ""
+    if files_modified > 0:
+        return (
+            f"{prefix}{files_modified} files auto-fixed, {total_diagnostics} remaining diagnostics."
+        )
+    if total_diagnostics > 0:
+        return f"{prefix}{total_diagnostics} issues found."
+    return None
+
+
 # =============================================================================
-# Tool Handler
+# Tool Registration
 # =============================================================================
 
 
-@mcp_registry.register(
-    "lint",
-    "Lint operations: run checks/fixes or list available tools",
-    LintParams,
-)
-async def lint(ctx: AppContext, params: LintParams) -> dict[str, Any]:
-    """Unified lint tool.
+def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
+    """Register lint tools with FastMCP server."""
 
-    Actions:
-    - check: Run linters, formatters, and type checkers (applies fixes by default)
-    - tools: List available lint tools and their detection status
-    """
-    if params.action == "check":
-        result = await ctx.lint_ops.check(
-            paths=params.paths,
-            tools=params.tools,
-            categories=params.categories,
-            dry_run=params.dry_run,
+    @mcp.tool
+    async def lint_check(
+        ctx: Context,
+        paths: list[str] | None = Field(None, description="Paths to lint (default: entire repo)"),
+        tools: list[str] | None = Field(None, description="Specific tool IDs to run"),
+        categories: list[str] | None = Field(
+            None, description="Categories: linter, formatter, typechecker"
+        ),
+        dry_run: bool = Field(False, description="Report issues without applying fixes"),
+    ) -> dict[str, Any]:
+        """Run linters, formatters, and type checkers. Applies auto-fixes by default."""
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        result = await app_ctx.lint_ops.check(
+            paths=paths,
+            tools=tools,
+            categories=categories,
+            dry_run=dry_run,
         )
 
         output: dict[str, Any] = {
@@ -112,13 +118,29 @@ async def lint(ctx: AppContext, params: LintParams) -> dict[str, Any]:
             ),
         }
 
+        display = _display_lint_check(
+            result.status, result.total_diagnostics, result.total_files_modified, result.dry_run
+        )
+        if display:
+            output["display_to_user"] = display
+
         if result.agentic_hint:
             output["agentic_hint"] = result.agentic_hint
 
         return output
 
-    if params.action == "tools":
-        import shutil
+    @mcp.tool
+    async def lint_tools(
+        ctx: Context,
+        language: str | None = Field(
+            None, description="Filter by language (e.g., python, javascript)"
+        ),
+        category: str | None = Field(
+            None, description="Filter by category: linter, formatter, typechecker"
+        ),
+    ) -> dict[str, Any]:
+        """List available lint tools and their detection status in this repo."""
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
         from codeplane.lint import registry
         from codeplane.lint.models import ToolCategory
@@ -128,44 +150,44 @@ async def lint(ctx: AppContext, params: LintParams) -> dict[str, Any]:
         # Try to get detected tools from index first, fall back to runtime detection
         detected_ids: set[str] = set()
         try:
-            indexed_tools = await ctx.coordinator.get_lint_tools()
+            indexed_tools = await app_ctx.coordinator.get_lint_tools()
             if indexed_tools:
                 detected_ids = {t.tool_id for t in indexed_tools}
             else:
                 # Index empty, fall back to runtime detection
-                detected_pairs = registry.detect(ctx.lint_ops._repo_root)
+                detected_pairs = registry.detect(app_ctx.lint_ops._repo_root)
                 detected_ids = {t.tool_id for t, _ in detected_pairs}
         except (RuntimeError, AttributeError):
             # Coordinator not initialized, fall back to runtime detection
-            detected_pairs = registry.detect(ctx.lint_ops._repo_root)
+            detected_pairs = registry.detect(app_ctx.lint_ops._repo_root)
             detected_ids = {t.tool_id for t, _ in detected_pairs}
 
         # Filter by language if specified
-        if params.language:
-            matching = [t for t in all_tools if params.language in t.languages]
+        if language:
+            matching = [t for t in all_tools if language in t.languages]
             if not matching:
                 return {
                     "tools": [],
                     "detected_count": 0,
                     "total_count": 0,
-                    "summary": f"No tools available for language '{params.language}'",
-                    "agentic_hint": f"Language '{params.language}' is not supported. "
+                    "summary": f"No tools available for language '{language}'",
+                    "agentic_hint": f"Language '{language}' is not supported. "
                     f"Supported languages include: python, javascript, typescript, go, rust, ruby, php, java, kotlin",
                 }
             all_tools = matching
 
         # Filter by category if specified
-        if params.category:
+        if category:
             valid_categories = {e.value for e in ToolCategory}
-            if params.category not in valid_categories:
+            if category not in valid_categories:
                 return {
                     "tools": [],
                     "detected_count": 0,
                     "total_count": 0,
-                    "summary": f"Invalid category '{params.category}'",
+                    "summary": f"Invalid category '{category}'",
                     "agentic_hint": f"Valid categories: {', '.join(sorted(valid_categories))}",
                 }
-            cat = ToolCategory(params.category)
+            cat = ToolCategory(category)
             all_tools = [t for t in all_tools if t.category == cat]
 
         filtered_detected = [t for t in all_tools if t.tool_id in detected_ids]
@@ -187,5 +209,3 @@ async def lint(ctx: AppContext, params: LintParams) -> dict[str, Any]:
             "total_count": len(all_tools),
             "summary": f"{len(filtered_detected)} of {len(all_tools)} tools detected",
         }
-
-    return {"error": f"unknown action: {params.action}", "summary": "error: unknown action"}

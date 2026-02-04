@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from codeplane.index._internal.ignore import PRUNABLE_DIRS
 from codeplane.testing.models import ParsedTestCase, ParsedTestSuite, TestTarget
@@ -25,6 +25,9 @@ from codeplane.testing.runner_pack import (
     RunnerPack,
     runner_registry,
 )
+
+if TYPE_CHECKING:
+    from codeplane.testing.runtime import RuntimeExecutionContext
 
 
 def _is_prunable_path(
@@ -116,9 +119,21 @@ class KotlinGradlePack(RunnerPack):
         output_path: Path,  # noqa: ARG002
         pattern: str | None = None,
         tags: list[str] | None = None,  # noqa: ARG002
+        exec_ctx: RuntimeExecutionContext | None = None,
     ) -> list[str]:
-        gradle = "./gradlew" if (Path(target.workspace_root) / "gradlew").exists() else "gradle"
-        cmd = [gradle, "test"]
+        # Use execution context if available
+        if exec_ctx:
+            tool_config = exec_ctx.get_test_runner(self.pack_id)
+            if tool_config and tool_config.available:
+                cmd = [tool_config.executable] + list(tool_config.base_args)
+            else:
+                gradle = (
+                    "./gradlew" if (Path(target.workspace_root) / "gradlew").exists() else "gradle"
+                )
+                cmd = [gradle, "test"]
+        else:
+            gradle = "./gradlew" if (Path(target.workspace_root) / "gradlew").exists() else "gradle"
+            cmd = [gradle, "test"]
         if pattern:
             cmd.extend(["--tests", pattern])
         return cmd
@@ -203,6 +218,7 @@ class SwiftTestPack(RunnerPack):
         output_path: Path,  # noqa: ARG002
         pattern: str | None = None,
         tags: list[str] | None = None,  # noqa: ARG002
+        exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002 - Swift test uses standard swift command
     ) -> list[str]:
         cmd = ["swift", "test"]
         if pattern:
@@ -290,6 +306,7 @@ class SbtTestPack(RunnerPack):
         output_path: Path,  # noqa: ARG002
         pattern: str | None = None,
         tags: list[str] | None = None,  # noqa: ARG002
+        exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002 - sbt uses standard command
     ) -> list[str]:
         cmd = ["sbt"]
         if pattern:
@@ -387,6 +404,7 @@ class DartTestPack(RunnerPack):
         output_path: Path,  # noqa: ARG002
         pattern: str | None = None,
         tags: list[str] | None = None,
+        exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002 - Dart uses standard command
     ) -> list[str]:
         cmd = ["dart", "test", "--reporter", "json", target.selector]
         if pattern:
@@ -502,6 +520,7 @@ class FlutterTestPack(RunnerPack):
         output_path: Path,  # noqa: ARG002
         pattern: str | None = None,
         tags: list[str] | None = None,
+        exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002 - Flutter uses standard command
     ) -> list[str]:
         cmd = ["flutter", "test", "--machine", target.selector]
         if pattern:
@@ -576,6 +595,7 @@ class BatsPack(RunnerPack):
         output_path: Path,
         pattern: str | None = None,
         tags: list[str] | None = None,  # noqa: ARG002
+        exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002 - Bats uses standard command
     ) -> list[str]:
         cmd = ["bats", "--formatter", "junit", target.selector]
         if pattern:
@@ -653,6 +673,7 @@ class PesterPack(RunnerPack):
         output_path: Path,
         pattern: str | None = None,
         tags: list[str] | None = None,
+        exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002 - Pester uses pwsh command
     ) -> list[str]:
         # Build Pester invocation
         pester_config = f"""
@@ -737,6 +758,7 @@ class BustedPack(RunnerPack):
         output_path: Path,
         pattern: str | None = None,
         tags: list[str] | None = None,
+        exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002 - busted uses standard command
     ) -> list[str]:
         cmd = ["busted", "-o", "junit", target.selector, ">", str(output_path)]
         if pattern:

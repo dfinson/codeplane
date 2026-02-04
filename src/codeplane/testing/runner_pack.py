@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from codeplane.testing.models import ParsedTestSuite, TargetKind, TestTarget
+    from codeplane.testing.runtime import RuntimeExecutionContext
 
 
 # =============================================================================
@@ -91,6 +92,7 @@ class RunnerPack(abc.ABC):
         output_path: Path,
         pattern: str | None = None,
         tags: list[str] | None = None,
+        exec_ctx: RuntimeExecutionContext | None = None,
     ) -> list[str]:
         """Build command to run tests for a target.
 
@@ -99,6 +101,8 @@ class RunnerPack(abc.ABC):
             output_path: Path to write machine-readable output
             pattern: Test name pattern filter
             tags: Test tags/markers filter
+            exec_ctx: Execution context with runtime info (Python executable, etc.)
+                      If None, falls back to PATH-based detection.
 
         Returns:
             Command as list of strings

@@ -4,6 +4,7 @@ Supports:
 - Console suppression during Rich live displays (spinners, progress bars)
 - Separate console vs file log levels
 - Request correlation IDs
+- Session-based log format: "Agent Session <session-id>: tool -> summary"
 """
 
 from __future__ import annotations
@@ -94,7 +95,13 @@ def configure_logging(
     json_format: bool = False,
     level: str = "INFO",
 ) -> None:
-    """Configure structlog. Pass config for multi-output, or use simple params."""
+    """Configure structlog. Pass config for multi-output, or use simple params.
+
+    Args:
+        config: Logging configuration with outputs
+        json_format: Use JSON format for simple setup
+        level: Default log level
+    """
     from codeplane.config.models import LoggingConfig, LogOutputConfig
 
     if config is None:

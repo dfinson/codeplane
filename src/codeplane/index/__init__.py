@@ -48,6 +48,10 @@ from codeplane.index.models import (
 )
 from codeplane.index.ops import IndexCoordinator, IndexStats, InitResult, SearchMode, SearchResult
 
+# Import ContextRuntime to register it with SQLModel metadata for create_all()
+# This model lives in testing/runtime.py but is part of the index schema
+from codeplane.testing.runtime import ContextRuntime
+
 __all__ = [
     # Public API
     "IndexCoordinator",
@@ -96,4 +100,6 @@ __all__ = [
     "FileState",
     "CandidateContext",
     "LexicalHit",
+    # Testing runtime model (registered for schema)
+    "ContextRuntime",
 ]

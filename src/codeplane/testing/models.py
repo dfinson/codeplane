@@ -252,6 +252,8 @@ class TestRunStatus:
     diagnostics: list[ExecutionDiagnostic] = field(default_factory=list)
     # Coverage artifacts if coverage was enabled
     coverage: list[dict[str, str]] = field(default_factory=list)  # [{format, path, pack_id}]
+    # Target selectors that were executed (for coverage correlation)
+    target_selectors: list[str] = field(default_factory=list)
     # Polling hint: suggested seconds until next status check (None = don't poll)
     poll_after_seconds: float | None = None
 

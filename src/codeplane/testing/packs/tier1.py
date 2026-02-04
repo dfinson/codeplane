@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from codeplane.index._internal.ignore import PRUNABLE_DIRS
 from codeplane.testing.models import ParsedTestCase, ParsedTestSuite, TestTarget
@@ -28,6 +28,9 @@ from codeplane.testing.runner_pack import (
     RunnerPack,
     runner_registry,
 )
+
+if TYPE_CHECKING:
+    from codeplane.testing.runtime import RuntimeExecutionContext
 
 
 def _is_prunable_path(
@@ -142,8 +145,22 @@ class PytestPack(RunnerPack):
         output_path: Path,
         pattern: str | None = None,
         tags: list[str] | None = None,
+        exec_ctx: RuntimeExecutionContext | None = None,
     ) -> list[str]:
-        cmd = ["pytest", target.selector, f"--junitxml={output_path}", "--tb=short", "-q"]
+        # Use execution context if available, otherwise fall back to bare pytest
+        if exec_ctx:
+            tool_config = exec_ctx.get_test_runner(self.pack_id)
+            if tool_config and tool_config.available:
+                # Use configured executable (e.g., /repo/.venv/bin/python -m pytest)
+                cmd = [tool_config.executable] + list(tool_config.base_args)
+            else:
+                # ExecutionContext exists but pytest not available via it
+                cmd = ["pytest"]
+        else:
+            # No execution context, use bare pytest (legacy behavior)
+            cmd = ["pytest"]
+
+        cmd.extend([target.selector, f"--junitxml={output_path}", "--tb=short", "-q"])
         if pattern:
             cmd.extend(["-k", pattern])
         if tags:
@@ -243,9 +260,19 @@ class JestPack(RunnerPack):
         output_path: Path,
         pattern: str | None = None,
         tags: list[str] | None = None,  # noqa: ARG002
+        exec_ctx: RuntimeExecutionContext | None = None,
     ) -> list[str]:
-        pm = self._detect_package_manager(Path(target.workspace_root))
-        cmd = [pm, "jest"] if pm == "npx" else [pm, "run", "jest", "--"]
+        # Use execution context if available
+        if exec_ctx:
+            tool_config = exec_ctx.get_test_runner(self.pack_id)
+            if tool_config and tool_config.available:
+                cmd = [tool_config.executable] + list(tool_config.base_args)
+            else:
+                pm = self._detect_package_manager(Path(target.workspace_root))
+                cmd = [pm, "jest"] if pm == "npx" else [pm, "run", "jest", "--"]
+        else:
+            pm = self._detect_package_manager(Path(target.workspace_root))
+            cmd = [pm, "jest"] if pm == "npx" else [pm, "run", "jest", "--"]
         cmd.extend([target.selector, "--json", f"--outputFile={output_path}"])
         if pattern:
             cmd.extend(["--testNamePattern", pattern])
@@ -388,15 +415,24 @@ class VitestPack(RunnerPack):
         output_path: Path,
         pattern: str | None = None,
         tags: list[str] | None = None,  # noqa: ARG002
+        exec_ctx: RuntimeExecutionContext | None = None,
     ) -> list[str]:
-        cmd = [
-            "npx",
-            "vitest",
-            "run",
-            target.selector,
-            "--reporter=junit",
-            f"--outputFile={output_path}",
-        ]
+        # Use execution context if available
+        if exec_ctx:
+            tool_config = exec_ctx.get_test_runner(self.pack_id)
+            if tool_config and tool_config.available:
+                cmd = [tool_config.executable] + list(tool_config.base_args)
+            else:
+                cmd = ["npx", "vitest", "run"]
+        else:
+            cmd = ["npx", "vitest", "run"]
+        cmd.extend(
+            [
+                target.selector,
+                "--reporter=junit",
+                f"--outputFile={output_path}",
+            ]
+        )
         if pattern:
             cmd.extend(["--testNamePattern", pattern])
         return cmd
@@ -480,8 +516,18 @@ class GoTestPack(RunnerPack):
         output_path: Path,  # noqa: ARG002
         pattern: str | None = None,
         tags: list[str] | None = None,
+        exec_ctx: RuntimeExecutionContext | None = None,
     ) -> list[str]:
-        cmd = ["go", "test", "-json", target.selector]
+        # Use execution context if available
+        if exec_ctx:
+            tool_config = exec_ctx.get_test_runner(self.pack_id)
+            if tool_config and tool_config.available:
+                cmd = [tool_config.executable] + list(tool_config.base_args)
+            else:
+                cmd = ["go", "test", "-json"]
+        else:
+            cmd = ["go", "test", "-json"]
+        cmd.append(target.selector)
         if pattern:
             cmd.extend(["-run", pattern])
         if tags:
@@ -575,15 +621,24 @@ class CargoNextestPack(RunnerPack):
         output_path: Path,
         pattern: str | None = None,
         tags: list[str] | None = None,  # noqa: ARG002
+        exec_ctx: RuntimeExecutionContext | None = None,
     ) -> list[str]:
-        cmd = [
-            "cargo",
-            "nextest",
-            "run",
-            "--message-format",
-            "junit",
-            f"--junit-path={output_path}",
-        ]
+        # Use execution context if available
+        if exec_ctx:
+            tool_config = exec_ctx.get_test_runner(self.pack_id)
+            if tool_config and tool_config.available:
+                cmd = [tool_config.executable] + list(tool_config.base_args)
+            else:
+                cmd = ["cargo", "nextest", "run"]
+        else:
+            cmd = ["cargo", "nextest", "run"]
+        cmd.extend(
+            [
+                "--message-format",
+                "junit",
+                f"--junit-path={output_path}",
+            ]
+        )
         if target.selector != ".":
             cmd.extend(["-p", target.selector])
         if pattern:
@@ -643,8 +698,17 @@ class CargoTestPack(RunnerPack):
         output_path: Path,  # noqa: ARG002
         pattern: str | None = None,
         tags: list[str] | None = None,  # noqa: ARG002
+        exec_ctx: RuntimeExecutionContext | None = None,
     ) -> list[str]:
-        cmd = ["cargo", "test"]
+        # Use execution context if available
+        if exec_ctx:
+            tool_config = exec_ctx.get_test_runner(self.pack_id)
+            if tool_config and tool_config.available:
+                cmd = [tool_config.executable] + list(tool_config.base_args)
+            else:
+                cmd = ["cargo", "test"]
+        else:
+            cmd = ["cargo", "test"]
         if target.selector != ".":
             cmd.extend(["-p", target.selector])
         if pattern:
@@ -758,9 +822,19 @@ class MavenSurefirePack(RunnerPack):
         output_path: Path,  # noqa: ARG002 - Maven writes to target/surefire-reports
         pattern: str | None = None,
         tags: list[str] | None = None,  # noqa: ARG002
+        exec_ctx: RuntimeExecutionContext | None = None,
     ) -> list[str]:
-        mvn = "./mvnw" if (Path(target.workspace_root) / "mvnw").exists() else "mvn"
-        cmd = [mvn, "test"]
+        # Use execution context if available
+        if exec_ctx:
+            tool_config = exec_ctx.get_test_runner(self.pack_id)
+            if tool_config and tool_config.available:
+                cmd = [tool_config.executable] + list(tool_config.base_args)
+            else:
+                mvn = "./mvnw" if (Path(target.workspace_root) / "mvnw").exists() else "mvn"
+                cmd = [mvn, "test"]
+        else:
+            mvn = "./mvnw" if (Path(target.workspace_root) / "mvnw").exists() else "mvn"
+            cmd = [mvn, "test"]
         if target.selector != ".":
             cmd.extend(["-pl", target.selector])
         if pattern:
@@ -886,11 +960,30 @@ class GradlePack(RunnerPack):
         output_path: Path,  # noqa: ARG002
         pattern: str | None = None,
         tags: list[str] | None = None,  # noqa: ARG002
+        exec_ctx: RuntimeExecutionContext | None = None,
     ) -> list[str]:
-        gradle = "./gradlew" if (Path(target.workspace_root) / "gradlew").exists() else "gradle"
-        cmd = [gradle, "test"]
-        if target.selector != ".":
-            cmd = [gradle, f":{target.selector}:test"]
+        # Use execution context if available
+        if exec_ctx:
+            tool_config = exec_ctx.get_test_runner(self.pack_id)
+            if tool_config and tool_config.available:
+                cmd = [tool_config.executable] + list(tool_config.base_args)
+                if target.selector != "." and "test" in tool_config.base_args:
+                    # Replace 'test' with ':selector:test'
+                    cmd = [tool_config.executable, f":{target.selector}:test"]
+            else:
+                gradle = (
+                    "./gradlew" if (Path(target.workspace_root) / "gradlew").exists() else "gradle"
+                )
+                cmd = (
+                    [gradle, "test"]
+                    if target.selector == "."
+                    else [gradle, f":{target.selector}:test"]
+                )
+        else:
+            gradle = "./gradlew" if (Path(target.workspace_root) / "gradlew").exists() else "gradle"
+            cmd = [gradle, "test"]
+            if target.selector != ".":
+                cmd = [gradle, f":{target.selector}:test"]
         if pattern:
             cmd.extend(["--tests", pattern])
         return cmd
@@ -996,14 +1089,24 @@ class DotnetTestPack(RunnerPack):
         output_path: Path,
         pattern: str | None = None,
         tags: list[str] | None = None,
+        exec_ctx: RuntimeExecutionContext | None = None,
     ) -> list[str]:
-        cmd = [
-            "dotnet",
-            "test",
-            target.selector,
-            f"--logger:junit;LogFilePath={output_path}",
-            "--no-build",  # Assume already built
-        ]
+        # Use execution context if available
+        if exec_ctx:
+            tool_config = exec_ctx.get_test_runner(self.pack_id)
+            if tool_config and tool_config.available:
+                cmd = [tool_config.executable] + list(tool_config.base_args)
+            else:
+                cmd = ["dotnet", "test"]
+        else:
+            cmd = ["dotnet", "test"]
+        cmd.extend(
+            [
+                target.selector,
+                f"--logger:junit;LogFilePath={output_path}",
+                "--no-build",  # Assume already built
+            ]
+        )
         if pattern:
             cmd.extend(["--filter", f"FullyQualifiedName~{pattern}"])
         if tags:
@@ -1078,6 +1181,7 @@ class CTestPack(RunnerPack):
         output_path: Path,  # noqa: ARG002
         pattern: str | None = None,
         tags: list[str] | None = None,
+        exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002 - CTest doesn't use execution context
     ) -> list[str]:
         build_dir = Path(target.workspace_root) / "build"
         cmd = ["ctest", "--test-dir", str(build_dir), "--output-on-failure"]
@@ -1179,17 +1283,26 @@ class RSpecPack(RunnerPack):
         output_path: Path,
         pattern: str | None = None,
         tags: list[str] | None = None,
+        exec_ctx: RuntimeExecutionContext | None = None,
     ) -> list[str]:
-        cmd = [
-            "bundle",
-            "exec",
-            "rspec",
-            target.selector,
-            "--format",
-            "RspecJunitFormatter",
-            "--out",
-            str(output_path),
-        ]
+        # Use execution context if available
+        if exec_ctx:
+            tool_config = exec_ctx.get_test_runner(self.pack_id)
+            if tool_config and tool_config.available:
+                cmd = [tool_config.executable] + list(tool_config.base_args)
+            else:
+                cmd = ["bundle", "exec", "rspec"]
+        else:
+            cmd = ["bundle", "exec", "rspec"]
+        cmd.extend(
+            [
+                target.selector,
+                "--format",
+                "RspecJunitFormatter",
+                "--out",
+                str(output_path),
+            ]
+        )
         if pattern:
             cmd.extend(["--example", pattern])
         if tags:
@@ -1272,6 +1385,7 @@ class PHPUnitPack(RunnerPack):
         output_path: Path,
         pattern: str | None = None,
         tags: list[str] | None = None,
+        exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002 - PHPUnit doesn't use execution context currently
     ) -> list[str]:
         cmd = ["./vendor/bin/phpunit", target.selector, f"--log-junit={output_path}"]
         if pattern:

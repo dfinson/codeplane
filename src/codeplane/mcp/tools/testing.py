@@ -92,6 +92,83 @@ def _summarize_run(result: "TestResult") -> str:
     return status.status
 
 
+def _build_coverage_hint(
+    coverage_artifacts: list[dict[str, str]],
+    target_selectors: list[str] | None = None,
+) -> str:
+    """Build guidance for interpreting coverage data.
+
+    The coverage file includes all source files in the project, not just
+    those exercised by the tests. This hint tells the agent which source
+    files are likely relevant based on the test targets.
+    """
+    if not coverage_artifacts:
+        return "No coverage data available."
+
+    hints: list[str] = []
+
+    # Add executed targets if available
+    if target_selectors:
+        hints.append(
+            "Executed test targets:\n"
+            + "\n".join(f"  - {sel}" for sel in target_selectors[:10])
+            + (
+                f"\n  ... and {len(target_selectors) - 10} more"
+                if len(target_selectors) > 10
+                else ""
+            )
+        )
+
+    # Dedupe coverage artifacts by path (multiple targets may share same output file)
+    seen_paths: set[str] = set()
+    deduped: list[dict[str, str]] = []
+    for cov in coverage_artifacts:
+        path = cov.get("path", "")
+        if path and path not in seen_paths:
+            seen_paths.add(path)
+            deduped.append(cov)
+
+    for cov in deduped:
+        fmt = cov.get("format", "unknown")
+        path = cov.get("path", "")
+        pack_id = cov.get("pack_id", "")
+
+        if fmt == "lcov":
+            hints.append(
+                f"Coverage file: {path}\n"
+                "  Format: LCOV (line-by-line coverage)\n"
+                "  Reading: Look for 'SF:' (source file), 'DA:line,count' (line hits), "
+                "'LF:' (lines found), 'LH:' (lines hit)\n"
+                "  Note: File includes ALL project sources. Focus on files matching your test paths - "
+                "e.g., if testing 'tests/foo/test_bar.py', look for 'src/*/foo/bar.py' entries."
+            )
+        elif fmt == "istanbul":
+            hints.append(
+                f"Coverage directory: {path}\n"
+                "  Format: Istanbul/NYC (JSON + LCOV)\n"
+                "  Files: coverage-summary.json (overview), lcov.info (line detail)\n"
+                "  Note: Focus on source files corresponding to your test targets."
+            )
+        elif fmt == "gocov":
+            hints.append(
+                f"Coverage file: {path}\n"
+                "  Format: Go coverage profile\n"
+                "  Reading: 'mode: set/count/atomic', then 'file:start.col,end.col count'\n"
+                "  Note: Go coverage is package-scoped - results match tested packages."
+            )
+        elif fmt == "jacoco":
+            hints.append(
+                f"Coverage directory: {path}\n"
+                "  Format: JaCoCo (XML + HTML)\n"
+                "  Files: jacoco.xml (machine-readable), index.html (human-readable)\n"
+                "  Note: Coverage tied to modules configured in build file."
+            )
+        else:
+            hints.append(f"Coverage: {path} (format: {fmt}, runner: {pack_id})")
+
+    return "\n\n".join(hints)
+
+
 def _serialize_test_result(result: "TestResult", is_action: bool = False) -> dict[str, Any]:
     """Convert TestResult to dict.
 
@@ -174,6 +251,11 @@ def _serialize_test_result(result: "TestResult", is_action: bool = False) -> dic
             ]
         if status.coverage:
             output["run_status"]["coverage"] = status.coverage
+            # Add coverage guidance for the agent
+            output["run_status"]["coverage_hint"] = _build_coverage_hint(
+                status.coverage,
+                status.target_selectors,
+            )
 
     if result.agentic_hint:
         output["agentic_hint"] = result.agentic_hint

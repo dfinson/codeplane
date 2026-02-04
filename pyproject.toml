@@ -24,7 +24,7 @@ dependencies = [
     "httpx>=0.28.0",
     # MCP
     "mcp>=1.9.0",
-    "fastmcp>=2.0.0",
+    "fastmcp>=2.14.5",
     # Config & Validation
     "pydantic>=2.12.0",
     "pydantic-settings>=2.12.0",

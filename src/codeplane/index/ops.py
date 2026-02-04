@@ -56,6 +56,7 @@ from codeplane.index.models import (
     RefFact,
     TestTarget,
 )
+from codeplane.testing.runtime import RuntimeResolver
 from codeplane.tools.map_repo import IncludeOption, MapRepoResult, RepoMapper
 
 if TYPE_CHECKING:
@@ -313,6 +314,10 @@ class IndexCoordinator:
                 session.add(context)
 
             session.commit()
+
+        # Step 7.4: Resolve and persist context runtimes
+        # Runtime is captured at discovery time per Design A (SPEC.md §8.4)
+        await self._resolve_context_runtimes()
 
         # Step 7.5: Discover test targets
         await self._discover_test_targets()
@@ -1278,6 +1283,77 @@ class IndexCoordinator:
         # Dispose DB engine to release file handles
         if hasattr(self, "db") and self.db is not None:
             self.db.engine.dispose()
+
+    async def _resolve_context_runtimes(self) -> int:
+        """Resolve and persist runtimes for all valid contexts.
+
+        Called during initialization after contexts are persisted.
+        Uses RuntimeResolver to detect Python venvs, Node installations, etc.
+        Results are persisted to ContextRuntime table.
+
+        Returns:
+            Count of runtimes resolved
+        """
+        import structlog
+
+        logger = structlog.get_logger()
+        runtimes_resolved = 0
+
+        # Create resolver once
+        resolver = RuntimeResolver(self.repo_root)
+
+        with self.db.session() as session:
+            # Get all valid contexts
+            stmt = select(Context).where(
+                Context.probe_status == ProbeStatus.VALID.value,
+                Context.enabled == True,  # noqa: E712
+            )
+            contexts = list(session.exec(stmt).all())
+
+            for context in contexts:
+                if context.id is None:
+                    continue
+
+                # Resolve runtime for this context
+                try:
+                    result = resolver.resolve_for_context(
+                        context_id=context.id,
+                        language_family=context.language_family,
+                        root_path=context.root_path or "",
+                    )
+
+                    # Persist the runtime
+                    session.add(result.runtime)
+                    runtimes_resolved += 1
+
+                    # Log any warnings
+                    for warning in result.warnings:
+                        logger.warning(
+                            "runtime_resolution_warning",
+                            context_id=context.id,
+                            context_name=context.name,
+                            warning=warning,
+                        )
+
+                    logger.debug(
+                        "context_runtime_resolved",
+                        context_id=context.id,
+                        context_name=context.name,
+                        language=context.language_family,
+                        method=result.method,
+                        python_exe=result.runtime.python_executable,
+                    )
+
+                except Exception as e:
+                    logger.warning(
+                        "runtime_resolution_failed",
+                        context_id=context.id,
+                        error=str(e),
+                    )
+
+            session.commit()
+
+        return runtimes_resolved
 
     async def _discover_test_targets(self) -> int:
         """Discover and persist test targets for all workspaces.

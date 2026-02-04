@@ -176,7 +176,7 @@ async def run_server(
     # Print banner with logo
     from codeplane.cli.up import _print_banner
 
-    _print_banner(config.server.host, config.server.port)
+    _print_banner(config.server.host, config.server.port, repo_root)
 
     controller = ServerController(
         repo_root=repo_root,
@@ -188,13 +188,14 @@ async def run_server(
 
     app = create_app(controller, repo_root, coordinator)
 
-    # Configure uvicorn
+    # Configure uvicorn with graceful shutdown
     uvicorn_config = uvicorn.Config(
         app,
         host=config.server.host,
         port=config.server.port,
-        log_level="warning",  # Use structlog instead
+        log_level="critical",  # Suppress ASGI warnings on shutdown
         ws="none",  # Disable websockets - we use SSE for MCP
+        timeout_graceful_shutdown=2,  # Give connections 2s to close
     )
     server = uvicorn.Server(uvicorn_config)
 

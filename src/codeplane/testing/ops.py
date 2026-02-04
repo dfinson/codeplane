@@ -7,6 +7,7 @@ Per SPEC.md §23.7 test tool specification.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -39,6 +40,11 @@ from codeplane.testing.models import (
     TestTarget,
 )
 from codeplane.testing.runner_pack import RunnerPack, runner_registry
+from codeplane.testing.runtime import (
+    ExecutionContextBuilder,
+    RuntimeExecutionContext,
+    RuntimeResolver,
+)
 from codeplane.testing.safe_execution import SafeExecutionConfig, SafeExecutionContext
 
 if TYPE_CHECKING:
@@ -81,6 +87,82 @@ def get_python_executable(workspace_root: Path) -> str:
         if unix_python.exists():
             return str(unix_python)
     return "python"
+
+
+# Cache for coverage tool detection - keyed by (workspace_root, runner_pack_id)
+_coverage_tools_cache: dict[tuple[Path, str], dict[str, bool]] = {}
+
+
+def clear_coverage_tools_cache() -> None:
+    """Clear the coverage tools cache. Useful for testing."""
+    _coverage_tools_cache.clear()
+
+
+def detect_coverage_tools(
+    workspace_root: Path,
+    runner_pack_id: str,
+    exec_ctx: RuntimeExecutionContext | None = None,
+) -> dict[str, bool]:
+    """Detect available coverage tools for a runner pack.
+
+    Returns a dict of tool_name -> is_available.
+
+    Results are cached per (workspace_root, runner_pack_id) to avoid
+    spawning subprocess for every test target.
+    """
+    cache_key = (workspace_root, runner_pack_id)
+    if cache_key in _coverage_tools_cache:
+        return _coverage_tools_cache[cache_key]
+
+    tools: dict[str, bool] = {}
+
+    if runner_pack_id == "python.pytest":
+        # Check if pytest-cov is installed
+        # Use RuntimeExecutionContext if available, otherwise fallback to venv detection
+        if exec_ctx and exec_ctx.runtime.python_executable:
+            python_exe = exec_ctx.runtime.python_executable
+        else:
+            python_exe = get_python_executable(workspace_root)
+
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                [python_exe, "-c", "import pytest_cov"],
+                capture_output=True,
+                timeout=5,
+                cwd=workspace_root,
+            )
+            tools["pytest-cov"] = result.returncode == 0
+        except Exception:
+            tools["pytest-cov"] = False
+
+    elif runner_pack_id in ("js.jest", "js.vitest"):
+        # Jest and Vitest have built-in coverage
+        tools["built-in"] = True
+
+    elif runner_pack_id == "go.gotest":
+        # Go has built-in coverage
+        tools["built-in"] = True
+
+    elif runner_pack_id in ("rust.nextest", "rust.cargotest"):
+        # Check for cargo-llvm-cov
+        tools["cargo-llvm-cov"] = shutil.which("cargo-llvm-cov") is not None
+
+    elif runner_pack_id == "ruby.rspec":
+        # Check for simplecov in Gemfile
+        gemfile = workspace_root / "Gemfile"
+        if gemfile.exists():
+            tools["simplecov"] = "simplecov" in gemfile.read_text()
+
+    elif runner_pack_id == "php.phpunit":
+        # Check for xdebug or pcov
+        tools["xdebug"] = shutil.which("php") is not None  # Simplified check
+        tools["pcov"] = False  # Would need PHP extension check
+
+    # Cache the result
+    _coverage_tools_cache[cache_key] = tools
+    return tools
 
 
 def detect_node_package_manager(workspace_root: Path) -> str:
@@ -683,13 +765,25 @@ class TestOps:
         # Run ALL targets concurrently (semaphore limits parallelism)
         all_tasks = [asyncio.create_task(run_target(t)) for t in targets]
 
+        # Properly drain all coroutines from as_completed to avoid "coroutine never awaited"
         for coro in asyncio.as_completed(all_tasks):
             if cancel_event.is_set() or (fail_fast and progress.cases.failed > 0):
+                # Cancel remaining tasks and await them to avoid leaked coroutines
                 for t in all_tasks:
                     t.cancel()
-                break
+                # Drain remaining coroutines from the iterator
+                # Each coroutine from as_completed must be awaited even after cancellation
+                with contextlib.suppress(asyncio.CancelledError):
+                    await coro  # Await current one
+                # Continue to drain remaining
+                continue
 
-            target, result, cov_artifact = await coro
+            try:
+                target, result, cov_artifact = await coro
+            except asyncio.CancelledError:
+                # Task was cancelled, skip processing
+                continue
+
             if cov_artifact:
                 coverage_artifacts.append(cov_artifact)
             if result:
@@ -756,12 +850,43 @@ class TestOps:
             duration_seconds=duration,
             artifact_dir=str(artifact_dir),
             coverage=coverage_dicts,
+            target_selectors=[t.selector for t in targets],
         )
 
         # Persist result to artifacts for later retrieval
         self._persist_result(artifact_dir, final_status)
 
         return final_status
+
+    def _resolve_execution_context(
+        self,
+        target: TestTarget,
+    ) -> RuntimeExecutionContext | None:
+        """Resolve execution context for a test target.
+
+        Uses RuntimeResolver to detect the runtime environment for the target's
+        workspace root, then builds a RuntimeExecutionContext with appropriate
+        ToolConfigs for the runner pack.
+
+        Returns None if resolution fails, allowing graceful fallback to
+        PATH-based resolution.
+        """
+        try:
+            workspace_root = Path(target.workspace_root)
+
+            # Detect runtime for this workspace
+            runtime = RuntimeResolver.resolve(workspace_root)
+
+            # Build execution context with tool configs
+            exec_ctx = ExecutionContextBuilder.build(
+                context_root=workspace_root,
+                runtime=runtime,
+            )
+
+            return exec_ctx
+        except Exception:
+            # Resolution failed - return None to trigger fallback
+            return None
 
     async def _run_single_target(
         self,
@@ -797,16 +922,20 @@ class TestOps:
 
         pack = pack_class()
 
+        # Resolve execution context for this target (captures venv/runtime at discovery)
+        exec_ctx = self._resolve_execution_context(target)
+
         # Create output file path
         safe_name = target.target_id.replace("/", "_").replace(":", "_")
         output_path = artifact_dir / f"{safe_name}.xml"
 
-        # Build command
+        # Build command with execution context (uses correct Python/Node/etc. if available)
         cmd = pack.build_command(
             target,
             output_path=output_path,
             pattern=pattern,
             tags=tags,
+            exec_ctx=exec_ctx,
         )
 
         if not cmd:
@@ -823,44 +952,56 @@ class TestOps:
                 None,
             )
 
-        # Handle coverage
+        # Handle coverage - determine capability first, then create safe context
         cov_artifact: CoverageArtifact | None = None
         emitter = get_emitter(target.runner_pack_id) if coverage else None
-        strip_coverage_flags = False
+        coverage_available = False
         if emitter:
-            # Check capability
+            # Check capability with detected coverage tools (uses exec_ctx for correct Python)
+            coverage_tools = detect_coverage_tools(
+                Path(target.workspace_root), target.runner_pack_id, exec_ctx
+            )
             runtime = PackRuntime(
                 workspace_root=Path(target.workspace_root),
                 runner_available=True,
-                coverage_tools={},  # TODO: detect coverage tools
+                coverage_tools=coverage_tools,
             )
             capability = emitter.capability(runtime)
-            if capability == CoverageCapability.AVAILABLE:
-                cmd = emitter.modify_command(cmd, artifact_dir)
-                cov_artifact = CoverageArtifact(
-                    format=emitter.format_id,
-                    path=emitter.artifact_path(artifact_dir),
-                    pack_id=target.runner_pack_id,
-                    invocation_id=target.target_id,
-                )
-                # Strip any existing coverage flags from command since we're injecting our own
-                strip_coverage_flags = True
+            coverage_available = capability == CoverageCapability.AVAILABLE
 
         # Create safe execution context to protect against repo misconfigurations
+        # strip_coverage_flags=True removes existing coverage flags from the command
+        # BEFORE we add our own (so project configs don't interfere)
         safe_ctx = SafeExecutionContext(
             SafeExecutionConfig(
                 artifact_dir=artifact_dir,
                 workspace_root=Path(target.workspace_root),
                 timeout_sec=timeout_sec,
-                strip_coverage_flags=strip_coverage_flags,
+                strip_coverage_flags=coverage_available,
             )
         )
 
-        # Sanitize command (removes dangerous flags, adds safety flags)
+        # Sanitize command FIRST (removes dangerous flags including existing coverage flags)
         cmd = safe_ctx.sanitize_command(cmd, target.runner_pack_id)
+
+        # NOW add our coverage flags after sanitization
+        if coverage_available and emitter:
+            cmd = emitter.modify_command(cmd, artifact_dir)
+            cov_artifact = CoverageArtifact(
+                format=emitter.format_id,
+                path=emitter.artifact_path(artifact_dir),
+                pack_id=target.runner_pack_id,
+                invocation_id=target.target_id,
+            )
 
         # Prepare safe environment (overrides project configs to prevent corruption)
         safe_env = safe_ctx.prepare_environment(target.runner_pack_id)
+
+        # Merge execution context environment overrides (from runtime resolution)
+        # This includes venv PATH adjustments and any tool-specific env vars
+        if exec_ctx:
+            runtime_env = exec_ctx.build_env()
+            safe_env.update(runtime_env)
 
         # Verify executable exists
         executable = cmd[0]
@@ -1037,6 +1178,8 @@ class TestOps:
                 }
                 for d in (status.diagnostics or [])
             ],
+            "coverage": status.coverage,
+            "target_selectors": status.target_selectors,
         }
         result_path.write_text(json.dumps(result_data, indent=2))
 
@@ -1101,6 +1244,8 @@ class TestOps:
                 diagnostics=diagnostics,
                 duration_seconds=data.get("duration_seconds"),
                 artifact_dir=data.get("artifact_dir"),
+                coverage=data.get("coverage", []),
+                target_selectors=data.get("target_selectors", []),
             )
         except (json.JSONDecodeError, KeyError):
             return None

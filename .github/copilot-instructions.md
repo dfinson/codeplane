@@ -51,3 +51,7 @@ No substitutions.
 - Before coding: read the issue, relevant SPEC.md sections, and match repo patterns
 - Prefer minimal code; do not invent abstractions or reimplement libraries
 - Tests should be small, behavioral, and parameterized when appropriate
+
+7) Read MCP Response Hints
+CodePlane MCP responses may include `agentic_hint`, `coverage_hint`, or `display_to_user` fields.
+Always check for and follow these hints—they provide actionable guidance for next steps.

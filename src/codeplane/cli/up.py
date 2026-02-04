@@ -48,12 +48,19 @@ LOGO = r"""
 """
 
 
-def _print_banner(host: str, port: int, *, animate: bool = True) -> None:
+def _print_banner(
+    host: str,
+    port: int,
+    repo_root: Path | None = None,
+    *,
+    animate: bool = True,
+) -> None:
     """Print startup banner with logo and info using Rich.
 
     Args:
         host: Server host
         port: Server port
+        repo_root: Repository root path (optional)
         animate: If True, render logo line-by-line with delay (Issue #3)
     """
     ver = version("codeplane")
@@ -68,15 +75,25 @@ def _print_banner(host: str, port: int, *, animate: bool = True) -> None:
     # Ready banner with rule separators (fixed width to match logo ~64 chars)
     banner_width = 64
     rule_line = "─" * banner_width
+    base_url = f"http://{host}:{port}"
+
     console.print()
     console.print(rule_line, style="dim cyan", highlight=False)
     console.print(
         f"CodePlane v{ver} · Ready".center(banner_width), style="bold cyan", highlight=False
     )
-    console.print(
-        f"Listening at http://{host}:{port}".center(banner_width), style="green", highlight=False
-    )
     console.print(rule_line, style="dim cyan", highlight=False)
+    console.print()
+
+    # Endpoint info
+    console.print(f"  MCP Endpoint:    {base_url}/mcp", style="green", highlight=False)
+    console.print(f"  Dashboard:       {base_url}/dashboard", highlight=False)
+    console.print(f"  Health Check:    {base_url}/health", highlight=False)
+    console.print(f"  Status:          {base_url}/status", highlight=False)
+
+    if repo_root:
+        console.print(f"  Repository:      {repo_root}", style="dim", highlight=False)
+
     console.print()
 
 
@@ -91,6 +108,11 @@ def up_command(path: Path | None, port: int | None) -> None:
     PATH is the repository root. If not specified, auto-detects by walking
     up from the current directory to find the git root.
     """
+    from datetime import datetime
+    from uuid import uuid4
+
+    from codeplane.config.models import LoggingConfig, LogOutputConfig
+    from codeplane.core.logging import configure_logging
     from codeplane.daemon.lifecycle import is_server_running, read_server_info, run_server
 
     repo_root = find_repo_root(path)
@@ -133,6 +155,24 @@ def up_command(path: Path | None, port: int | None) -> None:
             raise click.ClickException("Failed to load index")
     finally:
         loop.close()
+
+    # Generate log file path
+    # Format: .codeplane/logs/YYYY-MM-DD/HHMMSS-<6-digit-hash>.log
+    now = datetime.now()
+    server_run_id = uuid4().hex[:6]
+    log_dir = codeplane_dir / "logs" / now.strftime("%Y-%m-%d")
+    log_file = log_dir / f"{now.strftime('%H%M%S')}-{server_run_id}.log"
+
+    # Configure logging: Console INFO, File DEBUG
+    configure_logging(
+        config=LoggingConfig(
+            level="DEBUG",
+            outputs=[
+                LogOutputConfig(destination="stderr", format="console", level="INFO"),
+                LogOutputConfig(destination=str(log_file), format="json", level="DEBUG"),
+            ],
+        ),
+    )
 
     try:
         asyncio.run(run_server(repo_root, coordinator, config))

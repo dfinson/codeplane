@@ -11,7 +11,6 @@ from pydantic import Field
 
 from codeplane.config.constants import GIT_BLAME_MAX, GIT_LOG_MAX
 from codeplane.git._internal.hooks import run_hook
-from codeplane.mcp.errors import HookFailedError
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -159,13 +158,18 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         hook_result = run_hook(repo_path, "pre-commit")
 
         if not hook_result.success:
-            raise HookFailedError(
-                hook_type="pre-commit",
-                exit_code=hook_result.exit_code,
-                stdout=hook_result.stdout,
-                stderr=hook_result.stderr,
-                modified_files=hook_result.modified_files,
-            )
+            return {
+                "error": {
+                    "code": "HOOK_FAILED",
+                    "hook_type": "pre-commit",
+                    "exit_code": hook_result.exit_code,
+                    "stdout": hook_result.stdout,
+                    "stderr": hook_result.stderr,
+                    "modified_files": hook_result.modified_files or [],
+                },
+                "summary": f"pre-commit hook failed (exit {hook_result.exit_code})",
+                "agentic_hint": "Fix issues reported above. If files were auto-fixed, stage them and retry.",
+            }
 
         sha = app_ctx.git_ops.commit(message, allow_empty=allow_empty)
         return {

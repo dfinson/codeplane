@@ -37,7 +37,7 @@ def create_app(
         coordinator=coordinator,
     )
     mcp = create_mcp_server(context)
-    mcp_app = mcp.http_app(path="/mcp")
+    mcp_app = mcp.http_app(path="/mcp", transport="streamable-http")
     routes.append(Mount("/", app=mcp_app))
 
     @asynccontextmanager
@@ -56,10 +56,11 @@ def create_app(
 
     @asynccontextmanager
     async def combined_lifespan(app: Starlette) -> AsyncIterator[None]:
-        # Enter both lifespans
+        # Enter MCP lifespan
         async with mcp_app.lifespan(app):
             yield
-        # Exit with timeout to prevent hanging
+        # MCP lifespan exit handles stream cleanup - timeout prevents hanging
+        # on stuck connections during shutdown
 
     app = Starlette(
         routes=routes,
