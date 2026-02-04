@@ -1,4 +1,9 @@
-"""Background indexer using thread pool for CPU-bound work."""
+"""Background indexer using thread pool for CPU-bound work.
+
+Improved logging:
+- Uses spinner with log suppression to prevent line collision (Issue #5)
+- Grammatically correct result summaries (Issue #4)
+"""
 
 from __future__ import annotations
 
@@ -15,6 +20,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from codeplane.config.models import IndexerConfig
+from codeplane.core.progress import get_console, pluralize, spinner
 
 if TYPE_CHECKING:
     from codeplane.index.ops import IndexCoordinator, IndexStats
@@ -136,12 +142,14 @@ class BackgroundIndexer:
             self._pending_paths.clear()
 
         self._state = IndexerState.INDEXING
+        console = get_console()
 
         try:
-            from rich.console import Console
+            # Build spinner message with grammatical correctness
+            spinner_msg = f"Reindexing {pluralize(len(paths), 'file')}"
 
-            console = Console(stderr=True)
-            with console.status(f"[cyan]Reindexing {len(paths)} file(s)...[/cyan]", spinner="dots"):
+            # Use spinner with log suppression (Issue #5)
+            with spinner(spinner_msg):
                 # Run indexing in thread pool
                 loop = asyncio.get_event_loop()
                 stats = await loop.run_in_executor(
@@ -149,24 +157,18 @@ class BackgroundIndexer:
                     self._index_sync,
                     paths,
                 )
+
             self._last_stats = stats
             self._last_error = None
 
-            # Build descriptive message showing what changed
-
+            # Build descriptive message with grammatical correctness (Issue #4)
             parts: list[str] = []
             if stats.files_added:
-                parts.append(
-                    f"{stats.files_added} file{'s' if stats.files_added != 1 else ''} added"
-                )
+                parts.append(pluralize(stats.files_added, "file") + " added")
             if stats.files_updated:
-                parts.append(
-                    f"{stats.files_updated} file{'s' if stats.files_updated != 1 else ''} updated"
-                )
+                parts.append(pluralize(stats.files_updated, "file") + " updated")
             if stats.files_removed:
-                parts.append(
-                    f"{stats.files_removed} file{'s' if stats.files_removed != 1 else ''} removed"
-                )
+                parts.append(pluralize(stats.files_removed, "file") + " removed")
             summary = ", ".join(parts) if parts else "no changes"
             console.print(f"  [green]✓[/green] {summary} in {stats.duration_seconds:.2f}s")
 

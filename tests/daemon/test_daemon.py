@@ -2,7 +2,7 @@
 
 import asyncio
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -305,6 +305,7 @@ class TestFileWatcher:
         }
 
         await watcher._handle_changes(changes)
+        watcher._flush_pending()  # Flush debounced changes
 
         # Only good.py should be in callback
         assert callback.called
@@ -333,6 +334,7 @@ class TestFileWatcher:
         }
 
         await watcher._handle_changes(changes)
+        watcher._flush_pending()  # Flush debounced changes
 
         call_paths = callback.call_args[0][0]
         path_strs = [str(p) for p in call_paths]
@@ -358,6 +360,7 @@ class TestFileWatcher:
         }
 
         await watcher._handle_changes(changes)
+        watcher._flush_pending()  # Flush debounced changes
 
         call_paths = callback.call_args[0][0]
         assert any(".cplignore" in str(p) for p in call_paths)
@@ -417,6 +420,256 @@ class TestFileWatcher:
 
         # Then
         assert watcher._watch_task is None
+
+
+class TestSummarizeChangesByType:
+    """Tests for _summarize_changes_by_type function (Issue #4)."""
+
+    def test_single_python_file(self) -> None:
+        """Single Python file uses singular form."""
+        from codeplane.daemon.watcher import _summarize_changes_by_type
+
+        paths = [Path("test.py")]
+        result = _summarize_changes_by_type(paths)
+        assert result == "1 Python file"
+
+    def test_multiple_python_files(self) -> None:
+        """Multiple Python files use plural form."""
+        from codeplane.daemon.watcher import _summarize_changes_by_type
+
+        paths = [Path("a.py"), Path("b.py"), Path("c.py")]
+        result = _summarize_changes_by_type(paths)
+        assert result == "3 Python files"
+
+    def test_mixed_file_types(self) -> None:
+        """Mixed file types are summarized separately."""
+        from codeplane.daemon.watcher import _summarize_changes_by_type
+
+        paths = [Path("a.py"), Path("b.py"), Path("c.json")]
+        result = _summarize_changes_by_type(paths)
+        assert "2 Python files" in result
+        assert "1 JSON file" in result
+
+    def test_top_three_types_shown(self) -> None:
+        """Only top 3 file types are shown with 'others' for remainder."""
+        from codeplane.daemon.watcher import _summarize_changes_by_type
+
+        paths = [
+            Path("a.py"),
+            Path("b.py"),
+            Path("c.js"),
+            Path("d.ts"),
+            Path("e.md"),
+            Path("f.rs"),
+        ]
+        result = _summarize_changes_by_type(paths)
+        # Should show top 3 types + "others"
+        parts = result.split(", ")
+        assert len(parts) <= 4
+
+    def test_unknown_extension(self) -> None:
+        """Unknown extensions show uppercased extension."""
+        from codeplane.daemon.watcher import _summarize_changes_by_type
+
+        paths = [Path("file.xyz")]
+        result = _summarize_changes_by_type(paths)
+        assert "XYZ" in result
+
+    def test_no_extension(self) -> None:
+        """Files without extension show 'other'."""
+        from codeplane.daemon.watcher import _summarize_changes_by_type
+
+        paths = [Path("Makefile")]
+        result = _summarize_changes_by_type(paths)
+        assert "other" in result.lower()
+
+    def test_yaml_yml_counted_separately(self) -> None:
+        """Both .yaml and .yml are categorized as YAML but counted separately."""
+        from codeplane.daemon.watcher import _summarize_changes_by_type
+
+        paths = [Path("a.yaml"), Path("b.yml")]
+        result = _summarize_changes_by_type(paths)
+        # Both should be YAML (shown separately since they have different extensions)
+        assert "YAML" in result
+        # Total should be 2 files mentioned
+        assert "1 YAML file" in result
+
+    def test_empty_list(self) -> None:
+        """Empty list returns empty string."""
+        from codeplane.daemon.watcher import _summarize_changes_by_type
+
+        paths: list[Path] = []
+        result = _summarize_changes_by_type(paths)
+        assert result == ""
+
+
+class TestHandleCplignoreChange:
+    """Tests for _handle_cplignore_change function (Issue #6)."""
+
+    @pytest.mark.asyncio
+    async def test_logs_added_patterns(self, tmp_path: Path) -> None:
+        """Logs newly added patterns."""
+        from codeplane.daemon.watcher import FileWatcher
+
+        cpl_dir = tmp_path / ".codeplane"
+        cpl_dir.mkdir()
+        # Start with empty ignore file
+        cplignore = cpl_dir / ".cplignore"
+        cplignore.write_text("")
+
+        callback = MagicMock()
+        watcher = FileWatcher(repo_root=tmp_path, on_change=callback)
+
+        # Update with new patterns
+        cplignore.write_text("*.pyc\n__pycache__/\n")
+
+        # Handle change
+        with patch("codeplane.daemon.watcher.logger") as mock_logger:
+            watcher._handle_cplignore_change(Path(".codeplane/.cplignore"))
+
+            # Check that added patterns were logged
+            calls = mock_logger.info.call_args_list
+            assert any("cplignore_changed" in str(c) for c in calls)
+
+    @pytest.mark.asyncio
+    async def test_logs_removed_patterns(self, tmp_path: Path) -> None:
+        """Logs removed patterns."""
+        from codeplane.daemon.watcher import FileWatcher
+
+        cpl_dir = tmp_path / ".codeplane"
+        cpl_dir.mkdir()
+        cplignore = cpl_dir / ".cplignore"
+        cplignore.write_text("*.pyc\n*.log\n")
+
+        callback = MagicMock()
+        watcher = FileWatcher(repo_root=tmp_path, on_change=callback)
+
+        # Remove a pattern
+        cplignore.write_text("*.pyc\n")
+
+        with patch("codeplane.daemon.watcher.logger") as mock_logger:
+            watcher._handle_cplignore_change(Path(".codeplane/.cplignore"))
+
+            # Check logging occurred
+            assert mock_logger.info.called
+
+    @pytest.mark.asyncio
+    async def test_tracks_pattern_diff(self, tmp_path: Path) -> None:
+        """Correctly tracks added and removed patterns."""
+        from codeplane.daemon.watcher import FileWatcher
+
+        cpl_dir = tmp_path / ".codeplane"
+        cpl_dir.mkdir()
+        cplignore = cpl_dir / ".cplignore"
+        cplignore.write_text("*.pyc\n")
+
+        callback = MagicMock()
+        watcher = FileWatcher(repo_root=tmp_path, on_change=callback)
+
+        # Verify initial state captured
+        assert watcher._last_cplignore_content == "*.pyc\n"
+
+        # Change patterns
+        cplignore.write_text("*.log\n")
+        watcher._handle_cplignore_change(Path(".codeplane/.cplignore"))
+
+        # Verify content updated
+        assert watcher._last_cplignore_content == "*.log\n"
+
+    @pytest.mark.asyncio
+    async def test_ignores_comments(self, tmp_path: Path) -> None:
+        """Comments are not treated as patterns."""
+        from codeplane.daemon.watcher import FileWatcher
+
+        cpl_dir = tmp_path / ".codeplane"
+        cpl_dir.mkdir()
+        cplignore = cpl_dir / ".cplignore"
+        cplignore.write_text("# comment\n*.pyc\n")
+
+        callback = MagicMock()
+        watcher = FileWatcher(repo_root=tmp_path, on_change=callback)
+
+        # Add another comment - should show no pattern changes
+        cplignore.write_text("# comment\n# another comment\n*.pyc\n")
+
+        with patch("codeplane.daemon.watcher.logger") as mock_logger:
+            watcher._handle_cplignore_change(Path(".codeplane/.cplignore"))
+
+            # Should log with "no changes" or empty diff
+            calls = mock_logger.info.call_args_list
+            # Find the cplignore_changed call
+            cplignore_call = next((c for c in calls if "cplignore_changed" in str(c)), None)
+            assert cplignore_call is not None
+
+
+class TestDebouncing:
+    """Tests for watcher debouncing behavior."""
+
+    @pytest.mark.asyncio
+    async def test_queue_change_adds_to_pending(self, tmp_path: Path) -> None:
+        """_queue_change adds paths to pending set."""
+        from codeplane.daemon.watcher import FileWatcher
+
+        cpl_dir = tmp_path / ".codeplane"
+        cpl_dir.mkdir()
+        (cpl_dir / ".cplignore").write_text("")
+
+        callback = MagicMock()
+        watcher = FileWatcher(repo_root=tmp_path, on_change=callback)
+
+        watcher._queue_change(Path("test.py"))
+
+        assert Path("test.py") in watcher._pending_changes
+
+    @pytest.mark.asyncio
+    async def test_flush_pending_calls_callback(self, tmp_path: Path) -> None:
+        """_flush_pending calls callback with pending paths."""
+        from codeplane.daemon.watcher import FileWatcher
+
+        cpl_dir = tmp_path / ".codeplane"
+        cpl_dir.mkdir()
+        (cpl_dir / ".cplignore").write_text("")
+
+        callback = MagicMock()
+        watcher = FileWatcher(repo_root=tmp_path, on_change=callback)
+
+        watcher._queue_change(Path("test.py"))
+        watcher._flush_pending()
+
+        assert callback.called
+        paths = callback.call_args[0][0]
+        assert Path("test.py") in paths
+
+    @pytest.mark.asyncio
+    async def test_flush_clears_pending(self, tmp_path: Path) -> None:
+        """_flush_pending clears the pending set."""
+        from codeplane.daemon.watcher import FileWatcher
+
+        cpl_dir = tmp_path / ".codeplane"
+        cpl_dir.mkdir()
+        (cpl_dir / ".cplignore").write_text("")
+
+        callback = MagicMock()
+        watcher = FileWatcher(repo_root=tmp_path, on_change=callback)
+
+        watcher._queue_change(Path("test.py"))
+        watcher._flush_pending()
+
+        assert len(watcher._pending_changes) == 0
+
+    @pytest.mark.asyncio
+    async def test_should_flush_false_when_empty(self, tmp_path: Path) -> None:
+        """_should_flush returns False for empty pending set."""
+        from codeplane.daemon.watcher import FileWatcher
+
+        cpl_dir = tmp_path / ".codeplane"
+        cpl_dir.mkdir()
+        (cpl_dir / ".cplignore").write_text("")
+
+        callback = MagicMock()
+        watcher = FileWatcher(repo_root=tmp_path, on_change=callback)
+
+        assert watcher._should_flush() is False
 
 
 class TestDaemonLifecycle:
