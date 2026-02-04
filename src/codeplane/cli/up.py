@@ -20,33 +20,31 @@ from codeplane.config.models import CodePlaneConfig
 from codeplane.core.progress import (
     animate_text,
     get_console,
-    print_centered,
-    print_rule,
 )
 from codeplane.index.ops import IndexCoordinator
 
 LOGO = r"""
-                          ++++++++++++++++++++++
-                       *++++++++++++++++++++++++++*
-                     *+++++++*              *+++++++*
-                   *+++++++                    *++++++*
-                  ++++++*                        *++++++
-                *+++++                              +++++*
-               ++++++                                *+++++
-               +++++             ++++                 +++++
-               *****              +++++                ****
-                                    +++++
-         *++++++++++++++++++++++     *++++ ++++++++++++++++++++++
-                                    ++++*
-               ++++*              ++++*               *++++
-               +++++             ++++                 +++++
-               *+++++                                +++++*
-                 *+++++                            ++++++
-                  *++++++*                       +++++++
-                    ++++++++                  ++++++++
-                     *++++++++++          ++++++++++*
-                        *+++++++++++++++++++++++++
-                           *++++++++++++++++++*
+                    ++++++++++++++++++++++
+                 *++++++++++++++++++++++++++*
+               *+++++++*              *+++++++*
+             *+++++++                    *++++++*
+            ++++++*                        *++++++
+          *+++++                              +++++*
+         ++++++                                *+++++
+         +++++             ++++                 +++++
+         *****              +++++                ****
+                              +++++
+   *++++++++++++++++++++++     *++++ ++++++++++++++++++++++
+                              ++++*
+         ++++*              ++++*               *++++
+         +++++             ++++                 +++++
+         *+++++                                +++++*
+           *+++++                            ++++++
+            *++++++*                       +++++++
+              ++++++++                  ++++++++
+               *++++++++++          ++++++++++*
+                  *+++++++++++++++++++++++++
+                     *++++++++++++++++++*
 """
 
 
@@ -69,11 +67,16 @@ def _print_banner(host: str, port: int, *, animate: bool = True) -> None:
 
     # Ready banner with rule separators (fixed width to match logo ~64 chars)
     banner_width = 64
+    rule_line = "─" * banner_width
     console.print()
-    print_rule(style="dim cyan", width=banner_width)
-    print_centered(f"CodePlane v{ver} · Ready", style="bold cyan")
-    print_centered(f"Listening at http://{host}:{port}", style="green")
-    print_rule(style="dim cyan", width=banner_width)
+    console.print(rule_line, style="dim cyan", highlight=False)
+    console.print(
+        f"CodePlane v{ver} · Ready".center(banner_width), style="bold cyan", highlight=False
+    )
+    console.print(
+        f"Listening at http://{host}:{port}".center(banner_width), style="green", highlight=False
+    )
+    console.print(rule_line, style="dim cyan", highlight=False)
     console.print()
 
 
