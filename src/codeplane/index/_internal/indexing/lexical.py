@@ -40,6 +40,7 @@ class SearchResults:
     results: list[SearchResult] = field(default_factory=list)
     total_hits: int = 0
     query_time_ms: int = 0
+    fallback_reason: str | None = None  # Set if query syntax error triggered literal fallback
 
 
 class LexicalIndex:
@@ -317,6 +318,20 @@ class LexicalIndex:
         self._staged_removes.clear()
         return count
 
+    def _escape_query(self, query: str) -> str:
+        r"""Escape special Tantivy query syntax characters for literal search.
+
+        Escapes: + - && || ! ( ) { } [ ] ^ " ~ * ? : \ /
+        """
+        special_chars = r'+-&|!(){}[]^"~*?:\/ '
+        escaped = []
+        for char in query:
+            if char in special_chars:
+                escaped.append(f"\\{char}")
+            else:
+                escaped.append(char)
+        return "".join(escaped)
+
     def search(
         self,
         query: str,
@@ -333,46 +348,66 @@ class LexicalIndex:
 
         Returns:
             SearchResults with matching documents.
+            If query syntax is invalid, falls back to literal search
+            and sets fallback_reason.
         """
         self._ensure_initialized()
         start = time.monotonic()
 
         results = SearchResults()
+        fallback_reason: str | None = None
 
         # Build query
         full_query = f"({query}) AND context_id:{context_id}" if context_id is not None else query
 
         searcher = self._index.searcher()
+
+        # Try to parse query; on syntax error, fall back to escaped literal search
         try:
-            # Parse and execute query using Index.parse_query
             parsed = self._index.parse_query(full_query, ["content", "symbols", "path"])
+        except ValueError as e:
+            # Tantivy raises ValueError on syntax errors
+            error_msg = str(e)
+            fallback_reason = f"query syntax error: {error_msg[:50]}"
 
-            # Search
-            top_docs = searcher.search(parsed, limit).hits
+            # Escape the original query and retry
+            escaped_query = self._escape_query(query)
+            escaped_full = (
+                f"({escaped_query}) AND context_id:{context_id}"
+                if context_id is not None
+                else escaped_query
+            )
+            try:
+                parsed = self._index.parse_query(escaped_full, ["content", "symbols", "path"])
+            except ValueError:
+                # Even escaped query failed - return empty results
+                results.query_time_ms = int((time.monotonic() - start) * 1000)
+                results.fallback_reason = "query could not be parsed even after escaping"
+                return results
 
-            results.total_hits = len(top_docs)
+        # Search
+        top_docs = searcher.search(parsed, limit).hits
+        results.total_hits = len(top_docs)
 
-            for score, doc_addr in top_docs:
-                doc = searcher.doc(doc_addr)
+        for score, doc_addr in top_docs:
+            doc = searcher.doc(doc_addr)
 
-                # Extract snippet around match and get line number
-                content = doc.get_first("content") or ""
-                snippet, line_num = self._extract_snippet(content, query, max_lines=3)
+            # Extract snippet around match and get line number
+            content = doc.get_first("content") or ""
+            snippet, line_num = self._extract_snippet(content, query, max_lines=3)
 
-                result = SearchResult(
-                    file_path=doc.get_first("path") or "",
-                    line=line_num,
-                    column=0,
-                    snippet=snippet,
-                    score=score,
-                    context_id=doc.get_first("context_id"),
-                )
-                results.results.append(result)
-
-        finally:
-            pass
+            result = SearchResult(
+                file_path=doc.get_first("path") or "",
+                line=line_num,
+                column=0,
+                snippet=snippet,
+                score=score,
+                context_id=doc.get_first("context_id"),
+            )
+            results.results.append(result)
 
         results.query_time_ms = int((time.monotonic() - start) * 1000)
+        results.fallback_reason = fallback_reason
         return results
 
     def search_symbols(

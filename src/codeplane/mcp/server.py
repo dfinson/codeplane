@@ -285,10 +285,15 @@ def _wire_tool(mcp: FastMCP, spec: Any, context: AppContext) -> None:
             log.info("tool_complete", tool=tool_name, elapsed_ms=elapsed_ms, **summary)
 
             # Print summary to console (Issue #UX)
+            # Agent tool calls: no checkmark, prefixed with session
             if show_ui:
                 summary_text = _format_tool_summary(tool_name, result_data)
                 if summary_text:
-                    status(summary_text, style="success")
+                    short_session = session.session_id[:12]
+                    status(
+                        f"[dim]{short_session}[/dim] {tool_name} -> {summary_text}",
+                        style="none",
+                    )
 
             return ToolResponse(
                 success=True,

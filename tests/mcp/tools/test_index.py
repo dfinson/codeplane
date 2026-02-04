@@ -269,9 +269,11 @@ class TestSearchHandler:
     @pytest.fixture
     def mock_ctx(self) -> MagicMock:
         """Create mock context."""
+        from codeplane.index.ops import SearchResponse
+
         ctx = MagicMock()
         ctx.coordinator = MagicMock()
-        ctx.coordinator.search = AsyncMock(return_value=[])
+        ctx.coordinator.search = AsyncMock(return_value=SearchResponse(results=[]))
         ctx.coordinator.get_def = AsyncMock(return_value=None)
         ctx.coordinator.get_references = AsyncMock(return_value=[])
         return ctx
@@ -288,14 +290,17 @@ class TestSearchHandler:
     @pytest.mark.asyncio
     async def test_lexical_search_with_results(self, mock_ctx: MagicMock) -> None:
         """Lexical search returns results."""
-        mock_result = MagicMock()
-        mock_result.path = "src/test.py"
-        mock_result.line = 10
-        mock_result.column = 5
-        mock_result.snippet = "def test_function"
-        mock_result.score = 0.9
+        from codeplane.index.ops import SearchResponse, SearchResult
 
-        mock_ctx.coordinator.search = AsyncMock(return_value=[mock_result])
+        mock_result = SearchResult(
+            path="src/test.py",
+            line=10,
+            column=5,
+            snippet="def test_function",
+            score=0.9,
+        )
+
+        mock_ctx.coordinator.search = AsyncMock(return_value=SearchResponse(results=[mock_result]))
 
         params = SearchParams(query="test")
         result = await search(mock_ctx, params)
@@ -308,7 +313,9 @@ class TestSearchHandler:
     @pytest.mark.asyncio
     async def test_symbol_search(self, mock_ctx: MagicMock) -> None:
         """Symbol search delegates to coordinator."""
-        mock_ctx.coordinator.search = AsyncMock(return_value=[])
+        from codeplane.index.ops import SearchResponse
+
+        mock_ctx.coordinator.search = AsyncMock(return_value=SearchResponse(results=[]))
 
         params = SearchParams(query="MyClass", mode="symbol")
         result = await search(mock_ctx, params)

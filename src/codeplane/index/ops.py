@@ -107,6 +107,14 @@ class SearchResult:
     score: float
 
 
+@dataclass
+class SearchResponse:
+    """Response from a search operation including metadata."""
+
+    results: list[SearchResult]
+    fallback_reason: str | None = None  # Set if query syntax error triggered literal fallback
+
+
 class SearchMode:
     """Search mode enum."""
 
@@ -929,7 +937,7 @@ class IndexCoordinator:
         query: str,
         mode: str = SearchMode.TEXT,
         limit: int = 100,
-    ) -> list[SearchResult]:
+    ) -> SearchResponse:
         """
         Search the index. Thread-safe, no locks needed.
 
@@ -939,11 +947,11 @@ class IndexCoordinator:
             limit: Maximum results to return
 
         Returns:
-            List of SearchResult objects
+            SearchResponse with results and optional fallback_reason
         """
         await self.wait_for_freshness()
         if self._lexical is None:
-            return []
+            return SearchResponse(results=[])
 
         # Use appropriate search method based on mode
         if mode == SearchMode.SYMBOL:
@@ -953,7 +961,7 @@ class IndexCoordinator:
         else:
             search_results = self._lexical.search(query, limit=limit)
 
-        return [
+        results = [
             SearchResult(
                 path=hit.file_path,
                 line=hit.line,
@@ -963,6 +971,11 @@ class IndexCoordinator:
             )
             for hit in search_results.results
         ]
+
+        return SearchResponse(
+            results=results,
+            fallback_reason=search_results.fallback_reason,
+        )
 
     async def get_def(
         self,

@@ -83,12 +83,14 @@ class GetReferencesParams(BaseParams):
 # =============================================================================
 
 
-def _summarize_search(count: int, mode: str, query: str) -> str:
+def _summarize_search(count: int, mode: str, query: str, fallback: bool = False) -> str:
     """Generate summary for search."""
+    suffix = " (literal fallback)" if fallback else ""
     if count == 0:
-        return f'no {mode} results for "{query}"'
+        q = query[:30] + "..." if len(query) > 30 else query
+        return f'no {mode} results for "{q}"{suffix}'
     q = query[:30] + "..." if len(query) > 30 else query
-    return f'{count} {mode} results for "{q}"'
+    return f'{count} {mode} results for "{q}"{suffix}'
 
 
 def _summarize_map(file_count: int, sections: list[str], truncated: bool) -> str:
@@ -183,13 +185,13 @@ async def search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
         }
 
     # Lexical or symbol search
-    search_results = await ctx.coordinator.search(
+    search_response = await ctx.coordinator.search(
         params.query,
         mode_map[params.mode],
         limit=params.limit,
     )
 
-    return {
+    result: dict[str, Any] = {
         "results": [
             {
                 "path": r.path,
@@ -199,12 +201,23 @@ async def search(ctx: AppContext, params: SearchParams) -> dict[str, Any]:
                 "score": r.score,
                 "match_type": "fuzzy",
             }
-            for r in search_results
+            for r in search_response.results
         ],
         "pagination": {},
         "query_time_ms": 0,
-        "summary": _summarize_search(len(search_results), params.mode, params.query),
+        "summary": _summarize_search(
+            len(search_response.results),
+            params.mode,
+            params.query,
+            fallback=search_response.fallback_reason is not None,
+        ),
     }
+
+    # Include fallback reason if query syntax was invalid
+    if search_response.fallback_reason:
+        result["fallback_reason"] = search_response.fallback_reason
+
+    return result
 
 
 @registry.register("map_repo", "Get repository mental model", MapRepoParams)
