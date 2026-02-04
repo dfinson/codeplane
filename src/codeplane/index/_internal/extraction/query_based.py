@@ -171,8 +171,10 @@ class QueryBasedExtractor(BaseTypeExtractor):
 
         if query_string not in self._queries:
             try:
+                from tree_sitter import Query
+
                 lang = self._get_language()
-                self._queries[query_string] = lang.query(query_string)
+                self._queries[query_string] = Query(lang, query_string)
             except Exception:
                 # Query compilation failed - grammar mismatch
                 return None

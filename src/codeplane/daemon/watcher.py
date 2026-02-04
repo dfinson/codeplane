@@ -9,11 +9,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import structlog
-from watchfiles import Change, awatch
+from watchfiles import Change, DefaultFilter, awatch
 
+from codeplane.core.excludes import PRUNABLE_DIRS
 from codeplane.index._internal.ignore import IgnoreChecker
 
 logger = structlog.get_logger()
+
+
+def _create_watch_filter() -> DefaultFilter:
+    """Create a watchfiles filter that ignores PRUNABLE_DIRS.
+
+    Merges PRUNABLE_DIRS with watchfiles' DefaultFilter to ensure
+    consistent exclusions between native and polling watcher modes.
+    """
+    # Combine default ignore_dirs with our PRUNABLE_DIRS
+    default_filter = DefaultFilter()
+    combined_dirs = default_filter._ignore_dirs | PRUNABLE_DIRS
+    return DefaultFilter(ignore_dirs=list(combined_dirs))
 
 
 def _is_cross_filesystem(path: Path) -> bool:
@@ -86,9 +99,11 @@ class FileWatcher:
 
     async def _watch_loop(self) -> None:
         """Main watch loop using watchfiles (native filesystem events)."""
+        watch_filter = _create_watch_filter()
         try:
             async for changes in awatch(
                 self.repo_root,
+                watch_filter=watch_filter,
                 stop_event=self._stop_event,
                 ignore_permission_denied=True,
             ):
@@ -104,8 +119,6 @@ class FileWatcher:
         Uses the coordinator's indexed file list rather than git status,
         since gitignored files may still be indexed if not in .cplignore.
         """
-        from codeplane.index._internal.ignore import PRUNABLE_DIRS
-
         # Track mtimes for all non-cplignored files
         mtimes: dict[Path, float] = {}
 
