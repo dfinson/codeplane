@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Any
@@ -131,9 +132,18 @@ def get_needed_grammars(languages: set[LanguageFamily]) -> list[tuple[str, str]]
     return needed
 
 
+@dataclass
+class GrammarInstallResult:
+    """Result of grammar installation attempt."""
+
+    success: bool
+    failed_packages: list[str]
+    installed_packages: list[str]
+
+
 def install_grammars(
     packages: list[tuple[str, str]], quiet: bool = False, status_fn: Any = None
-) -> bool:
+) -> GrammarInstallResult:
     """Install grammar packages via pip.
 
     Uses the current Python interpreter to install packages into the running
@@ -144,34 +154,47 @@ def install_grammars(
         quiet: Suppress output
         status_fn: Optional status callback for progress messages
 
-    Returns True if all installed successfully.
+    Returns GrammarInstallResult with:
+        - success: True if all packages installed successfully
+        - failed_packages: List of package names that failed to install
+        - installed_packages: List of package names that installed successfully
     """
     if not packages:
-        return True
+        return GrammarInstallResult(success=True, failed_packages=[], installed_packages=[])
 
     import importlib
 
-    specs = [f"{pkg}>={ver}" for pkg, ver in packages]
     pkg_names = [p for p, _ in packages]
 
     if status_fn and not quiet:
         status_fn(f"Installing: {', '.join(pkg_names)}", style="none", indent=4)
 
-    # Always use sys.executable to ensure packages install into the current env
-    cmd = [sys.executable, "-m", "pip", "install", "--quiet"] + specs
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if result.returncode == 0:
-            importlib.invalidate_caches()
-            return True
-        else:
-            if status_fn and not quiet:
-                status_fn(f"Failed to install grammars: {result.stderr}", style="error", indent=4)
-            return False
-    except subprocess.TimeoutExpired:
-        if status_fn and not quiet:
-            status_fn("Grammar installation timed out", style="error", indent=4)
-        return False
+    # Install packages one by one to identify which ones fail
+    failed_packages: list[str] = []
+    installed_packages: list[str] = []
+
+    for pkg, ver in packages:
+        spec = f"{pkg}>={ver}"
+        cmd = [sys.executable, "-m", "pip", "install", "--quiet", spec]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode == 0:
+                installed_packages.append(pkg)
+            else:
+                failed_packages.append(pkg)
+        except subprocess.TimeoutExpired:
+            failed_packages.append(pkg)
+
+    importlib.invalidate_caches()
+
+    if failed_packages and status_fn and not quiet:
+        status_fn(f"Failed to install: {', '.join(failed_packages)}", style="error", indent=4)
+
+    return GrammarInstallResult(
+        success=len(failed_packages) == 0,
+        failed_packages=failed_packages,
+        installed_packages=installed_packages,
+    )
 
 
 def scan_repo_languages(repo_root: Path) -> set[LanguageFamily]:
@@ -241,8 +264,8 @@ def ensure_grammars_for_repo(repo_root: Path, quiet: bool = False, status_fn: An
         return True
 
     # Install
-    success = install_grammars(needed, quiet=quiet, status_fn=status_fn)
-    if success and status_fn and not quiet:
+    result = install_grammars(needed, quiet=quiet, status_fn=status_fn)
+    if result.success and status_fn and not quiet:
         lang_list = ", ".join(sorted(languages)) if languages else "none detected"
         status_fn(f"Language support ready ({lang_list})", style="success", indent=2)
-    return success
+    return result.success

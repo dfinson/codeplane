@@ -950,6 +950,7 @@ class IndexCoordinator:
         mode: str = SearchMode.TEXT,
         limit: int = 100,
         context_lines: int = 1,
+        filter_languages: list[str] | None = None,
     ) -> SearchResponse:
         """
         Search the index. Thread-safe, no locks needed.
@@ -959,6 +960,8 @@ class IndexCoordinator:
             mode: SearchMode.TEXT, SYMBOL, or PATH
             limit: Maximum results to return
             context_lines: Lines of context before/after each match (default 1)
+            filter_languages: Optional list of language families to filter by
+                             (e.g., ["python", "javascript"]). If None, returns all.
 
         Returns:
             SearchResponse with results and optional fallback_reason
@@ -967,18 +970,41 @@ class IndexCoordinator:
         if self._lexical is None:
             return SearchResponse(results=[])
 
+        # If filtering by languages, pre-compute the set of allowed paths
+        allowed_paths: set[str] | None = None
+        if filter_languages:
+            with self.db.session() as session:
+                from sqlmodel import col
+
+                stmt = select(File.path).where(col(File.language_family).in_(filter_languages))
+                allowed_paths = set(session.exec(stmt).all())
+                # If no files match the language filter, return empty results early
+                if not allowed_paths:
+                    return SearchResponse(results=[])
+
+        # Request more results than limit if filtering, to account for filtering
+        search_limit = limit * 3 if filter_languages else limit
+
         # Use appropriate search method based on mode
         if mode == SearchMode.SYMBOL:
             search_results = self._lexical.search_symbols(
-                query, limit=limit, context_lines=context_lines
+                query, limit=search_limit, context_lines=context_lines
             )
         elif mode == SearchMode.PATH:
             search_results = self._lexical.search_path(
-                query, limit=limit, context_lines=context_lines
+                query, limit=search_limit, context_lines=context_lines
             )
         else:
-            search_results = self._lexical.search(query, limit=limit, context_lines=context_lines)
+            search_results = self._lexical.search(
+                query, limit=search_limit, context_lines=context_lines
+            )
 
+        # Filter results by language if requested
+        filtered_hits = search_results.results
+        if allowed_paths is not None:
+            filtered_hits = [hit for hit in filtered_hits if hit.file_path in allowed_paths]
+
+        # Apply limit after filtering
         results = [
             SearchResult(
                 path=hit.file_path,
@@ -987,7 +1013,7 @@ class IndexCoordinator:
                 snippet=hit.snippet,
                 score=hit.score,
             )
-            for hit in search_results.results
+            for hit in filtered_hits[:limit]
         ]
 
         return SearchResponse(

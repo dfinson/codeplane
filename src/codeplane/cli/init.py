@@ -116,12 +116,21 @@ def initialize_repo(repo_root: Path, *, force: bool = False, show_cpl_up_hint: b
         needed = get_needed_grammars(languages)
         if needed:
             task_id = phase.add_progress("Installing grammars", total=len(needed))
-            success = install_grammars(needed, quiet=True, status_fn=None)
+            grammar_result = install_grammars(needed, quiet=True, status_fn=None)
             phase.advance(task_id, len(needed))
-            if success:
+            if grammar_result.success:
                 phase.complete(f"{len(needed)} grammars installed")
             else:
-                phase.complete("Some grammars failed to install", style="yellow")
+                failed_list = ", ".join(grammar_result.failed_packages)
+                phase.complete(
+                    f"{len(grammar_result.installed_packages)} installed, {len(grammar_result.failed_packages)} failed",
+                    style="yellow",
+                )
+                phase.add_text(f"Failed grammars: {failed_list}", style="yellow")
+                phase.add_text(
+                    "Note: Files without grammars are still searchable via text search",
+                    style="dim",
+                )
         else:
             phase.complete("Grammars ready")
 

@@ -181,6 +181,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             mode_map[mode],
             limit=limit,
             context_lines=context_lines,
+            filter_languages=filter_languages,
         )
 
         # Count unique files
