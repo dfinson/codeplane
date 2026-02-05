@@ -377,16 +377,27 @@ class PhaseBox:
             self._update()
 
     def complete(self, summary: str, *, style: str = "green") -> None:
-        """Mark a step complete with a checkmark summary.
+        """Mark a step complete with a status symbol and summary.
 
         Removes the current progress bar and adds a completion line.
+        Symbol is based on style:
+        - green (default): ✓ (success)
+        - yellow: ⚠ (warning)
+        - red: ✗ (error)
         """
         # Remove progress tasks (they're done)
         if self._progress:
             for task in list(self._progress.tasks):
                 self._progress.remove_task(task.id)
+        # Choose symbol based on style (trailing space included for consistent rendering)
+        if style == "yellow":
+            symbol = "⚠ "
+        elif style == "red":
+            symbol = "✗ "
+        else:
+            symbol = "✓ "
         # Add completion line
-        self._items.append(Text(f"✓ {summary}", style=style))
+        self._items.append(Text(f"{symbol}{summary}", style=style))
         self._update()
 
     def add_text(self, text: str, *, style: str = "") -> None:

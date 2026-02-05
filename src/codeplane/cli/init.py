@@ -130,15 +130,26 @@ def initialize_repo(repo_root: Path, *, force: bool = False, show_cpl_up_hint: b
             if grammar_result.success:
                 phase.complete(f"{len(needed)} grammars installed")
             else:
-                failed_list = ", ".join(grammar_result.failed_packages)
-                phase.complete(
-                    f"{len(grammar_result.installed_packages)} installed, {len(grammar_result.failed_packages)} failed",
-                    style="yellow",
-                )
-                phase.add_text(f"Failed grammars: {failed_list}", style="yellow")
+                # Some grammars failed to install
+                # Extract language name from package name (e.g., "tree-sitter-powershell" -> "powershell")
+                failed_langs = [
+                    pkg.replace("tree-sitter-", "").replace("tree_sitter_", "")
+                    for pkg in grammar_result.failed_packages
+                ]
+                failed_list = ", ".join(failed_langs)
+                if grammar_result.installed_packages:
+                    # Some succeeded, some failed
+                    phase.complete(
+                        f"{len(grammar_result.installed_packages)} grammars installed",
+                        style="green",
+                    )
+                else:
+                    # All needed grammars failed - just show ready
+                    phase.complete("Grammars ready")
+                # Show user-facing impact message
                 phase.add_text(
-                    "Note: Files without grammars are still searchable via text search",
-                    style="dim",
+                    f"Refactoring and symbol search unavailable for {failed_list} files",
+                    style="yellow",
                 )
         else:
             phase.complete("Grammars ready")
