@@ -1,15 +1,12 @@
 """Tests for MCP testing tools.
 
-Verifies parameter models and summary helpers.
+Verifies summary helpers and serialization.
 """
 
 from unittest.mock import MagicMock
 
 from codeplane.mcp.tools.testing import (
-    CancelTestRunParams,
-    DiscoverTestTargetsParams,
-    GetTestRunStatusParams,
-    RunTestTargetsParams,
+    _build_logs_hint,
     _display_discover,
     _display_run_start,
     _display_run_status,
@@ -26,70 +23,6 @@ from codeplane.testing.models import (
 )
 
 
-class TestDiscoverTestTargetsParams:
-    """Tests for DiscoverTestTargetsParams model."""
-
-    def test_minimal_params(self) -> None:
-        """Should work with no params."""
-        params = DiscoverTestTargetsParams()
-        assert params.paths is None
-
-    def test_with_paths(self) -> None:
-        """Should accept paths."""
-        params = DiscoverTestTargetsParams(paths=["tests/", "src/tests/"])
-        assert params.paths == ["tests/", "src/tests/"]
-
-
-class TestRunTestTargetsParams:
-    """Tests for RunTestTargetsParams model."""
-
-    def test_minimal_params(self) -> None:
-        """Should work with no params (run all)."""
-        params = RunTestTargetsParams()
-        assert params.targets is None
-        assert params.fail_fast is False
-        assert params.coverage is False
-
-    def test_all_params(self) -> None:
-        """Should accept all params."""
-        params = RunTestTargetsParams(
-            targets=["tests/test_foo.py"],
-            pattern="*_test",
-            tags=["unit", "fast"],
-            failed_only=True,
-            parallelism=4,
-            timeout_sec=120,
-            fail_fast=True,
-            coverage=True,
-        )
-        assert params.targets == ["tests/test_foo.py"]
-        assert params.pattern == "*_test"
-        assert params.tags == ["unit", "fast"]
-        assert params.failed_only is True
-        assert params.parallelism == 4
-        assert params.timeout_sec == 120
-        assert params.fail_fast is True
-        assert params.coverage is True
-
-
-class TestGetTestRunStatusParams:
-    """Tests for GetTestRunStatusParams model."""
-
-    def test_create_params(self) -> None:
-        """Should create params."""
-        params = GetTestRunStatusParams(run_id="abc123")
-        assert params.run_id == "abc123"
-
-
-class TestCancelTestRunParams:
-    """Tests for CancelTestRunParams model."""
-
-    def test_create_params(self) -> None:
-        """Should create params."""
-        params = CancelTestRunParams(run_id="abc123")
-        assert params.run_id == "abc123"
-
-
 class TestSummarizeDiscover:
     """Tests for _summarize_discover helper."""
 
@@ -98,11 +31,22 @@ class TestSummarizeDiscover:
         summary = _summarize_discover(0)
         assert "no test targets" in summary
 
-    def test_with_targets(self) -> None:
-        """Should show count."""
+    def test_with_count_only(self) -> None:
+        """Should show count without targets."""
         summary = _summarize_discover(42)
         assert "42" in summary
-        assert "discovered" in summary
+
+    def test_with_targets_by_language(self) -> None:
+        """Should group by language."""
+        targets = [
+            MagicMock(language="python"),
+            MagicMock(language="python"),
+            MagicMock(language="javascript"),
+        ]
+        summary = _summarize_discover(3, targets)
+        assert "3 targets" in summary
+        assert "python" in summary
+        assert "javascript" in summary
 
 
 class TestDisplayDiscover:
@@ -135,22 +79,51 @@ class TestSummarizeRun:
         summary = _summarize_run(result)
         assert "no run status" in summary
 
-    def test_with_progress(self) -> None:
-        """Should show pass/fail counts."""
+    def test_completed_with_failures(self) -> None:
+        """Should show failure indicator."""
         status = TestRunStatus(
             run_id="abc123",
             status="completed",
+            duration_seconds=5.0,
             progress=TestProgress(
                 targets=TargetProgress(total=10, completed=10),
-                cases=TestCaseProgress(total=100, passed=95, failed=3, skipped=2),
+                cases=TestCaseProgress(total=100, passed=95, failed=5),
             ),
         )
         result = TestResult(action="status", run_status=status)
         summary = _summarize_run(result)
-        assert "completed" in summary
-        assert "95/100 passed" in summary
-        assert "3 failed" in summary
-        assert "2 skipped" in summary
+        assert "95 passed" in summary
+        assert "5 failed" in summary
+
+    def test_completed_all_passed(self) -> None:
+        """Should show check mark for success."""
+        status = TestRunStatus(
+            run_id="abc123",
+            status="completed",
+            duration_seconds=3.0,
+            progress=TestProgress(
+                targets=TargetProgress(total=5, completed=5),
+                cases=TestCaseProgress(total=100, passed=100),
+            ),
+        )
+        result = TestResult(action="status", run_status=status)
+        summary = _summarize_run(result)
+        assert "100 passed" in summary
+        assert "\u2713" in summary  # Checkmark
+
+    def test_running_status(self) -> None:
+        """Should show running status."""
+        status = TestRunStatus(
+            run_id="abc123",
+            status="running",
+            progress=TestProgress(
+                cases=TestCaseProgress(total=50, passed=25),
+            ),
+        )
+        result = TestResult(action="status", run_status=status)
+        summary = _summarize_run(result)
+        assert "running" in summary
+        assert "25" in summary
 
 
 class TestDisplayRunStart:
@@ -237,6 +210,50 @@ class TestDisplayRunStatus:
         assert "cancelled" in display.lower()
 
 
+class TestBuildLogsHint:
+    """Tests for _build_logs_hint helper."""
+
+    def test_no_artifact_dir(self) -> None:
+        """Should return None if no artifact_dir."""
+        hint = _build_logs_hint(None, "running")
+        assert hint is None
+
+    def test_running_status(self) -> None:
+        """Should show hint for running tests."""
+        hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "running")
+        assert hint is not None
+        assert ".codeplane/artifacts/tests/abc123" in hint
+        assert "stdout.txt" in hint
+        assert "stderr.txt" in hint
+        assert "xml" in hint.lower()
+        assert "read_files" in hint
+
+    def test_completed_status(self) -> None:
+        """Should show hint for completed tests."""
+        hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "completed")
+        assert hint is not None
+        assert ".codeplane/artifacts/tests/abc123" in hint
+        assert "result.json" in hint
+        assert "read_files" in hint
+
+    def test_failed_status(self) -> None:
+        """Should show hint for failed tests."""
+        hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "failed")
+        assert hint is not None
+        assert "result.json" in hint
+
+    def test_cancelled_status(self) -> None:
+        """Should show hint for cancelled tests."""
+        hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "cancelled")
+        assert hint is not None
+        assert "result.json" in hint
+
+    def test_not_found_status(self) -> None:
+        """Should return None for not_found status."""
+        hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "not_found")
+        assert hint is None
+
+
 class TestSerializeTestResult:
     """Tests for _serialize_test_result helper."""
 
@@ -295,3 +312,29 @@ class TestSerializeTestResult:
         serialized = _serialize_test_result(result)
 
         assert "poll_after_seconds" in serialized["run_status"]
+
+    def test_logs_hint_for_status(self) -> None:
+        """Should include logs_hint for status checks."""
+        status = TestRunStatus(
+            run_id="abc123",
+            status="running",
+            artifact_dir=".codeplane/artifacts/tests/abc123",
+        )
+        result = TestResult(action="status", run_status=status)
+        serialized = _serialize_test_result(result, is_action=False)
+
+        assert "logs_hint" in serialized["run_status"]
+        assert ".codeplane/artifacts/tests/abc123" in serialized["run_status"]["logs_hint"]
+
+    def test_no_logs_hint_for_action(self) -> None:
+        """Should NOT include logs_hint for run_test_targets action."""
+        status = TestRunStatus(
+            run_id="abc123",
+            status="running",
+            artifact_dir=".codeplane/artifacts/tests/abc123",
+        )
+        result = TestResult(action="run", run_status=status)
+        serialized = _serialize_test_result(result, is_action=True)
+
+        # logs_hint should not be in run_status for actions
+        assert "logs_hint" not in serialized["run_status"]
