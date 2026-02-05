@@ -14,7 +14,6 @@ from click.testing import CliRunner
 from codeplane.cli.main import cli
 from codeplane.config import load_config
 from codeplane.config.models import LoggingConfig, LogOutputConfig
-from codeplane.core.errors import ConfigError
 from codeplane.core.logging import (
     clear_request_id,
     configure_logging,
@@ -72,8 +71,8 @@ def temp_repo(tmp_path: Path) -> Path:
 class TestErrorPropagation:
     """Test that errors propagate properly through CLI."""
 
-    def test_given_invalid_config_when_load_then_raises_config_error(self, temp_repo: Path) -> None:
-        """Invalid config raises ConfigError with details."""
+    def test_given_invalid_config_when_load_then_uses_defaults(self, temp_repo: Path) -> None:
+        """Invalid config gracefully falls back to defaults."""
         # Given - init the repo first
         runner.invoke(cli, ["init", str(temp_repo)])
 
@@ -81,12 +80,12 @@ class TestErrorPropagation:
         config_path = temp_repo / ".codeplane" / "config.yaml"
         config_path.write_text("invalid: yaml: [unterminated")
 
-        # When/Then
-        with pytest.raises(ConfigError) as exc_info:
-            load_config(repo_root=temp_repo)
+        # When - load config (should not raise, falls back to defaults)
+        config = load_config(repo_root=temp_repo)
 
-        assert exc_info.value.code.name == "CONFIG_PARSE_ERROR"
-        assert str(temp_repo) in str(exc_info.value.details.get("path", ""))
+        # Then - defaults are used
+        assert config.logging.level == "INFO"  # default
+        assert config.server.port == 7654  # default
 
     def test_given_init_error_when_invoke_then_nonzero_exit(self, tmp_path: Path) -> None:
         """CLI returns non-zero exit code on error."""

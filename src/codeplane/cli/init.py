@@ -7,10 +7,14 @@ import sys
 from pathlib import Path
 
 import click
-import yaml
 from rich.table import Table
 
-from codeplane.config.models import CodePlaneConfig
+from codeplane.config.user_config import (
+    RuntimeState,
+    UserConfig,
+    write_runtime_state,
+    write_user_config,
+)
 from codeplane.core.progress import (
     get_console,
     phase_box,
@@ -78,12 +82,13 @@ def initialize_repo(repo_root: Path, *, force: bool = False, show_cpl_up_hint: b
     else:
         index_dir = codeplane_dir
 
-    # Create config with index_path
-    config = CodePlaneConfig()
-    config.index.index_path = str(index_dir)
+    # Write minimal user config
     config_path = codeplane_dir / "config.yaml"
-    with config_path.open("w") as f:
-        yaml.dump(config.model_dump(), f, default_flow_style=False, sort_keys=False)
+    write_user_config(config_path, UserConfig())
+
+    # Write runtime state (index_path) - auto-generated, not user-editable
+    state_path = codeplane_dir / "state.yaml"
+    write_runtime_state(state_path, RuntimeState(index_path=str(index_dir)))
 
     cplignore_path = codeplane_dir / ".cplignore"
     if not cplignore_path.exists() or force:
@@ -93,7 +98,11 @@ def initialize_repo(repo_root: Path, *, force: bool = False, show_cpl_up_hint: b
     gitignore_path = codeplane_dir / ".gitignore"
     if not gitignore_path.exists() or force:
         gitignore_path.write_text(
-            "# Ignore everything except config files\n*\n!.gitignore\n!config.yaml\n"
+            "# Ignore everything except user config files\n"
+            "*\n"
+            "!.gitignore\n"
+            "!config.yaml\n"
+            "# state.yaml is auto-generated, do not commit\n"
         )
 
     # === Discovery Phase ===

@@ -3,9 +3,16 @@
 Supports loading configuration from multiple sources with precedence:
 1. Direct kwargs (highest priority)
 2. Environment variables (CODEPLANE__SECTION__KEY)
-3. Repo-level YAML (.codeplane/config.yaml)
-4. Global YAML (~/.config/codeplane/config.yaml)
+3. User config (.codeplane/config.yaml) - minimal user-facing options
+4. Runtime state (.codeplane/state.yaml) - auto-generated, not user-editable
 5. Built-in defaults (lowest priority)
+
+User-facing config (config.yaml) only contains:
+- port: Server port
+- max_file_size_mb: Max file size for indexing
+- log_level: Logging verbosity
+
+Everything else uses opinionated defaults that shouldn't need changing.
 """
 
 from pathlib import Path
@@ -27,6 +34,10 @@ from codeplane.config.models import (
     TelemetryConfig,
     TestingConfig,
     TimeoutsConfig,
+)
+from codeplane.config.user_config import (
+    load_runtime_state,
+    load_user_config,
 )
 from codeplane.core.errors import ConfigError
 
@@ -115,10 +126,13 @@ CodePlaneSettings = _make_settings_class({})
 
 
 def load_config(repo_root: Path | None = None, **kwargs: Any) -> CodePlaneConfig:
-    """Load config: defaults < global yaml < repo yaml < env vars < kwargs.
+    """Load config: defaults < user config < state < env vars < kwargs.
+
+    Loads user-facing config from .codeplane/config.yaml and runtime state
+    from .codeplane/state.yaml, merging them into the full internal config.
 
     Args:
-        repo_root: Repository root to load .codeplane/config.yaml from.
+        repo_root: Repository root to load config from.
                    Defaults to current working directory.
         **kwargs: Override values (highest precedence).
 
@@ -129,10 +143,30 @@ def load_config(repo_root: Path | None = None, **kwargs: Any) -> CodePlaneConfig
         ConfigError: On invalid YAML syntax or validation errors.
     """
     repo_root = repo_root or Path.cwd()
+    codeplane_dir = repo_root / ".codeplane"
 
-    # Load and merge YAML files (global first, repo overrides)
-    yaml_config = _load_yaml(GLOBAL_CONFIG_PATH)
-    yaml_config = _deep_merge(yaml_config, _load_yaml(repo_root / ".codeplane" / "config.yaml"))
+    # Load user config (minimal fields)
+    user_config = load_user_config(codeplane_dir / "config.yaml")
+
+    # Load runtime state (index_path, etc.)
+    state = load_runtime_state(codeplane_dir / "state.yaml")
+
+    # Build YAML config dict from user config + state
+    # Map user config fields to internal config structure
+    yaml_config: dict[str, Any] = {
+        "server": {"port": user_config.port},
+        "index": {"max_file_size_mb": user_config.max_file_size_mb},
+        "logging": {"level": user_config.log_level},
+    }
+
+    # Add state (index_path)
+    if state:
+        yaml_config["index"]["index_path"] = state.index_path
+
+    # Load and merge global config if present
+    global_config = _load_yaml(GLOBAL_CONFIG_PATH)
+    if global_config:
+        yaml_config = _deep_merge(global_config, yaml_config)
 
     settings_cls = _make_settings_class(yaml_config)
     try:

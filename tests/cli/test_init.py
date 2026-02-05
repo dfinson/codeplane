@@ -76,19 +76,34 @@ class TestInitCommand:
         assert ".env" in content
 
     def test_given_git_repo_when_init_then_config_is_valid_yaml(self, temp_git_repo: Path) -> None:
-        """Init creates valid YAML config with expected sections."""
+        """Init creates valid YAML config with simplified user fields."""
         # Given
         repo = temp_git_repo
 
         # When
         runner.invoke(cli, ["init", str(repo)])
 
-        # Then
+        # Then - new simplified config format
         config_path = repo / ".codeplane" / "config.yaml"
         with config_path.open() as f:
             config = yaml.safe_load(f)
-        assert "logging" in config
-        assert "server" in config
+        # New format has root-level fields, not nested
+        assert "port" in config
+
+    def test_given_git_repo_when_init_then_creates_state_file(self, temp_git_repo: Path) -> None:
+        """Init creates state.yaml with index_path."""
+        # Given
+        repo = temp_git_repo
+
+        # When
+        runner.invoke(cli, ["init", str(repo)])
+
+        # Then - state.yaml should exist with index_path
+        state_path = repo / ".codeplane" / "state.yaml"
+        assert state_path.exists()
+        with state_path.open() as f:
+            state = yaml.safe_load(f)
+        assert "index_path" in state
 
     def test_given_non_git_dir_when_init_then_fails(self, temp_non_git: Path) -> None:
         """Init fails with error when run outside git repository."""

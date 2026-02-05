@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from codeplane.config import load_config
+from codeplane.config.user_config import UserConfig, write_user_config
 
 pytestmark = pytest.mark.integration
 
@@ -53,7 +54,7 @@ class TestConfigCascade:
         self, temp_repo: Path, global_config_dir: Path
     ) -> None:
         """Full cascade applies correct precedence."""
-        # Given - global config sets base values
+        # Given - global config sets base values (full nested format)
         with (global_config_dir / "config.yaml").open("w") as f:
             yaml.dump(
                 {
@@ -63,11 +64,10 @@ class TestConfigCascade:
                 f,
             )
 
-        # Given - repo config overrides some values
+        # Given - repo config uses new simplified format
         config_dir = temp_repo / ".codeplane"
         config_dir.mkdir()
-        with (config_dir / "config.yaml").open("w") as f:
-            yaml.dump({"logging": {"level": "DEBUG"}}, f)
+        write_user_config(config_dir / "config.yaml", UserConfig(log_level="DEBUG"))
 
         # Given - env var overrides one value
         os.environ["CODEPLANE__SERVER__PORT"] = "9999"
@@ -76,7 +76,7 @@ class TestConfigCascade:
         config = load_config(repo_root=temp_repo)
 
         # Then - verify cascade
-        assert config.logging.level == "DEBUG"  # from repo
+        assert config.logging.level == "DEBUG"  # from repo (overrides global)
         assert config.server.port == 9999  # from env (overrides global)
         assert config.server.host == "0.0.0.0"  # from global
 
@@ -84,7 +84,7 @@ class TestConfigCascade:
         self, temp_repo: Path, global_config_dir: Path
     ) -> None:
         """Nested config objects are deep merged, not replaced."""
-        # Given - global sets logging config
+        # Given - global sets logging config (full nested format)
         with (global_config_dir / "config.yaml").open("w") as f:
             yaml.dump(
                 {
@@ -96,15 +96,15 @@ class TestConfigCascade:
                 f,
             )
 
-        # Given - repo changes level only
+        # Given - repo changes level using new simplified format
         config_dir = temp_repo / ".codeplane"
         config_dir.mkdir()
-        with (config_dir / "config.yaml").open("w") as f:
-            yaml.dump({"logging": {"level": "DEBUG"}}, f)
+        write_user_config(config_dir / "config.yaml", UserConfig(log_level="DEBUG"))
 
         # When
         config = load_config(repo_root=temp_repo)
 
         # Then
         assert config.logging.level == "DEBUG"
+        # Outputs from global config are preserved
         assert len(config.logging.outputs) == 1
