@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pygit2
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from codeplane.git._internal import (
     CheckoutPlanner,
@@ -522,10 +523,19 @@ class GitOps:
     def fetch(
         self, remote: str = "origin", callbacks: SystemCredentialCallback | None = None
     ) -> None:
-        """Fetch from remote."""
+        """Fetch from remote with retry for transient network failures."""
         cbs = callbacks or get_default_callbacks()
+        self._fetch_with_retry(remote, cbs)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
+    def _fetch_with_retry(self, remote: str, callbacks: SystemCredentialCallback) -> None:
+        """Internal fetch with retry decorator."""
         # Use lambda to avoid pygit2 version differences in keyword arg names
-        self._access.run_remote_operation(remote, "fetch", lambda r: r.fetch(callbacks=cbs))
+        self._access.run_remote_operation(remote, "fetch", lambda r: r.fetch(callbacks=callbacks))
 
     def push(
         self,
@@ -534,7 +544,7 @@ class GitOps:
         callbacks: SystemCredentialCallback | None = None,
     ) -> None:
         """
-        Push current branch to remote.
+        Push current branch to remote with retry for transient network failures.
 
         Note:
             Always pushes the current local branch to the same-named branch
@@ -545,9 +555,20 @@ class GitOps:
         prefix = "+" if force else ""
         refspec = f"{prefix}refs/heads/{branch}:refs/heads/{branch}"
         cbs = callbacks or get_default_callbacks()
+        self._push_with_retry(remote, refspec, cbs)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
+    def _push_with_retry(
+        self, remote: str, refspec: str, callbacks: SystemCredentialCallback
+    ) -> None:
+        """Internal push with retry decorator."""
         # Use lambda to avoid pygit2 version differences in keyword arg names
         self._access.run_remote_operation(
-            remote, "push", lambda r: r.push([refspec], callbacks=cbs)
+            remote, "push", lambda r: r.push([refspec], callbacks=callbacks)
         )
 
     def pull(

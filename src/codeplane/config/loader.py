@@ -1,4 +1,12 @@
-"""Configuration loading with pydantic-settings."""
+"""Configuration loading with pydantic-settings.
+
+Supports loading configuration from multiple sources with precedence:
+1. Direct kwargs (highest priority)
+2. Environment variables (CODEPLANE__SECTION__KEY)
+3. Repo-level YAML (.codeplane/config.yaml)
+4. Global YAML (~/.config/codeplane/config.yaml)
+5. Built-in defaults (lowest priority)
+"""
 
 from pathlib import Path
 from typing import Any, cast
@@ -8,11 +16,14 @@ from pydantic import ValidationError
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from codeplane.config.models import (
+    DatabaseConfig,
+    DebugConfig,
     IndexConfig,
     IndexerConfig,
     LimitsConfig,
     LoggingConfig,
     ServerConfig,
+    TelemetryConfig,
     TestingConfig,
     TimeoutsConfig,
 )
@@ -64,7 +75,7 @@ def _make_settings_class(yaml_config: dict[str, Any]) -> type[BaseSettings]:
     """Create a Settings class with instance-based YAML source (thread-safe)."""
 
     class CodePlaneSettings(BaseSettings):
-        """Root config. Env vars: CODEPLANE__LOGGING__LEVEL, CODEPLANE__DAEMON__PORT, etc."""
+        """Root config. Env vars: CODEPLANE__LOGGING__LEVEL, CODEPLANE__SERVER__PORT, etc."""
 
         model_config = SettingsConfigDict(
             env_prefix="CODEPLANE__",
@@ -79,6 +90,9 @@ def _make_settings_class(yaml_config: dict[str, Any]) -> type[BaseSettings]:
         indexer: IndexerConfig = IndexerConfig()
         limits: LimitsConfig = LimitsConfig()
         testing: TestingConfig = TestingConfig()
+        telemetry: TelemetryConfig = TelemetryConfig()
+        database: DatabaseConfig = DatabaseConfig()
+        debug: DebugConfig = DebugConfig()
 
         @classmethod
         def settings_customise_sources(
@@ -101,7 +115,19 @@ CodePlaneConfig = CodePlaneSettings
 
 
 def load_config(repo_root: Path | None = None, **kwargs: Any) -> BaseSettings:
-    """Load config: defaults < global yaml < repo yaml < env vars < kwargs."""
+    """Load config: defaults < global yaml < repo yaml < env vars < kwargs.
+
+    Args:
+        repo_root: Repository root to load .codeplane/config.yaml from.
+                   Defaults to current working directory.
+        **kwargs: Override values (highest precedence).
+
+    Returns:
+        Fully resolved configuration object.
+
+    Raises:
+        ConfigError: On invalid YAML syntax or validation errors.
+    """
     repo_root = repo_root or Path.cwd()
 
     # Load and merge YAML files (global first, repo overrides)

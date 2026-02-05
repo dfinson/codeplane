@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from codeplane.core.languages import EXTENSION_TO_NAME
+from codeplane.mcp.errors import MCPError, MCPErrorCode
 
 
 @dataclass
@@ -54,6 +55,34 @@ class ListFilesResult:
     truncated: bool = False
 
 
+def validate_path_in_repo(repo_root: Path, user_path: str) -> Path:
+    """Validate that user_path is within repo_root, preventing traversal attacks.
+
+    Args:
+        repo_root: Repository root directory
+        user_path: User-provided path (may be relative or absolute)
+
+    Returns:
+        Resolved absolute path if valid
+
+    Raises:
+        MCPError(PERMISSION_DENIED): If path escapes repo_root
+    """
+    resolved_root = repo_root.resolve()
+    full_path = (repo_root / user_path).resolve()
+
+    if not full_path.is_relative_to(resolved_root):
+        raise MCPError(
+            code=MCPErrorCode.PERMISSION_DENIED,
+            message=f"Path '{user_path}' escapes repository root",
+            remediation="Use paths relative to the repository root. Do not use '..' to escape the repo.",
+            path=user_path,
+            repo_root=str(resolved_root),
+        )
+
+    return full_path
+
+
 class FileOps:
     """File operations for read_files and list_files tools."""
 
@@ -85,9 +114,9 @@ class FileOps:
         Returns:
             ListFilesResult with matching entries
         """
-        # Resolve directory
+        # Resolve directory with traversal validation
         if path:
-            target_dir = self._repo_root / path
+            target_dir = validate_path_in_repo(self._repo_root, path)
             rel_base = path.rstrip("/")
         else:
             target_dir = self._repo_root
@@ -206,7 +235,13 @@ class FileOps:
 
         results: list[FileResult] = []
         for rel_path in paths:
-            full_path = self._repo_root / rel_path
+            # Validate path doesn't escape repo root
+            try:
+                full_path = validate_path_in_repo(self._repo_root, rel_path)
+            except MCPError:
+                # Skip paths that escape repo root (silent skip matches existing not-found behavior)
+                continue
+
             if not full_path.is_file():
                 continue
 

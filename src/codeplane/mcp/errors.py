@@ -28,6 +28,9 @@ class MCPErrorCode(str, Enum):
     DRY_RUN_EXPIRED = "DRY_RUN_EXPIRED"
     DRY_RUN_REQUIRED = "DRY_RUN_REQUIRED"
 
+    # Pagination errors - agent should restart pagination
+    CURSOR_STALE = "CURSOR_STALE"
+
     # File errors
     FILE_NOT_FOUND = "FILE_NOT_FOUND"
     FILE_EXISTS = "FILE_EXISTS"
@@ -178,6 +181,33 @@ class DryRunExpiredError(MCPError):
             remediation="Re-run with dry_run=True to get a fresh validation token.",
             dry_run_id=dry_run_id,
             age_seconds=age_seconds,
+        )
+
+
+class CursorStaleError(MCPError):
+    """Raised when pagination cursor is invalidated by index changes.
+
+    This error tells agents clearly that they MUST restart pagination from
+    the beginning because the underlying index has changed since the cursor
+    was created.
+    """
+
+    def __init__(self, cursor_epoch: int, current_epoch: int) -> None:
+        super().__init__(
+            code=MCPErrorCode.CURSOR_STALE,
+            message=(
+                f"Pagination cursor is stale. Index was updated since cursor creation "
+                f"(cursor epoch: {cursor_epoch}, current epoch: {current_epoch}). "
+                f"Results may have changed."
+            ),
+            remediation=(
+                "RESTART PAGINATION FROM THE BEGINNING. "
+                "Do not continue from this cursor. "
+                "Call the same tool again WITHOUT a cursor parameter to start fresh. "
+                "This ensures you see consistent, up-to-date results."
+            ),
+            cursor_epoch=cursor_epoch,
+            current_epoch=current_epoch,
         )
 
 
@@ -338,6 +368,22 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
             "Check modified_files - hooks may have auto-fixed some issues",
             "Fix remaining errors and retry the commit",
             "If auto-fixes were applied, stage them and retry",
+        ],
+    ),
+    MCPErrorCode.CURSOR_STALE.value: ErrorDocumentation(
+        code=MCPErrorCode.CURSOR_STALE,
+        category="pagination",
+        description="Pagination cursor is invalid because the index was updated.",
+        causes=[
+            "Files were added, modified, or deleted since pagination started",
+            "A reindex operation completed during pagination",
+            "Another session triggered an index update",
+        ],
+        remediation=[
+            "RESTART PAGINATION FROM THE BEGINNING - do not continue from this cursor",
+            "Call the same tool again WITHOUT a cursor parameter",
+            "This ensures consistent, up-to-date results",
+            "Consider completing pagination quickly to avoid this issue",
         ],
     ),
 }

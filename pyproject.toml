@@ -45,6 +45,8 @@ dependencies = [
     "questionary>=2.0.0",
     # File watching
     "watchfiles>=1.0.0",
+    # Retry logic for network operations
+    "tenacity>=8.2.0",
 ]
 
 [project.optional-dependencies]
@@ -124,6 +126,8 @@ module = [
     "httpx.*",
     "rich.*",
     "questionary.*",
+    "tenacity.*",
+    "opentelemetry.*",
 ]
 ignore_missing_imports = true
 
@@ -154,6 +158,10 @@ exclude_lines = [
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
 ]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv", "venv"]
+skips = ["B101"]  # Skip assert_used - we use asserts in tests
 
 [dependency-groups]
 dev = [

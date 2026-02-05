@@ -1,0 +1,72 @@
+name: Security
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly Monday scan
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  # Dependency vulnerability review for PRs
+  dependency-review:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          deny-licenses: GPL-3.0, AGPL-3.0
+
+  # Secret scanning (GitHub's built-in is enabled, this adds custom patterns)
+  secrets-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Scan for secrets with gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_COMMENTS: false
+
+  # Python-specific security scanning with Bandit
+  bandit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Check for Python files
+        id: check-python
+        run: |
+          if find src -name "*.py" ! -name "__init__.py" -type f | grep -q .; then
+            echo "has_python=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_python=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install Bandit
+        if: steps.check-python.outputs.has_python == 'true'
+        run: pip install bandit[toml]
+
+      - name: Run Bandit
+        if: steps.check-python.outputs.has_python == 'true'
+        run: bandit -r src/ -c pyproject.toml -f sarif -o bandit-results.sarif || true
+
+      - name: Upload Bandit results to GitHub Security
+        if: steps.check-python.outputs.has_python == 'true'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: bandit-results.sarif
+          category: bandit
