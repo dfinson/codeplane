@@ -6,15 +6,11 @@ repos:
         args: [--fix]
       - id: ruff-format
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.19.0
+  - repo: local
     hooks:
       - id: mypy
+        name: mypy
+        entry: .venv/bin/mypy
+        language: system
         files: ^src/
-        additional_dependencies:
-          - pydantic>=2.12.0
-          - pydantic-settings>=2.0.0
-          - structlog>=25.5.0
-          - click>=8.3.0
-          - pygit2>=1.19.0
         args: [--config-file=pyproject.toml]

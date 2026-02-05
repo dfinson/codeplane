@@ -7,7 +7,7 @@
 - [3. Explicit Non-Goals](#3-explicit-non-goals)
 - [4. Architecture Overview](#4-architecture-overview)
   - [4.1 Components](#41-components)
-  - [4.2 CLI, Daemon Lifecycle, and Operability](#42-cli-daemon-lifecycle-and-operability)
+  - [4.2 CLI, Server Lifecycle, and Operability](#42-cli-server-lifecycle-and-operability)
   - [4.3 Terminology Note](#43-terminology-note-always-on-vs-operated-lifecycle)
 - [5. Repository Truth & Reconciliation](#5-repository-truth--reconciliation-no-watchers)
   - [5.1 Design Goals](#51-design-goals)
@@ -22,19 +22,16 @@
   - [5.10 Reconciliation Invariants](#510-reconciliation-invariants)
 - [6. Ignore Rules, Two-Tier Index Model, and Security](#6-ignore-rules-two-tier-index-model-and-security-posture)
   - [6.1–6.10 Security and Ignore Configuration](#61-security-guarantees)
-- [7. Indexing & Retrieval Architecture](#7-indexing--retrieval-architecture-syntactic--semantic-two-layer)
+- [7. Index Architecture (Tier 0 + Tier 1)](#7-index-architecture-tier-0--tier-1)
   - [7.1 Overview](#71-overview)
-  - [7.2 Lexical Index](#72-lexical-index)
-  - [7.3 Structural Metadata](#73-structural-metadata)
-  - [7.4 Parser (Tree-sitter)](#74-parser-tree-sitter)
-  - [7.5 Semantic Layer (SCIP Batch Indexers)](#75-semantic-layer-scip-batch-indexers)
-  - [7.6 Graph Index](#76-graph-index)
-  - [7.7 Indexing Mechanics](#77-indexing-mechanics)
-  - [7.8 Atomic Update Protocol](#78-atomic-update-protocol)
-  - [7.9 Retrieval Pipeline](#79-retrieval-pipeline-no-embeddings)
-  - [7.10 Mental Map Endpoints](#710-mental-map-endpoints)
-  - [7.11 Documentation Awareness](#711-documentation-awareness)
-  - [7.12 SCIP Indexer Management](#712-scip-indexer-management--language-support)
+  - [7.2 Tier 0 — Lexical Retrieval](#72-tier-0--lexical-retrieval-tantivy)
+  - [7.3 Tier 1 — Structural Facts](#73-tier-1--structural-facts-sqlite)
+  - [7.4 Identity Scheme (def_uid)](#74-identity-scheme-def_uid)
+  - [7.5 Parser (Tree-sitter)](#75-parser-tree-sitter)
+  - [7.6 Epoch Model](#76-epoch-model)
+  - [7.7 File Watcher Integration](#77-file-watcher-integration)
+  - [7.8 Bounded Query APIs](#78-bounded-query-apis)
+  - [7.9 What This Index Does NOT Provide](#79-what-this-index-does-not-provide)
 - [8. Deterministic Refactor Engine](#8-deterministic-refactor-engine-scip-based-semantic-data)
   - [8.1 Purpose](#81-purpose)
   - [8.2 Core Principles](#82-core-principles)
@@ -59,21 +56,26 @@
 - [16. Embeddings Policy](#16-embeddings-policy)
 - [17. Subsystem Ownership Boundaries](#17-subsystem-ownership-boundaries-who-owns-what)
 - [18. Resolved Conflicts](#18-resolved-conflicts-previously-open)
-- [19. Risk Register](#19-risk-register-remaining-design-points)
-- [20. Readiness Note](#20-readiness-note-what-is-stable-enough-for-api-surfacing-next)
-- [21. What CodePlane Is](#21-what-codeplane-is-canonical-summary)
-- [22. MCP API Specification](#22-mcp-api-specification)
-  - [22.1 Design Principles](#221-design-principles)
-  - [22.2 Protocol Architecture](#222-protocol-architecture)
-  - [22.3 Response Envelope](#223-response-envelope)
-  - [22.4 Tool Catalog](#224-tool-catalog)
-  - [22.5 Progress Reporting](#225-progress-reporting)
-  - [22.6 Pagination](#226-pagination)
-  - [22.7 Tool Specifications](#227-tool-specifications)
-  - [22.8 REST Endpoints](#228-rest-endpoints-operator)
-  - [22.9 Error Handling](#229-error-handling)
-  - [22.10 MCP Server Configuration](#2210-mcp-server-configuration)
-  - [22.11 Versioning](#2211-versioning)
+- [19. Semantic Support Exploration](#19-semantic-support-exploration-design-archaeology)
+  - [19.1 Approaches Explored](#191-approaches-explored)
+  - [19.2 Failure Modes](#192-explicit-failure-modes-discovered)
+  - [19.3 Conclusion](#193-conclusion-planner-based-architecture)
+  - [19.4 Future Direction](#194-future-direction-explicitly-future--probable)
+- [20. Risk Register](#20-risk-register-remaining-design-points)
+- [21. Readiness Note](#21-readiness-note-what-is-stable-enough-for-api-surfacing-next)
+- [22. What CodePlane Is](#22-what-codeplane-is-canonical-summary)
+- [23. MCP API Specification](#23-mcp-api-specification)
+  - [23.1 Design Principles](#231-design-principles)
+  - [23.2 Protocol Architecture](#232-protocol-architecture)
+  - [23.3 Response Envelope](#233-response-envelope)
+  - [23.4 Tool Catalog](#234-tool-catalog)
+  - [23.5 Progress Reporting](#235-progress-reporting)
+  - [23.6 Pagination](#236-pagination)
+  - [23.7 Tool Specifications](#237-tool-specifications)
+  - [23.8 REST Endpoints](#238-rest-endpoints-operator)
+  - [23.9 Error Handling](#239-error-handling)
+  - [23.10 MCP Server Configuration](#2310-mcp-server-configuration)
+  - [23.11 Versioning](#2311-versioning)
 
 ---
 
@@ -145,7 +147,7 @@ CodePlane does not plan, retry, or decide strategies. Its role is deterministic 
 
 ### 4.1 Components
 
-- **CodePlane daemon (Python)**
+- **CodePlane server (Python)**
   - Maintains deterministic indexes.
   - Owns file, Git, test, and refactor operations.
   - Exposes endpoints.
@@ -163,7 +165,7 @@ Operational viewpoint:
 
 - VS Code is a viewer, not a state manager.
 
-### 4.2 CLI, Daemon Lifecycle, and Operability
+### 4.2 CLI, Server Lifecycle, and Operability
 
 CodePlane uses a single operator CLI: `cpl`. It is explicitly **not agent-facing**.
 
@@ -172,9 +174,8 @@ Core commands (idempotent; human output derivable from structured JSON via `--js
 | Command | Description |
 |---|---|
 | `cpl init` | One-time repo setup: write `.codeplane/`, generate `.cplignore`, bind repo ID, build first index (or schedule immediately). |
-| `cpl up` | Start the repo's daemon if not running. Idempotent, safe to run repeatedly. |
-| `cpl down` | Gracefully stop the repo's daemon. Useful for upgrades, debugging, releasing locks. |
-| `cpl status` | Single human-readable view: daemon running, repo fingerprint, index version, last reconcile, last error. |
+| `cpl up` | Start the CodePlane server (foreground). Ctrl+C to stop. Idempotent check prevents duplicate instances. |
+| `cpl status` | Single human-readable view: server running, repo fingerprint, index version, last reconcile, last error. |
 | `cpl doctor` | Single "tell me what's wrong and how to fix it" command. Output suitable for pasting into issues. |
 
 Humans learn: `init` once, then `up/status/doctor`.
@@ -190,19 +191,19 @@ The following capabilities are folded into core commands or removed to avoid sur
 | Config CLI | Removed in v1. Use files: global config in user dir, repo config in `.codeplane/config`. One-off overrides via `cpl up --set key=value` if needed. |
 | Rebuild index | Automatic when integrity checks fail; no manual trigger. |
 
-Daemon model:
+Server model:
 
-- **Repo-scoped daemon** — one daemon per repository; no multi-repo mode.
-- `cpl up` in a repo directory starts/ensures a daemon for that repo only.
+- **Foreground process** — `cpl up` runs in foreground, Ctrl+C to stop. No background daemonization.
+- **Repo-scoped** — one server per repository; no multi-repo mode.
+- `cpl up` in a repo directory starts a server for that repo only.
 - Transport: **HTTP localhost** with ephemeral port.
   - Cross-platform with identical code (no socket vs named pipe divergence).
   - MCP clients can connect directly via HTTP/SSE transport (no stdio proxy needed).
-- Request validation:
-  - All HTTP requests must include `X-CodePlane-Repo: <absolute-path>` header.
-  - Daemon validates header matches its configured repository root.
-  - Missing header → `400` with error code `REPO_HEADER_MISSING`.
-  - Path mismatch → `400` with error code `REPO_MISMATCH` (response includes expected/received paths).
-  - Rationale: Prevents cross-repo accidents when multiple CodePlane instances run simultaneously. No token management, no file permissions, no auth state.
+- Response header:
+  - All HTTP responses include `X-CodePlane-Repo: <absolute-path>` header.
+  - Clients can use this to detect wrong-server mistakes when multiple CodePlane instances run simultaneously.
+  - No request header required — clients don't need to send repo path on every request.
+  - Rationale: Simpler client integration while still enabling cross-repo accident detection. No token management, no file permissions, no auth state.
 - Isolation rationale:
   - Failure in one repo cannot affect another.
   - Version skew between repos is not a problem.
@@ -214,17 +215,13 @@ Repo activation:
 - `cpl up` initializes repo if needed (creates `.codeplane/`, repo UUID, config).
 - Index is eagerly built on startup and continuously maintained.
 
-Auto-start options (optional):
-
-- Manual: `cpl up` (recommended; explicit is better)
-
-Daemon startup includes:
+Server startup includes:
 
 - Git HEAD verification
 - Overlay index diff
 - Index consistency check
 
-Daemon shutdown:
+Server shutdown (Ctrl+C or SIGTERM):
 
 - Graceful shutdown timeout: 5 seconds (configurable)
 - In-flight HTTP requests: allowed to complete until timeout, then aborted
@@ -265,7 +262,7 @@ Logging:
   ```
 - JSON output example:
   ```json
-  {"ts":"2026-01-26T15:30:00.123Z","level":"info","event":"daemon started","port":54321}
+  {"ts":"2026-01-26T15:30:00.123Z","level":"info","event":"server started","port":54321}
   {"ts":"2026-01-26T15:30:01.456Z","level":"debug","op_id":"abc123","event":"refactor planning started","symbol":"MyClass"}
   {"ts":"2026-01-26T15:30:02.789Z","level":"error","op_id":"abc123","event":"indexer timeout","lang":"java","timeout_ms":30000}
   ```
@@ -284,7 +281,7 @@ Installation and upgrades:
 Diagnostics and introspection:
 
 - `cpl doctor` checks:
-  - Daemon reachable
+  - Server reachable
   - Index integrity
   - Commit hash matches Git HEAD
   - Config sanity
@@ -304,7 +301,7 @@ Config precedence:
 
 Environment variables use `CODEPLANE__` prefix with double underscore delimiter for nesting:
 - `CODEPLANE__LOGGING__LEVEL=DEBUG`
-- `CODEPLANE__DAEMON__PORT=8080`
+- `CODEPLANE__SERVER__PORT=8080`
 
 No dedicated config CLI in v1. Edit files directly.
 
@@ -345,7 +342,6 @@ Failure recovery playbooks:
 | Corrupt index | `cpl doctor` fails hash check | Automatic rebuild (or `cpl debug index-rebuild`) |
 | Schema mismatch | Startup error | Automatic rebuild on `cpl up` |
 | Stale revision | `cpl status` shows mismatch | Automatic re-fetch/rebuild on `cpl up` |
-| Daemon crash | Daemon auto-exits | `cpl up` (restarts daemon) |
 
 Platform constraints:
 
@@ -369,7 +365,7 @@ One source uses “local, always-on control plane” as conceptual framing; the 
 Unified operational interpretation:
 
 - CodePlane is **conceptually** a “control plane beneath agents.”
-- It is **operationally** a repo-scoped daemon managed via `cpl up` / `cpl down`.
+- It is **operationally** a repo-scoped foreground server started via `cpl up` (Ctrl+C to stop).
 
 ---
 
@@ -400,36 +396,28 @@ RepoVersion = (HEAD SHA, .git/index stat metadata, submodule SHAs)
 
 ### 5.3 File Type Classification
 
-| Type | Defined By | Tracked In | Checked During Reconcile? | Indexed? |
-|---|---|---|---|---|
-| 1. Git-tracked | Git | Git index | Yes (stat + hash fallback) | Yes (shared and local) |
-| 2. CPL-tracked (Git-ignored) | `.cplignore` opt-in via negation patterns (e.g., `!.env.local`) | CPL overlay index | Yes (stat + hash) | Yes (local only) |
-| 3. Ignored | `.cplignore` hard-excluded | None | No | No |
+| Type | Defined By | Indexed? |
+|---|---|---|
+| 1. Indexable | All files not excluded by `.cplignore` or PRUNABLE_DIRS | Yes |
+| 2. Ignored | Excluded via `.cplignore` or PRUNABLE_DIRS | No |
 
-**Note:** To include a Git-ignored file in the local overlay index, add a negation pattern to `.cplignore`. For example, `!.env.local` will opt that file into CPL tracking even though it's Git-ignored.
+**Note:** Git-tracking is irrelevant for indexing. The index artifacts (`.codeplane/`) are gitignored by design, so it is safe to index sensitive files like `.env`. The only exclusion mechanism is `.cplignore` patterns and PRUNABLE_DIRS (e.g., `node_modules/`, `.git/`).
 
 ### 5.4 Change Detection Strategy
 
-Git-tracked files use Git-style status logic:
+All indexable files use stat-based change detection:
 
-1. Load Git index entries.
-2. For each tracked file:
+1. Walk all files (excluding PRUNABLE_DIRS and `.cplignore` patterns).
+2. For each file:
    - `stat()` compare to cached metadata (mtime, size, inode).
-   - If metadata differs → hash file content and compare to index SHA.
+   - If metadata differs → hash file content and compare to stored hash.
    - If confirmed changed → reindex file and invalidate relevant caches.
-
-CPL-tracked files (not in Git):
-
-- Maintain internal CPL index entries.
-- Compare stat against cached metadata.
-- If metadata differs → hash file content to confirm.
-- Reindex only changed files.
 
 ### 5.5 Reconciliation Triggers
 
 Reconciliation occurs:
 
-- On daemon start
+- On server start
 - Before and after every operation that reads or mutates repo state
 - After agent-initiated file or Git ops (rename, commit, rebase, etc.)
 
@@ -497,92 +485,47 @@ def reconcile(repo):
 
 ### 5.10 Reconciliation Invariants
 
-- All mutations are operation-initiated.
-- No daemon background threads mutate repo state.
+- No server threads atomic_edit_files **repository state** (working tree, `.git/`, HEAD).
+- Background threads **may** update **derived state** (SQLite index, Tantivy, caches).
+- Index updates are continuous: file watcher detects changes, background worker reindexes.
 - Reconcile logic is stateless, deterministic, idempotent.
 - Git is the sole truth for tracked file identity and content.
 - CPL index is derived from disk + Git, never canonical.
 
 ---
 
-## 6. Ignore Rules, Two-Tier Index Model, and Security Posture
+## 6. Ignore Rules and Security Posture
 
 ### 6.1 Security Guarantees
 
-- No shared artifact includes secrets. Only Git-tracked files are eligible.
-- Local overlay index may include sensitive files, but it is never uploaded/shared/in CI artifacts.
+- Index artifacts (`.codeplane/`) are gitignored by design, so sensitive files can be indexed safely.
 - All indexing and mutation actions are scoped, audited, deterministic.
-- Reconciliation is stateless and pull-based; no background mutation.
 
 ### 6.2 Threat Assumptions
 
 - Runs under trusted OS user account.
 - Does not defend against compromised OS or user session.
-- Assumes Git is canonical truth for tracked file truth.
 
 ### 6.3 `.cplignore` Role and Semantics
 
-`.cplignore` is a superset of `.gitignore` and defines what CodePlane never indexes.
+`.cplignore` defines what CodePlane never indexes. Follows `.gitignore` syntax.
 
-Security-focused posture defines `.cplignore` defaults that block secrets and noise. See defaults below.
+Security-focused posture defines `.cplignore` defaults that block noise. See defaults below.
 
-### 6.4 Indexing Model (Security View)
+### 6.4 Indexing Model
 
-| Tier | Contents | Shared? | Indexed? | Example Files |
-|---|---|---:|---:|---|
-| Git-tracked | Tracked source files | Yes | Yes | `src/main.py` |
-| CPL overlay | Git-ignored but whitelisted | No | Yes | `.env.local` |
-| Ignored (CPL) | Blocked via `.cplignore` | No | No | `secrets/`, `*.pem` |
+| Type | Defined By | Indexed? |
+|---|---|---|
+| Indexable | All files not excluded by `.cplignore` or PRUNABLE_DIRS | Yes |
+| Ignored | Blocked via `.cplignore` or PRUNABLE_DIRS | No |
 
-Shared artifact = Git-tracked only. Overlay = local-only. Ignored = excluded.
+Git-tracking is irrelevant for indexing. Index artifacts are gitignored, so it's safe to index all files including `.env`.
 
-### 6.5 Shared Artifact Safety
+### 6.5 `.cplignore` Defaults
 
-- Inclusion rule: Only files explicitly tracked by Git are considered.
-- Build rule: CI artifact construction begins from a clean Git clone.
-- Validation rule: Enterprises can hash-check artifacts and run secret scanners.
-
-### 6.6 `.gitignore` Defaults (Security-Relevant)
-
-Recommended baseline:
+Default ignore patterns for efficiency (block noisy directories):
 
 ```
-# Secrets and tokens
-.env
-*.pem
-*.key
-*.p12
-*.crt
-*.aws
-
-# Build and runtime artifacts
-node_modules/
-dist/
-build/
-.venv/
-__pycache__/
-*.pyc
-
-# IDE and OS junk
-.vscode/
-.idea/
-.DS_Store
-*.log
-*.lock
-```
-
-### 6.7 `.cplignore` Defaults (Security + Efficiency)
-
-Superset ignore file blocks noisy, unsafe, irrelevant paths:
-
-```
-# Always ignored for indexing
-.env
-*.pem
-*.key
-*.p12
-*.crt
-*.aws
 node_modules/
 dist/
 build/
@@ -594,543 +537,449 @@ coverage/
 pytest_cache/
 ```
 
-These files are never indexed even locally.
-
-### 6.8 Failure Modes and Protections
+### 6.6 Failure Modes and Protections
 
 | Misconfig | Result | Mitigation |
 |---|---|---|
-| Secrets committed to Git | Artifact leaks secret | Prevent via pre-commit hooks, Git scanning |
-| Missing `.cplignore` | Sensitive files indexed locally | Defaults applied automatically |
-| Lax Git hygiene | Build includes unintended files | Clean clone + hash match required |
+| Missing `.cplignore` | All files indexed (may be slow) | Defaults applied automatically |
 
-### 6.9 Security-Auditability Notes
+### 6.7 Security-Auditability Notes
 
 - All mutations emit structured deltas.
 - Index is deterministic and reproducible.
 - Operation history is append-only (SQLite-backed).
 - No automatic retries or implicit mutations.
 
-### 6.10 `.env` Overlay Indexing: Resolved
-
-One source explicitly stated local overlay may include `.env` and local config.
-Another source's `.cplignore` default explicitly blocks `.env` from indexing even locally.
-
-**Resolution:** Default-blocked in `.cplignore` for security. Users who need `.env` indexed locally can explicitly whitelist via negation pattern (e.g., `!.env` or `!.env.local`) in `.cplignore`. This preserves security-first defaults while allowing explicit opt-in.
-
 ---
 
-## 7. Indexing & Retrieval Architecture (Syntactic + Semantic, Two-Layer)
+## 7. Index Architecture (Tier 0 + Tier 1)
 
 ### 7.1 Overview
 
-CodePlane builds a deterministic, incrementally updated two-layer index:
+CodePlane builds a deterministic, incrementally updated **stacked index** with two tiers:
 
-**Syntactic Layer (Always-On):**
-- Fast lexical search engine (Tantivy) for identifiers, paths, tokens
-- Structural metadata store (SQLite)
-- Dependency and symbol graph for bounded, explainable expansions
-- Tree-sitter parsing (~15 bundled grammars)
+**Tier 0 — Lexical Retrieval (Always-On):**
+- Tantivy full-text search for fast candidate discovery
+- NOT semantic authority — candidate generation only
+- One document per file with path, content, file_id, unit_id
 
-**Semantic Layer (Batch SCIP Indexers):**
-- One-shot SCIP indexers per language (scip-go, scip-typescript, rust-analyzer, etc.)
-- Precise cross-file references, type hierarchies, and symbol resolution
-- No persistent language servers — indexers run to completion and terminate
-- File state tracking (CLEAN/DIRTY/STALE/PENDING_CHECK)
+**Tier 1 — Structural Facts (Tree-sitter + SQLite):**
+- Syntactic fact extraction via Tree-sitter
+- Persisted facts: DefFact, RefFact, ScopeFact, LocalBindFact, ImportFact, ExportSurface
+- Bounded ambiguity infrastructure (AnchorGroups)
+- No semantic resolution — explicit syntactic facts only
+
+**Explicitly NOT provided:**
+- No semantic authority or type checking
+- No call graph or transitive analysis
+- No heuristic inference or query-time resolution
+- No SCIP, LSP, or compiler integration
+
+This index is **glorified search + syntactic facts**. It enables a future refactor planner but provides no semantic guarantees itself.
 
 Indexing scope:
 - Git-tracked files (primary)
 - CPL-tracked files (local overlay, never shared)
 - CPL-ignored files excluded
 
-No embeddings required. Normal load target is <1s response for syntactic queries.
+No embeddings. Target latency: <100ms for fact lookups, <1s for lexical search.
 
-### 7.2 Lexical Index
+### 7.2 Tier 0 — Lexical Retrieval (Tantivy)
+
+#### Purpose
+
+Fast candidate discovery by text search. Tier 0 is NOT semantic authority — it finds potential matches that Tier 1 facts refine.
+
+#### Storage
 
 - Engine: Tantivy via PyO3 bindings
-- Scope: paths, identifiers, docstrings optional
-- Update model: immutable segment + delete+add on change
-- Indexing throughput: 5k–50k docs/sec depending on hardware
-- Query latency: <10ms warm cache for top-K
-- Incremental updates based on Git blob hash and file content hash diff
+- Location: `.codeplane/tantivy/`
+- Update model: immutable segments + delete+add on change
 - Atomicity: build in temp dir and swap in (`os.replace()`)
 
-### 7.3 Structural Metadata
+#### Schema
 
-- Store: SQLite, single-file, ACID, WAL mode
-- Schema includes:
-  - `chunk_registry`: file/chunk id, blob hash, spans
-  - `symbols`: name, kind, location, language
-  - `relations`: edges between symbols (calls, imports, contains, inherits)
-- Concurrency:
-  - Readers non-blocking
-  - Writer blocked only during batch update (~10–100ms)
-- Consistency: metadata update transactionally coupled to index revision swap
+Each indexed file produces one Tantivy document:
 
-### 7.4 Parser (Tree-sitter)
+| Field | Type | Purpose |
+|-------|------|---------|
+| `file_id` | integer | Unique file identifier (FK to SQLite) |
+| `unit_id` | integer | Build unit / context ID |
+| `path` | text (raw) | Relative file path |
+| `content` | text (tokenized) | Full file content |
+| `language_family` | text | Language family identifier |
+
+#### APIs (All Bounded)
+
+```python
+lexical_search(
+    query: str,
+    limit: int,              # REQUIRED, hard cap
+    unit_id: int | None,     # Optional scope filter
+    language: str | None,    # Optional language filter
+) -> list[LexicalHit]        # Never exceeds limit
+```
+
+All queries MUST specify a limit. Unbounded queries are forbidden.
+
+#### Performance Targets
+
+- Indexing throughput: 5k–50k docs/sec
+- Query latency: <10ms warm cache for top-K
+- Incremental updates based on content hash diff
+
+### 7.3 Tier 1 — Structural Facts (SQLite)
+
+#### Purpose
+
+Persist explicit syntactic facts extracted via Tree-sitter. These facts enable bounded queries and future refactor planning. No semantic inference.
+
+#### Storage
+
+- Engine: SQLite, single-file, ACID, WAL mode
+- Location: `.codeplane/index.db`
+- Concurrency: Readers non-blocking, single writer
+
+#### Fact Tables
+
+##### 7.3.1 DefFact
+
+Definition facts for symbols (functions, classes, methods, variables).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `def_uid` | TEXT PK | Stable definition identity (see §7.4) |
+| `file_id` | INTEGER FK | File containing definition |
+| `unit_id` | INTEGER FK | Build unit / context |
+| `kind` | TEXT | function, class, method, variable, etc. |
+| `name` | TEXT | Simple name |
+| `qualified_name` | TEXT | Full path (e.g., `module.Class.method`) |
+| `lexical_path` | TEXT | Syntactic nesting path for identity |
+| `start_line` | INTEGER | Definition start line (1-indexed) |
+| `start_col` | INTEGER | Definition start column |
+| `end_line` | INTEGER | Definition end line |
+| `end_col` | INTEGER | Definition end column |
+| `signature_hash` | TEXT | Hash of syntactic signature |
+| `display_name` | TEXT | Human-readable form |
+
+##### 7.3.2 RefFact
+
+Reference facts for identifier occurrences.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `ref_id` | INTEGER PK | Reference identifier |
+| `file_id` | INTEGER FK | File containing reference |
+| `unit_id` | INTEGER FK | Build unit / context |
+| `scope_id` | INTEGER FK | Enclosing scope (FK to ScopeFact) |
+| `token_text` | TEXT | Exact text slice from source |
+| `start_line` | INTEGER | Reference start line |
+| `start_col` | INTEGER | Reference start column |
+| `end_line` | INTEGER | Reference end line |
+| `end_col` | INTEGER | Reference end column |
+| `role` | TEXT | DEFINITION, REFERENCE, IMPORT, EXPORT |
+| `ref_tier` | TEXT | PROVEN, STRONG, ANCHORED, UNKNOWN |
+| `certainty` | TEXT | CERTAIN, UNCERTAIN |
+
+**ref_tier classification (index-time only, no query-time upgrades):**
+
+| Tier | Meaning | Criteria |
+|------|---------|----------|
+| PROVEN | Lexically bound, same-file | LocalBindFact exists with certainty=CERTAIN |
+| STRONG | Cross-file with explicit trace | ImportFact + ExportSurface chain exists |
+| ANCHORED | Ambiguous, grouped | Member of an AnchorGroup |
+| UNKNOWN | Cannot classify | Default for unresolved refs |
+
+##### 7.3.3 ScopeFact
+
+Lexical scope facts for binding resolution.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `scope_id` | INTEGER PK | Scope identifier |
+| `file_id` | INTEGER FK | File containing scope |
+| `unit_id` | INTEGER FK | Build unit / context |
+| `parent_scope_id` | INTEGER FK | Parent scope (NULL for file scope) |
+| `kind` | TEXT | file, class, function, block, etc. |
+| `start_line` | INTEGER | Scope start line |
+| `start_col` | INTEGER | Scope start column |
+| `end_line` | INTEGER | Scope end line |
+| `end_col` | INTEGER | Scope end column |
+
+##### 7.3.4 LocalBindFact
+
+Same-file binding facts (index-time only, NO query-time inference).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `bind_id` | INTEGER PK | Binding identifier |
+| `file_id` | INTEGER FK | File containing binding |
+| `unit_id` | INTEGER FK | Build unit / context |
+| `scope_id` | INTEGER FK | Scope where name is bound |
+| `name` | TEXT | Bound identifier name |
+| `target_kind` | TEXT | DEF, IMPORT, UNKNOWN |
+| `target_uid` | TEXT | def_uid or import_uid or NULL |
+| `certainty` | TEXT | CERTAIN, UNCERTAIN |
+| `reason_code` | TEXT | PARAM, LOCAL_ASSIGN, DEF_IN_SCOPE, IMPORT_ALIAS |
+
+**Critical invariant:** LocalBindFact is written at index time. Query layer reads only — no upgrades, no inference.
+
+##### 7.3.5 ImportFact
+
+Explicit import statements (syntactic only, no dynamic resolution).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `import_uid` | TEXT PK | Import identity |
+| `file_id` | INTEGER FK | File containing import |
+| `unit_id` | INTEGER FK | Build unit / context |
+| `scope_id` | INTEGER FK | Scope where import is visible |
+| `imported_name` | TEXT | Name being imported |
+| `alias` | TEXT | Local alias (NULL if none) |
+| `source_literal` | TEXT | Import source string literal (if extractable) |
+| `import_kind` | TEXT | python_import, python_from, js_import, ts_import_type, etc. |
+| `certainty` | TEXT | CERTAIN, UNCERTAIN |
+
+**What is NOT imported:** Dynamic imports (`importlib.import_module(var)`), computed imports, or any form where the source cannot be statically extracted.
+
+##### 7.3.6 ExportSurface
+
+Materialized export surface per build unit.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `surface_id` | INTEGER PK | Surface identifier |
+| `unit_id` | INTEGER FK | Build unit |
+| `surface_hash` | TEXT | Hash of all entries for invalidation |
+| `epoch_id` | INTEGER | Epoch when surface was computed |
+
+##### 7.3.7 ExportEntry
+
+Individual exported names within an ExportSurface.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `entry_id` | INTEGER PK | Entry identifier |
+| `surface_id` | INTEGER FK | Parent ExportSurface |
+| `exported_name` | TEXT | Public name |
+| `def_uid` | TEXT | Target definition (NULL if unresolved) |
+| `certainty` | TEXT | CERTAIN, UNCERTAIN |
+| `evidence_kind` | TEXT | explicit_export, default_module, __all__literal, etc. |
+
+##### 7.3.8 ExportThunk
+
+Re-export declarations (strictly constrained forms only).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `thunk_id` | INTEGER PK | Thunk identifier |
+| `source_unit` | INTEGER FK | Unit doing the re-export |
+| `target_unit` | INTEGER FK | Unit being re-exported from |
+| `mode` | TEXT | REEXPORT_ALL, EXPLICIT_NAMES, ALIAS_MAP |
+| `explicit_names` | TEXT | JSON array of names (if EXPLICIT_NAMES) |
+| `alias_map` | TEXT | JSON object of name→alias (if ALIAS_MAP) |
+| `evidence_kind` | TEXT | Syntax node type that produced this |
+
+**Strictly forbidden:** Arbitrary predicates, heuristics, or computed re-exports.
+
+##### 7.3.9 AnchorGroup
+
+Bounded ambiguity buckets for refs that cannot be classified as PROVEN or STRONG.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `group_id` | INTEGER PK | Group identifier |
+| `unit_id` | INTEGER FK | Build unit |
+| `member_token` | TEXT | The identifier text (e.g., `foo`) |
+| `receiver_shape` | TEXT | Receiver pattern (e.g., `self.`, `obj.`, `None`) |
+| `total_count` | INTEGER | Total refs in this group |
+| `exemplar_ids` | TEXT | JSON array of ref_ids (hard-capped) |
+
+**Critical invariants:**
+- `exemplar_ids` is hard-capped (default: 10 exemplars max)
+- Exemplars selected by deterministic ordering: (file_path, start_line, start_col)
+- `total_count` tracks true population size for reporting
+- No unbounded lists ever returned
+
+##### 7.3.10 DynamicAccessSite
+
+Telemetry for dynamic access patterns (reporting only, never blocks).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `site_id` | INTEGER PK | Site identifier |
+| `file_id` | INTEGER FK | File containing site |
+| `unit_id` | INTEGER FK | Build unit |
+| `start_line` | INTEGER | Site start line |
+| `start_col` | INTEGER | Site start column |
+| `pattern_type` | TEXT | bracket_access, getattr, reflect, eval, etc. |
+| `extracted_literals` | TEXT | JSON array of literal strings (if any) |
+| `has_non_literal_key` | BOOLEAN | True if key is computed/dynamic |
+
+### 7.4 Identity Scheme (def_uid)
+
+#### Purpose
+
+Stable definition identity that survives renames and moves within syntactic constraints.
+
+#### Construction
+
+```
+def_uid = sha256(
+    unit_id + ":" +
+    kind + ":" +
+    lexical_path + ":" +
+    signature_hash + ":" +
+    disambiguator
+)[:16]  # Truncated for readability
+```
+
+#### Components
+
+| Component | Source | Purpose |
+|-----------|--------|---------|
+| `unit_id` | Build unit ID | Namespace isolation |
+| `kind` | Tree-sitter node type | Distinguish functions from classes |
+| `lexical_path` | Syntactic nesting | e.g., `Class.method`, `module.func` |
+| `signature_hash` | Parameter/return syntax | Distinguish overloads |
+| `disambiguator` | Sibling index | Handle same-signature siblings |
+
+#### Limitations (Explicitly Documented)
+
+- Macros/codegen: Definitions inside macro expansions have unstable identity
+- Conditional compilation: `#ifdef` blocks may produce different identities per config
+- Dynamic definitions: `setattr(obj, name, func)` not captured
+- Monkey patching: Runtime modifications invisible to index
+
+### 7.5 Parser (Tree-sitter)
 
 - Default parser: Tree-sitter via Python bindings
 - Languages: ~15 bundled grammars (~15 MB total), version-pinned
 - Failure mode: If grammar fails or file unsupported, skip with warning
 - No fallback tokenization — lexical index handles fuzzy matching
-- Tree-sitter provides syntactic structure only; semantic resolution via SCIP
+- Tree-sitter provides syntactic structure only; NO semantic resolution
 
-### 7.5 Semantic Layer (SCIP Batch Indexers)
+### 7.6 Epoch Model
 
-#### Design Rationale
+#### Purpose
 
-Persistent LSPs are rejected for CodePlane due to:
-- Memory overhead: 200MB–1GB+ per language server, multiplied by active languages
-- Latency on cold start: 5–30+ seconds to load project
-- Multi-environment complexity: Cannot easily run multiple Python interpreters, Go modules, or Java SDKs concurrently
-- Daemon resource constraints: CodePlane must remain lightweight
+Epochs are incremental snapshot barriers ensuring consistent index state.
 
-Instead, CodePlane uses **one-shot SCIP indexers** that:
-- Run to completion and terminate (no persistent processes)
-- Output SCIP protobuf files (standard format, tooling ecosystem)
-- Support incremental/sharded operation (index changed files only)
-- Decouple indexing from query-time
+#### Semantics
 
-#### Supported SCIP Indexers
+- Epochs are **incremental** — no duplication of unchanged data
+- Only changed files are reindexed between epochs
+- Publishing an epoch means: SQLite facts committed + Tantivy updates committed
+- Epoch ID is monotonically increasing
 
-| Language | Indexer | Acquisition |
-|----------|---------|-------------|
-| Go | scip-go | GitHub releases |
-| TypeScript/JavaScript | scip-typescript | npm package |
-| Python | scip-python | PyPI or GitHub |
-| Java/Kotlin | scip-java | GitHub releases |
-| C# | scip-dotnet | NuGet or GitHub |
-| Rust | rust-analyzer (SCIP mode) | GitHub releases |
-| C/C++ | scip-clang | GitHub releases |
-
-Additional indexers can be configured via `.codeplane/config.yaml`.
-
-#### Indexer Lifecycle
-
-1. **On-demand invocation**: Triggered by reconciliation when files are DIRTY
-2. **Execution**: Indexer runs as subprocess, writes output to file path (not stdout)
-3. **Termination**: Indexer must exit; hanging processes are killed after timeout
-4. **Import**: Output parsed and merged into semantic index
-5. **Cleanup**: Temporary SCIP files removed after import
-
-#### File State Model
-
-Each indexed file has a semantic state:
-
-| State | Meaning | Refresh Behavior |
-|-------|---------|------------------|
-| CLEAN | Semantic data matches content, dependencies confirmed | No action needed |
-| DIRTY | Content changed, refresh enqueued | Re-index this file |
-| STALE | Dependency's interface confirmed changed | Re-index this file |
-| PENDING_CHECK | Dependency is dirty, interface change unknown | Wait for dependency |
-
-State transitions:
-- File edit → DIRTY
-- Dependency becomes DIRTY → dependents become PENDING_CHECK
-- Dependency refresh completes with interface change → dependents become STALE
-- Dependency refresh completes with no interface change → dependents return to CLEAN
-- File refresh completes successfully → CLEAN
-
-#### Refresh Job Worker
+#### Lifecycle
 
 ```
-COMMIT ORDER (Critical):
-1. Claim job (queued → running, atomic WHERE clause)
-2. Run SCIP indexer
-3. Fresh HEAD read + supersede check (MUST be fresh git_rev_parse_head(), not cached)
-4. Import output into semantic index (transactional)
-5. Mark completed AFTER import succeeds
+file changes → background indexing → publish_epoch() → epoch_id++
 ```
 
-**Critical invariant**: Step 3 MUST re-read HEAD immediately before the import decision. Reading HEAD once at function start and comparing later is stale—HEAD can change during indexer execution. The supersede check and import decision must be atomic:
+#### Freshness Contract
+
+When a UX-facing operation requires index data:
+
+1. Determine required files/units
+2. If any are DIRTY/STALE/UNINDEXED: **block** for next epoch
+3. UX **never reads stale data**
+4. Epochs are expected to be sub-second to ~2s
+
+There is NO fallback to stale data. UX correctness > latency.
+
+### 7.7 File Watcher Integration
+
+#### Purpose
+
+Continuous background indexing decoupled from UX flow.
+
+#### Requirements
+
+- Watch all files NOT ignored by:
+  - Repository `.gitignore`
+  - `.codeplane/.gitignore`
+  - CPL ignore rules
+- Debounce events (handle storms, mid-write saves)
+- Enqueue changed files for background indexing
+- Never block UX during ingestion
+
+#### Init Behavior
+
+When `cpl init` runs:
+1. Start file watchers
+2. Trigger full initial index
+3. Begin epoch publication loop
+4. Create `.codeplane/.gitignore` to ignore artifacts
+
+### 7.8 Bounded Query APIs
+
+All fact queries MUST be bounded. No unbounded result sets.
+
+#### Required APIs
 
 ```python
-# After indexer completes:
-job.refresh()  # Reload job state from DB
-current_head = git_rev_parse_head()  # FRESH read
+# Definition lookups
+get_def(def_uid: str) -> DefFact | None
+list_defs_by_name(unit_id: int, name: str, limit: int) -> list[DefFact]
 
-if job.status == 'superseded' or job.head_at_enqueue != current_head:
-    mark_superseded(job_id)
-    discard_output(result)
-    return
+# Reference lookups
+list_refs_by_def_uid(def_uid: str, tier: RefTier | None, limit: int) -> list[RefFact]
+list_proven_refs(def_uid: str, limit: int) -> list[RefFact]  # Convenience
 
-# Only now import
-import_scip_output(result)
-mark_completed(job_id)
+# Scope lookups
+get_scope(scope_id: int) -> ScopeFact | None
+list_scopes_in_file(file_id: int) -> list[ScopeFact]
+
+# Binding lookups
+get_local_bind(scope_id: int, name: str) -> LocalBindFact | None
+list_binds_in_scope(scope_id: int, limit: int) -> list[LocalBindFact]
+
+# Import lookups
+list_imports(file_id: int, limit: int) -> list[ImportFact]
+get_import(import_uid: str) -> ImportFact | None
+
+# Export lookups
+get_export_surface(unit_id: int) -> ExportSurface | None
+list_export_entries(surface_id: int, limit: int) -> list[ExportEntry]
+
+# Anchor group lookups
+get_anchor_group(unit_id: int, member_token: str, receiver_shape: str) -> AnchorGroup | None
+list_anchor_groups(unit_id: int, limit: int) -> list[AnchorGroup]
+
+# Telemetry lookups
+list_dynamic_access_sites(file_id: int | None, unit_id: int | None, limit: int) -> list[DynamicAccessSite]
 ```
 
-HEAD-aware deduplication: Jobs keyed by `(context_id, head_at_enqueue)` to prevent redundant work after rapid commits.
+#### Forbidden APIs (REMOVED)
 
-#### Scoped Refresh (Monotonic Lattice)
+The following are explicitly NOT provided:
+- Call graph traversal
+- Callers / callees
+- Impact analysis
+- Transitive closure
+- Type hierarchy
+- "Resolution" of any kind
+- Qualified name matching as fallback
 
-Refresh jobs support optional scoping for efficiency:
+### 7.9 What This Index Does NOT Provide
 
-```python
-@dataclass
-class RefreshScope:
-    files: list[str] | None = None      # Specific files only
-    packages: list[str] | None = None   # Specific packages only
-    changed_since: float | None = None  # Files changed after timestamp
-```
+To prevent misuse, this section explicitly documents what the index cannot do:
 
-**Critical invariant**: Scope is monotonic per (context_id, head). For the same HEAD:
-- If existing job is queued/running, **merge scope (widen only), never supersede**
-- Only supersede on HEAD change
+1. **No semantic authority**: The index does not prove that a reference binds to a definition. PROVEN and STRONG are syntactic classifications, not semantic proofs.
 
-```
-Scope lattice (narrowest → broadest):
-files([a.py]) ⊂ files([a.py, b.py]) ⊂ packages([pkg]) ⊂ FULL (None)
-changed_since(T1) ⊂ changed_since(T0) where T0 < T1
-```
+2. **No safe refactor guarantees**: The index enables a future planner to propose edits. It does not guarantee those edits are correct.
 
-Merge rules:
-- `None` (full refresh) absorbs everything
-- Files: union of file lists
-- Packages: union of package lists  
-- changed_since: take earlier timestamp (wider range)
+3. **No type information**: The index knows `x = foo()` but not that `x` is a `List[str]`.
 
-This prevents:
-- Refresh storms from concurrent narrow requests
-- Lost coverage from superseding broader jobs with narrower ones
+4. **No cross-language resolution**: Python importing from a JS module is not traced.
 
-#### Mutation Gate
+5. **No dynamic behavior modeling**: `getattr(obj, name)` is logged, not resolved.
 
-**File State Model (Two Axes)**
-
-Files have two orthogonal state dimensions:
-
-| Axis | Values | Meaning |
-|------|--------|---------|
-| Freshness | CLEAN, DIRTY, STALE, PENDING_CHECK | Index currency vs content |
-| Certainty | CERTAIN, AMBIGUOUS | Semantic identity confidence |
-
-**Freshness axis** (index currency):
-- CLEAN: Semantic data matches content, deps confirmed
-- DIRTY: Content changed, refresh enqueued
-- STALE: Dependency interface confirmed changed
-- PENDING_CHECK: Dependency dirty, interface change unknown
-
-**Certainty axis** (semantic confidence):
-- CERTAIN: Semantic identity proven, no ambiguity
-- AMBIGUOUS: Index fresh but language semantics ambiguous (dynamic dispatch, reflection, multiple definitions)
-
-**Mutation behavior by combined state:**
-
-| State | Behavior |
-|-------|----------|
-| CLEAN + CERTAIN | Automatic semantic edits allowed |
-| CLEAN + AMBIGUOUS | Return `needs_decision` with candidates |
-| DIRTY/STALE/PENDING_CHECK + * | Block, return `blocked` with witness packet |
-
-**Response outcomes:**
-- `ok` — edits applied
-- `ok_syntactic` — edits applied via syntactic fallback
-- `blocked` — non-CLEAN files, with witness packet and suggested_refresh_scope
-- `needs_decision` — CLEAN but AMBIGUOUS, with candidates for agent to choose
-- `refused` — operation cannot be performed
-- `unsupported` — operation not implemented for this language
-
-**Escape hatch:** `force_syntactic: true` bypasses mutation gate entirely, applies syntactic-only edits with risk tiers.
-
-#### SCIP Indexer Configuration
-
-```yaml
-semantic:
-  enabled: true
-  indexers:
-    python:
-      command: ["scip-python", "index"]
-      args: ["--project-root", "."]
-      timeout_ms: 300000
-    typescript:
-      command: ["npx", "scip-typescript", "index"]
-      timeout_ms: 300000
-  refresh:
-    max_concurrent_jobs: 2
-    job_timeout_ms: 300000
-    poll_interval_ms: 30000
-```
-
-### 7.6 Graph Index
-- Nodes: symbols
-- Edges: calls, imports, inherits, contains
-- Schema: `relation(src_id, dst_id, type, weight)`
-- Traversal:
-  - Depth cap: 2–3
-  - Fanout cap per node role (utility capped at 3, class at 10)
-  - Deterministic order: lexicographic on symbol name
-- Purpose:
-  - Expand context for symbol search and rerank
-  - Input to refactor targets and reference resolution
-
-### 7.7 Indexing Mechanics
-
-- Change detection:
-  - Git blob hash + mtime for tracked files
-  - Content hash for untracked files
-- Chunk granularity:
-  - Function/class-level when possible
-  - Fallback to full file
-- Update triggers:
-  - On daemon start
-  - Pre/post each operation
-  - On detected repo state change
-- Deleted reference cleanup:
-  - On chunk deletion remove all edges targeting chunk
-  - Update relation tables and affected symbols accordingly
-
-### 7.8 Atomic Update Protocol
-
-- All index writes go to a temp dir/db.
-- On success:
-  - `os.replace()` old `index/` and `meta.db` atomically
-  - Optional backup previous revision (e.g. `index.prev/`)
-- Performance target: full diff update (10–20 files) under 1–2s
-- Crash safety: no intermediate state visible; recovery via Git + clean rebuild
-
-### 7.9 Retrieval Pipeline (No Embeddings)
-
-Pipeline:
-
-1. Lexical search
-2. Graph expansion (bounded)
-3. Deterministic reranking:
-   - exact matches
-   - fuzzy matches
-   - graph distance
-   - file role (test vs src)
-   - optional recency
-4. External symbol enrichment (see §7.9.1)
-
-This replaces repeated grep and file opening.
-
-### 7.9.1 External Symbol Enrichment
-
-Query responses that reference symbols from external libraries (dependencies, stdlib) are enriched with signature and docstring information when available from SCIP index data.
-
-**Rationale:** Agents need library function signatures when refactoring code that calls them. Without this, agents guess or rely on training data (which may be stale for the installed version).
-
-**Mechanism:**
-
-1. Scan query results for unresolved symbols (calls/references not in indexed codebase)
-2. Look up symbol in SCIP semantic index (external dependencies indexed when SCIP indexer runs)
-3. Extract signature and docstring from SCIP occurrence data
-4. Attach enrichment to response
-
-**Response schema:**
-
-```json
-{
-  "results": [...],
-  "external_symbols": {
-    "requests.get": {
-      "signature": "get(url: str | bytes, params: ..., **kwargs) -> Response",
-      "docstring": "Sends a GET request.",
-      "source": "site-packages/requests/api.py"
-    }
-  }
-}
-```
-
-**Scope:**
-
-- Only symbols in returned snippets enriched (not pre-indexed)
-- Enrichment available for languages with SCIP indexers
-- If semantic index unavailable or stale, enrichment omitted (degraded but functional)
-
-### 7.10 Mental Map Endpoints
-
-“Single call” repo map returns:
-
-- Directory structure
-- Language breakdown
-- Packages/modules
-- Entry points
-- Test layout
-- Dependency hubs
-- Public surface summaries
-
-Symbol search returns:
-
-- Definitions
-- References
-- Spans and usage counts
-
-Targeted lexical search is indexed, scoped, structured, deterministic.
-
-(Interface details are deferred; these are capabilities.)
-
-### 7.11 Documentation Awareness
-
-CodePlane indexes documentation files as first-class citizens alongside code, enabling agents to find explanations, examples, and references coherently.
-
-#### Supported Documentation Formats
-
-| Format | Extensions | Structure Extraction |
-|--------|------------|---------------------|
-| Markdown | `.md`, `.markdown` | Headings, code blocks, links |
-| reStructuredText | `.rst` | Headings, code blocks, directives |
-| AsciiDoc | `.adoc`, `.asciidoc` | Headings, code blocks, links |
-| Plain text | `.txt`, `README`, `CHANGELOG` | Paragraph boundaries only |
-
-#### Documentation Structure Index
-
-For each documentation file, CodePlane extracts:
-
-- **Headings**: Title, level, anchor slug, line span
-- **Code blocks**: Language tag, content, line span, referenced symbols (best-effort)
-- **Links**: Internal (relative paths), external (URLs), anchor references
-- **Front matter**: YAML/TOML metadata blocks (common in static site generators)
-
-This enables:
-- Navigation by heading ("jump to Installation section")
-- Finding code examples for a symbol
-- Detecting broken internal links
-
-#### Doc-Code Linking (Best-Effort)
-
-CodePlane attempts to link documentation references to code symbols:
-
-1. **Code blocks**: Parse code blocks using Tree-sitter (when language tagged) and extract symbol references
-2. **Inline code**: Match backtick-wrapped identifiers (`` `MyClass` ``) against known symbols
-3. **Import statements in examples**: Link to actual module definitions
-
-Linking is best-effort and heuristic-based:
-- Exact symbol name matches are linked with high confidence
-- Partial matches (e.g., `MyClass` in prose without backticks) are flagged but not auto-linked
-- Ambiguous references (multiple symbols with same name) are not linked
-
-#### Search Ranking for Documentation
-
-Documentation files receive adjusted ranking based on query intent signals:
-
-| Query Pattern | Doc Weight | Code Weight |
-|---------------|------------|-------------|
-| "how to", "example", "usage" | Higher | Lower |
-| "where is", "definition", "implementation" | Lower | Higher |
-| Symbol name (exact) | Equal | Equal |
-| General keyword | Equal | Equal |
-
-Agents can also explicitly scope searches:
-- `scope:docs` — documentation files only
-- `scope:code` — source files only
-- `scope:all` — default, both
-
-#### Docstring Extraction
-
-Docstrings are extracted as part of symbol metadata:
-
-- Python: `"""..."""` immediately following `def`/`class`
-- JavaScript/TypeScript: JSDoc `/** ... */` preceding functions/classes
-- Go: `//` comment blocks preceding exported symbols
-- Rust: `///` doc comments
-
-Docstrings are:
-- Stored with their parent symbol in the structural index
-- Searchable via lexical index
-- Returned as part of symbol search results
-
-### 7.12 SCIP Indexer Management & Language Support
-
-#### Acquisition Model
-
-CodePlane does not bundle SCIP indexers. Indexers are downloaded on-demand and cached globally.
-
-- Cache location: `~/.codeplane/indexers/{language}-{indexer}-{version}/`
-- Manifest: `~/.codeplane/indexers/manifest.json` tracks installed indexers and their checksums
-- Downloads are SHA256-verified against a signed manifest fetched from CodePlane's release infrastructure
-
-#### Init-Time Discovery
-
-`cpl init` performs language detection and prompts for SCIP indexer installation:
-
-1. Scan repository for language indicators (file extensions, config files)
-2. Present detected languages and recommended indexers
-3. User confirms which indexers to install
-4. Download, verify, and register confirmed indexers
-5. Write selections to `.codeplane/config.yaml`
-
-Example prompt:
-```
-Detected languages:
-  ✓ Python (3847 files) — recommended: scip-python
-  ✓ TypeScript (1203 files) — recommended: scip-typescript
-  ✓ Go (892 files) — recommended: scip-go
-  ○ Java (12 files) — recommended: scip-java (optional, 150MB)
-
-Install SCIP indexers for [Python, TypeScript, Go]? [Y/n]
-Include Java? [y/N]
-```
-
-#### Runtime Language Discovery
-
-If incremental reindexing detects a new language not covered by installed indexers:
-
-1. Daemon logs warning: `INDEXER_LANGUAGE_DISCOVERED`
-2. Daemon sets status flag: `pending_indexer_install: true`
-3. Semantic operations for that language return error `8003 INDEXER_LANGUAGE_UNSUPPORTED`
-4. `cpl status` shows: `New language detected: Rust. Run 'cpl indexer install' or configure exclusion.`
-5. MCP API continues serving all other operations normally (syntactic queries still work)
-6. User runs `cpl indexer install` to interactively install missing indexers, or configures exclusion
-
-This design:
-- Never blocks the user silently
-- Never auto-downloads without consent
-- Keeps daemon running for languages already supported
-- Makes the gap visible and actionable
-- Syntactic layer remains fully functional for all languages
-
-#### SCIP Indexer CLI Commands
-
-| Command | Description |
-|---------|-------------|
-| `cpl indexer list` | Show installed SCIP indexers and their status |
-| `cpl indexer install` | Interactive install for detected but missing languages |
-| `cpl indexer install <language>` | Install SCIP indexer for specific language |
-| `cpl indexer remove <language>` | Remove SCIP indexer for specific language |
-| `cpl indexer update` | Check for and install indexer updates |
-| `cpl indexer run [--language <lang>]` | Manually trigger semantic indexing |
-
-#### SCIP Indexer Configuration
-
-```yaml
-semantic:
-  enabled: true
-  
-  indexers:
-    python:
-      command: ["scip-python", "index"]
-      args: ["--project-root", "."]
-      timeout_ms: 300000
-    typescript:
-      command: ["npx", "scip-typescript", "index"]
-      timeout_ms: 300000
-    go:
-      command: ["scip-go"]
-      timeout_ms: 300000
-  
-  # Languages to exclude from semantic indexing
-  exclude:
-    - markdown
-    - plaintext
-  
-  # Global settings
-  refresh:
-    max_concurrent_jobs: 2
-    job_timeout_ms: 300000
-    poll_interval_ms: 30000
-```
-
-#### Tree-sitter Grammar Management
-
-Tree-sitter grammars provide syntactic parsing (separate from SCIP semantic indexing):
-- Bundled for common languages (~15 grammars, ~15MB total)
-- Downloadable for additional languages via `cpl grammar install <language>`
-- Stored in `~/.codeplane/grammars/`
-- Required for syntactic layer; semantic layer uses SCIP indexers
+6. **No inference or heuristics**: If explicit syntactic proof doesn't exist, the ref stays UNKNOWN.
 
 ---
-
 ## 8. Deterministic Refactor Engine (SCIP-Based Semantic Data)
 
 ### 8.1 Purpose
@@ -2129,7 +1978,7 @@ A task exists to:
 
 - group related operations
 - apply execution limits
-- survive daemon restarts
+- survive server restarts
 - produce structured outcomes
 
 A task does not:
@@ -2146,7 +1995,7 @@ Lifecycle states:
 | OPEN | Task active; operations correlated |
 | CLOSED_SUCCESS | Task ended cleanly |
 | CLOSED_FAILED | Task aborted due to limits/invariants |
-| CLOSED_INTERRUPTED | Daemon restart or client disconnect |
+| CLOSED_INTERRUPTED | Server restart or client disconnect |
 
 Tasks are explicitly opened and closed; never reopened implicitly.
 
@@ -2210,7 +2059,7 @@ CodePlane does not decide next step.
 
 ### 12.4 Restart Semantics
 
-On daemon restart:
+On server restart:
 
 - All OPEN tasks marked CLOSED_INTERRUPTED.
 - Repo reconciled from Git.
@@ -2246,7 +2095,7 @@ It exists to answer:
 
 Primary persistence:
 
-- Local append-only SQLite DB owned by daemon, stored in repo:
+- Local append-only SQLite DB owned by server, stored in repo:
   - `.codeplane/ledger.db`
 
 v1 ledger schema (SQLite only):
@@ -2337,7 +2186,7 @@ CodePlane is infrastructure. Infrastructure requires visibility.
 
 Operators need to answer:
 
-- Is the daemon healthy?
+- Is the server healthy?
 - Are agents making progress or spinning?
 - Which operations are slow, failing, or succeeding?
 - Is the index fresh or stale?
@@ -2352,7 +2201,7 @@ Principles:
 
 1. **Visibility without overhead**: Observability is always-on, not sampled or opt-in.
 2. **Structured and queryable**: Telemetry is structured data, not log grep.
-3. **Bundled and self-contained**: No external dependencies required. Dashboard ships with daemon.
+3. **Bundled and self-contained**: No external dependencies required. Dashboard ships with server.
 4. **Standards-based**: OpenTelemetry for traces and metrics. Exportable but not required.
 
 ### 13.3 What CodePlane Monitors
@@ -2371,9 +2220,9 @@ Every MCP operation emits a trace with spans:
 
 Purpose: Understand what agents are doing, how long it takes, and what fails.
 
-#### System Health (Daemon-Level)
+#### System Health (Server-Level)
 
-The daemon exposes continuous health metrics:
+The server exposes continuous health metrics:
 
 | Metric | What It Measures |
 |--------|------------------|
@@ -2383,7 +2232,7 @@ The daemon exposes continuous health metrics:
 | Reconciliation rate | Reconciliations per minute; duration histogram |
 | Task throughput | Tasks opened/closed per interval; budget exhaustion rate |
 
-Purpose: Know if the daemon is healthy before problems compound.
+Purpose: Know if the server is healthy before problems compound.
 
 #### Convergence Signals (Agent-Level)
 
@@ -2402,9 +2251,9 @@ Purpose: Detect spinning agents and non-convergent loops without CodePlane makin
 
 #### Dashboard Endpoint
 
-The daemon exposes a unified dashboard at `/dashboard`:
+The server exposes a unified dashboard at `/dashboard`:
 
-- Bundled with daemon; no external setup
+- Bundled with server; no external setup
 - Accessible via browser at `http://127.0.0.1:<port>/dashboard`
 - Unified view of traces, metrics, and health
 
@@ -2417,7 +2266,7 @@ Dashboard capabilities:
 
 #### Metrics Endpoint
 
-The daemon exposes a Prometheus-compatible metrics endpoint at `/metrics`:
+The server exposes a Prometheus-compatible metrics endpoint at `/metrics`:
 
 - Scrapeable by external monitoring systems
 - Useful for fleet-level aggregation (optional, not required)
@@ -2550,11 +2399,166 @@ The following contradictions have been resolved:
 
 3. **Tree-sitter failure policy**: Resolved. On parse failure, skip file, log warning, continue indexing. Never abort the indexing pass for a single file failure. See section 7.4.
 
-4. **"Always-on" framing vs explicit lifecycle**: Resolved. CodePlane is conceptually a control plane, operationally a repo-scoped daemon managed via `cpl up` / `cpl down`. OS service integration is deferred.
+4. **"Always-on" framing vs explicit lifecycle**: Resolved. CodePlane is conceptually a control plane, operationally a repo-scoped server managed via `cpl up` (Ctrl+C to stop). OS service integration is deferred.
 
 ---
 
-## 19. Risk Register (Remaining Design Points)
+## 19. Semantic Support Exploration (Design Archaeology)
+
+This section documents the semantic indexing approaches explored during CodePlane development. The designs described here were investigated, partially implemented, and ultimately **reverted** in favor of a simpler planner-based architecture. This record is preserved to prevent future re-exploration of known dead-ends.
+
+### 19.1 Approaches Explored
+
+#### Tree-sitter-only Symbol Graphs (Defs/Refs/Scopes)
+
+**What was tried:**
+- Extract definitions, references, and scopes entirely via Tree-sitter queries
+- Build best-effort binding graphs within files using syntactic scope nesting
+- Use syntactic interface hashing to detect "likely safe" rename targets
+
+**Why it failed:**
+- Cross-file references require semantic resolution that Tree-sitter cannot provide
+- Dynamic languages (Python, JavaScript) have binding semantics invisible to syntax
+- False positives in binding led to silently incorrect renames
+- Interface hashing was fragile and produced false invalidation cascades
+
+#### Best-Effort Binding and Anchor-Group Approaches
+
+**What was tried:**
+- Group ambiguous references into "anchor groups" keyed by receiver shape + member token
+- Use heuristic confidence scores to surface "likely correct" candidates
+- Return bounded candidate sets with exemplars + counts
+
+**Why it failed:**
+- Anchor group explosion: large codebases produced thousands of groups
+- No reliable way to distinguish "probably right" from "dangerously wrong"
+- Agent disambiguation burden shifted problem rather than solving it
+- Confidence scores were unprovable and misleading
+
+#### Export-Surface Fingerprinting and Invalidation
+
+**What was tried:**
+- Hash public interface (exported symbols, signatures) per module
+- Only re-index dependents when interface hash changes
+- Demand-driven rebinding: defer cross-file resolution until query time
+
+**Why it failed:**
+- Interface boundaries are often unclear (Python has no enforced public/private)
+- Re-export chains (`from x import *`) broke fingerprint isolation
+- Demand-driven rebinding was too slow for interactive use
+- Invalidation cascades when a widely-used module changed
+
+#### LSP-Based Designs
+
+**What was tried:**
+- Use persistent Language Server Protocol servers for semantic queries
+- LSP provides precise references, type hierarchies, and symbol resolution
+
+**Why rejected:**
+- Memory overhead: 200MB–1GB+ per language server
+- Cold start latency: 5–30+ seconds per project
+- Multi-environment complexity: cannot easily run multiple interpreters/SDKs
+- Server resource constraints: CodePlane must remain lightweight
+- Multi-worktree hostility: LSP assumes single project root
+- Operational complexity outweighed benefits for refactor planning
+
+#### SCIP Batch Indexers
+
+**What was tried:**
+- One-shot indexers (scip-python, scip-go, scip-typescript, etc.)
+- Batch process outputs SCIP protobuf files with symbols, occurrences, relationships
+- Import into SQLite for query-time resolution
+- File state model: Freshness (CLEAN/DIRTY/STALE/PENDING_CHECK) × Certainty (CERTAIN/AMBIGUOUS)
+- Refresh job workers with HEAD-aware deduplication and scoped refresh
+
+**Why it failed:**
+- **Identity instability**: SCIP symbol identifiers are version-specific; indexer updates broke cached edges
+- **Candidate floods**: Cross-file semantic queries returned unbounded result sets
+- **Stale semantics**: Time between file edit and semantic refresh created correctness windows
+- **Multi-worktree hostility**: SCIP indexers assume monolithic project structure
+- **Profile complexity**: Different Python interpreters, Node versions produced incompatible indexes
+- **Operational burden**: Installing, versioning, and updating indexers per language
+- **Complexity-benefit mismatch**: Full semantic engines don't pay off for bounded rename planning
+
+#### Hybrid Approaches
+
+**What was tried:**
+- Tree-sitter for "syntactic certainty" within files
+- SCIP for cross-file "semantic authority"
+- Runtime upgrade: Anchored → Strong when semantic data confirms binding
+
+**Why it failed:**
+- Query-time upgrades were non-deterministic (depended on refresh timing)
+- Mixed confidence levels in output were confusing
+- "Partial semantic" results were worse than "no semantic" for agent trust
+
+### 19.2 Explicit Failure Modes Discovered
+
+| Failure Mode | Impact | Root Cause |
+|--------------|--------|------------|
+| Identity instability | Broken edges after indexer upgrade | SCIP symbol strings encode version-specific details |
+| Candidate floods | Unbounded result sets overwhelm agents | No principled way to cap without losing correctness |
+| Stale semantics | Renames based on outdated index state | File content changes faster than refresh completes |
+| Multi-worktree hostility | Per-worktree index state conflicts | Semantic engines assume single checkout |
+| Profile divergence | Python venv A ≠ venv B semantics | Same file has different bindings per environment |
+| Operational complexity | Users don't install/maintain indexers | Adding 8+ external tools is hostile to adoption |
+
+### 19.3 Conclusion: Planner-Based Architecture
+
+The correct shippable baseline is a **refactor planner** with a **full stacked index**:
+
+**Tier 0 — Tantivy Lexical Index (always-on):**
+- Fast, deterministic lexical retrieval
+- Candidate discovery, never semantic authority
+- One document per file with file_id, path, language, content tokens
+
+**Tier 1 — Tree-sitter/SQLite Structural Facts:**
+- DefFact: definitions with kind, range, signature hash
+- RefFact: references with token text, role, certainty
+- ScopeFact: lexical scope nesting
+- LocalBindFact: same-file bindings (syntactically provable)
+- ImportFact: explicit import statements (not dynamic resolution)
+- ExportSurface: exported names per module
+
+**Planner Output (not semantic authority):**
+- Bounded candidate sets
+- Patch previews with text edits
+- Coverage + Risk manifest (explicit about what is PROVEN vs ANCHORED)
+- Auto-apply limited to PROVEN edits (lexical matches, same-file bindings)
+- Everything else is proposal-only unless explicitly promoted
+
+**What "PROVEN" means:**
+- Same-file definition-reference within lexical scope
+- Import statements with explicit module path
+- Export re-declarations matching import source
+
+**What remains "ANCHORED" (proposal-only):**
+- Cross-file references without import chain proof
+- Dynamic access patterns
+- Receiver-based dispatch
+- Multi-hop import chains
+
+### 19.4 Future Direction (Explicitly FUTURE / PROBABLE)
+
+**Tier 3: Optional semantic backends (FUTURE)**
+
+Semantic engines (SCIP, LSP, compiler APIs) may be reintroduced as:
+- Opt-in batch jobs per language/project
+- User-initiated, not server-managed
+- Results cached but not authoritative
+- Planner remains the default UX
+
+**Gating criteria for reintroduction:**
+- Documented complexity-benefit analysis per language
+- Clear operational model (install, version, update)
+- Proof that semantic confidence exceeds planner confidence for target use case
+- No impact on server startup time or memory footprint
+
+Until these criteria are met, semantic engines are explicitly deferred.
+
+---
+
+## 20. Risk Register (Remaining Design Points)
 
 Items 1-3 from the original register have been resolved (see section 16). Remaining items:
 
@@ -2569,7 +2573,7 @@ Items 1-3 from the original register have been resolved (see section 16). Remain
 
 ---
 
-## 20. Readiness Note: What Is Stable Enough for API Surfacing Next
+## 21. Readiness Note: What Is Stable Enough for API Surfacing Next
 
 Stable enough that API design should be mechanical:
 
@@ -2589,7 +2593,7 @@ All previously-open contradictions have been resolved. API surfacing can proceed
 
 ---
 
-## 21. What CodePlane Is (Canonical Summary)
+## 22. What CodePlane Is (Canonical Summary)
 
 CodePlane is:
 
@@ -2602,9 +2606,9 @@ It turns AI coding from slow and chaotic into fast, predictable, and auditable b
 
 ---
 
-## 22. MCP API Specification
+## 23. MCP API Specification
 
-### 22.1 Design Principles
+### 23.1 Design Principles
 
 The MCP API is the primary interface for AI agents to interact with CodePlane.
 
@@ -2627,7 +2631,7 @@ Core design choices:
 4. **Progress via Context** — Long operations report progress through MCP's native mechanism
 5. **Pagination via response models** — Cursor-based pagination encoded in return type
 
-### 22.2 Protocol Architecture
+### 23.2 Protocol Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -2637,7 +2641,7 @@ Core design choices:
                       │ MCP/JSON-RPC 2.0 over HTTP/SSE
                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    CodePlane Daemon                              │
+│                    CodePlane Server                              │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  │
 │  │  FastMCP Server │  │  REST Handler   │  │  SSE Handler    │  │
 │  │   (~35 tools)   │  │  (/health, etc) │  │  (streaming)    │  │
@@ -2661,7 +2665,7 @@ Core design choices:
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 22.3 Response Envelope
+### 23.3 Response Envelope
 
 All tool responses are wrapped in a consistent envelope that provides session context without polluting domain models.
 
@@ -2739,7 +2743,7 @@ Any tool can accept optional `session_id` parameter to:
 - Resume a session after reconnect
 - Run operations in a specific task context
 
-### 22.4 Tool Catalog
+### 23.4 Tool Catalog
 
 Tools are organized into namespaced families. Each tool has a single responsibility and strongly-typed response.
 
@@ -2832,7 +2836,7 @@ Tools are organized into namespaced families. Each tool has a single responsibil
 
 | Tool | Purpose |
 |------|---------|
-| `mutate` | Atomic file edits |
+| `atomic_edit_files` | Atomic file edits |
 
 #### Refactor Tools (Requires SCIP)
 
@@ -2854,11 +2858,11 @@ Tools are organized into namespaced families. Each tool has a single responsibil
 
 | Tool | Purpose |
 |------|---------|
-| `status` | Daemon health, index state |
+| `status` | Server health, index state |
 
 **Total: ~35 tools**
 
-### 22.5 Progress Reporting
+### 23.5 Progress Reporting
 
 Long-running operations report progress through MCP's native `Context.report_progress()` mechanism rather than separate streaming tool variants.
 
@@ -2892,7 +2896,7 @@ async def test_run(
 
 Clients receive progress events via the MCP protocol's built-in progress notification mechanism.
 
-### 22.6 Pagination
+### 23.6 Pagination
 
 Tools returning collections support cursor-based pagination for large result sets.
 
@@ -2935,9 +2939,9 @@ Tools returning collections support cursor-based pagination for large result set
 | `git_log` | Yes | Commit history |
 | `git_blame` | Yes | Line authorship |
 | `read_files` | No | Uses explicit line ranges |
-| `mutate` | No | Single operation |
+| `atomic_edit_files` | No | Single operation |
 
-### 22.7 Tool Specifications
+### 23.7 Tool Specifications
 
 The following sections define detailed parameter and response schemas for each tool. All responses are wrapped in the `ToolResponse` envelope (see 22.3).
 
@@ -2996,6 +3000,8 @@ Unified search across lexical index, symbols, and references.
 
 Repository mental model — structure, languages, entry points, dependencies.
 
+Queries the existing index to build a mental model. Does NOT scan the filesystem — reflects only what's indexed.
+
 **Parameters:**
 
 ```typescript
@@ -3009,39 +3015,47 @@ Repository mental model — structure, languages, entry points, dependencies.
 **Response:**
 
 ```typescript
+// DirectoryNode structure
+interface DirectoryNode {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  children?: DirectoryNode[];       // Only for directories
+  file_count?: number;              // Only for directories
+  line_count?: number;              // Only for files (from File.line_count)
+}
+
 {
   structure: {
     root: string;
     tree: DirectoryNode[];          // Nested directory structure
     file_count: number;
-    total_lines: number;
+    contexts: string[];             // Valid context root paths
   };
   languages: Array<{
-    language: string;
+    language: string;               // Language family from File.language_family
     file_count: number;
-    line_count: number;
     percentage: number;
   }>;
   entry_points: Array<{
     path: string;
-    kind: "main" | "cli" | "api" | "test" | "config";
-    language: string;
+    kind: string;                   // DefFact.kind (function, class, method)
+    name: string;                   // DefFact.name
+    qualified_name?: string;        // DefFact.qualified_name
   }>;
   dependencies: {
-    direct: string[];
-    dev: string[];
-    package_manager: string;
+    external_modules: string[];     // From ImportFact.source_literal (non-relative)
+    import_count: number;
   };
   test_layout: {
-    framework: string;
-    test_dirs: string[];
+    test_files: string[];           // File paths matching test patterns
     test_count: number;
   };
   public_api: Array<{
-    symbol: string;
-    kind: string;
-    path: string;
-    exported: boolean;
+    name: string;                   // ExportEntry.exported_name
+    def_uid?: string;               // Target definition UID
+    certainty: string;              // CERTAIN or UNCERTAIN
+    evidence?: string;              // Evidence kind (e.g., __all__literal)
   }>;
   _session: SessionState;
 }
@@ -3091,7 +3105,7 @@ Read file contents with optional line ranges.
 
 ---
 
-#### `mutate`
+#### `atomic_edit_files`
 
 Atomic file edits with structured delta response.
 
@@ -3395,7 +3409,7 @@ Semantic refactoring via SCIP index.
     contexts_used: string[];
   };
   applied?: {
-    delta: MutationDelta;           // Same as mutate
+    delta: MutationDelta;           // Same as atomic_edit_files
     validation?: {
       diagnostics_before: number;
       diagnostics_after: number;
@@ -3563,7 +3577,7 @@ Session and task lifecycle management.
 
 #### `status`
 
-Daemon health, index state, and session info.
+Server health, index state, and session info.
 
 **Parameters:**
 
@@ -3615,7 +3629,7 @@ Daemon health, index state, and session info.
 
 ---
 
-### 22.8 REST Endpoints (Operator)
+### 23.8 REST Endpoints (Operator)
 
 Non-MCP endpoints for operators and monitoring.
 
@@ -3627,18 +3641,18 @@ Non-MCP endpoints for operators and monitoring.
 | `/status` | GET | JSON status (same as `status` tool) |
 | `/dashboard` | GET | Observability dashboard (see section 13) |
 
-**Validation:** Same `X-CodePlane-Repo` header as MCP.
+**Response header:** All responses include `X-CodePlane-Repo` header with the server's repository path.
 
 **Example:**
 
 ```bash
-curl -H "X-CodePlane-Repo: $(cat .codeplane/repo)" \
-     http://127.0.0.1:$(cat .codeplane/port)/health
+curl http://127.0.0.1:$(cat .codeplane/port)/health
+# Response includes: X-CodePlane-Repo: /path/to/repo
 ```
 
 ---
 
-### 22.9 Error Handling
+### 23.9 Error Handling
 
 All MCP tools use the error schema defined in section 4.2.
 
@@ -3686,7 +3700,7 @@ Client must close task and open new one, or configure additional budget.
 
 ---
 
-### 22.10 MCP Server Configuration
+### 23.10 MCP Server Configuration
 
 CodePlane registers as an MCP server. Client configuration example:
 
@@ -3697,14 +3711,13 @@ CodePlane registers as an MCP server. Client configuration example:
   "mcpServers": {
     "codeplane": {
       "transport": "http",
-      "url": "http://127.0.0.1:${port}",
-      "headers": {
-        "X-CodePlane-Repo": "${repo_path}"
-      }
+      "url": "http://127.0.0.1:${port}"
     }
   }
 }
 ```
+
+**Response header:** All responses include `X-CodePlane-Repo` header with the server's repository path. Clients can use this to verify they're talking to the correct server.
 
 **Dynamic discovery:**
 
@@ -3712,7 +3725,7 @@ Clients read `.codeplane/port` for the port number.
 
 ---
 
-### 22.11 Versioning
+### 23.11 Versioning
 
 - API version included in `/status` response
 - Breaking changes increment major version

@@ -5,25 +5,25 @@ import pytest
 from codeplane.core.errors import (
     CodePlaneError,
     ConfigError,
-    ErrorCode,
     InternalError,
+    InternalErrorCode,
 )
 
 
-class TestErrorCode:
+class TestInternalErrorCode:
     """Error code value tests."""
 
     @pytest.mark.parametrize(
         ("code", "expected_range"),
         [
-            (ErrorCode.CONFIG_PARSE_ERROR, 2000),
-            (ErrorCode.CONFIG_INVALID_VALUE, 2000),
-            (ErrorCode.INTERNAL_ERROR, 9000),
-            (ErrorCode.INTERNAL_TIMEOUT, 9000),
+            (InternalErrorCode.CONFIG_PARSE_ERROR, 2000),
+            (InternalErrorCode.CONFIG_INVALID_VALUE, 2000),
+            (InternalErrorCode.INTERNAL_ERROR, 9000),
+            (InternalErrorCode.INTERNAL_TIMEOUT, 9000),
         ],
     )
     def test_given_error_code_when_checked_then_in_correct_range(
-        self, code: ErrorCode, expected_range: int
+        self, code: InternalErrorCode, expected_range: int
     ) -> None:
         """Error codes fall within their designated numeric range."""
         # Given
@@ -43,7 +43,7 @@ class TestCodePlaneError:
         """Error serializes to dict with all required fields."""
         # Given
         error = CodePlaneError(
-            code=ErrorCode.CONFIG_PARSE_ERROR,
+            code=InternalErrorCode.CONFIG_PARSE_ERROR,
             message="Test message",
             retryable=True,
             details={"key": "value"},
@@ -65,7 +65,7 @@ class TestCodePlaneError:
         """Error string representation is human readable."""
         # Given
         error = CodePlaneError(
-            code=ErrorCode.INTERNAL_ERROR,
+            code=InternalErrorCode.INTERNAL_ERROR,
             message="Something broke",
         )
 
@@ -82,18 +82,22 @@ class TestConfigError:
     @pytest.mark.parametrize(
         ("factory", "kwargs", "expected_code"),
         [
-            ("parse_error", {"path": "/foo", "reason": "bad yaml"}, ErrorCode.CONFIG_PARSE_ERROR),
+            (
+                "parse_error",
+                {"path": "/foo", "reason": "bad yaml"},
+                InternalErrorCode.CONFIG_PARSE_ERROR,
+            ),
             (
                 "invalid_value",
                 {"field": "port", "value": -1, "reason": "negative"},
-                ErrorCode.CONFIG_INVALID_VALUE,
+                InternalErrorCode.CONFIG_INVALID_VALUE,
             ),
-            ("missing_required", {"field": "api_key"}, ErrorCode.CONFIG_MISSING_REQUIRED),
-            ("file_not_found", {"path": "/missing"}, ErrorCode.CONFIG_FILE_NOT_FOUND),
+            ("missing_required", {"field": "api_key"}, InternalErrorCode.CONFIG_MISSING_REQUIRED),
+            ("file_not_found", {"path": "/missing"}, InternalErrorCode.CONFIG_FILE_NOT_FOUND),
         ],
     )
     def test_given_factory_when_called_then_correct_code(
-        self, factory: str, kwargs: dict, expected_code: ErrorCode
+        self, factory: str, kwargs: dict[str, object], expected_code: InternalErrorCode
     ) -> None:
         """Factory methods produce errors with correct error codes."""
         # Given
@@ -133,4 +137,4 @@ class TestInternalError:
 
         # Then
         assert error.details == extras
-        assert error.code == ErrorCode.INTERNAL_ERROR
+        assert error.code == InternalErrorCode.INTERNAL_ERROR

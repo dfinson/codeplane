@@ -97,7 +97,7 @@ class TestLoggingConfiguration:
             data = json.loads(lines[-1])
             assert data["event"] == "test message"
             assert data["key"] == "value"
-            assert "ts" in data
+            assert "timestamp" in data
             assert data["level"] == "info"
 
     def test_given_module_name_when_get_logger_then_binds_name(self) -> None:
@@ -112,36 +112,44 @@ class TestLoggingConfiguration:
         # Then
         assert logger is not None
 
-    def test_given_config_object_when_configure_then_takes_precedence(
-        self, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """LoggingConfig object takes precedence over simple params."""
+    def test_given_config_object_when_configure_then_takes_precedence(self, tmp_path: Path) -> None:
+        """LoggingConfig object takes precedence over simple params.
+
+        NOTE: Console output is suppressed by design (ConsoleSuppressingFilter).
+        This test verifies config precedence via file output.
+        """
         # Given
+        log_file = tmp_path / "test.log"
         config = LoggingConfig(
             level="DEBUG",
-            outputs=[LogOutputConfig(format="json", destination="stderr")],
+            outputs=[LogOutputConfig(format="json", destination=str(log_file))],
         )
 
-        # When
+        # When  - config's DEBUG should override the level="ERROR" param
         configure_logging(config=config, json_format=False, level="ERROR")
         logger = get_logger()
         logger.debug("debug msg")
 
-        # Then
-        captured = capsys.readouterr()
-        assert "debug msg" in captured.err
+        # Then - DEBUG level from config object took precedence
+        content = log_file.read_text()
+        assert "debug msg" in content
 
     def test_given_multi_output_config_when_configure_then_logs_to_all(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+        self, tmp_path: Path
     ) -> None:
-        """Multiple outputs receive logs according to their levels."""
+        """Multiple outputs receive logs according to their levels.
+
+        NOTE: Console output is suppressed by design (ConsoleSuppressingFilter),
+        so we verify multi-output behavior via multiple file outputs.
+        """
         # Given
-        log_file = tmp_path / "test.jsonl"
+        debug_file = tmp_path / "debug.log"
+        info_file = tmp_path / "info.log"
         config = LoggingConfig(
             level="DEBUG",
             outputs=[
-                LogOutputConfig(format="console", destination="stderr", level="INFO"),
-                LogOutputConfig(format="json", destination=str(log_file)),
+                LogOutputConfig(format="json", destination=str(info_file), level="INFO"),
+                LogOutputConfig(format="json", destination=str(debug_file)),
             ],
         )
 
@@ -151,12 +159,12 @@ class TestLoggingConfiguration:
         logger.debug("debug only")
         logger.info("info msg")
 
-        # Then - console should have INFO only
-        captured = capsys.readouterr()
-        assert "info msg" in captured.err
-        assert "debug only" not in captured.err
+        # Then - info_file should have INFO only (not DEBUG)
+        info_content = info_file.read_text()
+        assert "info msg" in info_content
+        assert "debug only" not in info_content
 
-        # Then - file should have both (inherits DEBUG)
-        content = log_file.read_text()
-        assert "debug only" in content
-        assert "info msg" in content
+        # Then - debug_file should have both (inherits DEBUG from config level)
+        debug_content = debug_file.read_text()
+        assert "debug only" in debug_content
+        assert "info msg" in debug_content

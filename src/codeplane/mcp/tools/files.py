@@ -1,0 +1,185 @@
+"""Files MCP tools - read_files, list_files handlers."""
+
+from typing import TYPE_CHECKING, Any, Literal
+
+from fastmcp import Context
+from fastmcp.utilities.json_schema import dereference_refs
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from codeplane.config.constants import FILES_LIST_MAX
+
+if TYPE_CHECKING:
+    from fastmcp import FastMCP
+
+    from codeplane.mcp.context import AppContext
+
+
+# =============================================================================
+# Parameter Models
+# =============================================================================
+
+
+class RangeParam(BaseModel):
+    """Line range specification for partial file reads."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str | None = Field(
+        None,
+        description="File path this range applies to. Required when reading multiple files with different ranges.",
+    )
+    start_line: int = Field(..., gt=0, description="Start line (1-indexed, inclusive)")
+    end_line: int = Field(..., gt=0, description="End line (1-indexed, inclusive)")
+
+    @model_validator(mode="after")
+    def validate_range(self) -> "RangeParam":
+        if self.end_line < self.start_line:
+            raise ValueError(
+                f"end_line ({self.end_line}) must be >= start_line ({self.start_line})"
+            )
+        return self
+
+
+# =============================================================================
+# Summary Helpers
+# =============================================================================
+
+
+def _summarize_read(files: list[dict[str, Any]], not_found: int = 0) -> str:
+    """Generate summary for files.read."""
+    from codeplane.core.formatting import compress_path, format_path_list, pluralize
+
+    if not files and not_found:
+        return f"{not_found} file(s) not found"
+
+    total_lines = sum(f.get("line_count", 0) for f in files)
+    paths = [f["path"] for f in files]
+
+    if len(paths) == 1:
+        compressed = compress_path(paths[0], 35)
+        rng = files[0].get("range")
+        if rng:
+            return f"1 file ({compressed}:{rng[0]}-{rng[1]}), {total_lines} lines"
+        return f"1 file ({compressed}), {total_lines} lines"
+
+    # Multiple files: compress all paths
+    compressed_paths = [compress_path(p, 20) for p in paths]
+    path_list = format_path_list(compressed_paths, max_total=40, compress=False)
+    suffix = f", {not_found} not found" if not_found else ""
+    return f"{pluralize(len(files), 'file')} ({path_list}), {total_lines} lines{suffix}"
+
+
+def _summarize_list(path: str, total: int, truncated: bool) -> str:
+    """Generate summary for files.list."""
+    loc = path or "repo root"
+    trunc = " (truncated)" if truncated else ""
+    return f"{total} entries in {loc}{trunc}"
+
+
+# =============================================================================
+# Tool Registration
+# =============================================================================
+
+
+def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
+    """Register file tools with FastMCP server."""
+
+    @mcp.tool
+    async def read_files(
+        ctx: Context,
+        paths: list[str] = Field(..., description="File paths relative to repo root"),
+        ranges: list[RangeParam] | None = Field(
+            None,
+            description=(
+                "Optional line ranges per file. Each range can specify a 'path' to apply "
+                "different ranges to different files in one call."
+            ),
+        ),
+        include_metadata: bool = Field(False, description="Include file stats (size, mtime)"),
+    ) -> dict[str, Any]:
+        """Read file contents with optional line ranges."""
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        ranges_dict = None
+        if ranges:
+            ranges_dict = [
+                {"path": r.path or "", "start": r.start_line, "end": r.end_line} for r in ranges
+            ]
+
+        result = app_ctx.file_ops.read_files(
+            paths,
+            ranges=ranges_dict,
+            include_metadata=include_metadata,
+        )
+
+        files = [
+            {
+                "path": f.path,
+                "content": f.content,
+                "language": f.language,
+                "line_count": f.line_count,
+                "range": f.range,
+                "metadata": f.metadata,
+            }
+            for f in result.files
+        ]
+
+        not_found = len(paths) - len(files)
+        return {
+            "files": files,
+            "summary": _summarize_read(files, not_found),
+        }
+
+    @mcp.tool
+    async def list_files(
+        ctx: Context,
+        path: str | None = Field(
+            None, description="Directory path relative to repo root (default: repo root)"
+        ),
+        pattern: str | None = Field(
+            None, description="Glob pattern to filter (e.g., '*.py', '**/*.ts')"
+        ),
+        recursive: bool = Field(False, description="Recurse into subdirectories"),
+        include_hidden: bool = Field(False, description="Include dotfiles and dotdirs"),
+        include_metadata: bool = Field(False, description="Include size and mtime for files"),
+        file_type: Literal["all", "file", "directory"] = Field(
+            "all", description="Filter by entry type"
+        ),
+        limit: int = Field(200, ge=1, le=FILES_LIST_MAX, description="Maximum entries to return"),
+    ) -> dict[str, Any]:
+        """List files and directories with optional filtering."""
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        result = app_ctx.file_ops.list_files(
+            path=path,
+            pattern=pattern,
+            recursive=recursive,
+            include_hidden=include_hidden,
+            include_metadata=include_metadata,
+            file_type=file_type,
+            limit=limit,
+        )
+
+        return {
+            "path": result.path,
+            "entries": [
+                {
+                    "name": e.name,
+                    "path": e.path,
+                    "type": e.type,
+                    **(
+                        {"size": e.size, "modified_at": e.modified_at}
+                        if include_metadata and e.type == "file"
+                        else {}
+                    ),
+                }
+                for e in result.entries
+            ],
+            "total": result.total,
+            "truncated": result.truncated,
+            "summary": _summarize_list(result.path, result.total, result.truncated),
+        }
+
+    # Flatten schemas to remove $ref/$defs for Claude compatibility
+    for tool in mcp._tool_manager._tools.values():
+        tool.parameters = dereference_refs(tool.parameters)

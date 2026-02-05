@@ -9,7 +9,7 @@ from enum import IntEnum
 from typing import Any
 
 
-class ErrorCode(IntEnum):
+class InternalErrorCode(IntEnum):
     """Numeric error codes for MCP responses."""
 
     # Config (2xxx)
@@ -27,7 +27,7 @@ class ErrorCode(IntEnum):
 class CodePlaneError(Exception):
     """Base error with structured context for MCP responses."""
 
-    code: ErrorCode
+    code: InternalErrorCode
     message: str
     retryable: bool = False
     details: dict[str, Any] = field(default_factory=dict)
@@ -55,7 +55,7 @@ class ConfigError(CodePlaneError):
     @classmethod
     def parse_error(cls, path: str, reason: str) -> "ConfigError":
         return cls(
-            ErrorCode.CONFIG_PARSE_ERROR,
+            InternalErrorCode.CONFIG_PARSE_ERROR,
             f"Failed to parse {path}: {reason}",
             details={"path": path, "reason": reason},
         )
@@ -63,7 +63,7 @@ class ConfigError(CodePlaneError):
     @classmethod
     def invalid_value(cls, field: str, value: Any, reason: str) -> "ConfigError":
         return cls(
-            ErrorCode.CONFIG_INVALID_VALUE,
+            InternalErrorCode.CONFIG_INVALID_VALUE,
             f"Invalid '{field}': {reason}",
             details={"field": field, "value": str(value), "reason": reason},
         )
@@ -71,7 +71,7 @@ class ConfigError(CodePlaneError):
     @classmethod
     def missing_required(cls, field: str) -> "ConfigError":
         return cls(
-            ErrorCode.CONFIG_MISSING_REQUIRED,
+            InternalErrorCode.CONFIG_MISSING_REQUIRED,
             f"Missing required: {field}",
             details={"field": field},
         )
@@ -79,7 +79,9 @@ class ConfigError(CodePlaneError):
     @classmethod
     def file_not_found(cls, path: str) -> "ConfigError":
         return cls(
-            ErrorCode.CONFIG_FILE_NOT_FOUND, f"Config not found: {path}", details={"path": path}
+            InternalErrorCode.CONFIG_FILE_NOT_FOUND,
+            f"Config not found: {path}",
+            details={"path": path},
         )
 
 
@@ -88,4 +90,4 @@ class InternalError(CodePlaneError):
 
     @classmethod
     def unexpected(cls, reason: str, **details: Any) -> "InternalError":
-        return cls(ErrorCode.INTERNAL_ERROR, f"Internal error: {reason}", details=details)
+        return cls(InternalErrorCode.INTERNAL_ERROR, f"Internal error: {reason}", details=details)

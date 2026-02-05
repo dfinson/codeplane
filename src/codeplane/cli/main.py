@@ -2,16 +2,28 @@
 
 import click
 
+from codeplane.cli.clear import clear_command
 from codeplane.cli.init import init_command
+from codeplane.cli.status import status_command
+from codeplane.cli.up import up_command
+from codeplane.core.logging import configure_logging
 
 
 @click.group()
 @click.version_option(version="0.1.0", prog_name="cpl")
-def cli() -> None:
+@click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
+@click.pass_context
+def cli(ctx: click.Context, verbose: bool) -> None:
     """CodePlane - Local repository control plane for AI coding agents."""
+    ctx.ensure_object(dict)
+    ctx.obj["verbose"] = verbose
+    configure_logging(level="DEBUG" if verbose else "INFO")
 
 
 cli.add_command(init_command, name="init")
+cli.add_command(up_command, name="up")
+cli.add_command(clear_command, name="clear")
+cli.add_command(status_command, name="status")
 
 
 if __name__ == "__main__":

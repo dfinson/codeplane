@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="All Tests" tests="8" errors="1" failures="2" skipped="1" time="0.500">
+    <testsuite name="suite1" tests="4" errors="0" failures="1" skipped="0" time="0.200">
+        <testcase classname="suite1.TestClass" name="test_a" time="0.050"/>
+        <testcase classname="suite1.TestClass" name="test_b" time="0.050"/>
+        <testcase classname="suite1.TestClass" name="test_c" time="0.050">
+            <failure message="Failed">Test failed</failure>
+        </testcase>
+        <testcase classname="suite1.TestClass" name="test_d" time="0.050"/>
+    </testsuite>
+    <testsuite name="suite2" tests="4" errors="1" failures="1" skipped="1" time="0.300">
+        <testcase classname="suite2.TestOther" name="test_x" time="0.075"/>
+        <testcase classname="suite2.TestOther" name="test_y" time="0.075">
+            <failure message="Assertion failed">Expected true</failure>
+        </testcase>
+        <testcase classname="suite2.TestOther" name="test_z" time="0.075">
+            <error message="RuntimeError">Unexpected error</error>
+        </testcase>
+        <testcase classname="suite2.TestOther" name="test_skip" time="0.075">
+            <skipped message="Not implemented"/>
+        </testcase>
+    </testsuite>
+</testsuites>

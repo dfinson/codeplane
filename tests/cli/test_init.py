@@ -3,6 +3,7 @@
 from collections.abc import Generator
 from pathlib import Path
 
+import pygit2
 import pytest
 import yaml
 from click.testing import CliRunner
@@ -14,11 +15,25 @@ runner = CliRunner()
 
 @pytest.fixture
 def temp_git_repo(tmp_path: Path) -> Generator[Path, None, None]:
-    """Create a temporary git repository."""
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    (repo / ".git").mkdir()
-    yield repo
+    """Create a temporary git repository with initial commit."""
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+    pygit2.init_repository(str(repo_path))
+
+    # Configure and create initial commit (required for HEAD to exist)
+    repo = pygit2.Repository(str(repo_path))
+    repo.config["user.name"] = "Test"
+    repo.config["user.email"] = "test@test.com"
+
+    # Create a file and commit
+    (repo_path / "README.md").write_text("# Test repo")
+    repo.index.add("README.md")
+    repo.index.write()
+    tree = repo.index.write_tree()
+    sig = pygit2.Signature("Test", "test@test.com")
+    repo.create_commit("HEAD", sig, sig, "Initial commit", tree, [])
+
+    yield repo_path
 
 
 @pytest.fixture
@@ -46,7 +61,7 @@ class TestInitCommand:
         assert (repo / ".codeplane" / "config.yaml").exists()
 
     def test_given_git_repo_when_init_then_creates_ignore_file(self, temp_git_repo: Path) -> None:
-        """Init creates .codeplane/ignore with default patterns."""
+        """Init creates .codeplane/.cplignore with default patterns."""
         # Given
         repo = temp_git_repo
 
@@ -54,26 +69,41 @@ class TestInitCommand:
         runner.invoke(cli, ["init", str(repo)])
 
         # Then
-        ignore_path = repo / ".codeplane" / "ignore"
-        assert ignore_path.exists()
-        content = ignore_path.read_text()
+        cplignore_path = repo / ".codeplane" / ".cplignore"
+        assert cplignore_path.exists()
+        content = cplignore_path.read_text()
         assert "node_modules/" in content
         assert ".env" in content
 
     def test_given_git_repo_when_init_then_config_is_valid_yaml(self, temp_git_repo: Path) -> None:
-        """Init creates valid YAML config with expected sections."""
+        """Init creates valid YAML config with simplified user fields."""
         # Given
         repo = temp_git_repo
 
         # When
         runner.invoke(cli, ["init", str(repo)])
 
-        # Then
+        # Then - new simplified config format
         config_path = repo / ".codeplane" / "config.yaml"
         with config_path.open() as f:
             config = yaml.safe_load(f)
-        assert "logging" in config
-        assert "daemon" in config
+        # New format has root-level fields, not nested
+        assert "port" in config
+
+    def test_given_git_repo_when_init_then_creates_state_file(self, temp_git_repo: Path) -> None:
+        """Init creates state.yaml with index_path."""
+        # Given
+        repo = temp_git_repo
+
+        # When
+        runner.invoke(cli, ["init", str(repo)])
+
+        # Then - state.yaml should exist with index_path
+        state_path = repo / ".codeplane" / "state.yaml"
+        assert state_path.exists()
+        with state_path.open() as f:
+            state = yaml.safe_load(f)
+        assert "index_path" in state
 
     def test_given_non_git_dir_when_init_then_fails(self, temp_non_git: Path) -> None:
         """Init fails with error when run outside git repository."""
@@ -86,6 +116,7 @@ class TestInitCommand:
         # Then
         assert result.exit_code == 1
         assert "Not inside a git repository" in result.output
+        assert "CodePlane commands must be run from within a git repository" in result.output
 
     def test_given_initialized_repo_when_init_again_then_idempotent(
         self, temp_git_repo: Path
@@ -117,7 +148,7 @@ class TestInitCommand:
 
         # Then
         assert result.exit_code == 0
-        assert "Initialized CodePlane" in result.output
+        assert "Initializing CodePlane" in result.output
         with config_path.open() as f:
             config = yaml.safe_load(f)
         assert "custom" not in config

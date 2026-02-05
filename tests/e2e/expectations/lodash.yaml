@@ -1,0 +1,52 @@
+# lodash - Modern JavaScript utility library
+repo: lodash/lodash
+commit: "v4.17.21"
+clone_depth: 1
+timeout_profile: large
+
+contexts:
+  - root: "."
+    language: javascript
+
+files:
+  indexed_min: 100
+  indexed_max: 600
+  must_include:
+    - "lodash.js"
+  must_exclude:
+    - "node_modules/"
+    - ".git/"
+
+anchors:
+  - symbol: "map"
+    kind: function
+    file_contains: ".js"
+    line_min: 1
+    line_max: 500
+  - symbol: "filter"
+    kind: function
+    file_contains: ".js"
+    line_min: 1
+    line_max: 500
+
+refs:
+  - to_symbol: "map"
+    min_refs: 5
+
+imports:
+  - file_contains: ".js"
+    imports_min: 0
+    must_import: []
+
+search:
+  - query: "function map"
+    must_find_file: ".js"
+
+incremental:
+  touch_file: "lodash.js"
+  reindexed_max: 10
+
+daemon:
+  starts: true
+  status_shows_running: true
+  stops_cleanly: true

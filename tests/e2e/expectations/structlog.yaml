@@ -1,0 +1,61 @@
+# structlog - Structured logging for Python
+repo: hynek/structlog
+commit: "24.4.0"
+clone_depth: 1
+timeout_profile: small
+
+contexts:
+  - root: "."
+    language: python
+
+files:
+  indexed_min: 20
+  indexed_max: 100
+  must_include:
+    - "src/structlog/__init__.py"
+  must_exclude:
+    - "__pycache__/"
+    - ".git/"
+
+anchors:
+  - symbol: "BoundLogger"
+    kind: class
+    file_contains: "src/structlog"
+    line_min: 1
+    line_max: 500
+  - symbol: "get_logger"
+    kind: function
+    file_contains: "src/structlog"
+    line_min: 1
+    line_max: 200
+
+refs:
+  - to_symbol: "BoundLogger"
+    min_refs: 3
+
+imports:
+  - file_contains: "src/structlog"
+    imports_min: 2
+    must_import: []
+
+scopes:
+  - file_contains: "src/structlog"
+    has_class_scope: true
+    class_has_methods_min: 3
+
+test_targets:
+  runner: pytest
+  targets_min: 50
+
+search:
+  - query: "class BoundLogger"
+    must_find_file: "src/structlog"
+
+incremental:
+  touch_file: "src/structlog/__init__.py"
+  reindexed_max: 5
+
+daemon:
+  starts: true
+  status_shows_running: true
+  stops_cleanly: true

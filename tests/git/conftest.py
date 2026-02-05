@@ -261,6 +261,7 @@ def git_repo_with_branch(git_repo: tuple[Path, GitOps]) -> tuple[Path, GitOps, s
     repo_path, ops = git_repo
     # Get current branch name (could be master or main depending on git config)
     default_branch = ops.current_branch()
+    assert default_branch is not None
 
     # Add a commit on default branch
     (repo_path / "default.txt").write_text("default content\n")

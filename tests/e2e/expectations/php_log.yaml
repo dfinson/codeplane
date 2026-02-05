@@ -1,0 +1,52 @@
+# php-fig/log - PSR-3 Logger Interface
+repo: php-fig/log
+commit: "3.0.2"
+clone_depth: 1
+timeout_profile: small
+
+contexts:
+  - root: "."
+    language: php
+
+files:
+  indexed_min: 3
+  indexed_max: 30
+  must_include:
+    - "src/LoggerInterface.php"
+  must_exclude:
+    - "vendor/"
+    - ".git/"
+
+anchors:
+  - symbol: "LoggerInterface"
+    kind: class
+    file_contains: "src"
+    line_min: 1
+    line_max: 200
+
+refs:
+  - to_symbol: "LoggerInterface"
+    min_refs: 1
+
+imports:
+  - file_contains: "src"
+    imports_min: 0
+    must_import: []
+
+scopes:
+  - file_contains: "src"
+    has_class_scope: true
+    class_has_methods_min: 1
+
+search:
+  - query: "interface LoggerInterface"
+    must_find_file: "src"
+
+incremental:
+  touch_file: "src/LoggerInterface.php"
+  reindexed_max: 5
+
+daemon:
+  starts: true
+  status_shows_running: true
+  stops_cleanly: true

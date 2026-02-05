@@ -62,19 +62,22 @@ class TestFileOutput:
 class TestMultiOutput:
     """Test multiple simultaneous log outputs."""
 
-    def test_given_multiple_outputs_when_log_then_filters_by_level(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """Each output respects its own level filter."""
+    def test_given_multiple_outputs_when_log_then_filters_by_level(self, tmp_path: Path) -> None:
+        """Each output respects its own level filter.
+
+        NOTE: Console output is suppressed by design (ConsoleSuppressingFilter).
+        This test verifies multi-output filtering via file destinations only.
+        """
         # Given
         debug_file = tmp_path / "debug.log"
         error_file = tmp_path / "error.log"
+        warning_file = tmp_path / "warning.log"
         config = LoggingConfig(
             level="DEBUG",
             outputs=[
                 LogOutputConfig(format="json", destination=str(debug_file), level="DEBUG"),
                 LogOutputConfig(format="json", destination=str(error_file), level="ERROR"),
-                LogOutputConfig(format="console", destination="stderr", level="WARNING"),
+                LogOutputConfig(format="json", destination=str(warning_file), level="WARNING"),
             ],
         )
         configure_logging(config=config)
@@ -98,12 +101,12 @@ class TestMultiOutput:
         assert "info msg" not in error_content
         assert "error msg" in error_content
 
-        # Then - stderr has warning+
-        captured = capsys.readouterr()
-        assert "debug msg" not in captured.err
-        assert "info msg" not in captured.err
-        assert "warn msg" in captured.err
-        assert "error msg" in captured.err
+        # Then - warning file has warning+
+        warning_content = warning_file.read_text()
+        assert "debug msg" not in warning_content
+        assert "info msg" not in warning_content
+        assert "warn msg" in warning_content
+        assert "error msg" in warning_content
 
 
 class TestRequestCorrelation:

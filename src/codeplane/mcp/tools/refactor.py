@@ -1,0 +1,221 @@
+"""Refactor MCP tools - refactor_* handlers."""
+
+from typing import TYPE_CHECKING, Any
+
+from fastmcp import Context
+from fastmcp.utilities.json_schema import dereference_refs
+from pydantic import Field
+
+if TYPE_CHECKING:
+    from fastmcp import FastMCP
+
+    from codeplane.mcp.context import AppContext
+    from codeplane.refactor.ops import RefactorResult
+
+
+# =============================================================================
+# Summary Helpers
+# =============================================================================
+
+
+def _summarize_refactor(status: str, files_affected: int, preview: Any) -> str:
+    """Generate summary for refactor operations."""
+    if status == "cancelled":
+        return "refactoring cancelled"
+    if status == "applied":
+        return f"applied to {files_affected} files"
+    if status == "pending" and preview:
+        high = preview.high_certainty_count or 0
+        med = preview.medium_certainty_count or 0
+        low = preview.low_certainty_count or 0
+        total = high + med + low
+        parts = [f"preview: {total} changes in {files_affected} files"]
+        if low:
+            parts.append(f"({low} need review)")
+        return " ".join(parts)
+    return status
+
+
+def _display_refactor(status: str, files_affected: int, preview: Any, refactor_id: str) -> str:
+    """Human-friendly message for refactor operations."""
+    if status == "cancelled":
+        return "Refactoring cancelled."
+    if status == "applied":
+        return f"Refactoring applied: {files_affected} files modified."
+    if status == "pending" and preview:
+        high = preview.high_certainty_count or 0
+        low = preview.low_certainty_count or 0
+        total = high + (preview.medium_certainty_count or 0) + low
+        if low > 0:
+            return f"Preview ready: {total} changes in {files_affected} files ({low} require review). Refactor ID: {refactor_id}"
+        return (
+            f"Preview ready: {total} changes in {files_affected} files. Refactor ID: {refactor_id}"
+        )
+    return f"Refactoring {status}."
+
+
+def _serialize_refactor_result(result: "RefactorResult") -> dict[str, Any]:
+    """Convert RefactorResult to dict."""
+    # Get files_affected from preview or applied delta
+    if result.preview:
+        files_affected = result.preview.files_affected
+    elif result.applied:
+        files_affected = result.applied.files_changed
+    else:
+        files_affected = 0
+
+    output: dict[str, Any] = {
+        "refactor_id": result.refactor_id,
+        "status": result.status,
+        "summary": _summarize_refactor(result.status, files_affected, result.preview),
+        "display_to_user": _display_refactor(
+            result.status, files_affected, result.preview, result.refactor_id
+        ),
+    }
+
+    if result.preview:
+        preview_dict: dict[str, Any] = {
+            "files_affected": result.preview.files_affected,
+            "high_certainty_count": result.preview.high_certainty_count,
+            "medium_certainty_count": result.preview.medium_certainty_count,
+            "low_certainty_count": result.preview.low_certainty_count,
+            "edits": [
+                {
+                    "path": fe.path,
+                    "hunks": [
+                        {
+                            "old": h.old,
+                            "new": h.new,
+                            "line": h.line,
+                            "certainty": h.certainty,
+                        }
+                        for h in fe.hunks
+                    ],
+                }
+                for fe in result.preview.edits
+            ],
+        }
+        # Add verification fields if present
+        if result.preview.verification_required:
+            preview_dict["verification_required"] = True
+            preview_dict["low_certainty_files"] = result.preview.low_certainty_files
+            preview_dict["verification_guidance"] = result.preview.verification_guidance
+        output["preview"] = preview_dict
+
+    if result.divergence:
+        output["divergence"] = {
+            "conflicting_hunks": result.divergence.conflicting_hunks,
+            "resolution_options": result.divergence.resolution_options,
+        }
+
+    return output
+
+
+# =============================================================================
+# Tool Registration
+# =============================================================================
+
+
+def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
+    """Register refactor tools with FastMCP server."""
+
+    @mcp.tool
+    async def refactor_rename(
+        ctx: Context,
+        symbol: str = Field(..., description="Symbol name or path:line:col locator"),
+        new_name: str = Field(..., description="New name for the symbol"),
+        include_comments: bool = Field(True, description="Include comment references"),
+        contexts: list[str] | None = Field(None, description="Limit to specific contexts"),
+    ) -> dict[str, Any]:
+        """Rename a symbol across the codebase."""
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        result = await app_ctx.refactor_ops.rename(
+            symbol,
+            new_name,
+            _include_comments=include_comments,
+            _contexts=contexts,
+        )
+        return _serialize_refactor_result(result)
+
+    @mcp.tool
+    async def refactor_move(
+        ctx: Context,
+        from_path: str = Field(..., description="Source file path"),
+        to_path: str = Field(..., description="Destination file path"),
+        include_comments: bool = Field(True, description="Include comment references"),
+    ) -> dict[str, Any]:
+        """Move a file/module, updating imports."""
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        result = await app_ctx.refactor_ops.move(
+            from_path,
+            to_path,
+            include_comments=include_comments,
+        )
+        return _serialize_refactor_result(result)
+
+    @mcp.tool
+    async def refactor_delete(
+        ctx: Context,
+        target: str = Field(..., description="Symbol or path to delete"),
+        include_comments: bool = Field(True, description="Include comment references"),
+    ) -> dict[str, Any]:
+        """Find all references to a symbol/file for manual cleanup."""
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        result = await app_ctx.refactor_ops.delete(
+            target,
+            include_comments=include_comments,
+        )
+        return _serialize_refactor_result(result)
+
+    @mcp.tool
+    async def refactor_apply(
+        ctx: Context,
+        refactor_id: str = Field(..., description="ID of the refactoring to apply"),
+    ) -> dict[str, Any]:
+        """Apply a previewed refactoring."""
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        result = await app_ctx.refactor_ops.apply(refactor_id, app_ctx.mutation_ops)
+        return _serialize_refactor_result(result)
+
+    @mcp.tool
+    async def refactor_cancel(
+        ctx: Context,
+        refactor_id: str = Field(..., description="ID of the refactoring to cancel"),
+    ) -> dict[str, Any]:
+        """Cancel a pending refactoring."""
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        result = await app_ctx.refactor_ops.cancel(refactor_id)
+        return _serialize_refactor_result(result)
+
+    @mcp.tool
+    async def refactor_inspect(
+        ctx: Context,
+        refactor_id: str = Field(..., description="ID of the refactoring to inspect"),
+        path: str = Field(..., description="File path to inspect"),
+        context_lines: int = Field(2, description="Lines of context around matches"),
+    ) -> dict[str, Any]:
+        """Inspect low-certainty matches in a file with context."""
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        result = await app_ctx.refactor_ops.inspect(
+            refactor_id,
+            path,
+            context_lines=context_lines,
+        )
+
+        from codeplane.core.formatting import compress_path
+
+        return {
+            "path": result.path,
+            "matches": result.matches,
+            "summary": f"{len(result.matches)} matches in {compress_path(result.path, 35)}",
+        }
+
+    # Flatten schemas to remove $ref/$defs for Claude compatibility
+    for tool in mcp._tool_manager._tools.values():
+        tool.parameters = dereference_refs(tool.parameters)

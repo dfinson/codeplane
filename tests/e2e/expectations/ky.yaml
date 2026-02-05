@@ -1,0 +1,52 @@
+# ky - Tiny HTTP client based on Fetch API
+repo: sindresorhus/ky
+commit: "v1.7.2"
+clone_depth: 1
+timeout_profile: small
+
+contexts:
+  - root: "."
+    language: typescript
+
+files:
+  indexed_min: 5
+  indexed_max: 30
+  must_include:
+    - "source/index.ts"
+  must_exclude:
+    - "node_modules/"
+    - ".git/"
+
+anchors:
+  - symbol: "ky"
+    kind: function
+    file_contains: "source"
+    line_min: 1
+    line_max: 500
+
+refs:
+  - to_symbol: "ky"
+    min_refs: 1
+
+imports:
+  - file_contains: "source"
+    imports_min: 1
+    must_import: []
+
+scopes:
+  - file_contains: "source"
+    has_class_scope: false
+    class_has_methods_min: 0
+
+search:
+  - query: "export default ky"
+    must_find_file: "source"
+
+incremental:
+  touch_file: "source/index.ts"
+  reindexed_max: 5
+
+daemon:
+  starts: true
+  status_shows_running: true
+  stops_cleanly: true

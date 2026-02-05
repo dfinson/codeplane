@@ -1,0 +1,62 @@
+# Newtonsoft.Json - Popular JSON library for .NET
+repo: JamesNK/Newtonsoft.Json
+commit: "13.0.3"
+clone_depth: 1
+timeout_profile: large
+
+contexts:
+  - root: "."
+    language: csharp
+
+files:
+  indexed_min: 100
+  indexed_max: 600
+  must_include:
+    - "Src/Newtonsoft.Json/JsonConvert.cs"
+  must_exclude:
+    - "bin/"
+    - "obj/"
+    - ".git/"
+
+anchors:
+  - symbol: "JsonConvert"
+    kind: class
+    file_contains: "Src/Newtonsoft.Json"
+    line_min: 1
+    line_max: 2000
+  - symbol: "SerializeObject"
+    kind: method
+    file_contains: "Src/Newtonsoft.Json"
+    line_min: 1
+    line_max: 2000
+
+refs:
+  - to_symbol: "JsonConvert"
+    min_refs: 5
+
+imports:
+  - file_contains: "Src/Newtonsoft.Json"
+    imports_min: 2
+    must_import: []
+
+scopes:
+  - file_contains: "Src/Newtonsoft.Json"
+    has_class_scope: true
+    class_has_methods_min: 5
+
+test_targets:
+  runner: dotnet
+  targets_min: 10
+
+search:
+  - query: "public static class JsonConvert"
+    must_find_file: "Src/Newtonsoft.Json"
+
+incremental:
+  touch_file: "Src/Newtonsoft.Json/JsonConvert.cs"
+  reindexed_max: 10
+
+daemon:
+  starts: true
+  status_shows_running: true
+  stops_cleanly: true

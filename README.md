@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/status-pre--alpha-orange" alt="Status: Pre-alpha">
+  <img src="https://img.shields.io/badge/status-alpha-yellow" alt="Status: Alpha">
   <img src="https://img.shields.io/badge/python-≥3.12-blue" alt="Python ≥3.12">
   <a href="https://codecov.io/gh/dfinson/codeplane"><img src="https://codecov.io/gh/dfinson/codeplane/branch/main/graph/badge.svg" alt="Coverage"></a>
   <img src="https://img.shields.io/github/license/dfinson/codeplane" alt="License">
@@ -17,25 +17,82 @@
 
 ---
 
-CodePlane executes safe, deterministic operations for AI coding agents. It owns indexing, refactoring, testing, and file mutations—applying changes atomically and returning structured, auditable results so agents can act without probing or guesswork.
+## Quick Start
 
-## Status
+```bash
+pip install git+https://github.com/dfinson/codeplane.git
+```
 
-🚧 **Pre-alpha** — M0 + M1 complete, M2 in progress.
+```bash
+cd /path/to/your-repo
+cpl up              # Start daemon on default port 7654 (foreground, Ctrl+C to stop)
+cpl up --port 7655  # Or specify a port
+```
 
-Core infrastructure and Git operations are implemented. See the [roadmap](#roadmap) for progress.
+### VS Code / Copilot
 
-## Vision
+Add `.vscode/mcp.json` to your repo:
 
-AI coding agents need reliable infrastructure:
+```json
+{
+  "servers": {
+    "codeplane": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "http://127.0.0.1:7654/mcp"]
+    }
+  }
+}
+```
 
-- **Atomic mutations** — Changes succeed completely or roll back entirely
-- **Fast code search** — Sub-second queries across the codebase  
-- **Semantic refactoring** — Rename, extract, move with full reference updates
-- **Structured test results** — Normalized output from any test framework
-- **Operation history** — Full audit trail for debugging and convergence tracking
+In another terminal:
+```bash
+cpl status      # Check daemon status
+cpl clear       # Clear index and cache
+```
 
-CodePlane provides this via MCP (Model Context Protocol) tools, exposing capabilities as a local HTTP daemon.
+---
+
+## The Problem
+
+AI coding agents lose a **lot** of time and waste a lot of token consumption on tasks that should be much closer to instant.
+
+- **Exploratory thrash** — repeated grep, file opens, and retries to build a mental model
+- **Terminal mediation** — deterministic operations (git status, diff, run test) produce unstructured text and loops
+- **Missing deterministic refactors** — renames that IDEs do in seconds take agents minutes via search-and-edit
+
+The bottleneck is I/O and orchestration, not model capability.
+
+## The Solution
+
+CodePlane turns a repository into a **deterministic, queryable system**:
+
+```
+Agent plans and decides → CodePlane executes → Structured result → Next action
+```
+
+Every operation returns complete, structured context in a single call. No probing. No guesswork.
+
+## Architecture
+
+CodePlane provides a **full stacked index**:
+
+- **Tier 0 — Tantivy Lexical Index**: Fast, deterministic lexical retrieval for candidate discovery
+- **Tier 1 — Tree-sitter/SQLite Structural Facts**: Definitions, references, scopes, imports, exports
+
+## MCP Tools
+
+CodePlane exposes 30+ MCP tools organized by domain:
+
+| Domain | Tools | Description |
+|--------|-------|-------------|
+| **Files** | `read_files`, `list_files` | Read content, list directories with filtering |
+| **Git** | `git_status`, `git_diff`, `git_commit`, `git_log`, `git_push`, `git_pull`, `git_checkout`, `git_merge`, `git_reset`, `git_stage`, `git_branch`, `git_remote`, `git_stash`, `git_rebase`, `git_inspect`, `git_history`, `git_submodule`, `git_worktree` | Complete git operations with structured output |
+| **Index** | `search`, `map_repo` | Lexical/symbol search, repository mental model |
+| **Mutation** | `write_files` | Atomic file create/update/delete with content-addressed edits |
+| **Refactor** | `refactor_rename`, `refactor_move`, `refactor_delete`, `refactor_apply`, `refactor_cancel`, `refactor_inspect` | LSP-style refactoring with preview and certainty levels |
+| **Testing** | `discover_test_targets`, `run_test_targets`, `get_test_run_status`, `cancel_test_run` | Multi-language test discovery and execution |
+| **Lint** | `lint_check`, `lint_tools` | Auto-detected linters, formatters, type checkers |
+| **Introspection** | `describe` | Self-documenting tool schemas |
 
 ## Roadmap
 
@@ -43,25 +100,31 @@ Track progress via [GitHub Milestones](https://github.com/dfinson/codeplane/mile
 
 | Milestone | Description | Status |
 |-----------|-------------|--------|
-| M0: Foundation | Core types, errors, logging, configuration | ✅ Complete |
-| M1: Git Operations | Status, staging, commits, branches, diffs | ✅ Complete |
-| M2: Index Engine | Syntactic search + SCIP semantic layer infrastructure | 🚧 In Progress |
-| M3: Mutation Engine | Atomic file changes with rollback | |
-| M4: Ledger & Task Model | Operation history, convergence metrics | |
-| M5: Daemon & CLI | HTTP daemon, `cpl` CLI commands | |
-| M6: Core MCP Tools | File ops, search, git tools for agents | |
-| M7: Test Runner | Framework detection, parallel execution | |
-| M8: Semantic Refactor | Rename, move, delete using SCIP semantic data | |
-| M9: Polish & Hardening | Docs, benchmarks, security, packaging | |
+| **M0** | Foundation: Core types, errors, logging, configuration | ✅ |
+| **M1** | Git Operations: Status, staging, commits, branches, diffs | ✅ |
+| **M2** | Index Engine: Tantivy lexical + Tree-sitter/SQLite structural facts | 🚧 |
+| **M3** | Refactor Planner: Bounded candidate sets with coverage/risk manifests | ✅ |
+| **M4** | Mutation Engine: Atomic file changes with rollback | ✅ |
+| **M5** | Ledger & Task Model: Operation history, convergence metrics | 🚧 |
+| **M6** | Daemon & CLI: HTTP daemon, `cpl` CLI commands | ✅ |
+| **M7** | Core MCP Tools: File ops, search, git tools for agents | ✅ |
+| **M8** | Test Runner: Framework detection, parallel execution | ✅ |
+| **M9** | Polish & Hardening: Docs, benchmarks, security, packaging | 🚧 |
+| **M10** | Advanced Semantic Support (SCIP/LSP analysis) | 🔬 |
 
-## Development
+## Contributing
 
 ```bash
-make dev         # Install with dev dependencies
-make lint        # Run ruff linter
-make typecheck   # Run mypy
-make test        # Run pytest
+# Clone and install with dev dependencies
+git clone https://github.com/dfinson/codeplane.git
+cd codeplane
+pip install -e ".[dev]"
+
+# Start CodePlane on itself
+cpl up
 ```
+
+Then point your AI agent at the running MCP server.
 
 ## License
 

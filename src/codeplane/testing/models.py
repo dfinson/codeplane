@@ -1,0 +1,320 @@
+"""Testing subsystem core models.
+
+Canonical data structures for test discovery, execution, and results.
+All runner packs produce output conforming to these models.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Literal
+
+# =============================================================================
+# Target Kinds - Per ecosystem semantics
+# =============================================================================
+
+TargetKind = Literal["file", "package", "project"]
+"""Test target granularity.
+
+- file: Single test file (pytest, jest, rspec)
+- package: Module/package (Go packages, Rust crates, Java packages)
+- project: Project root (dotnet solution, Maven module, Gradle project)
+"""
+
+
+# =============================================================================
+# Test Targets
+# =============================================================================
+
+
+@dataclass
+class TestTarget:
+    """A discovered test target."""
+
+    target_id: str
+    selector: str  # Path, package name, or project identifier
+    kind: TargetKind
+    language: str
+    runner_pack_id: str  # e.g., "python.pytest", "js.jest"
+    workspace_root: str  # Absolute path to workspace/project root
+    estimated_cost: float = 1.0
+    test_count: int | None = None
+
+    @property
+    def path(self) -> str:
+        """Alias for selector."""
+        return self.selector
+
+    @property
+    def runner(self) -> str:
+        """Extract runner name from pack_id."""
+        return (
+            self.runner_pack_id.split(".")[-1]
+            if "." in self.runner_pack_id
+            else self.runner_pack_id
+        )
+
+
+# =============================================================================
+# Progress Tracking - Separate target vs testcase counters
+# =============================================================================
+
+
+@dataclass
+class TargetProgress:
+    """Progress at target (file/package/project) level."""
+
+    total: int = 0
+    completed: int = 0
+    running: int = 0
+    failed: int = 0  # Targets that had failures
+
+
+@dataclass
+class TestCaseProgress:
+    """Progress at individual test case level."""
+
+    total: int = 0
+    passed: int = 0
+    failed: int = 0
+    skipped: int = 0
+    errors: int = 0
+
+
+@dataclass
+class TestProgress:
+    """Combined progress tracking."""
+
+    targets: TargetProgress = field(default_factory=TargetProgress)
+    cases: TestCaseProgress = field(default_factory=TestCaseProgress)
+
+    # Legacy compatibility properties
+    @property
+    def total(self) -> int:
+        return self.targets.total
+
+    @property
+    def completed(self) -> int:
+        return self.targets.completed
+
+    @property
+    def passed(self) -> int:
+        return self.cases.passed
+
+    @property
+    def failed(self) -> int:
+        return self.cases.failed
+
+    @property
+    def skipped(self) -> int:
+        return self.cases.skipped
+
+
+# =============================================================================
+# Test Failures
+# =============================================================================
+
+
+@dataclass
+class TestFailure:
+    """A single test failure."""
+
+    name: str
+    path: str
+    line: int | None
+    message: str
+    traceback: str | None = None
+    classname: str | None = None
+    duration_seconds: float = 0.0
+
+
+# =============================================================================
+# Test Results - Parsed output from runners
+# =============================================================================
+
+
+@dataclass
+class ParsedTestCase:
+    """A single test case result."""
+
+    name: str
+    classname: str | None
+    status: Literal["passed", "failed", "skipped", "error"]
+    duration_seconds: float
+    message: str | None = None
+    traceback: str | None = None
+    stdout: str | None = None
+    stderr: str | None = None
+    file_path: str | None = None
+    line_number: int | None = None
+
+
+# Error types for explicit failure classification
+ErrorType = Literal[
+    "none",  # No error
+    "command_not_found",  # Executable doesn't exist
+    "command_failed",  # Command ran but returned non-zero
+    "timeout",  # Command exceeded timeout
+    "parse_failed",  # Output exists but couldn't be parsed
+    "output_missing",  # Expected output file doesn't exist
+    "unknown",  # Unclassified error
+]
+"""Explicit error classification for diagnostic clarity."""
+
+
+@dataclass
+class ExecutionContext:
+    """Captured execution context for diagnostics."""
+
+    command: list[str] | None = None
+    working_directory: str | None = None
+    exit_code: int | None = None
+    raw_stdout: str | None = None
+    raw_stderr: str | None = None
+
+
+@dataclass
+class ParsedTestSuite:
+    """Parsed test suite result (from a single target)."""
+
+    name: str
+    tests: list[ParsedTestCase] = field(default_factory=list)
+    total: int = 0
+    passed: int = 0
+    failed: int = 0
+    skipped: int = 0
+    errors: int = 0
+    duration_seconds: float = 0.0
+    target_selector: str | None = None
+    workspace_root: str | None = None
+
+    # Execution context for diagnostics
+    execution: ExecutionContext | None = None
+
+    # Error classification
+    error_type: ErrorType = "none"
+    error_detail: str | None = None
+    suggested_action: str | None = None
+
+    # Observable fact: number of test cases parsed from output
+    # - int >= 0: Successfully parsed this many test cases
+    # - None: Could not parse output (no file, parse error, etc.)
+    parsed_test_count: int | None = None
+
+
+@dataclass
+class ParsedTestRun:
+    """Aggregated results from a complete test run (multiple targets)."""
+
+    run_id: str
+    suites: list[ParsedTestSuite] = field(default_factory=list)
+    total: int = 0
+    passed: int = 0
+    failed: int = 0
+    skipped: int = 0
+    errors: int = 0
+    duration_seconds: float = 0.0
+
+    def add_suite(self, suite: ParsedTestSuite) -> None:
+        self.suites.append(suite)
+        self.total += suite.total
+        self.passed += suite.passed
+        self.failed += suite.failed
+        self.skipped += suite.skipped
+        self.errors += suite.errors
+        self.duration_seconds += suite.duration_seconds
+
+
+# =============================================================================
+# Run Status
+# =============================================================================
+
+
+@dataclass
+class ExecutionDiagnostic:
+    """Diagnostic information for a target execution."""
+
+    target_id: str
+    error_type: ErrorType
+    error_detail: str | None
+    suggested_action: str | None
+    command: list[str] | None = None
+    working_directory: str | None = None
+    exit_code: int | None = None
+    # Raw stderr output (first ~2000 chars), uninterpreted
+    # Allows agents to read actual error messages without our interpretation
+    raw_stderr: str | None = None
+    # Observable fact: number of test cases parsed from output
+    # - int >= 0: Successfully parsed this many test cases
+    # - None: Could not parse output (no file, parse error, etc.)
+    parsed_test_count: int | None = None
+
+
+@dataclass
+class TestRunStatus:
+    """Status of a test run."""
+
+    run_id: str
+    status: Literal["running", "completed", "cancelled", "failed", "not_found"]
+    progress: TestProgress | None = None
+    failures: list[TestFailure] = field(default_factory=list)
+    duration_seconds: float = 0.0
+    artifact_dir: str | None = None  # .codeplane/artifacts/tests/<run_id>/
+    # Execution diagnostics for errors that aren't test failures
+    diagnostics: list[ExecutionDiagnostic] = field(default_factory=list)
+    # Coverage artifacts if coverage was enabled
+    coverage: list[dict[str, str]] = field(default_factory=list)  # [{format, path, pack_id}]
+    # Target selectors that were executed (for coverage correlation)
+    target_selectors: list[str] = field(default_factory=list)
+    # Polling hint: suggested seconds until next status check (None = don't poll)
+    poll_after_seconds: float | None = None
+
+    def compute_poll_hint(self) -> float | None:
+        """Compute intelligent polling interval based on progress.
+
+        Returns None if polling is not needed (run finished).
+        Otherwise returns suggested seconds until next poll.
+        """
+        # Terminal states - no more polling needed
+        if self.status in ("completed", "cancelled", "failed", "not_found"):
+            return None
+
+        # Running - estimate based on progress
+        if not self.progress or self.progress.targets.total == 0:
+            # No progress info yet, poll in 2 seconds
+            return 2.0
+
+        completed = self.progress.targets.completed
+        total = self.progress.targets.total
+        remaining = total - completed
+
+        if completed == 0:
+            # Just started, no rate info - poll in 3 seconds
+            return 3.0
+
+        if remaining == 0:
+            # Should be completing very soon
+            return 0.5
+
+        # Estimate time per target from elapsed time
+        if self.duration_seconds > 0 and completed > 0:
+            seconds_per_target = self.duration_seconds / completed
+            estimated_remaining = seconds_per_target * remaining
+
+            # Poll at roughly 20% intervals, min 1s, max 10s
+            poll_interval = max(1.0, min(10.0, estimated_remaining * 0.2))
+            return round(poll_interval, 1)
+
+        # Fallback: poll every 3 seconds
+        return 3.0
+
+
+@dataclass
+class TestResult:
+    """Result of test operation (discover/run/status/cancel)."""
+
+    action: Literal["discover", "run", "status", "cancel"]
+    targets: list[TestTarget] | None = None
+    run_status: TestRunStatus | None = None
+    # Agentic fallback - when no runners detected, suggest what agent should run
+    agentic_hint: str | None = None

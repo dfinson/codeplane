@@ -23,6 +23,7 @@ class TestRebasePlan:
         """Rebase plan should list commits as pick actions."""
         _, ops, commit_shas = git_repo_with_commits
         default_branch = ops.current_branch()
+        assert default_branch is not None
 
         # Create a base branch at first commit
         ops.checkout(commit_shas[0])
@@ -58,6 +59,7 @@ class TestRebaseExecute:
         """Simple rebase without conflicts should succeed."""
         repo_path, ops, _ = git_repo_with_branch
         default_branch = ops.current_branch()
+        assert default_branch is not None
 
         # Checkout feature and rebase onto default branch
         ops.checkout("feature")
@@ -73,6 +75,7 @@ class TestRebaseExecute:
         """Starting new rebase while one is in progress should raise."""
         repo_path, ops, _ = git_repo_with_branch
         default_branch = ops.current_branch()
+        assert default_branch is not None
 
         # Switch to default branch and create conflicting changes
         ops.checkout(default_branch)
@@ -107,6 +110,7 @@ class TestRebaseAbort:
         """Aborting a rebase should restore original state."""
         repo_path, ops, _ = git_repo_with_branch
         default_branch = ops.current_branch()
+        assert default_branch is not None
 
         # Create conflicting changes
         ops.checkout(default_branch)
@@ -159,6 +163,7 @@ class TestRebaseContinue:
 
         repo_path, ops, _ = git_repo_with_branch
         default_branch = ops.current_branch()
+        assert default_branch is not None
 
         # Create conflicting changes
         ops.checkout(default_branch)
@@ -211,6 +216,7 @@ class TestRebaseSkip:
         """Skipping a conflicting commit should move to next step."""
         repo_path, ops, _ = git_repo_with_branch
         default_branch = ops.current_branch()
+        assert default_branch is not None
 
         # Create conflicting changes
         ops.checkout(default_branch)
@@ -262,6 +268,7 @@ class TestRebaseActions:
 
         # Create base branch at first commit
         default = ops.current_branch()
+        assert default is not None
         ops.checkout(shas[0])
         ops.create_branch("base")
         ops.checkout(default)
@@ -278,7 +285,7 @@ class TestRebaseActions:
         for step in plan.steps[1:]:
             custom_steps.append(RebaseStep(action="pick", commit_sha=step.commit_sha, message=None))
 
-        custom_plan = RebasePlan(onto="base", upstream="base", steps=custom_steps)
+        custom_plan = RebasePlan(onto="base", upstream="base", steps=tuple(custom_steps))
 
         result = ops.rebase_execute(custom_plan)
         assert result.success is True or result.state == "conflict"
@@ -296,6 +303,7 @@ class TestRebaseActions:
 
         # Create base branch
         default = ops.current_branch()
+        assert default is not None
         ops.checkout(shas[0])
         ops.create_branch("reword-base")
         ops.checkout(default)
@@ -315,7 +323,9 @@ class TestRebaseActions:
         for step in plan.steps[1:]:
             custom_steps.append(RebaseStep(action="pick", commit_sha=step.commit_sha, message=None))
 
-        custom_plan = RebasePlan(onto="reword-base", upstream="reword-base", steps=custom_steps)
+        custom_plan = RebasePlan(
+            onto="reword-base", upstream="reword-base", steps=tuple(custom_steps)
+        )
 
         result = ops.rebase_execute(custom_plan)
 
@@ -335,6 +345,7 @@ class TestRebaseActions:
         repo_path, ops, shas = git_repo_with_commits
 
         default = ops.current_branch()
+        assert default is not None
         ops.checkout(shas[0])
         ops.create_branch("squash-base")
         ops.checkout(default)
@@ -351,7 +362,9 @@ class TestRebaseActions:
         for step in plan.steps[2:]:
             custom_steps.append(RebaseStep(action="pick", commit_sha=step.commit_sha, message=None))
 
-        custom_plan = RebasePlan(onto="squash-base", upstream="squash-base", steps=custom_steps)
+        custom_plan = RebasePlan(
+            onto="squash-base", upstream="squash-base", steps=tuple(custom_steps)
+        )
 
         result = ops.rebase_execute(custom_plan)
 
@@ -370,6 +383,7 @@ class TestRebaseActions:
         repo_path, ops, shas = git_repo_with_commits
 
         default = ops.current_branch()
+        assert default is not None
         ops.checkout(shas[0])
         ops.create_branch("fixup-base")
         ops.checkout(default)
@@ -386,7 +400,9 @@ class TestRebaseActions:
         for step in plan.steps[2:]:
             custom_steps.append(RebaseStep(action="pick", commit_sha=step.commit_sha, message=None))
 
-        custom_plan = RebasePlan(onto="fixup-base", upstream="fixup-base", steps=custom_steps)
+        custom_plan = RebasePlan(
+            onto="fixup-base", upstream="fixup-base", steps=tuple(custom_steps)
+        )
 
         result = ops.rebase_execute(custom_plan)
 
@@ -404,6 +420,7 @@ class TestRebaseActions:
         repo_path, ops, shas = git_repo_with_commits
 
         default = ops.current_branch()
+        assert default is not None
         ops.checkout(shas[0])
         ops.create_branch("edit-base")
         ops.checkout(default)
@@ -419,7 +436,7 @@ class TestRebaseActions:
         for step in plan.steps[1:]:
             custom_steps.append(RebaseStep(action="pick", commit_sha=step.commit_sha, message=None))
 
-        custom_plan = RebasePlan(onto="edit-base", upstream="edit-base", steps=custom_steps)
+        custom_plan = RebasePlan(onto="edit-base", upstream="edit-base", steps=tuple(custom_steps))
 
         result = ops.rebase_execute(custom_plan)
 
@@ -448,6 +465,7 @@ class TestRebaseBranchRestoration:
         """
         repo_path, ops, _ = git_repo_with_branch
         default_branch = ops.current_branch()
+        assert default_branch is not None
 
         # Checkout feature and rebase onto default
         ops.checkout("feature")
@@ -477,6 +495,7 @@ class TestRebaseBranchRestoration:
         """
         repo_path, ops, _ = git_repo_with_branch
         default_branch = ops.current_branch()
+        assert default_branch is not None
 
         # Create conflicting changes
         ops.checkout(default_branch)

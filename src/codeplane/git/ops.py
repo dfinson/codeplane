@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 
 import pygit2
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 from codeplane.git._internal import (
     CheckoutPlanner,
@@ -173,14 +175,46 @@ class GitOps:
             kwargs["max_line"] = max_line
         return BlameInfo.from_pygit2(path, self._access.blame(path, **kwargs))
 
-    def log(self, ref: str = "HEAD", limit: int = 50) -> list[CommitInfo]:
+    def log(
+        self,
+        ref: str = "HEAD",
+        limit: int = 50,
+        since: str | None = None,
+        until: str | None = None,
+        paths: Sequence[str] | None = None,
+    ) -> list[CommitInfo]:
         """Get commit history."""
         try:
             start = self._access.resolve_ref_oid(ref)
-        except RefNotFoundError:
-            return []
+        except RefNotFoundError as e:
+            # Invalid ref - raise to caller so they can distinguish from empty history
+            raise RefNotFoundError(ref) from e
+
+        # Parse timestamps
+        since_ts = datetime.fromisoformat(since).timestamp() if since else None
+        until_ts = datetime.fromisoformat(until).timestamp() if until else None
+
         result: list[CommitInfo] = []
         for commit in self._access.walk_commits(start, SORT_TIME):
+            # Time filtering
+            if until_ts is not None and commit.commit_time > until_ts:
+                continue
+            if since_ts is not None and commit.commit_time < since_ts:
+                break
+
+            # Path filtering
+            if paths:
+                parent = commit.parents[0] if commit.parents else None
+                # Diff parent -> commit
+                diff = self._access.repo.diff(parent, commit)
+                match = False
+                for delta in diff.deltas:
+                    if any(delta.new_file.path.startswith(p) for p in paths):
+                        match = True
+                        break
+                if not match:
+                    continue
+
             result.append(CommitInfo.from_pygit2(commit))
             if len(result) >= limit:
                 break
@@ -231,6 +265,12 @@ class GitOps:
         """Current branch name, or None if detached or unborn."""
         return self._access.current_branch_name()
 
+    def tracked_files(self) -> list[str]:
+        """List all files tracked in the git index."""
+        index = self._access.index
+        index.read()
+        return [entry.path for entry in index]
+
     # =========================================================================
     # Write Operations
     # =========================================================================
@@ -248,6 +288,21 @@ class GitOps:
                 index.remove(p)
         index.write()
 
+    def stage_all(self) -> list[str]:
+        """Stage all changed files. Returns list of staged paths."""
+        index = self._access.index
+        status = self._access.status()
+        staged: list[str] = []
+        for path, flags in status.items():
+            if flags & (STATUS_WT_NEW | STATUS_WT_MODIFIED):
+                index.add(path)
+                staged.append(path)
+            elif flags & STATUS_WT_DELETED:
+                index.remove(path)
+                staged.append(path)
+        index.write()
+        return staged
+
     def unstage(self, paths: Sequence[str | Path]) -> None:
         """Unstage files (keeps working tree changes)."""
         if self._access.is_unborn:
@@ -259,6 +314,23 @@ class GitOps:
         for p in paths:
             self._access.index_reset_entry(self._access.normalize_path(p), head_tree)
         self._access.index.write()
+
+    def discard(self, paths: Sequence[str | Path]) -> None:
+        """Discard working tree changes, restoring files to index state."""
+        repo = self._access.repo
+        for p in paths:
+            norm = self._access.normalize_path(p)
+            full_path = self._access.path / norm
+            if norm in self._access.index:
+                # Restore from index
+                entry = self._access.index[norm]
+                blob = repo[entry.id]
+                if isinstance(blob, pygit2.Blob):
+                    full_path.parent.mkdir(parents=True, exist_ok=True)
+                    full_path.write_bytes(blob.data)
+            elif full_path.exists():
+                # Untracked file not in index - delete it
+                full_path.unlink()
 
     def commit(self, message: str, allow_empty: bool = False) -> str:
         """Create commit from staged changes. Returns commit sha."""
@@ -452,10 +524,19 @@ class GitOps:
     def fetch(
         self, remote: str = "origin", callbacks: SystemCredentialCallback | None = None
     ) -> None:
-        """Fetch from remote."""
+        """Fetch from remote with retry for transient network failures."""
         cbs = callbacks or get_default_callbacks()
+        self._fetch_with_retry(remote, cbs)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
+    def _fetch_with_retry(self, remote: str, callbacks: SystemCredentialCallback) -> None:
+        """Internal fetch with retry decorator."""
         # Use lambda to avoid pygit2 version differences in keyword arg names
-        self._access.run_remote_operation(remote, "fetch", lambda r: r.fetch(callbacks=cbs))
+        self._access.run_remote_operation(remote, "fetch", lambda r: r.fetch(callbacks=callbacks))
 
     def push(
         self,
@@ -464,7 +545,7 @@ class GitOps:
         callbacks: SystemCredentialCallback | None = None,
     ) -> None:
         """
-        Push current branch to remote.
+        Push current branch to remote with retry for transient network failures.
 
         Note:
             Always pushes the current local branch to the same-named branch
@@ -475,9 +556,20 @@ class GitOps:
         prefix = "+" if force else ""
         refspec = f"{prefix}refs/heads/{branch}:refs/heads/{branch}"
         cbs = callbacks or get_default_callbacks()
+        self._push_with_retry(remote, refspec, cbs)
+
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        reraise=True,
+    )
+    def _push_with_retry(
+        self, remote: str, refspec: str, callbacks: SystemCredentialCallback
+    ) -> None:
+        """Internal push with retry decorator."""
         # Use lambda to avoid pygit2 version differences in keyword arg names
         self._access.run_remote_operation(
-            remote, "push", lambda r: r.push([refspec], callbacks=cbs)
+            remote, "push", lambda r: r.push([refspec], callbacks=callbacks)
         )
 
     def pull(

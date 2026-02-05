@@ -1,222 +1,72 @@
-# CodePlane
-
-Local repository control plane for AI coding agents. Exposes repository operations via MCP tools over HTTP.
-
-**Status:** Design + scaffolding phase. See `SPEC.md` for authoritative design.
-
-## Technology Stack
-
-- **CLI:** Click
-- **HTTP:** Starlette + Uvicorn
-- **Index:** Tantivy + SQLite + Symbol Graph
-- **Refactor:** LSP-only (no regex, no guessing)
-- **Logging:** structlog
-- **Observability:** OpenTelemetry + Phoenix
-
-## Architecture Invariants
-
-These are non-negotiable design principles. Do not suggest alternatives:
-
-- **LSP-only refactoring** — CodePlane never guesses symbol bindings. All semantic refactors go through LSP.
-- **No background mutations** — Reconciliation is triggered, never autonomous.
-- **Determinism over heuristics** — If it can be computed, don't infer it.
-- **Structured responses always** — Every operation returns structured context, not raw text.
-- **Ledger is append-only** — Never update or delete ledger records.
-
----
-
-## A. Development Workflow
-
-When implementing features, fixing bugs, or making changes:
-
-### 1. Context Gathering
-
-- **Fetch the relevant GitHub issue** — Read acceptance criteria and linked discussions
-- **Read the relevant SPEC.md section(s)** — The spec is authoritative; implementation follows spec
-- **Check existing code patterns** — Match conventions already established in the codebase
-
-### 2. Branch Workflow
-
-Create or checkout a branch following this naming convention:
-
-```
-<gh-username>/<type>/<short-description>
-```
-
-Types: `feature`, `bug`, `doc`, `spike`, `refactor`, `chore`
-
-Examples:
-- `dfinson/feature/otel-traces`
-- `dfinson/bug/lsp-timeout-handling`
-- `dfinson/spike/tantivy-perf`
-
-### 3. Design Before Implementation
-
-**Always evaluate 2-3 design options before writing code.**
-
-- Present tradeoffs explicitly
-- **Treat LOC as a first-class cost** — More code means more review, more tests, more maintenance
-- Prefer concise and elegant over verbose and explicit
-- Ask which approach to proceed with
-- If spec is silent or ambiguous, propose spec amendments before implementing
-
-### 4. Spec Alignment
-
-- If implementation reveals a spec gap, **propose a spec update first**
-- If implementation conflicts with spec, **stop and clarify** — do not silently diverge
-- Reference spec sections in commit messages and PR descriptions
-
-### 5. Commit Discipline
-
-- Atomic commits with clear messages
-- Prefix: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`
-- Reference issue numbers: `feat: add otel traces (#115)`
-
-### 6. Testing Discipline
-
-- Target 90%+ coverage, but **quality over quantity**
-- Use **Given/When/Then** (BDD) or **Arrange/Act/Assert** (AAA) structure
-- **Parametrize** tests where possible — one test with 10 cases beats 10 copy-paste tests
-- Tests must be reviewable — no thousands of LOC that humans will never read
-- Test behavior and outcomes, not implementation details
-
-### 7. Comment Policy
-
-Comments are a maintenance liability. Apply these rules strictly:
-
-- **Minimize comments** — Code should be self-documenting through clear naming and structure
-- **Never use comments as a changelog** — Git history exists; comments like "Added 2026-01-15" or "Changed per review" are forbidden
-- **No commented-out code** — Delete it; Git remembers
-- **Acceptable comments:**
-  - Non-obvious "why" explanations (not "what")
-  - Regulatory/compliance references
-  - Links to external specs or RFCs
-  - TODO with issue number: `# TODO(#123): handle edge case`
-
-### 8. Anti-Overengineering Rules
-
-**Default posture: Write less code.**
-
-Before writing any abstraction, validator, or helper, ask: "Does a library already do this?"
-
-**Forbidden patterns:**
-
-- **Reimplementing library features** — If pydantic-settings handles env vars, don't write custom env parsing. If structlog has processors, don't wrap them. Read the library docs first.
-- **Custom validators for standard types** — Use `Literal["A", "B", "C"]` not a custom normalizer. Use `Field(ge=0, le=65535)` not a validator method.
-- **Migration/compatibility shorthands** — No `json_format: bool` that "converts to" the real config. Users can write the real config.
-- **Verbose docstrings** — If the function is `_load_yaml(path) -> dict`, don't write "Load YAML file, returning empty dict if missing." The code is obvious.
-- **Field descriptions that repeat the field name** — `port: int = Field(description="The port number")` adds nothing. Delete it.
-- **Factory methods for simple constructors** — If `Error(code, message, details={...})` works, don't add `Error.from_x()` methods.
-
-**Docstring rules:**
-
-- One-line docstrings only, unless explaining non-obvious behavior
-- No Args/Returns sections for obvious signatures
-- No docstrings on private helpers with self-documenting names
-- Class docstrings: one line stating purpose, not restating field names
-
-**Test for overengineering:**
-
-If you can delete code and tests still pass with equivalent coverage, the code was unnecessary.
-
----
-
-## B. Code Review Guidance
-
-Copilot performs well on narrow, locally-visible issues. It struggles with architecture, context, and judgment calls.
-
-### What to Prioritize (Copilot strengths — lean in)
-
-- **Injection vulnerabilities** — shell, eval, SQL, path traversal
-- **Cross-platform bugs** — Windows paths, CRLF, case sensitivity
-- **Race conditions** — especially in daemon lifecycle and LSP management
-- **Type mismatches** — signature inconsistencies, None handling
-- **Error handling gaps** — unhandled exceptions, missing rollback
-
-### What to Flag Conservatively (Copilot weaknesses — compensate)
-
-- **Destructive operations** — file deletion, ledger writes, Git mutations
-  - Require explicit rollback/recovery paths
-  - Check for partial failure scenarios
-  - Verify atomicity guarantees
-
-- **State corruption risks** — index inconsistency, orphaned locks, stale caches
-  - These are high-severity; prefer false positives
-
-- **Architecture violations** — anything that bypasses LSP, mutates in background, or breaks structured response contracts
-
-### What NOT to Suggest
-
-- Removing debug output from tests (CI needs visibility)
-- Premature abstraction ("extract this to a utility")
-- Excessive documentation for self-evident code
-- "Consider using X library" without concrete justification
-- Logging changes in hot paths without perf context
-
-### High-Risk Paths (Extra Scrutiny)
-
-| Path | Risk |
-|------|------|
-| `src/codeplane/mutation/` | Data loss, partial writes |
-| `src/codeplane/refactor/` | Incorrect symbol resolution |
-| `src/codeplane/daemon/` | Lifecycle bugs, resource leaks |
-| `src/codeplane/ledger/` | Audit integrity, append-only violation |
-| `src/codeplane/index/` | Stale data, corruption |
-
-### Review Anti-Patterns to Avoid
-
-- Line-level nitpicks on large architectural PRs (focus on design)
-- Suggesting changes that violate spec invariants
-- Overengineering suggestions for spike/prototype branches
-- Context-free "best practice" recommendations
-
----
-
-## C. Pull Request Creation
-
-When creating pull requests:
-
-### 1. Template Usage
-
-- **Always check for PR templates** in `.github/PULL_REQUEST_TEMPLATE.md` or `.github/PULL_REQUEST_TEMPLATE/`
-- **Use the template structure** — do not discard or reformat it
-- **Be context-sensitive with checkboxes** — only check boxes that actually apply to this PR
-  - If a checkbox doesn't apply, leave it unchecked or mark N/A
-  - Do not blindly check all boxes
-  - Each checked box is a commitment
-
-### 2. Description Guidelines
-
-- **Stay high-level** — PR descriptions summarize intent, not implementation details
-- **Link to issues** — Use `Closes #123` or `Relates to #123`
-- **Avoid code in descriptions** — The diff is the code; the description is the context
-- **State what changed and why** — not how (the diff shows how)
-
-### 3. Scope Discipline
-
-- One logical change per PR
-- If a PR touches unrelated areas, split it
-- Refactors and features should not mix
-
----
-
-## D. GitHub Remote Operations
-
-> **⚠️ CRITICAL: No Substitutions**
->
-> When asked to perform a specific GitHub remote action (resolve threads, merge PR, create release, etc.):
-> - Do **exactly** what was requested, or
-> - Say "I cannot do that with the available tools"
->
-> **Never** substitute a different action. If asked to resolve review threads and you can't, say so. Do not add a comment instead. Do not do something "close enough." Either perform the exact operation or report that it's not possible.
-
----
-
-## Dev Commands
-
-```bash
-make dev         # Install with dev deps
-make lint        # Ruff
-make typecheck   # Mypy
-make test        # Pytest
-```
+# CodePlane — Copilot Instructions
+
+Authority: SPEC.md wins. If unsure or there is a spec conflict, stop and ask.
+
+1) MCP First (Default)
+If a CodePlane MCP tool exists for an action, use it.
+Terminal commands are fallback only when the tool does not exist.
+
+- Read files: mcp_codeplane_read_files (not cat/head)
+- Edit files: mcp_codeplane_atomic_edit_files (not sed/echo/awk)
+- List files: mcp_codeplane_list_files (not ls/find)
+- Map repo: mcp_codeplane_map_repo (not manual traversal)
+- Search: CodePlane search tools (not grep/rg)
+- Git ops: CodePlane git tools (not raw git)
+
+2) Non-Negotiable Invariants
+- Refactors are LSP-only (no regex, no guessing)
+- No autonomous mutations (all reconciliation is triggered)
+- Determinism over heuristics
+- Structured outputs only (no raw text)
+- Ledger is append-only (no updates or deletes)
+
+3) No Hacks (Root Cause Only)
+If something fails, diagnose and fix it properly. Do not “make it pass”.
+
+Forbidden:
+- # type: ignore, Any, dishonest cast()
+- try/except or inline imports to dodge module issues
+- regex or string parsing for structured data
+- raw SQL to bypass ORM or typing
+- empty except blocks or silent fallbacks
+- “for now” workarounds
+
+If you cannot solve it correctly with available tools or information, say so and ask.
+
+4) All Checks Must Pass (Method-Agnostic)
+Lint, typecheck, tests, and CI must be green.
+
+- Prefer CodePlane MCP endpoints for lint/test/typecheck when available
+- Terminal commands are acceptable only if MCP support does not exist
+- The requirement is the result, not the invocation method
+
+5) GitHub Remote Actions Must Be Exact
+When asked to perform a specific remote action (merge, resolve threads, release, etc.):
+- do exactly that action, or
+- state it is not possible with available tools
+
+No substitutions.
+
+6) Change Discipline (Minimal)
+- Before coding: read the issue, relevant SPEC.md sections, and match repo patterns
+- Prefer minimal code; do not invent abstractions or reimplement libraries
+- Tests should be small, behavioral, and parameterized when appropriate
+
+7) Read MCP Response Hints
+CodePlane MCP responses may include `agentic_hint`, `coverage_hint`, or `display_to_user` fields.
+Always check for and follow these hints—they provide actionable guidance for next steps.
+
+8) NEVER Reset Hard Without Approval
+**ABSOLUTE PROHIBITION**: Never execute `git reset --hard` under any circumstances without explicit user approval.
+
+This applies to:
+- `git reset --hard` (any ref)
+- `mcp_codeplane_git_reset` with `mode: hard`
+- Any equivalent destructive operation that discards uncommitted changes
+
+If you believe a hard reset is needed:
+1. STOP and explain why you think it's necessary
+2. List what uncommitted work will be lost
+3. Wait for explicit user confirmation before proceeding
+
+Violating this rule destroys work irreversibly and may affect parallel agent workflows.

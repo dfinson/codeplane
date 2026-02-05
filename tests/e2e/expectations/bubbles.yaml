@@ -1,0 +1,56 @@
+# bubbles - TUI components for Bubble Tea
+repo: charmbracelet/bubbles
+commit: "v0.20.0"
+clone_depth: 1
+timeout_profile: medium
+
+contexts:
+  - root: "."
+    language: go
+
+files:
+  indexed_min: 20
+  indexed_max: 100
+  must_include:
+    - "spinner/spinner.go"
+  must_exclude:
+    - "vendor/"
+    - ".git/"
+
+anchors:
+  - symbol: "Model"
+    kind: class
+    file_contains: ".go"
+    line_min: 1
+    line_max: 300
+
+refs:
+  - to_symbol: "Model"
+    min_refs: 3
+
+imports:
+  - file_contains: ".go"
+    imports_min: 2
+    must_import: []
+
+scopes:
+  - file_contains: ".go"
+    has_class_scope: true
+    class_has_methods_min: 2
+
+test_targets:
+  runner: go
+  targets_min: 5
+
+search:
+  - query: "type Model struct"
+    must_find_file: ".go"
+
+incremental:
+  touch_file: "spinner/spinner.go"
+  reindexed_max: 5
+
+daemon:
+  starts: true
+  status_shows_running: true
+  stops_cleanly: true

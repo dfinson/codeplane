@@ -1,0 +1,56 @@
+# rack - Ruby web server interface
+repo: rack/rack
+commit: "v3.1.8"
+clone_depth: 1
+timeout_profile: medium
+
+contexts:
+  - root: "."
+    language: ruby
+
+files:
+  indexed_min: 30
+  indexed_max: 200
+  must_include:
+    - "lib/rack.rb"
+  must_exclude:
+    - "vendor/"
+    - ".git/"
+
+anchors:
+  - symbol: "Rack"
+    kind: class
+    file_contains: "lib/rack"
+    line_min: 1
+    line_max: 500
+
+refs:
+  - to_symbol: "Rack"
+    min_refs: 3
+
+imports:
+  - file_contains: "lib/rack"
+    imports_min: 1
+    must_import: []
+
+scopes:
+  - file_contains: "lib/rack"
+    has_class_scope: true
+    class_has_methods_min: 1
+
+test_targets:
+  runner: rspec
+  targets_min: 10
+
+search:
+  - query: "module Rack"
+    must_find_file: "lib/rack"
+
+incremental:
+  touch_file: "lib/rack.rb"
+  reindexed_max: 5
+
+daemon:
+  starts: true
+  status_shows_running: true
+  stops_cleanly: true
