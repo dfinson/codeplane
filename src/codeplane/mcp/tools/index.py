@@ -89,6 +89,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         filter_languages: list[str] | None = Field(None, description="Filter by languages"),
         filter_kinds: list[str] | None = Field(None, description="Filter by symbol kinds"),
         limit: int = Field(default=20, le=SEARCH_MAX_LIMIT, description="Maximum results"),
+        context_lines: int = Field(
+            default=1, ge=0, le=5, description="Lines of context before/after each match"
+        ),
         cursor: str | None = Field(None, description="Pagination cursor"),
         include_snippets: bool = Field(True, description="Include code snippets"),
     ) -> dict[str, Any]:
@@ -177,6 +180,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             query,
             mode_map[mode],
             limit=limit,
+            context_lines=context_lines,
         )
 
         # Count unique files

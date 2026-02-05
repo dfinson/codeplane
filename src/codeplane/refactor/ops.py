@@ -409,28 +409,45 @@ class RefactorOps:
     ) -> None:
         """Use Tantivy index for lexical fallback - NOT filesystem scan.
 
-        Queries the index for the symbol, then validates matches.
-        Much faster than scanning all files.
+        Queries the index for the symbol, then scans matched files for ALL
+        occurrences. Tantivy returns one result per document (file), so we
+        need to find all line occurrences within each matched file.
         """
         # Search the index for the symbol
         search_response = await self._coordinator.search(symbol, limit=500)
 
+        # Collect unique file paths from search results
+        matched_files: set[str] = set()
         for hit in search_response.results:
-            loc = (hit.path, hit.line)
-            if loc in seen_locations:
+            if hit.snippet and _word_boundary_match(hit.snippet, symbol):
+                matched_files.add(hit.path)
+
+        # For each matched file, scan for ALL occurrences
+        for file_path in matched_files:
+            full_path = self._repo_root / file_path
+            if not full_path.exists():
                 continue
 
-            # Verify it's a word boundary match (index may return partial matches)
-            if hit.snippet and _word_boundary_match(hit.snippet, symbol):
-                seen_locations.add(loc)
-                edits_by_file.setdefault(hit.path, []).append(
-                    EditHunk(
-                        old=symbol,
-                        new=new_name,
-                        line=hit.line,
-                        certainty="low",
-                    )
-                )
+            try:
+                content = full_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+
+            # Find all lines containing the symbol with word boundaries
+            lines = content.splitlines()
+            for line_num, line in enumerate(lines, 1):  # 1-indexed
+                if _word_boundary_match(line, symbol):
+                    loc = (file_path, line_num)
+                    if loc not in seen_locations:
+                        seen_locations.add(loc)
+                        edits_by_file.setdefault(file_path, []).append(
+                            EditHunk(
+                                old=symbol,
+                                new=new_name,
+                                line=line_num,
+                                certainty="low",
+                            )
+                        )
 
     async def inspect(
         self,

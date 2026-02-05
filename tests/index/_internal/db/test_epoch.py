@@ -200,9 +200,11 @@ class TestEpochManager:
         assert stats.published_at > 0
 
     def test_publish_epoch_reloads_lexical_if_present(self, tmp_path: Path) -> None:
-        """publish_epoch reloads lexical index when available."""
+        """publish_epoch reloads lexical index when no staged changes."""
         mock_db = MagicMock()
         mock_lexical = MagicMock()
+        # Simulate no staged changes
+        mock_lexical.has_staged_changes.return_value = False
 
         # Setup sessions
         mock_read_session = MagicMock()

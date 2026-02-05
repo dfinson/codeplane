@@ -119,25 +119,61 @@ def _summarize_run(result: "TestResult") -> str:
     return status.status
 
 
-def _build_logs_hint(artifact_dir: str | None, status_str: str) -> str | None:
-    """Build hint for where to find test logs."""
+def _target_id_to_safe_name(target_id: str) -> str:
+    """Convert target_id to safe filename (matches ops.py logic)."""
+    return target_id.replace("/", "_").replace(":", "_")
+
+
+def _build_logs_hint(
+    artifact_dir: str | None,
+    status_str: str,
+    target_selectors: list[str] | None = None,
+) -> str | None:
+    """Build hint for where to find test logs.
+
+    Args:
+        artifact_dir: Path to artifact directory
+        status_str: Current run status
+        target_selectors: List of target selectors that were executed
+    """
     if not artifact_dir:
         return None
 
+    # Build list of actual artifact files if we have target info
+    file_examples: list[str] = []
+    if target_selectors:
+        # Show up to 3 examples of actual file names
+        for selector in target_selectors[:3]:
+            # Target IDs use "test:" prefix, selectors don't - construct the target_id
+            target_id = f"test:{selector}"
+            safe_name = _target_id_to_safe_name(target_id)
+            file_examples.append(f"  - {safe_name}.stdout.txt")
+        if len(target_selectors) > 3:
+            file_examples.append(f"  ... and {len(target_selectors) - 3} more targets")
+
     if status_str == "running":
+        if file_examples:
+            return (
+                f"Test output is being written to: {artifact_dir}/\n"
+                + "\n".join(file_examples)
+                + "\n"
+                "Each target also produces .stderr.txt (if any) and .xml (JUnit results).\n"
+                "Use read_files to inspect logs for completed targets."
+            )
         return (
             f"Test output is being written to: {artifact_dir}/\n"
-            "  - <target_id>.stdout.txt: stdout from each test target\n"
-            "  - <target_id>.stderr.txt: stderr (if any)\n"
-            "  - <target_id>.xml: JUnit XML results\n"
             "Use read_files to inspect logs for completed targets."
         )
     elif status_str in ("completed", "failed", "cancelled"):
+        if file_examples:
+            return (
+                f"Test logs available at: {artifact_dir}/\n" + "\n".join(file_examples) + "\n"
+                "Each target also produces .stderr.txt (if any) and .xml (JUnit results).\n"
+                "  - result.json: final run summary\n"
+                "Use read_files to inspect specific test output."
+            )
         return (
             f"Test logs available at: {artifact_dir}/\n"
-            "  - <target_id>.stdout.txt: stdout from each test target\n"
-            "  - <target_id>.stderr.txt: stderr (if any)\n"
-            "  - <target_id>.xml: JUnit XML results\n"
             "  - result.json: final run summary\n"
             "Use read_files to inspect specific test output."
         )
@@ -328,7 +364,11 @@ def _serialize_test_result(result: "TestResult", is_action: bool = False) -> dic
 
         # Add logs hint for status checks (not for initial run action)
         if not is_action:
-            logs_hint = _build_logs_hint(status.artifact_dir, status.status)
+            logs_hint = _build_logs_hint(
+                status.artifact_dir,
+                status.status,
+                status.target_selectors,
+            )
             if logs_hint:
                 output["run_status"]["logs_hint"] = logs_hint
 

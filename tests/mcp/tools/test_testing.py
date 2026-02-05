@@ -218,21 +218,46 @@ class TestBuildLogsHint:
         hint = _build_logs_hint(None, "running")
         assert hint is None
 
-    def test_running_status(self) -> None:
-        """Should show hint for running tests."""
+    def test_running_status_without_targets(self) -> None:
+        """Should show generic hint for running tests without target info."""
         hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "running")
         assert hint is not None
         assert ".codeplane/artifacts/tests/abc123" in hint
-        assert "stdout.txt" in hint
-        assert "stderr.txt" in hint
-        assert "xml" in hint.lower()
         assert "read_files" in hint
 
-    def test_completed_status(self) -> None:
-        """Should show hint for completed tests."""
+    def test_running_status_with_targets(self) -> None:
+        """Should show actual target file names for running tests."""
+        hint = _build_logs_hint(
+            ".codeplane/artifacts/tests/abc123",
+            "running",
+            target_selectors=["tests/test_foo.py", "tests/test_bar.py"],
+        )
+        assert hint is not None
+        assert ".codeplane/artifacts/tests/abc123" in hint
+        # Should contain actual file names, not <target_id> placeholder
+        assert "test_tests_test_foo.py.stdout.txt" in hint
+        assert "test_tests_test_bar.py.stdout.txt" in hint
+        assert "<target_id>" not in hint
+        assert "read_files" in hint
+
+    def test_completed_status_without_targets(self) -> None:
+        """Should show generic hint for completed tests without target info."""
         hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "completed")
         assert hint is not None
         assert ".codeplane/artifacts/tests/abc123" in hint
+        assert "result.json" in hint
+        assert "read_files" in hint
+
+    def test_completed_status_with_targets(self) -> None:
+        """Should show actual target file names for completed tests."""
+        hint = _build_logs_hint(
+            ".codeplane/artifacts/tests/abc123",
+            "completed",
+            target_selectors=["tests/test_foo.py"],
+        )
+        assert hint is not None
+        assert "test_tests_test_foo.py.stdout.txt" in hint
+        assert "<target_id>" not in hint
         assert "result.json" in hint
         assert "read_files" in hint
 
@@ -252,6 +277,29 @@ class TestBuildLogsHint:
         """Should return None for not_found status."""
         hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "not_found")
         assert hint is None
+
+    def test_many_targets_shows_ellipsis(self) -> None:
+        """Should show ellipsis for many targets."""
+        hint = _build_logs_hint(
+            ".codeplane/artifacts/tests/abc123",
+            "completed",
+            target_selectors=[
+                "tests/test_one.py",
+                "tests/test_two.py",
+                "tests/test_three.py",
+                "tests/test_four.py",
+                "tests/test_five.py",
+            ],
+        )
+        assert hint is not None
+        # Should show first 3
+        assert "test_tests_test_one.py.stdout.txt" in hint
+        assert "test_tests_test_two.py.stdout.txt" in hint
+        assert "test_tests_test_three.py.stdout.txt" in hint
+        # Should indicate more
+        assert "2 more targets" in hint
+        # Should NOT show the last ones
+        assert "test_tests_test_four.py" not in hint
 
 
 class TestSerializeTestResult:

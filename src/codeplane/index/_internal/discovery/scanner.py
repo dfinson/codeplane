@@ -210,7 +210,8 @@ class ContextDiscovery:
         for family, tier_markers in MARKER_DEFINITIONS.items():
             for tier, marker_names in tier_markers.items():
                 for name in marker_names:
-                    marker_lookup.setdefault(name, []).append((family, tier))
+                    # Keys are stored lowercase for case-insensitive matching
+                    marker_lookup.setdefault(name.lower(), []).append((family, tier))
 
         dotnet_extensions = {".sln", ".csproj", ".fsproj", ".vbproj"}
         markers: list[DiscoveredMarker] = []
@@ -218,8 +219,10 @@ class ContextDiscovery:
         for rel_dir, filename in all_files:
             rel_path = f"{rel_dir}/{filename}" if rel_dir else filename
 
-            if filename in marker_lookup:
-                for family, tier in marker_lookup[filename]:
+            # Case-insensitive marker matching (Cargo.toml == cargo.toml)
+            filename_lower = filename.lower()
+            if filename_lower in marker_lookup:
+                for family, tier in marker_lookup[filename_lower]:
                     markers.append(DiscoveredMarker(path=rel_path, family=family, tier=tier))
 
             ext = Path(filename).suffix.lower()
@@ -240,18 +243,29 @@ class ContextDiscovery:
         tier_markers = MARKER_DEFINITIONS.get(family, {})
         markers: list[DiscoveredMarker] = []
 
+        # Build lowercase lookup for case-insensitive matching
+        tier_marker_lookup: dict[str, MarkerTier] = {}
+        for tier, marker_names in tier_markers.items():
+            for name in marker_names:
+                tier_marker_lookup[name.lower()] = tier
+
         for rel_dir, filename in all_files:
             rel_path = f"{rel_dir}/{filename}" if rel_dir else filename
-            for tier, marker_names in tier_markers.items():
-                if filename in marker_names:
-                    markers.append(DiscoveredMarker(path=rel_path, family=family, tier=tier))
+            filename_lower = filename.lower()
+            if filename_lower in tier_marker_lookup:
+                markers.append(
+                    DiscoveredMarker(
+                        path=rel_path, family=family, tier=tier_marker_lookup[filename_lower]
+                    )
+                )
 
         return markers
 
     def _handle_rust_workspaces(self, markers: list[DiscoveredMarker]) -> list[DiscoveredMarker]:
         result: list[DiscoveredMarker] = []
         for marker in markers:
-            if marker.family == LanguageFamily.RUST and marker.path.endswith("Cargo.toml"):
+            # Case-insensitive check for Cargo.toml
+            if marker.family == LanguageFamily.RUST and marker.path.lower().endswith("cargo.toml"):
                 try:
                     content = (self.repo_root / marker.path).read_text()
                     if "[workspace]" in content:

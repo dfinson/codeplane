@@ -339,17 +339,19 @@ class LexicalIndex:
         query: str,
         limit: int = 20,
         context_id: int | None = None,
+        context_lines: int = 1,
     ) -> SearchResults:
         """
         Search the index.
 
         Args:
             query: Search query (supports Tantivy query syntax)
-            limit: Maximum results to return
+            limit: Maximum results to return (applies after line expansion)
             context_id: Optional context to filter by
+            context_lines: Lines of context before/after each match (default 1)
 
         Returns:
-            SearchResults with matching documents.
+            SearchResults with matching lines (one result per line occurrence).
             If query syntax is invalid, falls back to literal search
             and sets fallback_reason.
         """
@@ -387,26 +389,35 @@ class LexicalIndex:
                 results.fallback_reason = "query could not be parsed even after escaping"
                 return results
 
-        # Search
-        top_docs = searcher.search(parsed, limit).hits
+        # Search - fetch more docs than limit since we expand to lines
+        # Tantivy returns 1 doc per file, we expand to N lines per file
+        doc_limit = min(limit, 500)  # Cap doc fetch to avoid memory issues
+        top_docs = searcher.search(parsed, doc_limit).hits
         results.total_hits = len(top_docs)
 
         for score, doc_addr in top_docs:
             doc = searcher.doc(doc_addr)
-
-            # Extract snippet around match and get line number
+            file_path = doc.get_first("path") or ""
             content = doc.get_first("content") or ""
-            snippet, line_num = self._extract_snippet(content, query, max_lines=3)
+            ctx_id = doc.get_first("context_id")
 
-            result = SearchResult(
-                file_path=doc.get_first("path") or "",
-                line=line_num,
-                column=0,
-                snippet=snippet,
-                score=score,
-                context_id=doc.get_first("context_id"),
-            )
-            results.results.append(result)
+            # Extract ALL matching lines from this file
+            for snippet, line_num in self._extract_all_snippets(content, query, context_lines):
+                if len(results.results) >= limit:
+                    break
+                results.results.append(
+                    SearchResult(
+                        file_path=file_path,
+                        line=line_num,
+                        column=0,
+                        snippet=snippet,
+                        score=score,
+                        context_id=ctx_id,
+                    )
+                )
+
+            if len(results.results) >= limit:
+                break
 
         results.query_time_ms = int((time.monotonic() - start) * 1000)
         results.fallback_reason = fallback_reason
@@ -417,42 +428,30 @@ class LexicalIndex:
         query: str,
         limit: int = 20,
         context_id: int | None = None,
+        context_lines: int = 1,
     ) -> SearchResults:
         """Search only in symbol names."""
         self._ensure_initialized()
 
         symbol_query = f"symbols:{query}"
-        return self.search(symbol_query, limit, context_id)
+        return self.search(symbol_query, limit, context_id, context_lines)
 
     def search_path(
         self,
         pattern: str,
         limit: int = 20,
         context_id: int | None = None,
+        context_lines: int = 1,
     ) -> SearchResults:
         """Search in file paths."""
         self._ensure_initialized()
 
         path_query = f"path:{pattern}"
-        return self.search(path_query, limit, context_id)
+        return self.search(path_query, limit, context_id, context_lines)
 
-    def _extract_snippet(
-        self,
-        content: str,
-        query: str,
-        max_lines: int = 3,
-    ) -> tuple[str, int]:
-        """Extract a snippet around the query match.
-
-        Returns:
-            Tuple of (snippet_text, line_number) where line_number is 1-indexed.
-            If no match found, returns (first lines, 1).
-        """
-        lines = content.split("\n")
+    def _extract_search_terms(self, query: str) -> list[str]:
+        """Extract actual search terms from query, removing field prefixes and operators."""
         query_lower = query.lower()
-
-        # Handle query syntax - extract actual search terms
-        # Remove field prefixes like "symbols:" or "path:"
         search_terms = []
         for term in query_lower.split():
             if ":" in term:
@@ -460,23 +459,68 @@ class LexicalIndex:
                 _, value = term.split(":", 1)
                 if value:
                     search_terms.append(value)
-            else:
-                # Skip boolean operators
-                if term not in ("and", "or", "not"):
-                    search_terms.append(term)
+            elif term not in ("and", "or", "not"):
+                search_terms.append(term)
+        return search_terms
 
-        # Find first line matching any search term
+    def _extract_all_snippets(
+        self,
+        content: str,
+        query: str,
+        context_lines: int = 1,
+    ) -> list[tuple[str, int]]:
+        """Extract snippets for ALL lines matching the query.
+
+        Args:
+            content: File content
+            query: Search query
+            context_lines: Lines of context before and after match (default 1)
+
+        Returns:
+            List of (snippet_text, line_number) tuples where line_number is 1-indexed.
+            If no match found, returns [(first lines, 1)].
+        """
+        lines = content.split("\n")
+        search_terms = self._extract_search_terms(query)
+
+        if not search_terms:
+            # No valid search terms, return first lines
+            snippet_size = 1 + 2 * context_lines
+            return [("\n".join(lines[:snippet_size]), 1)]
+
+        # Find ALL lines matching any search term
+        matches: list[tuple[str, int]] = []
         for i, line in enumerate(lines):
             line_lower = line.lower()
             for term in search_terms:
                 if term in line_lower:
-                    # Return context around match (1-indexed line number)
-                    start = max(0, i - 1)
-                    end = min(len(lines), i + max_lines)
-                    return "\n".join(lines[start:end]), i + 1
+                    # Build context snippet
+                    start = max(0, i - context_lines)
+                    end = min(len(lines), i + context_lines + 1)
+                    snippet = "\n".join(lines[start:end])
+                    matches.append((snippet, i + 1))  # 1-indexed
+                    break  # Don't double-count if multiple terms match same line
 
-        # No match found, return first lines
-        return "\n".join(lines[:max_lines]), 1
+        if not matches:
+            snippet_size = 1 + 2 * context_lines
+            return [("\n".join(lines[:snippet_size]), 1)]
+
+        return matches
+
+    def _extract_snippet(
+        self,
+        content: str,
+        query: str,
+        context_lines: int = 1,
+    ) -> tuple[str, int]:
+        """Extract first snippet matching the query (legacy compatibility).
+
+        Returns:
+            Tuple of (snippet_text, line_number) where line_number is 1-indexed.
+            If no match found, returns (first lines, 1).
+        """
+        matches = self._extract_all_snippets(content, query, context_lines)
+        return matches[0]
 
     def clear(self) -> None:
         """Clear all documents from the index."""

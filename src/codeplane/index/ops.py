@@ -949,6 +949,7 @@ class IndexCoordinator:
         query: str,
         mode: str = SearchMode.TEXT,
         limit: int = 100,
+        context_lines: int = 1,
     ) -> SearchResponse:
         """
         Search the index. Thread-safe, no locks needed.
@@ -957,6 +958,7 @@ class IndexCoordinator:
             query: Search query string
             mode: SearchMode.TEXT, SYMBOL, or PATH
             limit: Maximum results to return
+            context_lines: Lines of context before/after each match (default 1)
 
         Returns:
             SearchResponse with results and optional fallback_reason
@@ -967,11 +969,15 @@ class IndexCoordinator:
 
         # Use appropriate search method based on mode
         if mode == SearchMode.SYMBOL:
-            search_results = self._lexical.search_symbols(query, limit=limit)
+            search_results = self._lexical.search_symbols(
+                query, limit=limit, context_lines=context_lines
+            )
         elif mode == SearchMode.PATH:
-            search_results = self._lexical.search_path(query, limit=limit)
+            search_results = self._lexical.search_path(
+                query, limit=limit, context_lines=context_lines
+            )
         else:
-            search_results = self._lexical.search(query, limit=limit)
+            search_results = self._lexical.search(query, limit=limit, context_lines=context_lines)
 
         results = [
             SearchResult(

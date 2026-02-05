@@ -43,9 +43,10 @@ class TestToolCategory:
         assert actual == expected
 
     def test_is_str_enum(self) -> None:
-        """Categories are string-based."""
+        """Categories are string-based (StrEnum)."""
         assert ToolCategory.GIT.value == "git"
-        assert str(ToolCategory.FILES) == "ToolCategory.FILES"
+        # StrEnum: str() returns the value, not the qualified name
+        assert str(ToolCategory.FILES) == "files"
 
 
 class TestBehaviorFlags:
