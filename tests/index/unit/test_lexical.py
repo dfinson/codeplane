@@ -328,6 +328,213 @@ class TestSearchResults:
         assert results.query_time_ms == 0
 
 
+class TestExtractSearchTerms:
+    """Tests for _extract_search_terms helper method."""
+
+    def test_simple_term(self, lexical_index: LexicalIndex) -> None:
+        """Should extract simple search terms."""
+        terms = lexical_index._extract_search_terms("hello")
+        assert terms == ["hello"]
+
+    def test_multiple_terms(self, lexical_index: LexicalIndex) -> None:
+        """Should extract multiple space-separated terms."""
+        terms = lexical_index._extract_search_terms("hello world")
+        assert terms == ["hello", "world"]
+
+    def test_field_prefix_extraction(self, lexical_index: LexicalIndex) -> None:
+        """Should extract value from field:value syntax."""
+        terms = lexical_index._extract_search_terms("symbols:MyClass")
+        assert terms == ["myclass"]  # lowercased
+
+    def test_removes_boolean_operators(self, lexical_index: LexicalIndex) -> None:
+        """Should remove AND, OR, NOT operators."""
+        terms = lexical_index._extract_search_terms("foo AND bar OR baz NOT qux")
+        assert "and" not in terms
+        assert "or" not in terms
+        assert "not" not in terms
+        assert "foo" in terms
+        assert "bar" in terms
+
+    def test_empty_query(self, lexical_index: LexicalIndex) -> None:
+        """Should return empty list for empty query."""
+        terms = lexical_index._extract_search_terms("")
+        assert terms == []
+
+    def test_only_operators(self, lexical_index: LexicalIndex) -> None:
+        """Should return empty list when query has only operators."""
+        terms = lexical_index._extract_search_terms("AND OR NOT")
+        assert terms == []
+
+
+class TestExtractAllSnippets:
+    """Tests for _extract_all_snippets method."""
+
+    def test_single_occurrence(self, lexical_index: LexicalIndex) -> None:
+        """Should return single match when term appears once."""
+        content = "line one\nline two with target\nline three"
+        matches = lexical_index._extract_all_snippets(content, "target")
+        assert len(matches) == 1
+        assert matches[0][1] == 2  # line number (1-indexed)
+
+    def test_multiple_occurrences(self, lexical_index: LexicalIndex) -> None:
+        """Should return all lines containing the term."""
+        content = "target here\nsomething else\ntarget again\nmore stuff\ntarget third"
+        matches = lexical_index._extract_all_snippets(content, "target")
+        assert len(matches) == 3
+        assert [m[1] for m in matches] == [1, 3, 5]  # lines 1, 3, 5
+
+    def test_context_lines_default(self, lexical_index: LexicalIndex) -> None:
+        """Should include 1 line of context by default."""
+        content = "line 1\nline 2\ntarget line\nline 4\nline 5"
+        matches = lexical_index._extract_all_snippets(content, "target")
+        assert len(matches) == 1
+        snippet = matches[0][0]
+        # Default context_lines=1: 1 before + match + 1 after = 3 lines
+        assert "line 2" in snippet
+        assert "target line" in snippet
+        assert "line 4" in snippet
+
+    def test_context_lines_zero(self, lexical_index: LexicalIndex) -> None:
+        """Should return only matching line when context_lines=0."""
+        content = "line 1\nline 2\ntarget line\nline 4\nline 5"
+        matches = lexical_index._extract_all_snippets(content, "target", context_lines=0)
+        snippet = matches[0][0]
+        assert snippet == "target line"
+        assert "line 2" not in snippet
+        assert "line 4" not in snippet
+
+    def test_context_lines_expanded(self, lexical_index: LexicalIndex) -> None:
+        """Should respect larger context_lines value."""
+        content = "line 1\nline 2\nline 3\ntarget\nline 5\nline 6\nline 7"
+        matches = lexical_index._extract_all_snippets(content, "target", context_lines=2)
+        snippet = matches[0][0]
+        # context_lines=2: 2 before + match + 2 after = 5 lines
+        assert "line 2" in snippet
+        assert "line 3" in snippet
+        assert "target" in snippet
+        assert "line 5" in snippet
+        assert "line 6" in snippet
+
+    def test_no_match_returns_first_lines(self, lexical_index: LexicalIndex) -> None:
+        """Should return first lines when no match found."""
+        content = "line 1\nline 2\nline 3\nline 4\nline 5"
+        matches = lexical_index._extract_all_snippets(content, "nonexistent")
+        assert len(matches) == 1
+        assert matches[0][1] == 1  # line 1
+
+    def test_case_insensitive_matching(self, lexical_index: LexicalIndex) -> None:
+        """Should match case-insensitively."""
+        content = "TARGET here\nTarGeT there\ntarget everywhere"
+        matches = lexical_index._extract_all_snippets(content, "target")
+        assert len(matches) == 3
+
+    def test_boundary_at_file_start(self, lexical_index: LexicalIndex) -> None:
+        """Should handle match at start of file without negative indexing."""
+        content = "target first\nline 2\nline 3"
+        matches = lexical_index._extract_all_snippets(content, "target", context_lines=2)
+        assert len(matches) == 1
+        assert matches[0][1] == 1
+
+    def test_boundary_at_file_end(self, lexical_index: LexicalIndex) -> None:
+        """Should handle match at end of file without overflow."""
+        content = "line 1\nline 2\ntarget last"
+        matches = lexical_index._extract_all_snippets(content, "target", context_lines=2)
+        assert len(matches) == 1
+        assert matches[0][1] == 3
+
+
+class TestSearchMultipleOccurrences:
+    """Tests for search returning multiple results per file."""
+
+    def test_search_returns_all_line_occurrences(self, lexical_index: LexicalIndex) -> None:
+        """Search should return one result per line occurrence, not per file."""
+        content = """def foo():
+    foo_helper()
+    return foo_value
+
+def bar():
+    pass
+
+def foo_again():
+    foo_final()
+"""
+        lexical_index.add_file("multi.py", content, context_id=1)
+        lexical_index.reload()
+
+        results = lexical_index.search("foo")
+        # "foo" appears on lines 1, 2, 3, 8, 9 (5 occurrences)
+        assert len(results.results) >= 5
+        # All results should be from the same file
+        assert all(r.file_path == "multi.py" for r in results.results)
+        # Should have different line numbers
+        lines = [r.line for r in results.results]
+        assert len(set(lines)) >= 5  # At least 5 distinct lines
+
+    def test_search_multiple_files_multiple_occurrences(self, lexical_index: LexicalIndex) -> None:
+        """Search should return all occurrences across multiple files."""
+        lexical_index.add_file("file1.py", "target\nother\ntarget", context_id=1)
+        lexical_index.add_file("file2.py", "target here\ntarget there", context_id=1)
+        lexical_index.reload()
+
+        results = lexical_index.search("target")
+        # file1: lines 1, 3 (2 occurrences)
+        # file2: lines 1, 2 (2 occurrences)
+        # Total: 4 occurrences
+        assert len(results.results) >= 4
+
+        file1_results = [r for r in results.results if r.file_path == "file1.py"]
+        file2_results = [r for r in results.results if r.file_path == "file2.py"]
+        assert len(file1_results) >= 2
+        assert len(file2_results) >= 2
+
+
+class TestContextLinesParameter:
+    """Tests for context_lines parameter in search methods."""
+
+    def test_search_respects_context_lines(self, lexical_index: LexicalIndex) -> None:
+        """Search should pass context_lines to snippet extraction."""
+        content = "line 1\nline 2\nTARGET\nline 4\nline 5\nline 6"
+        lexical_index.add_file("ctx.py", content, context_id=1)
+        lexical_index.reload()
+
+        # With context_lines=0, snippet should be just the matching line
+        results_no_ctx = lexical_index.search("TARGET", context_lines=0)
+        assert len(results_no_ctx.results) >= 1
+        snippet_no_ctx = results_no_ctx.results[0].snippet
+        assert "TARGET" in snippet_no_ctx
+        # Should NOT include surrounding lines
+        assert "line 2" not in snippet_no_ctx
+        assert "line 4" not in snippet_no_ctx
+
+        # With context_lines=2, snippet should include surrounding lines
+        results_ctx = lexical_index.search("TARGET", context_lines=2)
+        snippet_ctx = results_ctx.results[0].snippet
+        assert "line 2" in snippet_ctx
+        assert "TARGET" in snippet_ctx
+        assert "line 4" in snippet_ctx
+
+    def test_search_symbols_respects_context_lines(self, lexical_index: LexicalIndex) -> None:
+        """search_symbols should respect context_lines parameter."""
+        lexical_index.add_file(
+            "syms.py",
+            "# comment\nclass MySymbol:\n    pass\n# end",
+            context_id=1,
+            symbols=["MySymbol"],
+        )
+        lexical_index.reload()
+
+        results = lexical_index.search_symbols("MySymbol", context_lines=0)
+        assert len(results.results) >= 1
+
+    def test_search_path_respects_context_lines(self, lexical_index: LexicalIndex) -> None:
+        """search_path should respect context_lines parameter."""
+        lexical_index.add_file("src/deep/path.py", "content", context_id=1)
+        lexical_index.reload()
+
+        results = lexical_index.search_path("deep", context_lines=0)
+        assert len(results.results) >= 1
+
+
 class TestClear:
     """Tests for clearing the index."""
 
