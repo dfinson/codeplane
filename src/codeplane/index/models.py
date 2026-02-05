@@ -465,6 +465,33 @@ class IndexedLintTool(SQLModel, table=True):
     discovered_at: float | None = None
 
 
+class IndexedCoverageCapability(SQLModel, table=True):
+    """Coverage capability discovered during indexing.
+
+    Stores whether coverage tools are available for each (workspace, runner_pack) pair.
+    Queried at execution time instead of re-detecting tools per invocation.
+    """
+
+    __tablename__ = "indexed_coverage_capabilities"
+
+    id: int | None = Field(default=None, primary_key=True)
+    workspace_root: str = Field(index=True)
+    runner_pack_id: str = Field(index=True)  # "python.pytest", "js.jest", etc.
+    tools_json: str  # JSON dict of tool_name -> is_available
+    discovered_at: float | None = None
+
+    def get_tools(self) -> dict[str, bool]:
+        """Parse tools_json to dict."""
+        if self.tools_json is None:
+            return {}
+        result: dict[str, bool] = json.loads(self.tools_json)
+        return result
+
+    def set_tools(self, tools: dict[str, bool]) -> None:
+        """Set tools_json from dict."""
+        self.tools_json = json.dumps(tools) if tools else "{}"
+
+
 class Context(SQLModel, table=True):
     """Indexing context (package, workspace, etc) - represents a build unit."""
 

@@ -7,6 +7,7 @@ Split into verb-first tools:
 - cancel_test_run: Abort a run
 """
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastmcp import Context
@@ -251,11 +252,27 @@ def _serialize_test_result(result: "TestResult", is_action: bool = False) -> dic
             ]
         if status.coverage:
             output["run_status"]["coverage"] = status.coverage
-            # Add coverage guidance for the agent
+            # Add coverage guidance for the agent (text hint)
             output["run_status"]["coverage_hint"] = _build_coverage_hint(
                 status.coverage,
                 status.target_selectors,
             )
+            # Add parsed coverage stats (structured data)
+            from codeplane.testing.coverage import CoverageArtifact, parse_coverage_summary
+
+            coverage_stats: list[dict[str, Any]] = []
+            for cov_dict in status.coverage:
+                artifact = CoverageArtifact(
+                    format=cov_dict.get("format", "unknown"),
+                    path=Path(cov_dict.get("path", "")),
+                    pack_id=cov_dict.get("pack_id", ""),
+                    invocation_id="",
+                )
+                summary = parse_coverage_summary(artifact)
+                if summary and summary.is_valid:
+                    coverage_stats.append(summary.to_dict())
+            if coverage_stats:
+                output["run_status"]["coverage_stats"] = coverage_stats
 
     if result.agentic_hint:
         output["agentic_hint"] = result.agentic_hint
@@ -308,8 +325,20 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     @mcp.tool
     async def run_test_targets(
         ctx: Context,
-        targets: list[str] | None = Field(None, description="Target IDs from discover to run"),
-        pattern: str | None = Field(None, description="Filter tests by pattern"),
+        targets: list[str] | None = Field(
+            None,
+            description="Target IDs from discover to run. Use discover_test_targets first to get IDs.",
+        ),
+        target_filter: str | None = Field(
+            None,
+            description="Filter which TARGETS to run by path substring (e.g. 'test_excludes' runs "
+            "only targets containing 'test_excludes' in their path). Fails if no targets match.",
+        ),
+        test_filter: str | None = Field(
+            None,
+            description="Filter which TEST NAMES to run within targets (passed to pytest -k, jest "
+            "--testNamePattern). Does NOT filter which targets are executed.",
+        ),
         tags: list[str] | None = Field(None, description="Filter tests by tags"),
         failed_only: bool = Field(False, description="Run only previously failed tests"),
         parallelism: int | None = Field(None, description="Number of parallel workers"),
@@ -317,12 +346,24 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         fail_fast: bool = Field(False, description="Stop on first failure"),
         coverage: bool = Field(False, description="Collect coverage data"),
     ) -> dict[str, Any]:
-        """Execute tests. Pass target_ids from discover, or use pattern/tags to filter."""
+        """Execute tests.
+
+        IMPORTANT: This tool runs ALL discovered targets unless you filter them.
+
+        Filtering options:
+        - targets: Specific target_ids from discover_test_targets (recommended)
+        - target_filter: Substring match on target paths (e.g. 'test_foo' runs only test_foo.py)
+        - test_filter: Filter test NAMES within targets (does NOT reduce which targets run)
+
+        To run a single test file, use: targets=['test:path/to/test_file.py']
+        To run tests matching a path pattern, use: target_filter='test_excludes'
+        """
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
         result = await app_ctx.test_ops.run(
             targets=targets,
-            pattern=pattern,
+            target_filter=target_filter,
+            test_filter=test_filter,
             tags=tags,
             failed_only=failed_only,
             parallelism=parallelism,

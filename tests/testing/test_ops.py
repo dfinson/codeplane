@@ -31,6 +31,11 @@ def create_mock_coordinator() -> MagicMock:
     coordinator.get_indexed_file_count = AsyncMock(return_value=10)
     coordinator.get_indexed_files = AsyncMock(return_value=["src/foo.py", "src/bar.py"])
     coordinator.get_contexts = AsyncMock(return_value=[])
+    coordinator.get_test_targets = AsyncMock(
+        return_value=[]
+    )  # Index-first: return empty by default
+    coordinator.get_context_runtime = AsyncMock(return_value=None)
+    coordinator.get_coverage_capability = AsyncMock(return_value={})
     return coordinator
 
 
@@ -253,7 +258,11 @@ class TestActiveRun:
 
 
 class TestTestOpsDiscover:
-    """Tests for TestOps.discover()."""
+    """Tests for TestOps.discover().
+
+    Note: discover() is now index-first. Tests mock the coordinator to return
+    indexed test targets rather than expecting filesystem discovery.
+    """
 
     @pytest.mark.asyncio
     async def test_discover_returns_test_result(self) -> None:
@@ -264,79 +273,116 @@ class TestTestOpsDiscover:
             (root / "tests" / "test_example.py").write_text("def test_foo(): pass")
 
             coordinator = create_mock_coordinator()
+            # Mock indexed test targets
+            mock_target = MagicMock()
+            mock_target.target_id = "test:tests/test_example.py"
+            mock_target.selector = "tests/test_example.py"
+            mock_target.kind = "file"
+            mock_target.language = "python"
+            mock_target.runner_pack_id = "python.pytest"
+            mock_target.workspace_root = str(root)
+            mock_target.test_count = None
+            coordinator.get_test_targets = AsyncMock(return_value=[mock_target])
+
             ops = TestOps(root, coordinator)
 
             result = await ops.discover()
 
             assert result.action == "discover"
             assert result.targets is not None
+            assert len(result.targets) == 1
 
     @pytest.mark.asyncio
     async def test_discover_with_paths_filter(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            (root / "pytest.ini").write_text("")
-            (root / "tests").mkdir()
-            (root / "tests" / "test_a.py").write_text("def test_a(): pass")
-            (root / "tests" / "test_b.py").write_text("def test_b(): pass")
 
             coordinator = create_mock_coordinator()
+            # Mock two indexed targets
+            mock_target_a = MagicMock()
+            mock_target_a.target_id = "test:tests/test_a.py"
+            mock_target_a.selector = "tests/test_a.py"
+            mock_target_a.kind = "file"
+            mock_target_a.language = "python"
+            mock_target_a.runner_pack_id = "python.pytest"
+            mock_target_a.workspace_root = str(root)
+            mock_target_a.test_count = None
+
+            mock_target_b = MagicMock()
+            mock_target_b.target_id = "test:tests/test_b.py"
+            mock_target_b.selector = "tests/test_b.py"
+            mock_target_b.kind = "file"
+            mock_target_b.language = "python"
+            mock_target_b.runner_pack_id = "python.pytest"
+            mock_target_b.workspace_root = str(root)
+            mock_target_b.test_count = None
+
+            coordinator.get_test_targets = AsyncMock(return_value=[mock_target_a, mock_target_b])
+
             ops = TestOps(root, coordinator)
 
             result = await ops.discover(paths=["tests/test_a.py"])
 
             assert result.action == "discover"
+            # Should filter to just test_a
+            assert len(result.targets) == 1  # type: ignore
+            assert result.targets[0].selector == "tests/test_a.py"  # type: ignore
 
     @pytest.mark.asyncio
     async def test_discover_empty_repo_provides_agentic_hint(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             coordinator = create_mock_coordinator()
+            # Empty index - no test targets
+            coordinator.get_test_targets = AsyncMock(return_value=[])
+
             ops = TestOps(root, coordinator)
 
             result = await ops.discover()
 
             assert result.action == "discover"
-            # With no workspaces, should have agentic hint
-            assert result.agentic_hint is not None or result.targets == []
+            # With no indexed targets, should have agentic hint
+            assert result.agentic_hint is not None
+            assert result.targets == []
 
     @pytest.mark.asyncio
-    async def test_discover_uses_index_contexts(self) -> None:
-        """Test that discover tries to use index contexts first."""
+    async def test_discover_queries_index(self) -> None:
+        """Test that discover queries the index for test targets."""
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             coordinator = create_mock_coordinator()
-
-            # Mock contexts returning a python project
-            mock_context = MagicMock()
-            mock_context.root_path = ""
-            coordinator.get_contexts = AsyncMock(return_value=[mock_context])
-
-            (root / "pytest.ini").write_text("")
+            coordinator.get_test_targets = AsyncMock(return_value=[])
 
             ops = TestOps(root, coordinator)
             result = await ops.discover()
 
             assert result.action == "discover"
-            coordinator.get_contexts.assert_called_once()
+            # Should have called get_test_targets
+            coordinator.get_test_targets.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_discover_falls_back_to_filesystem_on_index_error(self) -> None:
-        """Test fallback when index fails."""
+    async def test_discover_index_first_no_filesystem_fallback(self) -> None:
+        """Test that discover does not fall back to filesystem - index is authoritative."""
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            coordinator = create_mock_coordinator()
-            coordinator.get_contexts = AsyncMock(side_effect=Exception("Index error"))
 
+            # Set up actual test file on filesystem
             (root / "pytest.ini").write_text("")
             (root / "tests").mkdir()
             (root / "tests" / "test_x.py").write_text("def test_x(): pass")
 
+            coordinator = create_mock_coordinator()
+            # Index returns empty - discover should return empty, not fall back to filesystem
+            coordinator.get_test_targets = AsyncMock(return_value=[])
+
             ops = TestOps(root, coordinator)
             result = await ops.discover()
 
-            # Should still work via filesystem fallback
             assert result.action == "discover"
+            # Should return empty targets from index, not discover from filesystem
+            assert result.targets == []
+            # Should provide agentic hint when no targets found
+            assert result.agentic_hint is not None
 
 
 # =============================================================================
@@ -441,7 +487,11 @@ class TestAgenticHint:
 
 
 class TestTestOpsRun:
-    """Tests for TestOps.run()."""
+    """Tests for TestOps.run().
+
+    Note: run() is now index-first. Tests mock the coordinator to return
+    indexed test targets.
+    """
 
     @pytest.mark.asyncio
     async def test_run_returns_running_status(self) -> None:
@@ -452,6 +502,17 @@ class TestTestOpsRun:
             (root / "tests" / "test_x.py").write_text("def test_x(): pass")
 
             coordinator = create_mock_coordinator()
+            # Mock indexed test target
+            mock_target = MagicMock()
+            mock_target.target_id = "test:tests/test_x.py"
+            mock_target.selector = "tests/test_x.py"
+            mock_target.kind = "file"
+            mock_target.language = "python"
+            mock_target.runner_pack_id = "python.pytest"
+            mock_target.workspace_root = str(root)
+            mock_target.test_count = None
+            coordinator.get_test_targets = AsyncMock(return_value=[mock_target])
+
             ops = TestOps(root, coordinator)
 
             result = await ops.run()
@@ -473,6 +534,17 @@ class TestTestOpsRun:
             (root / "pytest.ini").write_text("")
 
             coordinator = create_mock_coordinator()
+            # Mock indexed test target
+            mock_target = MagicMock()
+            mock_target.target_id = "test:tests/test_x.py"
+            mock_target.selector = "tests/test_x.py"
+            mock_target.kind = "file"
+            mock_target.language = "python"
+            mock_target.runner_pack_id = "python.pytest"
+            mock_target.workspace_root = str(root)
+            mock_target.test_count = None
+            coordinator.get_test_targets = AsyncMock(return_value=[mock_target])
+
             ops = TestOps(root, coordinator)
 
             result = await ops.run()
@@ -496,21 +568,29 @@ class TestTestOpsRun:
             (root / "tests" / "test_a.py").write_text("def test_a(): pass")
 
             coordinator = create_mock_coordinator()
+            # Mock indexed test target
+            mock_target = MagicMock()
+            mock_target.target_id = "test:tests/test_a.py"
+            mock_target.selector = "tests/test_a.py"
+            mock_target.kind = "file"
+            mock_target.language = "python"
+            mock_target.runner_pack_id = "python.pytest"
+            mock_target.workspace_root = str(root)
+            mock_target.test_count = None
+            coordinator.get_test_targets = AsyncMock(return_value=[mock_target])
+
             ops = TestOps(root, coordinator)
 
-            # First discover to get target IDs
-            discover_result = await ops.discover()
-            if discover_result.targets:
-                target_id = discover_result.targets[0].target_id
-                result = await ops.run(targets=[target_id])
+            # Run with specific target
+            result = await ops.run(targets=["test:tests/test_a.py"])
 
-                assert result.action == "run"
-                assert result.run_status is not None
+            assert result.action == "run"
+            assert result.run_status is not None
 
-                # Cleanup
-                if result.run_status.run_id in ops._active_runs:
-                    ops._active_runs[result.run_status.run_id].cancel_event.set()
-                    ops._active_runs[result.run_status.run_id].task.cancel()
+            # Cleanup
+            if result.run_status.run_id in ops._active_runs:
+                ops._active_runs[result.run_status.run_id].cancel_event.set()
+                ops._active_runs[result.run_status.run_id].task.cancel()
 
 
 # =============================================================================
@@ -528,6 +608,17 @@ class TestTestOpsStatus:
             (root / "pytest.ini").write_text("")
 
             coordinator = create_mock_coordinator()
+            # Mock indexed test target
+            mock_target = MagicMock()
+            mock_target.target_id = "test:tests/test_x.py"
+            mock_target.selector = "tests/test_x.py"
+            mock_target.kind = "file"
+            mock_target.language = "python"
+            mock_target.runner_pack_id = "python.pytest"
+            mock_target.workspace_root = str(root)
+            mock_target.test_count = None
+            coordinator.get_test_targets = AsyncMock(return_value=[mock_target])
+
             ops = TestOps(root, coordinator)
 
             # Start a run
@@ -619,6 +710,17 @@ class TestTestOpsCancel:
             (root / "pytest.ini").write_text("")
 
             coordinator = create_mock_coordinator()
+            # Mock indexed test target
+            mock_target = MagicMock()
+            mock_target.target_id = "test:tests/test_x.py"
+            mock_target.selector = "tests/test_x.py"
+            mock_target.kind = "file"
+            mock_target.language = "python"
+            mock_target.runner_pack_id = "python.pytest"
+            mock_target.workspace_root = str(root)
+            mock_target.test_count = None
+            coordinator.get_test_targets = AsyncMock(return_value=[mock_target])
+
             ops = TestOps(root, coordinator)
 
             # Start a run

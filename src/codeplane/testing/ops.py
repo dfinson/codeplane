@@ -43,7 +43,6 @@ from codeplane.testing.runner_pack import RunnerPack, runner_registry
 from codeplane.testing.runtime import (
     ExecutionContextBuilder,
     RuntimeExecutionContext,
-    RuntimeResolver,
 )
 from codeplane.testing.safe_execution import SafeExecutionConfig, SafeExecutionContext
 
@@ -412,47 +411,51 @@ class TestOps:
     ) -> TestResult:
         """Discover test targets in the repository.
 
-        Queries indexed test targets. Falls back to filesystem discovery
-        if index is not available.
+        Index-first approach: Always queries the index. The index waits for
+        freshness internally (via coordinator.wait_for_freshness). No filesystem
+        fallback - if index isn't ready, we block until it is.
+
+        Args:
+            paths: Optional list of path prefixes to filter targets
+
+        Returns:
+            TestResult with discovered targets
         """
         from typing import cast
 
         from codeplane.testing.models import TargetKind
 
-        # Try to get targets from index first
-        try:
-            indexed_targets = await self._coordinator.get_test_targets()
-        except Exception:
-            indexed_targets = []
+        # Query index - coordinator.get_test_targets waits for freshness internally
+        indexed_targets = await self._coordinator.get_test_targets()
 
-        # If we have indexed targets, use them
-        if indexed_targets:
+        all_targets = [
+            TestTarget(
+                target_id=t.target_id,
+                selector=t.selector,
+                kind=cast(TargetKind, t.kind),
+                language=t.language,
+                runner_pack_id=t.runner_pack_id,
+                workspace_root=t.workspace_root,
+                estimated_cost=1.0,
+                test_count=t.test_count,
+            )
+            for t in indexed_targets
+        ]
+
+        # Filter by paths if specified
+        if paths:
             all_targets = [
-                TestTarget(
-                    target_id=t.target_id,
-                    selector=t.selector,
-                    kind=cast(TargetKind, t.kind),
-                    language=t.language,
-                    runner_pack_id=t.runner_pack_id,
-                    workspace_root=t.workspace_root,
-                    estimated_cost=1.0,
-                    test_count=t.test_count,
-                )
-                for t in indexed_targets
+                t
+                for t in all_targets
+                if any(t.selector.startswith(p) or p.startswith(t.selector) for p in paths)
             ]
 
-            # Filter by paths if specified
-            if paths:
-                all_targets = [
-                    t
-                    for t in all_targets
-                    if any(t.selector.startswith(p) or p.startswith(t.selector) for p in paths)
-                ]
+        # Generate agentic hint if no targets found
+        agentic_hint = None
+        if not all_targets:
+            agentic_hint = await self._generate_agentic_hint()
 
-            return TestResult(action="discover", targets=all_targets, agentic_hint=None)
-
-        # Fallback to filesystem discovery if index not available
-        return await self._discover_from_filesystem(paths)
+        return TestResult(action="discover", targets=all_targets, agentic_hint=agentic_hint)
 
     async def _discover_from_filesystem(
         self,
@@ -544,15 +547,46 @@ class TestOps:
         return list(seen.values())
 
     async def _get_targets_by_id(self, target_ids: list[str]) -> list[TestTarget]:
-        """Get test targets by ID from the index."""
+        """Get test targets by ID from the index.
+
+        Index-first: waits for index freshness, does not fallback.
+        """
         from typing import cast
 
         from codeplane.testing.models import TargetKind
 
-        try:
-            indexed_targets = await self._coordinator.get_test_targets(target_ids=target_ids)
-        except Exception:
-            indexed_targets = []
+        # Query index - coordinator.get_test_targets waits for freshness internally
+        indexed_targets = await self._coordinator.get_test_targets(target_ids=target_ids)
+
+        return [
+            TestTarget(
+                target_id=t.target_id,
+                selector=t.selector,
+                kind=cast(TargetKind, t.kind),
+                language=t.language,
+                runner_pack_id=t.runner_pack_id,
+                workspace_root=t.workspace_root,
+                estimated_cost=1.0,
+                test_count=t.test_count,
+            )
+            for t in indexed_targets
+        ]
+
+    async def _get_all_targets_from_index(self) -> list[TestTarget]:
+        """Get ALL test targets from the index.
+
+        Index-first approach: This always queries the index. If index is not ready,
+        we wait for it (via coordinator.wait_for_freshness). No filesystem fallback.
+
+        Returns:
+            List of TestTarget objects from the index
+        """
+        from typing import cast
+
+        from codeplane.testing.models import TargetKind
+
+        # Query index - coordinator.get_test_targets calls wait_for_freshness internally
+        indexed_targets = await self._coordinator.get_test_targets()
 
         return [
             TestTarget(
@@ -612,7 +646,8 @@ class TestOps:
         self,
         targets: list[str] | None = None,
         *,
-        pattern: str | None = None,
+        target_filter: str | None = None,
+        test_filter: str | None = None,
         tags: list[str] | None = None,
         failed_only: bool = False,  # noqa: ARG002
         parallelism: int | None = None,
@@ -624,8 +659,11 @@ class TestOps:
 
         Args:
             targets: Specific target IDs to run, or None for all
-            pattern: Test name pattern filter
-            tags: Test tag filters
+            target_filter: Substring to filter which TARGETS to run by path.
+                          Fails explicitly if no targets match.
+            test_filter: Filter test NAMES within targets (pytest -k, jest --testNamePattern).
+                        Does NOT reduce which targets are executed.
+            tags: Test tag filters (pytest markers, etc.)
             failed_only: Only run previously failed tests
             parallelism: Max concurrent test invocations
             timeout_sec: Per-target timeout
@@ -642,7 +680,7 @@ class TestOps:
                 ),
                 agentic_hint="Empty targets list provided. Either omit targets "
                 "to run all tests, or specify at least one target. "
-                "Use testing_discover to find available targets.",
+                "Use discover_test_targets to find available targets.",
             )
 
         run_id = str(uuid.uuid4())[:8]
@@ -664,10 +702,28 @@ class TestOps:
             # Direct index lookup by ID - no filesystem scan
             resolved_targets = await self._get_targets_by_id(targets)
         else:
-            # Run all: use discover() which queries the index
-            discover_result = await self.discover()
-            resolved_targets = discover_result.targets or []
-            agentic_hint_for_empty = discover_result.agentic_hint
+            # Get all targets from index
+            resolved_targets = await self._get_all_targets_from_index()
+
+        # Apply target_filter if provided - FAIL if no matches
+        if target_filter and resolved_targets:
+            before_count = len(resolved_targets)
+            resolved_targets = [
+                t
+                for t in resolved_targets
+                if target_filter in t.selector or target_filter in t.target_id
+            ]
+            if not resolved_targets:
+                return TestResult(
+                    action="run",
+                    run_status=TestRunStatus(
+                        run_id=run_id,
+                        status="failed",
+                    ),
+                    agentic_hint=f"target_filter='{target_filter}' matched 0 of {before_count} targets. "
+                    f"Use discover_test_targets to see available target paths. "
+                    f"To filter test NAMES within targets, use test_filter instead.",
+                )
 
         # Check if we have any targets to run
         if not resolved_targets:
@@ -680,7 +736,10 @@ class TestOps:
                     artifact_dir=str(artifact_dir),
                 ),
                 agentic_hint="No test targets found to run. "
-                + (agentic_hint_for_empty or "Use testing_discover to check available targets."),
+                + (
+                    agentic_hint_for_empty
+                    or "Use discover_test_targets to check available targets."
+                ),
             )
 
         progress.targets.total = len(resolved_targets)
@@ -694,7 +753,7 @@ class TestOps:
                 failures=failures,
                 cancel_event=cancel_event,
                 artifact_dir=artifact_dir,
-                pattern=pattern,
+                test_filter=test_filter,
                 tags=tags,
                 parallelism=parallelism or _default_parallelism(),
                 timeout_sec=timeout_sec or 300,
@@ -731,7 +790,7 @@ class TestOps:
         failures: list[TestFailure],
         cancel_event: asyncio.Event,
         artifact_dir: Path,
-        pattern: str | None,
+        test_filter: str | None,
         tags: list[str] | None,
         parallelism: int,
         timeout_sec: int,
@@ -755,7 +814,7 @@ class TestOps:
                 result, cov_artifact = await self._run_single_target(
                     target=target,
                     artifact_dir=artifact_dir,
-                    pattern=pattern,
+                    test_filter=test_filter,
                     tags=tags,
                     timeout_sec=timeout_sec,
                     coverage=coverage,
@@ -858,41 +917,48 @@ class TestOps:
 
         return final_status
 
-    def _resolve_execution_context(
+    async def _get_execution_context(
         self,
         target: TestTarget,
     ) -> RuntimeExecutionContext | None:
-        """Resolve execution context for a test target.
+        """Get pre-indexed execution context for a test target.
 
-        Uses RuntimeResolver to detect the runtime environment for the target's
-        workspace root, then builds a RuntimeExecutionContext with appropriate
-        ToolConfigs for the runner pack.
+        Index-first approach: Runtime is captured at discovery time and stored
+        in ContextRuntime table. This provides O(1) lookup instead of re-detecting
+        venvs/runtimes for every test execution.
+
+        Falls back to PATH-based resolution only if index lookup fails.
 
         Returns None if resolution fails, allowing graceful fallback to
-        PATH-based resolution.
+        PATH-based execution.
         """
         try:
             workspace_root = Path(target.workspace_root)
 
-            # Detect runtime for this workspace
-            runtime = RuntimeResolver.resolve(workspace_root)
+            # Query indexed runtime (captured at discovery time)
+            indexed_runtime = await self._coordinator.get_context_runtime(str(workspace_root))
 
-            # Build execution context with tool configs
-            exec_ctx = ExecutionContextBuilder.build(
-                context_root=workspace_root,
-                runtime=runtime,
-            )
+            if indexed_runtime:
+                # Build execution context from indexed runtime
+                exec_ctx = ExecutionContextBuilder.build(
+                    context_root=workspace_root,
+                    runtime=indexed_runtime,
+                )
+                return exec_ctx
 
-            return exec_ctx
+            # Index lookup failed - fall back to PATH-based execution
+            # This should rarely happen if indexing is working correctly
+            return None
+
         except Exception:
-            # Resolution failed - return None to trigger fallback
+            # Resolution failed - return None to trigger PATH fallback
             return None
 
     async def _run_single_target(
         self,
         target: TestTarget,
         artifact_dir: Path,
-        pattern: str | None,
+        test_filter: str | None,
         tags: list[str] | None,
         timeout_sec: int,
         coverage: bool,
@@ -901,6 +967,14 @@ class TestOps:
 
         Uses SafeExecutionContext to protect against misconfigurations in
         target repositories (coverage DB corruption, hanging tests, etc.).
+
+        Args:
+            target: Test target to run
+            artifact_dir: Directory for output files
+            test_filter: Filter test names within target (pytest -k, jest --testNamePattern)
+            tags: Test tags/markers filter
+            timeout_sec: Timeout for the test run
+            coverage: Whether to collect coverage
 
         Returns:
             Tuple of (test results, coverage artifact if collected)
@@ -922,8 +996,8 @@ class TestOps:
 
         pack = pack_class()
 
-        # Resolve execution context for this target (captures venv/runtime at discovery)
-        exec_ctx = self._resolve_execution_context(target)
+        # Get pre-indexed execution context (runtime captured at discovery time)
+        exec_ctx = await self._get_execution_context(target)
 
         # Create output file path
         safe_name = target.target_id.replace("/", "_").replace(":", "_")
@@ -933,7 +1007,7 @@ class TestOps:
         cmd = pack.build_command(
             target,
             output_path=output_path,
-            pattern=pattern,
+            pattern=test_filter,
             tags=tags,
             exec_ctx=exec_ctx,
         )
@@ -952,14 +1026,14 @@ class TestOps:
                 None,
             )
 
-        # Handle coverage - determine capability first, then create safe context
+        # Handle coverage - use pre-indexed capability instead of detecting at runtime
         cov_artifact: CoverageArtifact | None = None
         emitter = get_emitter(target.runner_pack_id) if coverage else None
         coverage_available = False
         if emitter:
-            # Check capability with detected coverage tools (uses exec_ctx for correct Python)
-            coverage_tools = detect_coverage_tools(
-                Path(target.workspace_root), target.runner_pack_id, exec_ctx
+            # Get pre-indexed coverage tools from index (O(1) lookup)
+            coverage_tools = await self._coordinator.get_coverage_capability(
+                target.workspace_root, target.runner_pack_id
             )
             runtime = PackRuntime(
                 workspace_root=Path(target.workspace_root),

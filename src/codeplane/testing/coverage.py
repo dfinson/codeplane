@@ -15,7 +15,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     pass
@@ -444,3 +444,284 @@ def get_emitter(pack_id: str) -> CoverageEmitter | None:
 def supports_coverage(pack_id: str) -> bool:
     """Check if a pack has coverage support."""
     return pack_id in EMITTER_REGISTRY
+
+
+# =============================================================================
+# Coverage Summary - Structured Stats for Agent Consumption
+# =============================================================================
+
+
+@dataclass
+class CoverageSummary:
+    """Structured coverage statistics.
+
+    Provides parsed coverage data instead of text hints, enabling agents
+    to act on coverage numbers directly.
+    """
+
+    # Line coverage (most common metric)
+    lines_covered: int = 0
+    lines_total: int = 0
+    lines_percent: float = 0.0
+
+    # Branch coverage (optional, not all formats support this)
+    branches_covered: int | None = None
+    branches_total: int | None = None
+    branches_percent: float | None = None
+
+    # Function/method coverage (optional)
+    functions_covered: int | None = None
+    functions_total: int | None = None
+    functions_percent: float | None = None
+
+    # File counts
+    files_with_coverage: int = 0
+    files_total: int = 0
+
+    # Format info
+    format_id: str = "unknown"
+    pack_id: str = ""
+
+    @property
+    def is_valid(self) -> bool:
+        """Check if coverage data was successfully parsed."""
+        return self.lines_total > 0
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dict for JSON serialization."""
+        result: dict[str, Any] = {
+            "lines": {
+                "covered": self.lines_covered,
+                "total": self.lines_total,
+                "percent": round(self.lines_percent, 2),
+            },
+            "files": {
+                "with_coverage": self.files_with_coverage,
+                "total": self.files_total,
+            },
+            "format": self.format_id,
+            "pack_id": self.pack_id,
+        }
+        if self.branches_total is not None:
+            result["branches"] = {
+                "covered": self.branches_covered,
+                "total": self.branches_total,
+                "percent": round(self.branches_percent or 0, 2),
+            }
+        if self.functions_total is not None:
+            result["functions"] = {
+                "covered": self.functions_covered,
+                "total": self.functions_total,
+                "percent": round(self.functions_percent or 0, 2),
+            }
+        return result
+
+
+def parse_coverage_summary(artifact: CoverageArtifact) -> CoverageSummary | None:
+    """Parse coverage artifact into structured summary.
+
+    Supports LCOV, Istanbul JSON, and Go coverage formats.
+    Returns None if parsing fails.
+    """
+    if not artifact.path.exists():
+        return None
+
+    try:
+        if artifact.format == "lcov":
+            return _parse_lcov(artifact.path, artifact)
+        elif artifact.format == "istanbul":
+            return _parse_istanbul(artifact.path, artifact)
+        elif artifact.format == "gocov":
+            return _parse_gocov(artifact.path, artifact)
+        else:
+            return None
+    except Exception:
+        return None
+
+
+def _parse_lcov(path: Path, artifact: CoverageArtifact) -> CoverageSummary:
+    """Parse LCOV format coverage file.
+
+    LCOV format:
+    - SF: source file path
+    - DA:line_number,execution_count - line data
+    - LF: lines found (total lines in file)
+    - LH: lines hit (covered lines in file)
+    - BRF: branches found
+    - BRH: branches hit
+    - FNF: functions found
+    - FNH: functions hit
+    """
+    content = path.read_text()
+
+    files_count = 0
+    total_lf = 0  # Lines found
+    total_lh = 0  # Lines hit
+    total_brf = 0  # Branches found
+    total_brh = 0  # Branches hit
+    total_fnf = 0  # Functions found
+    total_fnh = 0  # Functions hit
+
+    for line in content.splitlines():
+        line = line.strip()
+        if line.startswith("SF:"):
+            files_count += 1
+        elif line.startswith("LF:"):
+            total_lf += int(line[3:])
+        elif line.startswith("LH:"):
+            total_lh += int(line[3:])
+        elif line.startswith("BRF:"):
+            total_brf += int(line[4:])
+        elif line.startswith("BRH:"):
+            total_brh += int(line[4:])
+        elif line.startswith("FNF:"):
+            total_fnf += int(line[4:])
+        elif line.startswith("FNH:"):
+            total_fnh += int(line[4:])
+
+    summary = CoverageSummary(
+        lines_covered=total_lh,
+        lines_total=total_lf,
+        lines_percent=(total_lh / total_lf * 100) if total_lf > 0 else 0.0,
+        files_with_coverage=files_count,
+        files_total=files_count,
+        format_id="lcov",
+        pack_id=artifact.pack_id,
+    )
+
+    if total_brf > 0:
+        summary.branches_covered = total_brh
+        summary.branches_total = total_brf
+        summary.branches_percent = (total_brh / total_brf * 100) if total_brf > 0 else 0.0
+
+    if total_fnf > 0:
+        summary.functions_covered = total_fnh
+        summary.functions_total = total_fnf
+        summary.functions_percent = (total_fnh / total_fnf * 100) if total_fnf > 0 else 0.0
+
+    return summary
+
+
+def _parse_istanbul(path: Path, artifact: CoverageArtifact) -> CoverageSummary:
+    """Parse Istanbul/NYC JSON coverage.
+
+    Istanbul stores coverage in coverage-summary.json with format:
+    {
+      "total": {
+        "lines": {"total": N, "covered": N, "pct": N},
+        "branches": {...},
+        "functions": {...},
+        "statements": {...}
+      }
+    }
+    """
+    import json
+
+    # Istanbul creates a directory with multiple files
+    summary_file = path / "coverage-summary.json" if path.is_dir() else path
+    if not summary_file.exists():
+        # Try coverage-final.json
+        summary_file = path / "coverage-final.json" if path.is_dir() else path
+        if not summary_file.exists():
+            return CoverageSummary(format_id="istanbul", pack_id=artifact.pack_id)
+
+    data = json.loads(summary_file.read_text())
+
+    # Handle coverage-summary.json format
+    if "total" in data:
+        total = data["total"]
+        return CoverageSummary(
+            lines_covered=total.get("lines", {}).get("covered", 0),
+            lines_total=total.get("lines", {}).get("total", 0),
+            lines_percent=total.get("lines", {}).get("pct", 0.0),
+            branches_covered=total.get("branches", {}).get("covered"),
+            branches_total=total.get("branches", {}).get("total"),
+            branches_percent=total.get("branches", {}).get("pct"),
+            functions_covered=total.get("functions", {}).get("covered"),
+            functions_total=total.get("functions", {}).get("total"),
+            functions_percent=total.get("functions", {}).get("pct"),
+            files_with_coverage=len(data) - 1,  # Subtract 'total' key
+            files_total=len(data) - 1,
+            format_id="istanbul",
+            pack_id=artifact.pack_id,
+        )
+
+    # Handle coverage-final.json format (per-file data)
+    files_count = len(data)
+    total_lines_covered = 0
+    total_lines = 0
+    total_branches_covered = 0
+    total_branches = 0
+
+    for _file_path, file_cov in data.items():
+        # Count statement coverage as line coverage
+        if "s" in file_cov:
+            for count in file_cov["s"].values():
+                total_lines += 1
+                if count > 0:
+                    total_lines_covered += 1
+        if "b" in file_cov:
+            for branch_counts in file_cov["b"].values():
+                for count in branch_counts:
+                    total_branches += 1
+                    if count > 0:
+                        total_branches_covered += 1
+
+    return CoverageSummary(
+        lines_covered=total_lines_covered,
+        lines_total=total_lines,
+        lines_percent=(total_lines_covered / total_lines * 100) if total_lines > 0 else 0.0,
+        branches_covered=total_branches_covered if total_branches > 0 else None,
+        branches_total=total_branches if total_branches > 0 else None,
+        branches_percent=(
+            (total_branches_covered / total_branches * 100) if total_branches > 0 else None
+        ),
+        files_with_coverage=files_count,
+        files_total=files_count,
+        format_id="istanbul",
+        pack_id=artifact.pack_id,
+    )
+
+
+def _parse_gocov(path: Path, artifact: CoverageArtifact) -> CoverageSummary:
+    """Parse Go coverage profile.
+
+    Go coverage format:
+    mode: set/count/atomic
+    file.go:start_line.start_col,end_line.end_col num_statements count
+    """
+    content = path.read_text()
+    lines = content.strip().splitlines()
+
+    if not lines:
+        return CoverageSummary(format_id="gocov", pack_id=artifact.pack_id)
+
+    files_seen: set[str] = set()
+    total_statements = 0
+    covered_statements = 0
+
+    for line in lines[1:]:  # Skip mode line
+        if not line.strip():
+            continue
+        parts = line.split()
+        if len(parts) >= 3:
+            file_block = parts[0]
+            file_path = file_block.split(":")[0]
+            files_seen.add(file_path)
+            num_statements = int(parts[1])
+            count = int(parts[2])
+            total_statements += num_statements
+            if count > 0:
+                covered_statements += num_statements
+
+    return CoverageSummary(
+        lines_covered=covered_statements,
+        lines_total=total_statements,
+        lines_percent=(
+            (covered_statements / total_statements * 100) if total_statements > 0 else 0.0
+        ),
+        files_with_coverage=len(files_seen),
+        files_total=len(files_seen),
+        format_id="gocov",
+        pack_id=artifact.pack_id,
+    )

@@ -51,12 +51,13 @@ from codeplane.index.models import (
     ContextMarker,
     DefFact,
     File,
+    IndexedCoverageCapability,
     IndexedLintTool,
     ProbeStatus,
     RefFact,
     TestTarget,
 )
-from codeplane.testing.runtime import RuntimeResolver
+from codeplane.testing.runtime import ContextRuntime, RuntimeResolver
 from codeplane.tools.map_repo import IncludeOption, MapRepoResult, RepoMapper
 
 if TYPE_CHECKING:
@@ -324,6 +325,9 @@ class IndexCoordinator:
 
         # Step 7.6: Discover lint tools
         await self._discover_lint_tools()
+
+        # Step 7.7: Discover coverage capabilities (after test targets)
+        await self._discover_coverage_capabilities()
 
         # Step 8: Initialize router
         self._router = ContextRouter()
@@ -1201,6 +1205,72 @@ class IndexCoordinator:
                 stmt = stmt.where(IndexedLintTool.category == category)
             return list(session.exec(stmt).all())
 
+    async def get_context_runtime(
+        self,
+        workspace_root: str,
+    ) -> ContextRuntime | None:
+        """Get pre-indexed runtime context for a workspace root.
+
+        Runtime contexts are resolved during indexing (Design A - capture at discovery time).
+        This provides O(1) lookup instead of re-resolving at execution time.
+
+        Args:
+            workspace_root: Absolute path to the workspace root
+
+        Returns:
+            ContextRuntime if found, None if workspace not indexed
+        """
+        await self.wait_for_freshness()
+        with self.db.session() as session:
+            # Find context by root_path - normalize to relative path
+            try:
+                rel_path = str(Path(workspace_root).relative_to(self.repo_root))
+            except ValueError:
+                rel_path = ""  # workspace_root is repo_root itself
+
+            # Find context for this workspace
+            stmt = select(Context).where(
+                Context.root_path == rel_path,
+                Context.probe_status == ProbeStatus.VALID.value,
+                Context.enabled == True,  # noqa: E712
+            )
+            context = session.exec(stmt).first()
+            if not context or context.id is None:
+                return None
+
+            # Get associated runtime
+            runtime_stmt = select(ContextRuntime).where(ContextRuntime.context_id == context.id)
+            return session.exec(runtime_stmt).first()
+
+    async def get_coverage_capability(
+        self,
+        workspace_root: str,
+        runner_pack_id: str,
+    ) -> dict[str, bool]:
+        """Get pre-indexed coverage tools for a (workspace, runner_pack) pair.
+
+        Coverage capabilities are detected during indexing and stored in the
+        IndexedCoverageCapability table. This provides O(1) lookup instead of
+        spawning subprocess for every test execution.
+
+        Args:
+            workspace_root: Absolute path to the workspace root
+            runner_pack_id: Runner pack ID (e.g. "python.pytest")
+
+        Returns:
+            Dict of tool_name -> is_available, empty dict if not indexed
+        """
+        await self.wait_for_freshness()
+        with self.db.session() as session:
+            stmt = select(IndexedCoverageCapability).where(
+                IndexedCoverageCapability.workspace_root == workspace_root,
+                IndexedCoverageCapability.runner_pack_id == runner_pack_id,
+            )
+            capability = session.exec(stmt).first()
+            if capability:
+                return capability.get_tools()
+            return {}
+
     async def map_repo(
         self,
         include: list[IncludeOption] | None = None,
@@ -1452,6 +1522,51 @@ class IndexCoordinator:
             session.commit()
 
         return tools_discovered
+
+    async def _discover_coverage_capabilities(self) -> int:
+        """Discover and persist coverage capabilities for all workspaces.
+
+        For each (workspace, runner_pack) pair detected during test target discovery,
+        detect available coverage tools and store them. Called during init() after
+        test targets are discovered.
+
+        Returns count of capabilities discovered.
+        """
+        import json as json_module
+
+        from codeplane.testing.ops import detect_coverage_tools
+
+        capabilities_discovered = 0
+        discovered_at = time.time()
+
+        with self.db.session() as session:
+            # Get distinct (workspace_root, runner_pack_id) pairs from test targets
+            stmt = select(
+                TestTarget.workspace_root,
+                TestTarget.runner_pack_id,
+            ).distinct()
+            pairs = list(session.exec(stmt).all())
+
+            for workspace_root, runner_pack_id in pairs:
+                # Detect coverage tools for this pair
+                tools = detect_coverage_tools(
+                    Path(workspace_root),
+                    runner_pack_id,
+                    exec_ctx=None,  # Use index runtime if needed later
+                )
+
+                capability = IndexedCoverageCapability(
+                    workspace_root=workspace_root,
+                    runner_pack_id=runner_pack_id,
+                    tools_json=json_module.dumps(tools),
+                    discovered_at=discovered_at,
+                )
+                session.add(capability)
+                capabilities_discovered += 1
+
+            session.commit()
+
+        return capabilities_discovered
 
     async def _rediscover_test_targets(self) -> int:
         """Clear and re-discover all test targets.
