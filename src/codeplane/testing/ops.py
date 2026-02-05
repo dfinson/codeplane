@@ -891,6 +891,7 @@ class TestOps:
                             ),
                             exit_code=result.execution.exit_code if result.execution else None,
                             raw_stderr=truncated_stderr,
+                            parsed_test_count=result.parsed_test_count,
                         )
                     )
 
@@ -1283,6 +1284,7 @@ class TestOps:
                     "working_directory": d.working_directory,
                     "exit_code": d.exit_code,
                     "raw_stderr": d.raw_stderr,
+                    "parsed_test_count": d.parsed_test_count,
                 }
                 for d in (status.diagnostics or [])
             ],
@@ -1341,6 +1343,7 @@ class TestOps:
                     working_directory=d.get("working_directory"),
                     exit_code=d.get("exit_code"),
                     raw_stderr=d.get("raw_stderr"),
+                    parsed_test_count=d.get("parsed_test_count"),
                 )
                 for d in data.get("diagnostics", [])
             ]

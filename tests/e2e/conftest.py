@@ -33,11 +33,11 @@ if TYPE_CHECKING:
     from subprocess import Popen
 
 
-# Skip all e2e tests until fixed: https://github.com/dfinson/codeplane/issues/130
-pytestmark = pytest.mark.skip(
-    reason="E2E tests disabled pending fix (see https://github.com/dfinson/codeplane/issues/130)"
-)
-
+# FIXED: # Skip all e2e tests until fixed: https://github.com/dfinson/codeplane/issues/130
+# FIXED: pytestmark = pytest.mark.skip(
+# FIXED:     reason="E2E tests disabled pending fix (see https://github.com/dfinson/codeplane/issues/130)"
+# FIXED: )
+# FIXED: 
 
 # Operation-specific HTTP timeouts for MCP tool calls
 TOOL_TIMEOUTS: dict[str, float] = {
@@ -82,10 +82,10 @@ class CodePlaneServer:
             TimeoutError: If server doesn't become ready in time
             RuntimeError: If server fails to start
         """
-        # Start cpl up as foreground process in its own process group
+        # Start cpl up (runs in foreground by default) in its own process group
         # This allows us to kill the entire tree on cleanup
         self.process = subprocess.Popen(
-            ["cpl", "up", "--foreground"],
+            ["cpl", "up"],
             cwd=self.repo_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,

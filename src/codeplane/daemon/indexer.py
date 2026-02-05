@@ -168,8 +168,13 @@ class BackgroundIndexer:
                 parts.append(f"{stats.files_updated} files updated")
             if stats.files_removed:
                 parts.append(f"{stats.files_removed} files deleted")
-            summary = ", ".join(parts) if parts else "no changes"
-            status(f"{summary} ({stats.duration_seconds:.1f}s)", style="success", source="indexer")
+
+            # Only print status when there were actual changes
+            if parts:
+                summary = ", ".join(parts)
+                status(
+                    f"{summary} ({stats.duration_seconds:.1f}s)", style="success", source="indexer"
+                )
 
             # Notify completion callback
             if self._on_complete is not None:

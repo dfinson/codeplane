@@ -244,6 +244,10 @@ class ExecutionDiagnostic:
     # Raw stderr output (first ~2000 chars), uninterpreted
     # Allows agents to read actual error messages without our interpretation
     raw_stderr: str | None = None
+    # Observable fact: number of test cases parsed from output
+    # - int >= 0: Successfully parsed this many test cases
+    # - None: Could not parse output (no file, parse error, etc.)
+    parsed_test_count: int | None = None
 
 
 @dataclass

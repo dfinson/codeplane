@@ -123,7 +123,8 @@ class TestLoadConfig:
         """Loads config from repo .codeplane directory."""
         codeplane_dir = tmp_path / ".codeplane"
         codeplane_dir.mkdir()
-        (codeplane_dir / "config.yaml").write_text("logging:\n  level: DEBUG\n")
+        # User config uses flat fields: log_level, port, max_file_size_mb
+        (codeplane_dir / "config.yaml").write_text("log_level: DEBUG\n")
 
         with patch("codeplane.config.loader.GLOBAL_CONFIG_PATH", tmp_path / "none.yaml"):
             config = load_config(tmp_path)
@@ -133,7 +134,7 @@ class TestLoadConfig:
         """Environment variables override YAML config."""
         codeplane_dir = tmp_path / ".codeplane"
         codeplane_dir.mkdir()
-        (codeplane_dir / "config.yaml").write_text("logging:\n  level: INFO\n")
+        (codeplane_dir / "config.yaml").write_text("log_level: INFO\n")
 
         with (
             patch("codeplane.config.loader.GLOBAL_CONFIG_PATH", tmp_path / "none.yaml"),
@@ -151,14 +152,14 @@ class TestLoadConfig:
             assert config.logging.level == "ERROR"
 
     def test_raises_config_error_for_invalid_value(self, tmp_path: Path) -> None:
-        """Raises ConfigError for invalid config values."""
+        """Raises ConfigError for invalid env var values via Pydantic validation."""
         codeplane_dir = tmp_path / ".codeplane"
         codeplane_dir.mkdir()
-        # Invalid port value
-        (codeplane_dir / "config.yaml").write_text("server:\n  port: -1\n")
 
+        # Use an invalid log level via env var - pydantic will reject it
         with (
             patch("codeplane.config.loader.GLOBAL_CONFIG_PATH", tmp_path / "none.yaml"),
+            patch.dict(os.environ, {"CODEPLANE__LOGGING__LEVEL": "INVALID_LEVEL"}),
             pytest.raises(ConfigError),
         ):
             load_config(tmp_path)
@@ -175,11 +176,12 @@ class TestGetIndexPaths:
             assert tantivy_path == tmp_path / ".codeplane" / "tantivy"
 
     def test_respects_custom_index_path(self, tmp_path: Path) -> None:
-        """Respects index_path setting in config."""
+        """Respects index_path setting in state.yaml (runtime state)."""
         codeplane_dir = tmp_path / ".codeplane"
         codeplane_dir.mkdir()
         custom_path = tmp_path / "custom" / "index"
-        (codeplane_dir / "config.yaml").write_text(f"index:\n  index_path: {custom_path}\n")
+        # index_path is set in state.yaml, not config.yaml (it's runtime state)
+        (codeplane_dir / "state.yaml").write_text(f"index_path: {custom_path}\n")
 
         with patch("codeplane.config.loader.GLOBAL_CONFIG_PATH", tmp_path / "none.yaml"):
             db_path, tantivy_path = get_index_paths(tmp_path)

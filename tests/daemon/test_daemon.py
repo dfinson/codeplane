@@ -138,6 +138,69 @@ class TestBackgroundIndexer:
         await indexer.stop()
 
     @pytest.mark.asyncio
+    async def test_given_no_changes_when_flush_then_no_status_output(self) -> None:
+        """Flushing with no actual changes should not print status."""
+        from unittest.mock import AsyncMock
+
+        from codeplane.index.ops import IndexStats
+
+        coordinator = MagicMock()
+        # Return stats with no changes
+        stats = IndexStats(
+            files_processed=1,
+            files_added=0,
+            files_updated=0,
+            files_removed=0,
+            symbols_indexed=0,
+            duration_seconds=0.1,
+        )
+        coordinator.reindex_incremental = AsyncMock(return_value=stats)
+
+        indexer = BackgroundIndexer(coordinator=coordinator)
+        indexer.start()
+        indexer.queue_paths([Path("test.py")])
+
+        # Flush and check no status output
+        with patch("codeplane.daemon.indexer.status") as mock_status:
+            await indexer._flush()
+            # status() should NOT be called when no changes
+            mock_status.assert_not_called()
+
+        await indexer.stop()
+
+    @pytest.mark.asyncio
+    async def test_given_changes_when_flush_then_status_output(self) -> None:
+        """Flushing with actual changes should print status."""
+        from unittest.mock import AsyncMock
+
+        from codeplane.index.ops import IndexStats
+
+        coordinator = MagicMock()
+        # Return stats with changes
+        stats = IndexStats(
+            files_processed=3,
+            files_added=0,
+            files_updated=3,
+            files_removed=0,
+            symbols_indexed=10,
+            duration_seconds=0.2,
+        )
+        coordinator.reindex_incremental = AsyncMock(return_value=stats)
+
+        indexer = BackgroundIndexer(coordinator=coordinator)
+        indexer.start()
+        indexer.queue_paths([Path("test.py")])
+
+        with patch("codeplane.daemon.indexer.status") as mock_status:
+            await indexer._flush()
+            # status() SHOULD be called when there are changes
+            mock_status.assert_called_once()
+            call_args = mock_status.call_args
+            assert "3 files updated" in call_args[0][0]
+
+        await indexer.stop()
+
+    @pytest.mark.asyncio
     async def test_given_stopping_indexer_when_flush_then_noop(self) -> None:
         """Flushing during stop does nothing."""
         from codeplane.daemon.indexer import IndexerState
