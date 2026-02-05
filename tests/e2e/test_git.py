@@ -8,8 +8,8 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from tests.e2e.conftest import TOOL_TIMEOUTS
-from tests.e2e.expectations.schema import RepoExpectation
+from .conftest import TOOL_TIMEOUTS
+from .expectations.schema import RepoExpectation
 
 
 @pytest.mark.e2e
