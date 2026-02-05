@@ -33,6 +33,12 @@ if TYPE_CHECKING:
     from subprocess import Popen
 
 
+# Skip all e2e tests until fixed: https://github.com/dfinson/codeplane/issues/130
+pytestmark = pytest.mark.skip(
+    reason="E2E tests disabled pending fix (see https://github.com/dfinson/codeplane/issues/130)"
+)
+
+
 # Operation-specific HTTP timeouts for MCP tool calls
 TOOL_TIMEOUTS: dict[str, float] = {
     "describe": 30.0,

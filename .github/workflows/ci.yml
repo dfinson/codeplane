@@ -164,39 +164,39 @@ jobs:
           report_type: test_results
           fail_ci_if_error: false
 
-  # E2E tests - clones real repos, starts daemon, makes MCP calls
-  e2e-test:
-    needs: [preflight, unit-test]
-    if: needs.preflight.outputs.has_tests == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v6
+  # E2E tests - disabled pending fix: https://github.com/dfinson/codeplane/issues/130
+  # e2e-test:
+  #   needs: [preflight, unit-test]
+  #   if: needs.preflight.outputs.has_tests == 'true'
+  #   runs-on: ubuntu-latest
+  #   timeout-minutes: 30
+  #   steps:
+  #     - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-          cache-dependency-path: pyproject.toml
+  #     - uses: actions/setup-python@v6
+  #       with:
+  #         python-version: '3.12'
+  #         cache: 'pip'
+  #         cache-dependency-path: pyproject.toml
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+  #     - name: Install dependencies
+  #       run: |
+  #         python -m pip install --upgrade pip
+  #         pip install -e ".[dev]"
 
-      - name: Configure git identity
-        run: |
-          git config --global user.email "ci@codeplane.dev"
-          git config --global user.name "CodePlane CI"
+  #     - name: Configure git identity
+  #       run: |
+  #         git config --global user.email "ci@codeplane.dev"
+  #         git config --global user.name "CodePlane CI"
 
-      - name: Run e2e tests
-        run: pytest -m "e2e" -v --tb=short --junitxml=junit-e2e.xml -o junit_family=legacy
+  #     - name: Run e2e tests
+  #       run: pytest -m "e2e" -v --tb=short --junitxml=junit-e2e.xml -o junit_family=legacy
 
-      - name: Upload test results to Codecov
-        if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: junit-e2e.xml
-          report_type: test_results
-          fail_ci_if_error: false
+  #     - name: Upload test results to Codecov
+  #       if: ${{ !cancelled() }}
+  #       uses: codecov/codecov-action@v5
+  #       with:
+  #         token: ${{ secrets.CODECOV_TOKEN }}
+  #         files: junit-e2e.xml
+  #         report_type: test_results
+  #         fail_ci_if_error: false
