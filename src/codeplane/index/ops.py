@@ -1416,6 +1416,14 @@ class IndexCoordinator:
                 if context.id is None:
                     continue
 
+                # Check if runtime already exists (idempotent init)
+                existing = session.exec(
+                    select(ContextRuntime).where(ContextRuntime.context_id == context.id)
+                ).first()
+                if existing is not None:
+                    runtimes_resolved += 1
+                    continue
+
                 # Resolve runtime for this context
                 try:
                     result = resolver.resolve_for_context(
@@ -1463,12 +1471,16 @@ class IndexCoordinator:
         Uses runner packs to find test files. Called during init() after
         contexts are persisted. Returns count of targets discovered.
         """
+
         from codeplane.testing.runner_pack import runner_registry
 
         targets_discovered = 0
         discovered_at = time.time()
 
         with self.db.session() as session:
+            # Get existing target_ids for idempotent init
+            existing_ids = set(session.exec(select(TestTarget.target_id)).all())
+
             # Get all valid contexts
             stmt = select(Context).where(
                 Context.probe_status == ProbeStatus.VALID.value,
@@ -1500,6 +1512,11 @@ class IndexCoordinator:
                         continue
 
                     for target in targets:
+                        # Skip if already exists (idempotent init)
+                        if target.target_id in existing_ids:
+                            targets_discovered += 1
+                            continue
+
                         test_target = TestTarget(
                             context_id=primary_ctx.id,
                             target_id=target.target_id,
@@ -1514,6 +1531,7 @@ class IndexCoordinator:
                             discovered_at=discovered_at,
                         )
                         session.add(test_target)
+                        existing_ids.add(target.target_id)
                         targets_discovered += 1
 
             session.commit()
@@ -1534,10 +1552,18 @@ class IndexCoordinator:
         discovered_at = time.time()
 
         with self.db.session() as session:
+            # Get existing tool_ids for idempotent init
+            existing_ids = set(session.exec(select(IndexedLintTool.tool_id)).all())
+
             # Detect configured tools for the repo (returns (tool, config_file) tuples)
             detected_pairs = lint_registry.detect(self.repo_root)
 
             for tool, config_file in detected_pairs:
+                # Skip if already exists (idempotent init)
+                if tool.tool_id in existing_ids:
+                    tools_discovered += 1
+                    continue
+
                 indexed_tool = IndexedLintTool(
                     tool_id=tool.tool_id,
                     name=tool.name,
@@ -1549,6 +1575,7 @@ class IndexCoordinator:
                     discovered_at=discovered_at,
                 )
                 session.add(indexed_tool)
+                existing_ids.add(tool.tool_id)
                 tools_discovered += 1
 
             session.commit()
@@ -1572,6 +1599,16 @@ class IndexCoordinator:
         discovered_at = time.time()
 
         with self.db.session() as session:
+            # Get existing (workspace_root, runner_pack_id) pairs for idempotent init
+            existing_pairs = set(
+                session.exec(
+                    select(
+                        IndexedCoverageCapability.workspace_root,
+                        IndexedCoverageCapability.runner_pack_id,
+                    )
+                ).all()
+            )
+
             # Get distinct (workspace_root, runner_pack_id) pairs from test targets
             stmt = select(
                 TestTarget.workspace_root,
@@ -1580,6 +1617,11 @@ class IndexCoordinator:
             pairs = list(session.exec(stmt).all())
 
             for workspace_root, runner_pack_id in pairs:
+                # Skip if already exists (idempotent init)
+                if (workspace_root, runner_pack_id) in existing_pairs:
+                    capabilities_discovered += 1
+                    continue
+
                 # Detect coverage tools for this pair
                 tools = detect_coverage_tools(
                     Path(workspace_root),
@@ -1594,6 +1636,7 @@ class IndexCoordinator:
                     discovered_at=discovered_at,
                 )
                 session.add(capability)
+                existing_pairs.add((workspace_root, runner_pack_id))
                 capabilities_discovered += 1
 
             session.commit()
