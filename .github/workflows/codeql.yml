@@ -4,8 +4,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
-  schedule:
-    - cron: '0 6 * * 1'
+  workflow_dispatch:
 
 permissions:
   security-events: write
@@ -13,6 +12,7 @@ permissions:
 jobs:
   analyze:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       matrix:
         language: [python]

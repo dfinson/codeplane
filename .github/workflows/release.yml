@@ -1,21 +1,146 @@
 name: Release
+
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: Version (e.g. 0.1.0)
+      release_type:
+        description: "Release type"
         required: true
+        type: choice
+        options:
+          - "patch"
+          - "minor"
+          - "major"
+      dry_run:
+        description: "Build only (do not publish)"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
 permissions:
   contents: write
+  id-token: write  # For PyPI trusted publishing
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
     steps:
-      - uses: actions/checkout@v6
+      - name: Validate release from main branch
+        if: github.ref_name != 'main' && inputs.dry_run != 'true'
+        run: |
+          echo "ERROR: Releases can only be created from the 'main' branch."
+          echo "Current branch: ${{ github.ref_name }}"
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - run: pip install build && python -m build
-      - run: echo "Publish not yet implemented"
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      # --- VERSION CALCULATION ---
+      - name: Calculate Version
+        id: calc_version
+        env:
+          INPUT_RELEASE_TYPE: ${{ inputs.release_type }}
+        run: python .github/tools/calculate_version.py
+
+      # --- CREATE TAG ---
+      - name: Create and Push Tag
+        if: inputs.dry_run != 'true'
+        run: |
+          TAG_NAME="${{ steps.calc_version.outputs.tag_name }}"
+
+          # Check if tag already exists
+          if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+            echo "Error: Tag $TAG_NAME already exists!"
+            exit 1
+          fi
+
+          echo "Creating tag: $TAG_NAME"
+          git tag -a "$TAG_NAME" -m "Release $TAG_NAME"
+          git push origin "$TAG_NAME"
+
+      # --- BUILD ---
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build package
+        run: python -m build
+
+      # --- VERIFY ---
+      - name: Verify package version
+        run: |
+          TAG_NAME="${{ steps.calc_version.outputs.tag_name }}"
+          EXPECTED_VERSION="${TAG_NAME#v}"
+          
+          # Extract version from built wheel
+          WHEEL_VERSION=$(ls dist/*.whl | head -1 | sed -n 's/.*-\([0-9]*\.[0-9]*\.[0-9]*\)-.*/\1/p')
+          
+          echo "Expected version: $EXPECTED_VERSION"
+          echo "Wheel version: $WHEEL_VERSION"
+          
+          if [ "$EXPECTED_VERSION" != "$WHEEL_VERSION" ]; then
+            echo "ERROR: Version mismatch! Tag=$EXPECTED_VERSION, Wheel=$WHEEL_VERSION"
+            exit 1
+          fi
+          
+          echo "RELEASE_VERSION=$EXPECTED_VERSION" >> $GITHUB_ENV
+
+      # --- PUBLISH TO PYPI ---
+      - name: Publish to PyPI
+        if: inputs.dry_run != 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # Uses trusted publishing (OIDC) - no API token needed
+        # Requires PyPI project to be configured for GitHub Actions
+
+      # --- UPLOAD ARTIFACTS ---
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels
+          path: dist/*
+
+      # --- GITHUB RELEASE ---
+      - name: Create GitHub Release
+        if: inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_NAME="${{ steps.calc_version.outputs.tag_name }}"
+
+          gh release create "$TAG_NAME" \
+            dist/* \
+            --title "Release $TAG_NAME" \
+            --generate-notes
+
+      # --- UPDATE LATEST TAG ---
+      - name: Update latest tag
+        if: inputs.dry_run != 'true'
+        run: |
+          TAG_NAME="${{ steps.calc_version.outputs.tag_name }}"
+
+          echo "Updating 'latest' tag to point to $TAG_NAME"
+
+          # Delete the remote 'latest' tag if it exists
+          git push origin :refs/tags/latest 2>/dev/null || true
+
+          # Create and force-push the 'latest' tag
+          git tag -f latest "$TAG_NAME"
+          git push origin latest

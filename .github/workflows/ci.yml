@@ -15,17 +15,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
+  # Single gate job to detect if there's code to check
+  preflight:
     runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      has_python: ${{ steps.check.outputs.has_python }}
+      has_tests: ${{ steps.check.outputs.has_tests }}
     steps:
       - uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Check for Python files
-        id: check-python
+      - name: Check for Python and test files
+        id: check
         run: |
           if find src -name "*.py" ! -name "__init__.py" -type f | grep -q .; then
             echo "has_python=true" >> $GITHUB_OUTPUT
@@ -33,58 +34,6 @@ jobs:
             echo "has_python=false" >> $GITHUB_OUTPUT
             echo "No implementation files yet (design phase)"
           fi
-
-      - name: Ruff Lint
-        if: steps.check-python.outputs.has_python == 'true'
-        uses: astral-sh/ruff-action@v3
-
-      - name: Ruff Format Check
-        if: steps.check-python.outputs.has_python == 'true'
-        uses: astral-sh/ruff-action@v3
-        with:
-          args: "format --check"
-
-  typecheck:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Check for Python files
-        id: check-python
-        run: |
-          if find src -name "*.py" ! -name "__init__.py" -type f | grep -q .; then
-            echo "has_python=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_python=false" >> $GITHUB_OUTPUT
-            echo "No implementation files yet (design phase)"
-          fi
-
-      - name: Install dependencies
-        if: steps.check-python.outputs.has_python == 'true'
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Run mypy
-        if: steps.check-python.outputs.has_python == 'true'
-        run: mypy src
-
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Check for test files
-        id: check-tests
-        run: |
           if find tests -name "test_*.py" -type f | grep -q .; then
             echo "has_tests=true" >> $GITHUB_OUTPUT
           else
@@ -92,18 +41,71 @@ jobs:
             echo "No test files yet (design phase)"
           fi
 
+  lint:
+    needs: preflight
+    if: needs.preflight.outputs.has_python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Ruff Lint
+        uses: astral-sh/ruff-action@v3
+
+      - name: Ruff Format Check
+        uses: astral-sh/ruff-action@v3
+        with:
+          args: "format --check"
+
+  typecheck:
+    needs: preflight
+    if: needs.preflight.outputs.has_python == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+
       - name: Install dependencies
-        if: steps.check-tests.outputs.has_tests == 'true'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run mypy
+        run: mypy src
+
+  test:
+    needs: preflight
+    if: needs.preflight.outputs.has_tests == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
       - name: Run tests with coverage
-        if: steps.check-tests.outputs.has_tests == 'true'
-        run: pytest --cov=src/codeplane --cov-branch --cov-report=xml --junitxml=junit.xml -o junit_family=legacy
+        run: pytest --cov=src/codeplane --cov-branch --cov-report=xml --cov-fail-under=90 --junitxml=junit.xml -o junit_family=legacy
 
       - name: Upload coverage to Codecov
-        if: steps.check-tests.outputs.has_tests == 'true'
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -111,7 +113,7 @@ jobs:
           fail_ci_if_error: false
 
       - name: Upload test results to Codecov
-        if: ${{ !cancelled() && steps.check-tests.outputs.has_tests == 'true' }}
+        if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}

@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "codeplane"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Local repository control plane for AI coding agents"
 readme = "README.md"
 license = "MIT"
@@ -68,6 +68,9 @@ cpl = "codeplane.cli.main:cli"
 [project.urls]
 Homepage = "https://github.com/davidfinson/codeplane"
 Repository = "https://github.com/davidfinson/codeplane"
+
+[tool.hatch.version]
+source = "vcs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/codeplane"]
