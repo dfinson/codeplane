@@ -261,6 +261,8 @@ class FileWatcher:
             async for changes in awatch(
                 self.repo_root,
                 watch_filter=watch_filter,
+                step=500,  # Reduce CPU: check every 500ms instead of default 50ms
+                rust_timeout=10_000,  # 10s timeout for cleaner shutdown
                 stop_event=self._stop_event,
                 ignore_permission_denied=True,
             ):

@@ -1,4 +1,4 @@
-"""Shared ignore/exclude pattern matching.
+"""Shared ignore/exclude pattern matching with tiered architecture.
 
 Single source of truth for path exclusion logic used by:
 - FileWatcher (runtime file change filtering)
@@ -7,7 +7,10 @@ Single source of truth for path exclusion logic used by:
 - map_repo (filtering results)
 - Any component needing .cplignore + .gitignore + UNIVERSAL_EXCLUDES support
 
-NOTE: PRUNABLE_DIRS is now imported from codeplane.core.excludes.
+Tiered Architecture:
+- HARDCODED_DIRS: Always excluded, cannot be overridden (VCS, .codeplane)
+- DEFAULT_PRUNABLE_DIRS: Excluded by default, user can opt-in via !pattern
+- .cplignore patterns: User-configurable file/directory patterns
 """
 
 from __future__ import annotations
@@ -15,21 +18,34 @@ from __future__ import annotations
 import fnmatch
 from pathlib import Path
 
-from codeplane.core.excludes import PRUNABLE_DIRS
+from codeplane.core.excludes import (
+    DEFAULT_PRUNABLE_DIRS,
+    HARDCODED_DIRS,
+    PRUNABLE_DIRS,
+    is_hardcoded_dir,
+)
 
-__all__ = ["PRUNABLE_DIRS", "IgnoreChecker", "matches_glob"]
+__all__ = [
+    "PRUNABLE_DIRS",
+    "HARDCODED_DIRS",
+    "DEFAULT_PRUNABLE_DIRS",
+    "IgnoreChecker",
+    "matches_glob",
+]
 
 
 class IgnoreChecker:
-    """Checks if paths should be ignored based on patterns.
+    """Checks if paths should be ignored based on tiered patterns.
 
-    Loads patterns from .cplignore files anywhere in the repo (hierarchical,
-    like .gitignore) and accepts additional patterns via constructor.
+    Tiered Architecture:
+    - Tier 0 (HARDCODED_DIRS): Always pruned, not overridable
+    - Tier 1 (DEFAULT_PRUNABLE_DIRS): Pruned by default, user can opt-in via !pattern
+    - Tier 2 (.cplignore patterns): User-defined patterns with negation support
 
     Pattern syntax:
     - Standard glob patterns (fnmatch)
     - Directory patterns ending in / match contents
-    - Negation with ! prefix
+    - Negation with ! prefix (e.g., !vendor/ to opt-in vendor directory)
 
     .cplignore files themselves are NOT excluded - they need to be indexed
     so file watchers can detect changes and trigger reindexing.
@@ -46,13 +62,54 @@ class IgnoreChecker:
         respect_gitignore: bool = False,
     ) -> None:
         self._root = root
-        self._patterns: list[str] = list(PRUNABLE_DIRS)
+        # Start with DEFAULT_PRUNABLE as base patterns (not HARDCODED - those are handled separately)
+        self._patterns: list[str] = list(DEFAULT_PRUNABLE_DIRS)
+        self._negated_dirs: set[str] = set()  # Track negated directory names for pruning override
         self._cplignore_paths: list[Path] = []  # Track all loaded .cplignore files
         self._load_cplignore_recursive(root)
         if respect_gitignore:
             self._load_gitignore_recursive(root)
         if extra_patterns:
             self._patterns.extend(extra_patterns)
+
+    @property
+    def negated_dirs(self) -> frozenset[str]:
+        """Return set of directory names that were negated in .cplignore.
+
+        These directories will NOT be pruned during traversal even if they
+        are in DEFAULT_PRUNABLE_DIRS.
+        """
+        return frozenset(self._negated_dirs)
+
+    def should_prune_dir(self, dirname: str) -> bool:
+        """Check if a directory should be pruned during traversal.
+
+        Implements tiered pruning:
+        - Tier 0 (HARDCODED_DIRS): Always prune, not overridable
+        - Tier 1 (DEFAULT_PRUNABLE_DIRS): Prune unless negated in .cplignore
+
+        Args:
+            dirname: Directory name (not path), e.g., "node_modules", "vendor"
+
+        Returns:
+            True if directory should be skipped during traversal.
+
+        Example:
+            # User adds "!vendor/" to .cplignore
+            checker.should_prune_dir("vendor")  # Returns False (opted-in)
+            checker.should_prune_dir(".git")    # Returns True (hardcoded)
+            checker.should_prune_dir("node_modules")  # Returns True (default)
+        """
+        # Tier 0: Hardcoded dirs are ALWAYS pruned
+        if is_hardcoded_dir(dirname):
+            return True
+
+        # Tier 1: Default prunable dirs, unless user negated them
+        if dirname in DEFAULT_PRUNABLE_DIRS:
+            return dirname not in self._negated_dirs
+
+        # Not in any prunable set
+        return False
 
     @property
     def cplignore_paths(self) -> list[Path]:
@@ -156,6 +213,9 @@ class IgnoreChecker:
         Args:
             path: Path to the ignore file
             prefix: Directory prefix for nested .gitignore patterns
+
+        Also tracks negated directory names (e.g., !vendor/) to allow
+        opting-in to directories that are pruned by default.
         """
         try:
             content = path.read_text()
@@ -168,6 +228,14 @@ class IgnoreChecker:
                 is_negation = line.startswith("!")
                 if is_negation:
                     line = line[1:]
+
+                # Track negated directory names for pruning override
+                # e.g., "!vendor/" or "!vendor" -> track "vendor" as negated
+                if is_negation and not prefix:
+                    # Only track root-level negations for dir pruning
+                    dir_name = line.rstrip("/")
+                    if dir_name and "/" not in dir_name and "*" not in dir_name:
+                        self._negated_dirs.add(dir_name)
 
                 # Directory patterns (ending in /) match all contents
                 pattern = f"{line}**" if line.endswith("/") else line
