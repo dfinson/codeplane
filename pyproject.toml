@@ -107,6 +107,8 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 # MCP tool files use Field() in defaults (FastMCP convention) and have placeholder args
 "src/codeplane/mcp/tools/*.py" = ["B008", "ARG001"]
+# E2E test fixtures require parameters for pytest dependency injection even if unused
+"tests/e2e/*.py" = ["ARG001"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["codeplane"]
@@ -145,6 +147,12 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "yaml.*"
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+strict = false
+warn_return_any = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

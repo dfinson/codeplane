@@ -15,7 +15,7 @@ from tests.e2e.expectations.schema import RepoExpectation
 @pytest.mark.e2e
 def test_lint_tools(
     codeplane_server: tuple[str, int],
-    _expectation: RepoExpectation,
+    expectation: RepoExpectation,
 ) -> None:
     """Verify lint tool discovery."""
     url, _port = codeplane_server

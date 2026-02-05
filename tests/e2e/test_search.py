@@ -8,17 +8,17 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from tests.e2e.conftest import TOOL_TIMEOUTS
+from tests.e2e.conftest import MCP_ACCEPT_HEADER, TOOL_TIMEOUTS
 from tests.e2e.expectations.schema import RepoExpectation
 
 
 @pytest.mark.e2e
 def test_search(
-    codeplane_server: tuple[str, int],
+    mcp_session: tuple[str, str],
     expectation: RepoExpectation,
 ) -> None:
     """Verify search returns expected matches."""
-    url, _port = codeplane_server
+    url, session_id = mcp_session
     timeout = TOOL_TIMEOUTS.get("search", 30.0)
 
     search_specs = expectation.search
@@ -36,6 +36,10 @@ def test_search(
                     "arguments": {"query": spec.query},
                 },
                 "id": 1,
+            },
+            headers={
+                "Accept": MCP_ACCEPT_HEADER,
+                "Mcp-Session-Id": session_id,
             },
             timeout=timeout,
         )

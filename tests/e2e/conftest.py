@@ -33,12 +33,6 @@ if TYPE_CHECKING:
     from subprocess import Popen
 
 
-# FIXED: # Skip all e2e tests until fixed: https://github.com/dfinson/codeplane/issues/130
-# FIXED: pytestmark = pytest.mark.skip(
-# FIXED:     reason="E2E tests disabled pending fix (see https://github.com/dfinson/codeplane/issues/130)"
-# FIXED: )
-# FIXED: 
-
 # Operation-specific HTTP timeouts for MCP tool calls
 TOOL_TIMEOUTS: dict[str, float] = {
     "describe": 30.0,
@@ -54,6 +48,9 @@ TOOL_TIMEOUTS: dict[str, float] = {
     "lint_check": 60.0,
 }
 
+# MCP protocol headers
+MCP_ACCEPT_HEADER = "application/json, text/event-stream"
+
 
 @dataclass
 class CodePlaneServer:
@@ -62,6 +59,7 @@ class CodePlaneServer:
     Handles:
     - Starting the daemon as a foreground subprocess
     - Waiting for the server to become ready
+    - MCP session initialization
     - Reading the port from .codeplane/daemon.port
     - Graceful shutdown with SIGTERM
     """
@@ -71,6 +69,7 @@ class CodePlaneServer:
     process: Popen[bytes] | None = field(default=None, init=False)
     port: int | None = field(default=None, init=False)
     url: str | None = field(default=None, init=False)
+    session_id: str | None = field(default=None, init=False)
 
     def start(self) -> tuple[str, int]:
         """Start the daemon and wait for it to be ready.
@@ -85,7 +84,7 @@ class CodePlaneServer:
         # Start cpl up (runs in foreground by default) in its own process group
         # This allows us to kill the entire tree on cleanup
         self.process = subprocess.Popen(
-            ["cpl", "up"],
+            ["cpl", "up", "--port", "17654"],
             cwd=self.repo_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -100,6 +99,10 @@ class CodePlaneServer:
             raise RuntimeError("Server started but port not discovered")
 
         self.url = f"http://127.0.0.1:{self.port}"
+
+        # Initialize MCP session
+        self._initialize_session()
+
         return self.url, self.port
 
     def _wait_for_server_ready(self) -> None:
@@ -148,6 +151,32 @@ class CodePlaneServer:
             f"Port file exists: {port_file.exists()}, Port: {self.port}"
         )
 
+    def _initialize_session(self) -> None:
+        """Initialize MCP session to get session ID."""
+        if self.url is None:
+            raise RuntimeError("Server not started")
+
+        response = httpx.post(
+            f"{self.url}/mcp",
+            json={
+                "jsonrpc": "2.0",
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {"name": "e2e-test", "version": "1.0.0"},
+                },
+                "id": 1,
+            },
+            headers={"Accept": MCP_ACCEPT_HEADER},
+            timeout=10.0,
+        )
+        response.raise_for_status()
+
+        self.session_id = response.headers.get("mcp-session-id")
+        if not self.session_id:
+            raise RuntimeError("MCP session initialization did not return session ID")
+
     def stop(self) -> None:
         """Stop the daemon gracefully with SIGTERM.
 
@@ -186,6 +215,8 @@ class CodePlaneServer:
         """
         if self.url is None:
             raise RuntimeError("Server not started")
+        if self.session_id is None:
+            raise RuntimeError("MCP session not initialized")
 
         timeout = TOOL_TIMEOUTS.get(tool_name, self.timeout_config.tool_call_sec)
 
@@ -199,6 +230,10 @@ class CodePlaneServer:
                     "arguments": arguments or {},
                 },
                 "id": 1,
+            },
+            headers={
+                "Accept": MCP_ACCEPT_HEADER,
+                "Mcp-Session-Id": self.session_id,
             },
             timeout=timeout,
         )
@@ -344,3 +379,41 @@ def codeplane_server(
         yield url, port
     finally:
         server.stop()
+
+
+@pytest.fixture
+def mcp_session(
+    codeplane_server: tuple[str, int],
+    initialized_repo: Path,
+    expectation: RepoExpectation,
+) -> Generator[tuple[str, str], None, None]:
+    """Get MCP session info (url, session_id) for direct httpx calls.
+
+    This fixture is useful for tests that need to make raw MCP calls
+    instead of using the call_tool helper.
+    """
+    url, _port = codeplane_server
+
+    # Initialize a new session for tests that need direct access
+    response = httpx.post(
+        f"{url}/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "e2e-test-direct", "version": "1.0.0"},
+            },
+            "id": 1,
+        },
+        headers={"Accept": MCP_ACCEPT_HEADER},
+        timeout=10.0,
+    )
+    response.raise_for_status()
+
+    session_id = response.headers.get("mcp-session-id")
+    if not session_id:
+        raise RuntimeError("MCP session initialization did not return session ID")
+
+    yield url, session_id

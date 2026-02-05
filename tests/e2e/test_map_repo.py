@@ -15,7 +15,7 @@ from tests.e2e.expectations.schema import RepoExpectation
 @pytest.mark.e2e
 def test_map_repo(
     codeplane_server: tuple[str, int],
-    _expectation: RepoExpectation,
+    expectation: RepoExpectation,
 ) -> None:
     """Verify map_repo returns a structural overview."""
     url, _port = codeplane_server

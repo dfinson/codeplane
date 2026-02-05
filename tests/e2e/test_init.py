@@ -13,7 +13,7 @@ from tests.e2e.expectations.schema import RepoExpectation
 @pytest.mark.e2e
 def test_server_starts(
     codeplane_server: tuple[str, int],
-    _expectation: RepoExpectation,
+    expectation: RepoExpectation,
 ) -> None:
     """Verify the server starts and returns a valid port."""
     _url, port = codeplane_server
@@ -23,7 +23,7 @@ def test_server_starts(
 @pytest.mark.e2e
 def test_health_check(
     codeplane_server: tuple[str, int],
-    _expectation: RepoExpectation,
+    expectation: RepoExpectation,
 ) -> None:
     """Verify the health endpoint responds."""
     import httpx

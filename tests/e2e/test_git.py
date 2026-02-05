@@ -15,7 +15,7 @@ from .expectations.schema import RepoExpectation
 @pytest.mark.e2e
 def test_git_status(
     codeplane_server: tuple[str, int],
-    _expectation: RepoExpectation,
+    expectation: RepoExpectation,
 ) -> None:
     """Verify git_status returns repository state."""
     url, _port = codeplane_server
@@ -42,7 +42,7 @@ def test_git_status(
 @pytest.mark.e2e
 def test_git_log(
     codeplane_server: tuple[str, int],
-    _expectation: RepoExpectation,
+    expectation: RepoExpectation,
 ) -> None:
     """Verify git_log returns commit history."""
     url, _port = codeplane_server
