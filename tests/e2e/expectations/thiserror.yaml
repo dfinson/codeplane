@@ -1,0 +1,56 @@
+# thiserror - Derive macro for Error trait
+repo: dtolnay/thiserror
+commit: "2.0.9"
+clone_depth: 1
+timeout_profile: small
+
+contexts:
+  - root: "."
+    language: rust
+
+files:
+  indexed_min: 5
+  indexed_max: 30
+  must_include:
+    - "src/lib.rs"
+  must_exclude:
+    - "target/"
+    - ".git/"
+
+anchors:
+  - symbol: "Error"
+    kind: class
+    file_contains: "src"
+    line_min: 1
+    line_max: 200
+
+refs:
+  - to_symbol: "Error"
+    min_refs: 1
+
+imports:
+  - file_contains: "src"
+    imports_min: 1
+    must_import: []
+
+scopes:
+  - file_contains: "src"
+    has_class_scope: true
+    class_has_methods_min: 1
+
+test_targets:
+  runner: cargo
+  targets_min: 5
+
+search:
+  - query: "derive(Error)"
+    must_find_file: "tests"
+
+incremental:
+  touch_file: "src/lib.rs"
+  reindexed_max: 5
+
+daemon:
+  starts: true
+  status_shows_running: true
+  stops_cleanly: true

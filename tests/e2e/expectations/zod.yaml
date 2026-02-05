@@ -1,0 +1,61 @@
+# zod - TypeScript-first schema validation
+repo: colinhacks/zod
+commit: "v3.23.8"
+clone_depth: 1
+timeout_profile: medium
+
+contexts:
+  - root: "."
+    language: typescript
+
+files:
+  indexed_min: 10
+  indexed_max: 100
+  must_include:
+    - "src/index.ts"
+  must_exclude:
+    - "node_modules/"
+    - ".git/"
+
+anchors:
+  - symbol: "ZodType"
+    kind: class
+    file_contains: "src"
+    line_min: 1
+    line_max: 1000
+  - symbol: "z"
+    kind: variable
+    file_contains: "src"
+    line_min: 1
+    line_max: 500
+
+refs:
+  - to_symbol: "ZodType"
+    min_refs: 10
+
+imports:
+  - file_contains: "src"
+    imports_min: 1
+    must_import: []
+
+scopes:
+  - file_contains: "src"
+    has_class_scope: true
+    class_has_methods_min: 5
+
+test_targets:
+  runner: jest
+  targets_min: 50
+
+search:
+  - query: "class ZodType"
+    must_find_file: "src"
+
+incremental:
+  touch_file: "src/index.ts"
+  reindexed_max: 5
+
+daemon:
+  starts: true
+  status_shows_running: true
+  stops_cleanly: true

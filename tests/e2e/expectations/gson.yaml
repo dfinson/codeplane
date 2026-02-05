@@ -1,0 +1,61 @@
+# gson - Google's JSON library for Java
+repo: google/gson
+commit: "gson-parent-2.11.0"
+clone_depth: 1
+timeout_profile: large
+
+contexts:
+  - root: "."
+    language: java
+
+files:
+  indexed_min: 50
+  indexed_max: 300
+  must_include:
+    - "gson/src/main/java/com/google/gson/Gson.java"
+  must_exclude:
+    - "target/"
+    - ".git/"
+
+anchors:
+  - symbol: "Gson"
+    kind: class
+    file_contains: "gson/src"
+    line_min: 1
+    line_max: 2000
+  - symbol: "toJson"
+    kind: method
+    file_contains: "gson/src"
+    line_min: 1
+    line_max: 2000
+
+refs:
+  - to_symbol: "Gson"
+    min_refs: 10
+
+imports:
+  - file_contains: "gson/src"
+    imports_min: 3
+    must_import: []
+
+scopes:
+  - file_contains: "gson/src"
+    has_class_scope: true
+    class_has_methods_min: 10
+
+test_targets:
+  runner: maven
+  targets_min: 100
+
+search:
+  - query: "public class Gson"
+    must_find_file: "gson/src"
+
+incremental:
+  touch_file: "gson/src/main/java/com/google/gson/Gson.java"
+  reindexed_max: 10
+
+daemon:
+  starts: true
+  status_shows_running: true
+  stops_cleanly: true

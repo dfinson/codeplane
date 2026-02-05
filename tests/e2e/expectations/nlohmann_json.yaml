@@ -1,0 +1,52 @@
+# nlohmann/json - JSON for Modern C++
+repo: nlohmann/json
+commit: "v3.11.3"
+clone_depth: 1
+timeout_profile: large
+
+contexts:
+  - root: "."
+    language: cpp
+
+files:
+  indexed_min: 10
+  indexed_max: 200
+  must_include:
+    - "single_include/nlohmann/json.hpp"
+  must_exclude:
+    - "build/"
+    - ".git/"
+
+anchors:
+  - symbol: "json"
+    kind: class
+    file_contains: "include"
+    line_min: 1
+    line_max: 30000
+
+refs:
+  - to_symbol: "json"
+    min_refs: 1
+
+imports:
+  - file_contains: "include"
+    imports_min: 1
+    must_import: []
+
+scopes:
+  - file_contains: "include"
+    has_class_scope: true
+    class_has_methods_min: 1
+
+search:
+  - query: "class basic_json"
+    must_find_file: "include"
+
+incremental:
+  touch_file: "single_include/nlohmann/json.hpp"
+  reindexed_max: 5
+
+daemon:
+  starts: true
+  status_shows_running: true
+  stops_cleanly: true

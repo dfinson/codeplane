@@ -1,0 +1,61 @@
+# serde_json - JSON serialization for Rust
+repo: serde-rs/json
+commit: "v1.0.133"
+clone_depth: 1
+timeout_profile: medium
+
+contexts:
+  - root: "."
+    language: rust
+
+files:
+  indexed_min: 10
+  indexed_max: 50
+  must_include:
+    - "src/lib.rs"
+  must_exclude:
+    - "target/"
+    - ".git/"
+
+anchors:
+  - symbol: "Value"
+    kind: class
+    file_contains: "src"
+    line_min: 1
+    line_max: 500
+  - symbol: "from_str"
+    kind: function
+    file_contains: "src"
+    line_min: 1
+    line_max: 300
+
+refs:
+  - to_symbol: "Value"
+    min_refs: 10
+
+imports:
+  - file_contains: "src"
+    imports_min: 2
+    must_import: []
+
+scopes:
+  - file_contains: "src"
+    has_class_scope: true
+    class_has_methods_min: 3
+
+test_targets:
+  runner: cargo
+  targets_min: 20
+
+search:
+  - query: "pub enum Value"
+    must_find_file: "src"
+
+incremental:
+  touch_file: "src/lib.rs"
+  reindexed_max: 5
+
+daemon:
+  starts: true
+  status_shows_running: true
+  stops_cleanly: true

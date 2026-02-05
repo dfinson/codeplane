@@ -1,0 +1,61 @@
+# certmagic - Automatic HTTPS for Go
+repo: caddyserver/certmagic
+commit: "v0.21.4"
+clone_depth: 1
+timeout_profile: medium
+
+contexts:
+  - root: "."
+    language: go
+
+files:
+  indexed_min: 10
+  indexed_max: 50
+  must_include:
+    - "certmagic.go"
+  must_exclude:
+    - "vendor/"
+    - ".git/"
+
+anchors:
+  - symbol: "Config"
+    kind: class
+    file_contains: ".go"
+    line_min: 1
+    line_max: 500
+  - symbol: "HTTPS"
+    kind: function
+    file_contains: ".go"
+    line_min: 1
+    line_max: 300
+
+refs:
+  - to_symbol: "Config"
+    min_refs: 5
+
+imports:
+  - file_contains: ".go"
+    imports_min: 3
+    must_import: []
+
+scopes:
+  - file_contains: ".go"
+    has_class_scope: true
+    class_has_methods_min: 3
+
+test_targets:
+  runner: go
+  targets_min: 10
+
+search:
+  - query: "type Config struct"
+    must_find_file: ".go"
+
+incremental:
+  touch_file: "certmagic.go"
+  reindexed_max: 5
+
+daemon:
+  starts: true
+  status_shows_running: true
+  stops_cleanly: true

@@ -1,0 +1,61 @@
+# attrs - Classes Without Boilerplate
+repo: python-attrs/attrs
+commit: "24.2.0"
+clone_depth: 1
+timeout_profile: small
+
+contexts:
+  - root: "."
+    language: python
+
+files:
+  indexed_min: 15
+  indexed_max: 80
+  must_include:
+    - "src/attrs/__init__.py"
+  must_exclude:
+    - "__pycache__/"
+    - ".git/"
+
+anchors:
+  - symbol: "define"
+    kind: function
+    file_contains: "src/attr"
+    line_min: 1
+    line_max: 500
+  - symbol: "Attribute"
+    kind: class
+    file_contains: "src/attr"
+    line_min: 1
+    line_max: 1000
+
+refs:
+  - to_symbol: "Attribute"
+    min_refs: 5
+
+imports:
+  - file_contains: "src/attr"
+    imports_min: 2
+    must_import: []
+
+scopes:
+  - file_contains: "src/attr"
+    has_class_scope: true
+    class_has_methods_min: 2
+
+test_targets:
+  runner: pytest
+  targets_min: 100
+
+search:
+  - query: "def define"
+    must_find_file: "src/attr"
+
+incremental:
+  touch_file: "src/attrs/__init__.py"
+  reindexed_max: 5
+
+daemon:
+  starts: true
+  status_shows_running: true
+  stops_cleanly: true
