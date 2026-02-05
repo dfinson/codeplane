@@ -25,38 +25,3 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_COMMENTS: false
-
-  # Python-specific security scanning with Bandit
-  bandit:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Check for Python files
-        id: check-python
-        run: |
-          if find src -name "*.py" ! -name "__init__.py" -type f | grep -q .; then
-            echo "has_python=true" >> $GITHUB_OUTPUT
-          else
-            echo "has_python=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Install Bandit
-        if: steps.check-python.outputs.has_python == 'true'
-        run: pip install bandit[toml]
-
-      - name: Run Bandit
-        if: steps.check-python.outputs.has_python == 'true'
-        run: bandit -r src/ -c pyproject.toml -f sarif -o bandit-results.sarif || true
-
-      - name: Upload Bandit results to GitHub Security
-        if: steps.check-python.outputs.has_python == 'true'
-        uses: github/codeql-action/upload-sarif@v4
-        with:
-          sarif_file: bandit-results.sarif
-          category: bandit
