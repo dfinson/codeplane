@@ -81,7 +81,23 @@ def _check_config_exists(workspace_root: Path, config_spec: str) -> str | None:
                         return None
                     node = node[part]
                 return filename
-            except (OSError, tomllib.TOMLDecodeError, KeyError):
+            except OSError:
+                # File unreadable - treated as "config not found"
+                return None
+            except tomllib.TOMLDecodeError as e:
+                # Parse error - log warning and treat as "config not found"
+                # User may want to fix the invalid TOML
+                import structlog
+
+                structlog.get_logger().warning(
+                    "lint_config_parse_error",
+                    file=str(file_path),
+                    section=section_path,
+                    error=str(e),
+                )
+                return None
+            except KeyError:
+                # Section not found - normal "config not found" case
                 return None
         else:
             # Non-TOML files: just check existence

@@ -2146,8 +2146,13 @@ class IndexCoordinator:
                     continue
 
             full_path = self.repo_root / rel_str_repo
-            if full_path.is_file():
-                files.append(full_path)
+            try:
+                if full_path.is_file():
+                    files.append(full_path)
+            except OSError:
+                # Permission denied or path too long - skip file
+                # Logged by caller during indexing if needed
+                pass
 
         return files
 

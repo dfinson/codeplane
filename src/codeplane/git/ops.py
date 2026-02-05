@@ -186,8 +186,9 @@ class GitOps:
         """Get commit history."""
         try:
             start = self._access.resolve_ref_oid(ref)
-        except RefNotFoundError:
-            return []
+        except RefNotFoundError as e:
+            # Invalid ref - raise to caller so they can distinguish from empty history
+            raise RefNotFoundError(ref) from e
 
         # Parse timestamps
         since_ts = datetime.fromisoformat(since).timestamp() if since else None

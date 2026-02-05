@@ -259,8 +259,16 @@ class ContextDiscovery:
                             DiscoveredMarker(marker.path, marker.family, MarkerTier.WORKSPACE)
                         )
                         continue
-                except (OSError, UnicodeDecodeError):
-                    pass
+                except (OSError, UnicodeDecodeError) as e:
+                    # File read/decode errors during workspace detection
+                    # Non-fatal: marker kept at original tier
+                    import structlog
+
+                    structlog.get_logger().debug(
+                        "rust_workspace_detection_error",
+                        path=marker.path,
+                        error=str(e),
+                    )
             result.append(marker)
         return result
 
@@ -279,8 +287,16 @@ class ContextDiscovery:
                             DiscoveredMarker(marker.path, marker.family, MarkerTier.WORKSPACE)
                         )
                         continue
-                except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-                    pass
+                except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
+                    # File read/decode errors during workspace detection
+                    # Non-fatal: marker kept at original tier
+                    import structlog
+
+                    structlog.get_logger().debug(
+                        "js_workspace_detection_error",
+                        path=marker.path,
+                        error=str(e),
+                    )
             result.append(marker)
         return result
 
@@ -299,7 +315,15 @@ class ContextDiscovery:
                             DiscoveredMarker(marker.path, marker.family, MarkerTier.WORKSPACE)
                         )
                         continue
-                except (OSError, UnicodeDecodeError):
-                    pass
+                except (OSError, UnicodeDecodeError) as e:
+                    # File read/decode errors during workspace detection
+                    # Non-fatal: marker kept at original tier
+                    import structlog
+
+                    structlog.get_logger().debug(
+                        "maven_workspace_detection_error",
+                        path=marker.path,
+                        error=str(e),
+                    )
             result.append(marker)
         return result

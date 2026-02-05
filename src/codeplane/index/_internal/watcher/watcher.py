@@ -361,6 +361,9 @@ class BackgroundIndexer:
 
     async def _process_loop(self) -> None:
         """Process queued changes."""
+        import structlog
+
+        logger = structlog.get_logger()
         try:
             while self._running:
                 events = await self._queue.get()
@@ -368,8 +371,23 @@ class BackgroundIndexer:
                 # Collect unique paths (dedupe rapid changes to same file)
                 paths = list({event.path for event in events})
 
-                # Call the index callback (suppress errors to keep indexer alive)
-                with contextlib.suppress(Exception):
+                # Call the index callback (log errors to keep indexer alive)
+                try:
                     await self._index_callback([self._config.root / p for p in paths])
+                except OSError as e:
+                    # Filesystem errors (permission denied, disk full, etc.)
+                    logger.warning("indexing_callback_os_error", error=str(e), paths=paths)
+                except ValueError as e:
+                    # Invalid data during indexing (unsupported file type, etc.)
+                    logger.warning("indexing_callback_value_error", error=str(e), paths=paths)
+                except Exception as e:
+                    # Unexpected error - log with full traceback for debugging
+                    logger.error(
+                        "indexing_callback_unexpected_error",
+                        error=str(e),
+                        error_type=type(e).__name__,
+                        paths=paths,
+                        exc_info=True,
+                    )
         except asyncio.CancelledError:
             pass

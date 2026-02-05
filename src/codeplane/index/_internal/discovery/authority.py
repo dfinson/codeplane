@@ -357,8 +357,26 @@ class Tier1AuthorityFilter:
                     content = json.loads(marker_path.read_text())
                     if "packages" in content:
                         globs.extend(content["packages"])
-            except (OSError, json.JSONDecodeError, yaml.YAMLError):
-                pass
+            except OSError as e:
+                # File read errors (permission denied, missing file during scan, etc.)
+                # Non-fatal: workspace detection continues with partial info
+                import structlog
+
+                structlog.get_logger().debug(
+                    "workspace_config_read_error",
+                    marker=marker,
+                    error=str(e),
+                )
+            except (json.JSONDecodeError, yaml.YAMLError) as e:
+                # Parse errors indicate misconfigured workspace files
+                # Log as warning since user may want to fix the config
+                import structlog
+
+                structlog.get_logger().warning(
+                    "workspace_config_parse_error",
+                    marker=marker,
+                    error=str(e),
+                )
 
         return globs
 
