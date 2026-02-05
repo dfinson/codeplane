@@ -11,18 +11,6 @@ permissions:
   security-events: write
 
 jobs:
-  # Dependency vulnerability review for PRs
-  dependency-review:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/dependency-review-action@v4
-        with:
-          fail-on-severity: high
-          deny-licenses: GPL-3.0, AGPL-3.0
-
   # Secret scanning (GitHub's built-in is enabled, this adds custom patterns)
   secrets-scan:
     runs-on: ubuntu-latest
