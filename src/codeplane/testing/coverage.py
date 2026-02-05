@@ -523,6 +523,8 @@ def parse_coverage_summary(artifact: CoverageArtifact) -> CoverageSummary | None
     Supports LCOV, Istanbul JSON, and Go coverage formats.
     Returns None if parsing fails.
     """
+    import json
+
     if not artifact.path.exists():
         return None
 
@@ -534,8 +536,16 @@ def parse_coverage_summary(artifact: CoverageArtifact) -> CoverageSummary | None
         elif artifact.format == "gocov":
             return _parse_gocov(artifact.path, artifact)
         else:
+            # Unknown format
             return None
-    except Exception:
+    except (OSError, ValueError, KeyError):
+        # OSError: file read errors
+        # ValueError: numeric parsing errors in coverage data
+        # KeyError: missing expected fields in JSON formats
+        # Coverage is informational - log but don't crash
+        return None
+    except json.JSONDecodeError:
+        # Malformed JSON in istanbul/gocov format
         return None
 
 

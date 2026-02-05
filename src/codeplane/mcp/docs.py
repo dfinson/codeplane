@@ -472,27 +472,40 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
     ),
     "git_reset": ToolDocumentation(
         name="git_reset",
-        description="Reset HEAD to a ref.",
+        description="Reset HEAD to a ref. Hard reset requires two-phase confirmation.",
         category=ToolCategory.GIT,
         when_to_use=[
             "Undoing commits (soft/mixed)",
-            "Discarding changes (hard)",
+            "Discarding changes (hard) - requires explicit user approval",
             "Unstaging files (mixed)",
         ],
         when_not_to_use=[
             "When changes are pushed - use revert instead",
             "When unsure - hard reset loses changes permanently",
+            "Without explicit user approval for hard reset",
         ],
-        hints_before="Use 'soft' or 'mixed' to preserve changes; 'hard' discards them.",
+        hints_before="For hard reset: MUST obtain user approval. First call returns confirmation token; second call with token executes.",
         hints_after=None,
-        commonly_preceded_by=["git_log"],
+        commonly_preceded_by=["git_log", "git_status"],
         commonly_followed_by=[],
         behavior=BehaviorFlags(has_side_effects=True),
-        possible_errors=["REF_NOT_FOUND"],
+        possible_errors=["REF_NOT_FOUND", "INVALID_CONFIRMATION", "TOKEN_MISMATCH"],
         examples=[
             {
                 "description": "Soft reset to undo last commit",
                 "params": {"ref": "HEAD~1", "mode": "soft"},
+            },
+            {
+                "description": "Hard reset phase 1 - get confirmation token",
+                "params": {"ref": "HEAD~1", "mode": "hard"},
+            },
+            {
+                "description": "Hard reset phase 2 - execute with token",
+                "params": {
+                    "ref": "HEAD~1",
+                    "mode": "hard",
+                    "confirmation_token": "<token_from_phase_1>",
+                },
             },
         ],
     ),

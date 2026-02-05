@@ -170,13 +170,21 @@ class LintOps:
         )
 
     async def _get_detected_languages(self) -> list[str]:
-        """Get detected languages, gracefully handling uninitialized coordinator."""
+        """Get detected languages from coordinator.
+
+        Raises RuntimeError if coordinator is not initialized.
+        Callers should handle this by providing explicit language list or deferring.
+        """
         try:
             file_stats = await self._coordinator.get_file_stats()
             return list(file_stats.keys())
         except RuntimeError:
-            # Coordinator not initialized - return common defaults
-            return ["python", "javascript"]
+            # Coordinator not initialized - re-raise rather than silently defaulting
+            # Callers should explicitly handle uninitialized state
+            raise RuntimeError(
+                "Coordinator not initialized. "
+                "Provide explicit tool_ids or categories, or ensure coordinator is ready."
+            ) from None
 
     async def _resolve_tools(
         self, tool_ids: list[str] | None, categories: list[str] | None
@@ -272,11 +280,15 @@ class LintOps:
             stderr = stderr_bytes.decode(errors="replace")
 
             # Parse output
-            diagnostics = tool.parse_output(stdout, stderr)
+            parse_result = tool.parse_output(stdout, stderr)
+            diagnostics = parse_result.diagnostics
 
             # Determine status
             status: Literal["clean", "dirty", "error", "skipped"]
-            if proc.returncode == 0 and not diagnostics:
+            if not parse_result.success:
+                # Parser error - treat as tool error
+                status = "error"
+            elif proc.returncode == 0 and not diagnostics:
                 status = "clean"
             elif diagnostics:
                 status = "dirty"
@@ -291,6 +303,14 @@ class LintOps:
                 files_checked = await self._get_file_count_from_index(tool, paths)
             files_modified = sum(1 for d in diagnostics if d.fix_applied)
 
+            # Build error detail
+            error_detail: str | None = None
+            if status == "error":
+                if parse_result.parse_error:
+                    error_detail = f"Parse error: {parse_result.parse_error}"
+                elif stderr:
+                    error_detail = stderr
+
             return ToolResult(
                 tool_id=tool.tool_id,
                 status=status,
@@ -299,7 +319,7 @@ class LintOps:
                 files_modified=files_modified,
                 duration_seconds=time.time() - start_time,
                 command=cmd,
-                error_detail=stderr if status == "error" else None,
+                error_detail=error_detail,
             )
 
         except OSError as e:

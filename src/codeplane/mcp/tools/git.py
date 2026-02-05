@@ -1,6 +1,7 @@
 """Git MCP tools - consolidated git_* handlers."""
 
 import contextlib
+import secrets
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -16,6 +17,14 @@ if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from codeplane.mcp.context import AppContext
+
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+# Fingerprint key for tracking hard reset confirmation tokens
+_HARD_RESET_TOKEN_KEY = "pending_hard_reset_token"
 
 
 # =============================================================================
@@ -281,10 +290,78 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ctx: Context,
         ref: str = Field(..., description="Reference to reset to"),
         mode: Literal["soft", "mixed", "hard"] = Field("mixed", description="Reset mode"),
+        confirmation_token: str | None = Field(
+            None,
+            description="Required for hard reset. Obtain from initial call without token.",
+        ),
     ) -> dict[str, Any]:
-        """Reset HEAD to a ref."""
-        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+        """Reset HEAD to a ref.
 
+        For mode='hard', a two-phase confirmation is required:
+        1. First call without confirmation_token returns a warning and token
+        2. Second call with the token executes the reset
+
+        This prevents accidental data loss from uncommitted changes.
+        """
+        session = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        # For hard reset, enforce two-phase confirmation
+        if mode == "hard":
+            stored_token = session.fingerprints.get(_HARD_RESET_TOKEN_KEY)
+
+            # Phase 2: Validate token and execute
+            if confirmation_token:
+                if not stored_token:
+                    return {
+                        "error": {
+                            "code": "INVALID_CONFIRMATION",
+                            "message": "No pending hard reset confirmation. Call without token first.",
+                        },
+                        "summary": "invalid confirmation token",
+                    }
+                if confirmation_token != stored_token:
+                    return {
+                        "error": {
+                            "code": "TOKEN_MISMATCH",
+                            "message": "Confirmation token does not match. Request a new token.",
+                        },
+                        "summary": "token mismatch",
+                    }
+                # Token valid - clear it and proceed to execute
+                del session.fingerprints[_HARD_RESET_TOKEN_KEY]
+
+            # Phase 1: Generate token and return warning
+            else:
+                # Gather information about what would be lost
+                status = app_ctx.git_ops.status()
+                uncommitted_files = list(status.keys())
+                uncommitted_count = len(uncommitted_files)
+
+                # Generate and store confirmation token
+                token = secrets.token_urlsafe(16)
+                session.fingerprints[_HARD_RESET_TOKEN_KEY] = token
+
+                return {
+                    "requires_confirmation": True,
+                    "confirmation_token": token,
+                    "mode": mode,
+                    "target_ref": ref,
+                    "uncommitted_files_count": uncommitted_count,
+                    "uncommitted_files": uncommitted_files[:20],  # Cap at 20 for display
+                    "warning": (
+                        "DESTRUCTIVE ACTION: git reset --hard will permanently discard "
+                        "all uncommitted changes. This cannot be undone."
+                    ),
+                    "agentic_hint": (
+                        "STOP: This operation is irreversible and may destroy work. "
+                        "You MUST ask the user for explicit approval before proceeding. "
+                        "If approved, call git_reset again with the same parameters "
+                        f"plus confirmation_token='{token}'."
+                    ),
+                    "summary": f"BLOCKED: hard reset requires user approval ({uncommitted_count} uncommitted files at risk)",
+                }
+
+        # Execute the reset (soft/mixed immediately, hard after confirmation)
         app_ctx.git_ops.reset(ref, mode=mode)
         ref_display = ref[:12] if len(ref) > 12 else ref
         return {

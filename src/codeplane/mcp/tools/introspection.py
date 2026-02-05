@@ -21,11 +21,13 @@ if TYPE_CHECKING:
 
 
 def _get_version() -> str:
+    from importlib.metadata import PackageNotFoundError
     from importlib.metadata import version as pkg_version
 
     try:
         return pkg_version("codeplane")
-    except Exception:
+    except PackageNotFoundError:
+        # Package not installed in editable mode or not found
         return "unknown"
 
 

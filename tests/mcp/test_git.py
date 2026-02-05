@@ -7,11 +7,13 @@ Tests the actual exports:
 - _summarize_log() helper
 - _summarize_branches() helper
 - _summarize_paths() helper
+- _HARD_RESET_TOKEN_KEY constant
 
 Handler tests use conftest.py fixtures for integration testing.
 """
 
 from codeplane.mcp.tools.git import (
+    _HARD_RESET_TOKEN_KEY,
     _summarize_branches,
     _summarize_commit,
     _summarize_diff,
@@ -179,3 +181,16 @@ class TestSummarizePaths:
         assert "added" in result
         # With many paths, some should be shown and "+N more" may appear
         assert "a.py" in result or "+" in result
+
+
+class TestHardResetTokenKey:
+    """Tests for hard reset confirmation token key."""
+
+    def test_token_key_is_string(self):
+        """Token key should be a constant string."""
+        assert isinstance(_HARD_RESET_TOKEN_KEY, str)
+        assert len(_HARD_RESET_TOKEN_KEY) > 0
+
+    def test_token_key_is_descriptive(self):
+        """Token key should indicate its purpose."""
+        assert "hard" in _HARD_RESET_TOKEN_KEY.lower() or "reset" in _HARD_RESET_TOKEN_KEY.lower()

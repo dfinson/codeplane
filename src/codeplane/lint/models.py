@@ -86,3 +86,23 @@ class LintResult:
         if any(t.status == "dirty" for t in self.tools_run):
             return "dirty"
         return "clean"
+
+
+@dataclass
+class ParseResult:
+    """Result from parsing tool output."""
+
+    diagnostics: list[Diagnostic] = field(default_factory=list)
+    parse_error: str | None = None
+
+    @property
+    def success(self) -> bool:
+        return self.parse_error is None
+
+    @classmethod
+    def ok(cls, diagnostics: list[Diagnostic]) -> ParseResult:
+        return cls(diagnostics=diagnostics)
+
+    @classmethod
+    def error(cls, message: str) -> ParseResult:
+        return cls(parse_error=message)

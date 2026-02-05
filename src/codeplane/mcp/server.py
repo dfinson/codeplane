@@ -4,9 +4,11 @@ Uses native FastMCP @mcp.tool decorators for tool registration.
 Includes logging middleware for tool call instrumentation.
 """
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import structlog
@@ -17,6 +19,33 @@ if TYPE_CHECKING:
     from codeplane.mcp.context import AppContext
 
 log = structlog.get_logger(__name__)
+
+
+@asynccontextmanager
+async def _noop_docket_lifespan(*_args: Any, **_kwargs: Any) -> AsyncIterator[None]:
+    """No-op lifespan that replaces FastMCP's Docket task queue.
+
+    FastMCP's Docket uses an in-memory backend that polls continuously,
+    burning ~15% CPU at idle. Since we don't use Docket's task scheduling,
+    we replace the lifespan with a no-op to eliminate this CPU drain.
+    """
+    yield
+
+
+def _patch_fastmcp_docket() -> None:
+    """Disable FastMCP's Docket task queue to eliminate idle CPU usage.
+
+    The Docket in-memory backend polls at ~5Hz even with no tasks,
+    causing unnecessary CPU usage. Since CodePlane doesn't use Docket,
+    we monkey-patch the lifespan to be a no-op.
+    """
+    from fastmcp import FastMCP
+
+    # Only patch once
+    if not hasattr(FastMCP, "_docket_patched"):
+        FastMCP._docket_lifespan = staticmethod(_noop_docket_lifespan)  # type: ignore[method-assign]
+        FastMCP._docket_patched = True  # type: ignore[attr-defined]
+        log.debug("fastmcp_docket_disabled")
 
 
 def create_mcp_server(context: "AppContext") -> "FastMCP":
@@ -44,6 +73,9 @@ def create_mcp_server(context: "AppContext") -> "FastMCP":
     )
 
     log.info("mcp_server_creating", repo_root=str(context.repo_root))
+
+    # Disable Docket task queue to eliminate ~15% idle CPU usage
+    _patch_fastmcp_docket()
 
     # Configure FastMCP global settings
     fastmcp.settings.json_response = True

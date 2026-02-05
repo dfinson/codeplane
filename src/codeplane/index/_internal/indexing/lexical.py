@@ -294,7 +294,9 @@ class LexicalIndex:
 
             # Single atomic commit
             writer.commit()
-        except Exception:
+        except (OSError, ValueError):
+            # OSError: filesystem errors during commit
+            # ValueError: tantivy index corruption or schema mismatch
             # On failure, changes are discarded (Tantivy writer rollback)
             self._staged_adds.clear()
             self._staged_removes.clear()

@@ -133,7 +133,14 @@ def detect_coverage_tools(
                 cwd=workspace_root,
             )
             tools["pytest-cov"] = result.returncode == 0
-        except Exception:
+        except FileNotFoundError:
+            # Python executable not found
+            tools["pytest-cov"] = False
+        except subprocess.TimeoutExpired:
+            # Import check timed out
+            tools["pytest-cov"] = False
+        except subprocess.SubprocessError:
+            # Other subprocess errors
             tools["pytest-cov"] = False
 
     elif runner_pack_id in ("js.jest", "js.vitest"):

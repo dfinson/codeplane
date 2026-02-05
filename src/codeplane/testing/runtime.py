@@ -423,7 +423,14 @@ class RuntimeResolver:
             if result.returncode == 0:
                 # "Python 3.12.1" -> "3.12.1"
                 return result.stdout.strip().split()[-1]
-        except Exception:
+        except FileNotFoundError:
+            # Executable doesn't exist
+            pass
+        except subprocess.TimeoutExpired:
+            # Version check timed out - executable may be hung
+            pass
+        except subprocess.SubprocessError:
+            # Other subprocess errors (e.g., CalledProcessError)
             pass
         return None
 
@@ -439,7 +446,14 @@ class RuntimeResolver:
             )
             if result.returncode == 0:
                 return result.stdout.strip()
-        except Exception:
+        except FileNotFoundError:
+            # Poetry not installed
+            pass
+        except subprocess.TimeoutExpired:
+            # Poetry command timed out
+            pass
+        except subprocess.SubprocessError:
+            # Other subprocess errors
             pass
         return None
 
@@ -509,7 +523,14 @@ class RuntimeResolver:
             if result.returncode == 0:
                 # "v20.10.0" -> "20.10.0"
                 return result.stdout.strip().lstrip("v")
-        except Exception:
+        except FileNotFoundError:
+            # Node not installed
+            pass
+        except subprocess.TimeoutExpired:
+            # Version check timed out
+            pass
+        except subprocess.SubprocessError:
+            # Other subprocess errors
             pass
         return None
 
@@ -548,7 +569,14 @@ class RuntimeResolver:
                 parts = result.stdout.split()
                 if len(parts) >= 3:
                     return parts[2].lstrip("go")
-        except Exception:
+        except FileNotFoundError:
+            # Go not installed
+            pass
+        except subprocess.TimeoutExpired:
+            # Version check timed out
+            pass
+        except subprocess.SubprocessError:
+            # Other subprocess errors
             pass
         return None
 
@@ -579,7 +607,14 @@ class RuntimeResolver:
                 parts = result.stdout.split()
                 if len(parts) >= 2:
                     return parts[1]
-        except Exception:
+        except FileNotFoundError:
+            # Cargo not installed
+            pass
+        except subprocess.TimeoutExpired:
+            # Version check timed out
+            pass
+        except subprocess.SubprocessError:
+            # Other subprocess errors
             pass
         return None
 
@@ -640,7 +675,14 @@ class RuntimeResolver:
                         match = re.search(r'"([^"]+)"', line)
                         if match:
                             return match.group(1)
-        except Exception:
+        except FileNotFoundError:
+            # Java not installed
+            pass
+        except subprocess.TimeoutExpired:
+            # Version check timed out
+            pass
+        except subprocess.SubprocessError:
+            # Other subprocess errors
             pass
         return None
 
@@ -668,7 +710,14 @@ class RuntimeResolver:
             )
             if result.returncode == 0:
                 return result.stdout.strip()
-        except Exception:
+        except FileNotFoundError:
+            # .NET not installed
+            pass
+        except subprocess.TimeoutExpired:
+            # Version check timed out
+            pass
+        except subprocess.SubprocessError:
+            # Other subprocess errors
             pass
         return None
 
@@ -704,7 +753,14 @@ class RuntimeResolver:
                 parts = result.stdout.split()
                 if len(parts) >= 2:
                     return parts[1]
-        except Exception:
+        except FileNotFoundError:
+            # Ruby not installed
+            pass
+        except subprocess.TimeoutExpired:
+            # Version check timed out
+            pass
+        except subprocess.SubprocessError:
+            # Other subprocess errors
             pass
         return None
 
@@ -880,7 +936,14 @@ class ExecutionContextBuilder:
                 timeout=5,
             )
             return result.returncode == 0
-        except Exception:
+        except FileNotFoundError:
+            # Python executable not found
+            return False
+        except subprocess.TimeoutExpired:
+            # Import check timed out
+            return False
+        except subprocess.SubprocessError:
+            # Other subprocess errors
             return False
 
     def _build_javascript_tools(

@@ -23,6 +23,32 @@ from codeplane.index._internal.ignore import IgnoreChecker
 
 logger = structlog.get_logger()
 
+# Directories that are NEVER watched, regardless of other settings.
+# These are hardcoded because:
+# - .codeplane/logs causes inotify feedback loop (writes trigger more watches)
+# - VCS dirs (.git, .svn, etc.) have their own change detection
+HARDCODED_DIRS: frozenset[str] = frozenset({".git", ".svn", ".hg", ".bzr", ".codeplane"})
+
+
+def _get_watchable_paths(repo_root: Path, hardcoded_dirs: frozenset[str]) -> list[Path]:
+    """Get list of paths to watch, excluding HARDCODED_DIRS.
+
+    Instead of watching repo_root recursively (which includes .codeplane/logs
+    and causes inotify feedback loops), we watch only the top-level entries
+    that are not in HARDCODED_DIRS.
+    """
+    paths: list[Path] = []
+    try:
+        for entry in repo_root.iterdir():
+            if entry.name not in hardcoded_dirs:
+                paths.append(entry)
+    except OSError:
+        # If we can't list the directory, fall back to watching root
+        # (will be noisy but functional)
+        paths = [repo_root]
+    return paths
+
+
 # Debouncing configuration
 DEBOUNCE_WINDOW_SEC = 0.5  # Sliding window for batching rapid changes
 MAX_DEBOUNCE_WAIT_SEC = 2.0  # Maximum wait before forcing flush
@@ -44,8 +70,14 @@ def _is_cross_filesystem(path: Path) -> bool:
     """Detect if path is on a cross-filesystem mount (WSL /mnt/*, network drives, etc.)."""
     resolved = path.resolve()
     path_str = str(resolved)
-    # WSL accessing Windows filesystem
-    if path_str.startswith("/mnt/") and len(path_str) > 5 and path_str[5].isalpha():
+    # WSL accessing Windows filesystem: /mnt/c/, /mnt/d/, etc.
+    # Must be single letter followed by / (not /mnt/data/ which is a regular mount)
+    if (
+        path_str.startswith("/mnt/")
+        and len(path_str) > 6
+        and path_str[5].isalpha()
+        and path_str[6] == "/"
+    ):
         return True
     # Common network/remote mounts
     return path_str.startswith(("/run/user/", "/media/", "/net/"))
@@ -143,6 +175,7 @@ class FileWatcher:
     _debounce_task: asyncio.Task[None] | None = field(default=None, init=False)
     # Track previous cplignore content for diff (Issue #6)
     _last_cplignore_content: str | None = field(default=None, init=False)
+    _dir_scan_task: asyncio.Task[None] | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         """Initialize ignore checker and detect cross-filesystem."""
@@ -171,6 +204,8 @@ class FileWatcher:
             )
         else:
             self._watch_task = asyncio.create_task(self._watch_loop())
+            # Start periodic scan for new directories
+            self._dir_scan_task = asyncio.create_task(self._periodic_dir_scan())
             logger.info(
                 "file_watcher_started",
                 repo_root=str(self.repo_root),
@@ -188,6 +223,13 @@ class FileWatcher:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._debounce_task
             self._debounce_task = None
+
+        # Cancel dir scan task
+        if self._dir_scan_task is not None and not self._dir_scan_task.done():
+            self._dir_scan_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._dir_scan_task
+            self._dir_scan_task = None
 
         # Flush any pending changes before stopping
         if self._pending_changes:
@@ -258,8 +300,14 @@ class FileWatcher:
         self._debounce_task = asyncio.create_task(self._debounce_flush_loop())
 
         try:
+            # Watch explicit paths to avoid inotify feedback from .codeplane/logs
+            watch_paths = _get_watchable_paths(self.repo_root, HARDCODED_DIRS)
+            if not watch_paths:
+                logger.warning("no_watchable_paths", repo_root=str(self.repo_root))
+                return
+
             async for changes in awatch(
-                self.repo_root,
+                *watch_paths,
                 watch_filter=watch_filter,
                 step=500,  # Reduce CPU: check every 500ms instead of default 50ms
                 rust_timeout=10_000,  # 10s timeout for cleaner shutdown
@@ -274,6 +322,32 @@ class FileWatcher:
         finally:
             if self._debounce_task:
                 self._debounce_task.cancel()
+
+    async def _periodic_dir_scan(self) -> None:
+        """Periodically scan for new top-level directories to watch.
+
+        Since we watch explicit paths rather than repo_root, new directories
+        created after watcher starts won't be watched. This task checks for
+        new directories every 30 seconds and restarts watching if needed.
+        """
+        try:
+            known_paths = set(_get_watchable_paths(self.repo_root, HARDCODED_DIRS))
+            while not self._stop_event.is_set():
+                await asyncio.sleep(30.0)
+                current_paths = set(_get_watchable_paths(self.repo_root, HARDCODED_DIRS))
+                new_paths = current_paths - known_paths
+                if new_paths:
+                    logger.info(
+                        "new_directories_detected",
+                        count=len(new_paths),
+                        paths=[str(p.name) for p in new_paths],
+                    )
+                    # Queue changes for new directories (will trigger reindex)
+                    for path in new_paths:
+                        self._queue_change(path.relative_to(self.repo_root))
+                    known_paths = current_paths
+        except asyncio.CancelledError:
+            pass
 
     async def _poll_loop(self) -> None:
         """Poll loop using mtime checks (for cross-filesystem where inotify fails).

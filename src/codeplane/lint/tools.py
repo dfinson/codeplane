@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from codeplane.lint.models import Diagnostic, ToolCategory
+from codeplane.lint.models import ParseResult, ToolCategory
 
 if TYPE_CHECKING:
     pass
@@ -42,12 +42,12 @@ class LintTool:
     stderr_has_output: bool = False  # Some tools write to stderr
 
     # Parser function (set by register)
-    _parser: Callable[[str, str], list[Diagnostic]] | None = None
+    _parser: Callable[[str, str], ParseResult] | None = None
 
-    def parse_output(self, stdout: str, stderr: str) -> list[Diagnostic]:
+    def parse_output(self, stdout: str, stderr: str) -> ParseResult:
         """Parse tool output into diagnostics."""
         if self._parser is None:
-            return []
+            return ParseResult.ok([])
         return self._parser(stdout, stderr)
 
 
@@ -101,7 +101,7 @@ class ToolRegistry:
     def register(
         self,
         tool: LintTool,
-        parser: Callable[[str, str], list[Diagnostic]] | None = None,
+        parser: Callable[[str, str], ParseResult] | None = None,
     ) -> None:
         """Register a tool."""
         if parser is not None:
