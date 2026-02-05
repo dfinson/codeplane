@@ -25,15 +25,17 @@ if TYPE_CHECKING:
 
 
 def _summarize_lint(status: str, total_diagnostics: int, files_modified: int, dry_run: bool) -> str:
+    """Generate summary for lint_check."""
     prefix = "(dry-run) " if dry_run else ""
     if status == "clean":
-        return f"{prefix}clean, no issues"
-    parts = [status]
-    if total_diagnostics:
-        parts.append(f"{total_diagnostics} diagnostics")
-    if files_modified:
-        parts.append(f"{files_modified} files fixed")
-    return f"{prefix}{', '.join(parts)}"
+        return f"{prefix}✓ clean"
+    if files_modified > 0 and total_diagnostics > 0:
+        return f"{prefix}⚠ {files_modified} fixed, {total_diagnostics} remain"
+    if files_modified > 0:
+        return f"{prefix}✓ {files_modified} fixed"
+    if total_diagnostics > 0:
+        return f"{prefix}✗ {total_diagnostics} issues"
+    return f"{prefix}{status}"
 
 
 def _display_lint_check(
@@ -149,18 +151,24 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
 
         # Try to get detected tools from index first, fall back to runtime detection
         detected_ids: set[str] = set()
+        detected_configs: dict[str, str | None] = {}  # tool_id -> config_file
         try:
             indexed_tools = await app_ctx.coordinator.get_lint_tools()
             if indexed_tools:
                 detected_ids = {t.tool_id for t in indexed_tools}
+                detected_configs = {t.tool_id: t.config_file for t in indexed_tools}
             else:
                 # Index empty, fall back to runtime detection
                 detected_pairs = registry.detect(app_ctx.lint_ops._repo_root)
-                detected_ids = {t.tool_id for t, _ in detected_pairs}
+                detected_ids = {t.tool_id for t, cfg in detected_pairs}
+                detected_configs = {
+                    t.tool_id: str(cfg) if cfg else None for t, cfg in detected_pairs
+                }
         except (RuntimeError, AttributeError):
             # Coordinator not initialized, fall back to runtime detection
             detected_pairs = registry.detect(app_ctx.lint_ops._repo_root)
-            detected_ids = {t.tool_id for t, _ in detected_pairs}
+            detected_ids = {t.tool_id for t, cfg in detected_pairs}
+            detected_configs = {t.tool_id: str(cfg) if cfg else None for t, cfg in detected_pairs}
 
         # Filter by language if specified
         if language:
@@ -192,6 +200,26 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
 
         filtered_detected = [t for t in all_tools if t.tool_id in detected_ids]
 
+        # Build summary with detected tool names and their config contexts
+        if filtered_detected:
+            tool_names = [t.name for t in filtered_detected[:3]]
+            names_str = ", ".join(tool_names)
+            if len(filtered_detected) > 3:
+                names_str += f", +{len(filtered_detected) - 3} more"
+            # Get unique config files for context
+            configs: set[str] = {
+                c for t in filtered_detected if (c := detected_configs.get(t.tool_id)) is not None
+            }
+            if configs:
+                ctx_str = ", ".join(sorted(configs)[:2])
+                if len(configs) > 2:
+                    ctx_str += f", +{len(configs) - 2}"
+                summary = f"{len(filtered_detected)} detected: {names_str} (via {ctx_str})"
+            else:
+                summary = f"{len(filtered_detected)} detected: {names_str}"
+        else:
+            summary = f"0 of {len(all_tools)} tools detected"
+
         return {
             "tools": [
                 {
@@ -201,11 +229,12 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                     "category": t.category.value,
                     "executable": t.executable,
                     "detected": t.tool_id in detected_ids,
+                    "config_file": detected_configs.get(t.tool_id),
                     "executable_available": shutil.which(t.executable) is not None,
                 }
                 for t in sorted(all_tools, key=lambda x: (x.category.value, x.tool_id))
             ],
             "detected_count": len(filtered_detected),
             "total_count": len(all_tools),
-            "summary": f"{len(filtered_detected)} of {len(all_tools)} tools detected",
+            "summary": summary,
         }

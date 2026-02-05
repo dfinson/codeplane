@@ -58,11 +58,12 @@ def _summarize_diff(files_changed: int, additions: int, deletions: int, staged: 
 
 
 def _summarize_commit(sha: str, message: str) -> str:
+    from codeplane.core.formatting import truncate_at_word
+
     short_sha = sha[:7]
-    first_line = message.split("\n")[0][:50]
-    if len(message.split("\n")[0]) > 50:
-        first_line += "..."
-    return f'{short_sha} "{first_line}"'
+    first_line = message.split("\n")[0]
+    truncated = truncate_at_word(first_line, 45)
+    return f'{short_sha} "{truncated}"'
 
 
 def _summarize_log(count: int, has_more: bool) -> str:
@@ -77,11 +78,12 @@ def _summarize_branches(count: int, current: str | None) -> str:
 
 
 def _summarize_paths(action: str, paths: list[str]) -> str:
-    if len(paths) == 1:
-        return f"{action} {paths[0]}"
-    if len(paths) <= 3:
-        return f"{action} {len(paths)} files ({', '.join(paths)})"
-    return f"{action} {len(paths)} files ({paths[0]}, {paths[1]}, +{len(paths) - 2} more)"
+    from codeplane.core.formatting import format_path_list
+
+    if len(paths) == 0:
+        return f"nothing to {action}"
+    path_str = format_path_list(paths, max_total=45)
+    return f"{action} {path_str}"
 
 
 # =============================================================================
@@ -507,11 +509,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 pagination["next_cursor"] = str(end_idx)
                 pagination["total_estimate"] = len(lines)
 
+            from codeplane.core.formatting import compress_path
+
             return {
                 "results": page,
                 "pagination": pagination,
                 **blame_dict,
-                "summary": f"{len(page)} lines from {path}",
+                "summary": f"{len(page)} lines from {compress_path(path, 35)}",
             }
 
         raise ValueError(f"Unknown action: {action}")

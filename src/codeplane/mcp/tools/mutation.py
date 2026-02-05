@@ -52,12 +52,51 @@ class EditParam(BaseModel):
 # =============================================================================
 
 
-def _summarize_write(files_changed: int, insertions: int, deletions: int, dry_run: bool) -> str:
+def _summarize_write(delta_files: list[Any], dry_run: bool) -> str:
     """Generate summary for write_files."""
+    from codeplane.core.formatting import compress_path, pluralize
+
     prefix = "(dry-run) " if dry_run else ""
-    if files_changed == 0:
+    if not delta_files:
         return f"{prefix}no changes"
-    return f"{prefix}{files_changed} files (+{insertions}/-{deletions})"
+
+    # Count by action
+    actions: dict[str, int] = {}
+    total_ins = 0
+    total_del = 0
+    for f in delta_files:
+        action = f.action if hasattr(f, "action") else f.get("action", "updated")
+        actions[action] = actions.get(action, 0) + 1
+        total_ins += f.insertions if hasattr(f, "insertions") else f.get("insertions", 0)
+        total_del += f.deletions if hasattr(f, "deletions") else f.get("deletions", 0)
+
+    # Single file: show path
+    if len(delta_files) == 1:
+        f = delta_files[0]
+        path = compress_path(f.path if hasattr(f, "path") else f.get("path", ""), 30)
+        action = f.action if hasattr(f, "action") else f.get("action", "updated")
+        ins = f.insertions if hasattr(f, "insertions") else f.get("insertions", 0)
+        dels = f.deletions if hasattr(f, "deletions") else f.get("deletions", 0)
+        if action == "deleted":
+            return f"{prefix}deleted {path}"
+        elif action == "created":
+            return f"{prefix}created {path} (+{ins} lines)"
+        else:
+            return f"{prefix}updated {path} (+{ins}/-{dels})"
+
+    # Multiple files: show counts by action
+    parts: list[str] = []
+    total = len(delta_files)
+    if actions.get("created"):
+        parts.append(pluralize(actions["created"], "created", "created"))
+    if actions.get("updated"):
+        parts.append(pluralize(actions["updated"], "updated", "updated"))
+    if actions.get("deleted"):
+        parts.append(pluralize(actions["deleted"], "deleted", "deleted"))
+
+    action_summary = ", ".join(parts)
+    delta_str = f" (+{total_ins}/-{total_del})" if total_ins or total_del else ""
+    return f"{prefix}{pluralize(total, 'file')}: {action_summary}{delta_str}"
 
 
 def _display_write(files: list[Any], dry_run: bool) -> str:
@@ -166,12 +205,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                         for f in result.delta.files
                     ],
                 },
-                "summary": _summarize_write(
-                    result.delta.files_changed,
-                    result.delta.insertions,
-                    result.delta.deletions,
-                    result.dry_run,
-                ),
+                "summary": _summarize_write(result.delta.files, result.dry_run),
                 "display_to_user": _display_write(result.delta.files, result.dry_run),
             }
 

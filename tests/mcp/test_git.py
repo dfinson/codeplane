@@ -1,347 +1,181 @@
-"""Tests for MCP git tools."""
+"""Tests for MCP git tools.
 
-import pytest
-from pydantic import ValidationError
+Tests the actual exports:
+- _summarize_status() helper
+- _summarize_diff() helper
+- _summarize_commit() helper
+- _summarize_log() helper
+- _summarize_branches() helper
+- _summarize_paths() helper
+
+Handler tests use conftest.py fixtures for integration testing.
+"""
 
 from codeplane.mcp.tools.git import (
-    GitBranchParams,
-    GitCommitParams,
-    GitDiffParams,
-    GitInspectParams,
-    GitLogParams,
-    GitResetParams,
-    GitStageParams,
-    GitStashParams,
-    GitStatusParams,
+    _summarize_branches,
+    _summarize_commit,
+    _summarize_diff,
+    _summarize_log,
+    _summarize_paths,
+    _summarize_status,
 )
 
 
-class TestGitStatusParams:
-    """Tests for GitStatusParams model."""
-
-    def test_no_required_fields(self):
-        """No required fields."""
-        params = GitStatusParams()
-        assert params.session_id is None
-
-
-class TestGitDiffParams:
-    """Tests for GitDiffParams model."""
-
-    def test_defaults(self):
-        """All fields have defaults."""
-        params = GitDiffParams()
-        assert params.base is None
-        assert params.target is None
-        assert params.staged is False
-
-    def test_staged_only(self):
-        """Can request staged changes only."""
-        params = GitDiffParams(staged=True)
-        assert params.staged is True
-
-    def test_base_and_target(self):
-        """Can compare between refs."""
-        params = GitDiffParams(base="main", target="feature")
-        assert params.base == "main"
-        assert params.target == "feature"
-
-
-class TestGitCommitParams:
-    """Tests for GitCommitParams model."""
-
-    def test_message_required(self):
-        """message is required."""
-        with pytest.raises(ValidationError):
-            GitCommitParams()
-
-    def test_message_provided(self):
-        """Accepts commit message."""
-        params = GitCommitParams(message="feat: add feature")
-        assert params.message == "feat: add feature"
-
-    def test_allow_empty_default(self):
-        """allow_empty defaults to False."""
-        params = GitCommitParams(message="msg")
-        assert params.allow_empty is False
-
-
-class TestGitLogParams:
-    """Tests for GitLogParams model."""
-
-    def test_defaults(self):
-        """All fields have defaults."""
-        params = GitLogParams()
-        assert params.ref == "HEAD"
-        assert params.limit == 50
-        assert params.paths is None
-        assert params.since is None
-        assert params.until is None
-
-    def test_limit_bounds(self):
-        """limit is bounded."""
-        params = GitLogParams(limit=100)
-        assert params.limit == 100
-
-    def test_paths_filter(self):
-        """Can filter by paths."""
-        params = GitLogParams(paths=["src/main.py"])
-        assert params.paths == ["src/main.py"]
-
-
-class TestGitStageParams:
-    """Tests for GitStageParams model."""
-
-    def test_action_required(self):
-        """action is required."""
-        with pytest.raises(ValidationError):
-            GitStageParams()
-
-    def test_add_action(self):
-        """add action stages files."""
-        params = GitStageParams(action="add", paths=["file.py"])
-        assert params.action == "add"
-
-    def test_remove_action(self):
-        """remove action unstages files."""
-        params = GitStageParams(action="remove", paths=["file.py"])
-        assert params.action == "remove"
-
-    def test_all_action(self):
-        """all action stages everything."""
-        params = GitStageParams(action="all")
-        assert params.action == "all"
-        assert params.paths is None
-
-    def test_discard_action(self):
-        """discard action discards changes."""
-        params = GitStageParams(action="discard", paths=["file.py"])
-        assert params.action == "discard"
-
-    def test_invalid_action(self):
-        """Invalid action rejected."""
-        with pytest.raises(ValidationError):
-            GitStageParams(action="commit")
-
-
-class TestGitBranchParams:
-    """Tests for GitBranchParams model."""
-
-    def test_action_required(self):
-        """action is required."""
-        with pytest.raises(ValidationError):
-            GitBranchParams()
-
-    def test_list_action(self):
-        """list action lists branches."""
-        params = GitBranchParams(action="list")
-        assert params.action == "list"
-
-    def test_create_action(self):
-        """create action creates branch."""
-        params = GitBranchParams(action="create", name="new-feature")
-        assert params.action == "create"
-        assert params.name == "new-feature"
-
-    def test_delete_action(self):
-        """delete action deletes branch."""
-        params = GitBranchParams(action="delete", name="old-branch")
-        assert params.action == "delete"
-
-    def test_create_with_ref(self):
-        """create can specify base ref."""
-        params = GitBranchParams(action="create", name="feature", ref="develop")
-        assert params.ref == "develop"
-
-    def test_force_delete(self):
-        """force flag for delete."""
-        params = GitBranchParams(action="delete", name="branch", force=True)
-        assert params.force is True
-
-
-class TestGitResetParams:
-    """Tests for GitResetParams model."""
-
-    def test_ref_required(self):
-        """ref is required."""
-        with pytest.raises(ValidationError):
-            GitResetParams()
-
-    def test_ref_provided(self):
-        """Accepts ref."""
-        params = GitResetParams(ref="HEAD~1")
-        assert params.ref == "HEAD~1"
-
-    def test_mode_default(self):
-        """mode defaults to mixed."""
-        params = GitResetParams(ref="HEAD")
-        assert params.mode == "mixed"
-
-    def test_mode_options(self):
-        """mode accepts valid options."""
-        for mode in ["soft", "mixed", "hard"]:
-            params = GitResetParams(ref="HEAD", mode=mode)
-            assert params.mode == mode
-
-    def test_mode_invalid(self):
-        """mode rejects invalid value."""
-        with pytest.raises(ValidationError):
-            GitResetParams(ref="HEAD", mode="keep")
-
-
-class TestGitStashParams:
-    """Tests for GitStashParams model."""
-
-    def test_action_required(self):
-        """action is required."""
-        with pytest.raises(ValidationError):
-            GitStashParams()
-
-    def test_push_action(self):
-        """push action creates stash."""
-        params = GitStashParams(action="push")
-        assert params.action == "push"
-
-    def test_pop_action(self):
-        """pop action applies and removes stash."""
-        params = GitStashParams(action="pop")
-        assert params.action == "pop"
-
-    def test_list_action(self):
-        """list action lists stashes."""
-        params = GitStashParams(action="list")
-        assert params.action == "list"
-
-    def test_push_with_message(self):
-        """push can have message."""
-        params = GitStashParams(action="push", message="WIP: feature")
-        assert params.message == "WIP: feature"
-
-    def test_push_include_untracked(self):
-        """push can include untracked."""
-        params = GitStashParams(action="push", include_untracked=True)
-        assert params.include_untracked is True
-
-    def test_pop_with_index(self):
-        """pop can specify stash index."""
-        params = GitStashParams(action="pop", index=2)
-        assert params.index == 2
-
-
-class TestGitInspectParams:
-    """Tests for GitInspectParams model."""
-
-    def test_action_required(self):
-        """action is required."""
-        with pytest.raises(ValidationError):
-            GitInspectParams()
-
-    def test_show_action(self):
-        """show action shows commit."""
-        params = GitInspectParams(action="show")
-        assert params.action == "show"
-
-    def test_blame_action(self):
-        """blame action annotates file."""
-        params = GitInspectParams(action="blame", path="file.py")
-        assert params.action == "blame"
-        assert params.path == "file.py"
-
-    def test_show_with_ref(self):
-        """show can specify commit ref."""
-        params = GitInspectParams(action="show", ref="abc1234")
-        assert params.ref == "abc1234"
-
-    def test_blame_with_lines(self):
-        """blame can specify line range."""
-        params = GitInspectParams(action="blame", path="f.py", start_line=10, end_line=20)
-        assert params.start_line == 10
-        assert params.end_line == 20
-
-
-class TestGitStatusHandler:
-    """Tests for git_status handler - parameter validation."""
-
-    def test_status_params_accept_paths(self):
-        """Status params can include paths filter."""
-        params = GitStatusParams(paths=["src/"])
-        assert params.paths == ["src/"]
-
-
-class TestGitDiffHandler:
-    """Tests for git_diff handler - parameter validation."""
-
-    def test_diff_params_combinations(self):
-        """Various param combinations are valid."""
-        # Just staged
-        p1 = GitDiffParams(staged=True)
-        assert p1.staged is True
-
-        # Base and target
-        p2 = GitDiffParams(base="main", target="HEAD")
-        assert p2.base == "main"
-
-
-class TestGitCommitHandler:
-    """Tests for git_commit handler - parameter validation."""
-
-    def test_commit_params_with_paths(self):
-        """Commit can specify paths."""
-        params = GitCommitParams(message="fix", paths=["file.py"])
-        assert params.paths == ["file.py"]
-
-
-class TestGitLogHandler:
-    """Tests for git_log handler - parameter validation."""
-
-    def test_log_params_date_filters(self):
-        """Log supports date filtering."""
-        params = GitLogParams(since="2024-01-01", until="2024-12-31")
-        assert params.since == "2024-01-01"
-        assert params.until == "2024-12-31"
-
-
-class TestGitStageHandler:
-    """Tests for git_stage handler - parameter validation."""
-
-    def test_stage_params_paths_optional_for_all(self):
-        """Paths not required for 'all' action."""
-        params = GitStageParams(action="all")
-        assert params.paths is None
-
-
-class TestGitBranchHandler:
-    """Tests for git_branch handler - parameter validation."""
-
-    def test_branch_params_ref_default(self):
-        """Ref defaults to HEAD."""
-        params = GitBranchParams(action="create", name="test")
-        assert params.ref == "HEAD"
-
-
-class TestGitResetHandler:
-    """Tests for git_reset handler - parameter validation."""
-
-    def test_reset_params_mode_variations(self):
-        """All mode values work."""
-        for mode in ["soft", "mixed", "hard"]:
-            params = GitResetParams(ref="HEAD", mode=mode)
-            assert params.mode == mode
-
-
-class TestGitStashHandler:
-    """Tests for git_stash handler - parameter validation."""
-
-    def test_stash_params_index_default(self):
-        """Index defaults to 0."""
-        params = GitStashParams(action="pop")
-        assert params.index == 0
-
-
-class TestGitInspectHandler:
-    """Tests for git_inspect handler - parameter validation."""
-
-    def test_inspect_params_ref_default(self):
-        """Ref defaults to HEAD."""
-        params = GitInspectParams(action="show")
-        assert params.ref == "HEAD"
+class TestSummarizeStatus:
+    """Tests for _summarize_status helper."""
+
+    def test_clean_with_branch(self):
+        """Clean repo shows branch name."""
+        result = _summarize_status("main", {}, True, 0)
+        assert result == "clean, branch: main"
+
+    def test_clean_detached(self):
+        """Clean repo in detached HEAD."""
+        result = _summarize_status(None, {}, True, 0)
+        assert result == "clean, branch: detached"
+
+    def test_modified_files(self):
+        """Shows modified count."""
+        # 256 = modified in worktree
+        files = {"a.py": 256, "b.py": 256}
+        result = _summarize_status("main", files, False, 0)
+        assert "2 modified" in result
+
+    def test_staged_files(self):
+        """Shows staged count."""
+        # 1 = index_new, 2 = index_modified, 4 = index_deleted
+        files = {"a.py": 1, "b.py": 2}
+        result = _summarize_status("main", files, False, 0)
+        assert "2 staged" in result
+
+    def test_conflicted_files(self):
+        """Shows conflict count."""
+        # >= 4096 = conflicted
+        files = {"a.py": 4096}
+        result = _summarize_status("main", files, False, 0)
+        assert "1 conflicts" in result
+
+    def test_rebase_in_progress(self):
+        """Shows rebase state."""
+        files = {"a.py": 256}
+        result = _summarize_status("main", files, False, 1)
+        assert "rebase in progress" in result
+
+    def test_merge_in_progress(self):
+        """Shows merge state."""
+        files = {"a.py": 256}
+        result = _summarize_status("main", files, False, 2)
+        assert "merge in progress" in result
+
+    def test_mixed_status(self):
+        """Shows all status types."""
+        files = {
+            "a.py": 256,  # modified
+            "b.py": 1,  # staged (new)
+            "c.py": 4096,  # conflicted
+        }
+        result = _summarize_status("feature", files, False, 0)
+        assert "1 modified" in result
+        assert "1 staged" in result
+        assert "1 conflicts" in result
+
+
+class TestSummarizeDiff:
+    """Tests for _summarize_diff helper."""
+
+    def test_no_changes(self):
+        """No changes message."""
+        result = _summarize_diff(0, 0, 0, False)
+        assert result == "no changes"
+
+    def test_no_staged_changes(self):
+        """No staged changes message."""
+        result = _summarize_diff(0, 0, 0, True)
+        assert result == "no staged changes"
+
+    def test_with_changes(self):
+        """Shows file count and deltas."""
+        result = _summarize_diff(3, 100, 50, False)
+        assert "3 files changed" in result
+        assert "+100" in result
+        assert "-50" in result
+
+    def test_staged_prefix(self):
+        """Staged diff has prefix."""
+        result = _summarize_diff(2, 10, 5, True)
+        assert result.startswith("staged:")
+
+
+class TestSummarizeCommit:
+    """Tests for _summarize_commit helper."""
+
+    def test_short_message(self):
+        """Short message not truncated."""
+        result = _summarize_commit("abc1234567890", "Short message")
+        assert result == 'abc1234 "Short message"'
+
+    def test_long_message_truncated(self):
+        """Long message truncated to 50 chars."""
+        long_msg = "x" * 100
+        result = _summarize_commit("abc1234567890", long_msg)
+        assert "..." in result
+        assert len(result) < 70  # sha + truncated message
+
+    def test_multiline_message(self):
+        """Only first line used."""
+        result = _summarize_commit("abc1234", "First line\nSecond line")
+        assert "First line" in result
+        assert "Second line" not in result
+
+
+class TestSummarizeLog:
+    """Tests for _summarize_log helper."""
+
+    def test_count_only(self):
+        """Shows commit count."""
+        result = _summarize_log(5, False)
+        assert result == "5 commits"
+
+    def test_has_more(self):
+        """Shows more available."""
+        result = _summarize_log(50, True)
+        assert "50 commits" in result
+        assert "(more available)" in result
+
+
+class TestSummarizeBranches:
+    """Tests for _summarize_branches helper."""
+
+    def test_with_current(self):
+        """Shows current branch."""
+        result = _summarize_branches(5, "main")
+        assert result == "5 branches, current: main"
+
+    def test_without_current(self):
+        """No current branch (detached)."""
+        result = _summarize_branches(3, None)
+        assert result == "3 branches"
+
+
+class TestSummarizePaths:
+    """Tests for _summarize_paths helper."""
+
+    def test_single_path(self):
+        """Single path shown directly."""
+        result = _summarize_paths("staged", ["file.py"])
+        assert result == "staged file.py"
+
+    def test_few_paths(self):
+        """Few paths listed."""
+        result = _summarize_paths("unstaged", ["a.py", "b.py", "c.py"])
+        assert "unstaged" in result
+        # The actual format may be "unstaged a.py, b.py, c.py" or truncated
+        assert "a.py" in result
+
+    def test_many_paths(self):
+        """Many paths shows +N more."""
+        paths = ["a.py", "b.py", "c.py", "d.py", "e.py"]
+        result = _summarize_paths("added", paths)
+        assert "added" in result
+        # With many paths, some should be shown and "+N more" may appear
+        assert "a.py" in result or "+" in result

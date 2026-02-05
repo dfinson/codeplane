@@ -207,10 +207,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             path,
             context_lines=context_lines,
         )
+
+        from codeplane.core.formatting import compress_path
+
         return {
             "path": result.path,
             "matches": result.matches,
-            "summary": f"{len(result.matches)} matches in {result.path}",
+            "summary": f"{len(result.matches)} matches in {compress_path(result.path, 35)}",
         }
 
     # Flatten schemas to remove $ref/$defs for Claude compatibility

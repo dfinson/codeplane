@@ -19,14 +19,18 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
-def _summarize_search(count: int, mode: str, query: str, fallback: bool = False) -> str:
+def _summarize_search(
+    count: int, mode: str, query: str, fallback: bool = False, file_count: int = 0
+) -> str:
     """Generate summary for search."""
+    from codeplane.core.formatting import truncate_query
+
     suffix = " (literal fallback)" if fallback else ""
+    q = truncate_query(query, 20)
     if count == 0:
-        q = query[:30] + "..." if len(query) > 30 else query
         return f'no {mode} results for "{q}"{suffix}'
-    q = query[:30] + "..." if len(query) > 30 else query
-    return f'{count} {mode} results for "{q}"{suffix}'
+    files_str = f" across {file_count} files" if file_count > 0 else ""
+    return f'{count} {mode} results for "{q}"{files_str}{suffix}'
 
 
 def _summarize_map(file_count: int, sections: list[str], truncated: bool) -> str:
@@ -145,8 +149,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
             refs = await app_ctx.coordinator.get_references(def_fact, _context_id=0, limit=limit)
             ref_results: list[dict[str, Any]] = []
+            ref_files: set[str] = set()
             for ref in refs:
                 path = await _get_file_path(app_ctx, ref.file_id)
+                ref_files.add(path)
                 ref_results.append(
                     {
                         "path": path,
@@ -161,7 +167,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "results": ref_results,
                 "pagination": {},
                 "query_time_ms": 0,
-                "summary": _summarize_search(len(ref_results), "references", query),
+                "summary": _summarize_search(
+                    len(ref_results), "references", query, file_count=len(ref_files)
+                ),
             }
 
         # Lexical or symbol search
@@ -170,6 +178,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             mode_map[mode],
             limit=limit,
         )
+
+        # Count unique files
+        unique_files = {r.path for r in search_response.results}
 
         result: dict[str, Any] = {
             "results": [
@@ -190,6 +201,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 mode,
                 query,
                 fallback=search_response.fallback_reason is not None,
+                file_count=len(unique_files),
             ),
         }
 

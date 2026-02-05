@@ -26,10 +26,21 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
-def _summarize_discover(count: int) -> str:
+def _summarize_discover(count: int, targets: list[Any] | None = None) -> str:
     if count == 0:
         return "no test targets found"
-    return f"{count} test targets discovered"
+    if targets:
+        # Group by language
+        by_lang: dict[str, int] = {}
+        for t in targets:
+            lang = t.language if hasattr(t, "language") else "unknown"
+            by_lang[lang] = by_lang.get(lang, 0) + 1
+        # Format: "12 targets (10 python, 2 javascript)"
+        lang_parts = [f"{v} {k}" for k, v in sorted(by_lang.items(), key=lambda x: -x[1])[:3]]
+        if len(by_lang) > 3:
+            lang_parts.append(f"+{len(by_lang) - 3} more")
+        return f"{count} targets ({', '.join(lang_parts)})"
+    return f"{count} test targets"
 
 
 def _display_discover(count: int, targets: list[Any]) -> str:
@@ -81,13 +92,22 @@ def _summarize_run(result: "TestResult") -> str:
     status = result.run_status
     if status.progress:
         p = status.progress
+        if status.status == "completed":
+            if p.cases.failed > 0:
+                return f"\u2717 {p.cases.passed} passed, {p.cases.failed} failed ({status.duration_seconds:.1f}s)"
+            return f"\u2713 {p.cases.passed} passed ({status.duration_seconds:.1f}s)"
+        elif status.status == "running":
+            return f"running: {p.cases.passed}/{p.cases.total} passed"
+        elif status.status == "cancelled":
+            return "cancelled"
+        elif status.status == "failed":
+            return "\u2717 run failed"
+        # Other statuses
         parts: list[str] = [status.status]
         if p.cases.total > 0:
             parts.append(f"{p.cases.passed}/{p.cases.total} passed")
             if p.cases.failed:
                 parts.append(f"{p.cases.failed} failed")
-            if p.cases.skipped:
-                parts.append(f"{p.cases.skipped} skipped")
         return ", ".join(parts)
 
     return status.status
@@ -315,7 +335,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 }
                 for t in targets
             ],
-            "summary": _summarize_discover(len(targets)),
+            "summary": _summarize_discover(len(targets), targets),
             "display_to_user": _display_discover(len(targets), targets),
         }
         if result.agentic_hint:

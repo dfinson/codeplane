@@ -55,13 +55,24 @@ _PROGRESS_THRESHOLD = 100
 # Console for output
 _console = Console(stderr=True)
 
-# Style prefixes
+# Style prefixes for direct tool/sync operations
 _STYLES = {
     "success": "[green]✓[/green] ",
     "error": "[red]✗[/red] ",
     "warning": "[yellow]![/yellow] ",
     "info": "  ",
     "none": "",
+}
+
+# Async/background sources use a different symbol to avoid false confirmation
+_ASYNC_SUCCESS_SYMBOL = "[dim]◦[/dim] "  # ◦ (open circle) for background ops
+
+# Source tags for console output (Option C)
+_SOURCE_TAGS = {
+    "tool": "[tool]  ",
+    "index": "[index] ",
+    "watch": "[watch] ",
+    "system": "",  # No tag for system messages
 }
 
 # Global flag to suppress console logging during spinners (Issue #5)
@@ -117,14 +128,37 @@ def get_console() -> Console:
     return _console
 
 
-def status(message: str, *, style: str = "info", indent: int = 0) -> None:
-    """Print a styled status message to stderr."""
-    prefix = _STYLES.get(style, "")
+def status(
+    message: str,
+    *,
+    style: str = "info",
+    source: str | None = None,
+    indent: int = 0,
+) -> None:
+    """Print a styled status message to stderr.
+
+    Args:
+        message: The message to display
+        style: Style preset (success, error, warning, info, none)
+        source: Source tag (tool, index, watch, system). If provided and style=success,
+                async sources (index, watch) use ◦ instead of ✓ to avoid false confirmation.
+        indent: Number of spaces to indent
+    """
+    # Determine the prefix symbol
+    if style == "success" and source in ("index", "watch"):
+        # Async/background sources use open circle to avoid false confirmation
+        prefix = _ASYNC_SUCCESS_SYMBOL
+    else:
+        prefix = _STYLES.get(style, "")
+
+    # Add source tag if provided
+    source_tag = _SOURCE_TAGS.get(source, "") if source else ""
+
     padding = " " * indent
-    _console.print(f"{padding}{prefix}{message}", highlight=False)
+    _console.print(f"{source_tag}{padding}{prefix}{message}", highlight=False)
 
     # Log at DEBUG for observability (lazy to respect runtime config)
-    _get_logger().debug("status", message=message, style=style)
+    _get_logger().debug("status", message=message, style=style, source=source)
 
 
 def pluralize(count: int, singular: str, plural: str | None = None) -> str:

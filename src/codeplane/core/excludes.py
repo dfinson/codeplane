@@ -189,7 +189,7 @@ def is_default_prunable(dirname: str) -> bool:
     return dirname in DEFAULT_PRUNABLE_DIRS
 
 
-UNIVERSAL_EXCLUDE_GLOBS: tuple[str, ...] = tuple(f"**/{d}/**" for d in sorted(PRUNABLE_DIRS))
+UNIVERSAL_EXCLUDE_GLOBS: tuple[str, ...] = tuple(f"**/{d}/**" for d in PRUNABLE_DIRS)
 
 _CPLIGNORE = """\
 # CodePlane ignore patterns (gitignore syntax)

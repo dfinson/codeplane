@@ -47,6 +47,8 @@ class RangeParam(BaseModel):
 
 def _summarize_read(files: list[dict[str, Any]], not_found: int = 0) -> str:
     """Generate summary for files.read."""
+    from codeplane.core.formatting import compress_path, format_path_list, pluralize
+
     if not files and not_found:
         return f"{not_found} file(s) not found"
 
@@ -54,18 +56,15 @@ def _summarize_read(files: list[dict[str, Any]], not_found: int = 0) -> str:
     paths = [f["path"] for f in files]
 
     if len(paths) == 1:
+        compressed = compress_path(paths[0], 35)
         rng = files[0].get("range")
         if rng:
-            return f"1 file ({paths[0]}:{rng[0]}-{rng[1]}), {total_lines} lines"
-        return f"1 file ({paths[0]}), {total_lines} lines"
+            return f"1 file ({compressed}:{rng[0]}-{rng[1]}), {total_lines} lines"
+        return f"1 file ({compressed}), {total_lines} lines"
 
-    if len(paths) <= 3:
-        path_list = ", ".join(paths)
-    else:
-        path_list = f"{paths[0]}, {paths[1]}, +{len(paths) - 2} more"
-
+    path_list = format_path_list(paths, max_total=40)
     suffix = f", {not_found} not found" if not_found else ""
-    return f"{len(files)} files ({path_list}), {total_lines} lines{suffix}"
+    return f"{pluralize(len(files), 'file')} ({path_list}), {total_lines} lines{suffix}"
 
 
 def _summarize_list(path: str, total: int, truncated: bool) -> str:

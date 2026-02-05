@@ -169,7 +169,7 @@ class BackgroundIndexer:
             if stats.files_removed:
                 parts.append(pluralize(stats.files_removed, "file") + " removed")
             summary = ", ".join(parts) if parts else "no changes"
-            status(f"{summary} ({stats.duration_seconds:.1f}s)", style="success")
+            status(f"{summary} ({stats.duration_seconds:.1f}s)", style="success", source="index")
 
             # Notify completion callback
             if self._on_complete is not None:
