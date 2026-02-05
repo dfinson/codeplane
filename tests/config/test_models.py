@@ -79,13 +79,13 @@ class TestLoggingConfig:
     def test_level_options(self) -> None:
         """Log levels are valid."""
         for level in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
-            config = LoggingConfig(level=level)  # type: ignore[arg-type]
+            config = LoggingConfig(level=level)
             assert config.level == level
 
     def test_invalid_level(self) -> None:
         """Invalid level is rejected."""
         with pytest.raises(ValidationError):
-            LoggingConfig(level="TRACE")  # type: ignore[arg-type]
+            LoggingConfig(level="TRACE")
 
 
 class TestServerConfig:

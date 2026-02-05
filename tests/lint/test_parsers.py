@@ -61,12 +61,12 @@ class TestParseRuff:
     def test_empty_output(self) -> None:
         """Empty output returns empty list."""
         result = parse_ruff("", "")
-        assert result == []
+        assert result.diagnostics == []
 
     def test_empty_json_array(self) -> None:
         """Empty JSON array returns empty list."""
         result = parse_ruff("[]", "")
-        assert result == []
+        assert result.diagnostics == []
 
     def test_single_diagnostic(self) -> None:
         """Parses single diagnostic."""
@@ -80,16 +80,16 @@ class TestParseRuff:
             }
         ]
         result = parse_ruff(json.dumps(data), "")
-        assert len(result) == 1
-        assert result[0].path == "test.py"
-        assert result[0].line == 10
-        assert result[0].code == "E501"
-        assert result[0].source == "ruff"
+        assert len(result.diagnostics) == 1
+        assert result.diagnostics[0].path == "test.py"
+        assert result.diagnostics[0].line == 10
+        assert result.diagnostics[0].code == "E501"
+        assert result.diagnostics[0].source == "ruff"
 
     def test_invalid_json(self) -> None:
         """Invalid JSON returns empty list."""
         result = parse_ruff("not json", "")
-        assert result == []
+        assert result.diagnostics == []
 
 
 class TestParseMypy:
@@ -98,7 +98,7 @@ class TestParseMypy:
     def test_empty_output(self) -> None:
         """Empty output returns empty list."""
         result = parse_mypy("", "")
-        assert result == []
+        assert result.diagnostics == []
 
     def test_single_error(self) -> None:
         """Parses single error."""
@@ -110,11 +110,11 @@ class TestParseMypy:
             "message": "Incompatible type",
         }
         result = parse_mypy(json.dumps(data), "")
-        assert len(result) == 1
-        assert result[0].path == "test.py"
-        assert result[0].line == 5
-        assert result[0].severity == Severity.ERROR
-        assert result[0].source == "mypy"
+        assert len(result.diagnostics) == 1
+        assert result.diagnostics[0].path == "test.py"
+        assert result.diagnostics[0].line == 5
+        assert result.diagnostics[0].severity == Severity.ERROR
+        assert result.diagnostics[0].source == "mypy"
 
     def test_multiple_lines(self) -> None:
         """Parses multiple JSON lines."""
@@ -124,7 +124,7 @@ class TestParseMypy:
         ]
         stdout = "\n".join(json.dumps(line) for line in lines)
         result = parse_mypy(stdout, "")
-        assert len(result) == 2
+        assert len(result.diagnostics) == 2
 
 
 class TestParseEslint:
@@ -133,7 +133,7 @@ class TestParseEslint:
     def test_empty_output(self) -> None:
         """Empty output returns empty list."""
         result = parse_eslint("[]", "")
-        assert result == []
+        assert result.diagnostics == []
 
     def test_single_file_error(self) -> None:
         """Parses single file with error."""
@@ -152,10 +152,10 @@ class TestParseEslint:
             }
         ]
         result = parse_eslint(json.dumps(data), "")
-        assert len(result) == 1
-        assert result[0].path == "/src/app.js"
-        assert result[0].severity == Severity.ERROR
-        assert result[0].code == "no-unused-vars"
+        assert len(result.diagnostics) == 1
+        assert result.diagnostics[0].path == "/src/app.js"
+        assert result.diagnostics[0].severity == Severity.ERROR
+        assert result.diagnostics[0].code == "no-unused-vars"
 
     def test_warning_severity(self) -> None:
         """Severity 1 is WARNING."""
@@ -166,7 +166,7 @@ class TestParseEslint:
             }
         ]
         result = parse_eslint(json.dumps(data), "")
-        assert result[0].severity == Severity.WARNING
+        assert result.diagnostics[0].severity == Severity.WARNING
 
 
 class TestParseTsc:
@@ -175,24 +175,24 @@ class TestParseTsc:
     def test_empty_output(self) -> None:
         """Empty output returns empty list."""
         result = parse_tsc("", "")
-        assert result == []
+        assert result.diagnostics == []
 
     def test_single_error(self) -> None:
         """Parses single TypeScript error."""
         stdout = "src/app.ts(10,5): error TS2345: Argument type mismatch"
         result = parse_tsc(stdout, "")
-        assert len(result) == 1
-        assert result[0].path == "src/app.ts"
-        assert result[0].line == 10
-        assert result[0].column == 5
-        assert result[0].code == "TS2345"
-        assert result[0].severity == Severity.ERROR
+        assert len(result.diagnostics) == 1
+        assert result.diagnostics[0].path == "src/app.ts"
+        assert result.diagnostics[0].line == 10
+        assert result.diagnostics[0].column == 5
+        assert result.diagnostics[0].code == "TS2345"
+        assert result.diagnostics[0].severity == Severity.ERROR
 
     def test_warning(self) -> None:
         """Parses warning."""
         stdout = "src/app.ts(1,1): warning TS6385: Some warning"
         result = parse_tsc(stdout, "")
-        assert result[0].severity == Severity.WARNING
+        assert result.diagnostics[0].severity == Severity.WARNING
 
 
 class TestParseBlackCheck:
@@ -201,15 +201,15 @@ class TestParseBlackCheck:
     def test_empty_output(self) -> None:
         """Empty output returns empty list."""
         result = parse_black_check("", "")
-        assert result == []
+        assert result.diagnostics == []
 
     def test_would_reformat(self) -> None:
         """Parses 'would reformat' messages."""
         stderr = "would reformat src/app.py\nwould reformat tests/test_app.py"
         result = parse_black_check("", stderr)
-        assert len(result) == 2
-        assert result[0].path == "src/app.py"
-        assert result[0].source == "black"
+        assert len(result.diagnostics) == 2
+        assert result.diagnostics[0].path == "src/app.py"
+        assert result.diagnostics[0].source == "black"
 
 
 class TestParsePrettierCheck:
@@ -218,14 +218,14 @@ class TestParsePrettierCheck:
     def test_empty_output(self) -> None:
         """Empty output returns empty list."""
         result = parse_prettier_check("", "")
-        assert result == []
+        assert result.diagnostics == []
 
     def test_files_needing_format(self) -> None:
         """Parses files needing formatting."""
         stdout = "Checking formatting...\nsrc/app.js\ntests/app.test.js"
         result = parse_prettier_check(stdout, "")
-        assert len(result) == 2
-        assert result[0].path == "src/app.js"
+        assert len(result.diagnostics) == 2
+        assert result.diagnostics[0].path == "src/app.js"
 
 
 class TestParseGoVet:
@@ -234,17 +234,17 @@ class TestParseGoVet:
     def test_empty_output(self) -> None:
         """Empty output returns empty list."""
         result = parse_go_vet("", "")
-        assert result == []
+        assert result.diagnostics == []
 
     def test_single_error(self) -> None:
         """Parses single go vet error."""
         stdout = "main.go:10:5: unreachable code"
         result = parse_go_vet(stdout, "")
-        assert len(result) == 1
-        assert result[0].path == "main.go"
-        assert result[0].line == 10
-        assert result[0].column == 5
-        assert result[0].source == "go vet"
+        assert len(result.diagnostics) == 1
+        assert result.diagnostics[0].path == "main.go"
+        assert result.diagnostics[0].line == 10
+        assert result.diagnostics[0].column == 5
+        assert result.diagnostics[0].source == "go vet"
 
 
 class TestParseGofmt:
@@ -253,12 +253,12 @@ class TestParseGofmt:
     def test_empty_output(self) -> None:
         """Empty output returns empty list."""
         result = parse_gofmt("", "")
-        assert result == []
+        assert result.diagnostics == []
 
     def test_files_needing_format(self) -> None:
         """Parses files needing formatting."""
         stdout = "main.go\npkg/util.go"
         result = parse_gofmt(stdout, "")
-        assert len(result) == 2
-        assert result[0].path == "main.go"
-        assert result[0].source == "gofmt"
+        assert len(result.diagnostics) == 2
+        assert result.diagnostics[0].path == "main.go"
+        assert result.diagnostics[0].source == "gofmt"

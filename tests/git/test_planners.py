@@ -62,7 +62,9 @@ class TestCheckoutPlanner:
     def test_checkout_detached_by_sha(self, temp_repo: pygit2.Repository) -> None:
         """Checking out by SHA should result in detached HEAD."""
         ops = GitOps(temp_repo.workdir)
-        head_sha = ops.head_commit().sha
+        head_commit = ops.head_commit()
+        assert head_commit is not None
+        head_sha = head_commit.sha
 
         ops.checkout(head_sha)
 
@@ -89,6 +91,7 @@ class TestRebasePlanner:
 
         # Get current branch name
         current = ops.current_branch()
+        assert current is not None
 
         # Plan rebase onto first commit
         ops.checkout(shas[0])

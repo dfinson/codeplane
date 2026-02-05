@@ -128,7 +128,7 @@ class TestIntegrityChecker:
         # Rest return 0
         call_count = [0]
 
-        def scalar_side_effect():
+        def scalar_side_effect() -> int:
             call_count[0] += 1
             if call_count[0] == 1:
                 return 5  # orphan refs
@@ -158,7 +158,7 @@ class TestIntegrityChecker:
 
         call_count = [0]
 
-        def scalar_side_effect():
+        def scalar_side_effect() -> int:
             call_count[0] += 1
             if call_count[0] == 2:
                 return 3  # orphan defs

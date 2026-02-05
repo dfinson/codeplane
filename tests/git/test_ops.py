@@ -300,6 +300,7 @@ class TestPull:
         """Pull when remote is ahead should fast-forward."""
         from codeplane.git import PullResult
 
+        assert repo_with_remote.workdir is not None
         workdir = Path(repo_with_remote.workdir)
         ops = GitOps(workdir)
 
@@ -307,7 +308,9 @@ class TestPull:
         ops.push()
 
         # Simulate remote advancing: clone, commit, push back
-        bare_path = Path(repo_with_remote.remotes["origin"].url)
+        remote_url = repo_with_remote.remotes["origin"].url
+        assert remote_url is not None
+        bare_path = Path(remote_url)
         with_clone = workdir.parent / "clone"
         clone = pygit2.clone_repository(str(bare_path), str(with_clone), checkout_branch="main")
         (with_clone / "remote-change.txt").write_text("from remote")
@@ -368,6 +371,7 @@ class TestCherrypick:
         # Get the commit from feature branch
         ops.checkout("feature")
         feature_head = ops.head_commit()
+        assert feature_head is not None
         ops.checkout("main")
 
         result = ops.cherrypick(feature_head.sha)
@@ -392,7 +396,9 @@ class TestCherrypick:
         (workdir / "conflict.txt").write_text("feature content")
         ops.stage(["conflict.txt"])
         ops.commit("add conflict on feature")
-        feature_sha = ops.head_commit().sha
+        head_commit = ops.head_commit()
+        assert head_commit is not None
+        feature_sha = head_commit.sha
 
         # Go back to main and try to cherry-pick
         ops.checkout("main")
@@ -467,12 +473,16 @@ class TestAmend:
     ) -> None:
         """Amend with new message should update commit message."""
         ops = GitOps(temp_repo.workdir)
-        original_sha = ops.head_commit().sha
+        head_commit = ops.head_commit()
+        assert head_commit is not None
+        original_sha = head_commit.sha
 
         new_sha = ops.amend(message="Amended message")
 
         assert new_sha != original_sha
-        assert ops.head_commit().message == "Amended message"
+        amended_commit = ops.head_commit()
+        assert amended_commit is not None
+        assert amended_commit.message == "Amended message"
 
     def test_given_staged_changes_when_amend_then_includes_changes(
         self, temp_repo: pygit2.Repository
@@ -498,11 +508,15 @@ class TestAmend:
     ) -> None:
         """Amend without message keeps original message."""
         ops = GitOps(temp_repo.workdir)
-        original_message = ops.head_commit().message
+        head_commit = ops.head_commit()
+        assert head_commit is not None
+        original_message = head_commit.message
 
         ops.amend()
 
-        assert ops.head_commit().message == original_message
+        amended_commit = ops.head_commit()
+        assert amended_commit is not None
+        assert amended_commit.message == original_message
 
 
 class TestMergeAnalysis:
@@ -832,7 +846,9 @@ class TestReset:
 
         ops.reset(target_sha, mode="soft")
 
-        assert ops.head_commit().sha == target_sha
+        head_commit = ops.head_commit()
+        assert head_commit is not None
+        assert head_commit.sha == target_sha
 
     def test_reset_mixed(self, repo_with_history: pygit2.Repository) -> None:
         """Mixed reset should move HEAD and unstage."""
@@ -842,7 +858,9 @@ class TestReset:
 
         ops.reset(target_sha, mode="mixed")
 
-        assert ops.head_commit().sha == target_sha
+        head_commit = ops.head_commit()
+        assert head_commit is not None
+        assert head_commit.sha == target_sha
 
     def test_reset_hard(self, repo_with_history: pygit2.Repository) -> None:
         """Hard reset should move HEAD and discard changes."""
@@ -852,7 +870,9 @@ class TestReset:
 
         ops.reset(target_sha, mode="hard")
 
-        assert ops.head_commit().sha == target_sha
+        head_commit = ops.head_commit()
+        assert head_commit is not None
+        assert head_commit.sha == target_sha
 
 
 class TestMergeOperations:
@@ -912,7 +932,9 @@ class TestCheckoutEdgeCases:
     def test_checkout_detached_head(self, temp_repo: pygit2.Repository) -> None:
         """Checkout by SHA should result in detached HEAD."""
         ops = GitOps(temp_repo.workdir)
-        head_sha = ops.head_commit().sha
+        head_commit = ops.head_commit()
+        assert head_commit is not None
+        head_sha = head_commit.sha
 
         ops.checkout(head_sha)
 
@@ -942,7 +964,7 @@ class TestBranchEdgeCases:
 
     def test_delete_current_branch_raises(self, temp_repo: pygit2.Repository) -> None:
         """Deleting current branch should raise."""
-        from codeplane.git._internal.errors import GitError
+        from codeplane.git import GitError
 
         ops = GitOps(temp_repo.workdir)
 

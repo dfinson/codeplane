@@ -413,9 +413,9 @@ class RefactorOps:
         Much faster than scanning all files.
         """
         # Search the index for the symbol
-        search_results = await self._coordinator.search(symbol, limit=500)
+        search_response = await self._coordinator.search(symbol, limit=500)
 
-        for hit in search_results:
+        for hit in search_response.results:
             loc = (hit.path, hit.line)
             if loc in seen_locations:
                 continue
@@ -653,9 +653,9 @@ class RefactorOps:
         # Search for module path in quotes
         for old_val, new_val in [(from_module, to_module), (from_path, to_path)]:
             # Search for the value (index will find files containing it)
-            search_results = await self._coordinator.search(f'"{old_val}"', limit=200)
+            search_response = await self._coordinator.search(f'"{old_val}"', limit=200)
 
-            for hit in search_results:
+            for hit in search_response.results:
                 loc = (hit.path, hit.line)
                 if loc in seen_locations:
                     continue
@@ -896,9 +896,9 @@ class RefactorOps:
             patterns.append(self._path_to_module(target))
 
         for pattern in patterns:
-            search_results = await self._coordinator.search(pattern, limit=500)
+            search_response = await self._coordinator.search(pattern, limit=500)
 
-            for hit in search_results:
+            for hit in search_response.results:
                 loc = (hit.path, hit.line)
                 if loc in seen_locations:
                     continue

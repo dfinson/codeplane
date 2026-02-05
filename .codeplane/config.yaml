@@ -40,3 +40,16 @@ limits:
 testing:
   default_parallelism: 4
   default_timeout_sec: 300
+telemetry:
+  enabled: false
+  otlp_endpoint: null
+  service_name: codeplane
+database:
+  busy_timeout_ms: 30000
+  max_retries: 3
+  retry_base_delay_sec: 0.1
+  pool_size: 5
+  checkpoint_interval: 1000
+debug:
+  enabled: false
+  verbose_errors: false

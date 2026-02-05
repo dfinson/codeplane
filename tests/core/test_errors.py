@@ -97,7 +97,7 @@ class TestConfigError:
         ],
     )
     def test_given_factory_when_called_then_correct_code(
-        self, factory: str, kwargs: dict, expected_code: InternalErrorCode
+        self, factory: str, kwargs: dict[str, object], expected_code: InternalErrorCode
     ) -> None:
         """Factory methods produce errors with correct error codes."""
         # Given

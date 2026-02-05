@@ -971,7 +971,7 @@ class TestGradleBuildCommandDetailed:
         target = TestTarget(
             target_id="test:.",
             selector=".",
-            kind="module",
+            kind="project",
             language="java",
             runner_pack_id="java.gradle",
             workspace_root="/repo",
@@ -1031,7 +1031,7 @@ class TestCTestBuildCommandDetailed:
         target = TestTarget(
             target_id="test:.",
             selector=".",
-            kind="directory",
+            kind="project",
             language="cpp",
             runner_pack_id="cpp.ctest",
             workspace_root="/repo",

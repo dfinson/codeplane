@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import sys
 import threading
+import time
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from types import TracebackType
@@ -64,19 +65,24 @@ _STYLES = {
     "none": "",
 }
 
-# Async/background sources use a different symbol to avoid false confirmation
-_ASYNC_SUCCESS_SYMBOL = "[dim]◦[/dim] "  # ◦ (open circle) for background ops
+# Async/background sources use no symbol to avoid noise
+_ASYNC_SUCCESS_SYMBOL = ""
 
-# Source tags for console output (Option C)
+# Source tags for console output - escaped for Rich markup
 _SOURCE_TAGS = {
-    "tool": "[tool]  ",
-    "index": "[index] ",
-    "watch": "[watch] ",
+    "agent": "\\[agent] ",
+    "indexer": "\\[indexer] ",
+    "watch": "\\[watch] ",
     "system": "",  # No tag for system messages
 }
 
 # Global flag to suppress console logging during spinners (Issue #5)
 _suppress_console_logs = threading.local()
+
+
+def _timestamp() -> str:
+    """Return current time as HH:MM:SS for log prefix."""
+    return time.strftime("%H:%M:%S")
 
 
 def is_console_suppressed() -> bool:
@@ -141,12 +147,12 @@ def status(
         message: The message to display
         style: Style preset (success, error, warning, info, none)
         source: Source tag (tool, index, watch, system). If provided and style=success,
-                async sources (index, watch) use ◦ instead of ✓ to avoid false confirmation.
+                async sources (index, watch) use no symbol to avoid false confirmation.
         indent: Number of spaces to indent
     """
     # Determine the prefix symbol
-    if style == "success" and source in ("index", "watch"):
-        # Async/background sources use open circle to avoid false confirmation
+    if style == "success" and source in ("indexer", "watch"):
+        # Async/background sources use no symbol to avoid false confirmation
         prefix = _ASYNC_SUCCESS_SYMBOL
     else:
         prefix = _STYLES.get(style, "")
@@ -154,8 +160,11 @@ def status(
     # Add source tag if provided
     source_tag = _SOURCE_TAGS.get(source, "") if source else ""
 
+    # Build timestamp prefix (dimmed, bracketed)
+    ts = f"[dim]\\[{_timestamp()}][/dim] "
+
     padding = " " * indent
-    _console.print(f"{source_tag}{padding}{prefix}{message}", highlight=False)
+    _console.print(f"{ts}{source_tag}{padding}{prefix}{message}", highlight=False)
 
     # Log at DEBUG for observability (lazy to respect runtime config)
     _get_logger().debug("status", message=message, style=style, source=source)

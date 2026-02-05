@@ -48,6 +48,29 @@ def _patch_fastmcp_docket() -> None:
         log.debug("fastmcp_docket_disabled")
 
 
+def _suppress_rich_tracebacks() -> None:
+    """Suppress Rich traceback printing to console.
+
+    FastMCP uses Rich to print tracebacks even when enable_rich_tracebacks=False
+    in some code paths. This patches Rich's Console to suppress exception printing
+    to stderr entirely - we handle errors cleanly in our middleware.
+    """
+    import sys
+
+    from rich.console import Console
+
+    _original_print_exception = Console.print_exception
+
+    def _suppressed_print_exception(self: Console, *args: Any, **kwargs: Any) -> None:
+        # Only suppress if outputting to stderr (console)
+        # Allow file-based consoles to still print exceptions if needed
+        if self.file is None or self.file is sys.stderr or self.file is sys.stdout:
+            return  # Suppress console tracebacks
+        _original_print_exception(self, *args, **kwargs)
+
+    Console.print_exception = _suppressed_print_exception  # type: ignore[method-assign]
+
+
 def create_mcp_server(context: "AppContext") -> "FastMCP":
     """Create FastMCP server with all tools wired to context.
 
@@ -76,6 +99,9 @@ def create_mcp_server(context: "AppContext") -> "FastMCP":
 
     # Disable Docket task queue to eliminate ~15% idle CPU usage
     _patch_fastmcp_docket()
+
+    # Suppress Rich tracebacks that leak through FastMCP
+    _suppress_rich_tracebacks()
 
     # Configure FastMCP global settings
     fastmcp.settings.json_response = True

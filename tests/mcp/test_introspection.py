@@ -16,7 +16,7 @@ from codeplane.mcp.tools.introspection import (
 class TestGetVersion:
     """Tests for _get_version helper."""
 
-    def test_returns_string(self):
+    def test_returns_string(self) -> None:
         """Returns a version string."""
         version = _get_version()
         assert isinstance(version, str)
@@ -25,27 +25,27 @@ class TestGetVersion:
 class TestDeriveFeatures:
     """Tests for _derive_features helper."""
 
-    def test_empty_tools(self):
+    def test_empty_tools(self) -> None:
         """Empty tool list returns empty features."""
         result = _derive_features([])
         assert result == []
 
-    def test_git_tools(self):
+    def test_git_tools(self) -> None:
         """Git tools derive git_ops feature."""
         result = _derive_features(["git_status", "git_commit"])
         assert "git_ops" in result
 
-    def test_refactor_tools(self):
+    def test_refactor_tools(self) -> None:
         """Refactor tools derive refactoring feature."""
         result = _derive_features(["refactor_rename", "refactor_move"])
         assert "refactoring" in result
 
-    def test_index_tools(self):
+    def test_index_tools(self) -> None:
         """Index tools derive indexing feature."""
         result = _derive_features(["search", "map_repo"])
         assert "indexing" in result
 
-    def test_results_sorted(self):
+    def test_results_sorted(self) -> None:
         """Results are sorted alphabetically."""
         result = _derive_features(["search", "git_status", "describe"])
         assert result == sorted(result)

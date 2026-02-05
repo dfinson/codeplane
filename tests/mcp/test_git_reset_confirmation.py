@@ -4,6 +4,7 @@ Tests the confirmation flow for destructive git reset --hard operations.
 """
 
 import secrets
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,12 +12,15 @@ import pytest
 from codeplane.mcp.session import SessionState
 from codeplane.mcp.tools.git import _HARD_RESET_TOKEN_KEY
 
+if TYPE_CHECKING:
+    from fastmcp import FastMCP
+
 
 class TestGitResetHardConfirmationUnit:
     """Unit tests for the confirmation token logic."""
 
     @pytest.fixture
-    def session(self):
+    def session(self) -> SessionState:
         """Create a session with real fingerprints dict."""
         return SessionState(
             session_id="test-session-123",
@@ -24,13 +28,13 @@ class TestGitResetHardConfirmationUnit:
             last_active=0.0,
         )
 
-    def test_token_key_constant_exists(self):
+    def test_token_key_constant_exists(self) -> None:
         """Token key should be a valid string constant."""
         assert isinstance(_HARD_RESET_TOKEN_KEY, str)
         assert len(_HARD_RESET_TOKEN_KEY) > 0
         assert "reset" in _HARD_RESET_TOKEN_KEY.lower()
 
-    def test_phase1_stores_token_in_session(self, session):
+    def test_phase1_stores_token_in_session(self, session: SessionState) -> None:
         """Phase 1 should store a token in session fingerprints."""
         token = secrets.token_urlsafe(16)
         session.fingerprints[_HARD_RESET_TOKEN_KEY] = token
@@ -38,7 +42,7 @@ class TestGitResetHardConfirmationUnit:
         assert _HARD_RESET_TOKEN_KEY in session.fingerprints
         assert len(session.fingerprints[_HARD_RESET_TOKEN_KEY]) > 0
 
-    def test_phase2_valid_token_clears_fingerprint(self, session):
+    def test_phase2_valid_token_clears_fingerprint(self, session: SessionState) -> None:
         """Phase 2 with valid token should clear the stored token."""
         token = secrets.token_urlsafe(16)
         session.fingerprints[_HARD_RESET_TOKEN_KEY] = token
@@ -51,7 +55,7 @@ class TestGitResetHardConfirmationUnit:
 
         assert _HARD_RESET_TOKEN_KEY not in session.fingerprints
 
-    def test_phase2_invalid_token_keeps_fingerprint(self, session):
+    def test_phase2_invalid_token_keeps_fingerprint(self, session: SessionState) -> None:
         """Phase 2 with invalid token should keep the stored token."""
         token = secrets.token_urlsafe(16)
         session.fingerprints[_HARD_RESET_TOKEN_KEY] = token
@@ -63,14 +67,14 @@ class TestGitResetHardConfirmationUnit:
         assert _HARD_RESET_TOKEN_KEY in session.fingerprints
         assert session.fingerprints[_HARD_RESET_TOKEN_KEY] == token
 
-    def test_phase2_no_pending_token_fails(self, session):
+    def test_phase2_no_pending_token_fails(self, session: SessionState) -> None:
         """Phase 2 without a pending token should fail."""
         assert _HARD_RESET_TOKEN_KEY not in session.fingerprints
 
         stored_token = session.fingerprints.get(_HARD_RESET_TOKEN_KEY)
         assert stored_token is None
 
-    def test_token_is_single_use(self, session):
+    def test_token_is_single_use(self, session: SessionState) -> None:
         """Token should be invalidated after successful use."""
         token = secrets.token_urlsafe(16)
         session.fingerprints[_HARD_RESET_TOKEN_KEY] = token
@@ -87,7 +91,7 @@ class TestGitResetHardConfirmationIntegration:
     """Integration tests using FastMCP tool_manager."""
 
     @pytest.fixture
-    def app_ctx_with_session(self):
+    def app_ctx_with_session(self) -> MagicMock:
         """Create mock AppContext with real session state."""
         from codeplane.mcp.session import SessionManager
 
@@ -102,12 +106,16 @@ class TestGitResetHardConfirmationIntegration:
 
         return ctx
 
-    async def _call_tool(self, mcp, name: str, arguments: dict):
+    async def _call_tool(
+        self, mcp: "FastMCP", name: str, arguments: dict[str, object]
+    ) -> dict[str, Any]:
         """Helper to call a tool through FastMCP's tool manager.
 
         Note: When calling tool.fn directly, Pydantic Field defaults aren't
         applied, so we must explicitly include None values for optional params.
         """
+        from typing import Any, cast
+
         tool = mcp._tool_manager._tools[name]
         # Create a mock FastMCP Context with session_id
         from unittest.mock import MagicMock
@@ -116,15 +124,15 @@ class TestGitResetHardConfirmationIntegration:
         ctx.session_id = "test-session"
         # FastMCP's tool.fn is wrapped - get the underlying function
         # and call it directly with kwargs
-        fn = tool.fn
+        fn = tool.fn  # type: ignore[attr-defined]
         # If fn is a wrapped async function, we need to call it properly
         # FastMCP may wrap tools differently, so we access the raw function
         if hasattr(fn, "__wrapped__"):
             fn = fn.__wrapped__
-        return await fn(ctx, **arguments)
+        return cast(dict[str, Any], await fn(ctx, **arguments))
 
     @pytest.mark.asyncio
-    async def test_soft_reset_executes_immediately(self, app_ctx_with_session):
+    async def test_soft_reset_executes_immediately(self, app_ctx_with_session: MagicMock) -> None:
         """Soft reset should execute without confirmation."""
         from fastmcp import FastMCP
 
@@ -143,7 +151,7 @@ class TestGitResetHardConfirmationIntegration:
         assert result["reset_to"] == "HEAD~1"
 
     @pytest.mark.asyncio
-    async def test_mixed_reset_executes_immediately(self, app_ctx_with_session):
+    async def test_mixed_reset_executes_immediately(self, app_ctx_with_session: MagicMock) -> None:
         """Mixed reset should execute without confirmation."""
         from fastmcp import FastMCP
 
@@ -161,7 +169,9 @@ class TestGitResetHardConfirmationIntegration:
         assert result["mode"] == "mixed"
 
     @pytest.mark.asyncio
-    async def test_hard_reset_phase1_blocks_and_returns_token(self, app_ctx_with_session):
+    async def test_hard_reset_phase1_blocks_and_returns_token(
+        self, app_ctx_with_session: MagicMock
+    ) -> None:
         """Hard reset without token should block and return confirmation token."""
         from fastmcp import FastMCP
 
@@ -184,7 +194,9 @@ class TestGitResetHardConfirmationIntegration:
         assert "BLOCKED" in result["summary"]
 
     @pytest.mark.asyncio
-    async def test_hard_reset_phase2_executes_with_valid_token(self, app_ctx_with_session):
+    async def test_hard_reset_phase2_executes_with_valid_token(
+        self, app_ctx_with_session: MagicMock
+    ) -> None:
         """Hard reset with valid token should execute."""
         from fastmcp import FastMCP
 
@@ -209,7 +221,7 @@ class TestGitResetHardConfirmationIntegration:
         assert "requires_confirmation" not in result2
 
     @pytest.mark.asyncio
-    async def test_hard_reset_fails_with_wrong_token(self, app_ctx_with_session):
+    async def test_hard_reset_fails_with_wrong_token(self, app_ctx_with_session: MagicMock) -> None:
         """Hard reset with wrong token should fail with TOKEN_MISMATCH."""
         from fastmcp import FastMCP
 
@@ -232,7 +244,9 @@ class TestGitResetHardConfirmationIntegration:
         assert result["error"]["code"] == "TOKEN_MISMATCH"
 
     @pytest.mark.asyncio
-    async def test_hard_reset_fails_without_pending_confirmation(self, app_ctx_with_session):
+    async def test_hard_reset_fails_without_pending_confirmation(
+        self, app_ctx_with_session: MagicMock
+    ) -> None:
         """Hard reset with token but no pending confirmation should fail."""
         from fastmcp import FastMCP
 
@@ -251,7 +265,7 @@ class TestGitResetHardConfirmationIntegration:
         assert result["error"]["code"] == "INVALID_CONFIRMATION"
 
     @pytest.mark.asyncio
-    async def test_hard_reset_token_is_single_use(self, app_ctx_with_session):
+    async def test_hard_reset_token_is_single_use(self, app_ctx_with_session: MagicMock) -> None:
         """Token should be invalidated after use."""
         from fastmcp import FastMCP
 
@@ -277,7 +291,9 @@ class TestGitResetHardConfirmationIntegration:
         assert result3["error"]["code"] == "INVALID_CONFIRMATION"
 
     @pytest.mark.asyncio
-    async def test_hard_reset_caps_uncommitted_files_list(self, app_ctx_with_session):
+    async def test_hard_reset_caps_uncommitted_files_list(
+        self, app_ctx_with_session: MagicMock
+    ) -> None:
         """Uncommitted files list should be capped at 20."""
         from fastmcp import FastMCP
 

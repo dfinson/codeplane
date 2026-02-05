@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from sqlmodel import Session, create_engine
+from sqlmodel import Session, SQLModel, create_engine
 
 from codeplane.index.models import (
     Context,
@@ -13,7 +13,6 @@ from codeplane.index.models import (
     File,
     ImportFact,
     ProbeStatus,
-    SQLModel,
 )
 from codeplane.tools.map_repo import RepoMapper
 

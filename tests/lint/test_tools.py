@@ -54,23 +54,26 @@ class TestLintTool:
             executable="test",
         )
         result = tool.parse_output("stdout", "stderr")
-        assert result == []
+        assert result.diagnostics == []
 
     def test_parse_output_with_parser(self) -> None:
         """Should use parser when set."""
+        from codeplane.lint.models import ParseResult
 
-        def mock_parser(stdout: str, _stderr: str) -> list[Diagnostic]:
-            return [
-                Diagnostic(
-                    path="test.py",
-                    line=1,
-                    message=stdout,
-                    source="test.tool",
-                    severity=Severity.ERROR,
-                    column=1,
-                    code="TEST001",
-                )
-            ]
+        def mock_parser(stdout: str, _stderr: str) -> ParseResult:
+            return ParseResult.ok(
+                [
+                    Diagnostic(
+                        path="test.py",
+                        line=1,
+                        message=stdout,
+                        source="test.tool",
+                        severity=Severity.ERROR,
+                        column=1,
+                        code="TEST001",
+                    )
+                ]
+            )
 
         tool = LintTool(
             tool_id="test.tool",
@@ -81,8 +84,8 @@ class TestLintTool:
         )
         tool._parser = mock_parser
         result = tool.parse_output("test message", "")
-        assert len(result) == 1
-        assert result[0].message == "test message"
+        assert len(result.diagnostics) == 1
+        assert result.diagnostics[0].message == "test message"
 
 
 class TestCheckConfigExists:
@@ -160,6 +163,8 @@ class TestToolRegistry:
 
     def test_register_with_parser(self) -> None:
         """Should register tool with parser."""
+        from codeplane.lint.models import ParseResult
+
         registry = ToolRegistry()
         tool = LintTool(
             tool_id="test.tool",
@@ -169,8 +174,8 @@ class TestToolRegistry:
             executable="test",
         )
 
-        def parser(_stdout: str, _stderr: str) -> list[Diagnostic]:
-            return []
+        def parser(_stdout: str, _stderr: str) -> ParseResult:
+            return ParseResult.ok([])
 
         registry.register(tool, parser=parser)
         assert tool._parser is parser

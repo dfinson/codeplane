@@ -216,8 +216,8 @@ members = [
         repo_path.mkdir()
 
         candidates = [
-            make_candidate(LanguageFamily.MARKDOWN, "", None),
-            make_candidate(LanguageFamily.JSON_YAML, "", None),
+            make_candidate(LanguageFamily.MARKDOWN, "", 0),
+            make_candidate(LanguageFamily.JSON, "", 0),
         ]
 
         authority = Tier1AuthorityFilter(repo_path)

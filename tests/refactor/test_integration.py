@@ -134,33 +134,36 @@ def indexed_project(
     result = indexer.index_files(py_files, context_id=1)
     assert result.errors == [], f"Indexing errors: {result.errors}"
 
-    # Also index into lexical index
+    # Also index into lexical index using add_file
     for py_file in py_files:
         full_path = refactor_project / py_file
         content = full_path.read_text(encoding="utf-8")
-        lexical_index.add_document(
-            path=py_file,
+        lexical_index.add_file(
+            file_path=py_file,
             content=content,
-            symbols=[],  # Not needed for lexical search
             context_id=1,
+            file_id=0,
+            symbols=[],  # Not needed for lexical search
         )
-    lexical_index.commit()
 
     return refactor_project, test_db, lexical_index
 
 
 @pytest.fixture
 def refactor_ops(
-    _indexed_project: tuple[Path, Database, LexicalIndex],
+    indexed_project: tuple[Path, Database, LexicalIndex],
+    tmp_path: Path,
 ) -> RefactorOps:
     """Create RefactorOps with real coordinator."""
     repo_root, db, lexical_index = indexed_project
 
-    # Create a real coordinator
+    # Create a real coordinator with proper constructor
+    db_path = tmp_path / "coordinator.db"
+    tantivy_path = tmp_path / "coordinator.tantivy"
     coordinator = IndexCoordinator(
-        db=db,
-        repo_root=repo_root,
-        _lexical_index=lexical_index,
+        repo_root,
+        db_path,
+        tantivy_path,
     )
 
     return RefactorOps(repo_root, coordinator)
@@ -198,7 +201,7 @@ class TestRefactorRenameIntegration:
     async def test_rename_function_apply(
         self,
         refactor_ops: RefactorOps,
-        _indexed_project: tuple[Path, Database, LexicalIndex],
+        indexed_project: tuple[Path, Database, LexicalIndex],
     ) -> None:
         """Test applying a rename actually modifies files."""
         repo_root, _, _ = indexed_project
@@ -322,7 +325,7 @@ class TestRefactorRenameIntegration:
             for match in inspect_result.matches:
                 assert "line" in match
                 assert "snippet" in match
-                assert match["line"] > 0
+                assert int(match["line"]) > 0
 
 
 @pytest.mark.asyncio
@@ -345,7 +348,7 @@ class TestRefactorEdgeCases:
     async def test_apply_invalid_refactor_id(
         self,
         refactor_ops: RefactorOps,
-        _indexed_project: tuple[Path, Database, LexicalIndex],
+        indexed_project: tuple[Path, Database, LexicalIndex],
     ) -> None:
         """Applying with invalid ID should raise."""
         repo_root, _, _ = indexed_project
@@ -357,7 +360,7 @@ class TestRefactorEdgeCases:
     async def test_line_numbers_are_accurate(
         self,
         refactor_ops: RefactorOps,
-        _indexed_project: tuple[Path, Database, LexicalIndex],
+        indexed_project: tuple[Path, Database, LexicalIndex],
     ) -> None:
         """Test that line numbers in preview are accurate."""
         repo_root, _, _ = indexed_project

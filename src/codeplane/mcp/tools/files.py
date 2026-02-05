@@ -62,7 +62,9 @@ def _summarize_read(files: list[dict[str, Any]], not_found: int = 0) -> str:
             return f"1 file ({compressed}:{rng[0]}-{rng[1]}), {total_lines} lines"
         return f"1 file ({compressed}), {total_lines} lines"
 
-    path_list = format_path_list(paths, max_total=40)
+    # Multiple files: compress all paths
+    compressed_paths = [compress_path(p, 20) for p in paths]
+    path_list = format_path_list(compressed_paths, max_total=40, compress=False)
     suffix = f", {not_found} not found" if not_found else ""
     return f"{pluralize(len(files), 'file')} ({path_list}), {total_lines} lines{suffix}"
 

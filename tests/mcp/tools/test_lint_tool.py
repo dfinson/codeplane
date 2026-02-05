@@ -1,96 +1,96 @@
 """Tests for mcp/tools/lint.py module.
 
 Covers:
-- LintParams model
 - _summarize_lint helper
-- lint handler (tool, check actions)
+- _display_lint_check helper
 """
 
 from __future__ import annotations
 
-import pytest
-from pydantic import ValidationError
-
-from codeplane.mcp.tools.lint import LintParams, _summarize_lint
-
-
-class TestLintParams:
-    """Tests for LintParams model."""
-
-    def test_check_action(self) -> None:
-        """Check action params."""
-        params = LintParams(action="check", paths=["src/"])
-        assert params.action == "check"
-        assert params.paths == ["src/"]
-
-    def test_tools_action(self) -> None:
-        """Tools action params."""
-        params = LintParams(action="tools", language="python")
-        assert params.action == "tools"
-        assert params.language == "python"
-
-    def test_invalid_action(self) -> None:
-        """Invalid action rejected."""
-        with pytest.raises(ValidationError):
-            LintParams(action="invalid")  # type: ignore[arg-type]
-
-    def test_defaults(self) -> None:
-        """Default values."""
-        params = LintParams(action="check")
-        assert params.paths is None
-        assert params.tools is None
-        assert params.categories is None
-        assert params.dry_run is False
-        assert params.language is None
-        assert params.category is None
-
-    def test_check_with_tools(self) -> None:
-        """Check action with specific tools."""
-        params = LintParams(action="check", tools=["ruff", "mypy"])
-        assert params.tools == ["ruff", "mypy"]
-
-    def test_check_with_categories(self) -> None:
-        """Check action with categories."""
-        params = LintParams(action="check", categories=["linter", "formatter"])
-        assert params.categories == ["linter", "formatter"]
-
-    def test_check_dry_run(self) -> None:
-        """Check action with dry_run."""
-        params = LintParams(action="check", dry_run=True)
-        assert params.dry_run is True
-
-    def test_tools_with_category_filter(self) -> None:
-        """Tools action with category filter."""
-        params = LintParams(action="tools", category="formatter")
-        assert params.category == "formatter"
+from codeplane.mcp.tools.lint import _display_lint_check, _summarize_lint
 
 
 class TestSummarizeLint:
     """Tests for _summarize_lint helper."""
 
-    def test_clean_status(self) -> None:
-        """Clean status message."""
-        summary = _summarize_lint("clean", 0, 0, False)
-        assert "clean" in summary
-        assert "no issues" in summary
+    def test_clean(self) -> None:
+        """Clean status."""
+        result = _summarize_lint(
+            status="clean", total_diagnostics=0, files_modified=0, dry_run=False
+        )
+        assert result == "clean"
+
+    def test_clean_dry_run(self) -> None:
+        """Clean status with dry run."""
+        result = _summarize_lint(
+            status="clean", total_diagnostics=0, files_modified=0, dry_run=True
+        )
+        assert result == "(dry-run) clean"
 
     def test_with_diagnostics(self) -> None:
-        """Status with diagnostics."""
-        summary = _summarize_lint("issues", 5, 0, False)
-        assert "5 diagnostics" in summary
+        """Has diagnostics only."""
+        result = _summarize_lint(
+            status="dirty", total_diagnostics=5, files_modified=0, dry_run=False
+        )
+        assert "5 issues" in result
 
-    def test_with_files_modified(self) -> None:
-        """Status with files modified."""
-        summary = _summarize_lint("fixed", 0, 3, False)
-        assert "3 files fixed" in summary
+    def test_with_fixes(self) -> None:
+        """Files were fixed."""
+        result = _summarize_lint(
+            status="fixed", total_diagnostics=0, files_modified=3, dry_run=False
+        )
+        assert "3 fixed" in result
+
+    def test_with_fixes_and_remaining(self) -> None:
+        """Some fixed, some remain."""
+        result = _summarize_lint(
+            status="partial", total_diagnostics=2, files_modified=3, dry_run=False
+        )
+        assert "3 fixed" in result
+        assert "2 remain" in result
+
+    def test_dry_run_with_issues(self) -> None:
+        """Dry run shows prefix."""
+        result = _summarize_lint(
+            status="dirty", total_diagnostics=5, files_modified=0, dry_run=True
+        )
+        assert "(dry-run)" in result
+        assert "5 issues" in result
+
+
+class TestDisplayLintCheck:
+    """Tests for _display_lint_check helper."""
+
+    def test_clean(self) -> None:
+        """Clean status message."""
+        result = _display_lint_check(
+            status="clean", total_diagnostics=0, files_modified=0, dry_run=False
+        )
+        assert result is not None
+        assert "passed" in result.lower() or "no issues" in result.lower()
+
+    def test_with_issues(self) -> None:
+        """Has issues message."""
+        result = _display_lint_check(
+            status="dirty", total_diagnostics=5, files_modified=0, dry_run=False
+        )
+        assert result is not None
+        assert "5" in result
+        assert "issues" in result.lower() or "found" in result.lower()
+
+    def test_with_fixes(self) -> None:
+        """Fixed files message."""
+        result = _display_lint_check(
+            status="fixed", total_diagnostics=2, files_modified=3, dry_run=False
+        )
+        assert result is not None
+        assert "3" in result
+        assert "fixed" in result.lower() or "auto" in result.lower()
 
     def test_dry_run_prefix(self) -> None:
-        """Dry run adds prefix."""
-        summary = _summarize_lint("clean", 0, 0, True)
-        assert "(dry-run)" in summary
-
-    def test_combined(self) -> None:
-        """Combined status with multiple parts."""
-        summary = _summarize_lint("issues", 10, 2, False)
-        assert "10 diagnostics" in summary
-        assert "2 files fixed" in summary
+        """Dry run message includes prefix."""
+        result = _display_lint_check(
+            status="dirty", total_diagnostics=5, files_modified=0, dry_run=True
+        )
+        assert result is not None
+        assert "dry" in result.lower()

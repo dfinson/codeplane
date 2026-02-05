@@ -12,6 +12,7 @@ from codeplane.testing.runner_pack import (
     RunnerPackRegistry,
     runner_registry,
 )
+from codeplane.testing.runtime import RuntimeExecutionContext
 
 # =============================================================================
 # MarkerRule
@@ -125,6 +126,7 @@ class TestRunnerPackRegistry:
                 output_path: Path,  # noqa: ARG002
                 pattern: str | None = None,  # noqa: ARG002
                 tags: list[str] | None = None,  # noqa: ARG002
+                exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002
             ) -> list[str]:
                 return []
 

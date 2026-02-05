@@ -20,12 +20,12 @@ from codeplane.mcp.tools.testing import (
 class TestSummarizeDiscover:
     """Tests for _summarize_discover helper."""
 
-    def test_no_targets(self):
+    def test_no_targets(self) -> None:
         """No targets found."""
         result = _summarize_discover(0)
         assert result == "no test targets found"
 
-    def test_with_targets(self):
+    def test_with_targets(self) -> None:
         """Shows target count."""
         result = _summarize_discover(5)
         assert result == "5 test targets"
@@ -34,12 +34,12 @@ class TestSummarizeDiscover:
 class TestDisplayDiscover:
     """Tests for _display_discover helper."""
 
-    def test_no_targets(self):
+    def test_no_targets(self) -> None:
         """No targets message."""
         result = _display_discover(0, [])
         assert result == "No test targets found in this repository."
 
-    def test_single_language(self):
+    def test_single_language(self) -> None:
         """Shows language breakdown."""
         targets = [MagicMock(language="python"), MagicMock(language="python")]
         result = _display_discover(2, targets)
@@ -50,14 +50,14 @@ class TestDisplayDiscover:
 class TestSummarizeRun:
     """Tests for _summarize_run helper."""
 
-    def test_no_status(self):
+    def test_no_status(self) -> None:
         """No run status."""
         result = MagicMock()
         result.run_status = None
         summary = _summarize_run(result)
         assert summary == "no run status"
 
-    def test_with_progress(self):
+    def test_with_progress(self) -> None:
         """Shows pass/fail counts."""
         result = MagicMock()
         status = MagicMock()

@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import pytest
 
 from codeplane.index._internal.db import Database
 from codeplane.index._internal.state.filestate import FileStateService, MutationGateResult
-from codeplane.index.models import Certainty, File, Freshness
+from codeplane.index.models import Certainty, File, FileState, Freshness
 
 
 @pytest.fixture
-def db(tmp_path) -> Database:
+def db(tmp_path: Path) -> Database:
     """Create a test database."""
     db_path = tmp_path / "test.db"
     database = Database(db_path)
@@ -49,6 +50,7 @@ class TestGetFileState:
             )
             session.add(file)
             session.commit()
+            assert file.id is not None
             file_id = file.id
 
         state = service.get_file_state(file_id=file_id, context_id=1)
@@ -69,6 +71,7 @@ class TestGetFileState:
             )
             session.add(file)
             session.commit()
+            assert file.id is not None
             file_id = file.id
 
         state = service.get_file_state(file_id=file_id, context_id=1)
@@ -89,9 +92,10 @@ class TestGetFileState:
             )
             session.add(file)
             session.commit()
+            assert file.id is not None
             file_id = file.id
 
-        memo: dict = {}
+        memo: dict[tuple[int, int], FileState] = {}
         state1 = service.get_file_state(file_id=file_id, context_id=1, memo=memo)
         state2 = service.get_file_state(file_id=file_id, context_id=1, memo=memo)
 
@@ -108,7 +112,7 @@ class TestGetFileStatesBatch:
     ) -> None:
         """Batch retrieval gets states for multiple files."""
         # Create multiple files
-        file_ids = []
+        file_ids: list[int] = []
         with db.session() as session:
             for i in range(3):
                 file = File(
@@ -118,6 +122,7 @@ class TestGetFileStatesBatch:
                 )
                 session.add(file)
                 session.commit()
+                assert file.id is not None
                 file_ids.append(file.id)
 
         states = service.get_file_states_batch(file_ids, context_id=1)
@@ -141,7 +146,7 @@ class TestCheckMutationGate:
     def test_indexed_files_need_decision(self, db: Database, service: FileStateService) -> None:
         """Indexed (CLEAN) files need human/agent decision in Tier 0+1."""
         # Create indexed files
-        file_ids = []
+        file_ids: list[int] = []
         with db.session() as session:
             for i in range(2):
                 file = File(
@@ -151,6 +156,7 @@ class TestCheckMutationGate:
                 )
                 session.add(file)
                 session.commit()
+                assert file.id is not None
                 file_ids.append(file.id)
 
         result = service.check_mutation_gate(file_ids, context_id=1)
@@ -171,6 +177,7 @@ class TestCheckMutationGate:
             )
             session.add(file)
             session.commit()
+            assert file.id is not None
             file_id = file.id
 
         result = service.check_mutation_gate([file_id], context_id=1)
@@ -194,7 +201,7 @@ class TestCheckMutationGate:
         self, db: Database, service: FileStateService
     ) -> None:
         """Mix of indexed and unindexed files categorized correctly."""
-        file_ids = []
+        file_ids: list[int] = []
         with db.session() as session:
             # Indexed file
             indexed = File(
@@ -204,6 +211,7 @@ class TestCheckMutationGate:
             )
             session.add(indexed)
             session.commit()
+            assert indexed.id is not None
             file_ids.append(indexed.id)
 
             # Unindexed file
@@ -214,6 +222,7 @@ class TestCheckMutationGate:
             )
             session.add(unindexed)
             session.commit()
+            assert unindexed.id is not None
             file_ids.append(unindexed.id)
 
         # Add nonexistent file

@@ -13,6 +13,7 @@ from codeplane.testing.models import (
     TargetProgress,
     TestCaseProgress,
     TestProgress,
+    TestRunStatus,
 )
 from codeplane.testing.ops import (
     ActiveRun,
@@ -198,8 +199,9 @@ class TestDetectedWorkspace:
     """Tests for DetectedWorkspace dataclass."""
 
     def test_create(self) -> None:
-        pack = runner_registry.get("python.pytest")
-        assert pack is not None
+        pack_class = runner_registry.get("python.pytest")
+        assert pack_class is not None
+        pack = pack_class()  # Instantiate
 
         ws = DetectedWorkspace(
             root=Path("/repo"),
@@ -223,8 +225,13 @@ class TestActiveRun:
     @pytest.mark.asyncio
     async def test_create(self) -> None:
         # Create a mock task
-        async def dummy_coro():
-            return None
+        async def dummy_coro() -> TestRunStatus:
+            return TestRunStatus(
+                run_id="run-123",
+                status="completed",
+                progress=None,
+                failures=[],
+            )
 
         task = asyncio.create_task(dummy_coro())
         cancel_event = asyncio.Event()
@@ -788,6 +795,7 @@ class TestPersistAndLoadResult:
             assert loaded is not None
             assert loaded.run_id == "test-run"
             assert loaded.status == "completed"
+            assert loaded.progress is not None
             assert loaded.progress.targets.total == 3
             assert loaded.progress.cases.passed == 8
 

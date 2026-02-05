@@ -18,17 +18,17 @@ from codeplane.mcp.tools.refactor import (
 class TestSummarizeRefactor:
     """Tests for _summarize_refactor helper."""
 
-    def test_cancelled(self):
+    def test_cancelled(self) -> None:
         """Cancelled status."""
         result = _summarize_refactor("cancelled", 0, None)
         assert result == "refactoring cancelled"
 
-    def test_applied(self):
+    def test_applied(self) -> None:
         """Applied status shows file count."""
         result = _summarize_refactor("applied", 5, None)
         assert result == "applied to 5 files"
 
-    def test_pending_with_preview(self):
+    def test_pending_with_preview(self) -> None:
         """Pending with preview shows change counts."""
         preview = MagicMock()
         preview.high_certainty_count = 10
@@ -43,12 +43,12 @@ class TestSummarizeRefactor:
 class TestDisplayRefactor:
     """Tests for _display_refactor helper."""
 
-    def test_cancelled(self):
+    def test_cancelled(self) -> None:
         """Cancelled message."""
         result = _display_refactor("cancelled", 0, None, "ref_123")
         assert result == "Refactoring cancelled."
 
-    def test_applied(self):
+    def test_applied(self) -> None:
         """Applied message."""
         result = _display_refactor("applied", 3, None, "ref_123")
         assert "Refactoring applied" in result

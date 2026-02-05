@@ -183,8 +183,8 @@ class TestDetectLanguageFamily:
     def test_detect_by_filename(self) -> None:
         """Detects language by filename."""
         assert detect_language_family("Dockerfile") == "docker"
-        # Makefile is claimed by cpp (common for C/C++ projects)
-        assert detect_language_family("Makefile") == "cpp"
+        # Makefile is detected as 'make' language family
+        assert detect_language_family("Makefile") == "make"
 
     def test_detect_with_path_object(self) -> None:
         """Works with Path objects."""
@@ -281,8 +281,8 @@ class TestGetGrammarName:
 
     def test_returns_none_for_language_without_grammar(self) -> None:
         """Returns None for languages without tree-sitter grammar."""
-        # Some languages don't have grammars (e.g., clojure)
-        assert get_grammar_name("clojure") is None
+        # Markdown doesn't have a tree-sitter grammar in our config
+        assert get_grammar_name("matlab") is None
 
     def test_returns_none_for_unknown(self) -> None:
         """Returns None for unknown family."""
@@ -296,9 +296,9 @@ class TestHasGrammar:
         """Returns True for languages with grammar."""
         assert has_grammar("python") is True
 
-    def test_returns_false_for_clojure(self) -> None:
+    def test_returns_false_for_no_grammar(self) -> None:
         """Returns False for languages without grammar."""
-        assert has_grammar("clojure") is False
+        assert has_grammar("matlab") is False
 
     def test_returns_false_for_unknown(self) -> None:
         """Returns False for unknown family."""

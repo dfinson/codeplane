@@ -3,8 +3,8 @@
 Verifies all registered lint tools have valid configurations.
 """
 
-from codeplane.lint.definitions import registry
-from codeplane.lint.models import ToolCategory
+from codeplane.lint import registry
+from codeplane.lint.models import ParseResult, ToolCategory
 
 
 class TestToolRegistry:
@@ -181,8 +181,8 @@ class TestToolParsers:
         for tool in registry.all():
             assert tool._parser is not None, f"Tool {tool.tool_id} missing parser"
 
-    def test_parse_output_returns_list(self) -> None:
-        """parse_output should return a list of diagnostics."""
+    def test_parse_output_returns_parse_result(self) -> None:
+        """parse_output should return a ParseResult."""
         for tool in registry.all():
             result = tool.parse_output("", "")
-            assert isinstance(result, list)
+            assert isinstance(result, ParseResult)

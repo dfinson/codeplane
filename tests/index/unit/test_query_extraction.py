@@ -12,6 +12,8 @@ Targets 95%+ code coverage via parametrization across:
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from codeplane.index._internal.extraction import (
@@ -451,7 +453,7 @@ GENERIC_TYPE_SAMPLES: list[tuple[LanguageQueryConfig, str, str]] = [
 # =============================================================================
 
 
-def make_tree(code: str, language: str):
+def make_tree(code: str, language: str) -> Any:
     """Parse code into a tree-sitter tree."""
     from codeplane.index._internal.parsing.treesitter import TreeSitterParser
 

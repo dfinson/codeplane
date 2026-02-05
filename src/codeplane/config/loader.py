@@ -9,13 +9,14 @@ Supports loading configuration from multiple sources with precedence:
 """
 
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import yaml
 from pydantic import ValidationError
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from codeplane.config.models import (
+    CodePlaneConfig,
     DatabaseConfig,
     DebugConfig,
     IndexConfig,
@@ -109,12 +110,11 @@ def _make_settings_class(yaml_config: dict[str, Any]) -> type[BaseSettings]:
     return CodePlaneSettings
 
 
-# For type hints and direct instantiation without YAML
+# Alias for backward compatibility - use CodePlaneConfig from models for type hints
 CodePlaneSettings = _make_settings_class({})
-CodePlaneConfig = CodePlaneSettings
 
 
-def load_config(repo_root: Path | None = None, **kwargs: Any) -> BaseSettings:
+def load_config(repo_root: Path | None = None, **kwargs: Any) -> CodePlaneConfig:
     """Load config: defaults < global yaml < repo yaml < env vars < kwargs.
 
     Args:
@@ -136,7 +136,7 @@ def load_config(repo_root: Path | None = None, **kwargs: Any) -> BaseSettings:
 
     settings_cls = _make_settings_class(yaml_config)
     try:
-        return settings_cls(**kwargs)
+        return settings_cls(**kwargs)  # type: ignore[return-value]
     except ValidationError as e:
         err = e.errors()[0]
         field = ".".join(str(loc) for loc in err["loc"])
@@ -145,9 +145,7 @@ def load_config(repo_root: Path | None = None, **kwargs: Any) -> BaseSettings:
 
 def get_index_paths(repo_root: Path) -> tuple[Path, Path]:
     """Get db_path and tantivy_path for a repo, respecting config.index.index_path."""
-    from codeplane.config.models import CodePlaneConfig
-
-    config = cast(CodePlaneConfig, load_config(repo_root))
+    config = load_config(repo_root)
     if config.index.index_path:
         index_dir = Path(config.index.index_path)
     else:

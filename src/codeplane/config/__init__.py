@@ -1,7 +1,8 @@
 """Config module exports."""
 
-from codeplane.config.loader import CodePlaneConfig, CodePlaneSettings, load_config
+from codeplane.config.loader import CodePlaneSettings, load_config
 from codeplane.config.models import (
+    CodePlaneConfig,
     IndexConfig,
     LoggingConfig,
     ServerConfig,

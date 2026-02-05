@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 from fastmcp.server.middleware import Middleware, MiddlewareContext
+from fastmcp.tools.tool import ToolResult
 from pydantic import ValidationError
 
 from codeplane.mcp.errors import MCPError
@@ -26,8 +27,13 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger(__name__)
 
-# Source tag for tool output
-_TOOL_TAG = "[tool]  "
+# Source tag for agent output - escaped for Rich markup
+_AGENT_TAG = "\\[agent] "
+
+
+def _timestamp() -> str:
+    """Return current time as HH:MM:SS for log prefix."""
+    return time.strftime("%H:%M:%S")
 
 
 class ToolMiddleware(Middleware):
@@ -83,11 +89,12 @@ class ToolMiddleware(Middleware):
                 **summary_dict,
             )
 
-            # Print session log to console: "[tool]  Agent Session <id>: tool -> summary"
+            # Print session log to console with timestamp
             summary_text = self._format_tool_summary(tool_name, result)
             if summary_text:
+                ts = f"[dim]\\[{_timestamp()}][/dim] "
                 console.print(
-                    f"{_TOOL_TAG}Agent Session {session_id}: {tool_name} -> {summary_text}",
+                    f"{ts}{_AGENT_TAG}Session {session_id}: {tool_name} -> {summary_text}",
                     style="green",
                     highlight=False,
                 )
@@ -103,13 +110,15 @@ class ToolMiddleware(Middleware):
                 session_id=session_id,
                 duration_ms=round(duration_ms, 1),
             )
-            return {
-                "error": {
-                    "code": "CANCELLED",
-                    "message": f"Tool '{tool_name}' cancelled: server shutting down",
-                },
-                "summary": "error: cancelled",
-            }
+            return ToolResult(
+                structured_content={
+                    "error": {
+                        "code": "CANCELLED",
+                        "message": f"Tool '{tool_name}' cancelled: server shutting down",
+                    },
+                    "summary": "error: cancelled",
+                }
+            )
 
         except ValidationError as e:
             # User input error - return structured response with schema help
@@ -133,19 +142,21 @@ class ToolMiddleware(Middleware):
             # Build schema info from FastMCP tool manager
             tool_schema = self._get_tool_schema(context, tool_name)
 
-            return {
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": f"Invalid parameters for '{tool_name}'",
-                    "details": error_details,
-                },
-                "tool_schema": tool_schema,
-                "agentic_hint": (
-                    f"Use 'describe' with action='tool' and name='{tool_name}' for full documentation. "
-                    "For other tools you're unsure about, call describe to see correct usage."
-                ),
-                "summary": f"error: validation failed for {tool_name}",
-            }
+            return ToolResult(
+                structured_content={
+                    "error": {
+                        "code": "VALIDATION_ERROR",
+                        "message": f"Invalid parameters for '{tool_name}'",
+                        "details": error_details,
+                    },
+                    "tool_schema": tool_schema,
+                    "agentic_hint": (
+                        f"Use 'describe' with action='tool' and name='{tool_name}' for full documentation. "
+                        "For other tools you're unsure about, call describe to see correct usage."
+                    ),
+                    "summary": f"error: validation failed for {tool_name}",
+                }
+            )
 
         except MCPError as e:
             # Expected error - return structured response, not exception
@@ -160,10 +171,12 @@ class ToolMiddleware(Middleware):
             )
             # Return structured error response instead of raising
             error_response = e.to_response()
-            return {
-                "error": error_response.to_dict(),
-                "summary": f"error: {e.code.value}",
-            }
+            return ToolResult(
+                structured_content={
+                    "error": error_response.to_dict(),
+                    "summary": f"error: {e.code.value}",
+                }
+            )
 
         except Exception as e:
             # Internal error - log error, no traceback to console
@@ -181,18 +194,20 @@ class ToolMiddleware(Middleware):
             # Print concise error with log file pointer (no stacktrace)
             self._print_error_with_log_pointer(console, tool_name, type(e).__name__, str(e))
 
-            return {
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": f"Error calling tool '{tool_name}': {e}",
-                    "error_type": type(e).__name__,
-                },
-                "agentic_hint": (
-                    "This is an internal error. Check the log file for details. "
-                    f"Use 'describe' with action='tool' and name='{tool_name}' to verify correct usage."
-                ),
-                "summary": f"error: internal error in {tool_name}",
-            }
+            return ToolResult(
+                structured_content={
+                    "error": {
+                        "code": "INTERNAL_ERROR",
+                        "message": f"Error calling tool '{tool_name}': {e}",
+                        "error_type": type(e).__name__,
+                    },
+                    "agentic_hint": (
+                        "This is an internal error. Check the log file for details. "
+                        f"Use 'describe' with action='tool' and name='{tool_name}' to verify correct usage."
+                    ),
+                    "summary": f"error: internal error in {tool_name}",
+                }
+            )
 
     def _print_error_with_log_pointer(
         self,
@@ -203,7 +218,7 @@ class ToolMiddleware(Middleware):
     ) -> None:
         """Print a concise error message with a pointer to the log file.
 
-        Format: [tool]  <tool> failed: <error_type> - <brief msg>. See <log_file> for details.
+        Format: [agent] <tool> failed: <error_type> - <brief msg>. See <log_file> for details.
         """
         from codeplane.core.logging import get_log_file_path
 
@@ -211,9 +226,10 @@ class ToolMiddleware(Middleware):
         brief_msg = error_msg[:60] + "..." if len(error_msg) > 60 else error_msg
 
         log_file = get_log_file_path()
+        ts = f"[dim]\\[{_timestamp()}][/dim] "
         if log_file:
             console.print(
-                f"{_TOOL_TAG}{tool_name} failed: {error_type} - {brief_msg}. "
+                f"{ts}{_AGENT_TAG}{tool_name} failed: {error_type} - {brief_msg}. "
                 f"See {log_file} for details.",
                 style="red",
                 highlight=False,
@@ -221,7 +237,7 @@ class ToolMiddleware(Middleware):
         else:
             # No log file configured, just print the error
             console.print(
-                f"{_TOOL_TAG}{tool_name} failed: {error_type} - {brief_msg}",
+                f"{ts}{_AGENT_TAG}{tool_name} failed: {error_type} - {brief_msg}",
                 style="red",
                 highlight=False,
             )
@@ -334,6 +350,10 @@ class ToolMiddleware(Middleware):
             except (json.JSONDecodeError, AttributeError):
                 pass
 
+        # Handle ToolResult with structured_content
+        if hasattr(result, "structured_content") and result.structured_content:
+            return self._extract_from_dict(tool_name, result.structured_content)
+
         # Direct dict result
         if isinstance(result, dict):
             return self._extract_from_dict(tool_name, result)
@@ -400,6 +420,8 @@ class ToolMiddleware(Middleware):
                         break
             except (json.JSONDecodeError, AttributeError):
                 pass
+        elif hasattr(result, "structured_content") and result.structured_content:
+            data = result.structured_content
         elif isinstance(result, dict):
             data = result
 

@@ -52,7 +52,7 @@ class TestFileStateService:
         mock_db = MagicMock()
         service = FileStateService(mock_db)
 
-        memo: dict = {}
+        memo: dict[tuple[int, int], FileState] = {}
         cached_state = FileState(
             freshness=Freshness.CLEAN,
             certainty=Certainty.CERTAIN,

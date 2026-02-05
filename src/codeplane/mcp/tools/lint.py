@@ -28,13 +28,13 @@ def _summarize_lint(status: str, total_diagnostics: int, files_modified: int, dr
     """Generate summary for lint_check."""
     prefix = "(dry-run) " if dry_run else ""
     if status == "clean":
-        return f"{prefix}✓ clean"
+        return f"{prefix}clean"
     if files_modified > 0 and total_diagnostics > 0:
-        return f"{prefix}⚠ {files_modified} fixed, {total_diagnostics} remain"
+        return f"{prefix}{files_modified} fixed, {total_diagnostics} remain"
     if files_modified > 0:
-        return f"{prefix}✓ {files_modified} fixed"
+        return f"{prefix}{files_modified} fixed"
     if total_diagnostics > 0:
-        return f"{prefix}✗ {total_diagnostics} issues"
+        return f"{prefix}{total_diagnostics} issues"
     return f"{prefix}{status}"
 
 

@@ -9,14 +9,12 @@ Improved UX:
 import asyncio
 from importlib.metadata import version
 from pathlib import Path
-from typing import cast
 
 import click
 
 from codeplane.cli.init import initialize_repo
 from codeplane.cli.utils import find_repo_root
 from codeplane.config.loader import load_config
-from codeplane.config.models import CodePlaneConfig
 from codeplane.core.progress import (
     animate_text,
     get_console,
@@ -128,7 +126,7 @@ def up_command(path: Path | None, port: int | None) -> None:
             return
 
     # Load config
-    config = cast(CodePlaneConfig, load_config(repo_root))
+    config = load_config(repo_root)
     if port is not None:
         config.server.port = port
 

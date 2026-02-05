@@ -175,13 +175,13 @@ class TestEpochManager:
 
         # Use side_effect to return different sessions
 
-        def session_side_effect():
+        def session_side_effect() -> MagicMock:
             cm = MagicMock()
             cm.__enter__ = MagicMock(return_value=mock_read_session)
             cm.__exit__ = MagicMock(return_value=False)
             return cm
 
-        def transaction_side_effect():
+        def transaction_side_effect() -> MagicMock:
             cm = MagicMock()
             cm.__enter__ = MagicMock(return_value=mock_write_session)
             cm.__exit__ = MagicMock(return_value=False)

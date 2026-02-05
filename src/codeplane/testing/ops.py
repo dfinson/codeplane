@@ -661,6 +661,7 @@ class TestOps:
         timeout_sec: int | None = None,
         fail_fast: bool = False,
         coverage: bool = False,
+        coverage_dir: str | None = None,
     ) -> TestResult:
         """Run tests using runner packs.
 
@@ -676,6 +677,7 @@ class TestOps:
             timeout_sec: Per-target timeout
             fail_fast: Stop on first failure
             coverage: Enable coverage collection if supported
+            coverage_dir: Directory for coverage artifacts (required when coverage=True)
         """
         # Validate that targets is not an empty list
         if targets is not None and len(targets) == 0:
@@ -766,6 +768,7 @@ class TestOps:
                 timeout_sec=timeout_sec or 300,
                 fail_fast=fail_fast,
                 coverage=coverage,
+                coverage_dir=Path(coverage_dir) if coverage_dir else None,
             )
         )
 
@@ -803,6 +806,7 @@ class TestOps:
         timeout_sec: int,
         fail_fast: bool,
         coverage: bool,
+        coverage_dir: Path | None,
     ) -> TestRunStatus:
         """Execute tests concurrently with semaphore-limited parallelism."""
         start_time = time.time()
@@ -825,6 +829,7 @@ class TestOps:
                     tags=tags,
                     timeout_sec=timeout_sec,
                     coverage=coverage,
+                    coverage_dir=coverage_dir,
                 )
                 return (target, result, cov_artifact)
 
@@ -969,6 +974,7 @@ class TestOps:
         tags: list[str] | None,
         timeout_sec: int,
         coverage: bool,
+        coverage_dir: Path | None,
     ) -> tuple[ParsedTestSuite, CoverageArtifact | None]:
         """Run a single test target using its runner pack.
 
@@ -982,6 +988,7 @@ class TestOps:
             tags: Test tags/markers filter
             timeout_sec: Timeout for the test run
             coverage: Whether to collect coverage
+            coverage_dir: Directory for coverage artifacts (required when coverage=True)
 
         Returns:
             Tuple of (test results, coverage artifact if collected)
@@ -1066,11 +1073,11 @@ class TestOps:
         cmd = safe_ctx.sanitize_command(cmd, target.runner_pack_id)
 
         # NOW add our coverage flags after sanitization
-        if coverage_available and emitter:
-            cmd = emitter.modify_command(cmd, artifact_dir)
+        if coverage_available and emitter and coverage_dir:
+            cmd = emitter.modify_command(cmd, coverage_dir)
             cov_artifact = CoverageArtifact(
                 format=emitter.format_id,
-                path=emitter.artifact_path(artifact_dir),
+                path=emitter.artifact_path(coverage_dir),
                 pack_id=target.runner_pack_id,
                 invocation_id=target.target_id,
             )

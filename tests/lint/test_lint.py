@@ -316,7 +316,7 @@ class TestLintTool:
         assert tool.name == "Test Tool"
         assert "python" in tool.languages
 
-    def test_lint_tool_parse_output_none(self) -> None:
+    def test_parse_output_none(self) -> None:
         tool = LintTool(
             tool_id="test.tool",
             name="Test Tool",
@@ -328,7 +328,7 @@ class TestLintTool:
         )
         # Without a parser, should return empty list
         result = tool.parse_output("hello", "")
-        assert result == []
+        assert result.diagnostics == []
 
 
 # =============================================================================
@@ -378,7 +378,8 @@ class TestParsers:
                 "message": "os imported but unused"
             }
         ]"""
-        diagnostics = parsers.parse_ruff(output, "")
+        result = parsers.parse_ruff(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].path == "src/foo.py"
         assert diagnostics[0].line == 1
@@ -390,12 +391,13 @@ class TestParsers:
             {"code": "F401", "filename": "a.py", "location": {"row": 1, "column": 1}, "end_location": {"row": 1, "column": 5}, "message": "m1"},
             {"code": "F401", "filename": "b.py", "location": {"row": 2, "column": 1}, "end_location": {"row": 2, "column": 5}, "message": "m2"}
         ]"""
-        diagnostics = parsers.parse_ruff(output, "")
-        assert len(diagnostics) == 2
+        result = parsers.parse_ruff(output, "")
+        assert len(result.diagnostics) == 2
 
     def test_parse_mypy(self) -> None:
         output = '{"file": "src/bar.py", "line": 10, "column": 5, "severity": "error", "code": "arg-type", "message": "Argument 1 has incompatible type"}'
-        diagnostics = parsers.parse_mypy(output, "")
+        result = parsers.parse_mypy(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].path == "src/bar.py"
         assert diagnostics[0].severity == Severity.ERROR
@@ -404,8 +406,8 @@ class TestParsers:
     def test_parse_mypy_multiline(self) -> None:
         output = """{"file": "a.py", "line": 1, "column": 1, "severity": "error", "code": "E1", "message": "m1"}
 {"file": "b.py", "line": 2, "column": 2, "severity": "warning", "code": "W1", "message": "m2"}"""
-        diagnostics = parsers.parse_mypy(output, "")
-        assert len(diagnostics) == 2
+        result = parsers.parse_mypy(output, "")
+        assert len(result.diagnostics) == 2
 
     def test_parse_pyright(self) -> None:
         output = """{
@@ -413,7 +415,8 @@ class TestParsers:
                 {"file": "test.py", "range": {"start": {"line": 5, "character": 0}}, "severity": "error", "rule": "reportGeneralTypeIssues", "message": "Type mismatch"}
             ]
         }"""
-        diagnostics = parsers.parse_pyright(output, "")
+        result = parsers.parse_pyright(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].line == 6  # 0-indexed to 1-indexed
         assert diagnostics[0].severity == Severity.ERROR
@@ -427,19 +430,21 @@ class TestParsers:
                 ]
             }
         ]"""
-        diagnostics = parsers.parse_eslint(output, "")
+        result = parsers.parse_eslint(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].severity == Severity.ERROR  # severity 2 = error
         assert diagnostics[0].code == "no-unused-vars"
 
     def test_parse_eslint_severity_warning(self) -> None:
         output = '[{"filePath": "a.js", "messages": [{"line": 1, "column": 1, "severity": 1, "ruleId": "r1", "message": "m"}]}]'
-        diagnostics = parsers.parse_eslint(output, "")
-        assert diagnostics[0].severity == Severity.WARNING
+        result = parsers.parse_eslint(output, "")
+        assert result.diagnostics[0].severity == Severity.WARNING
 
     def test_parse_tsc(self) -> None:
         output = "src/index.ts(10,5): error TS2345: Argument of type 'string' is not assignable to parameter of type 'number'."
-        diagnostics = parsers.parse_tsc(output, "")
+        result = parsers.parse_tsc(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].path == "src/index.ts"
         assert diagnostics[0].line == 10
@@ -449,13 +454,14 @@ class TestParsers:
     def test_parse_tsc_multiline(self) -> None:
         output = """a.ts(1,1): error TS1: msg1
 b.ts(2,2): error TS2: msg2"""
-        diagnostics = parsers.parse_tsc(output, "")
-        assert len(diagnostics) == 2
+        result = parsers.parse_tsc(output, "")
+        assert len(result.diagnostics) == 2
 
     def test_parse_prettier(self) -> None:
         # Prettier --list-different output (parse_prettier_check)
         stdout = "src/app.js\nsrc/utils.ts\n"
-        diagnostics = parsers.parse_prettier_check(stdout, "")
+        result = parsers.parse_prettier_check(stdout, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 2
         assert diagnostics[0].path == "src/app.js"
 
@@ -473,13 +479,15 @@ b.ts(2,2): error TS2: msg2"""
                 }
             ]
         }"""
-        diagnostics = parsers.parse_biome(output, "")
+        result = parsers.parse_biome(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].path == "src/a.ts"
 
     def test_parse_go_vet(self) -> None:
         output = "main.go:15:2: printf: Printf format %d has arg of wrong type"
-        diagnostics = parsers.parse_go_vet("", output)
+        result = parsers.parse_go_vet("", output)
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].path == "main.go"
         assert diagnostics[0].line == 15
@@ -487,7 +495,8 @@ b.ts(2,2): error TS2: msg2"""
     def test_parse_staticcheck(self) -> None:
         # staticcheck JSON output (one JSON object per line)
         output = '{"location": {"file": "pkg/util.go", "line": 25, "column": 10}, "severity": "warning", "code": "SA1000", "message": "message here"}'
-        diagnostics = parsers.parse_staticcheck(output, "")
+        result = parsers.parse_staticcheck(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].code == "SA1000"
 
@@ -497,13 +506,15 @@ b.ts(2,2): error TS2: msg2"""
                 {"FromLinter": "govet", "Text": "issue text", "Pos": {"Filename": "main.go", "Line": 10, "Column": 5}}
             ]
         }"""
-        diagnostics = parsers.parse_golangci_lint(output, "")
+        result = parsers.parse_golangci_lint(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].source == "golangci-lint"
 
     def test_parse_gofmt(self) -> None:
         output = "main.go\npkg/utils.go\n"
-        diagnostics = parsers.parse_gofmt(output, "")
+        result = parsers.parse_gofmt(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 2
         assert diagnostics[0].path == "main.go"
         assert diagnostics[1].path == "pkg/utils.go"
@@ -511,12 +522,13 @@ b.ts(2,2): error TS2: msg2"""
     def test_parse_goimports(self) -> None:
         # goimports uses same format as gofmt
         output = "a.go\nb.go\n"
-        diagnostics = parsers.parse_gofmt(output, "")  # Same parser
-        assert len(diagnostics) == 2
+        result = parsers.parse_gofmt(output, "")  # Same parser
+        assert len(result.diagnostics) == 2
 
     def test_parse_clippy(self) -> None:
         output = '{"reason":"compiler-message","message":{"level":"warning","code":{"code":"clippy::needless_return"},"message":"unneeded `return` statement","spans":[{"file_name":"src/main.rs","line_start":10,"line_end":10,"column_start":5,"column_end":15,"is_primary":true}]}}'
-        diagnostics = parsers.parse_clippy(output, "")
+        result = parsers.parse_clippy(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].path == "src/main.rs"
         assert diagnostics[0].code == "clippy::needless_return"
@@ -524,7 +536,8 @@ b.ts(2,2): error TS2: msg2"""
     def test_parse_rustfmt(self) -> None:
         # rustfmt --check outputs "Diff in <file>:" format
         output = "Diff in src/main.rs:\n+  // new line\nDiff in src/lib.rs:\n-  old\n"
-        diagnostics = parsers.parse_rustfmt_check(output, "")
+        result = parsers.parse_rustfmt_check(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 2
         assert diagnostics[0].path == "src/main.rs"
         assert diagnostics[1].path == "src/lib.rs"
@@ -537,37 +550,43 @@ b.ts(2,2): error TS2: msg2"""
                 ]
             }
         }"""
-        diagnostics = parsers.parse_cargo_audit(output, "")
+        result = parsers.parse_cargo_audit(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
+        assert diagnostics[0].code is not None
         assert "RUSTSEC-2021-0001" in diagnostics[0].code
 
     def test_parse_shellcheck(self) -> None:
         output = '[{"file": "script.sh", "line": 5, "column": 1, "level": "warning", "code": 2086, "message": "Double quote to prevent globbing"}]'
-        diagnostics = parsers.parse_shellcheck(output, "")
+        result = parsers.parse_shellcheck(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].code == "SC2086"
 
     def test_parse_shfmt(self) -> None:
         output = "script.sh\nother.sh\n"
-        diagnostics = parsers.parse_shfmt(output, "")
-        assert len(diagnostics) == 2
+        result = parsers.parse_shfmt(output, "")
+        assert len(result.diagnostics) == 2
 
     def test_parse_hadolint(self) -> None:
         output = '[{"file": "Dockerfile", "line": 5, "column": 1, "code": "DL3008", "level": "warning", "message": "Pin versions"}]'
-        diagnostics = parsers.parse_hadolint(output, "")
+        result = parsers.parse_hadolint(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].code == "DL3008"
 
     def test_parse_yamllint(self) -> None:
         # yamllint parsable format uses stdout
         output = "config.yml:5:3: [warning] wrong indentation (indentation)"
-        diagnostics = parsers.parse_yamllint(output, "")
+        result = parsers.parse_yamllint(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].path == "config.yml"
 
     def test_parse_markdownlint(self) -> None:
         output = '[{"fileName": "README.md", "lineNumber": 10, "ruleNames": ["MD013"], "ruleDescription": "Line length", "errorDetail": "too long"}]'
-        diagnostics = parsers.parse_markdownlint(output, "")
+        result = parsers.parse_markdownlint(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].code == "MD013"
 
@@ -575,7 +594,8 @@ b.ts(2,2): error TS2: msg2"""
         output = """[
             {"filepath": "query.sql", "violations": [{"start_line_no": 5, "start_line_pos": 1, "code": "L001", "description": "Trailing whitespace"}]}
         ]"""
-        diagnostics = parsers.parse_sqlfluff(output, "")
+        result = parsers.parse_sqlfluff(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].code == "L001"
 
@@ -590,7 +610,8 @@ b.ts(2,2): error TS2: msg2"""
                 }
             ]
         }"""
-        diagnostics = parsers.parse_rubocop(output, "")
+        result = parsers.parse_rubocop(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].path == "lib/foo.rb"
         assert diagnostics[0].code == "Style/StringLiterals"
@@ -605,7 +626,8 @@ b.ts(2,2): error TS2: msg2"""
                 }
             }
         }"""
-        diagnostics = parsers.parse_phpcs(output, "")
+        result = parsers.parse_phpcs(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].path == "src/App.php"
 
@@ -619,8 +641,8 @@ b.ts(2,2): error TS2: msg2"""
                 }
             }
         }"""
-        diagnostics = parsers.parse_phpstan(output, "")
-        assert len(diagnostics) == 1
+        result = parsers.parse_phpstan(output, "")
+        assert len(result.diagnostics) == 1
 
     def test_parse_checkstyle(self) -> None:
         output = """<?xml version="1.0"?>
@@ -629,7 +651,8 @@ b.ts(2,2): error TS2: msg2"""
         <error line="10" column="5" severity="warning" message="Missing Javadoc" source="JavadocMethod"/>
     </file>
 </checkstyle>"""
-        diagnostics = parsers.parse_checkstyle(output, "")
+        result = parsers.parse_checkstyle(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].path == "src/Main.java"
 
@@ -637,14 +660,15 @@ b.ts(2,2): error TS2: msg2"""
         output = """[
             {"file": "src/Main.kt", "errors": [{"line": 5, "col": 1, "message": "Unexpected blank line", "rule": "no-blank-line-before-rbrace"}]}
         ]"""
-        diagnostics = parsers.parse_ktlint(output, "")
+        result = parsers.parse_ktlint(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].code == "no-blank-line-before-rbrace"
 
     def test_parse_dotnet_format(self) -> None:
         output = "src/Program.cs\nsrc/Util.cs\n"
-        diagnostics = parsers.parse_dotnet_format(output, "")
-        assert len(diagnostics) == 2
+        result = parsers.parse_dotnet_format(output, "")
+        assert len(result.diagnostics) == 2
 
     def test_parse_bandit(self) -> None:
         output = """{
@@ -652,22 +676,23 @@ b.ts(2,2): error TS2: msg2"""
                 {"filename": "app.py", "line_number": 10, "test_id": "B105", "issue_severity": "HIGH", "issue_confidence": "MEDIUM", "issue_text": "Possible hardcoded password"}
             ]
         }"""
-        diagnostics = parsers.parse_bandit(output, "")
+        result = parsers.parse_bandit(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].code == "B105"
         assert diagnostics[0].severity == Severity.ERROR
 
     def test_parse_black_check(self) -> None:
         stderr = "would reformat src/foo.py\nwould reformat src/bar.py\n"
-        diagnostics = parsers.parse_black_check("", stderr)
-        assert len(diagnostics) == 2
+        result = parsers.parse_black_check("", stderr)
+        assert len(result.diagnostics) == 2
 
     def test_parse_isort_check(self) -> None:
         # isort --diff writes to stdout, but black_check parses stderr
         # We'll just test black_check with isort-style input
         stderr = "would reformat src/foo.py\n"
-        diagnostics = parsers.parse_black_check("", stderr)
-        assert len(diagnostics) == 1
+        result = parsers.parse_black_check("", stderr)
+        assert len(result.diagnostics) == 1
 
     def test_parse_sarif(self) -> None:
         output = """{
@@ -686,80 +711,81 @@ b.ts(2,2): error TS2: msg2"""
                 }]
             }]
         }"""
-        diagnostics = parsers.parse_sarif(output, "")
+        result = parsers.parse_sarif(output, "")
+        diagnostics = result.diagnostics
         assert len(diagnostics) == 1
         assert diagnostics[0].path == "src/test.py"
         assert diagnostics[0].source == "TestTool"
 
     def test_parse_empty_output(self) -> None:
-        assert parsers.parse_ruff("", "") == []
-        assert parsers.parse_mypy("", "") == []
-        assert parsers.parse_eslint("", "") == []
-        assert parsers.parse_tsc("", "") == []
-        assert parsers.parse_go_vet("", "") == []
+        assert parsers.parse_ruff("", "").diagnostics == []
+        assert parsers.parse_mypy("", "").diagnostics == []
+        assert parsers.parse_eslint("", "").diagnostics == []
+        assert parsers.parse_tsc("", "").diagnostics == []
+        assert parsers.parse_go_vet("", "").diagnostics == []
 
     def test_parse_invalid_json(self) -> None:
-        assert parsers.parse_ruff("not json", "") == []
-        assert parsers.parse_eslint("{invalid}", "") == []
-        assert parsers.parse_mypy("not json", "") == []
+        assert parsers.parse_ruff("not json", "").diagnostics == []
+        assert parsers.parse_eslint("{invalid}", "").diagnostics == []
+        assert parsers.parse_mypy("not json", "").diagnostics == []
 
     def test_parse_pyright_invalid_json(self) -> None:
-        assert parsers.parse_pyright("not json", "") == []
-        assert parsers.parse_pyright("{}", "") == []  # Missing keys
+        assert parsers.parse_pyright("not json", "").diagnostics == []
+        assert parsers.parse_pyright("{}", "").diagnostics == []  # Missing keys
 
     def test_parse_bandit_invalid_json(self) -> None:
-        assert parsers.parse_bandit("not json", "") == []
-        assert parsers.parse_bandit("{}", "") == []  # Missing results key
+        assert parsers.parse_bandit("not json", "").diagnostics == []
+        assert parsers.parse_bandit("{}", "").diagnostics == []  # Missing results key
 
     def test_parse_biome_invalid_json(self) -> None:
-        assert parsers.parse_biome("not json", "") == []
-        assert parsers.parse_biome("{}", "") == []  # Missing diagnostics
+        assert parsers.parse_biome("not json", "").diagnostics == []
+        assert parsers.parse_biome("{}", "").diagnostics == []  # Missing diagnostics
 
     def test_parse_golangci_lint_invalid_json(self) -> None:
-        assert parsers.parse_golangci_lint("not json", "") == []
-        assert parsers.parse_golangci_lint("{}", "") == []  # Missing issues
+        assert parsers.parse_golangci_lint("not json", "").diagnostics == []
+        assert parsers.parse_golangci_lint("{}", "").diagnostics == []  # Missing issues
 
     def test_parse_rustfmt_check_missing_diff(self) -> None:
         # Valid mismatches but with empty content
         output = '[{"name": "test.rs", "mismatches": []}]'
-        assert parsers.parse_rustfmt_check(output, "") == []
+        assert parsers.parse_rustfmt_check(output, "").diagnostics == []
 
     def test_parse_clippy_invalid_json(self) -> None:
-        assert parsers.parse_clippy("not json", "") == []
+        assert parsers.parse_clippy("not json", "").diagnostics == []
 
     def test_parse_sarif_invalid_json(self) -> None:
-        assert parsers.parse_sarif("not json", "") == []
-        assert parsers.parse_sarif("{}", "") == []  # Missing runs
+        assert parsers.parse_sarif("not json", "").diagnostics == []
+        assert parsers.parse_sarif("{}", "").diagnostics == []  # Missing runs
 
     def test_parse_rubocop_invalid_json(self) -> None:
-        assert parsers.parse_rubocop("not json", "") == []
-        assert parsers.parse_rubocop("{}", "") == []  # Missing files
+        assert parsers.parse_rubocop("not json", "").diagnostics == []
+        assert parsers.parse_rubocop("{}", "").diagnostics == []  # Missing files
 
     def test_parse_phpcs_invalid_json(self) -> None:
-        assert parsers.parse_phpcs("not json", "") == []
-        assert parsers.parse_phpcs("{}", "") == []  # Missing files
+        assert parsers.parse_phpcs("not json", "").diagnostics == []
+        assert parsers.parse_phpcs("{}", "").diagnostics == []  # Missing files
 
     def test_parse_checkstyle_invalid_xml(self) -> None:
-        assert parsers.parse_checkstyle("not xml", "") == []
+        assert parsers.parse_checkstyle("not xml", "").diagnostics == []
 
     def test_parse_ktlint_invalid_json(self) -> None:
-        assert parsers.parse_ktlint("not json", "") == []
+        assert parsers.parse_ktlint("not json", "").diagnostics == []
 
     def test_parse_shellcheck_invalid_json(self) -> None:
-        assert parsers.parse_shellcheck("not json", "") == []
+        assert parsers.parse_shellcheck("not json", "").diagnostics == []
 
     def test_parse_hadolint_invalid_json(self) -> None:
-        assert parsers.parse_hadolint("not json", "") == []
+        assert parsers.parse_hadolint("not json", "").diagnostics == []
 
     def test_parse_yamllint_invalid_json(self) -> None:
-        assert parsers.parse_yamllint("not json", "") == []
+        assert parsers.parse_yamllint("not json", "").diagnostics == []
 
     def test_parse_markdownlint_invalid_json(self) -> None:
-        assert parsers.parse_markdownlint("not json", "") == []
+        assert parsers.parse_markdownlint("not json", "").diagnostics == []
 
     def test_parse_sqlfluff_invalid_json(self) -> None:
-        assert parsers.parse_sqlfluff("not json", "") == []
-        assert parsers.parse_sqlfluff("{}", "") == []  # Missing results == []
+        assert parsers.parse_sqlfluff("not json", "").diagnostics == []
+        assert parsers.parse_sqlfluff("{}", "").diagnostics == []  # Missing results
 
 
 # =============================================================================
@@ -1135,7 +1161,9 @@ class TestLintOps:
                 duration_seconds=0.1,
             )
 
-            async def mock_run_tool(_tool, _paths, _dry_run):  # noqa: ARG001
+            async def mock_run_tool(
+                _tool: LintTool, _paths: list[Path], _dry_run: bool
+            ) -> ToolResult:  # noqa: ARG001
                 return error_result
 
             with (

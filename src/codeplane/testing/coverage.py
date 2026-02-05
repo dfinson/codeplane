@@ -10,6 +10,7 @@ Design principles:
 - Explicit support: Only packs with tested emitters claim coverage support
 """
 
+import logging
 import shutil
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -19,6 +20,9 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     pass
+
+
+logger = logging.getLogger(__name__)
 
 
 class CoverageCapability(Enum):
@@ -488,12 +492,15 @@ class CoverageSummary:
         return self.lines_total > 0
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to dict for JSON serialization."""
+        """Convert to dict for JSON serialization.
+
+        Percentages are rounded to 1 decimal place for cleaner output.
+        """
         result: dict[str, Any] = {
             "lines": {
                 "covered": self.lines_covered,
                 "total": self.lines_total,
-                "percent": round(self.lines_percent, 2),
+                "percent": round(self.lines_percent, 1),
             },
             "files": {
                 "with_coverage": self.files_with_coverage,
@@ -506,13 +513,13 @@ class CoverageSummary:
             result["branches"] = {
                 "covered": self.branches_covered,
                 "total": self.branches_total,
-                "percent": round(self.branches_percent or 0, 2),
+                "percent": round(self.branches_percent or 0, 1),
             }
         if self.functions_total is not None:
             result["functions"] = {
                 "covered": self.functions_covered,
                 "total": self.functions_total,
-                "percent": round(self.functions_percent or 0, 2),
+                "percent": round(self.functions_percent or 0, 1),
             }
         return result
 
@@ -520,12 +527,13 @@ class CoverageSummary:
 def parse_coverage_summary(artifact: CoverageArtifact) -> CoverageSummary | None:
     """Parse coverage artifact into structured summary.
 
-    Supports LCOV, Istanbul JSON, and Go coverage formats.
+    Supports LCOV, Istanbul JSON, Go coverage, JaCoCo, and Cobertura formats.
     Returns None if parsing fails.
     """
     import json
 
     if not artifact.path.exists():
+        logger.debug("Coverage artifact not found: %s", artifact.path)
         return None
 
     try:
@@ -535,17 +543,22 @@ def parse_coverage_summary(artifact: CoverageArtifact) -> CoverageSummary | None
             return _parse_istanbul(artifact.path, artifact)
         elif artifact.format == "gocov":
             return _parse_gocov(artifact.path, artifact)
+        elif artifact.format == "jacoco":
+            return _parse_jacoco(artifact.path, artifact)
+        elif artifact.format == "cobertura":
+            return _parse_cobertura(artifact.path, artifact)
         else:
-            # Unknown format
+            logger.debug("Unknown coverage format: %s", artifact.format)
             return None
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError) as e:
         # OSError: file read errors
         # ValueError: numeric parsing errors in coverage data
         # KeyError: missing expected fields in JSON formats
-        # Coverage is informational - log but don't crash
+        logger.debug("Failed to parse %s coverage at %s: %s", artifact.format, artifact.path, e)
         return None
-    except json.JSONDecodeError:
-        # Malformed JSON in istanbul/gocov format
+    except json.JSONDecodeError as e:
+        # Malformed JSON in istanbul format
+        logger.debug("Invalid JSON in coverage file %s: %s", artifact.path, e)
         return None
 
 
@@ -733,5 +746,197 @@ def _parse_gocov(path: Path, artifact: CoverageArtifact) -> CoverageSummary:
         files_with_coverage=len(files_seen),
         files_total=len(files_seen),
         format_id="gocov",
+        pack_id=artifact.pack_id,
+    )
+
+
+def _parse_jacoco(path: Path, artifact: CoverageArtifact) -> CoverageSummary:
+    """Parse JaCoCo XML coverage report.
+
+    JaCoCo XML format has counters at multiple levels (report, package, class, method).
+    We specifically read from the root <report> element's direct <counter> children
+    to get the report-level totals.
+
+    Structure:
+        <report name="...">
+            <counter type="LINE" missed="N" covered="N"/>
+            <counter type="BRANCH" missed="N" covered="N"/>
+            <counter type="METHOD" missed="N" covered="N"/>
+            <package name="...">
+                <counter type="LINE" .../> <!-- package-level, ignore -->
+            </package>
+        </report>
+    """
+    import xml.etree.ElementTree as ET
+
+    # JaCoCo outputs to a directory; look for jacoco.xml
+    if path.is_dir():
+        xml_file = path / "jacoco.xml"
+        if not xml_file.exists():
+            # Try site/jacoco structure (Maven default)
+            xml_file = path / "site" / "jacoco" / "jacoco.xml"
+        if not xml_file.exists():
+            logger.debug("JaCoCo XML not found in %s", path)
+            return CoverageSummary(format_id="jacoco", pack_id=artifact.pack_id)
+    else:
+        xml_file = path
+
+    tree = ET.parse(xml_file)
+    root = tree.getroot()
+
+    # Read counters directly under root (report-level totals)
+    lines_covered = 0
+    lines_missed = 0
+    branches_covered = 0
+    branches_missed = 0
+    methods_covered = 0
+    methods_missed = 0
+
+    for counter in root.findall("./counter"):
+        counter_type = counter.get("type")
+        covered = int(counter.get("covered", 0))
+        missed = int(counter.get("missed", 0))
+
+        if counter_type == "LINE":
+            lines_covered = covered
+            lines_missed = missed
+        elif counter_type == "BRANCH":
+            branches_covered = covered
+            branches_missed = missed
+        elif counter_type == "METHOD":
+            methods_covered = covered
+            methods_missed = missed
+
+    lines_total = lines_covered + lines_missed
+    branches_total = branches_covered + branches_missed
+    methods_total = methods_covered + methods_missed
+
+    # Count packages as proxy for file count
+    packages = root.findall(".//package")
+
+    summary = CoverageSummary(
+        lines_covered=lines_covered,
+        lines_total=lines_total,
+        lines_percent=(lines_covered / lines_total * 100) if lines_total > 0 else 0.0,
+        files_with_coverage=len(packages),
+        files_total=len(packages),
+        format_id="jacoco",
+        pack_id=artifact.pack_id,
+    )
+
+    if branches_total > 0:
+        summary.branches_covered = branches_covered
+        summary.branches_total = branches_total
+        summary.branches_percent = branches_covered / branches_total * 100
+
+    if methods_total > 0:
+        summary.functions_covered = methods_covered
+        summary.functions_total = methods_total
+        summary.functions_percent = methods_covered / methods_total * 100
+
+    return summary
+
+
+def _parse_cobertura(path: Path, artifact: CoverageArtifact) -> CoverageSummary:
+    """Parse Cobertura XML coverage report.
+
+    Cobertura format (used by .NET coverlet, Python coverage.py, etc.):
+        <coverage line-rate="0.85" branch-rate="0.50" lines-covered="100" lines-valid="117">
+            <packages>...</packages>
+        </coverage>
+
+    The line-rate is a decimal (0.0-1.0), not a percentage.
+    Some variants use lines-covered/lines-valid instead of line-rate.
+    """
+    import xml.etree.ElementTree as ET
+
+    # Handle directory or direct file
+    if path.is_dir():
+        # Look for common cobertura filenames
+        for name in ["coverage.cobertura.xml", "cobertura.xml", "coverage.xml"]:
+            xml_file = path / name
+            if xml_file.exists():
+                break
+        else:
+            # Try glob for .NET TestResults structure
+            cobertura_files = list(path.glob("**/coverage.cobertura.xml"))
+            if cobertura_files:
+                xml_file = cobertura_files[0]
+            else:
+                logger.debug("Cobertura XML not found in %s", path)
+                return CoverageSummary(format_id="cobertura", pack_id=artifact.pack_id)
+    else:
+        xml_file = path
+
+    tree = ET.parse(xml_file)
+    root = tree.getroot()
+
+    # Handle namespace if present (some cobertura variants use it)
+    # Strip namespace for simpler parsing
+    for elem in root.iter():
+        if "}" in elem.tag:
+            elem.tag = elem.tag.split("}", 1)[1]
+
+    # Try line-rate first (most common)
+    line_rate_str = root.get("line-rate")
+    branch_rate_str = root.get("branch-rate")
+    lines_covered_str = root.get("lines-covered")
+    lines_valid_str = root.get("lines-valid")
+    branches_covered_str = root.get("branches-covered")
+    branches_valid_str = root.get("branches-valid")
+
+    # Calculate line coverage
+    if lines_covered_str and lines_valid_str:
+        lines_covered = int(lines_covered_str)
+        lines_total = int(lines_valid_str)
+        lines_percent = (lines_covered / lines_total * 100) if lines_total > 0 else 0.0
+    elif line_rate_str:
+        line_rate = float(line_rate_str)
+        lines_percent = line_rate * 100
+        # We don't have exact counts, estimate from packages
+        lines_covered = 0
+        lines_total = 0
+        for pkg in root.findall(".//package"):
+            for cls in pkg.findall(".//class"):
+                for line in cls.findall(".//line"):
+                    lines_total += 1
+                    if int(line.get("hits", 0)) > 0:
+                        lines_covered += 1
+    else:
+        lines_covered = 0
+        lines_total = 0
+        lines_percent = 0.0
+
+    # Calculate branch coverage
+    branches_covered: int | None = None
+    branches_total: int | None = None
+    branches_percent: float | None = None
+
+    if branches_covered_str and branches_valid_str:
+        branches_covered = int(branches_covered_str)
+        branches_total = int(branches_valid_str)
+        branches_percent = (branches_covered / branches_total * 100) if branches_total > 0 else 0.0
+    elif branch_rate_str:
+        branch_rate = float(branch_rate_str)
+        if branch_rate > 0:
+            branches_percent = branch_rate * 100
+            # Counts not available from rate alone
+            branches_covered = None
+            branches_total = None
+
+    # Count packages/classes
+    packages = root.findall(".//package")
+    classes = root.findall(".//class")
+
+    return CoverageSummary(
+        lines_covered=lines_covered,
+        lines_total=lines_total,
+        lines_percent=lines_percent,
+        branches_covered=branches_covered,
+        branches_total=branches_total,
+        branches_percent=branches_percent,
+        files_with_coverage=len(classes) if classes else len(packages),
+        files_total=len(classes) if classes else len(packages),
+        format_id="cobertura",
         pack_id=artifact.pack_id,
     )

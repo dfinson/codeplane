@@ -7,7 +7,9 @@ Covers:
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, MutableMapping
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -50,12 +52,16 @@ class TestRepoHeaderMiddleware:
         """Passes through non-HTTP scopes unchanged."""
         middleware = RepoHeaderMiddleware(mock_app, tmp_path)
 
-        scope = {"type": "websocket"}
+        scope: MutableMapping[str, Any] = {"type": "websocket"}
         receive = MagicMock()
         send = MagicMock()
 
         # Make app awaitable
-        async def mock_call(s: dict, r: MagicMock, se: MagicMock) -> None:
+        async def mock_call(
+            s: MutableMapping[str, Any],
+            r: Callable[[], Awaitable[MutableMapping[str, Any]]],
+            se: Callable[[MutableMapping[str, Any]], Awaitable[None]],
+        ) -> None:
             pass
 
         mock_app.side_effect = mock_call
@@ -67,19 +73,23 @@ class TestRepoHeaderMiddleware:
     @pytest.mark.asyncio
     async def test_adds_header_to_http_response(self, tmp_path: Path) -> None:
         """Adds X-CodePlane-Repo header to HTTP responses."""
-        captured_message: dict = {}
+        captured_message: MutableMapping[str, Any] = {}
 
-        async def mock_send(message: dict) -> None:
+        async def mock_send(message: MutableMapping[str, Any]) -> None:
             if message["type"] == "http.response.start":
                 captured_message.update(message)
 
-        async def mock_app(_scope: dict, _receive: MagicMock, send: MagicMock) -> None:
+        async def mock_app(
+            _scope: MutableMapping[str, Any],
+            _receive: Callable[[], Awaitable[MutableMapping[str, Any]]],
+            send: Callable[[MutableMapping[str, Any]], Awaitable[None]],
+        ) -> None:
             await send({"type": "http.response.start", "headers": []})
             await send({"type": "http.response.body", "body": b"OK"})
 
         middleware = RepoHeaderMiddleware(mock_app, tmp_path)
 
-        scope = {"type": "http"}
+        scope: MutableMapping[str, Any] = {"type": "http"}
         receive = MagicMock()
 
         await middleware(scope, receive, mock_send)
@@ -92,13 +102,17 @@ class TestRepoHeaderMiddleware:
     @pytest.mark.asyncio
     async def test_preserves_existing_headers(self, tmp_path: Path) -> None:
         """Preserves existing response headers."""
-        captured_message: dict = {}
+        captured_message: MutableMapping[str, Any] = {}
 
-        async def mock_send(message: dict) -> None:
+        async def mock_send(message: MutableMapping[str, Any]) -> None:
             if message["type"] == "http.response.start":
                 captured_message.update(message)
 
-        async def mock_app(_scope: dict, _receive: MagicMock, send: MagicMock) -> None:
+        async def mock_app(
+            _scope: MutableMapping[str, Any],
+            _receive: Callable[[], Awaitable[MutableMapping[str, Any]]],
+            send: Callable[[MutableMapping[str, Any]], Awaitable[None]],
+        ) -> None:
             await send(
                 {
                     "type": "http.response.start",
@@ -120,13 +134,17 @@ class TestRepoHeaderMiddleware:
     @pytest.mark.asyncio
     async def test_header_value_is_repo_path(self, tmp_path: Path) -> None:
         """Header value is the resolved repo path."""
-        captured_message: dict = {}
+        captured_message: MutableMapping[str, Any] = {}
 
-        async def mock_send(message: dict) -> None:
+        async def mock_send(message: MutableMapping[str, Any]) -> None:
             if message["type"] == "http.response.start":
                 captured_message.update(message)
 
-        async def mock_app(_scope: dict, _receive: MagicMock, send: MagicMock) -> None:
+        async def mock_app(
+            _scope: MutableMapping[str, Any],
+            _receive: Callable[[], Awaitable[MutableMapping[str, Any]]],
+            send: Callable[[MutableMapping[str, Any]], Awaitable[None]],
+        ) -> None:
             await send({"type": "http.response.start", "headers": []})
 
         middleware = RepoHeaderMiddleware(mock_app, tmp_path)

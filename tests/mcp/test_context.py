@@ -10,13 +10,13 @@ from codeplane.mcp.context import AppContext
 class TestAppContext:
     """Tests for AppContext dataclass."""
 
-    def test_is_dataclass(self):
+    def test_is_dataclass(self) -> None:
         """AppContext is a dataclass."""
         from dataclasses import is_dataclass
 
         assert is_dataclass(AppContext)
 
-    def test_has_required_fields(self):
+    def test_has_required_fields(self) -> None:
         """AppContext has all required fields."""
         field_names = {f.name for f in fields(AppContext)}
         expected = {
@@ -32,7 +32,7 @@ class TestAppContext:
         }
         assert expected <= field_names
 
-    def test_manual_construction(self, tmp_path: Path):
+    def test_manual_construction(self, tmp_path: Path) -> None:
         """Can construct AppContext manually."""
         ctx = AppContext(
             repo_root=tmp_path,
@@ -51,7 +51,7 @@ class TestAppContext:
 class TestAppContextCreate:
     """Tests for AppContext.create factory."""
 
-    def test_create_signature(self):
+    def test_create_signature(self) -> None:
         """create has expected signature."""
         import inspect
 
@@ -62,7 +62,7 @@ class TestAppContextCreate:
         assert "tantivy_path" in params
         assert "coordinator" in params
 
-    def test_create_coordinator_optional(self):
+    def test_create_coordinator_optional(self) -> None:
         """coordinator parameter is optional."""
         import inspect
 

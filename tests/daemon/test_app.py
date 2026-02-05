@@ -176,6 +176,6 @@ class TestAppMiddleware:
         # The middleware is in app.middleware member as Middleware objects
 
         has_repo_middleware = any(
-            m.cls.__name__ == "RepoHeaderMiddleware" for m in app.user_middleware
+            getattr(m.cls, "__name__", None) == "RepoHeaderMiddleware" for m in app.user_middleware
         )
         assert has_repo_middleware

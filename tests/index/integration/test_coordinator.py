@@ -150,8 +150,8 @@ class TestCoordinatorSearch:
             # Search for content that exists
             results = await coordinator.search("Hello", mode=SearchMode.TEXT)
 
-            assert len(results) >= 1
-            assert all(isinstance(r, SearchResult) for r in results)
+            assert len(results.results) >= 1
+            assert all(isinstance(r, SearchResult) for r in results.results)
         finally:
             coordinator.close()
 
@@ -169,7 +169,7 @@ class TestCoordinatorSearch:
             # Search for function name
             results = await coordinator.search("helper", mode=SearchMode.SYMBOL)
 
-            assert len(results) >= 1
+            assert len(results.results) >= 1
         finally:
             coordinator.close()
 
@@ -187,8 +187,8 @@ class TestCoordinatorSearch:
             # Search for path pattern
             results = await coordinator.search("utils", mode=SearchMode.PATH)
 
-            assert len(results) >= 1
-            assert any("utils" in r.path for r in results)
+            assert len(results.results) >= 1
+            assert any("utils" in r.path for r in results.results)
         finally:
             coordinator.close()
 
@@ -205,7 +205,7 @@ class TestCoordinatorSearch:
 
             results = await coordinator.search("xyznonexistent123")
 
-            assert len(results) == 0
+            assert len(results.results) == 0
         finally:
             coordinator.close()
 
@@ -304,7 +304,7 @@ class TestCoordinatorMonorepo:
             # Search for something in both packages
             results = await coordinator.search("hello")
 
-            assert len(results) >= 1
+            assert len(results.results) >= 1
         finally:
             coordinator.close()
 
@@ -372,12 +372,12 @@ class TestCoordinatorCplignore:
             node_results = await coordinator.search("module.exports")
 
             # None of these should be found
-            assert len(venv_results) == 0, ".venv/ should be ignored"
-            assert len(node_results) == 0, "node_modules/ should be ignored"
+            assert len(venv_results.results) == 0, ".venv/ should be ignored"
+            assert len(node_results.results) == 0, "node_modules/ should be ignored"
 
             # But main.py should be indexed
             main_results = await coordinator.search("main")
-            assert len(main_results) >= 1, "main.py should be indexed"
+            assert len(main_results.results) >= 1, "main.py should be indexed"
         finally:
             coordinator.close()
 
@@ -436,12 +436,12 @@ class TestCoordinatorCplignore:
             dist_results = await coordinator.search("BUNDLED")
             build_results = await coordinator.search("BUILD_OUTPUT")
 
-            assert len(dist_results) == 0, "dist/ should be ignored"
-            assert len(build_results) == 0, "build/ should be ignored"
+            assert len(dist_results.results) == 0, "dist/ should be ignored"
+            assert len(build_results.results) == 0, "build/ should be ignored"
 
             # But main.py should be indexed
             main_results = await coordinator.search("main")
-            assert len(main_results) >= 1, "main.py should be indexed"
+            assert len(main_results.results) >= 1, "main.py should be indexed"
         finally:
             coordinator.close()
 
@@ -491,11 +491,11 @@ class TestCoordinatorCplignore:
 
             # Search for content that should NOT be indexed
             config_results = await coordinator.search("CODEPLANE_CONFIG")
-            assert len(config_results) == 0, ".codeplane/ should always be ignored"
+            assert len(config_results.results) == 0, ".codeplane/ should always be ignored"
 
             # But main.py should be indexed
             main_results = await coordinator.search("main")
-            assert len(main_results) >= 1, "main.py should be indexed"
+            assert len(main_results.results) >= 1, "main.py should be indexed"
         finally:
             coordinator.close()
 
@@ -529,7 +529,7 @@ class TestCplignoreChangeHandling:
 
             # Verify generated file is NOT indexed
             gen_results = await coordinator.search("GENERATED_CONTENT")
-            assert len(gen_results) == 0, "generated_code.py should be ignored initially"
+            assert len(gen_results.results) == 0, "generated_code.py should be ignored initially"
 
             # Modify .cplignore to remove the pattern (restore original)
             cplignore_path.write_text(original_content)
@@ -539,7 +539,7 @@ class TestCplignoreChangeHandling:
 
             # Now the generated file should be indexed
             gen_results = await coordinator.search("GENERATED_CONTENT")
-            assert len(gen_results) >= 1, (
+            assert len(gen_results.results) >= 1, (
                 "generated_code.py should be indexed after .cplignore change"
             )
         finally:
@@ -564,7 +564,7 @@ class TestCplignoreChangeHandling:
 
             # Verify temporary.py IS indexed
             temp_results = await coordinator.search("TEMP_CODE")
-            assert len(temp_results) >= 1, "temporary.py should be indexed initially"
+            assert len(temp_results.results) >= 1, "temporary.py should be indexed initially"
 
             # Modify .cplignore to ignore temporary.py
             cplignore_path = integration_repo / ".codeplane" / ".cplignore"
@@ -576,7 +576,9 @@ class TestCplignoreChangeHandling:
 
             # Now temporary.py should NOT be indexed
             temp_results = await coordinator.search("TEMP_CODE")
-            assert len(temp_results) == 0, "temporary.py should be removed after .cplignore change"
+            assert len(temp_results.results) == 0, (
+                "temporary.py should be removed after .cplignore change"
+            )
         finally:
             coordinator.close()
 
@@ -596,7 +598,7 @@ class TestCplignoreChangeHandling:
 
             # Get initial file count
             initial_results = await coordinator.search("def")
-            initial_count = len(initial_results)
+            initial_count = len(initial_results.results)
 
             # Trigger incremental reindex without any changes
             stats = await coordinator.reindex_incremental([])
@@ -607,6 +609,6 @@ class TestCplignoreChangeHandling:
 
             # Same files should still be indexed
             final_results = await coordinator.search("def")
-            assert len(final_results) == initial_count
+            assert len(final_results.results) == initial_count
         finally:
             coordinator.close()

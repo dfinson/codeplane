@@ -160,16 +160,16 @@ class BackgroundIndexer:
             self._last_stats = stats
             self._last_error = None
 
-            # Build descriptive message with grammatical correctness (Issue #4)
+            # Build delta-based summary
             parts: list[str] = []
             if stats.files_added:
-                parts.append(pluralize(stats.files_added, "file") + " added")
+                parts.append(f"{stats.files_added} files created")
             if stats.files_updated:
-                parts.append(pluralize(stats.files_updated, "file") + " updated")
+                parts.append(f"{stats.files_updated} files updated")
             if stats.files_removed:
-                parts.append(pluralize(stats.files_removed, "file") + " removed")
+                parts.append(f"{stats.files_removed} files deleted")
             summary = ", ".join(parts) if parts else "no changes"
-            status(f"{summary} ({stats.duration_seconds:.1f}s)", style="success", source="index")
+            status(f"{summary} ({stats.duration_seconds:.1f}s)", style="success", source="indexer")
 
             # Notify completion callback
             if self._on_complete is not None:

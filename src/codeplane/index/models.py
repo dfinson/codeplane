@@ -12,7 +12,7 @@ semantic guarantees itself.
 """
 
 import json
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Column, ForeignKey, Integer
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 # ============================================================================
 
 
-class LanguageFamily(str, Enum):
+class LanguageFamily(StrEnum):
     """Canonical language name identifiers.
 
     All languages get lexical indexing (full-text search).
@@ -227,7 +227,7 @@ class LanguageFamily(str, Enum):
         return self in self.data_families()
 
 
-class Freshness(str, Enum):
+class Freshness(StrEnum):
     """Index currency state."""
 
     CLEAN = "clean"
@@ -237,14 +237,14 @@ class Freshness(str, Enum):
     UNINDEXED = "unindexed"
 
 
-class Certainty(str, Enum):
+class Certainty(StrEnum):
     """Confidence level for facts."""
 
     CERTAIN = "certain"
     UNCERTAIN = "uncertain"
 
 
-class RefTier(str, Enum):
+class RefTier(StrEnum):
     """Reference tier classification (assigned at index time, never upgraded at query time)."""
 
     PROVEN = "proven"  # Same-file lexical bind with LocalBindFact certainty=CERTAIN
@@ -253,7 +253,7 @@ class RefTier(str, Enum):
     UNKNOWN = "unknown"  # Cannot classify
 
 
-class Role(str, Enum):
+class Role(StrEnum):
     """Reference role in source code."""
 
     DEFINITION = "definition"
@@ -262,7 +262,7 @@ class Role(str, Enum):
     EXPORT = "export"
 
 
-class ScopeKind(str, Enum):
+class ScopeKind(StrEnum):
     """Lexical scope kind."""
 
     FILE = "file"
@@ -273,7 +273,7 @@ class ScopeKind(str, Enum):
     LAMBDA = "lambda"
 
 
-class BindTargetKind(str, Enum):
+class BindTargetKind(StrEnum):
     """Target kind for LocalBindFact."""
 
     DEF = "def"  # Bound to a DefFact
@@ -281,7 +281,7 @@ class BindTargetKind(str, Enum):
     UNKNOWN = "unknown"  # Cannot determine
 
 
-class BindReasonCode(str, Enum):
+class BindReasonCode(StrEnum):
     """Reason for binding classification."""
 
     PARAM = "param"  # Function parameter
@@ -293,7 +293,7 @@ class BindReasonCode(str, Enum):
     EXCEPT_AS = "except_as"  # Exception handler alias
 
 
-class ImportKind(str, Enum):
+class ImportKind(StrEnum):
     """Import statement kind."""
 
     PYTHON_IMPORT = "python_import"  # import foo
@@ -305,7 +305,7 @@ class ImportKind(str, Enum):
     RUST_USE = "rust_use"  # use foo::bar
 
 
-class ExportThunkMode(str, Enum):
+class ExportThunkMode(StrEnum):
     """Re-export mode for ExportThunk."""
 
     REEXPORT_ALL = "reexport_all"  # export * from 'module'
@@ -313,7 +313,7 @@ class ExportThunkMode(str, Enum):
     ALIAS_MAP = "alias_map"  # export { a as x, b as y } from 'module'
 
 
-class DynamicAccessPattern(str, Enum):
+class DynamicAccessPattern(StrEnum):
     """Dynamic access pattern types (telemetry only)."""
 
     BRACKET_ACCESS = "bracket_access"  # obj[key]
@@ -323,7 +323,7 @@ class DynamicAccessPattern(str, Enum):
     IMPORT_MODULE = "import_module"  # importlib.import_module(var)
 
 
-class ProbeStatus(str, Enum):
+class ProbeStatus(StrEnum):
     """Context probe status."""
 
     PENDING = "pending"
@@ -333,14 +333,14 @@ class ProbeStatus(str, Enum):
     DETACHED = "detached"
 
 
-class MarkerTier(str, Enum):
+class MarkerTier(StrEnum):
     """Marker tier for context discovery hierarchy."""
 
     WORKSPACE = "workspace"
     PACKAGE = "package"
 
 
-class AccessStyle(str, Enum):
+class AccessStyle(StrEnum):
     """Member access syntax style."""
 
     DOT = "dot"  # obj.member (most languages)
@@ -349,7 +349,7 @@ class AccessStyle(str, Enum):
     BRACKET = "bracket"  # obj["member"] (dynamic access)
 
 
-class ResolutionMethod(str, Enum):
+class ResolutionMethod(StrEnum):
     """How a reference was resolved to its target."""
 
     TYPE_TRACED = "type_traced"  # Via type annotation chain
@@ -360,7 +360,7 @@ class ResolutionMethod(str, Enum):
     UNRESOLVED = "unresolved"  # Could not resolve
 
 
-class AnnotationTargetKind(str, Enum):
+class AnnotationTargetKind(StrEnum):
     """What kind of entity has a type annotation."""
 
     PARAMETER = "parameter"  # Function/method parameter
@@ -371,7 +371,7 @@ class AnnotationTargetKind(str, Enum):
     CLASS_VAR = "class_var"  # Class-level variable
 
 
-class MemberKind(str, Enum):
+class MemberKind(StrEnum):
     """Kind of type member."""
 
     FIELD = "field"  # Instance field
@@ -383,7 +383,7 @@ class MemberKind(str, Enum):
     CONSTRUCTOR = "constructor"  # Constructor/initializer
 
 
-class TypeParentKind(str, Enum):
+class TypeParentKind(StrEnum):
     """Kind of type that contains members."""
 
     CLASS = "class"
@@ -395,7 +395,7 @@ class TypeParentKind(str, Enum):
     ENUM = "enum"
 
 
-class ImplStyle(str, Enum):
+class ImplStyle(StrEnum):
     """How interface implementation is declared."""
 
     EXPLICIT = "explicit"  # implements/impl keyword

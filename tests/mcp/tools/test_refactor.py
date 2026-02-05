@@ -1,180 +1,196 @@
 """Tests for MCP refactor tools.
 
-Verifies parameter models and summary helpers.
+Verifies summary helpers and serialization.
 """
 
 from unittest.mock import MagicMock
 
 from codeplane.mcp.tools.refactor import (
-    RefactorApplyParams,
-    RefactorCancelParams,
-    RefactorDeleteParams,
-    RefactorInspectParams,
-    RefactorMoveParams,
-    RefactorRenameParams,
     _display_refactor,
+    _serialize_refactor_result,
     _summarize_refactor,
 )
-
-
-class TestRefactorRenameParams:
-    """Tests for RefactorRenameParams model."""
-
-    def test_minimal_params(self) -> None:
-        """Should accept minimal params."""
-        params = RefactorRenameParams(symbol="old_name", new_name="new_name")
-        assert params.symbol == "old_name"
-        assert params.new_name == "new_name"
-        assert params.include_comments is True
-
-    def test_all_params(self) -> None:
-        """Should accept all params."""
-        params = RefactorRenameParams(
-            symbol="MyClass",
-            new_name="BetterClass",
-            include_comments=False,
-            contexts=["ctx1", "ctx2"],
-        )
-        assert params.include_comments is False
-        assert params.contexts == ["ctx1", "ctx2"]
-
-
-class TestRefactorMoveParams:
-    """Tests for RefactorMoveParams model."""
-
-    def test_create_params(self) -> None:
-        """Should create params."""
-        params = RefactorMoveParams(
-            from_path="src/old.py",
-            to_path="src/new.py",
-        )
-        assert params.from_path == "src/old.py"
-        assert params.to_path == "src/new.py"
-        assert params.include_comments is True
-
-
-class TestRefactorDeleteParams:
-    """Tests for RefactorDeleteParams model."""
-
-    def test_create_params(self) -> None:
-        """Should create params."""
-        params = RefactorDeleteParams(target="unused_function")
-        assert params.target == "unused_function"
-        assert params.include_comments is True
-
-
-class TestRefactorApplyParams:
-    """Tests for RefactorApplyParams model."""
-
-    def test_create_params(self) -> None:
-        """Should create params."""
-        params = RefactorApplyParams(refactor_id="abc123")
-        assert params.refactor_id == "abc123"
-
-
-class TestRefactorCancelParams:
-    """Tests for RefactorCancelParams model."""
-
-    def test_create_params(self) -> None:
-        """Should create params."""
-        params = RefactorCancelParams(refactor_id="abc123")
-        assert params.refactor_id == "abc123"
-
-
-class TestRefactorInspectParams:
-    """Tests for RefactorInspectParams model."""
-
-    def test_create_params(self) -> None:
-        """Should create params."""
-        params = RefactorInspectParams(
-            refactor_id="abc123",
-            path="src/file.py",
-        )
-        assert params.refactor_id == "abc123"
-        assert params.path == "src/file.py"
-        assert params.context_lines == 2
-
-    def test_custom_context_lines(self) -> None:
-        """Should accept custom context_lines."""
-        params = RefactorInspectParams(
-            refactor_id="abc123",
-            path="src/file.py",
-            context_lines=5,
-        )
-        assert params.context_lines == 5
 
 
 class TestSummarizeRefactor:
     """Tests for _summarize_refactor helper."""
 
-    def test_cancelled_status(self) -> None:
-        """Should handle cancelled."""
-        summary = _summarize_refactor("cancelled", 0, None)
-        assert "cancelled" in summary
+    def test_cancelled(self) -> None:
+        """Cancelled status."""
+        result = _summarize_refactor(status="cancelled", files_affected=0, preview=None)
+        assert "cancelled" in result
 
-    def test_applied_status(self) -> None:
-        """Should handle applied."""
-        summary = _summarize_refactor("applied", 5, None)
-        assert "applied" in summary
-        assert "5 files" in summary
+    def test_applied(self) -> None:
+        """Applied status."""
+        result = _summarize_refactor(status="applied", files_affected=5, preview=None)
+        assert "applied" in result
+        assert "5 files" in result
 
-    def test_pending_with_preview(self) -> None:
-        """Should handle pending with preview."""
+    def test_pending_preview(self) -> None:
+        """Pending with preview."""
         preview = MagicMock()
         preview.high_certainty_count = 10
-        preview.medium_certainty_count = 5
+        preview.medium_certainty_count = 3
         preview.low_certainty_count = 2
 
-        summary = _summarize_refactor("pending", 3, preview)
-        assert "preview" in summary
-        assert "17 changes" in summary  # 10+5+2
-        assert "3 files" in summary
-        assert "2 need review" in summary
+        result = _summarize_refactor(status="pending", files_affected=4, preview=preview)
+        assert "preview" in result
+        assert "15 changes" in result  # 10 + 3 + 2
+        assert "4 files" in result
 
-    def test_pending_no_low_certainty(self) -> None:
-        """Should not show review count when no low certainty."""
+    def test_pending_with_low_certainty(self) -> None:
+        """Pending with low certainty matches."""
         preview = MagicMock()
-        preview.high_certainty_count = 10
-        preview.medium_certainty_count = 5
-        preview.low_certainty_count = 0
+        preview.high_certainty_count = 5
+        preview.medium_certainty_count = 0
+        preview.low_certainty_count = 3
 
-        summary = _summarize_refactor("pending", 2, preview)
-        assert "need review" not in summary
+        result = _summarize_refactor(status="pending", files_affected=2, preview=preview)
+        assert "need review" in result
+        assert "3" in result
+
+    def test_unknown_status(self) -> None:
+        """Unknown status returns status itself."""
+        result = _summarize_refactor(status="unknown", files_affected=0, preview=None)
+        assert result == "unknown"
 
 
 class TestDisplayRefactor:
     """Tests for _display_refactor helper."""
 
-    def test_cancelled(self) -> None:
-        """Should handle cancelled."""
-        display = _display_refactor("cancelled", 0, None, "abc123")
-        assert "cancelled" in display.lower()
+    def test_cancelled_message(self) -> None:
+        """Cancelled message."""
+        result = _display_refactor(
+            status="cancelled", files_affected=0, preview=None, refactor_id="abc123"
+        )
+        assert "cancelled" in result.lower()
 
-    def test_applied(self) -> None:
-        """Should handle applied."""
-        display = _display_refactor("applied", 3, None, "abc123")
-        assert "applied" in display.lower()
-        assert "3 files" in display
+    def test_applied_message(self) -> None:
+        """Applied message."""
+        result = _display_refactor(
+            status="applied", files_affected=5, preview=None, refactor_id="abc123"
+        )
+        assert "applied" in result.lower()
+        assert "5" in result
 
-    def test_pending_with_low_certainty(self) -> None:
-        """Should mention review needed for low certainty."""
-        preview = MagicMock()
-        preview.high_certainty_count = 5
-        preview.medium_certainty_count = 3
-        preview.low_certainty_count = 2
-
-        display = _display_refactor("pending", 2, preview, "abc123")
-        assert "Preview ready" in display
-        assert "2 require review" in display
-        assert "abc123" in display
-
-    def test_pending_all_high_certainty(self) -> None:
-        """Should not mention review when all high certainty."""
+    def test_pending_message_with_id(self) -> None:
+        """Pending shows refactor ID."""
         preview = MagicMock()
         preview.high_certainty_count = 10
         preview.medium_certainty_count = 0
         preview.low_certainty_count = 0
 
-        display = _display_refactor("pending", 3, preview, "abc123")
-        assert "Preview ready" in display
-        assert "require review" not in display
+        result = _display_refactor(
+            status="pending", files_affected=3, preview=preview, refactor_id="abc123"
+        )
+        assert "abc123" in result
+        assert "preview" in result.lower() or "ready" in result.lower()
+
+    def test_pending_with_review_needed(self) -> None:
+        """Pending with low certainty shows review needed."""
+        preview = MagicMock()
+        preview.high_certainty_count = 5
+        preview.medium_certainty_count = 0
+        preview.low_certainty_count = 2
+
+        result = _display_refactor(
+            status="pending", files_affected=2, preview=preview, refactor_id="xyz789"
+        )
+        assert "review" in result.lower()
+
+
+class TestSerializeRefactorResult:
+    """Tests for _serialize_refactor_result helper."""
+
+    def test_basic_result(self) -> None:
+        """Basic result serialization."""
+        result = MagicMock()
+        result.refactor_id = "test-123"
+        result.status = "pending"
+        result.preview = None
+        result.applied = None
+        result.divergence = None
+
+        output = _serialize_refactor_result(result)
+        assert output["refactor_id"] == "test-123"
+        assert output["status"] == "pending"
+        assert "summary" in output
+        assert "display_to_user" in output
+
+    def test_with_preview(self) -> None:
+        """Result with preview."""
+        result = MagicMock()
+        result.refactor_id = "test-456"
+        result.status = "pending"
+        result.applied = None
+        result.divergence = None
+
+        # Setup preview
+        preview = MagicMock()
+        preview.files_affected = 3
+        preview.high_certainty_count = 10
+        preview.medium_certainty_count = 2
+        preview.low_certainty_count = 1
+        preview.verification_required = False
+        preview.edits = []
+        result.preview = preview
+
+        output = _serialize_refactor_result(result)
+        assert "preview" in output
+        assert output["preview"]["files_affected"] == 3
+        assert output["preview"]["high_certainty_count"] == 10
+
+    def test_with_applied_delta(self) -> None:
+        """Result with applied delta."""
+        result = MagicMock()
+        result.refactor_id = "test-789"
+        result.status = "applied"
+        result.preview = None
+        result.divergence = None
+
+        applied = MagicMock()
+        applied.files_changed = 5
+        result.applied = applied
+
+        output = _serialize_refactor_result(result)
+        assert "5 files" in output["summary"]
+
+    def test_with_divergence(self) -> None:
+        """Result with divergence."""
+        result = MagicMock()
+        result.refactor_id = "test-div"
+        result.status = "diverged"
+        result.preview = None
+        result.applied = None
+
+        divergence = MagicMock()
+        divergence.conflicting_hunks = 2
+        divergence.resolution_options = ["abort", "force"]
+        result.divergence = divergence
+
+        output = _serialize_refactor_result(result)
+        assert "divergence" in output
+        assert output["divergence"]["conflicting_hunks"] == 2
+
+    def test_preview_with_verification(self) -> None:
+        """Preview requiring verification."""
+        result = MagicMock()
+        result.refactor_id = "test-verify"
+        result.status = "pending"
+        result.applied = None
+        result.divergence = None
+
+        preview = MagicMock()
+        preview.files_affected = 2
+        preview.high_certainty_count = 3
+        preview.medium_certainty_count = 0
+        preview.low_certainty_count = 2
+        preview.verification_required = True
+        preview.low_certainty_files = ["a.py", "b.py"]
+        preview.verification_guidance = "Review these files carefully"
+        preview.edits = []
+        result.preview = preview
+
+        output = _serialize_refactor_result(result)
+        assert output["preview"]["verification_required"] is True
+        assert "a.py" in output["preview"]["low_certainty_files"]

@@ -98,16 +98,16 @@ def _summarize_run(result: "TestResult") -> str:
         if status.status == "completed":
             if p.cases.failed > 0:
                 return (
-                    f"\u2717 {p.cases.passed} passed, {p.cases.failed} failed "
+                    f"{p.cases.passed} passed, {p.cases.failed} failed "
                     f"({status.duration_seconds:.1f}s)"
                 )
-            return f"\u2713 {p.cases.passed} passed ({status.duration_seconds:.1f}s)"
+            return f"{p.cases.passed} passed ({status.duration_seconds:.1f}s)"
         elif status.status == "running":
             return f"running: {p.cases.passed}/{p.cases.total} passed"
         elif status.status == "cancelled":
             return "cancelled"
         elif status.status == "failed":
-            return "\u2717 run failed"
+            return "run failed"
         # Other statuses
         parts: list[str] = [status.status]
         if p.cases.total > 0:
@@ -403,6 +403,12 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         timeout_sec: int | None = Field(None, description="Timeout in seconds"),
         fail_fast: bool = Field(False, description="Stop on first failure"),
         coverage: bool = Field(False, description="Collect coverage data"),
+        coverage_dir: str | None = Field(
+            None,
+            description="Directory to write coverage artifacts (required when coverage=True). "
+            "Use map_repo to understand project structure and determine the appropriate "
+            "source directory.",
+        ),
     ) -> dict[str, Any]:
         """Execute tests.
 
@@ -415,8 +421,25 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         To run a single test file, use: targets=['test:path/to/test_file.py']
         To run tests matching a path pattern, use: target_filter='test_excludes'
+
+        Coverage:
+        When coverage=True, coverage_dir MUST be provided. Coverage artifacts will be written
+        to canonical paths within that directory. Use map_repo to understand your project
+        layout before enabling coverage.
         """
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        # Validate coverage_dir is provided when coverage is requested
+        if coverage and not coverage_dir:
+            return {
+                "action": "run",
+                "run_status": {"status": "failed", "run_id": ""},
+                "agentic_hint": (
+                    "coverage=True requires coverage_dir to be specified. "
+                    "Use map_repo to understand your project structure and provide "
+                    "the appropriate source directory path."
+                ),
+            }
 
         result = await app_ctx.test_ops.run(
             targets=targets,
@@ -428,6 +451,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             timeout_sec=timeout_sec,
             fail_fast=fail_fast,
             coverage=coverage,
+            coverage_dir=coverage_dir,
         )
         return _serialize_test_result(result, is_action=True)
 

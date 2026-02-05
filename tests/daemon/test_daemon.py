@@ -95,7 +95,8 @@ class TestBackgroundIndexer:
         # Same executor, not replaced
         assert indexer._executor is executor
 
-        indexer._executor.shutdown(wait=False)
+        if indexer._executor is not None:
+            indexer._executor.shutdown(wait=False)
 
     @pytest.mark.asyncio
     async def test_given_stopped_indexer_when_stop_again_then_noop(self) -> None:
@@ -115,7 +116,7 @@ class TestBackgroundIndexer:
         coordinator = MagicMock()
         indexer = BackgroundIndexer(coordinator=coordinator)
 
-        async def callback(stats):
+        async def callback(stats: object) -> None:
             pass
 
         indexer.set_on_complete(callback)
@@ -886,7 +887,7 @@ class TestRepoHeaderMiddleware:
 
         from codeplane.daemon.middleware import REPO_HEADER, RepoHeaderMiddleware
 
-        async def status(_request):
+        async def status(_request: object) -> JSONResponse:
             return JSONResponse({"status": "ok"})
 
         app = Starlette(
@@ -911,7 +912,7 @@ class TestRepoHeaderMiddleware:
 
         from codeplane.daemon.middleware import REPO_HEADER, RepoHeaderMiddleware
 
-        async def health(_request):
+        async def health(_request: object) -> JSONResponse:
             return JSONResponse({"status": "ok"})
 
         app = Starlette(

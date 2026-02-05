@@ -9,30 +9,30 @@ from codeplane.mcp.tools.base import BaseParams
 class TestBaseParams:
     """Tests for BaseParams base class."""
 
-    def test_session_id_optional(self):
+    def test_session_id_optional(self) -> None:
         """session_id defaults to None."""
         params = BaseParams()
         assert params.session_id is None
 
-    def test_session_id_accepts_string(self):
+    def test_session_id_accepts_string(self) -> None:
         """session_id accepts string value."""
         params = BaseParams(session_id="sess_123")
         assert params.session_id == "sess_123"
 
-    def test_session_id_accepts_none(self):
+    def test_session_id_accepts_none(self) -> None:
         """session_id explicitly accepts None."""
         params = BaseParams(session_id=None)
         assert params.session_id is None
 
-    def test_extra_forbid_rejects_unknown_fields(self):
+    def test_extra_forbid_rejects_unknown_fields(self) -> None:
         """Extra fields are rejected."""
         with pytest.raises(ValidationError) as exc_info:
-            BaseParams(unknown_field="value")
+            BaseParams(unknown_field="value")  # type: ignore[call-arg]
         errors = exc_info.value.errors()
         assert len(errors) == 1
         assert errors[0]["type"] == "extra_forbidden"
 
-    def test_subclass_inherits_session_id(self):
+    def test_subclass_inherits_session_id(self) -> None:
         """Subclass automatically has session_id."""
 
         class ChildParams(BaseParams):
@@ -42,24 +42,24 @@ class TestBaseParams:
         assert params.name == "test"
         assert params.session_id == "sess_456"
 
-    def test_subclass_inherits_extra_forbid(self):
+    def test_subclass_inherits_extra_forbid(self) -> None:
         """Subclass also rejects extra fields."""
 
         class ChildParams(BaseParams):
             name: str
 
         with pytest.raises(ValidationError) as exc_info:
-            ChildParams(name="test", extra="nope")
+            ChildParams(name="test", extra="nope")  # type: ignore[call-arg]
         errors = exc_info.value.errors()
         assert any(e["type"] == "extra_forbidden" for e in errors)
 
-    def test_model_dump(self):
+    def test_model_dump(self) -> None:
         """model_dump works correctly."""
         params = BaseParams(session_id="sess_789")
         data = params.model_dump()
         assert data == {"session_id": "sess_789"}
 
-    def test_model_dump_exclude_none(self):
+    def test_model_dump_exclude_none(self) -> None:
         """model_dump can exclude None values."""
         params = BaseParams()
         data = params.model_dump(exclude_none=True)

@@ -98,18 +98,19 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     }
                 # Basic info from tool manager
                 tool_spec = mcp._tool_manager._tools.get(name)
+                desc = tool_spec.description if tool_spec else "No description"
                 return {
                     "found": True,
                     "name": name,
-                    "description": tool_spec.description if tool_spec else "",
+                    "description": desc,
                     "extended_docs": False,
-                    "summary": f"basic docs for {name}",
+                    "summary": f"{name}: {desc}",
                 }
             return {
                 "found": True,
                 "extended_docs": True,
                 **doc.to_dict(),
-                "summary": f"full docs for {name}",
+                "summary": f"{name}: {doc.description}",
             }
 
         if action == "error":

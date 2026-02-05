@@ -297,6 +297,7 @@ class TestDefinitionLookups:
             # Get context ID
             ctx = session.exec(select(Context)).first()
             assert ctx is not None
+            assert ctx.id is not None
 
             results = queries.list_defs_by_name(ctx.id, "foo")
 
@@ -310,6 +311,7 @@ class TestDefinitionLookups:
             queries = FactQueries(session)
             ctx = session.exec(select(Context)).first()
             assert ctx is not None
+            assert ctx.id is not None
 
             results = queries.list_defs_by_name(ctx.id, "foo", limit=1)
 
@@ -321,6 +323,7 @@ class TestDefinitionLookups:
             queries = FactQueries(session)
             file = queries.get_file_by_path("src/main.py")
             assert file is not None
+            assert file.id is not None
 
             results = queries.list_defs_in_file(file.id)
 
@@ -365,6 +368,7 @@ class TestReferenceLookups:
             queries = FactQueries(session)
             file = queries.get_file_by_path("src/main.py")
             assert file is not None
+            assert file.id is not None
 
             results = queries.list_refs_in_file(file.id)
 
@@ -376,6 +380,7 @@ class TestReferenceLookups:
             queries = FactQueries(session)
             ctx = session.exec(select(Context)).first()
             assert ctx is not None
+            assert ctx.id is not None
 
             results = queries.list_refs_by_token(ctx.id, "foo")
 
@@ -391,8 +396,11 @@ class TestScopeLookups:
             queries = FactQueries(session)
             # Get a scope ID first
             file = queries.get_file_by_path("src/main.py")
+            assert file is not None
+            assert file.id is not None
             scopes = queries.list_scopes_in_file(file.id)
             assert len(scopes) > 0
+            assert scopes[0].scope_id is not None
 
             result = queries.get_scope(scopes[0].scope_id)
 
@@ -413,6 +421,7 @@ class TestScopeLookups:
             queries = FactQueries(session)
             file = queries.get_file_by_path("src/main.py")
             assert file is not None
+            assert file.id is not None
 
             results = queries.list_scopes_in_file(file.id)
 
@@ -427,8 +436,11 @@ class TestBindingLookups:
         with seeded_db.session() as session:
             queries = FactQueries(session)
             file = queries.get_file_by_path("src/main.py")
+            assert file is not None
+            assert file.id is not None
             scopes = queries.list_scopes_in_file(file.id)
             file_scope = next(s for s in scopes if s.kind == ScopeKind.FILE.value)
+            assert file_scope.scope_id is not None
 
             result = queries.get_local_bind(file_scope.scope_id, "foo")
 
@@ -441,8 +453,11 @@ class TestBindingLookups:
         with seeded_db.session() as session:
             queries = FactQueries(session)
             file = queries.get_file_by_path("src/main.py")
+            assert file is not None
+            assert file.id is not None
             scopes = queries.list_scopes_in_file(file.id)
             file_scope = next(s for s in scopes if s.kind == ScopeKind.FILE.value)
+            assert file_scope.scope_id is not None
 
             result = queries.get_local_bind(file_scope.scope_id, "nonexistent")
 
@@ -453,8 +468,11 @@ class TestBindingLookups:
         with seeded_db.session() as session:
             queries = FactQueries(session)
             file = queries.get_file_by_path("src/main.py")
+            assert file is not None
+            assert file.id is not None
             scopes = queries.list_scopes_in_file(file.id)
             file_scope = next(s for s in scopes if s.kind == ScopeKind.FILE.value)
+            assert file_scope.scope_id is not None
 
             results = queries.list_binds_in_scope(file_scope.scope_id)
 
@@ -471,6 +489,7 @@ class TestImportLookups:
             queries = FactQueries(session)
             file = queries.get_file_by_path("src/main.py")
             assert file is not None
+            assert file.id is not None
 
             results = queries.list_imports(file.id)
 
@@ -505,6 +524,7 @@ class TestExportLookups:
             queries = FactQueries(session)
             ctx = session.exec(select(Context)).first()
             assert ctx is not None
+            assert ctx.id is not None
 
             result = queries.get_export_surface(ctx.id)
 
@@ -524,8 +544,11 @@ class TestExportLookups:
         with seeded_db.session() as session:
             queries = FactQueries(session)
             ctx = session.exec(select(Context)).first()
+            assert ctx is not None
+            assert ctx.id is not None
             surface = queries.get_export_surface(ctx.id)
             assert surface is not None
+            assert surface.surface_id is not None
 
             results = queries.list_export_entries(surface.surface_id)
 
@@ -543,6 +566,7 @@ class TestAnchorGroupLookups:
             queries = FactQueries(session)
             ctx = session.exec(select(Context)).first()
             assert ctx is not None
+            assert ctx.id is not None
 
             result = queries.get_anchor_group(ctx.id, "method", "self.")
 
@@ -557,6 +581,7 @@ class TestAnchorGroupLookups:
             queries = FactQueries(session)
             ctx = session.exec(select(Context)).first()
             assert ctx is not None
+            assert ctx.id is not None
 
             result = queries.get_anchor_group(ctx.id, "method", None)
 
@@ -571,6 +596,7 @@ class TestAnchorGroupLookups:
             queries = FactQueries(session)
             ctx = session.exec(select(Context)).first()
             assert ctx is not None
+            assert ctx.id is not None
 
             result = queries.get_anchor_group(ctx.id, "nonexistent", None)
 
@@ -582,6 +608,7 @@ class TestAnchorGroupLookups:
             queries = FactQueries(session)
             ctx = session.exec(select(Context)).first()
             assert ctx is not None
+            assert ctx.id is not None
 
             results = queries.list_anchor_groups(ctx.id)
 
@@ -598,6 +625,7 @@ class TestFileLookups:
             # First get the file by path to get the ID
             file = queries.get_file_by_path("src/main.py")
             assert file is not None
+            assert file.id is not None
 
             result = queries.get_file(file.id)
 
