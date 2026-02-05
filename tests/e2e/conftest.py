@@ -76,13 +76,15 @@ class CodePlaneServer:
             TimeoutError: If server doesn't become ready in time
             RuntimeError: If server fails to start
         """
-        # Start cpl up as foreground process
+        # Start cpl up as foreground process in its own process group
+        # This allows us to kill the entire tree on cleanup
         self.process = subprocess.Popen(
             ["cpl", "up", "--foreground"],
             cwd=self.repo_path,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env={**os.environ, "CODEPLANE_LOG_LEVEL": "DEBUG"},
+            start_new_session=True,
         )
 
         # Wait for server to write port file and respond to health checks
@@ -141,16 +143,24 @@ class CodePlaneServer:
         )
 
     def stop(self) -> None:
-        """Stop the daemon gracefully with SIGTERM."""
+        """Stop the daemon gracefully with SIGTERM.
+
+        Kills the entire process group to ensure child processes are cleaned up,
+        even if pytest is interrupted.
+        """
         if self.process is None:
             return
 
         try:
-            self.process.send_signal(signal.SIGTERM)
+            # Kill the entire process group, not just the main process
+            os.killpg(self.process.pid, signal.SIGTERM)
             self.process.wait(timeout=self.timeout_config.shutdown_sec)
         except subprocess.TimeoutExpired:
-            self.process.kill()
+            os.killpg(self.process.pid, signal.SIGKILL)
             self.process.wait(timeout=5.0)
+        except ProcessLookupError:
+            # Process already dead
+            pass
         finally:
             self.process = None
 
@@ -230,12 +240,11 @@ def cloned_repo(
 
     clone_cmd.extend([clone_url, str(repo_dir)])
 
-    # Execute clone
-    result = subprocess.run(
+    # Execute clone with proper cleanup on interrupt
+    result = _run_with_cleanup(
         clone_cmd,
-        capture_output=True,
+        cwd=Path.cwd(),
         timeout=timeout.clone_sec,
-        check=False,
     )
 
     if result.returncode != 0:
@@ -247,6 +256,47 @@ def cloned_repo(
     shutil.rmtree(repo_dir, ignore_errors=True)
 
 
+def _run_with_cleanup(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    timeout: float,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a command with proper process group cleanup on interrupt.
+
+    Uses start_new_session to create a process group, allowing us to kill
+    the entire tree if pytest is interrupted (e.g., Ctrl+C, SIGKILL).
+    """
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return subprocess.CompletedProcess(
+            args=cmd,
+            returncode=proc.returncode,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    except subprocess.TimeoutExpired:
+        # Kill the entire process group on timeout
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=5.0)
+        raise
+    except BaseException:
+        # On any interrupt (KeyboardInterrupt, etc.), kill the process group
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=5.0)
+        raise
+
+
 @pytest.fixture
 def initialized_repo(
     cloned_repo: Path,
@@ -255,12 +305,10 @@ def initialized_repo(
     """Initialize CodePlane in the cloned repository."""
     timeout = expectation.timeout_config
 
-    result = subprocess.run(
+    result = _run_with_cleanup(
         ["cpl", "init"],
         cwd=cloned_repo,
-        capture_output=True,
         timeout=timeout.init_sec,
-        check=False,
     )
 
     if result.returncode != 0:
