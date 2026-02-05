@@ -743,13 +743,14 @@ class TestBlame:
 class TestLogEdgeCases:
     """Additional edge case tests for log."""
 
-    def test_log_nonexistent_ref_returns_empty(self, temp_repo: pygit2.Repository) -> None:
-        """Log with nonexistent ref should return empty list."""
+    def test_log_nonexistent_ref_raises_error(self, temp_repo: pygit2.Repository) -> None:
+        """Log with nonexistent ref should raise RefNotFoundError."""
+        from codeplane.git.errors import RefNotFoundError
+
         ops = GitOps(temp_repo.workdir)
 
-        log = ops.log(ref="nonexistent-branch")
-
-        assert log == []
+        with pytest.raises(RefNotFoundError):
+            ops.log(ref="nonexistent-branch")
 
 
 class TestStageUnstage:

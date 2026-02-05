@@ -1030,10 +1030,10 @@ class TestLintOps:
             tool = registry.get("python.ruff")
             assert tool is not None
 
-            # Mock subprocess with clean output
+            # Mock subprocess with clean output (ruff returns "[]" when no issues)
             mock_proc = MagicMock()
             mock_proc.returncode = 0
-            mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+            mock_proc.communicate = AsyncMock(return_value=(b"[]", b""))
 
             with (
                 patch.object(ops, "_build_command", return_value=["ruff", "check", "."]),
@@ -1121,8 +1121,8 @@ class TestLintOps:
             ):
                 result = await ops._run_tool(tool, [root], dry_run=True)
 
-            # Exit code 1 or 2 with no diagnostics = dirty
-            assert result.status == "dirty"
+            # Exit code 1 with unparseable output = error (parser failed)
+            assert result.status == "error"
 
     @pytest.mark.asyncio
     async def test_run_tool_oserror(self) -> None:

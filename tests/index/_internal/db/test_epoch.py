@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from unittest.mock import MagicMock
 
 from codeplane.index._internal.db.epoch import EpochManager, EpochStats
@@ -158,7 +159,7 @@ class TestEpochManager:
         # Short timeout to avoid slow test
         assert manager.await_epoch(100, timeout_seconds=0.05) is False
 
-    def test_publish_epoch_increments_epoch_id(self) -> None:
+    def test_publish_epoch_increments_epoch_id(self, tmp_path: Path) -> None:
         """publish_epoch creates new epoch with incremented ID."""
         mock_db = MagicMock()
 
@@ -190,7 +191,7 @@ class TestEpochManager:
         mock_db.session = session_side_effect
         mock_db.immediate_transaction = transaction_side_effect
 
-        manager = EpochManager(mock_db)
+        manager = EpochManager(mock_db, journal_dir=tmp_path)
         stats = manager.publish_epoch(files_indexed=10, commit_hash="abc")
 
         assert stats.epoch_id == 6  # 5 + 1
@@ -198,7 +199,7 @@ class TestEpochManager:
         assert stats.commit_hash == "abc"
         assert stats.published_at > 0
 
-    def test_publish_epoch_reloads_lexical_if_present(self) -> None:
+    def test_publish_epoch_reloads_lexical_if_present(self, tmp_path: Path) -> None:
         """publish_epoch reloads lexical index when available."""
         mock_db = MagicMock()
         mock_lexical = MagicMock()
@@ -221,12 +222,12 @@ class TestEpochManager:
             __exit__=MagicMock(return_value=False),
         )
 
-        manager = EpochManager(mock_db, lexical=mock_lexical)
+        manager = EpochManager(mock_db, lexical=mock_lexical, journal_dir=tmp_path)
         manager.publish_epoch()
 
         mock_lexical.reload.assert_called_once()
 
-    def test_publish_epoch_creates_repo_state_if_missing(self) -> None:
+    def test_publish_epoch_creates_repo_state_if_missing(self, tmp_path: Path) -> None:
         """publish_epoch creates RepoState if it doesn't exist."""
         mock_db = MagicMock()
 
@@ -245,7 +246,7 @@ class TestEpochManager:
             __exit__=MagicMock(return_value=False),
         )
 
-        manager = EpochManager(mock_db)
+        manager = EpochManager(mock_db, journal_dir=tmp_path)
         stats = manager.publish_epoch()
 
         # Should create epoch 1 (0 + 1)

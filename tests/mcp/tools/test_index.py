@@ -3,6 +3,8 @@
 Verifies summary helpers and serialization functions.
 """
 
+from typing import Any
+
 from codeplane.mcp.tools.index import (
     _serialize_tree,
     _summarize_map,
@@ -62,6 +64,39 @@ class TestSummarizeMap:
         assert "truncated" in result
 
 
+class MockFileNode:
+    """Mock file node for testing."""
+
+    def __init__(
+        self,
+        name: str = "main.py",
+        path: str = "src/main.py",
+        line_count: int = 100,
+    ) -> None:
+        self.name = name
+        self.path = path
+        self.is_dir = False
+        self.line_count = line_count
+        self.children: list[Any] = []
+
+
+class MockDirNode:
+    """Mock directory node for testing."""
+
+    def __init__(
+        self,
+        name: str = "src",
+        path: str = "src",
+        file_count: int = 5,
+        children: list[Any] | None = None,
+    ) -> None:
+        self.name = name
+        self.path = path
+        self.is_dir = True
+        self.file_count = file_count
+        self.children: list[Any] = children if children is not None else []
+
+
 class TestSerializeTree:
     """Tests for _serialize_tree helper."""
 
@@ -72,15 +107,6 @@ class TestSerializeTree:
 
     def test_file_node(self) -> None:
         """File node serialization."""
-
-        # Create a mock file node
-        class MockFileNode:
-            name = "main.py"
-            path = "src/main.py"
-            is_dir = False
-            line_count = 100
-            children = []  # Files don't have children
-
         result = _serialize_tree([MockFileNode()])
         assert len(result) == 1
         assert result[0]["name"] == "main.py"
@@ -90,14 +116,6 @@ class TestSerializeTree:
 
     def test_directory_node(self) -> None:
         """Directory node serialization."""
-
-        class MockDirNode:
-            name = "src"
-            path = "src"
-            is_dir = True
-            file_count = 5
-            children = []
-
         result = _serialize_tree([MockDirNode()])
         assert len(result) == 1
         assert result[0]["name"] == "src"
@@ -107,24 +125,10 @@ class TestSerializeTree:
 
     def test_nested_tree(self) -> None:
         """Nested directory structure."""
+        file_node = MockFileNode(name="main.py", path="src/main.py", line_count=50)
+        dir_node = MockDirNode(name="src", path="src", file_count=1, children=[file_node])
 
-        class MockFileNode:
-            name = "main.py"
-            path = "src/main.py"
-            is_dir = False
-            line_count = 50
-            children = []
-
-        class MockDirNode:
-            name = "src"
-            path = "src"
-            is_dir = True
-            file_count = 1
-
-            def __init__(self):
-                self.children = [MockFileNode()]
-
-        result = _serialize_tree([MockDirNode()])
+        result = _serialize_tree([dir_node])
         assert len(result) == 1
         assert result[0]["is_dir"] is True
         assert len(result[0]["children"]) == 1

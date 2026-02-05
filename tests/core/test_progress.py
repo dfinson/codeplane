@@ -104,7 +104,8 @@ class TestStatus:
         with patch("codeplane.core.progress._console") as mock_console:
             status("Indented", indent=4)
             call_args = mock_console.print.call_args[0][0]
-            assert call_args.startswith("    ")
+            # Padding appears before message, but timestamp comes first
+            assert "    Indented" in call_args
 
 
 class TestProgress:

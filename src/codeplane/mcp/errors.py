@@ -7,11 +7,11 @@ Enables agents to understand failures and self-correct.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class MCPErrorCode(str, Enum):
+class MCPErrorCode(StrEnum):
     """Machine-readable error codes for MCP tool failures."""
 
     # Validation errors - agent should fix input

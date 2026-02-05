@@ -56,7 +56,7 @@ class TestEditParam:
     def test_invalid_action(self) -> None:
         """Should reject invalid action."""
         with pytest.raises(ValidationError):
-            EditParam(path="file.py", action="invalid")  # type: ignore
+            EditParam(path="file.py", action="invalid")
 
     def test_extra_fields_forbidden(self) -> None:
         """Extra fields are rejected."""

@@ -6,11 +6,11 @@ Provides on-demand documentation without bloating ListTools response.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class ToolCategory(str, Enum):
+class ToolCategory(StrEnum):
     """Categories for grouping tools."""
 
     GIT = "git"

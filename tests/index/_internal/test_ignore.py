@@ -56,10 +56,11 @@ class TestIgnoreChecker:
         assert checker is not None
 
     def test_should_ignore_prunable_dir(self, tmp_path: Path) -> None:
-        """Should ignore files in PRUNABLE_DIRS."""
+        """Should ignore files in DEFAULT_PRUNABLE_DIRS."""
         checker = IgnoreChecker(tmp_path)
         assert checker.should_ignore(tmp_path / "node_modules" / "pkg" / "index.js")
-        assert checker.should_ignore(tmp_path / ".git" / "objects")
+        # .git is in HARDCODED_DIRS, not DEFAULT_PRUNABLE_DIRS
+        # It's handled by should_prune_dir() instead
         assert checker.should_ignore(tmp_path / "__pycache__" / "cache.pyc")
 
     def test_should_not_ignore_normal_files(self, tmp_path: Path) -> None:

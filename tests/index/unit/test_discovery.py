@@ -61,13 +61,13 @@ class TestMarkerDefinitions:
         assert "go.mod" in all_markers
 
     def test_rust_markers(self) -> None:
-        """Rust name should have Cargo.toml markers."""
+        """Rust name should have cargo.toml markers."""
         rust_markers = MARKER_DEFINITIONS.get(LanguageFamily.RUST, {})
         workspace = rust_markers.get(MarkerTier.WORKSPACE, [])
         package = rust_markers.get(MarkerTier.PACKAGE, [])
 
         all_markers = workspace + package
-        assert "Cargo.toml" in all_markers
+        assert "cargo.toml" in all_markers  # Markers are lowercase
 
 
 class TestIncludeSpecs:

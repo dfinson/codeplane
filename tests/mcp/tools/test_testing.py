@@ -109,7 +109,7 @@ class TestSummarizeRun:
         result = TestResult(action="status", run_status=status)
         summary = _summarize_run(result)
         assert "100 passed" in summary
-        assert "\u2713" in summary  # Checkmark
+        # Note: checkmark is only in display_to_user, not in summary
 
     def test_running_status(self) -> None:
         """Should show running status."""

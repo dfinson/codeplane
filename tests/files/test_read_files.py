@@ -53,7 +53,7 @@ class TestReadFilesSingle:
         assert js_result.files[0].language == "javascript"
 
         json_result = ops.read_files("data.json")
-        assert json_result.files[0].language == "json_yaml"
+        assert json_result.files[0].language == "json"
 
     def test_read_file_counts_lines(self, temp_repo: Path) -> None:
         """Should count lines correctly."""

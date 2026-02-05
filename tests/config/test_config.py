@@ -60,14 +60,14 @@ class TestConfigModels:
             (0, True),
             (8080, True),
             (65535, True),
-            (-1, True),  # Port validation has been relaxed
-            (65536, True),  # Port validation has been relaxed
+            (-1, False),  # Invalid: below range
+            (65536, False),  # Invalid: above range
         ],
     )
     def test_given_port_when_validated_then_accepts_only_valid_range(
         self, port: int, valid: bool
     ) -> None:
-        """Port accepts most values (validation relaxed)."""
+        """Port accepts only valid range (0-65535)."""
         # Given
         daemon_config = {"port": port}
 
@@ -77,7 +77,7 @@ class TestConfigModels:
             assert config.server.port == port
         else:
             with pytest.raises(ValidationError):
-                CodePlaneConfig(daemon=daemon_config)
+                CodePlaneConfig(server=daemon_config)
 
 
 class TestConfigLoading:
