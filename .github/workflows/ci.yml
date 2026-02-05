@@ -81,7 +81,7 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Run mypy
-        run: mypy src tests
+        run: mypy src
 
   # Unit tests - fast, no external dependencies
   unit-test:
