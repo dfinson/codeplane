@@ -81,10 +81,92 @@ jobs:
           pip install -e ".[dev]"
 
       - name: Run mypy
-        run: mypy src
+        run: mypy src tests
 
-  test:
+  # Unit tests - fast, no external dependencies, coverage enforced
+  unit-test:
     needs: preflight
+    if: needs.preflight.outputs.has_tests == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@codeplane.dev"
+          git config --global user.name "CodePlane CI"
+
+      - name: Run unit tests with coverage
+        run: pytest -m "not integration and not e2e" --cov=src/codeplane --cov-branch --cov-report=xml --cov-fail-under=90 --junitxml=junit.xml -o junit_family=legacy
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage.xml
+          fail_ci_if_error: false
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: junit.xml
+          report_type: test_results
+          fail_ci_if_error: false
+
+  # Integration tests - may use network, private repo tests auto-skip without creds
+  integration-test:
+    needs: [preflight, unit-test]
+    if: needs.preflight.outputs.has_tests == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@codeplane.dev"
+          git config --global user.name "CodePlane CI"
+
+      - name: Run integration tests
+        run: pytest -m "integration" -v --tb=short --junitxml=junit-integration.xml -o junit_family=legacy
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: junit-integration.xml
+          report_type: test_results
+          fail_ci_if_error: false
+
+  # E2E tests - clones real repos, starts daemon, makes MCP calls
+  e2e-test:
+    needs: [preflight, unit-test]
     if: needs.preflight.outputs.has_tests == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -102,21 +184,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Run tests with coverage
-        run: pytest --cov=src/codeplane --cov-branch --cov-report=xml --cov-fail-under=90 --junitxml=junit.xml -o junit_family=legacy
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@codeplane.dev"
+          git config --global user.name "CodePlane CI"
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage.xml
-          fail_ci_if_error: false
+      - name: Run e2e tests
+        run: pytest -m "e2e" -v --tb=short --junitxml=junit-e2e.xml -o junit_family=legacy
 
       - name: Upload test results to Codecov
         if: ${{ !cancelled() }}
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: junit.xml
+          files: junit-e2e.xml
           report_type: test_results
           fail_ci_if_error: false
