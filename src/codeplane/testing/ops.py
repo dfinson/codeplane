@@ -870,6 +870,15 @@ class TestOps:
 
                 # Collect execution-level diagnostics (non-test errors)
                 if result.error_type != "none":
+                    # Truncate raw_stderr to ~2000 chars to avoid bloat
+                    truncated_stderr = None
+                    if result.execution and result.execution.raw_stderr:
+                        stderr_text = result.execution.raw_stderr
+                        if len(stderr_text) > 2000:
+                            truncated_stderr = stderr_text[:2000] + "\n... (truncated)"
+                        else:
+                            truncated_stderr = stderr_text
+
                     diagnostics.append(
                         ExecutionDiagnostic(
                             target_id=target.target_id,
@@ -881,6 +890,7 @@ class TestOps:
                                 result.execution.working_directory if result.execution else None
                             ),
                             exit_code=result.execution.exit_code if result.execution else None,
+                            raw_stderr=truncated_stderr,
                         )
                     )
 
@@ -1155,22 +1165,31 @@ class TestOps:
             result.workspace_root = target.workspace_root
             result.execution = execution
 
+            # Set parsed_test_count as an observable fact
+            # - int >= 0: Successfully parsed this many test cases
+            # - None: Could not parse output
+            if result.tests is not None:
+                result.parsed_test_count = len(result.tests)
+            else:
+                result.parsed_test_count = None
+
             # Classify error type based on result
+            # Only set suggested_action when we have certainty about the cause
             if result.errors > 0 and result.total == 0:
                 # Parser returned errors with no tests - likely parse failure
                 if not output_path.exists() and not stdout.strip():
                     result.error_type = "output_missing"
                     result.error_detail = "No output file or stdout from test runner"
-                    result.suggested_action = "Check that the test command produces output"
+                    # No suggested_action - we don't know why output is missing
                 elif result.error_type == "none":  # Only set if not already set by parser
                     result.error_type = "parse_failed"
                     result.error_detail = "Could not parse test output"
-                    result.suggested_action = "Check the raw output in artifacts"
+                    # No suggested_action - could be many causes
             elif exit_code and exit_code != 0 and result.failed == 0 and result.errors == 0:
                 # Non-zero exit but no failures detected - command crashed
                 result.error_type = "command_failed"
                 result.error_detail = f"Command exited with code {exit_code}"
-                result.suggested_action = "Check stderr for error messages"
+                # No suggested_action - we don't know the cause, agent should read stderr
                 result.errors = 1
 
             return (result, cov_artifact)
@@ -1263,6 +1282,7 @@ class TestOps:
                     "command": d.command,
                     "working_directory": d.working_directory,
                     "exit_code": d.exit_code,
+                    "raw_stderr": d.raw_stderr,
                 }
                 for d in (status.diagnostics or [])
             ],
@@ -1320,6 +1340,7 @@ class TestOps:
                     command=d.get("command"),
                     working_directory=d.get("working_directory"),
                     exit_code=d.get("exit_code"),
+                    raw_stderr=d.get("raw_stderr"),
                 )
                 for d in data.get("diagnostics", [])
             ]
