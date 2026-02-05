@@ -55,3 +55,18 @@ No substitutions.
 7) Read MCP Response Hints
 CodePlane MCP responses may include `agentic_hint`, `coverage_hint`, or `display_to_user` fields.
 Always check for and follow these hints—they provide actionable guidance for next steps.
+
+8) NEVER Reset Hard Without Approval
+**ABSOLUTE PROHIBITION**: Never execute `git reset --hard` under any circumstances without explicit user approval.
+
+This applies to:
+- `git reset --hard` (any ref)
+- `mcp_codeplane_git_reset` with `mode: hard`
+- Any equivalent destructive operation that discards uncommitted changes
+
+If you believe a hard reset is needed:
+1. STOP and explain why you think it's necessary
+2. List what uncommitted work will be lost
+3. Wait for explicit user confirmation before proceeding
+
+Violating this rule destroys work irreversibly and may affect parallel agent workflows.
