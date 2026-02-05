@@ -5,6 +5,7 @@ Supports:
 - Separate console vs file log levels
 - Request correlation IDs
 - Session-based log format: "Agent Session <session-id>: tool -> summary"
+- Log file path tracking for exception pointers
 """
 
 from __future__ import annotations
@@ -23,6 +24,9 @@ if TYPE_CHECKING:
 
 _request_id: ContextVar[str | None] = ContextVar("request_id", default=None)
 
+# Track the current log file path for exception pointers
+_log_file_path: Path | None = None
+
 
 def get_request_id() -> str | None:
     return _request_id.get()
@@ -37,6 +41,23 @@ def set_request_id(request_id: str | None = None) -> str:
 
 def clear_request_id() -> None:
     _request_id.set(None)
+
+
+def get_log_file_path() -> Path | None:
+    """Get the current log file path, if any.
+
+    Used for exception log pointers to direct users to detailed logs.
+    """
+    return _log_file_path
+
+
+def _set_log_file_path(path: Path | None) -> None:
+    """Set the current log file path.
+
+    Called internally during logging configuration.
+    """
+    global _log_file_path
+    _log_file_path = path
 
 
 def _add_request_id(
@@ -59,25 +80,18 @@ _LEVEL_MAP = {
 
 
 class ConsoleSuppressingFilter(logging.Filter):
-    """Filter that blocks console output when suppression is active OR for info-level logs.
+    """Filter that blocks structlog console output.
 
-    This integrates with Rich live displays (spinners, progress bars)
-    to prevent log lines from colliding with animated UI elements.
-    Also suppresses info-level logs from console by default to keep
-    the CLI output clean (summaries only). File handlers receive all logs.
+    This filter ensures NO structlog messages appear on the console.
+    All user-facing output should go through Rich console.print() calls
+    in progress.py and middleware.py, which are controlled and formatted.
+
+    Structlog messages (including errors) go to the log file only.
+    This prevents stacktraces and raw error messages from leaking
+    to the terminal.
     """
 
-    def __init__(self, suppress_info: bool = True) -> None:
-        """Initialize filter.
-
-        Args:
-            suppress_info: If True, suppress INFO and DEBUG from console.
-                          Only WARNING and above are shown.
-        """
-        super().__init__()
-        self.suppress_info = suppress_info
-
-    def filter(self, record: logging.LogRecord) -> bool:
+    def filter(self, record: logging.LogRecord) -> bool:  # noqa: ARG002
         # Import here to avoid circular dependency
         from codeplane.core.progress import is_console_suppressed
 
@@ -85,8 +99,9 @@ class ConsoleSuppressingFilter(logging.Filter):
         if is_console_suppressed():
             return False
 
-        # Suppress info-level logs from console for clean CLI output
-        return not (self.suppress_info and record.levelno < logging.WARNING)
+        # Block ALL structlog output from console - use Rich console.print() instead
+        # This prevents error/stacktrace leakage to terminal
+        return False
 
 
 def configure_logging(
@@ -173,9 +188,20 @@ def _configure_stdlib_logging(
     logging.getLogger("mcp.server.lowlevel.server").setLevel(logging.WARNING)
     logging.getLogger("mcp.server.streamable_http").setLevel(logging.WARNING)
 
+    # Silence watchfiles debug logging (triggers on every filtered change,
+    # creates feedback loop with log file inside watched directory)
+    logging.getLogger("watchfiles.main").setLevel(logging.WARNING)
+
+    # Track first file destination for exception log pointers
+    _set_log_file_path(None)
+
     for output in config.outputs:
         output_level = _LEVEL_MAP.get((output.level or config.level).upper(), default_level)
         is_console = output.destination in ("stderr", "stdout")
+
+        # Track the first file destination for exception pointers
+        if not is_console and _log_file_path is None:
+            _set_log_file_path(Path(output.destination))
 
         if output.format == "json":
             formatter = structlog.stdlib.ProcessorFormatter(

@@ -70,6 +70,21 @@ def _compute_def_uid(
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
+def _has_grammar_for_file(file_path: str) -> bool:
+    """Check if a tree-sitter grammar is available for this file's language.
+
+    Returns True if the file's language has a grammar available on PyPI.
+    Returns False for languages like F#, VB.NET, Erlang, etc. that lack PyPI grammars.
+    Also returns False for unknown file types.
+    """
+    from codeplane.core.languages import detect_language_family, has_grammar
+
+    language = detect_language_family(file_path)
+    if language is None:
+        return False
+    return has_grammar(language)
+
+
 @dataclass
 class ExtractionResult:
     """Result of extracting facts from a single file."""
@@ -92,6 +107,8 @@ class ExtractionResult:
     line_count: int = 0
     error: str | None = None
     parse_time_ms: int = 0
+    # Flag indicating file was skipped due to no grammar (not an error)
+    skipped_no_grammar: bool = False
 
 
 @dataclass
@@ -113,12 +130,18 @@ class BatchResult:
     receiver_shapes_extracted: int = 0
     errors: list[str] = field(default_factory=list)
     duration_ms: int = 0
+    # Count of files skipped due to no grammar (not errors)
+    files_skipped_no_grammar: int = 0
 
 
 def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionResult:
     """Extract all facts from a single file (worker function).
 
     Extracts: DefFact, RefFact, ScopeFact, ImportFact, LocalBindFact, DynamicAccessSite
+
+    Files whose language has no tree-sitter grammar (e.g., F#, VB.NET, Erlang)
+    are gracefully skipped - they will still be indexed in Tantivy for lexical
+    search, but no structural facts are extracted.
     """
     start = time.monotonic()
     result = ExtractionResult(file_path=file_path)
@@ -134,6 +157,14 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
         result.line_count = content.count(b"\n") + (
             1 if content and not content.endswith(b"\n") else 0
         )
+
+        # Check if grammar is available BEFORE attempting to parse
+        # This gracefully handles languages like F#, VB.NET, Erlang that
+        # have language definitions but no PyPI-available tree-sitter grammar
+        if not _has_grammar_for_file(file_path):
+            result.skipped_no_grammar = True
+            result.parse_time_ms = int((time.monotonic() - start) * 1000)
+            return result
 
         parser = TreeSitterParser()
         try:
@@ -560,6 +591,10 @@ class StructuralIndexer:
     - LocalBindFact extraction (same-file bindings)
     - DynamicAccessSite extraction (dynamic access telemetry)
 
+    Files whose language has no tree-sitter grammar (e.g., F#, VB.NET, Erlang)
+    are gracefully skipped by this indexer. They will still be searchable via
+    the lexical (Tantivy) index.
+
     Usage::
 
         indexer = StructuralIndexer(db, repo_path)
@@ -604,6 +639,11 @@ class StructuralIndexer:
 
                 if extraction.error:
                     result.errors.append(f"{extraction.file_path}: {extraction.error}")
+                    continue
+
+                # Track files skipped due to no grammar (not errors)
+                if extraction.skipped_no_grammar:
+                    result.files_skipped_no_grammar += 1
                     continue
 
                 file_id = file_id_map.get(extraction.file_path)

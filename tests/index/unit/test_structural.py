@@ -209,13 +209,15 @@ def foo():
         assert "not found" in result.error.lower()
 
     def test_extract_unsupported_extension(self, temp_dir: Path) -> None:
-        """Should return error for unsupported file types."""
+        """Should gracefully skip unsupported file types."""
         file_path = temp_dir / "test.unknown"
         file_path.write_text("content")
 
         result = _extract_file("test.unknown", str(temp_dir), unit_id=1)
 
-        assert result.error is not None
+        # Unsupported files are skipped (no error), but marked as no-grammar
+        assert result.error is None
+        assert result.skipped_no_grammar is True
 
     def test_extract_content_hash(self, temp_dir: Path) -> None:
         """Should compute content hash."""

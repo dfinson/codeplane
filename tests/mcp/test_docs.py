@@ -35,6 +35,7 @@ class TestToolCategory:
             "mutation",
             "refactor",
             "testing",
+            "lint",
             "session",
             "introspection",
         }
@@ -145,7 +146,7 @@ class TestToolDocs:
 
     def test_contains_core_tools(self) -> None:
         """Contains documentation for core tools."""
-        expected = ["read_files", "atomic_edit_files", "map_repo", "search"]
+        expected = ["read_files", "write_files", "map_repo", "search"]
         for tool in expected:
             assert tool in TOOL_DOCS, f"Missing doc for {tool}"
 

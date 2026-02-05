@@ -4,7 +4,7 @@ Provides:
 - Structured error handling (catches exceptions, returns structured responses)
 - Console UX (spinner during execution, summary output after)
 - Logging with timing and result summaries
-- No tracebacks printed to console
+- No tracebacks printed to console (exception log pointers instead)
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ import time
 from typing import TYPE_CHECKING, Any
 
 import structlog
-from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 from pydantic import ValidationError
 
@@ -26,6 +25,9 @@ if TYPE_CHECKING:
     from mcp import types as mt
 
 log = structlog.get_logger(__name__)
+
+# Source tag for tool output
+_TOOL_TAG = "[tool]  "
 
 
 class ToolMiddleware(Middleware):
@@ -81,11 +83,11 @@ class ToolMiddleware(Middleware):
                 **summary_dict,
             )
 
-            # Print session log to console: "Agent Session <id>: tool -> summary"
+            # Print session log to console: "[tool]  Agent Session <id>: tool -> summary"
             summary_text = self._format_tool_summary(tool_name, result)
             if summary_text:
                 console.print(
-                    f"Agent Session {session_id}: {tool_name} -> {summary_text}",
+                    f"{_TOOL_TAG}Agent Session {session_id}: {tool_name} -> {summary_text}",
                     style="green",
                     highlight=False,
                 )
@@ -101,19 +103,49 @@ class ToolMiddleware(Middleware):
                 session_id=session_id,
                 duration_ms=round(duration_ms, 1),
             )
-            raise ToolError(f"Tool '{tool_name}' cancelled: server shutting down") from None
+            return {
+                "error": {
+                    "code": "CANCELLED",
+                    "message": f"Tool '{tool_name}' cancelled: server shutting down",
+                },
+                "summary": "error: cancelled",
+            }
 
         except ValidationError as e:
-            # User input error - no traceback needed
+            # User input error - return structured response with schema help
             duration_ms = (time.perf_counter() - start_time) * 1000
-            error_msg = e.errors()[0]["msg"] if e.errors() else str(e)
+            errors = e.errors()
+            error_details = [
+                {
+                    "field": ".".join(str(p) for p in err.get("loc", [])),
+                    "message": err.get("msg", ""),
+                    "type": err.get("type", ""),
+                }
+                for err in errors
+            ]
             log.warning(
                 "tool_validation_error",
                 tool=tool_name,
-                error=error_msg,
+                errors=error_details,
                 duration_ms=round(duration_ms, 1),
             )
-            raise ToolError(f"Validation error: {error_msg}") from e
+
+            # Build schema info from FastMCP tool manager
+            tool_schema = self._get_tool_schema(context, tool_name)
+
+            return {
+                "error": {
+                    "code": "VALIDATION_ERROR",
+                    "message": f"Invalid parameters for '{tool_name}'",
+                    "details": error_details,
+                },
+                "tool_schema": tool_schema,
+                "agentic_hint": (
+                    f"Use 'describe' with action='tool' and name='{tool_name}' for full documentation. "
+                    "For other tools you're unsure about, call describe to see correct usage."
+                ),
+                "summary": f"error: validation failed for {tool_name}",
+            }
 
         except MCPError as e:
             # Expected error - return structured response, not exception
@@ -145,7 +177,119 @@ class ToolMiddleware(Middleware):
             )
             # Full traceback at DEBUG level (goes to file only per logging config)
             log.debug("tool_internal_error_traceback", tool=tool_name, exc_info=True)
-            raise ToolError(f"Error calling tool '{tool_name}': {e}") from e
+
+            # Print concise error with log file pointer (no stacktrace)
+            self._print_error_with_log_pointer(console, tool_name, type(e).__name__, str(e))
+
+            return {
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": f"Error calling tool '{tool_name}': {e}",
+                    "error_type": type(e).__name__,
+                },
+                "agentic_hint": (
+                    "This is an internal error. Check the log file for details. "
+                    f"Use 'describe' with action='tool' and name='{tool_name}' to verify correct usage."
+                ),
+                "summary": f"error: internal error in {tool_name}",
+            }
+
+    def _print_error_with_log_pointer(
+        self,
+        console: Any,
+        tool_name: str,
+        error_type: str,
+        error_msg: str,
+    ) -> None:
+        """Print a concise error message with a pointer to the log file.
+
+        Format: [tool]  <tool> failed: <error_type> - <brief msg>. See <log_file> for details.
+        """
+        from codeplane.core.logging import get_log_file_path
+
+        # Truncate error message to keep console output compact
+        brief_msg = error_msg[:60] + "..." if len(error_msg) > 60 else error_msg
+
+        log_file = get_log_file_path()
+        if log_file:
+            console.print(
+                f"{_TOOL_TAG}{tool_name} failed: {error_type} - {brief_msg}. "
+                f"See {log_file} for details.",
+                style="red",
+                highlight=False,
+            )
+        else:
+            # No log file configured, just print the error
+            console.print(
+                f"{_TOOL_TAG}{tool_name} failed: {error_type} - {brief_msg}",
+                style="red",
+                highlight=False,
+            )
+
+    def _get_tool_schema(
+        self,
+        context: MiddlewareContext[Any],
+        tool_name: str,
+    ) -> dict[str, Any] | None:
+        """Extract schema info for a tool from FastMCP tool manager.
+
+        Returns a dict with name, description, and parameters schema,
+        or None if tool not found.
+        """
+        try:
+            # Access FastMCP server through the middleware context
+            # Navigate: fastmcp_context -> _mcp_context -> session -> app (FastMCP server)
+            if not context.fastmcp_context:
+                return None
+            mcp_ctx = getattr(context.fastmcp_context, "_mcp_context", None)
+            if mcp_ctx is None:
+                return None
+            server = getattr(getattr(mcp_ctx, "session", None), "app", None)
+            if server is None or not hasattr(server, "_tool_manager"):
+                return None
+            tool_spec = server._tool_manager._tools.get(tool_name)
+            if not tool_spec:
+                return None
+
+            # Build a concise schema representation
+            schema: dict[str, Any] = {
+                "name": tool_name,
+                "description": tool_spec.description or "",
+            }
+
+            # Extract parameters from the JSON schema
+            if tool_spec.parameters:
+                params = tool_spec.parameters
+                properties = params.get("properties", {})
+                required = set(params.get("required", []))
+
+                param_list: list[dict[str, Any]] = []
+                for pname, pschema in properties.items():
+                    if pname == "ctx":  # Skip FastMCP context param
+                        continue
+                    param_info: dict[str, Any] = {
+                        "name": pname,
+                        "type": pschema.get("type", pschema.get("anyOf", "unknown")),
+                        "required": pname in required,
+                    }
+                    if "description" in pschema:
+                        param_info["description"] = pschema["description"]
+                    if "default" in pschema:
+                        param_info["default"] = pschema["default"]
+                    if "enum" in pschema:
+                        param_info["allowed_values"] = pschema["enum"]
+                    if "minimum" in pschema:
+                        param_info["minimum"] = pschema["minimum"]
+                    if "maximum" in pschema:
+                        param_info["maximum"] = pschema["maximum"]
+                    param_list.append(param_info)
+
+                schema["parameters"] = param_list
+
+            return schema
+        except Exception:
+            # Don't let schema extraction failure break error handling
+            return None
 
     def _extract_log_params(self, _tool_name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Extract relevant parameters for logging.
