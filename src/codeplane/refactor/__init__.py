@@ -1,4 +1,4 @@
-"""Refactor operations module - refactor_* tools (LSP-based)."""
+"""Refactor operations module - refactor_* tools (index-based)."""
 
 from codeplane.refactor.ops import RefactorOps, RefactorPreview, RefactorResult
 

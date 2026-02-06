@@ -1,7 +1,7 @@
 """CodePlane error types with typed error codes.
 
 Error code ranges: 1xxx Auth, 2xxx Config, 3xxx Index, 4xxx Refactor,
-5xxx Mutation, 6xxx Task, 7xxx Test, 8xxx LSP, 9xxx Internal.
+5xxx Mutation, 6xxx Task, 7xxx Test, 8xxx Reserved, 9xxx Internal.
 """
 
 from dataclasses import dataclass, field

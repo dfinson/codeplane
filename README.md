@@ -89,7 +89,7 @@ CodePlane exposes 30+ MCP tools organized by domain:
 | **Git** | `git_status`, `git_diff`, `git_commit`, `git_log`, `git_push`, `git_pull`, `git_checkout`, `git_merge`, `git_reset`, `git_stage`, `git_branch`, `git_remote`, `git_stash`, `git_rebase`, `git_inspect`, `git_history`, `git_submodule`, `git_worktree` | Complete git operations with structured output |
 | **Index** | `search`, `map_repo` | Lexical/symbol search, repository mental model |
 | **Mutation** | `write_files` | Atomic file create/update/delete with content-addressed edits |
-| **Refactor** | `refactor_rename`, `refactor_move`, `refactor_delete`, `refactor_apply`, `refactor_cancel`, `refactor_inspect` | LSP-style refactoring with preview and certainty levels |
+| **Refactor** | `refactor_rename`, `refactor_move`, `refactor_delete`, `refactor_apply`, `refactor_cancel`, `refactor_inspect` | Index-based refactoring with preview and certainty levels |
 | **Testing** | `discover_test_targets`, `run_test_targets`, `get_test_run_status`, `cancel_test_run` | Multi-language test discovery and execution |
 | **Lint** | `lint_check`, `lint_tools` | Auto-detected linters, formatters, type checkers |
 | **Introspection** | `describe` | Self-documenting tool schemas |

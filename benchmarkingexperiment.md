@@ -39,7 +39,7 @@ Agents using CodePlane MCP will:
 **CodePlane approach**: `refactor_rename` → `refactor_apply`  
 **Terminal approach**: `grep` → manual edits → verify
 
-**Why CodePlane shines**: LSP-backed rename with certainty levels vs regex guessing.
+**Why CodePlane shines**: Index-backed rename with certainty levels vs regex guessing.
 
 ---
 

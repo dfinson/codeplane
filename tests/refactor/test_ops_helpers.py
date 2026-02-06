@@ -270,7 +270,7 @@ class TestRefactorPreview:
         preview = RefactorPreview(
             files_affected=5,
             edits=[FileEdit(path="a.py")],
-            contexts_used=["index", "lsp"],
+            contexts_used=["index", "lexical"],
             high_certainty_count=10,
             medium_certainty_count=3,
             low_certainty_count=2,
