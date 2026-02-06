@@ -169,6 +169,20 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "name": "refactor_symbol",
                     "description": "Safely rename a symbol across codebase",
                     "steps": ["refactor_rename", "refactor_inspect", "refactor_apply"],
+                    "details": {
+                        "certainty_levels": {
+                            "high": "Definition proven by structural index",
+                            "medium": "Comment/docstring references",
+                            "low": "Lexical text matches (cross-file refs, imports)",
+                        },
+                        "unique_identifiers": "For unique names (MyClassName), low-certainty matches are usually safe to apply directly",
+                        "common_words": "For common words (data, result), use refactor_inspect first to check for false positives",
+                        "response_fields": [
+                            "verification_required",
+                            "low_certainty_files",
+                            "verification_guidance",
+                        ],
+                    },
                 },
                 {
                     "name": "explore_codebase",

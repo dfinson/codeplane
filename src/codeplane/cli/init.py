@@ -125,6 +125,27 @@ coverage: bool             # default false
 coverage_dir: str          # REQUIRED when coverage=true
 ```
 
+### Refactor Tools Workflow
+
+Refactor tools use a **preview → review → apply** workflow:
+
+1. **`refactor_rename`** / **`refactor_move`** / **`refactor_delete`** — Returns preview with `refactor_id`
+2. **`refactor_inspect`** — Review low-certainty matches with context (recommended)
+3. **`refactor_apply`** or **`refactor_cancel`** — Execute or discard
+
+**Certainty levels:**
+- `high`: Proven by structural index (definitions, same-file refs)
+- `medium`: Comment/docstring references
+- `low`: Lexical text matches (cross-file refs, imports, strings)
+
+**When low-certainty is safe:** Unique identifiers (e.g., `MyClassName`) — all matches likely correct.
+**When to inspect first:** Common words (e.g., `data`, `result`) — may have false positives.
+
+**Response fields:**
+- `verification_required`: True if low-certainty matches exist
+- `verification_guidance`: Instructions for reviewing
+- `low_certainty_files`: Files needing inspection
+
 ### Response Handling
 
 CodePlane responses include structured metadata. You must inspect and act on:
