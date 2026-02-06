@@ -1,55 +1,13 @@
-logging:
-  level: INFO
-  outputs:
-  - format: console
-    destination: stderr
-    level: null
-server:
-  host: 127.0.0.1
-  port: 7654
-  shutdown_timeout_sec: 5
-  poll_interval_sec: 1.0
-  debounce_sec: 0.3
-index:
-  max_file_size_mb: 10
-  excluded_extensions:
-  - .min.js
-  - .min.css
-  - .map
-  index_path: /home/dave01/wsl-repos/codeplane/.codeplane
-timeouts:
-  server_stop_sec: 5.0
-  force_exit_sec: 3.0
-  watcher_stop_sec: 2.0
-  epoch_await_sec: 5.0
-  session_idle_sec: 1800.0
-  dry_run_ttl_sec: 60.0
-indexer:
-  debounce_sec: 0.5
-  max_workers: 1
-  queue_max_size: 10000
-limits:
-  search_default: 20
-  map_depth_default: 3
-  map_limit_default: 100
-  files_list_default: 200
-  git_log_default: 50
-  git_blame_default: 100
-  indexed_files_max: 1000
-  operation_records_max: 1000
-testing:
-  default_parallelism: 4
-  default_timeout_sec: 300
-telemetry:
-  enabled: false
-  otlp_endpoint: null
-  service_name: codeplane
-database:
-  busy_timeout_ms: 30000
-  max_retries: 3
-  retry_base_delay_sec: 0.1
-  pool_size: 5
-  checkpoint_interval: 1000
-debug:
-  enabled: false
-  verbose_errors: false
+# CodePlane Configuration
+# Docs: https://codeplane.dev/config
+
+# Server port (can also use: cpl up --port <N>)
+port: 7654
+
+# Maximum file size to index (MB). Files larger than this are skipped.
+# Increase for repos with large source files, but may slow indexing.
+# max_file_size_mb: 20
+
+# Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+# DEBUG is very verbose - use only for troubleshooting.
+# log_level: INFO
