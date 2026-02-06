@@ -21,110 +21,120 @@ Agents using CodePlane MCP will:
 |------------|----------|------|------------|---------------|
 | [fastapi/fastapi](https://github.com/tiangolo/fastapi) | Python | ~50k LOC | Medium | Well-structured, popular, good test coverage |
 | [denoland/deno](https://github.com/denoland/deno) | Rust/TS | ~200k LOC | High | Multi-language, complex build, large codebase |
-| [expressjs/express](https://github.com/expressjs/express) | JavaScript | ~15k LOC | Low | Simple structure, minimal dependencies |
-| [golang/go](https://github.com/golang/go) | Go | ~1M LOC | Very High | Massive codebase, tests CodePlane at scale |
+| [spring-projects/spring-boot](https://github.com/spring-projects/spring-boot) | Java | ~300k LOC | High | Industry-standard, complex module structure, extensive tests |
 
 ---
 
 ## Scenarios
 
-### Scenario 1: Symbol Rename Refactoring
-**Task**: Rename a widely-used function/class across the codebase.
+### Scenario 1: Targeted Symbol Rename
+**Task**: Rename a function used in 5-15 locations (not project-wide, scoped to a module).
 
 | Metric | Measurement |
 |--------|-------------|
 | Tool calls | Count of MCP/terminal invocations |
-| Files modified | Correctness of changes |
-| Missed references | False negatives |
-| False positives | Incorrect changes |
+| Correctness | All references updated, no false positives |
 | Time to completion | Wall clock seconds |
 
-**CodePlane approach**: `refactor_rename` → `refactor_inspect` → `refactor_apply`  
-**Terminal approach**: `grep` → manual `sed`/editor → verify with `grep`
+**CodePlane approach**: `refactor_rename` → `refactor_apply`  
+**Terminal approach**: `grep` → manual edits → verify
+
+**Why CodePlane shines**: LSP-backed rename with certainty levels vs regex guessing.
 
 ---
 
-### Scenario 2: Cross-File Search and Navigate
-**Task**: Find all usages of a specific API pattern, understand call hierarchy.
+### Scenario 2: Find Where Function Is Called
+**Task**: Given a function name, find all call sites and understand the call context.
 
 | Metric | Measurement |
 |--------|-------------|
-| Search iterations | Number of search refinements |
-| Context consumed | Tokens used for file reads |
-| Accuracy | Percentage of relevant results found |
+| Tool calls | Number of search/read operations |
+| Accuracy | All call sites found |
+| Context consumed | Tokens used |
 
-**CodePlane approach**: `search` (mode=references) → `read_files`  
-**Terminal approach**: `grep -r` → `cat` individual files
+**CodePlane approach**: `search` (mode=references) → `read_files` (targeted lines)  
+**Terminal approach**: `grep -rn` → `cat` entire files
+
+**Why CodePlane shines**: Symbol-aware search returns structured results with line numbers.
 
 ---
 
-### Scenario 3: Add Feature with Tests
-**Task**: Implement a new function and add corresponding unit tests.
+### Scenario 3: Quick Bug Fix Workflow
+**Task**: Fix a simple bug (off-by-one, typo, missing null check) and commit.
 
 | Metric | Measurement |
 |--------|-------------|
-| Write iterations | Number of file write attempts |
-| Test pass rate | First-run test success |
-| Lint/type errors | Issues caught before commit |
+| Write attempts | Number of file modification tries |
+| Commit success | First-try commit with hooks passing |
+| Total time | End-to-end seconds |
 
-**CodePlane approach**: `write_files` → `lint_check` → `run_test_targets`  
-**Terminal approach**: `echo >>` / editor → `pytest` / `npm test`
+**CodePlane approach**: `read_files` → `write_files` → `lint_check` → `git_commit`  
+**Terminal approach**: `cat` → `sed`/editor → run linter manually → `git commit`
+
+**Why CodePlane shines**: Atomic writes, integrated lint, hook-compliant commits.
 
 ---
 
-### Scenario 4: Bug Investigation from Stack Trace
-**Task**: Given a stack trace, locate the bug and propose a fix.
+### Scenario 4: New to Repo Orientation
+**Task**: Answer: "What's the project structure? Where are tests? What's the entry point?"
 
 | Metric | Measurement |
 |--------|-------------|
-| Files examined | Number of files read |
-| Pinpoint accuracy | Found correct line? |
-| Context efficiency | Relevant lines vs total lines read |
-
-**CodePlane approach**: `git_inspect` (blame) → `search` → `read_files`  
-**Terminal approach**: `git blame` → `grep` → `cat`
-
----
-
-### Scenario 5: Repository Orientation
-**Task**: New to the repo—understand structure, find entry points, identify test patterns.
-
-| Metric | Measurement |
-|--------|-------------|
-| Time to orientation | Seconds until accurate mental model |
-| Tool calls | Number of exploration operations |
+| Tool calls | Operations to get oriented |
+| Time to answers | Seconds to produce accurate summary |
 | Accuracy | Correct identification of key components |
 
-**CodePlane approach**: `map_repo` (include all sections)  
-**Terminal approach**: `find` → `ls` → `cat README` → `head` various files
+**CodePlane approach**: `map_repo` (include: structure, entry_points, test_layout)  
+**Terminal approach**: `find . -type f` → `ls` → `cat README` → `head` various files
+
+**Why CodePlane shines**: Single call returns structured repo mental model.
 
 ---
 
-### Scenario 6: Git Workflow (Branch, Commit, Push)
-**Task**: Create feature branch, make changes, commit with hooks, push.
+### Scenario 5: Add Unit Test for Existing Function
+**Task**: Write a test for an existing function, run it, ensure it passes.
 
 | Metric | Measurement |
 |--------|-------------|
-| Operations | Number of git commands |
-| Hook compliance | Pre-commit hooks respected? |
-| Error recovery | Handling of conflicts/failures |
+| Test discovery | Found correct test location/pattern |
+| Write iterations | File creation attempts |
+| First-run pass | Test passes on first execution |
 
-**CodePlane approach**: `git_checkout` (create) → `write_files` → `git_commit` → `git_push`  
+**CodePlane approach**: `search` (find function) → `discover_test_targets` → `write_files` → `run_test_targets`  
+**Terminal approach**: `grep` → guess test location → write file → `pytest`/`npm test`
+
+**Why CodePlane shines**: Test discovery shows patterns, targeted test execution.
+
+---
+
+### Scenario 6: Git Blame Investigation
+**Task**: Given a suspicious line, find who wrote it, when, and the commit context.
+
+| Metric | Measurement |
+|--------|-------------|
+| Tool calls | Operations to get full context |
+| Accuracy | Correct attribution and commit info |
+
+**CodePlane approach**: `git_inspect` (action=blame, line range) → `git_inspect` (action=show)  
+**Terminal approach**: `git blame -L` → `git show` → parse output
+
+**Why CodePlane shines**: Structured blame output with pagination, direct commit details.
+
+---
+
+### Scenario 7: Feature Branch Workflow
+**Task**: Create branch, make a change, commit with message, push.
+
+| Metric | Measurement |
+|--------|-------------|
+| Operations | Git commands needed |
+| Hook compliance | Pre-commit hooks respected |
+| Error handling | Recovery from any failures |
+
+**CodePlane approach**: `git_checkout` (create=true) → `write_files` → `git_commit` → `git_push`  
 **Terminal approach**: `git checkout -b` → edit → `git add` → `git commit` → `git push`
 
----
-
-### Scenario 7: Large-Scale Code Analysis
-**Task**: Find all functions that don't have docstrings/comments.
-
-| Metric | Measurement |
-|--------|-------------|
-| Recall | Percentage of undocumented functions found |
-| Precision | False positive rate |
-| Scalability | Performance on large codebases |
-
-**CodePlane approach**: `search` (mode=symbol, filter_kinds) → cross-reference with content  
-**Terminal approach**: AST parsing scripts or `grep` heuristics
+**Why CodePlane shines**: Hooks run automatically, structured error responses.
 
 ---
 
