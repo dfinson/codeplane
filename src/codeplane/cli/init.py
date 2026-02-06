@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import math
 import sys
 from pathlib import Path
@@ -21,6 +22,126 @@ from codeplane.core.progress import (
     status,
 )
 from codeplane.templates import get_cplignore_template
+
+# =============================================================================
+# Agent Instruction Snippet
+# =============================================================================
+
+_CODEPLANE_SNIPPET_MARKER = "<!-- codeplane-instructions -->"
+
+_CODEPLANE_SNIPPET = """
+<!-- codeplane-instructions -->
+## CodePlane MCP Integration
+
+This repository is configured with CodePlane MCP. When available, prefer CodePlane tools over terminal commands:
+
+| Task | Use | Instead of |
+|------|-----|------------|
+| Read files | `mcp_codeplane_read_files` | `cat`, `head` |
+| Write files | `mcp_codeplane_write_files` | `sed`, `echo >>` |
+| List files | `mcp_codeplane_list_files` | `ls`, `find` |
+| Search | `mcp_codeplane_search` | `grep`, `rg` |
+| Map repo | `mcp_codeplane_map_repo` | manual traversal |
+| Git operations | `mcp_codeplane_git_*` | raw `git` |
+
+CodePlane responses may include `agentic_hint`, `coverage_hint`, or `display_to_user` fields—follow these hints for next steps.
+<!-- /codeplane-instructions -->
+"""
+
+
+def _inject_agent_instructions(repo_root: Path) -> list[str]:
+    """Inject CodePlane snippet into agent instruction files.
+
+    Returns list of files that were created or updated.
+    """
+    modified: list[str] = []
+
+    # Target files for agent instructions
+    targets = [
+        repo_root / "AGENTS.md",
+        repo_root / ".github" / "copilot-instructions.md",
+    ]
+
+    for target in targets:
+        if target.exists():
+            content = target.read_text()
+            # Check if snippet already present
+            if _CODEPLANE_SNIPPET_MARKER in content:
+                continue  # Already has snippet
+            # Append snippet
+            new_content = content.rstrip() + "\n" + _CODEPLANE_SNIPPET
+            target.write_text(new_content)
+            modified.append(str(target.relative_to(repo_root)))
+        else:
+            # Create file with snippet (only for .github/copilot-instructions.md)
+            if target.name == "copilot-instructions.md":
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(
+                    "# Copilot Instructions\n\n"
+                    "Project-specific instructions for GitHub Copilot.\n" + _CODEPLANE_SNIPPET
+                )
+                modified.append(str(target.relative_to(repo_root)))
+
+    return modified
+
+
+# =============================================================================
+# VS Code MCP Configuration
+# =============================================================================
+
+
+def _ensure_vscode_mcp_config(repo_root: Path, port: int = 7654) -> bool:
+    """Ensure .vscode/mcp.json has the CodePlane server entry.
+
+    Returns True if file was created or modified.
+    """
+    vscode_dir = repo_root / ".vscode"
+    mcp_json_path = vscode_dir / "mcp.json"
+
+    # Derive server name from repo directory name
+    repo_name = repo_root.name
+    server_name = f"codeplane-{repo_name}"
+
+    expected_config = {
+        "command": "npx",
+        "args": ["-y", "mcp-remote", f"http://127.0.0.1:{port}/mcp"],
+    }
+
+    if mcp_json_path.exists():
+        try:
+            existing = json.loads(mcp_json_path.read_text())
+        except json.JSONDecodeError:
+            existing = {}
+
+        servers = existing.get("servers", {})
+
+        # Check if our server entry already exists (by name or equivalent config)
+        if server_name in servers:
+            return False  # Already configured
+
+        # Also check for legacy "codeplane" entry with same port
+        for name, cfg in servers.items():
+            if name.startswith("codeplane") and cfg.get("args", [])[-1:] == [
+                f"http://127.0.0.1:{port}/mcp"
+            ]:
+                return False  # Already has equivalent config
+
+        # Add our server entry
+        servers[server_name] = expected_config
+        existing["servers"] = servers
+        mcp_json_path.write_text(json.dumps(existing, indent=2) + "\n")
+        return True
+    else:
+        # Create new mcp.json
+        vscode_dir.mkdir(parents=True, exist_ok=True)
+        config = {"servers": {server_name: expected_config}}
+        mcp_json_path.write_text(json.dumps(config, indent=2) + "\n")
+        return True
+
+
+# =============================================================================
+# Filesystem Helpers
+# =============================================================================
 
 
 def _is_cross_filesystem(path: Path) -> bool:
@@ -104,6 +225,17 @@ def initialize_repo(repo_root: Path, *, force: bool = False, show_cpl_up_hint: b
             "!config.yaml\n"
             "# state.yaml is auto-generated, do not commit\n"
         )
+
+    # === IDE & Agent Integration ===
+    # Inject CodePlane instructions into agent instruction files
+    modified_agent_files = _inject_agent_instructions(repo_root)
+    if modified_agent_files:
+        for f in modified_agent_files:
+            status(f"Updated {f} with CodePlane instructions", style="info")
+
+    # Ensure VS Code MCP configuration
+    if _ensure_vscode_mcp_config(repo_root):
+        status("Created .vscode/mcp.json with CodePlane server", style="info")
 
     # === Discovery Phase ===
     from codeplane.index._internal.grammars import (
