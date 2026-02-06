@@ -81,6 +81,7 @@ class RefactorResult:
     preview: RefactorPreview | None = None
     applied: MutationDelta | None = None
     divergence: RefactorDivergence | None = None
+    warning: str | None = None  # Agent guidance (e.g., path:line:col format detected)
 
 
 def _scan_file_for_comment_occurrences(
@@ -229,6 +230,43 @@ class RefactorOps:
         """
         return _compute_rename_certainty_from_ref(ref)
 
+    async def _extract_symbol_at_location(
+        self,
+        file_path: str,
+        line_num: int,
+    ) -> str | None:
+        """Try to extract symbol name from a file:line location.
+
+        Used when agent mistakenly passes path:line:col format.
+        Returns the symbol name if found at that line.
+        """
+        full_path = self._repo_root / file_path
+        if not full_path.exists():
+            return None
+
+        # Read the line and try to extract identifier
+        try:
+            content = full_path.read_text()
+            lines = content.splitlines()
+            if 0 < line_num <= len(lines):
+                line = lines[line_num - 1]
+                # Try to find a likely symbol name (class/def/var assignment)
+                patterns = [
+                    r"class\s+(\w+)",
+                    r"def\s+(\w+)",
+                    r"async\s+def\s+(\w+)",
+                    r"^(\w+)\s*=",
+                    r"^\s*(\w+)\s*:",
+                ]
+                for pattern in patterns:
+                    m = re.search(pattern, line)
+                    if m:
+                        return m.group(1)
+        except (OSError, UnicodeDecodeError):
+            pass
+
+        return None
+
     async def rename(
         self,
         symbol: str,
@@ -244,7 +282,7 @@ class RefactorOps:
         Returns candidates with certainty scores for agent review.
 
         Args:
-            symbol: Symbol name or path:line:col locator
+            symbol: Symbol name (e.g., "MyClass", "my_function")
             new_name: New name for the symbol
             _include_comments: Also update comments/docs (default True)
             _contexts: Limit to specific contexts
@@ -252,6 +290,45 @@ class RefactorOps:
         Returns:
             RefactorResult with preview. Call apply() to execute.
         """
+        # Detect and strip path:line:col prefix if agent mistakenly passed it
+        symbol_warning: str | None = None
+        path_line_col_pattern = re.compile(r"^(.+):(\d+):(\d+)$")
+        match = path_line_col_pattern.match(symbol)
+        if match:
+            # Extract just the symbol name - this is a guess, warn the agent
+            original_input = symbol
+            # The "symbol" they probably meant is just the identifier, not the locator
+            # We can't reliably extract it from path:line:col, so search the file
+            file_path = match.group(1)
+            line_num = int(match.group(2))
+
+            # Try to find definition at that location to get actual symbol name
+            extracted_symbol = await self._extract_symbol_at_location(file_path, line_num)
+            if extracted_symbol:
+                symbol = extracted_symbol
+                symbol_warning = (
+                    f"WARNING: Detected path:line:col format '{original_input}'. "
+                    f"Extracted symbol name '{symbol}'. "
+                    f"In future, pass just the symbol name directly (e.g., 'MyClass' not 'path/file.py:10:5'). "
+                    f"Please verify '{symbol}' is the correct symbol to rename."
+                )
+            else:
+                # Couldn't extract - return early with error guidance
+                return RefactorResult(
+                    refactor_id=str(uuid.uuid4())[:8],
+                    status="previewed",
+                    preview=RefactorPreview(
+                        files_affected=0,
+                        edits=[],
+                        verification_required=True,
+                        verification_guidance=(
+                            f"ERROR: Received path:line:col format '{original_input}' but could not "
+                            f"extract symbol name at that location. "
+                            f"Pass the symbol name directly (e.g., 'MyClass' not 'path/file.py:10:5')."
+                        ),
+                    ),
+                )
+
         refactor_id = str(uuid.uuid4())[:8]
 
         # Find ALL definitions with this name (not just the first)
@@ -354,6 +431,7 @@ class RefactorOps:
             refactor_id=refactor_id,
             status="previewed",
             preview=preview,
+            warning=symbol_warning,
         )
 
     async def _add_comment_occurrences(

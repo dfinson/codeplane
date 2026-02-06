@@ -133,6 +133,14 @@ Refactor tools use a **preview → review → apply** workflow:
 2. **`refactor_inspect`** — Review low-certainty matches with context (recommended)
 3. **`refactor_apply`** or **`refactor_cancel`** — Execute or discard
 
+**{tool_prefix}_refactor_rename**
+```
+symbol: str                # REQUIRED - the symbol NAME only (e.g., "MyClass", "my_function")
+                           # WRONG: "src/file.py:42:6" - do NOT use path:line:col format
+new_name: str              # REQUIRED - new name for the symbol
+include_comments: bool     # default true - also update comments/docs
+```
+
 **Certainty levels:**
 - `high`: Proven by structural index (definitions, same-file refs)
 - `medium`: Comment/docstring references

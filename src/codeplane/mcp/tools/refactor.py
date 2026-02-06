@@ -108,6 +108,10 @@ def _serialize_refactor_result(result: "RefactorResult") -> dict[str, Any]:
             "resolution_options": result.divergence.resolution_options,
         }
 
+    # Include warning if present (e.g., path:line:col format detected)
+    if result.warning:
+        output["warning"] = result.warning
+
     return output
 
 
@@ -122,7 +126,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     @mcp.tool
     async def refactor_rename(
         ctx: Context,
-        symbol: str = Field(..., description="Symbol name or path:line:col locator"),
+        symbol: str = Field(
+            ...,
+            description="Symbol name to rename (e.g., 'MyClass', 'my_function'). Do NOT use path:line:col format.",
+        ),
         new_name: str = Field(..., description="New name for the symbol"),
         include_comments: bool = Field(True, description="Include comment references"),
         contexts: list[str] | None = Field(None, description="Limit to specific contexts"),
