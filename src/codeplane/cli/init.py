@@ -29,32 +29,125 @@ from codeplane.templates import get_cplignore_template
 
 _CODEPLANE_SNIPPET_MARKER = "<!-- codeplane-instructions -->"
 
-_CODEPLANE_SNIPPET = """
+
+def _make_codeplane_snippet(tool_prefix: str) -> str:
+    """Generate the CodePlane instruction snippet with the actual tool prefix.
+
+    Args:
+        tool_prefix: The MCP tool prefix (e.g., 'mcp_codeplane_myrepo')
+    """
+    # Note: Using {{}} to escape braces that should appear literally in output
+    # The f-string only interpolates {tool_prefix}
+    return f"""
 <!-- codeplane-instructions -->
-## CodePlane MCP Integration
+## CodePlane MCP: Mandatory Tool Selection
 
-This repository is configured with CodePlane MCP. When available, prefer CodePlane tools over terminal commands:
+This repository uses CodePlane MCP. **You MUST use CodePlane tools instead of terminal commands.**
 
-| Task | Use | Instead of |
-|------|-----|------------|
-| Read files | `mcp_codeplane_read_files` | `cat`, `head` |
-| Write files | `mcp_codeplane_write_files` | `sed`, `echo >>` |
-| List files | `mcp_codeplane_list_files` | `ls`, `find` |
-| Search | `mcp_codeplane_search` | `grep`, `rg` |
-| Map repo | `mcp_codeplane_map_repo` | manual traversal |
-| Git operations | `mcp_codeplane_git_*` | raw `git` |
+Terminal fallback is permitted ONLY when no CodePlane tool exists for the operation.
 
-CodePlane responses may include `agentic_hint`, `coverage_hint`, or `display_to_user` fields—follow these hints for next steps.
+### Required Tool Mapping
+
+| Operation | REQUIRED Tool | FORBIDDEN Alternative |
+|-----------|---------------|----------------------|
+| Read files | `{tool_prefix}_read_files` | `cat`, `head`, `less`, `tail` |
+| Write/edit files | `{tool_prefix}_write_files` | `sed`, `echo >>`, `awk`, `tee` |
+| List directory | `{tool_prefix}_list_files` | `ls`, `find`, `tree` |
+| Search code | `{tool_prefix}_search` | `grep`, `rg`, `ag`, `ack` |
+| Repository overview | `{tool_prefix}_map_repo` | Manual file traversal |
+| All git operations | `{tool_prefix}_git_*` | Raw `git` commands |
+| Run linters/formatters | `{tool_prefix}_lint_check` | `ruff`, `black`, `mypy` directly |
+| Discover tests | `{tool_prefix}_discover_test_targets` | Manual test file search |
+| Run tests | `{tool_prefix}_run_test_targets` | `pytest`, `jest` directly |
+| Rename symbols | `{tool_prefix}_refactor_rename` | Find-and-replace, `sed` |
+| Move files | `{tool_prefix}_refactor_move` | `mv` + manual import fixes |
+
+### Critical Parameter Reference
+
+**{tool_prefix}_read_files**
+```
+paths: list[str]           # REQUIRED - file paths relative to repo root
+ranges: list[RangeParam]   # optional - NOT "line_ranges"
+  start_line: int          # 1-indexed, NOT "start"
+  end_line: int            # 1-indexed, NOT "end"
+```
+
+**{tool_prefix}_write_files**
+```
+edits: list[EditParam]     # REQUIRED - array of edits
+  path: str                # file path relative to repo root
+  action: "create"|"update"|"delete"
+  old_content: str         # for update: exact text to find (include enough context)
+  new_content: str         # for update: replacement text
+dry_run: bool              # optional, default false
+```
+
+**{tool_prefix}_search**
+```
+query: str                 # REQUIRED
+mode: "lexical"|"symbol"|"references"|"definitions"  # default "lexical", NOT "scope" or "text"
+limit: int                 # default 20, NOT "max_results"
+```
+
+**{tool_prefix}_list_files**
+```
+path: str                  # optional - directory to list, NOT "directory"
+pattern: str               # optional - glob pattern (e.g., "*.py")
+recursive: bool            # default false
+limit: int                 # default 200
+```
+
+**{tool_prefix}_map_repo**
+```
+include: list[str]         # optional - values: "structure", "languages", "entry_points",
+                           #   "dependencies", "test_layout", "public_api"
+depth: int                 # default 3
+```
+
+**{tool_prefix}_git_commit**
+```
+message: str               # REQUIRED
+paths: list[str]           # optional - files to stage before commit
+```
+
+**{tool_prefix}_git_stage**
+```
+action: "add"|"remove"|"all"|"discard"  # REQUIRED
+paths: list[str]           # REQUIRED for add/remove/discard (not for "all")
+```
+
+**{tool_prefix}_run_test_targets**
+```
+targets: list[str]         # optional - target_ids from discover_test_targets
+target_filter: str         # optional - substring match on target paths
+test_filter: str           # optional - filter test NAMES (pytest -k), does NOT filter targets
+coverage: bool             # default false
+coverage_dir: str          # REQUIRED when coverage=true
+```
+
+### Response Handling
+
+CodePlane responses include structured metadata. You must inspect and act on:
+- `agentic_hint`: Direct instructions for your next action
+- `coverage_hint`: Guidance on test coverage expectations
+- `display_to_user`: Content that should be surfaced to the user
+
+Ignoring these hints degrades agent performance and may cause incorrect behavior.
 <!-- /codeplane-instructions -->
 """
 
 
-def _inject_agent_instructions(repo_root: Path) -> list[str]:
+def _inject_agent_instructions(repo_root: Path, tool_prefix: str) -> list[str]:
     """Inject CodePlane snippet into agent instruction files.
+
+    Args:
+        repo_root: Path to the repository root
+        tool_prefix: The MCP tool prefix (e.g., 'mcp_codeplane_myrepo')
 
     Returns list of files that were created or updated.
     """
     modified: list[str] = []
+    snippet = _make_codeplane_snippet(tool_prefix)
 
     # Target files for agent instructions
     targets = [
@@ -67,20 +160,37 @@ def _inject_agent_instructions(repo_root: Path) -> list[str]:
             content = target.read_text()
             # Check if snippet already present
             if _CODEPLANE_SNIPPET_MARKER in content:
-                continue  # Already has snippet
-            # Append snippet
-            new_content = content.rstrip() + "\n" + _CODEPLANE_SNIPPET
-            target.write_text(new_content)
-            modified.append(str(target.relative_to(repo_root)))
+                # Replace existing snippet with updated one
+                import re
+
+                new_content = re.sub(
+                    r"<!-- codeplane-instructions -->.*?<!-- /codeplane-instructions -->",
+                    snippet.strip(),
+                    content,
+                    flags=re.DOTALL,
+                )
+                if new_content != content:
+                    target.write_text(new_content)
+                    modified.append(str(target.relative_to(repo_root)))
+            else:
+                # Append snippet
+                new_content = content.rstrip() + "\n" + snippet
+                target.write_text(new_content)
+                modified.append(str(target.relative_to(repo_root)))
         else:
-            # Create file with snippet (only for .github/copilot-instructions.md)
-            if target.name == "copilot-instructions.md":
-                target.parent.mkdir(parents=True, exist_ok=True)
+            # Create file with snippet
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.name == "AGENTS.md":
+                target.write_text(
+                    "# Agent Instructions\n\n"
+                    "Instructions for AI coding agents working in this repository.\n" + snippet
+                )
+            else:  # copilot-instructions.md
                 target.write_text(
                     "# Copilot Instructions\n\n"
-                    "Project-specific instructions for GitHub Copilot.\n" + _CODEPLANE_SNIPPET
+                    "Project-specific instructions for GitHub Copilot.\n" + snippet
                 )
-                modified.append(str(target.relative_to(repo_root)))
+            modified.append(str(target.relative_to(repo_root)))
 
     return modified
 
@@ -227,8 +337,12 @@ def initialize_repo(repo_root: Path, *, force: bool = False, show_cpl_up_hint: b
         )
 
     # === IDE & Agent Integration ===
+    # Derive tool prefix from server name (codeplane-{repo_name} -> mcp_codeplane_{repo_name})
+    repo_name = repo_root.name
+    tool_prefix = f"mcp_codeplane_{repo_name.replace('-', '_')}"
+
     # Inject CodePlane instructions into agent instruction files
-    modified_agent_files = _inject_agent_instructions(repo_root)
+    modified_agent_files = _inject_agent_instructions(repo_root, tool_prefix)
     if modified_agent_files:
         for f in modified_agent_files:
             status(f"Updated {f} with CodePlane instructions", style="info")
