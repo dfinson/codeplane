@@ -1,6 +1,6 @@
 """High-level orchestration of the indexing engine.
 
-This module implements the IndexCoordinator - the entry point for all index
+This module implements the CplIndexCoordinator - the entry point for all index
 operations. It enforces critical serialization invariants:
 
 - reconcile_lock: Only ONE reconcile() at a time (prevents RepoState corruption)
@@ -139,7 +139,7 @@ class IndexCoordinator:
 
     Usage::
 
-        coordinator = IndexCoordinator(repo_root, db_path, tantivy_path)
+        coordinator = CplIndexCoordinator(repo_root, db_path, tantivy_path)
         result = await coordinator.initialize()
 
         # Search (thread-safe, no locks needed)
