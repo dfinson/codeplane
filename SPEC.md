@@ -889,6 +889,27 @@ When a UX-facing operation requires index data:
 
 There is NO fallback to stale data. UX correctness > latency.
 
+#### Current Implementation: Global Freshness
+
+The current implementation uses a **global freshness gate** via `_fresh_event`:
+
+- Cleared synchronously when any file mutation begins (`mark_stale()`)
+- Set when reindex completes
+- All query methods (`search`, `get_def`, `get_references`, etc.) await freshness before returning
+
+This prevents stale reads but has a limitation: any mutation blocks ALL queries repo-wide.
+
+#### Near-Term: File-Level Freshness (PLANNED)
+
+For improved concurrency, queries should block only on affected files:
+
+- Track `{file_id: freshness_state}` per file
+- Query for file X blocks only if file X is DIRTY
+- Other files remain queryable during partial reindex
+- Requires: per-file dirty tracking, dependency-aware blocking for cross-file queries
+
+See GitHub issue for design proposals and implementation timeline: https://github.com/dfinson/codeplane/issues/132
+
 ### 7.7 File Watcher Integration
 
 #### Purpose
