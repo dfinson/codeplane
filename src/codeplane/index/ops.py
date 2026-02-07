@@ -41,7 +41,13 @@ from codeplane.index._internal.discovery import (
     MembershipResolver,
     Tier1AuthorityFilter,
 )
-from codeplane.index._internal.indexing import FactQueries, LexicalIndex, StructuralIndexer
+from codeplane.index._internal.indexing import (
+    FactQueries,
+    LexicalIndex,
+    StructuralIndexer,
+    resolve_references,
+    resolve_type_traced,
+)
 from codeplane.index._internal.parsing import TreeSitterParser
 from codeplane.index._internal.state import FileStateService
 from codeplane.index.models import (
@@ -181,6 +187,13 @@ class IndexCoordinator:
         self._epoch_manager: EpochManager | None = None
 
         self._initialized = False
+
+    def mark_stale(self) -> None:
+        """Mark index as stale (query methods will block until fresh).
+
+        Call this BEFORE scheduling async reindex to prevent race conditions.
+        """
+        self._fresh_event.clear()
 
     async def initialize(
         self,
@@ -723,6 +736,12 @@ class IndexCoordinator:
 
             for ctx_id, paths in by_context.items():
                 self._structural.index_files(paths, context_id=ctx_id, file_id_map=file_id_map)
+
+            # Resolve cross-file references (Pass 2 - follows ImportFact chains)
+            resolve_references(self.db)
+
+            # Resolve type-traced member accesses (Pass 3 - follows type annotations)
+            resolve_type_traced(self.db)
 
         # Remove structural facts for removed files
         if to_remove:
@@ -1970,6 +1989,12 @@ class IndexCoordinator:
                     if file_paths:
                         self._structural.index_files(file_paths, context_id)
 
+                # Resolve cross-file references (Pass 2 - follows ImportFact chains)
+                resolve_references(self.db)
+
+                # Resolve type-traced member accesses (Pass 3 - follows type annotations)
+                resolve_type_traced(self.db)
+
         return count, indexed_paths, files_by_ext
 
     def _index_files_with_progress(
@@ -2044,8 +2069,9 @@ class IndexCoordinator:
                 select(Context).where(Context.probe_status == ProbeStatus.VALID.value)
             ).all()
 
-            # Build file -> context_id mapping
+            # Build file -> context_id mapping and collect file_ids
             file_to_context: dict[str, int] = {}
+            changed_file_ids: list[int] = []
             for ctx in contexts:
                 if ctx.id is None:
                     continue
@@ -2066,6 +2092,7 @@ class IndexCoordinator:
                 file = session.exec(select(File).where(File.path == str_path)).first()
                 if file and file.id is not None:
                     file_id = file.id
+                    changed_file_ids.append(file_id)
                     # Delete facts for this file using raw SQL
                     session.exec(
                         text("DELETE FROM def_facts WHERE file_id = :fid").bindparams(fid=file_id)
@@ -2102,6 +2129,13 @@ class IndexCoordinator:
 
         for ctx_id, paths in context_files.items():
             self._structural.index_files(paths, context_id=ctx_id)
+
+        # Resolve cross-file references (Pass 2 - scoped to changed files)
+        if changed_file_ids:
+            resolve_references(self.db, file_ids=changed_file_ids)
+
+            # Resolve type-traced member accesses (Pass 3 - scoped to changed files)
+            resolve_type_traced(self.db, file_ids=changed_file_ids)
 
     def _clear_all_structural_facts(self) -> None:
         """Clear all structural facts from the database.

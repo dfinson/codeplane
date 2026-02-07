@@ -18,6 +18,11 @@ from codeplane.index._internal.indexing.structural import (
     StructuralIndexer,
     index_context,
 )
+from codeplane.index._internal.indexing.type_resolver import (
+    TypeTracedResolver,
+    TypeTracedStats,
+    resolve_type_traced,
+)
 
 __all__ = [
     # Lexical (Tier 0)
@@ -34,6 +39,10 @@ __all__ = [
     "ReferenceResolver",
     "ResolutionStats",
     "resolve_references",
+    # Type-Traced Resolution (Pass 3)
+    "TypeTracedResolver",
+    "TypeTracedStats",
+    "resolve_type_traced",
     # Fact Queries
     "FactQueries",
 ]

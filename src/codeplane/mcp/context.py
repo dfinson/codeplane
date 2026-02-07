@@ -74,6 +74,9 @@ class AppContext:
         def on_mutation(paths: list[Path]) -> None:
             import asyncio
 
+            # Mark stale SYNCHRONOUSLY before scheduling async reindex
+            # This prevents race where search runs before reindex task starts
+            coordinator.mark_stale()
             asyncio.create_task(coordinator.reindex_incremental(paths))
 
         mutation_ops = MutationOps(repo_root, on_mutation=on_mutation)

@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 from sqlmodel import col, select
 
 from codeplane.index.models import (
+    BindTargetKind,
     Certainty,
     DefFact,
     File,
@@ -67,11 +68,8 @@ class ReferenceResolver:
         # Cache file_id -> exported symbols
         self._file_exports: dict[int, dict[str, str]] = {}  # name -> def_uid
 
-    def resolve_all(self, *, limit: int = 10000) -> ResolutionStats:
+    def resolve_all(self) -> ResolutionStats:
         """Resolve all unresolved STRONG-tier references.
-
-        Args:
-            limit: Maximum refs to process in one batch
 
         Returns:
             ResolutionStats with counts
@@ -79,14 +77,10 @@ class ReferenceResolver:
         stats = ResolutionStats()
 
         with self._db.session() as session:
-            # Find STRONG refs with no target_def_uid
-            stmt = (
-                select(RefFact)
-                .where(
-                    RefFact.ref_tier == RefTier.STRONG.value,
-                    RefFact.target_def_uid == None,  # noqa: E711
-                )
-                .limit(limit)
+            # Find ALL STRONG refs with no target_def_uid
+            stmt = select(RefFact).where(
+                RefFact.ref_tier == RefTier.STRONG.value,
+                RefFact.target_def_uid == None,  # noqa: E711
             )
             unresolved_refs = list(session.exec(stmt).all())
             stats.refs_processed = len(unresolved_refs)
@@ -156,13 +150,13 @@ class ReferenceResolver:
             return False
 
         # If it's a DEF binding (same-file), should already be PROVEN
-        if bind.target_kind == "DEF":
+        if bind.target_kind == BindTargetKind.DEF.value:
             ref.target_def_uid = bind.target_uid
             ref.certainty = Certainty.CERTAIN.value
             return True
 
         # If it's an IMPORT binding, follow the import chain
-        if bind.target_kind == "IMPORT":
+        if bind.target_kind == BindTargetKind.IMPORT.value:
             import_uid = bind.target_uid
             return self._resolve_import_ref(session, ref, import_uid)
 
@@ -219,10 +213,15 @@ class ReferenceResolver:
                 self._module_to_file[module_path] = file_id
 
     def _build_export_cache(self, session: object) -> None:
-        """Build mapping from file_id to exported symbols."""
+        """Build mapping from file_id to exported symbols.
+
+        Includes:
+        1. Direct definitions (DefFact) in the file
+        2. Re-exports (import + expose at module level via LocalBindFact)
+        """
         self._file_exports = {}
 
-        # Get all top-level definitions (no parent = exported)
+        # Step 1: Get all top-level definitions
         stmt = select(DefFact).where(
             col(DefFact.kind).in_(["function", "class", "variable"]),
         )
@@ -236,18 +235,56 @@ class ReferenceResolver:
             if not d.name.startswith("_"):
                 self._file_exports[d.file_id][d.name] = d.def_uid
 
+        # Step 2: Add re-exports (imports that are exposed at module level)
+        # These are LocalBindFacts with target_kind='import' - common in __init__.py
+        reexport_stmt = (
+            select(LocalBindFact, ImportFact)
+            .join(
+                ImportFact,
+                LocalBindFact.target_uid == ImportFact.import_uid,  # type: ignore[arg-type]
+            )
+            .where(
+                LocalBindFact.target_kind == BindTargetKind.IMPORT.value,
+            )
+        )
+        reexports = session.exec(reexport_stmt).all()  # type: ignore[attr-defined]
+
+        for bind, imp in reexports:
+            if bind.name.startswith("_"):
+                continue
+
+            # Find the actual definition in the source module
+            source_file_id = (
+                self._find_module_file(imp.source_literal) if imp.source_literal else None
+            )
+            if source_file_id is None:
+                continue
+
+            # Look up the def_uid from the source module's exports
+            source_exports = self._file_exports.get(source_file_id, {})
+            if imp.imported_name in source_exports:
+                def_uid = source_exports[imp.imported_name]
+                # Add to this file's exports
+                if bind.file_id not in self._file_exports:
+                    self._file_exports[bind.file_id] = {}
+                self._file_exports[bind.file_id][bind.name] = def_uid
+
     def _find_module_file(self, source_literal: str) -> int | None:
         """Find file_id for a module import path."""
         # Direct match
         if source_literal in self._module_to_file:
             return self._module_to_file[source_literal]
 
-        # Try common patterns
-        # foo.bar -> foo/bar.py or foo/bar/__init__.py
+        # Try common patterns:
+        # 1. foo.bar -> foo/bar.py or foo/bar/__init__.py
+        # 2. src.foo.bar -> also try for codebase with src/ prefix
         candidates = [
             source_literal,
             source_literal.replace(".", "/"),
             f"{source_literal.replace('.', '/')}/__init__",
+            # Handle src/ prefix - imports like 'codeplane.foo' map to 'src/codeplane/foo.py'
+            f"src.{source_literal}",
+            f"src/{source_literal.replace('.', '/')}",
         ]
 
         for candidate in candidates:
