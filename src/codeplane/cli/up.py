@@ -6,9 +6,13 @@ Improved UX:
 - Summary stream for startup progress
 """
 
+from __future__ import annotations
+
 import asyncio
+import sys
 from importlib.metadata import version
 from pathlib import Path
+from typing import Any
 
 import click
 
@@ -99,6 +103,7 @@ def _print_banner(
 @click.argument("path", default=None, required=False, type=click.Path(exists=True, path_type=Path))
 @click.option("--port", "-p", type=int, help="Override server port")
 @click.option(
+    "-r",
     "--reindex",
     is_flag=True,
     help="Wipe and rebuild the entire index from scratch",
@@ -183,9 +188,23 @@ def up_command(path: Path | None, port: int | None, reindex: bool) -> None:
         ),
     )
 
+    # Suppress asyncio subprocess cleanup errors on Ctrl+C
+    # These occur when event loop closes before subprocess transports are GC'd
+    _original_unraisablehook = sys.unraisablehook
+
+    def _suppress_event_loop_closed(unraisable: Any) -> None:
+        if getattr(unraisable, "exc_type", None) is RuntimeError and "Event loop is closed" in str(
+            getattr(unraisable, "exc_value", "")
+        ):
+            return  # Suppress this specific error
+        _original_unraisablehook(unraisable)
+
+    sys.unraisablehook = _suppress_event_loop_closed
+
     try:
         asyncio.run(run_server(repo_root, coordinator, config))
     except KeyboardInterrupt:
         click.echo("\nStopped")
     finally:
         coordinator.close()
+        sys.unraisablehook = _original_unraisablehook

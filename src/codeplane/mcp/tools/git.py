@@ -170,7 +170,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         if not hook_result.success:
             return {
-                "error": {
+                "hook_failure": {
                     "code": "HOOK_FAILED",
                     "hook_type": "pre-commit",
                     "exit_code": hook_result.exit_code,
