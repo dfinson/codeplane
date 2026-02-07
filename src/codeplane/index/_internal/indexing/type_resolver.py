@@ -17,6 +17,7 @@ The output is updated MemberAccessFact records with:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -71,11 +72,17 @@ class TypeTracedResolver:
         # Cache: (parent_type, member_name) -> TypeMemberFact
         self._member_map: dict[tuple[str, str], TypeMemberFact] = {}
 
-    def resolve_all(self, *, limit: int = 10000) -> TypeTracedStats:
+    def resolve_all(
+        self,
+        *,
+        limit: int = 10000,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> TypeTracedStats:
         """Resolve all unresolved member accesses.
 
         Args:
             limit: Maximum accesses to process in one batch
+            on_progress: Optional callback(processed, total) for progress updates
 
         Returns:
             TypeTracedStats with resolution counts
@@ -91,6 +98,7 @@ class TypeTracedResolver:
             )
             unresolved = list(session.exec(stmt).all())
             stats.accesses_processed = len(unresolved)
+            total = len(unresolved)
 
             if not unresolved:
                 return stats
@@ -100,7 +108,7 @@ class TypeTracedResolver:
             self._build_member_cache(session)
 
             # Resolve each access
-            for access in unresolved:
+            for i, access in enumerate(unresolved):
                 result = self._resolve_access(session, access)
                 if result == "resolved":
                     stats.accesses_resolved += 1
@@ -109,14 +117,30 @@ class TypeTracedResolver:
                 else:
                     stats.accesses_unresolved += 1
 
+                # Report progress every 50 accesses
+                if on_progress and (i + 1) % 50 == 0:
+                    on_progress(i + 1, total)
+
+            # Final progress update
+            if on_progress and total > 0:
+                on_progress(total, total)
+
             session.commit()
 
         return stats
 
-    def resolve_for_files(self, file_ids: list[int]) -> TypeTracedStats:
+    def resolve_for_files(
+        self,
+        file_ids: list[int],
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> TypeTracedStats:
         """Resolve accesses only for specific files.
 
         Use for incremental updates after re-indexing.
+
+        Args:
+            file_ids: List of file IDs to resolve
+            on_progress: Optional callback(processed, total) for progress updates
         """
         stats = TypeTracedStats()
 
@@ -127,6 +151,7 @@ class TypeTracedResolver:
             )
             unresolved = list(session.exec(stmt).all())
             stats.accesses_processed = len(unresolved)
+            total = len(unresolved)
 
             if not unresolved:
                 return stats
@@ -134,7 +159,7 @@ class TypeTracedResolver:
             self._build_type_cache(session)
             self._build_member_cache(session)
 
-            for access in unresolved:
+            for i, access in enumerate(unresolved):
                 result = self._resolve_access(session, access)
                 if result == "resolved":
                     stats.accesses_resolved += 1
@@ -142,6 +167,14 @@ class TypeTracedResolver:
                     stats.accesses_partial += 1
                 else:
                     stats.accesses_unresolved += 1
+
+                # Report progress every 50 accesses
+                if on_progress and (i + 1) % 50 == 0:
+                    on_progress(i + 1, total)
+
+            # Final progress update
+            if on_progress and total > 0:
+                on_progress(total, total)
 
             session.commit()
 
@@ -272,17 +305,22 @@ class TypeTracedResolver:
             self._member_map[key] = member
 
 
-def resolve_type_traced(db: Database, file_ids: list[int] | None = None) -> TypeTracedStats:
+def resolve_type_traced(
+    db: Database,
+    file_ids: list[int] | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> TypeTracedStats:
     """Convenience function to run type-traced resolution.
 
     Args:
         db: Database instance
         file_ids: Optional list of file IDs to resolve (None = all)
+        on_progress: Optional callback(processed, total) for progress updates
 
     Returns:
         TypeTracedStats
     """
     resolver = TypeTracedResolver(db)
     if file_ids:
-        return resolver.resolve_for_files(file_ids)
-    return resolver.resolve_all()
+        return resolver.resolve_for_files(file_ids, on_progress)
+    return resolver.resolve_all(on_progress=on_progress)

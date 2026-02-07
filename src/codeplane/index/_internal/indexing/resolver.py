@@ -18,6 +18,7 @@ Certainty is marked appropriately when resolution is ambiguous.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -68,8 +69,14 @@ class ReferenceResolver:
         # Cache file_id -> exported symbols
         self._file_exports: dict[int, dict[str, str]] = {}  # name -> def_uid
 
-    def resolve_all(self) -> ResolutionStats:
+    def resolve_all(
+        self,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> ResolutionStats:
         """Resolve all unresolved STRONG-tier references.
+
+        Args:
+            on_progress: Optional callback(processed, total) for progress updates
 
         Returns:
             ResolutionStats with counts
@@ -84,27 +91,44 @@ class ReferenceResolver:
             )
             unresolved_refs = list(session.exec(stmt).all())
             stats.refs_processed = len(unresolved_refs)
+            total = len(unresolved_refs)
 
             # Build caches
             self._build_module_cache(session)
             self._build_export_cache(session)
 
             # Resolve each ref
-            for ref in unresolved_refs:
+            for i, ref in enumerate(unresolved_refs):
                 resolved = self._resolve_ref(session, ref)
                 if resolved:
                     stats.refs_resolved += 1
                 else:
                     stats.refs_unresolved += 1
 
+                # Report progress every 50 refs
+                if on_progress and (i + 1) % 50 == 0:
+                    on_progress(i + 1, total)
+
+            # Final progress update
+            if on_progress and total > 0:
+                on_progress(total, total)
+
             session.commit()
 
         return stats
 
-    def resolve_for_files(self, file_ids: list[int]) -> ResolutionStats:
+    def resolve_for_files(
+        self,
+        file_ids: list[int],
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> ResolutionStats:
         """Resolve references only for specific files.
 
         Use this for incremental updates after re-indexing specific files.
+
+        Args:
+            file_ids: List of file IDs to resolve
+            on_progress: Optional callback(processed, total) for progress updates
         """
         stats = ResolutionStats()
 
@@ -117,18 +141,27 @@ class ReferenceResolver:
             )
             unresolved_refs = list(session.exec(stmt).all())
             stats.refs_processed = len(unresolved_refs)
+            total = len(unresolved_refs)
 
             # Build caches (only if we have refs to resolve)
             if unresolved_refs:
                 self._build_module_cache(session)
                 self._build_export_cache(session)
 
-                for ref in unresolved_refs:
+                for i, ref in enumerate(unresolved_refs):
                     resolved = self._resolve_ref(session, ref)
                     if resolved:
                         stats.refs_resolved += 1
                     else:
                         stats.refs_unresolved += 1
+
+                    # Report progress every 50 refs
+                    if on_progress and (i + 1) % 50 == 0:
+                        on_progress(i + 1, total)
+
+                # Final progress update
+                if on_progress and total > 0:
+                    on_progress(total, total)
 
                 session.commit()
 
@@ -314,17 +347,22 @@ class ReferenceResolver:
         return module
 
 
-def resolve_references(db: Database, file_ids: list[int] | None = None) -> ResolutionStats:
+def resolve_references(
+    db: Database,
+    file_ids: list[int] | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> ResolutionStats:
     """Convenience function to resolve cross-file references.
 
     Args:
         db: Database instance
         file_ids: Optional list of file IDs to resolve (None = all)
+        on_progress: Optional callback(processed, total) for progress updates
 
     Returns:
         ResolutionStats
     """
     resolver = ReferenceResolver(db)
     if file_ids:
-        return resolver.resolve_for_files(file_ids)
-    return resolver.resolve_all()
+        return resolver.resolve_for_files(file_ids, on_progress)
+    return resolver.resolve_all(on_progress)
