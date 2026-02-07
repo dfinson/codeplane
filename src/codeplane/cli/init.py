@@ -6,6 +6,7 @@ import json
 import math
 import sys
 from pathlib import Path
+from typing import Any
 
 import click
 from rich.table import Table
@@ -17,6 +18,7 @@ from codeplane.config.user_config import (
     write_user_config,
 )
 from codeplane.core.progress import (
+    PhaseBox,
     get_console,
     phase_box,
     status,
@@ -412,34 +414,17 @@ def initialize_repo(
             task_id = phase.add_progress("Installing grammars", total=len(needed))
             grammar_result = install_grammars(needed, quiet=True, status_fn=None)
             phase.advance(task_id, len(needed))
-            if grammar_result.success:
-                phase.complete(f"{len(needed)} grammars installed")
-            else:
-                # Some grammars failed to install
-                # Extract language name from package name (e.g., "tree-sitter-powershell" -> "powershell")
-                failed_langs = [
+            if grammar_result.installed_packages:
+                # Log which grammars were installed
+                installed_langs = [
                     pkg.replace("tree-sitter-", "").replace("tree_sitter_", "")
-                    for pkg in grammar_result.failed_packages
+                    for pkg in grammar_result.installed_packages
                 ]
-                failed_list = ", ".join(failed_langs)
-                if grammar_result.installed_packages:
-                    # Some succeeded, some failed
-                    phase.complete(
-                        f"{len(grammar_result.installed_packages)} grammars installed",
-                        style="green",
-                    )
-                else:
-                    # All needed grammars failed - just show ready
-                    phase.complete("Grammars ready")
-                # Show user-facing impact message
-                phase.add_text(
-                    f"Refactoring and symbol search unavailable for {failed_list} files",
-                    style="yellow",
-                )
-        else:
-            phase.complete("Grammars ready")
+                phase.complete(f"Installed: {', '.join(installed_langs)}")
+            else:
+                phase.complete("Grammars ready")
 
-    # === Indexing Phase ===
+    # === Lexical Indexing Phase ===
     from codeplane.index.ops import IndexCoordinator
 
     db_path = index_dir / "index.db"
@@ -452,83 +437,125 @@ def initialize_repo(
         tantivy_path=tantivy_path,
     )
 
+    # Shared state for phase transitions
+    indexing_state: dict[str, object] = {
+        "lexical_done": False,
+        "files_indexed": 0,
+        "files_by_ext": {},
+        "lexical_elapsed": 0.0,
+    }
+    structural_progress: dict[str, tuple[int, int]] = {}  # phase -> (done, total)
+    # Track phase box and task IDs for structural phase
+    structural_phase: PhaseBox | None = None
+    structural_task_id: Any = None
+    refs_task_id: Any = None
+    types_task_id: Any = None
+    lexical_elapsed = 0.0
+
     try:
         import time
 
         start_time = time.time()
 
-        # Run indexing with phase box and live table updates
-        with phase_box("Indexing", width=60) as phase:
-            # Phase weights: lexical=70%, structural=20%, resolving=10%
-            phase_descriptions = {
-                "lexical": "Indexing files",
-                "structural": "Parsing symbols",
-                "resolving_refs": "Resolving imports",
-                "resolving_types": "Resolving types",
-            }
-            phase_weights = {
-                "lexical": (0, 70),  # 0-70%
-                "structural": (70, 90),  # 70-90%
-                "resolving_refs": (90, 95),  # 90-95%
-                "resolving_types": (95, 100),  # 95-100%
-            }
-            current_phase = "lexical"
+        # Phase box 1: Lexical Indexing (files only)
+        lexical_phase = phase_box("Lexical Indexing", width=60)
+        lexical_phase.__enter__()
+        lexical_task_id = lexical_phase.add_progress("Indexing files", total=100)
 
-            # Progress callback to update the live table
-            def on_index_progress(
-                indexed: int, total: int, files_by_ext: dict[str, int], progress_phase: str
-            ) -> None:
-                nonlocal current_phase
+        def on_index_progress(
+            indexed: int, total: int, files_by_ext: dict[str, int], progress_phase: str
+        ) -> None:
+            nonlocal \
+                lexical_phase, \
+                structural_phase, \
+                structural_task_id, \
+                refs_task_id, \
+                types_task_id, \
+                lexical_elapsed
 
-                # Update description if phase changed
-                if progress_phase != current_phase:
-                    current_phase = progress_phase
-                    phase._progress.update(  # type: ignore[union-attr]
-                        task_id, description=phase_descriptions.get(progress_phase, progress_phase)
-                    )
+            if progress_phase == "lexical":
+                # Update lexical phase box
+                pct = int(indexed / total * 100) if total > 0 else 0
+                lexical_phase._progress.update(lexical_task_id, completed=pct)  # type: ignore[union-attr]
 
-                # Calculate weighted percentage based on phase
-                start_pct, end_pct = phase_weights.get(progress_phase, (0, 100))
-                if total > 0:
-                    # Scale progress within phase range
-                    phase_progress = indexed / total
-                    pct = start_pct + int(phase_progress * (end_pct - start_pct))
-                else:
-                    pct = start_pct
-
-                phase._progress.update(task_id, completed=pct)  # type: ignore[union-attr]
-
-                # Update live table with current file type counts (only during lexical)
-                if progress_phase == "lexical" and files_by_ext:
+                if files_by_ext:
                     table = _make_init_extension_table(files_by_ext)
-                    phase.set_live_table(table)
+                    lexical_phase.set_live_table(table)
 
-            task_id = phase.add_progress("Indexing files", total=100)
+                # Store latest state
+                indexing_state["files_indexed"] = indexed
+                indexing_state["files_by_ext"] = files_by_ext
 
-            loop = asyncio.new_event_loop()
-            try:
-                result = loop.run_until_complete(
-                    coord.initialize(on_index_progress=on_index_progress)
-                )
-            finally:
-                loop.close()
+            elif progress_phase == "structural":
+                # First structural callback - close lexical box, open structural box
+                if not indexing_state["lexical_done"]:
+                    indexing_state["lexical_done"] = True
+                    lexical_elapsed = time.time() - start_time
 
-            elapsed = time.time() - start_time
+                    # Finalize lexical box
+                    lexical_phase.set_live_table(None)
+                    files = indexing_state["files_indexed"]
+                    lexical_phase.complete(f"{files} files ({lexical_elapsed:.1f}s)")
+                    if indexing_state["files_by_ext"]:
+                        lexical_phase.add_text("")
+                        ext_table = _make_init_extension_table(indexing_state["files_by_ext"])  # type: ignore[arg-type]
+                        lexical_phase.add_table(ext_table)
+                    lexical_phase.__exit__(None, None, None)
 
-            if result.errors:
-                for err in result.errors:
-                    phase.add_text(f"Error: {err}", style="red")
-                return False
+                    # Open structural phase box
+                    structural_phase = phase_box("Structural Indexing", width=60)
+                    structural_phase.__enter__()
+                    structural_task_id = structural_phase.add_progress("Parsing symbols", total=100)
+                    refs_task_id = structural_phase.add_progress("Resolving imports", total=100)
+                    types_task_id = structural_phase.add_progress("Resolving types", total=100)
 
-            # Final table state and completion message
-            phase.set_live_table(None)  # Remove live table
-            phase.complete(f"{result.files_indexed} files indexed ({elapsed:.1f}s)")
+                # Update structural progress
+                if structural_phase is not None:
+                    pct = int(indexed / total * 100) if total > 0 else 0
+                    structural_phase._progress.update(structural_task_id, completed=pct)  # type: ignore[union-attr]
+                structural_progress["structural"] = (indexed, total)
 
-            # Add final extension breakdown as static content
+            elif progress_phase == "resolving_refs":
+                if structural_phase is not None:
+                    pct = int(indexed / total * 100) if total > 0 else 0
+                    structural_phase._progress.update(refs_task_id, completed=pct)  # type: ignore[union-attr]
+                structural_progress["resolving_refs"] = (indexed, total)
+
+            elif progress_phase == "resolving_types":
+                if structural_phase is not None:
+                    pct = int(indexed / total * 100) if total > 0 else 0
+                    structural_phase._progress.update(types_task_id, completed=pct)  # type: ignore[union-attr]
+                structural_progress["resolving_types"] = (indexed, total)
+
+        loop = asyncio.new_event_loop()
+        try:
+            result = loop.run_until_complete(coord.initialize(on_index_progress=on_index_progress))
+        finally:
+            loop.close()
+
+        # Handle case where there were no structural phases (shouldn't happen normally)
+        if not indexing_state["lexical_done"]:
+            lexical_elapsed = time.time() - start_time
+            lexical_phase.set_live_table(None)
+            lexical_phase.complete(f"{result.files_indexed} files ({lexical_elapsed:.1f}s)")
             if result.files_by_ext:
-                phase.add_text("")  # Spacer
+                lexical_phase.add_text("")
                 ext_table = _make_init_extension_table(result.files_by_ext)
-                phase.add_table(ext_table)
+                lexical_phase.add_table(ext_table)
+            lexical_phase.__exit__(None, None, None)
+
+        # Close structural phase box if it was opened
+        if structural_phase is not None:
+            total_elapsed = time.time() - start_time
+            structural_elapsed = total_elapsed - lexical_elapsed
+            structural_phase.complete(f"Done ({structural_elapsed:.1f}s)")
+            structural_phase.__exit__(None, None, None)
+
+        if result.errors:
+            for err in result.errors:
+                status(f"Error: {err}", style="error")
+            return False
+
     finally:
         coord.close()
 
