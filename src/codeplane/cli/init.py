@@ -110,6 +110,9 @@ message: str               # REQUIRED
 paths: list[str]           # optional - files to stage before commit
 ```
 
+**IMPORTANT:** `git_commit` only commits what is already staged. The `paths` parameter does NOT auto-stage.
+Always call `git_stage` first to stage files, then call `git_commit`.
+
 **{tool_prefix}_git_stage**
 ```
 action: "add"|"remove"|"all"|"discard"  # REQUIRED
@@ -456,14 +459,47 @@ def initialize_repo(
 
         # Run indexing with phase box and live table updates
         with phase_box("Indexing", width=60) as phase:
+            # Phase weights: lexical=70%, structural=20%, resolving=10%
+            phase_descriptions = {
+                "lexical": "Indexing files",
+                "structural": "Parsing symbols",
+                "resolving_refs": "Resolving imports",
+                "resolving_types": "Resolving types",
+            }
+            phase_weights = {
+                "lexical": (0, 70),  # 0-70%
+                "structural": (70, 90),  # 70-90%
+                "resolving_refs": (90, 95),  # 90-95%
+                "resolving_types": (95, 100),  # 95-100%
+            }
+            current_phase = "lexical"
+
             # Progress callback to update the live table
-            def on_index_progress(indexed: int, total: int, files_by_ext: dict[str, int]) -> None:
-                # Update progress bar (scale to 100)
+            def on_index_progress(
+                indexed: int, total: int, files_by_ext: dict[str, int], progress_phase: str
+            ) -> None:
+                nonlocal current_phase
+
+                # Update description if phase changed
+                if progress_phase != current_phase:
+                    current_phase = progress_phase
+                    phase._progress.update(  # type: ignore[union-attr]
+                        task_id, description=phase_descriptions.get(progress_phase, progress_phase)
+                    )
+
+                # Calculate weighted percentage based on phase
+                start_pct, end_pct = phase_weights.get(progress_phase, (0, 100))
                 if total > 0:
-                    pct = int(indexed * 100 / total)
-                    phase._progress.update(task_id, completed=pct)  # type: ignore[union-attr]
-                # Update live table with current file type counts
-                if files_by_ext:
+                    # Scale progress within phase range
+                    phase_progress = indexed / total
+                    pct = start_pct + int(phase_progress * (end_pct - start_pct))
+                else:
+                    pct = start_pct
+
+                phase._progress.update(task_id, completed=pct)  # type: ignore[union-attr]
+
+                # Update live table with current file type counts (only during lexical)
+                if progress_phase == "lexical" and files_by_ext:
                     table = _make_init_extension_table(files_by_ext)
                     phase.set_live_table(table)
 
@@ -539,7 +575,9 @@ def _make_init_extension_table(files_by_ext: dict[str, int]) -> Table:
 
 @click.command()
 @click.argument("path", default=None, required=False, type=click.Path(exists=True, path_type=Path))
-@click.option("--reindex", is_flag=True, help="Wipe and rebuild the entire index from scratch")
+@click.option(
+    "-r", "--reindex", is_flag=True, help="Wipe and rebuild the entire index from scratch"
+)
 def init_command(path: Path | None, reindex: bool) -> None:
     """Initialize a repository for CodePlane management.
 

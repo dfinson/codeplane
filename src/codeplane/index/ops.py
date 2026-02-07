@@ -197,14 +197,15 @@ class IndexCoordinator:
 
     async def initialize(
         self,
-        on_index_progress: Callable[[int, int, dict[str, int]], None],
+        on_index_progress: Callable[[int, int, dict[str, int], str], None],
     ) -> InitResult:
         """
         Full initialization: discover, probe, index.
 
         Args:
-            on_index_progress: Callback(indexed_count, total_count, files_by_ext)
-                              called during indexing for progress updates
+            on_index_progress: Callback(indexed_count, total_count, files_by_ext, phase)
+                              called during indexing for progress updates.
+                              phase is one of: "lexical", "structural", "resolving"
 
         Flow:
         1. Create database schema
@@ -1898,7 +1899,7 @@ class IndexCoordinator:
 
     async def _index_all_files(
         self,
-        on_progress: Callable[[int, int, dict[str, int]], None],
+        on_progress: Callable[[int, int, dict[str, int], str], None],
     ) -> tuple[int, list[str], dict[str, int]]:
         """Index all files in valid contexts.
 
@@ -1907,8 +1908,9 @@ class IndexCoordinator:
         - SQLite fact tables (DefFact, RefFact, etc.)
 
         Args:
-            on_progress: Callback(indexed_count, total_count, files_by_ext)
-                         called after each file for progress updates
+            on_progress: Callback(indexed_count, total_count, files_by_ext, phase)
+                         called after each file for progress updates.
+                         phase is one of: "lexical", "structural", "resolving"
 
         Returns:
             Tuple of (count of files indexed, list of indexed file paths, files by extension).
@@ -1978,29 +1980,51 @@ class IndexCoordinator:
                     claimed_paths.add(rel_str)
                     files_to_index.append((file_path, rel_str, root_context_id, lang_value))
 
-            # Index files with progress callback
+            # Index files with progress callback (phase: lexical)
             count, indexed_paths, files_by_ext, context_files = self._index_files_with_progress(
                 files_to_index, on_progress
             )
 
-            # Run structural indexer for each context
+            # Run structural indexer for each context (phase: structural)
             if self._structural is not None:
+                # Count total files for structural progress
+                total_structural_files = sum(len(paths) for paths in context_files.values())
+                structural_files_done = 0
+
                 for context_id, file_paths in context_files.items():
                     if file_paths:
                         self._structural.index_files(file_paths, context_id)
+                        structural_files_done += len(file_paths)
+                        # Report structural progress (current/total within structural phase)
+                        on_progress(
+                            structural_files_done,
+                            total_structural_files,
+                            files_by_ext,
+                            "structural",
+                        )
 
-                # Resolve cross-file references (Pass 2 - follows ImportFact chains)
-                resolve_references(self.db)
+                # Resolve cross-file references (phase: resolving_refs)
+                # Pass 2 - follows ImportFact chains
+                def pass2_progress(processed: int, total: int) -> None:
+                    on_progress(processed, total, files_by_ext, "resolving_refs")
 
-                # Resolve type-traced member accesses (Pass 3 - follows type annotations)
-                resolve_type_traced(self.db)
+                on_progress(0, 1, files_by_ext, "resolving_refs")  # Start
+                resolve_references(self.db, on_progress=pass2_progress)
+
+                # Resolve type-traced accesses (phase: resolving_types)
+                # Pass 3 - follows type annotations
+                def pass3_progress(processed: int, total: int) -> None:
+                    on_progress(processed, total, files_by_ext, "resolving_types")
+
+                on_progress(0, 1, files_by_ext, "resolving_types")  # Start
+                resolve_type_traced(self.db, on_progress=pass3_progress)
 
         return count, indexed_paths, files_by_ext
 
     def _index_files_with_progress(
         self,
         files_to_index: list[tuple[Path, str, int, str | None]],
-        on_progress: Callable[[int, int, dict[str, int]], None],
+        on_progress: Callable[[int, int, dict[str, int], str], None],
     ) -> tuple[int, list[str], dict[str, int], dict[int, list[str]]]:
         """Index files, calling progress callback after each file.
 
@@ -2008,7 +2032,7 @@ class IndexCoordinator:
 
         Args:
             files_to_index: List of (file_path, rel_str, context_id, lang_family)
-            on_progress: Callback(indexed_count, total_count, files_by_ext)
+            on_progress: Callback(indexed_count, total_count, files_by_ext, phase)
                          called after each file for progress updates
 
         Returns:
@@ -2039,8 +2063,8 @@ class IndexCoordinator:
                 ext = file_path.suffix.lower() or file_path.name.lower()
                 files_by_ext[ext] = files_by_ext.get(ext, 0) + 1
 
-                # Report progress
-                on_progress(count, total, files_by_ext)
+                # Report progress (lexical phase)
+                on_progress(count, total, files_by_ext, "lexical")
 
             except (OSError, UnicodeDecodeError):
                 pass
