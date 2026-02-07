@@ -1986,22 +1986,37 @@ class IndexCoordinator:
             )
 
             # Run structural indexer for each context (phase: structural)
+            # Process in batches for smoother progress updates
             if self._structural is not None:
-                # Count total files for structural progress
-                total_structural_files = sum(len(paths) for paths in context_files.values())
-                structural_files_done = 0
-
+                # Flatten all files with their context IDs for batched processing
+                all_structural_files: list[tuple[str, int]] = []
                 for context_id, file_paths in context_files.items():
-                    if file_paths:
-                        self._structural.index_files(file_paths, context_id)
-                        structural_files_done += len(file_paths)
-                        # Report structural progress (current/total within structural phase)
-                        on_progress(
-                            structural_files_done,
-                            total_structural_files,
-                            files_by_ext,
-                            "structural",
-                        )
+                    for path in file_paths:
+                        all_structural_files.append((path, context_id))
+
+                total_structural = len(all_structural_files)
+                structural_batch_size = 25  # Process in chunks for progress visibility
+
+                for batch_start in range(0, total_structural, structural_batch_size):
+                    batch_end = min(batch_start + structural_batch_size, total_structural)
+                    batch = all_structural_files[batch_start:batch_end]
+
+                    # Group batch by context_id
+                    batch_by_context: dict[int, list[str]] = {}
+                    for path, ctx_id in batch:
+                        batch_by_context.setdefault(ctx_id, []).append(path)
+
+                    # Index this batch
+                    for ctx_id, paths in batch_by_context.items():
+                        self._structural.index_files(paths, ctx_id)
+
+                    # Report progress after each batch
+                    on_progress(
+                        batch_end,
+                        total_structural,
+                        files_by_ext,
+                        "structural",
+                    )
 
                 # Resolve cross-file references (phase: resolving_refs)
                 # Pass 2 - follows ImportFact chains
