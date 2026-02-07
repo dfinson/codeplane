@@ -11,7 +11,7 @@ from codeplane.cli.init import _get_xdg_index_dir
 from codeplane.cli.utils import find_repo_root
 
 
-def clear_repo(repo_root: Path, *, force: bool = False) -> bool:
+def clear_repo(repo_root: Path, *, yes: bool = False) -> bool:
     """Remove all CodePlane data from a repository.
 
     This removes:
@@ -43,8 +43,8 @@ def clear_repo(repo_root: Path, *, force: bool = False) -> bool:
 
     console.print()
 
-    # Confirm unless forced
-    if not force:
+    # Confirm unless --yes
+    if not yes:
         answer = questionary.select(
             "This action cannot be undone. Are you sure?",
             choices=[
@@ -92,8 +92,8 @@ def clear_repo(repo_root: Path, *, force: bool = False) -> bool:
 
 @click.command()
 @click.argument("path", default=None, required=False, type=click.Path(exists=True, path_type=Path))
-@click.option("--force", "-f", is_flag=True, help="Skip confirmation prompt")
-def clear_command(path: Path | None, force: bool) -> None:
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
+def clear_command(path: Path | None, yes: bool) -> None:
     """Remove all CodePlane data from a repository.
 
     This removes the .codeplane/ directory and any associated index files
@@ -104,7 +104,7 @@ def clear_command(path: Path | None, force: bool) -> None:
     """
     repo_root = find_repo_root(path)
 
-    if not clear_repo(repo_root, force=force):
-        if not force:
+    if not clear_repo(repo_root, yes=yes):
+        if not yes:
             return  # Cancelled or nothing to clear
         raise click.ClickException("Failed to clear CodePlane data")

@@ -98,7 +98,12 @@ def _print_banner(
 @click.command()
 @click.argument("path", default=None, required=False, type=click.Path(exists=True, path_type=Path))
 @click.option("--port", "-p", type=int, help="Override server port")
-def up_command(path: Path | None, port: int | None) -> None:
+@click.option(
+    "--reindex",
+    is_flag=True,
+    help="Wipe and rebuild the entire index from scratch",
+)
+def up_command(path: Path | None, port: int | None, reindex: bool) -> None:
     """Start the CodePlane server for this repository.
 
     If already running, reports the existing instance. Runs in foreground.
@@ -130,9 +135,15 @@ def up_command(path: Path | None, port: int | None) -> None:
     if port is not None:
         config.server.port = port
 
-    # Initialize if needed (this creates config with correct index_path)
+    # Initialize if needed, or reindex if requested
     codeplane_dir = repo_root / ".codeplane"
-    if not codeplane_dir.exists() and not initialize_repo(repo_root, show_cpl_up_hint=False):
+    if reindex and not initialize_repo(repo_root, reindex=True, show_cpl_up_hint=False):
+        raise click.ClickException("Failed to reinitialize repository")
+    elif (
+        not reindex
+        and not codeplane_dir.exists()
+        and not initialize_repo(repo_root, show_cpl_up_hint=False)
+    ):
         raise click.ClickException("Failed to initialize repository")
 
     # Get index paths from config AFTER init (so we read the created config)

@@ -4,7 +4,7 @@ Covers:
 - clear_repo() function
 - Removing .codeplane/ directory
 - Removing XDG index directory
-- Force flag behavior
+- --yes flag behavior
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ class TestClearRepoNothingToRemove:
 
     def test_returns_false_when_nothing_to_clear(self, tmp_path: Path) -> None:
         """Returns False when no CodePlane data exists."""
-        result = clear_repo(tmp_path, force=True)
+        result = clear_repo(tmp_path, yes=True)
         assert result is False
 
     def test_prints_message_when_nothing_to_clear(
@@ -32,7 +32,7 @@ class TestClearRepoNothingToRemove:
         capsys: pytest.CaptureFixture[str],  # noqa: ARG002
     ) -> None:
         """Prints 'nothing to clear' message."""
-        clear_repo(tmp_path, force=True)
+        clear_repo(tmp_path, yes=True)
         # Rich Console writes to stderr by default in our code
         # The capsys captures both, so we need to check stderr
         # Since Console(stderr=True), output goes to stderr
@@ -42,13 +42,13 @@ class TestClearRepoCodeplaneDir:
     """Tests for removing .codeplane/ directory."""
 
     def test_removes_codeplane_directory(self, tmp_path: Path) -> None:
-        """Removes .codeplane/ directory when force=True."""
+        """Removes .codeplane/ directory when yes=True."""
         codeplane_dir = tmp_path / ".codeplane"
         codeplane_dir.mkdir()
         (codeplane_dir / "config.yaml").write_text("key: value")
         (codeplane_dir / "index").mkdir()
 
-        result = clear_repo(tmp_path, force=True)
+        result = clear_repo(tmp_path, yes=True)
 
         assert result is True
         assert not codeplane_dir.exists()
@@ -61,7 +61,7 @@ class TestClearRepoCodeplaneDir:
         nested.mkdir(parents=True)
         (nested / "file.txt").write_text("data")
 
-        clear_repo(tmp_path, force=True)
+        clear_repo(tmp_path, yes=True)
 
         assert not codeplane_dir.exists()
 
@@ -85,44 +85,44 @@ class TestClearRepoXdgDir:
         (xdg_dir / "sqlite.db").write_text("database")
 
         with patch("codeplane.cli.clear._get_xdg_index_dir", return_value=xdg_dir):
-            result = clear_repo(tmp_path, force=True)
+            result = clear_repo(tmp_path, yes=True)
 
         assert result is True
         assert not xdg_dir.exists()
 
 
-class TestClearRepoForceFlag:
-    """Tests for force flag behavior."""
+class TestClearRepoYesFlag:
+    """Tests for --yes flag behavior."""
 
-    def test_force_skips_confirmation(self, tmp_path: Path) -> None:
-        """force=True skips confirmation prompt."""
+    def test_yes_skips_confirmation(self, tmp_path: Path) -> None:
+        """yes=True skips confirmation prompt."""
         (tmp_path / ".codeplane").mkdir()
 
-        # Should not prompt - force=True
+        # Should not prompt - yes=True
         with patch("codeplane.cli.clear.questionary.select") as mock_select:
-            clear_repo(tmp_path, force=True)
+            clear_repo(tmp_path, yes=True)
             mock_select.assert_not_called()
 
-    def test_without_force_prompts_user(self, tmp_path: Path) -> None:
-        """Without force, prompts for confirmation."""
+    def test_without_yes_prompts_user(self, tmp_path: Path) -> None:
+        """Without yes, prompts for confirmation."""
         (tmp_path / ".codeplane").mkdir()
 
         # Mock questionary to simulate user cancelling
         with patch("codeplane.cli.clear.questionary.select") as mock_select:
             mock_select.return_value.ask.return_value = False
-            result = clear_repo(tmp_path, force=False)
+            result = clear_repo(tmp_path, yes=False)
 
         assert result is False
         mock_select.assert_called_once()
 
-    def test_without_force_confirms_deletion(self, tmp_path: Path) -> None:
-        """Without force, deletes on confirmation."""
+    def test_without_yes_confirms_deletion(self, tmp_path: Path) -> None:
+        """Without yes, deletes on confirmation."""
         codeplane_dir = tmp_path / ".codeplane"
         codeplane_dir.mkdir()
 
         with patch("codeplane.cli.clear.questionary.select") as mock_select:
             mock_select.return_value.ask.return_value = True
-            result = clear_repo(tmp_path, force=False)
+            result = clear_repo(tmp_path, yes=False)
 
         assert result is True
         assert not codeplane_dir.exists()
@@ -137,7 +137,7 @@ class TestClearRepoErrors:
         codeplane_dir.mkdir()
 
         with patch("codeplane.cli.clear.shutil.rmtree", side_effect=OSError("Permission denied")):
-            result = clear_repo(tmp_path, force=True)
+            result = clear_repo(tmp_path, yes=True)
 
         assert result is False
 
@@ -162,7 +162,7 @@ class TestClearRepoErrors:
             patch("codeplane.cli.clear._get_xdg_index_dir", return_value=xdg_dir),
             patch("codeplane.cli.clear.shutil.rmtree", side_effect=mock_rmtree),
         ):
-            result = clear_repo(tmp_path, force=True)
+            result = clear_repo(tmp_path, yes=True)
 
         # Should return False due to error, but attempt both
         assert result is False
@@ -179,7 +179,7 @@ class TestClearRepoBothDirs:
         xdg_dir.mkdir()
 
         with patch("codeplane.cli.clear._get_xdg_index_dir", return_value=xdg_dir):
-            result = clear_repo(tmp_path, force=True)
+            result = clear_repo(tmp_path, yes=True)
 
         assert result is True
         assert not codeplane_dir.exists()

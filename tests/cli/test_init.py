@@ -121,7 +121,7 @@ class TestInitCommand:
     def test_given_initialized_repo_when_init_again_then_idempotent(
         self, temp_git_repo: Path
     ) -> None:
-        """Init without --force is idempotent on already initialized repo."""
+        """Init without --reindex is idempotent on already initialized repo."""
         # Given
         repo = temp_git_repo
         runner.invoke(cli, ["init", str(repo)])
@@ -133,10 +133,10 @@ class TestInitCommand:
         assert result.exit_code == 0
         assert "Already initialized" in result.output
 
-    def test_given_initialized_repo_when_init_force_then_reinitializes(
+    def test_given_initialized_repo_when_init_reindex_then_reinitializes(
         self, temp_git_repo: Path
     ) -> None:
-        """Init with --force overwrites existing config."""
+        """Init with --reindex wipes and rebuilds from scratch."""
         # Given
         repo = temp_git_repo
         runner.invoke(cli, ["init", str(repo)])
@@ -144,7 +144,7 @@ class TestInitCommand:
         config_path.write_text("custom: true")
 
         # When
-        result = runner.invoke(cli, ["init", "--force", str(repo)])
+        result = runner.invoke(cli, ["init", "--reindex", str(repo)])
 
         # Then
         assert result.exit_code == 0

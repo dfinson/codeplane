@@ -301,31 +301,38 @@ def _get_xdg_index_dir(repo_root: Path) -> Path:
     return xdg_data / repo_hash
 
 
-def initialize_repo(repo_root: Path, *, force: bool = False, show_cpl_up_hint: bool = True) -> bool:
+def initialize_repo(
+    repo_root: Path, *, reindex: bool = False, show_cpl_up_hint: bool = True
+) -> bool:
     """Initialize a repository for CodePlane, returning True on success.
 
     Args:
         repo_root: Path to the repository root
-        force: Overwrite existing .codeplane directory
+        reindex: Wipe and rebuild the entire index from scratch
         show_cpl_up_hint: Show "Run 'cpl up'" hint at end (False when auto-init from cpl up)
     """
     codeplane_dir = repo_root / ".codeplane"
     console = get_console()
 
-    if codeplane_dir.exists() and not force:
+    if codeplane_dir.exists() and not reindex:
         status(f"Already initialized: {codeplane_dir}", style="info")
-        status("Use --force to reinitialize", style="info")
+        status("Use --reindex to rebuild the index", style="info")
         return False
 
     console.print()
     status(f"Initializing CodePlane in {repo_root}", style="none")
     console.print()
 
-    # If force is set and directory exists, remove it completely to start fresh
-    if force and codeplane_dir.exists():
+    # If reindex is set, remove existing data completely to start fresh
+    if reindex:
         import shutil
 
-        shutil.rmtree(codeplane_dir)
+        if codeplane_dir.exists():
+            shutil.rmtree(codeplane_dir)
+        # Also clear XDG index directory (for cross-filesystem setups like WSL)
+        xdg_index_dir = _get_xdg_index_dir(repo_root)
+        if xdg_index_dir.exists():
+            shutil.rmtree(xdg_index_dir)
 
     codeplane_dir.mkdir(exist_ok=True)
 
@@ -351,12 +358,12 @@ def initialize_repo(repo_root: Path, *, force: bool = False, show_cpl_up_hint: b
     write_runtime_state(state_path, RuntimeState(index_path=str(index_dir)))
 
     cplignore_path = codeplane_dir / ".cplignore"
-    if not cplignore_path.exists() or force:
+    if not cplignore_path.exists() or reindex:
         cplignore_path.write_text(get_cplignore_template())
 
     # Create .gitignore to exclude artifacts from version control per SPEC.md §7.7
     gitignore_path = codeplane_dir / ".gitignore"
-    if not gitignore_path.exists() or force:
+    if not gitignore_path.exists() or reindex:
         gitignore_path.write_text(
             "# Ignore everything except user config files\n"
             "*\n"
@@ -532,8 +539,8 @@ def _make_init_extension_table(files_by_ext: dict[str, int]) -> Table:
 
 @click.command()
 @click.argument("path", default=None, required=False, type=click.Path(exists=True, path_type=Path))
-@click.option("--force", "-f", is_flag=True, help="Overwrite existing .codeplane directory")
-def init_command(path: Path | None, force: bool) -> None:
+@click.option("--reindex", is_flag=True, help="Wipe and rebuild the entire index from scratch")
+def init_command(path: Path | None, reindex: bool) -> None:
     """Initialize a repository for CodePlane management.
 
     Creates .codeplane/ directory with default configuration and builds
@@ -546,7 +553,7 @@ def init_command(path: Path | None, force: bool) -> None:
 
     repo_root = find_repo_root(path)
 
-    if not initialize_repo(repo_root, force=force):
-        if not force:
+    if not initialize_repo(repo_root, reindex=reindex):
+        if not reindex:
             return  # Already initialized, message printed
         sys.exit(1)  # Errors occurred
