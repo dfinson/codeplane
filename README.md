@@ -79,7 +79,7 @@ CodePlane provides a **full stacked index**:
 `cpl init` / `cpl up` automatically configures your IDE and agents:
 
 | File | Purpose |
-|------|---------||
+|------|---------|
 | `.vscode/mcp.json` | VS Code MCP server config (uses `mcp-remote` for HTTP transport) |
 | `AGENTS.md` | Tool reference for AI agents (tool names, parameters, patterns) |
 | `.github/copilot-instructions.md` | Same instructions for GitHub Copilot |
