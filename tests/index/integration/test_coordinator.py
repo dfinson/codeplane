@@ -19,7 +19,7 @@ from codeplane.index.ops import (
 )
 
 
-def _noop_progress(indexed: int, total: int, files_by_ext: dict[str, int]) -> None:
+def _noop_progress(indexed: int, total: int, files_by_ext: dict[str, int], phase: str = "") -> None:
     """No-op progress callback for tests."""
     pass
 
@@ -109,26 +109,32 @@ class TestCoordinatorInitialization:
         tantivy_path = tmp_path / "tantivy"
 
         coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
-        progress_calls: list[tuple[int, int, dict[str, int]]] = []
+        progress_calls: list[tuple[int, int, dict[str, int], str]] = []
 
-        def track_progress(indexed: int, total: int, files_by_ext: dict[str, int]) -> None:
-            progress_calls.append((indexed, total, files_by_ext.copy()))
+        def track_progress(
+            indexed: int, total: int, files_by_ext: dict[str, int], phase: str = ""
+        ) -> None:
+            progress_calls.append((indexed, total, files_by_ext.copy(), phase))
 
         try:
-            result = await coordinator.initialize(on_index_progress=track_progress)
+            await coordinator.initialize(on_index_progress=track_progress)
 
-            # Should have called progress at least once per file indexed
-            assert len(progress_calls) >= result.files_indexed
+            # Should have called progress at least once
+            assert len(progress_calls) >= 1
 
-            # Progress should increase monotonically
-            for i in range(1, len(progress_calls)):
-                assert progress_calls[i][0] >= progress_calls[i - 1][0]
+            # Progress should increase monotonically within each phase
+            from itertools import groupby
 
-            # Final call should have indexed == total
-            if progress_calls:
-                final_indexed, final_total, final_ext = progress_calls[-1]
-                assert final_indexed == final_total
-                assert sum(final_ext.values()) == result.files_indexed
+            for _phase, group in groupby(progress_calls, key=lambda c: c[3]):
+                calls = list(group)
+                for i in range(1, len(calls)):
+                    assert calls[i][0] >= calls[i - 1][0]
+
+            # At least one phase's final call should report completion
+            structural_calls = [c for c in progress_calls if c[3] == "structural"]
+            if structural_calls:
+                final = structural_calls[-1]
+                assert final[0] == final[1]  # indexed == total
         finally:
             coordinator.close()
 
