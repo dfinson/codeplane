@@ -303,6 +303,8 @@ class ImportKind(StrEnum):
     TS_IMPORT_TYPE = "ts_import_type"  # import type { Foo } from 'bar'
     GO_IMPORT = "go_import"  # import "foo"
     RUST_USE = "rust_use"  # use foo::bar
+    CSHARP_USING = "csharp_using"  # using Namespace;
+    CSHARP_USING_STATIC = "csharp_using_static"  # using static Namespace.Type;
 
 
 class ExportThunkMode(StrEnum):

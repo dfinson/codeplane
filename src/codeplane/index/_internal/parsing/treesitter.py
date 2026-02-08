@@ -630,6 +630,8 @@ class TreeSitterParser:
             return self._extract_python_imports(result.root_node, file_path)
         elif result.language in ("javascript", "typescript", "tsx"):
             return self._extract_js_imports(result.root_node, file_path)
+        elif result.language == "csharp":
+            return self._extract_csharp_imports(result.root_node, file_path)
         else:
             return []
 
@@ -914,12 +916,208 @@ class TreeSitterParser:
                                     end_col=node.end_point[1],
                                 )
                             )
+                    elif child.type == "wildcard_import":
+                        # from X import * — namespace-level wildcard import
+                        imports.append(
+                            SyntacticImport(
+                                import_uid=make_uid("*", node.start_point[0] + 1),
+                                imported_name="*",
+                                alias=None,
+                                source_literal=source,
+                                import_kind="python_from",
+                                start_line=node.start_point[0] + 1,
+                                start_col=node.start_point[1],
+                                end_line=node.end_point[0] + 1,
+                                end_col=node.end_point[1],
+                            )
+                        )
 
             for child in node.children:
                 walk(child)
 
         walk(root)
         return imports
+
+    # ------------------------------------------------------------------
+    # C# using directive and namespace extraction
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _qualified_name_text(node: Any) -> str:
+        """Extract full text of a qualified_name or identifier node."""
+        if node.text:
+            text: str = node.text.decode("utf-8")
+            return text
+        return ""
+
+    def _extract_csharp_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract using directives from C# AST.
+
+        Handles three forms:
+        - ``using Namespace;``  -> import_kind = csharp_using
+        - ``using static Type;`` -> import_kind = csharp_using_static
+        - ``using Alias = Namespace.Type;`` -> import_kind = csharp_using, alias set
+        """
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        for node in root.children:
+            if node.type != "using_directive":
+                continue
+
+            children = node.children
+            has_static = any(c.type == "static" for c in children)
+            has_equals = any(c.type == "=" or (c.text and c.text == b"=") for c in children)
+
+            if has_equals:
+                # Aliased using: using Alias = Namespace.Type;
+                alias_node = None
+                target_node = None
+                found_equals = False
+                for c in children:
+                    if c.type == "using":
+                        continue
+                    if c.type == ";":
+                        continue
+                    if c.type == "=" or (c.text and c.text == b"="):
+                        found_equals = True
+                        continue
+                    if not found_equals and c.type == "identifier":
+                        alias_node = c
+                    elif found_equals and c.type in (
+                        "qualified_name",
+                        "identifier",
+                        "generic_name",
+                    ):
+                        target_node = c
+
+                if alias_node and target_node:
+                    alias_text = self._qualified_name_text(alias_node)
+                    target_text = self._qualified_name_text(target_node)
+                    imports.append(
+                        SyntacticImport(
+                            import_uid=make_uid(target_text, node.start_point[0] + 1),
+                            imported_name=target_text,
+                            alias=alias_text,
+                            source_literal=target_text,
+                            import_kind="csharp_using",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_col=node.end_point[1],
+                        )
+                    )
+
+            elif has_static:
+                # Static using: using static Namespace.Type;
+                target_node = None
+                for c in children:
+                    if c.type in ("qualified_name", "identifier", "generic_name"):
+                        target_node = c
+                if target_node:
+                    target_text = self._qualified_name_text(target_node)
+                    imports.append(
+                        SyntacticImport(
+                            import_uid=make_uid(target_text, node.start_point[0] + 1),
+                            imported_name=target_text,
+                            alias=None,
+                            source_literal=target_text,
+                            import_kind="csharp_using_static",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_col=node.end_point[1],
+                        )
+                    )
+
+            else:
+                # Regular namespace using: using Namespace;
+                target_node = None
+                for c in children:
+                    if c.type in ("qualified_name", "identifier"):
+                        target_node = c
+                        break
+                if target_node:
+                    target_text = self._qualified_name_text(target_node)
+                    imports.append(
+                        SyntacticImport(
+                            import_uid=make_uid(target_text, node.start_point[0] + 1),
+                            imported_name=target_text,
+                            alias=None,
+                            source_literal=target_text,
+                            import_kind="csharp_using",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_col=node.end_point[1],
+                        )
+                    )
+
+        return imports
+
+    def extract_csharp_namespace_types(self, root: Any) -> dict[str, list[str]]:
+        """Extract namespace -> type names mapping from a C# AST.
+
+        Handles both block-scoped and file-scoped namespace declarations.
+        Returns a dict mapping fully-qualified namespace names to lists of
+        top-level type names (classes, interfaces, structs, enums) declared
+        within that namespace.
+        """
+        _TYPE_DECLS = {
+            "class_declaration",
+            "interface_declaration",
+            "struct_declaration",
+            "enum_declaration",
+            "record_declaration",
+            "record_struct_declaration",
+        }
+
+        def _type_names_from(declaration_list: Any) -> list[str]:
+            """Collect type names from a declaration_list node."""
+            names: list[str] = []
+            for child in declaration_list.children:
+                if child.type in _TYPE_DECLS:
+                    for sub in child.children:
+                        if sub.type == "identifier":
+                            names.append(sub.text.decode("utf-8"))
+                            break
+            return names
+
+        ns_map: dict[str, list[str]] = {}
+
+        for node in root.children:
+            if node.type == "namespace_declaration":
+                # Block-scoped: namespace X.Y { class A {} }
+                ns_name = None
+                for child in node.children:
+                    if child.type in ("qualified_name", "identifier"):
+                        ns_name = self._qualified_name_text(child)
+                    elif child.type == "declaration_list" and ns_name:
+                        types = _type_names_from(child)
+                        if types:
+                            ns_map.setdefault(ns_name, []).extend(types)
+
+            elif node.type == "file_scoped_namespace_declaration":
+                # File-scoped: namespace X.Y;
+                ns_name = None
+                for child in node.children:
+                    if child.type in ("qualified_name", "identifier"):
+                        ns_name = self._qualified_name_text(child)
+                        break
+                if ns_name:
+                    # Types are siblings in compilation_unit, not children.
+                    # Continue scanning root.children after this node.
+                    for sibling in root.children:
+                        if sibling.type in _TYPE_DECLS:
+                            for sub in sibling.children:
+                                if sub.type == "identifier":
+                                    ns_map.setdefault(ns_name, []).append(sub.text.decode("utf-8"))
+                                    break
+
+        return ns_map
 
     def _extract_js_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
         """Extract imports from JavaScript/TypeScript AST."""
