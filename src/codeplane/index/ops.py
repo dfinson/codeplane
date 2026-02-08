@@ -45,7 +45,9 @@ from codeplane.index._internal.indexing import (
     FactQueries,
     LexicalIndex,
     StructuralIndexer,
+    resolve_namespace_refs,
     resolve_references,
+    resolve_star_import_refs,
     resolve_type_traced,
 )
 from codeplane.index._internal.parsing import TreeSitterParser
@@ -737,6 +739,10 @@ class IndexCoordinator:
 
             for ctx_id, paths in by_context.items():
                 self._structural.index_files(paths, context_id=ctx_id, file_id_map=file_id_map)
+
+            # Pass 1.5: DB-backed cross-file resolution
+            resolve_namespace_refs(self.db)
+            resolve_star_import_refs(self.db)
 
             # Resolve cross-file references (Pass 2 - follows ImportFact chains)
             resolve_references(self.db)
@@ -2018,6 +2024,14 @@ class IndexCoordinator:
                         "structural",
                     )
 
+                # Pass 1.5: DB-backed cross-file resolution
+                # Runs after ALL structural facts are persisted, so it sees the
+                # complete namespace-type mappings across all files (not just
+                # the 25-file batch that was visible to the old in-memory pass).
+                on_progress(0, 1, files_by_ext, "resolving_cross_file")
+                resolve_namespace_refs(self.db)
+                resolve_star_import_refs(self.db)
+
                 # Resolve cross-file references (phase: resolving_refs)
                 # Pass 2 - follows ImportFact chains
                 def pass2_progress(processed: int, total: int) -> None:
@@ -2168,6 +2182,11 @@ class IndexCoordinator:
 
         for ctx_id, paths in context_files.items():
             self._structural.index_files(paths, context_id=ctx_id)
+
+        # Pass 1.5: DB-backed cross-file resolution (scoped to changed files)
+        if changed_file_ids:
+            resolve_namespace_refs(self.db, file_ids=changed_file_ids)
+            resolve_star_import_refs(self.db, file_ids=changed_file_ids)
 
         # Resolve cross-file references (Pass 2 - scoped to changed files)
         if changed_file_ids:

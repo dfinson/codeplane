@@ -193,11 +193,18 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
         # Track language for cross-file resolution
         result.language = parse_result.language
 
+        # Build namespace -> type name inversion map (populated for C#, empty for others)
+        _type_to_ns: dict[str, str] = {}
+
         # Extract namespace -> type mapping for C# cross-file resolution
         if parse_result.language == "csharp":
             result.namespace_type_map = parser.extract_csharp_namespace_types(
                 parse_result.root_node
             )
+            # Invert namespace_type_map: type_name -> namespace
+            for _ns_name, _type_names in result.namespace_type_map.items():
+                for _tname in _type_names:
+                    _type_to_ns[_tname] = _ns_name
 
         # Build scope ID mapping (local file scope ID -> will be assigned DB scope_id later)
         # For now, we store the local scope_id and parent mapping in the dict
@@ -248,6 +255,7 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
                 "kind": sym.kind,
                 "name": sym.name,
                 "lexical_path": _compute_lexical_path(sym, symbols),
+                "namespace": _type_to_ns.get(sym.name),
                 "start_line": sym.line,
                 "start_col": sym.column,
                 "end_line": sym.end_line,
@@ -593,169 +601,6 @@ def _compute_lexical_path(sym: SyntacticSymbol, all_symbols: list[SyntacticSymbo
     return sym.name
 
 
-def _resolve_cross_file_refs(extractions: list[ExtractionResult]) -> None:
-    """Post-extraction pass: upgrade UNKNOWN refs using cross-file data.
-
-    For C#:
-      - Builds a global namespace -> type names map from all files.
-      - For each file with namespace ``using`` directives, refs matching
-        a type in a using'd project-internal namespace are upgraded from
-        UNKNOWN to STRONG.  Non-aliased namespace usings that reference
-        external assemblies are upgraded to ANCHORED.
-
-    For Python:
-      - Resolves ``from X import *`` against project-internal modules.
-      - Refs matching a module-level definition from the source module are
-        upgraded from UNKNOWN to STRONG.
-
-    This function mutates ExtractionResult.refs in place.
-    """
-    # ---- Phase 1: build global lookup tables ----
-
-    # C# namespace -> set of type names defined in project
-    global_ns_types: dict[str, set[str]] = {}
-    for ext in extractions:
-        for ns_name, type_names in ext.namespace_type_map.items():
-            global_ns_types.setdefault(ns_name, set()).update(type_names)
-
-    # Python file_path -> set of module-level def names
-    # Also build path lookup for module resolution
-    py_module_defs: dict[str, set[str]] = {}
-    all_file_paths: set[str] = {ext.file_path for ext in extractions}
-    for ext in extractions:
-        if ext.language == "python":
-            module_names: set[str] = set()
-            for d in ext.defs:
-                # Module-level defs have no '.' in lexical_path
-                if "." not in d.get("lexical_path", "."):
-                    module_names.add(d["name"])
-            if module_names:
-                py_module_defs[ext.file_path] = module_names
-
-    # ---- Phase 2: resolve per-file refs ----
-
-    for ext in extractions:
-        if ext.language == "csharp":
-            _resolve_csharp_refs(ext, global_ns_types)
-        elif ext.language == "python":
-            _resolve_python_star_refs(ext, py_module_defs, all_file_paths)
-
-
-def _resolve_csharp_refs(
-    ext: ExtractionResult,
-    global_ns_types: dict[str, set[str]],
-) -> None:
-    """Upgrade C# UNKNOWN refs using namespace-using evidence."""
-    # Collect non-aliased namespace usings for this file
-    using_namespaces: list[str] = []
-    for imp in ext.imports:
-        if (
-            imp.get("import_kind") == "csharp_using"
-            and imp.get("alias") is None
-            and imp.get("imported_name")
-        ):
-            using_namespaces.append(imp["imported_name"])
-
-    if not using_namespaces:
-        return
-
-    # Build set of type names available via project-internal namespace usings
-    available_types: set[str] = set()
-    for ns in using_namespaces:
-        ns_types = global_ns_types.get(ns)
-        if ns_types:
-            available_types.update(ns_types)
-
-    # Upgrade matching UNKNOWN reference refs
-    for ref in ext.refs:
-        if (
-            ref.get("ref_tier") == RefTier.UNKNOWN.value
-            and ref.get("role") == Role.REFERENCE.value
-            and ref["token_text"] in available_types
-        ):
-            ref["ref_tier"] = RefTier.STRONG.value
-            ref["certainty"] = Certainty.CERTAIN.value
-
-
-def _resolve_python_module_path(
-    source_literal: str | None,
-    importing_file: str,
-    all_file_paths: set[str],
-) -> str | None:
-    """Try to resolve a Python import source to a project file path.
-
-    Returns the matching file path from *all_file_paths*, or None.
-    """
-    if not source_literal:
-        return None
-
-    # Relative import (leading dots)
-    if source_literal.startswith("."):
-        dots = len(source_literal) - len(source_literal.lstrip("."))
-        relative_module = source_literal[dots:]
-        import_dir = str(Path(importing_file).parent)
-        for _ in range(dots - 1):
-            import_dir = str(Path(import_dir).parent)
-        if relative_module:
-            candidate = f"{import_dir}/{relative_module.replace('.', '/')}"
-        else:
-            candidate = import_dir
-        for attempt in (f"{candidate}.py", f"{candidate}/__init__.py"):
-            if attempt in all_file_paths:
-                return attempt
-        return None
-
-    # Absolute import — try multiple path prefixes
-    parts = source_literal.replace(".", "/")
-    for attempt in (f"{parts}.py", f"{parts}/__init__.py"):
-        if attempt in all_file_paths:
-            return attempt
-
-    # Also try with common src/ prefix stripped
-    # e.g. source_literal="mypackage.utils" -> "src/mypackage/utils.py"
-    for ext_path in all_file_paths:
-        if ext_path.endswith(f"{parts}.py") or ext_path.endswith(f"{parts}/__init__.py"):
-            return ext_path
-
-    return None
-
-
-def _resolve_python_star_refs(
-    ext: ExtractionResult,
-    py_module_defs: dict[str, set[str]],
-    all_file_paths: set[str],
-) -> None:
-    """Upgrade Python UNKNOWN refs using star-import evidence."""
-    # Find star imports in this file
-    star_sources: list[str | None] = []
-    for imp in ext.imports:
-        if imp.get("imported_name") == "*" and imp.get("import_kind") == "python_from":
-            star_sources.append(imp.get("source_literal"))
-
-    if not star_sources:
-        return
-
-    # Resolve each star import to project-internal module exports
-    available_names: set[str] = set()
-    for source in star_sources:
-        resolved = _resolve_python_module_path(source, ext.file_path, all_file_paths)
-        if resolved and resolved in py_module_defs:
-            available_names.update(py_module_defs[resolved])
-
-    if not available_names:
-        return
-
-    # Upgrade matching UNKNOWN reference refs
-    for ref in ext.refs:
-        if (
-            ref.get("ref_tier") == RefTier.UNKNOWN.value
-            and ref.get("role") == Role.REFERENCE.value
-            and ref["token_text"] in available_names
-        ):
-            ref["ref_tier"] = RefTier.STRONG.value
-            ref["certainty"] = Certainty.CERTAIN.value
-
-
 class StructuralIndexer:
     """Extracts facts from source files using Tree-sitter.
 
@@ -808,9 +653,6 @@ class StructuralIndexer:
                 file_id_map[extraction.file_path] = self._ensure_file_id(
                     extraction.file_path, extraction.content_hash, extraction.line_count, context_id
                 )
-
-        # Cross-file resolution: upgrade UNKNOWN refs using namespace/module data
-        _resolve_cross_file_refs(extractions)
 
         with self.db.bulk_writer() as writer:
             for extraction in extractions:

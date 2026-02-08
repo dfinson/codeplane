@@ -18,7 +18,7 @@ Certainty is marked appropriately when resolution is ambiguous.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -33,6 +33,7 @@ from codeplane.index.models import (
     LocalBindFact,
     RefFact,
     RefTier,
+    Role,
 )
 
 if TYPE_CHECKING:
@@ -366,3 +367,245 @@ def resolve_references(
     if file_ids:
         return resolver.resolve_for_files(file_ids, on_progress)
     return resolver.resolve_all(on_progress)
+
+
+# ============================================================================
+# Pass 1.5: DB-backed cross-file resolution
+# ============================================================================
+#
+# These functions run AFTER all structural facts are persisted to the DB,
+# eliminating the batch-boundary problem where in-memory resolution only
+# saw a fraction of namespace-type mappings per 25-file batch.
+#
+# resolve_namespace_refs: C# namespace-using resolution
+# resolve_star_import_refs: Python star-import resolution
+# ============================================================================
+
+
+@dataclass
+class CrossFileResolutionStats:
+    """Statistics from cross-file DB-backed resolution."""
+
+    refs_upgraded: int = 0
+    refs_scanned: int = 0
+
+
+def resolve_namespace_refs(
+    db: Database,
+    file_ids: list[int] | None = None,
+) -> CrossFileResolutionStats:
+    """Upgrade UNKNOWN refs using C# namespace-using evidence (DB-backed).
+
+    For each UNKNOWN REFERENCE ref in a file with ``using Namespace;``
+    directives, checks if the ref's token_text matches a DefFact.name
+    where that def's namespace equals one of the file's using'd namespaces.
+    Matching refs are upgraded to STRONG.
+
+    This replaces the old in-memory ``_resolve_cross_file_refs()`` which was
+    limited to seeing only 25 files per batch.
+
+    Args:
+        db: Database instance
+        file_ids: Optional list of file IDs to scope resolution. None = all.
+
+    Returns:
+        CrossFileResolutionStats
+    """
+    stats = CrossFileResolutionStats()
+
+    with db.session() as session:
+        from sqlalchemy import text
+
+        # Build the SQL query with optional file_id scoping
+        # Logic:
+        #   1. Find UNKNOWN REFERENCE refs
+        #   2. whose file has a csharp_using ImportFact (no alias)
+        #   3. where a DefFact exists with matching name and namespace
+        #   4. Upgrade those refs to STRONG
+        if file_ids:
+            file_id_list = ",".join(str(fid) for fid in file_ids)
+            file_filter = f"AND rf.file_id IN ({file_id_list})"
+        else:
+            file_filter = ""
+
+        # Count refs that will be upgraded (for stats)
+        count_sql = text(f"""
+            SELECT COUNT(DISTINCT rf.ref_id)
+            FROM ref_facts rf
+            JOIN import_facts imf ON rf.file_id = imf.file_id
+                AND imf.import_kind = 'csharp_using'
+                AND imf.alias IS NULL
+            JOIN def_facts df ON df.name = rf.token_text
+                AND df.namespace = imf.imported_name
+                AND df.kind IN ('class', 'struct', 'interface', 'enum')
+            WHERE rf.ref_tier = :unknown_tier
+                AND rf.role = :ref_role
+                {file_filter}
+        """)
+        result = session.execute(
+            count_sql.bindparams(
+                unknown_tier=RefTier.UNKNOWN.value,
+                ref_role=Role.REFERENCE.value,
+            )
+        )
+        stats.refs_scanned = result.scalar_one()
+
+        if stats.refs_scanned == 0:
+            return stats
+
+        # Perform the upgrade
+        update_sql = text(f"""
+            UPDATE ref_facts
+            SET ref_tier = :strong_tier, certainty = :certain
+            WHERE ref_id IN (
+                SELECT DISTINCT rf.ref_id
+                FROM ref_facts rf
+                JOIN import_facts imf ON rf.file_id = imf.file_id
+                    AND imf.import_kind = 'csharp_using'
+                    AND imf.alias IS NULL
+                JOIN def_facts df ON df.name = rf.token_text
+                    AND df.namespace = imf.imported_name
+                    AND df.kind IN ('class', 'struct', 'interface', 'enum')
+                WHERE rf.ref_tier = :unknown_tier
+                    AND rf.role = :ref_role
+                    {file_filter}
+            )
+        """)
+        session.execute(
+            update_sql.bindparams(
+                strong_tier=RefTier.STRONG.value,
+                certain=Certainty.CERTAIN.value,
+                unknown_tier=RefTier.UNKNOWN.value,
+                ref_role=Role.REFERENCE.value,
+            )
+        )
+        stats.refs_upgraded = stats.refs_scanned
+        session.commit()
+
+    return stats
+
+
+def resolve_star_import_refs(
+    db: Database,
+    file_ids: list[int] | None = None,
+) -> CrossFileResolutionStats:
+    """Upgrade UNKNOWN refs using Python star-import evidence (DB-backed).
+
+    For each file with ``from X import *``, resolves the source module to a
+    project file, builds the set of module-level exports, and upgrades
+    matching UNKNOWN refs to STRONG.
+
+    This replaces the old in-memory ``_resolve_python_star_refs()`` which was
+    limited to seeing only 25 files per batch.
+
+    Args:
+        db: Database instance
+        file_ids: Optional list of file IDs to scope resolution. None = all.
+
+    Returns:
+        CrossFileResolutionStats
+    """
+    stats = CrossFileResolutionStats()
+
+    with db.session() as session:
+        # Step 1: Find all star imports
+        star_stmt = select(ImportFact).where(
+            ImportFact.imported_name == "*",
+            ImportFact.import_kind == "python_from",
+        )
+        if file_ids:
+            star_stmt = star_stmt.where(col(ImportFact.file_id).in_(file_ids))
+        star_imports = list(session.exec(star_stmt).all())
+
+        if not star_imports:
+            return stats
+
+        # Step 2: Build module path -> file_id mapping
+        all_files: list[tuple[int | None, str]] = list(
+            session.exec(select(File.id, File.path)).all()
+        )
+        module_to_file_id: dict[str, int] = {}
+        for fid, fpath in all_files:
+            if fid is None or fpath is None:
+                continue
+            module_path = _path_to_python_module(fpath)
+            if module_path:
+                module_to_file_id[module_path] = fid
+
+        # Step 3: For each star import, find source module and resolve refs
+        for star_imp in star_imports:
+            source_literal = star_imp.source_literal
+            if not source_literal:
+                continue
+
+            # Resolve source module to file_id
+            source_file_id = _find_python_module_file(
+                source_literal, star_imp.file_id, module_to_file_id, all_files
+            )
+            if source_file_id is None:
+                continue
+
+            # Get module-level defs from source file
+            source_defs = session.exec(
+                select(DefFact.name).where(
+                    DefFact.file_id == source_file_id,
+                    DefFact.lexical_path == DefFact.name,  # Module-level: lexical_path == name
+                )
+            ).all()
+            export_names = {name for name in source_defs if not name.startswith("_")}
+
+            if not export_names:
+                continue
+
+            # Upgrade UNKNOWN refs in the importing file that match exports
+            unknown_refs = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == star_imp.file_id,
+                    RefFact.ref_tier == RefTier.UNKNOWN.value,
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+
+            for ref in unknown_refs:
+                stats.refs_scanned += 1
+                if ref.token_text in export_names:
+                    ref.ref_tier = RefTier.STRONG.value
+                    ref.certainty = Certainty.CERTAIN.value
+                    stats.refs_upgraded += 1
+
+        session.commit()
+
+    return stats
+
+
+def _path_to_python_module(path: str) -> str | None:
+    """Convert file path to Python module path."""
+    if not path.endswith(".py"):
+        return None
+    module = path[:-3]
+    if module.endswith("/__init__"):
+        module = module[:-9]
+    module = module.replace("/", ".").replace("\\", ".").lstrip(".")
+    return module
+
+
+def _find_python_module_file(
+    source_literal: str,
+    _importing_file_id: int,
+    module_to_file_id: dict[str, int],
+    all_files: Sequence[tuple[int | None, str]],
+) -> int | None:
+    """Resolve Python import source literal to a file_id."""
+    # Direct match
+    if source_literal in module_to_file_id:
+        return module_to_file_id[source_literal]
+
+    # Try suffix-based matching (handles src/ prefixes etc.)
+    parts = source_literal.replace(".", "/")
+    for fid, fpath in all_files:
+        if fid is None or fpath is None:
+            continue
+        if fpath.endswith(f"{parts}.py") or fpath.endswith(f"{parts}/__init__.py"):
+            return fid
+
+    return None

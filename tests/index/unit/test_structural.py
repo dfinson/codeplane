@@ -22,7 +22,7 @@ from codeplane.index._internal.indexing.structural import (
     _find_containing_scope,
 )
 from codeplane.index._internal.parsing import SyntacticScope
-from codeplane.index.models import Context, RefTier, Role
+from codeplane.index.models import Context, DefFact, RefFact, RefTier, Role
 
 
 @pytest.fixture
@@ -495,9 +495,9 @@ namespace Foo.Bar {
 
 
 class TestCrossFileResolution:
-    """Tests for cross-file ref_tier resolution."""
+    """Tests for DB-backed cross-file ref_tier resolution (Pass 1.5)."""
 
-    def test_csharp_namespace_using_upgrades_to_strong(self, temp_dir: Path) -> None:
+    def test_csharp_namespace_using_upgrades_to_strong(self, db: Database, temp_dir: Path) -> None:
         """UNKNOWN refs matching project-internal namespace types should become STRONG."""
         # File 1: defines the type in a namespace
         (temp_dir / "Resolver.cs").write_text(
@@ -518,32 +518,52 @@ namespace App {
 """
         )
 
-        ext1 = _extract_file("Resolver.cs", str(temp_dir), unit_id=1)
-        ext2 = _extract_file("Client.cs", str(temp_dir), unit_id=1)
+        db.create_all()
+        with db.session() as session:
+            ctx = Context(name="test", language_family="dotnet", root_path=str(temp_dir))
+            session.add(ctx)
+            session.commit()
+            context_id = ctx.id
+
+        indexer = StructuralIndexer(db, temp_dir)
+        indexer.index_files(["Resolver.cs", "Client.cs"], context_id=context_id or 1)
 
         # Before resolution: the ref to DefaultContractResolver in Client.cs is UNKNOWN
-        dcr_refs_before = [
-            r
-            for r in ext2.refs
-            if r["token_text"] == "DefaultContractResolver" and r["role"] == Role.REFERENCE.value
-        ]
-        assert len(dcr_refs_before) >= 1
-        assert all(r["ref_tier"] == RefTier.UNKNOWN.value for r in dcr_refs_before)
+        with db.session() as session:
+            from sqlmodel import select
 
-        # Run cross-file resolution
-        from codeplane.index._internal.indexing.structural import _resolve_cross_file_refs
+            from codeplane.index.models import File
 
-        _resolve_cross_file_refs([ext1, ext2])
+            client_file = session.exec(select(File).where(File.path == "Client.cs")).first()
+            assert client_file is not None
+            dcr_refs = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == client_file.id,
+                    RefFact.token_text == "DefaultContractResolver",
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+            assert len(dcr_refs) >= 1
+            assert all(r.ref_tier == RefTier.UNKNOWN.value for r in dcr_refs)
+
+        # Run DB-backed resolution (Pass 1.5)
+        from codeplane.index._internal.indexing.resolver import resolve_namespace_refs
+
+        stats = resolve_namespace_refs(db)
+        assert stats.refs_upgraded >= 1
 
         # After resolution: should be STRONG
-        dcr_refs_after = [
-            r
-            for r in ext2.refs
-            if r["token_text"] == "DefaultContractResolver" and r["role"] == Role.REFERENCE.value
-        ]
-        assert all(r["ref_tier"] == RefTier.STRONG.value for r in dcr_refs_after)
+        with db.session() as session:
+            dcr_refs_after = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == client_file.id,
+                    RefFact.token_text == "DefaultContractResolver",
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+            assert all(r.ref_tier == RefTier.STRONG.value for r in dcr_refs_after)
 
-    def test_csharp_external_namespace_stays_unknown(self, temp_dir: Path) -> None:
+    def test_csharp_external_namespace_stays_unknown(self, db: Database, temp_dir: Path) -> None:
         """Refs to types from external namespaces (not in project) stay UNKNOWN."""
         (temp_dir / "Client.cs").write_text(
             """using System.Collections.Generic;
@@ -556,20 +576,39 @@ namespace App {
 """
         )
 
-        ext = _extract_file("Client.cs", str(temp_dir), unit_id=1)
+        db.create_all()
+        with db.session() as session:
+            ctx = Context(name="test", language_family="dotnet", root_path=str(temp_dir))
+            session.add(ctx)
+            session.commit()
+            context_id = ctx.id
 
-        from codeplane.index._internal.indexing.structural import _resolve_cross_file_refs
+        indexer = StructuralIndexer(db, temp_dir)
+        indexer.index_files(["Client.cs"], context_id=context_id or 1)
 
-        _resolve_cross_file_refs([ext])
+        from codeplane.index._internal.indexing.resolver import resolve_namespace_refs
+
+        resolve_namespace_refs(db)
 
         # 'List' comes from System.Collections.Generic (external) — stays UNKNOWN
-        list_refs = [
-            r for r in ext.refs if r["token_text"] == "List" and r["role"] == Role.REFERENCE.value
-        ]
-        if list_refs:
-            assert all(r["ref_tier"] == RefTier.UNKNOWN.value for r in list_refs)
+        with db.session() as session:
+            from sqlmodel import select
 
-    def test_python_star_import_upgrades_to_strong(self, temp_dir: Path) -> None:
+            from codeplane.index.models import File
+
+            client_file = session.exec(select(File).where(File.path == "Client.cs")).first()
+            assert client_file is not None
+            list_refs = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == client_file.id,
+                    RefFact.token_text == "List",
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+            if list_refs:
+                assert all(r.ref_tier == RefTier.UNKNOWN.value for r in list_refs)
+
+    def test_python_star_import_upgrades_to_strong(self, db: Database, temp_dir: Path) -> None:
         """Python star imports from project-internal modules should upgrade refs to STRONG."""
         # Module with exported definitions
         (temp_dir / "utils.py").write_text(
@@ -589,39 +628,61 @@ y = Utility()
 """
         )
 
-        ext_utils = _extract_file("utils.py", str(temp_dir), unit_id=1)
-        ext_main = _extract_file("main.py", str(temp_dir), unit_id=1)
+        db.create_all()
+        with db.session() as session:
+            ctx = Context(name="test", language_family="python", root_path=str(temp_dir))
+            session.add(ctx)
+            session.commit()
+            context_id = ctx.id
+
+        indexer = StructuralIndexer(db, temp_dir)
+        indexer.index_files(["utils.py", "main.py"], context_id=context_id or 1)
 
         # Before resolution: helper and Utility refs should be UNKNOWN
-        helper_refs = [
-            r
-            for r in ext_main.refs
-            if r["token_text"] == "helper" and r["role"] == Role.REFERENCE.value
-        ]
-        assert len(helper_refs) >= 1
-        assert all(r["ref_tier"] == RefTier.UNKNOWN.value for r in helper_refs)
+        with db.session() as session:
+            from sqlmodel import select
 
-        # Run cross-file resolution
-        from codeplane.index._internal.indexing.structural import _resolve_cross_file_refs
+            from codeplane.index.models import File
 
-        _resolve_cross_file_refs([ext_utils, ext_main])
+            main_file = session.exec(select(File).where(File.path == "main.py")).first()
+            assert main_file is not None
+            helper_refs = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == main_file.id,
+                    RefFact.token_text == "helper",
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+            assert len(helper_refs) >= 1
+            assert all(r.ref_tier == RefTier.UNKNOWN.value for r in helper_refs)
+
+        # Run DB-backed resolution (Pass 1.5)
+        from codeplane.index._internal.indexing.resolver import resolve_star_import_refs
+
+        stats = resolve_star_import_refs(db)
+        assert stats.refs_upgraded >= 1
 
         # After resolution: should be STRONG
-        helper_refs_after = [
-            r
-            for r in ext_main.refs
-            if r["token_text"] == "helper" and r["role"] == Role.REFERENCE.value
-        ]
-        assert all(r["ref_tier"] == RefTier.STRONG.value for r in helper_refs_after)
+        with db.session() as session:
+            helper_refs_after = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == main_file.id,
+                    RefFact.token_text == "helper",
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+            assert all(r.ref_tier == RefTier.STRONG.value for r in helper_refs_after)
 
-        utility_refs_after = [
-            r
-            for r in ext_main.refs
-            if r["token_text"] == "Utility" and r["role"] == Role.REFERENCE.value
-        ]
-        assert all(r["ref_tier"] == RefTier.STRONG.value for r in utility_refs_after)
+            utility_refs_after = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == main_file.id,
+                    RefFact.token_text == "Utility",
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+            assert all(r.ref_tier == RefTier.STRONG.value for r in utility_refs_after)
 
-    def test_python_star_import_external_stays_unknown(self, temp_dir: Path) -> None:
+    def test_python_star_import_external_stays_unknown(self, db: Database, temp_dir: Path) -> None:
         """Star imports from external modules should leave refs as UNKNOWN."""
         (temp_dir / "main.py").write_text(
             """from os.path import *
@@ -630,20 +691,39 @@ x = exists("/tmp")
 """
         )
 
-        ext = _extract_file("main.py", str(temp_dir), unit_id=1)
+        db.create_all()
+        with db.session() as session:
+            ctx = Context(name="test", language_family="python", root_path=str(temp_dir))
+            session.add(ctx)
+            session.commit()
+            context_id = ctx.id
 
-        from codeplane.index._internal.indexing.structural import _resolve_cross_file_refs
+        indexer = StructuralIndexer(db, temp_dir)
+        indexer.index_files(["main.py"], context_id=context_id or 1)
 
-        _resolve_cross_file_refs([ext])
+        from codeplane.index._internal.indexing.resolver import resolve_star_import_refs
+
+        resolve_star_import_refs(db)
 
         # 'exists' comes from os.path (external) — stays UNKNOWN
-        exists_refs = [
-            r for r in ext.refs if r["token_text"] == "exists" and r["role"] == Role.REFERENCE.value
-        ]
-        if exists_refs:
-            assert all(r["ref_tier"] == RefTier.UNKNOWN.value for r in exists_refs)
+        with db.session() as session:
+            from sqlmodel import select
 
-    def test_csharp_multiple_files_same_namespace(self, temp_dir: Path) -> None:
+            from codeplane.index.models import File
+
+            main_file = session.exec(select(File).where(File.path == "main.py")).first()
+            assert main_file is not None
+            exists_refs = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == main_file.id,
+                    RefFact.token_text == "exists",
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+            if exists_refs:
+                assert all(r.ref_tier == RefTier.UNKNOWN.value for r in exists_refs)
+
+    def test_csharp_multiple_files_same_namespace(self, db: Database, temp_dir: Path) -> None:
         """Types from the same namespace across multiple files should all resolve."""
         (temp_dir / "A.cs").write_text(
             """namespace Shared {
@@ -669,22 +749,70 @@ namespace App {
 """
         )
 
-        ext_a = _extract_file("A.cs", str(temp_dir), unit_id=1)
-        ext_b = _extract_file("B.cs", str(temp_dir), unit_id=1)
-        ext_consumer = _extract_file("Consumer.cs", str(temp_dir), unit_id=1)
+        db.create_all()
+        with db.session() as session:
+            ctx = Context(name="test", language_family="dotnet", root_path=str(temp_dir))
+            session.add(ctx)
+            session.commit()
+            context_id = ctx.id
 
-        from codeplane.index._internal.indexing.structural import _resolve_cross_file_refs
+        indexer = StructuralIndexer(db, temp_dir)
+        # Critically: index in SEPARATE batches (simulates the 25-file batching)
+        indexer.index_files(["A.cs"], context_id=context_id or 1)
+        indexer.index_files(["B.cs"], context_id=context_id or 1)
+        indexer.index_files(["Consumer.cs"], context_id=context_id or 1)
 
-        _resolve_cross_file_refs([ext_a, ext_b, ext_consumer])
+        from codeplane.index._internal.indexing.resolver import resolve_namespace_refs
 
-        # Both TypeA and TypeB should be STRONG in Consumer
-        for type_name in ("TypeA", "TypeB"):
-            refs = [
-                r
-                for r in ext_consumer.refs
-                if r["token_text"] == type_name and r["role"] == Role.REFERENCE.value
-            ]
-            assert len(refs) >= 1, f"No refs found for {type_name}"
-            assert all(r["ref_tier"] == RefTier.STRONG.value for r in refs), (
-                f"{type_name} should be STRONG"
-            )
+        stats = resolve_namespace_refs(db)
+        assert stats.refs_upgraded >= 1
+        with db.session() as session:
+            from sqlmodel import select
+
+            from codeplane.index.models import File
+
+            consumer_file = session.exec(select(File).where(File.path == "Consumer.cs")).first()
+            assert consumer_file is not None
+            for type_name in ("TypeA", "TypeB"):
+                refs = session.exec(
+                    select(RefFact).where(
+                        RefFact.file_id == consumer_file.id,
+                        RefFact.token_text == type_name,
+                        RefFact.role == Role.REFERENCE.value,
+                    )
+                ).all()
+                assert len(refs) >= 1, f"No refs found for {type_name}"
+                assert all(r.ref_tier == RefTier.STRONG.value for r in refs), (
+                    f"{type_name} should be STRONG after DB-backed resolution"
+                )
+
+    def test_csharp_namespace_on_def_facts(self, db: Database, temp_dir: Path) -> None:
+        """C# extraction should populate namespace on DefFacts."""
+        (temp_dir / "test.cs").write_text(
+            """namespace Foo.Bar {
+    class Baz { }
+    interface IBaz { }
+}
+"""
+        )
+
+        db.create_all()
+        with db.session() as session:
+            ctx = Context(name="test", language_family="dotnet", root_path=str(temp_dir))
+            session.add(ctx)
+            session.commit()
+            context_id = ctx.id
+
+        indexer = StructuralIndexer(db, temp_dir)
+        indexer.index_files(["test.cs"], context_id=context_id or 1)
+
+        with db.session() as session:
+            from sqlmodel import select
+
+            defs = session.exec(select(DefFact)).all()
+            baz_def = next((d for d in defs if d.name == "Baz"), None)
+            ibaz_def = next((d for d in defs if d.name == "IBaz"), None)
+            assert baz_def is not None
+            assert baz_def.namespace == "Foo.Bar"
+            assert ibaz_def is not None
+            assert ibaz_def.namespace == "Foo.Bar"
