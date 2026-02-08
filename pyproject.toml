@@ -157,7 +157,7 @@ warn_return_any = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-v"
+addopts = "-v --ignore=tests/e2e"
 timeout = 600
 timeout_method = "signal"
 markers = [

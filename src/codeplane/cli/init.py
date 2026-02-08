@@ -12,8 +12,10 @@ import click
 from rich.table import Table
 
 from codeplane.config.user_config import (
+    DEFAULT_PORT,
     RuntimeState,
     UserConfig,
+    load_user_config,
     write_runtime_state,
     write_user_config,
 )
@@ -234,53 +236,120 @@ def _inject_agent_instructions(repo_root: Path, tool_prefix: str) -> list[str]:
 # =============================================================================
 
 
-def _ensure_vscode_mcp_config(repo_root: Path, port: int = 7654) -> bool:
-    """Ensure .vscode/mcp.json has the CodePlane server entry.
+def _get_mcp_server_name(repo_root: Path) -> str:
+    """Get the normalized MCP server name for a repo."""
+    repo_name = repo_root.name
+    normalized = repo_name.lower().replace(".", "_").replace("-", "_")
+    return f"codeplane-{normalized}"
 
-    Returns True if file was created or modified.
+
+def _ensure_vscode_mcp_config(repo_root: Path, port: int) -> tuple[bool, str]:
+    """Ensure .vscode/mcp.json has the CodePlane server entry with static port.
+
+    Creates or updates the MCP server entry with the actual port number.
+    Call sync_vscode_mcp_port() from 'cpl up' to update port if changed.
+
+    Returns tuple of (was_modified, server_name).
     """
     vscode_dir = repo_root / ".vscode"
     mcp_json_path = vscode_dir / "mcp.json"
+    server_name = _get_mcp_server_name(repo_root)
 
-    # Derive server name from repo directory name
-    repo_name = repo_root.name
-    server_name = f"codeplane-{repo_name}"
-
-    expected_config = {
+    expected_url = f"http://127.0.0.1:{port}/mcp"
+    expected_config: dict[str, Any] = {
         "command": "npx",
-        "args": ["-y", "mcp-remote", f"http://127.0.0.1:{port}/mcp"],
+        "args": ["-y", "mcp-remote", expected_url],
     }
 
     if mcp_json_path.exists():
         try:
-            existing = json.loads(mcp_json_path.read_text())
+            content = mcp_json_path.read_text()
+            # Remove JSONC comments before parsing
+            import re
+
+            content_no_comments = re.sub(r"//.*$", "", content, flags=re.MULTILINE)
+            existing = json.loads(content_no_comments)
         except json.JSONDecodeError:
             existing = {}
 
         servers = existing.get("servers", {})
 
-        # Check if our server entry already exists (by name or equivalent config)
+        # Check if our server entry already exists with correct config
         if server_name in servers:
-            return False  # Already configured
+            current_args = servers[server_name].get("args", [])
+            current_url = current_args[-1] if current_args else ""
 
-        # Also check for legacy "codeplane" entry with same port
-        for name, cfg in servers.items():
-            if name.startswith("codeplane") and cfg.get("args", [])[-1:] == [
-                f"http://127.0.0.1:{port}/mcp"
-            ]:
-                return False  # Already has equivalent config
+            # If URL matches exactly, no change needed
+            if current_url == expected_url:
+                return False, server_name
 
-        # Add our server entry
-        servers[server_name] = expected_config
+            # Update with new port
+            servers[server_name] = expected_config
+        else:
+            # Add new server entry
+            servers[server_name] = expected_config
+
         existing["servers"] = servers
-        mcp_json_path.write_text(json.dumps(existing, indent=2) + "\n")
-        return True
+        output = json.dumps(existing, indent=2) + "\n"
+        mcp_json_path.write_text(output)
+        return True, server_name
     else:
         # Create new mcp.json
         vscode_dir.mkdir(parents=True, exist_ok=True)
         config = {"servers": {server_name: expected_config}}
-        mcp_json_path.write_text(json.dumps(config, indent=2) + "\n")
+        output = json.dumps(config, indent=2) + "\n"
+        mcp_json_path.write_text(output)
+        return True, server_name
+
+
+def sync_vscode_mcp_port(repo_root: Path, port: int) -> bool:
+    """Update port in .vscode/mcp.json if it differs from configured port.
+
+    Called by 'cpl up' to ensure mcp.json matches the running server port.
+    Returns True if file was modified.
+    """
+    mcp_json_path = repo_root / ".vscode" / "mcp.json"
+    if not mcp_json_path.exists():
+        # Create mcp.json if it doesn't exist
+        return _ensure_vscode_mcp_config(repo_root, port)[0]
+
+    server_name = _get_mcp_server_name(repo_root)
+    expected_url = f"http://127.0.0.1:{port}/mcp"
+
+    try:
+        content = mcp_json_path.read_text()
+        import re
+
+        content_no_comments = re.sub(r"//.*$", "", content, flags=re.MULTILINE)
+        existing = json.loads(content_no_comments)
+    except json.JSONDecodeError:
+        # Invalid JSON, recreate the file
+        return _ensure_vscode_mcp_config(repo_root, port)[0]
+
+    servers = existing.get("servers", {})
+    if server_name not in servers:
+        # Our server entry doesn't exist, add it
+        servers[server_name] = {
+            "command": "npx",
+            "args": ["-y", "mcp-remote", expected_url],
+        }
+        existing["servers"] = servers
+        output = json.dumps(existing, indent=2) + "\n"
+        mcp_json_path.write_text(output)
         return True
+
+    current_args = servers[server_name].get("args", [])
+    current_url = current_args[-1] if current_args else ""
+
+    if current_url == expected_url:
+        return False
+
+    # Update port
+    servers[server_name]["args"] = ["-y", "mcp-remote", expected_url]
+    existing["servers"] = servers
+    output = json.dumps(existing, indent=2) + "\n"
+    mcp_json_path.write_text(output)
+    return True
 
 
 # =============================================================================
@@ -307,7 +376,11 @@ def _get_xdg_index_dir(repo_root: Path) -> Path:
 
 
 def initialize_repo(
-    repo_root: Path, *, reindex: bool = False, show_cpl_up_hint: bool = True
+    repo_root: Path,
+    *,
+    reindex: bool = False,
+    show_cpl_up_hint: bool = True,
+    port: int | None = None,
 ) -> bool:
     """Initialize a repository for CodePlane, returning True on success.
 
@@ -315,6 +388,7 @@ def initialize_repo(
         repo_root: Path to the repository root
         reindex: Wipe and rebuild the entire index from scratch
         show_cpl_up_hint: Show "Run 'cpl up'" hint at end (False when auto-init from cpl up)
+        port: Override port (persisted to config.yaml). If None, preserves existing or uses default.
     """
     codeplane_dir = repo_root / ".codeplane"
     console = get_console()
@@ -327,6 +401,19 @@ def initialize_repo(
     console.print()
     status(f"Initializing CodePlane in {repo_root}", style="none")
     console.print()
+
+    # Determine port: CLI override > existing config > default
+    config_path = codeplane_dir / "config.yaml"
+    if port is not None:
+        # Explicit port override from CLI
+        final_port = port
+    elif config_path.exists():
+        # Preserve existing config port (for reindex without --port)
+        existing_config = load_user_config(config_path)
+        final_port = existing_config.port
+    else:
+        # Fresh init with no port specified
+        final_port = DEFAULT_PORT
 
     # If reindex is set, remove existing data completely to start fresh
     if reindex:
@@ -354,9 +441,8 @@ def initialize_repo(
     else:
         index_dir = codeplane_dir
 
-    # Write minimal user config
-    config_path = codeplane_dir / "config.yaml"
-    write_user_config(config_path, UserConfig())
+    # Write user config
+    write_user_config(config_path, UserConfig(port=final_port))
 
     # Write runtime state (index_path) - auto-generated, not user-editable
     state_path = codeplane_dir / "state.yaml"
@@ -378,19 +464,20 @@ def initialize_repo(
         )
 
     # === IDE & Agent Integration ===
-    # Derive tool prefix from server name (codeplane-{repo_name} -> mcp_codeplane_{repo_name})
-    repo_name = repo_root.name
-    tool_prefix = f"mcp_codeplane_{repo_name.replace('-', '_')}"
+    # Ensure VS Code MCP configuration with static port (returns server_name)
+    mcp_modified, server_name = _ensure_vscode_mcp_config(repo_root, final_port)
+    if mcp_modified:
+        status("Created .vscode/mcp.json with CodePlane server", style="info")
+
+    # Derive tool prefix from server_name: VS Code creates tools as mcp_{server_name}_{tool}
+    # server_name is already normalized (lowercase, underscores)
+    tool_prefix = f"mcp_{server_name}"
 
     # Inject CodePlane instructions into agent instruction files
     modified_agent_files = _inject_agent_instructions(repo_root, tool_prefix)
     if modified_agent_files:
         for f in modified_agent_files:
             status(f"Updated {f} with CodePlane instructions", style="info")
-
-    # Ensure VS Code MCP configuration
-    if _ensure_vscode_mcp_config(repo_root):
-        status("Created .vscode/mcp.json with CodePlane server", style="info")
 
     # === Discovery Phase ===
     from codeplane.index._internal.grammars import (
@@ -505,9 +592,8 @@ def initialize_repo(
                     # Open structural phase box
                     structural_phase = phase_box("Structural Indexing", width=60)
                     structural_phase.__enter__()
+                    # Only create first progress bar; others added when their phase starts
                     structural_task_id = structural_phase.add_progress("Parsing symbols", total=100)
-                    refs_task_id = structural_phase.add_progress("Resolving imports", total=100)
-                    types_task_id = structural_phase.add_progress("Resolving types", total=100)
 
                 # Update structural progress
                 if structural_phase is not None:
@@ -517,12 +603,18 @@ def initialize_repo(
 
             elif progress_phase == "resolving_refs":
                 if structural_phase is not None:
+                    # Create progress bar on first callback for this phase
+                    if refs_task_id is None:
+                        refs_task_id = structural_phase.add_progress("Resolving imports", total=100)
                     pct = int(indexed / total * 100) if total > 0 else 0
                     structural_phase._progress.update(refs_task_id, completed=pct)  # type: ignore[union-attr]
                 structural_progress["resolving_refs"] = (indexed, total)
 
             elif progress_phase == "resolving_types":
                 if structural_phase is not None:
+                    # Create progress bar on first callback for this phase
+                    if types_task_id is None:
+                        types_task_id = structural_phase.add_progress("Resolving types", total=100)
                     pct = int(indexed / total * 100) if total > 0 else 0
                     structural_phase._progress.update(types_task_id, completed=pct)  # type: ignore[union-attr]
                 structural_progress["resolving_types"] = (indexed, total)
@@ -605,7 +697,8 @@ def _make_init_extension_table(files_by_ext: dict[str, int]) -> Table:
 @click.option(
     "-r", "--reindex", is_flag=True, help="Wipe and rebuild the entire index from scratch"
 )
-def init_command(path: Path | None, reindex: bool) -> None:
+@click.option("--port", "-p", type=int, help="Server port (persisted to config.yaml)")
+def init_command(path: Path | None, reindex: bool, port: int | None) -> None:
     """Initialize a repository for CodePlane management.
 
     Creates .codeplane/ directory with default configuration and builds
@@ -618,7 +711,7 @@ def init_command(path: Path | None, reindex: bool) -> None:
 
     repo_root = find_repo_root(path)
 
-    if not initialize_repo(repo_root, reindex=reindex):
+    if not initialize_repo(repo_root, reindex=reindex, port=port):
         if not reindex:
             return  # Already initialized, message printed
         sys.exit(1)  # Errors occurred

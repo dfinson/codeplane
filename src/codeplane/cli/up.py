@@ -16,7 +16,7 @@ from typing import Any
 
 import click
 
-from codeplane.cli.init import initialize_repo
+from codeplane.cli.init import initialize_repo, sync_vscode_mcp_port
 from codeplane.cli.utils import find_repo_root
 from codeplane.config.loader import load_config
 from codeplane.core.progress import (
@@ -101,7 +101,9 @@ def _print_banner(
 
 @click.command()
 @click.argument("path", default=None, required=False, type=click.Path(exists=True, path_type=Path))
-@click.option("--port", "-p", type=int, help="Override server port")
+@click.option(
+    "--port", "-p", type=int, help="Server port (persisted to config.yaml on init/reindex)"
+)
 @click.option(
     "-r",
     "--reindex",
@@ -141,13 +143,14 @@ def up_command(path: Path | None, port: int | None, reindex: bool) -> None:
         config.server.port = port
 
     # Initialize if needed, or reindex if requested
+    # Pass port to initialize_repo so it gets persisted to config.yaml
     codeplane_dir = repo_root / ".codeplane"
-    if reindex and not initialize_repo(repo_root, reindex=True, show_cpl_up_hint=False):
+    if reindex and not initialize_repo(repo_root, reindex=True, show_cpl_up_hint=False, port=port):
         raise click.ClickException("Failed to reinitialize repository")
     elif (
         not reindex
         and not codeplane_dir.exists()
-        and not initialize_repo(repo_root, show_cpl_up_hint=False)
+        and not initialize_repo(repo_root, show_cpl_up_hint=False, port=port)
     ):
         raise click.ClickException("Failed to initialize repository")
 
@@ -169,6 +172,10 @@ def up_command(path: Path | None, port: int | None, reindex: bool) -> None:
             raise click.ClickException("Failed to load index")
     finally:
         loop.close()
+
+    # Sync port in mcp.json if it differs from configured port
+    if sync_vscode_mcp_port(repo_root, config.server.port):
+        click.echo(f"Updated .vscode/mcp.json port to {config.server.port}")
 
     # Generate log file path
     # Format: .codeplane/logs/YYYY-MM-DD/HHMMSS-<6-digit-hash>.log

@@ -2,6 +2,30 @@
 
 Authority: SPEC.md wins. If unsure or there is a spec conflict, stop and ask.
 
+## ⛔ CRITICAL: E2E Tests Are OFF-LIMITS ⛔
+
+**DO NOT RUN E2E TESTS** unless ALL of the following are true:
+1. The user has EXPLICITLY requested E2E tests by name
+2. You have explained the cost (clones real repos, starts daemons, takes minutes, high CPU)
+3. The user has CONFIRMED they want to proceed
+
+E2E tests (`tests/e2e/`) are:
+- **Excluded by default** from `pytest` runs
+- **Resource-intensive**: Clone real GitHub repos, start CodePlane daemons
+- **Slow**: Can take 5-15+ minutes and consume significant CPU
+- **NOT for routine validation**: Use unit/integration tests instead
+
+**When running tests, ALWAYS use:**
+- `pytest tests/` (e2e excluded by default via pyproject.toml)
+- `target_filter` with specific test paths (NOT `tests/e2e`)
+
+**To run E2E tests (ONLY with explicit user confirmation):**
+- `pytest tests/e2e/ --ignore=` (override the default ignore)
+
+**Violating this wastes user resources and disrupts their workflow.**
+
+---
+
 1) MCP First (Default)
 If a CodePlane MCP tool exists for an action, use it.
 Terminal commands are fallback only when the tool does not exist.

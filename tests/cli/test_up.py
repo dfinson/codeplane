@@ -123,7 +123,9 @@ class TestUpCommand:
 
         runner.invoke(cli, ["up", str(temp_git_repo)])
         # Should call initialize_repo with show_cpl_up_hint=False for auto-init
-        mock_init.assert_called_once_with(temp_git_repo.resolve(), show_cpl_up_hint=False)
+        mock_init.assert_called_once_with(
+            temp_git_repo.resolve(), show_cpl_up_hint=False, port=None
+        )
 
     @patch("codeplane.daemon.lifecycle.run_server")
     @patch("codeplane.daemon.lifecycle.is_server_running")

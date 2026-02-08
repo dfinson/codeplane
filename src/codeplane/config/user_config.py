@@ -64,8 +64,9 @@ STATE_HEADER = """\
 def write_user_config(path: Path, config: UserConfig | None = None) -> None:
     """Write user config file with helpful comments.
 
-    Only writes non-default values as active config.
-    Default values are shown as comments for reference.
+    Args:
+        path: Path to write config.yaml
+        config: Config values (uses defaults if None)
     """
     cfg = config or UserConfig()
 
@@ -75,7 +76,7 @@ def write_user_config(path: Path, config: UserConfig | None = None) -> None:
         "",
     ]
 
-    # Port - always write (primary config)
+    # Port
     lines.append("# Server port (can also use: cpl up --port <N>)")
     lines.append(f"port: {cfg.port}")
     lines.append("")
