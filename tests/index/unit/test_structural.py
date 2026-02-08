@@ -552,7 +552,7 @@ namespace App {
         stats = resolve_namespace_refs(db)
         assert stats.refs_upgraded >= 1
 
-        # After resolution: should be STRONG
+        # After resolution: should be STRONG with target_def_uid linked
         with db.session() as session:
             dcr_refs_after = session.exec(
                 select(RefFact).where(
@@ -562,6 +562,15 @@ namespace App {
                 )
             ).all()
             assert all(r.ref_tier == RefTier.STRONG.value for r in dcr_refs_after)
+
+            # target_def_uid must be set for rename to discover these refs
+            resolver_def = session.exec(
+                select(DefFact).where(DefFact.name == "DefaultContractResolver")
+            ).first()
+            assert resolver_def is not None
+            assert all(r.target_def_uid == resolver_def.def_uid for r in dcr_refs_after), (
+                "target_def_uid must link to the DefFact for rename discovery"
+            )
 
     def test_csharp_external_namespace_stays_unknown(self, db: Database, temp_dir: Path) -> None:
         """Refs to types from external namespaces (not in project) stay UNKNOWN."""
@@ -662,7 +671,7 @@ y = Utility()
         stats = resolve_star_import_refs(db)
         assert stats.refs_upgraded >= 1
 
-        # After resolution: should be STRONG
+        # After resolution: should be STRONG with target_def_uid linked
         with db.session() as session:
             helper_refs_after = session.exec(
                 select(RefFact).where(
@@ -673,6 +682,13 @@ y = Utility()
             ).all()
             assert all(r.ref_tier == RefTier.STRONG.value for r in helper_refs_after)
 
+            # target_def_uid must be set for rename to discover these refs
+            helper_def = session.exec(select(DefFact).where(DefFact.name == "helper")).first()
+            assert helper_def is not None
+            assert all(r.target_def_uid == helper_def.def_uid for r in helper_refs_after), (
+                "target_def_uid must link to DefFact for rename discovery"
+            )
+
             utility_refs_after = session.exec(
                 select(RefFact).where(
                     RefFact.file_id == main_file.id,
@@ -681,6 +697,12 @@ y = Utility()
                 )
             ).all()
             assert all(r.ref_tier == RefTier.STRONG.value for r in utility_refs_after)
+
+            utility_def = session.exec(select(DefFact).where(DefFact.name == "Utility")).first()
+            assert utility_def is not None
+            assert all(r.target_def_uid == utility_def.def_uid for r in utility_refs_after), (
+                "target_def_uid must link to DefFact for rename discovery"
+            )
 
     def test_python_star_import_external_stays_unknown(self, db: Database, temp_dir: Path) -> None:
         """Star imports from external modules should leave refs as UNKNOWN."""

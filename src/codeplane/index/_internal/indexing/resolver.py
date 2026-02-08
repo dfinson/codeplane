@@ -453,10 +453,24 @@ def resolve_namespace_refs(
         if stats.refs_scanned == 0:
             return stats
 
-        # Perform the upgrade
+        # Perform the upgrade — also link target_def_uid so the rename
+        # code path can find these refs via list_refs_by_def_uid().
+        # Use a correlated subquery to resolve def_uid for each ref.
         update_sql = text(f"""
             UPDATE ref_facts
-            SET ref_tier = :strong_tier, certainty = :certain
+            SET ref_tier = :strong_tier,
+                certainty = :certain,
+                target_def_uid = (
+                    SELECT df.def_uid
+                    FROM import_facts imf
+                    JOIN def_facts df ON df.name = ref_facts.token_text
+                        AND df.namespace = imf.imported_name
+                        AND df.kind IN ('class', 'struct', 'interface', 'enum')
+                    WHERE imf.file_id = ref_facts.file_id
+                        AND imf.import_kind = 'csharp_using'
+                        AND imf.alias IS NULL
+                    LIMIT 1
+                )
             WHERE ref_id IN (
                 SELECT DISTINCT rf.ref_id
                 FROM ref_facts rf
@@ -545,16 +559,18 @@ def resolve_star_import_refs(
             if source_file_id is None:
                 continue
 
-            # Get module-level defs from source file
-            source_defs = session.exec(
-                select(DefFact.name).where(
+            # Get module-level defs from source file (name + def_uid for linking)
+            source_def_rows = session.exec(
+                select(DefFact.name, DefFact.def_uid).where(
                     DefFact.file_id == source_file_id,
                     DefFact.lexical_path == DefFact.name,  # Module-level: lexical_path == name
                 )
             ).all()
-            export_names = {name for name in source_defs if not name.startswith("_")}
+            export_map: dict[str, str] = {
+                name: uid for name, uid in source_def_rows if not name.startswith("_")
+            }
 
-            if not export_names:
+            if not export_map:
                 continue
 
             # Upgrade UNKNOWN refs in the importing file that match exports
@@ -568,9 +584,10 @@ def resolve_star_import_refs(
 
             for ref in unknown_refs:
                 stats.refs_scanned += 1
-                if ref.token_text in export_names:
+                if ref.token_text in export_map:
                     ref.ref_tier = RefTier.STRONG.value
                     ref.certainty = Certainty.CERTAIN.value
+                    ref.target_def_uid = export_map[ref.token_text]
                     stats.refs_upgraded += 1
 
         session.commit()
