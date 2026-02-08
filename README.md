@@ -29,26 +29,21 @@ cpl up              # Start daemon on default port 7654 (foreground, Ctrl+C to s
 cpl up --port 7655  # Or specify a port
 ```
 
-### VS Code / Copilot
+That's it. `cpl up` automatically:
+- Creates `.vscode/mcp.json` with the MCP server config
+- Injects agent instructions into `AGENTS.md` and `.github/copilot-instructions.md`
+- Syncs the port if you change it later (`cpl up --port 8000`)
 
-Add `.vscode/mcp.json` to your repo:
+### CLI Reference
 
-```json
-{
-  "servers": {
-    "codeplane": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "http://127.0.0.1:7654/mcp"]
-    }
-  }
-}
-```
-
-In another terminal:
-```bash
-cpl status      # Check daemon status
-cpl clear       # Clear index and cache
-```
+| Command | Description |
+|---------|-------------|
+| `cpl up` | Start server (foreground) |
+| `cpl up --port N` | Start on specific port |
+| `cpl up --reindex` | Rebuild index from scratch |
+| `cpl init` | Initialize without starting |
+| `cpl status` | Check daemon status |
+| `cpl clear` | Clear index and cache |
 
 ---
 
@@ -78,6 +73,18 @@ CodePlane provides a **full stacked index**:
 
 - **Tier 0 — Tantivy Lexical Index**: Fast, deterministic lexical retrieval for candidate discovery
 - **Tier 1 — Tree-sitter/SQLite Structural Facts**: Definitions, references, scopes, imports, exports
+
+## IDE & Agent Integration
+
+`cpl init` / `cpl up` automatically configures your IDE and agents:
+
+| File | Purpose |
+|------|---------||
+| `.vscode/mcp.json` | VS Code MCP server config (uses `mcp-remote` for HTTP transport) |
+| `AGENTS.md` | Tool reference for AI agents (tool names, parameters, patterns) |
+| `.github/copilot-instructions.md` | Same instructions for GitHub Copilot |
+
+The server name follows the pattern `codeplane-{repo_name}`, so tools appear as `mcp_codeplane_myrepo_read_files`, etc.
 
 ## MCP Tools
 
