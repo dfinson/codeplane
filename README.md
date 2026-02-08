@@ -17,6 +17,26 @@
 
 ---
 
+## The Problem
+
+AI coding agents lose a **lot** of time and waste a lot of token consumption on tasks that should be much closer to instant.
+
+- **Exploratory thrash** — repeated grep, file opens, and retries to build a mental model
+- **Terminal mediation** — deterministic operations (git status, diff, run test) produce unstructured text and loops
+- **Missing deterministic refactors** — renames that IDEs do in seconds take agents minutes via search-and-edit
+
+The bottleneck is I/O and orchestration, not model capability.
+
+## The Solution
+
+CodePlane turns a repository into a **deterministic, queryable system**:
+
+```
+Agent plans and decides → CodePlane executes → Structured result → Next action
+```
+
+Every operation returns complete, structured context in a single call. No probing. No guesswork.
+
 ## Quick Start
 
 ```bash
@@ -46,26 +66,6 @@ That's it. `cpl up` automatically:
 | `cpl clear` | Clear index and cache |
 
 ---
-
-## The Problem
-
-AI coding agents lose a **lot** of time and waste a lot of token consumption on tasks that should be much closer to instant.
-
-- **Exploratory thrash** — repeated grep, file opens, and retries to build a mental model
-- **Terminal mediation** — deterministic operations (git status, diff, run test) produce unstructured text and loops
-- **Missing deterministic refactors** — renames that IDEs do in seconds take agents minutes via search-and-edit
-
-The bottleneck is I/O and orchestration, not model capability.
-
-## The Solution
-
-CodePlane turns a repository into a **deterministic, queryable system**:
-
-```
-Agent plans and decides → CodePlane executes → Structured result → Next action
-```
-
-Every operation returns complete, structured context in a single call. No probing. No guesswork.
 
 ## Architecture
 
