@@ -1086,36 +1086,61 @@ class TreeSitterParser:
                             break
             return names
 
+        # Preprocessor wrapper node types that may contain namespace declarations.
+        # In C# files with #if/#region, tree-sitter wraps contained declarations
+        # under these node types instead of placing them as direct root children.
+        _PREPROC_WRAPPERS = {
+            "preproc_if",
+            "preproc_ifdef",
+            "preproc_elif",
+            "preproc_else",
+            "preproc_region",
+        }
+
         ns_map: dict[str, list[str]] = {}
 
-        for node in root.children:
-            if node.type == "namespace_declaration":
-                # Block-scoped: namespace X.Y { class A {} }
-                ns_name = None
-                for child in node.children:
-                    if child.type in ("qualified_name", "identifier"):
-                        ns_name = self._qualified_name_text(child)
-                    elif child.type == "declaration_list" and ns_name:
-                        types = _type_names_from(child)
-                        if types:
-                            ns_map.setdefault(ns_name, []).extend(types)
+        def _walk_for_namespaces(parent: Any) -> None:
+            """Walk tree nodes, descending into preprocessor wrappers."""
+            for node in parent.children:
+                if node.type == "namespace_declaration":
+                    # Block-scoped: namespace X.Y { class A {} }
+                    ns_name = None
+                    for child in node.children:
+                        if child.type in ("qualified_name", "identifier"):
+                            ns_name = self._qualified_name_text(child)
+                        elif child.type == "declaration_list" and ns_name:
+                            types = _type_names_from(child)
+                            if types:
+                                ns_map.setdefault(ns_name, []).extend(types)
 
-            elif node.type == "file_scoped_namespace_declaration":
-                # File-scoped: namespace X.Y;
-                ns_name = None
-                for child in node.children:
-                    if child.type in ("qualified_name", "identifier"):
-                        ns_name = self._qualified_name_text(child)
-                        break
-                if ns_name:
-                    # Types are siblings in compilation_unit, not children.
-                    # Continue scanning root.children after this node.
-                    for sibling in root.children:
-                        if sibling.type in _TYPE_DECLS:
-                            for sub in sibling.children:
-                                if sub.type == "identifier":
-                                    ns_map.setdefault(ns_name, []).append(sub.text.decode("utf-8"))
-                                    break
+                elif node.type == "file_scoped_namespace_declaration":
+                    # File-scoped: namespace X.Y;
+                    ns_name = None
+                    for child in node.children:
+                        if child.type in ("qualified_name", "identifier"):
+                            ns_name = self._qualified_name_text(child)
+                            break
+                    if ns_name:
+                        # Types are siblings in compilation_unit, not children.
+                        # Scan all root-level nodes (including inside preproc wrappers).
+                        _collect_file_scoped_types(root, ns_name)
+
+                elif node.type in _PREPROC_WRAPPERS:
+                    # Recurse into preprocessor blocks to find wrapped namespaces
+                    _walk_for_namespaces(node)
+
+        def _collect_file_scoped_types(parent: Any, ns_name: str) -> None:
+            """Collect type declarations for file-scoped namespaces, including inside preproc blocks."""
+            for sibling in parent.children:
+                if sibling.type in _TYPE_DECLS:
+                    for sub in sibling.children:
+                        if sub.type == "identifier":
+                            ns_map.setdefault(ns_name, []).append(sub.text.decode("utf-8"))
+                            break
+                elif sibling.type in _PREPROC_WRAPPERS:
+                    _collect_file_scoped_types(sibling, ns_name)
+
+        _walk_for_namespaces(root)
 
         return ns_map
 

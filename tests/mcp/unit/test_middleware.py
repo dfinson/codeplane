@@ -144,6 +144,7 @@ class TestToolMiddleware:
 
         assert isinstance(result, ToolResult)
         content = result.structured_content
+        assert content is not None
         assert "error" in content
         assert content["error"]["code"] == "CANCELLED"
         assert "server shutting down" in content["error"]["message"]
@@ -164,7 +165,7 @@ class TestToolMiddleware:
             number_field: int
 
         try:
-            TestModel(required_field=123, number_field="not_a_number")  # type: ignore
+            TestModel(required_field=123, number_field="not_a_number")
         except ValidationError as e:
             validation_error = e
 
@@ -176,6 +177,7 @@ class TestToolMiddleware:
 
         assert isinstance(result, ToolResult)
         content = result.structured_content
+        assert content is not None
         assert content["error"]["code"] == "VALIDATION_ERROR"
         assert "details" in content["error"]
         assert "agentic_hint" in content
@@ -203,6 +205,7 @@ class TestToolMiddleware:
             result = await middleware.on_call_tool(mock_context, call_next)
 
         content = result.structured_content
+        assert content is not None
         details = content["error"]["details"]
         assert len(details) > 0
         assert "field" in details[0]
@@ -230,6 +233,7 @@ class TestToolMiddleware:
 
         assert isinstance(result, ToolResult)
         content = result.structured_content
+        assert content is not None
         assert content["error"]["code"] == "FILE_NOT_FOUND"
         assert content["summary"] == "error: FILE_NOT_FOUND"
 
@@ -249,6 +253,7 @@ class TestToolMiddleware:
             result = await middleware.on_call_tool(mock_context, call_next)
 
         content = result.structured_content
+        assert content is not None
         assert content["error"]["code"] == "CONTENT_NOT_FOUND"
 
     # =========================================================================
@@ -267,6 +272,7 @@ class TestToolMiddleware:
 
         assert isinstance(result, ToolResult)
         content = result.structured_content
+        assert content is not None
         assert content["error"]["code"] == "INTERNAL_ERROR"
         assert "Unexpected failure" in content["error"]["message"]
         assert content["error"]["error_type"] == "RuntimeError"

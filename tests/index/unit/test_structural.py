@@ -481,6 +481,44 @@ namespace Foo.Bar {
         assert "Baz" in result.namespace_type_map["Foo.Bar"]
         assert "IBaz" in result.namespace_type_map["Foo.Bar"]
 
+    def test_csharp_namespace_inside_preprocessor_block(self, temp_dir: Path) -> None:
+        """C# namespace inside #if preprocessor block should be extracted."""
+        content = """#if NET6_0_OR_GREATER
+using System;
+
+namespace My.App.Tests {
+    public class MyTestClass { }
+    internal class HelperClass { }
+}
+#endif
+"""
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+
+        result = _extract_file("test.cs", str(temp_dir), unit_id=1)
+
+        assert "My.App.Tests" in result.namespace_type_map
+        assert "MyTestClass" in result.namespace_type_map["My.App.Tests"]
+        assert "HelperClass" in result.namespace_type_map["My.App.Tests"]
+
+    def test_csharp_namespace_inside_region(self, temp_dir: Path) -> None:
+        """C# namespace inside #region block should be extracted."""
+        content = """#region License
+// Some license text
+#endregion
+
+namespace My.App {
+    class Foo { }
+}
+"""
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+
+        result = _extract_file("test.cs", str(temp_dir), unit_id=1)
+
+        assert "My.App" in result.namespace_type_map
+        assert "Foo" in result.namespace_type_map["My.App"]
+
     def test_python_wildcard_import_extracted(self, temp_dir: Path) -> None:
         """Python wildcard imports should be extracted as ImportFacts."""
         content = "from os.path import *\n"
