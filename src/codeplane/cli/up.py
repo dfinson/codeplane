@@ -89,7 +89,7 @@ def _print_banner(
 
     # Endpoint info
     console.print(f"  MCP Endpoint:    {base_url}/mcp", style="green", highlight=False)
-    console.print(f"  Dashboard:       {base_url}/dashboard", highlight=False)
+    # console.print(f"  Dashboard:       {base_url}/dashboard", highlight=False)
     console.print(f"  Health Check:    {base_url}/health", highlight=False)
     console.print(f"  Status:          {base_url}/status", highlight=False)
 

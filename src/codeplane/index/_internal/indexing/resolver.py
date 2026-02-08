@@ -595,6 +595,123 @@ def resolve_star_import_refs(
     return stats
 
 
+def resolve_same_namespace_refs(
+    db: Database,
+    file_ids: list[int] | None = None,
+) -> CrossFileResolutionStats:
+    """Upgrade UNKNOWN refs using same/parent namespace visibility (DB-backed).
+
+    In C# (and Java/Kotlin), types in the same namespace or a parent namespace
+    are visible without an explicit ``using`` directive. For example, a file in
+    ``namespace Newtonsoft.Json.Converters`` can reference ``JsonSerializer``
+    from ``Newtonsoft.Json`` without ``using Newtonsoft.Json;``.
+
+    Resolution logic:
+    1. Find UNKNOWN REFERENCE refs
+    2. For each ref, find which namespace(s) the ref's file declares
+       (via DefFacts with a non-null namespace in the same file)
+    3. Check if a DefFact exists with matching name where:
+       - The def's namespace equals the ref's file namespace (same namespace), OR
+       - The def's namespace is a parent of the ref's file namespace
+         (e.g., def in "A.B" visible from file in "A.B.C")
+    4. Upgrade matching refs to STRONG with target_def_uid linked
+
+    Args:
+        db: Database instance
+        file_ids: Optional list of file IDs to scope resolution. None = all.
+
+    Returns:
+        CrossFileResolutionStats
+    """
+    stats = CrossFileResolutionStats()
+
+    with db.session() as session:
+        from sqlalchemy import text
+
+        if file_ids:
+            file_id_list = ",".join(str(fid) for fid in file_ids)
+            file_filter = f"AND rf.file_id IN ({file_id_list})"
+        else:
+            file_filter = ""
+
+        # Count refs that will be upgraded.
+        # Join: ref's file has a DefFact with a namespace, and a target DefFact
+        # exists with matching name whose namespace is the same as or a parent
+        # of the file's namespace.
+        count_sql = text(f"""
+            SELECT COUNT(DISTINCT rf.ref_id)
+            FROM ref_facts rf
+            JOIN def_facts file_def ON file_def.file_id = rf.file_id
+                AND file_def.namespace IS NOT NULL
+            JOIN def_facts target_def ON target_def.name = rf.token_text
+                AND target_def.kind IN ('class', 'struct', 'interface', 'enum')
+                AND (
+                    target_def.namespace = file_def.namespace
+                    OR file_def.namespace LIKE target_def.namespace || '.%'
+                )
+            WHERE rf.ref_tier = :unknown_tier
+                AND rf.role = :ref_role
+                {file_filter}
+        """)
+        result = session.execute(
+            count_sql.bindparams(
+                unknown_tier=RefTier.UNKNOWN.value,
+                ref_role=Role.REFERENCE.value,
+            )
+        )
+        stats.refs_scanned = result.scalar_one()
+
+        if stats.refs_scanned == 0:
+            return stats
+
+        # Perform the upgrade with target_def_uid linking.
+        update_sql = text(f"""
+            UPDATE ref_facts
+            SET ref_tier = :strong_tier,
+                certainty = :certain,
+                target_def_uid = (
+                    SELECT target_def.def_uid
+                    FROM def_facts file_def
+                    JOIN def_facts target_def ON target_def.name = ref_facts.token_text
+                        AND target_def.kind IN ('class', 'struct', 'interface', 'enum')
+                        AND (
+                            target_def.namespace = file_def.namespace
+                            OR file_def.namespace LIKE target_def.namespace || '.%'
+                        )
+                    WHERE file_def.file_id = ref_facts.file_id
+                        AND file_def.namespace IS NOT NULL
+                    LIMIT 1
+                )
+            WHERE ref_id IN (
+                SELECT DISTINCT rf.ref_id
+                FROM ref_facts rf
+                JOIN def_facts file_def ON file_def.file_id = rf.file_id
+                    AND file_def.namespace IS NOT NULL
+                JOIN def_facts target_def ON target_def.name = rf.token_text
+                    AND target_def.kind IN ('class', 'struct', 'interface', 'enum')
+                    AND (
+                        target_def.namespace = file_def.namespace
+                        OR file_def.namespace LIKE target_def.namespace || '.%'
+                    )
+                WHERE rf.ref_tier = :unknown_tier
+                    AND rf.role = :ref_role
+                    {file_filter}
+            )
+        """)
+        session.execute(
+            update_sql.bindparams(
+                strong_tier=RefTier.STRONG.value,
+                certain=Certainty.CERTAIN.value,
+                unknown_tier=RefTier.UNKNOWN.value,
+                ref_role=Role.REFERENCE.value,
+            )
+        )
+        stats.refs_upgraded = stats.refs_scanned
+        session.commit()
+
+    return stats
+
+
 def _path_to_python_module(path: str) -> str | None:
     """Convert file path to Python module path."""
     if not path.endswith(".py"):

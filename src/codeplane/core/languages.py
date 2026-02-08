@@ -502,7 +502,7 @@ ALL_LANGUAGES: tuple[Language, ...] = (
         markers_workspace=(),
         markers_package=("shard.yml",),
         grammar="crystal",
-        test_patterns=("spec/**/*.cr",),
+        test_patterns=("*_spec.cr",),
         priority=60,
     ),
     Language(
@@ -1027,6 +1027,39 @@ def build_include_specs() -> dict[str, tuple[str, ...]]:
 def get_test_patterns(name: str) -> tuple[str, ...]:
     """Get test file patterns for a name."""
     return LANGUAGES_BY_NAME[name].test_patterns if name in LANGUAGES_BY_NAME else ()
+
+
+def is_test_file(path: str | Path) -> bool:
+    """Check if a file path matches any known test file pattern.
+
+    Uses the canonical ``test_patterns`` defined on each ``Language`` in
+    ``ALL_LANGUAGES``.  Patterns are ``fnmatch``-style globs matched
+    against the filename (e.g. ``test_*.py``, ``*_test.go``).
+    Additionally, if a pattern contains ``/`` it is matched against the
+    full path string to support directory-style patterns like ``tests/``.
+
+    Args:
+        path: File path (string or Path object).
+
+    Returns:
+        True if the file matches any test pattern for any language.
+    """
+    from fnmatch import fnmatch
+
+    p = Path(path) if isinstance(path, str) else path
+    name = p.name
+    path_str = str(p)
+
+    for lang in ALL_LANGUAGES:
+        for pattern in lang.test_patterns:
+            if "/" in pattern:
+                # Directory-style pattern — use fnmatch against full path
+                if fnmatch(path_str, pattern):
+                    return True
+            else:
+                if fnmatch(name, pattern):
+                    return True
+    return False
 
 
 def get_grammar_name(name: str) -> str | None:

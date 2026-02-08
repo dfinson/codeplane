@@ -838,3 +838,206 @@ namespace App {
             assert baz_def.namespace == "Foo.Bar"
             assert ibaz_def is not None
             assert ibaz_def.namespace == "Foo.Bar"
+
+    def test_csharp_same_namespace_upgrades_to_strong(self, db: Database, temp_dir: Path) -> None:
+        """Types in the same namespace should resolve without a using directive."""
+        # File 1: defines JsonSerializer in Newtonsoft.Json
+        (temp_dir / "JsonSerializer.cs").write_text(
+            """namespace Newtonsoft.Json {
+    public class JsonSerializer { }
+}
+"""
+        )
+        # File 2: in the SAME namespace — no using needed
+        (temp_dir / "JsonConvert.cs").write_text(
+            """namespace Newtonsoft.Json {
+    class JsonConvert {
+        JsonSerializer serializer;
+    }
+}
+"""
+        )
+
+        db.create_all()
+        with db.session() as session:
+            ctx = Context(name="test", language_family="dotnet", root_path=str(temp_dir))
+            session.add(ctx)
+            session.commit()
+            context_id = ctx.id
+
+        indexer = StructuralIndexer(db, temp_dir)
+        indexer.index_files(["JsonSerializer.cs", "JsonConvert.cs"], context_id=context_id or 1)
+
+        # Before resolution: the ref should be UNKNOWN (no using directive)
+        with db.session() as session:
+            from sqlmodel import select
+
+            from codeplane.index.models import File
+
+            convert_file = session.exec(select(File).where(File.path == "JsonConvert.cs")).first()
+            assert convert_file is not None
+            js_refs = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == convert_file.id,
+                    RefFact.token_text == "JsonSerializer",
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+            assert len(js_refs) >= 1
+            assert all(r.ref_tier == RefTier.UNKNOWN.value for r in js_refs)
+
+        # namespace-using resolution should NOT match (no using directive)
+        from codeplane.index._internal.indexing.resolver import (
+            resolve_namespace_refs,
+            resolve_same_namespace_refs,
+        )
+
+        ns_stats = resolve_namespace_refs(db)
+        assert ns_stats.refs_upgraded == 0  # No using directive → no match
+
+        # Same-namespace resolution SHOULD match
+        same_stats = resolve_same_namespace_refs(db)
+        assert same_stats.refs_upgraded >= 1
+
+        # After resolution: STRONG with target_def_uid
+        with db.session() as session:
+            js_refs_after = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == convert_file.id,
+                    RefFact.token_text == "JsonSerializer",
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+            assert all(r.ref_tier == RefTier.STRONG.value for r in js_refs_after)
+
+            serializer_def = session.exec(
+                select(DefFact).where(DefFact.name == "JsonSerializer")
+            ).first()
+            assert serializer_def is not None
+            assert all(r.target_def_uid == serializer_def.def_uid for r in js_refs_after), (
+                "target_def_uid must link to DefFact for rename discovery"
+            )
+
+    def test_csharp_parent_namespace_upgrades_to_strong(self, db: Database, temp_dir: Path) -> None:
+        """Types in a parent namespace should resolve without a using directive."""
+        # File 1: defines JsonSerializer in Newtonsoft.Json
+        (temp_dir / "JsonSerializer.cs").write_text(
+            """namespace Newtonsoft.Json {
+    public class JsonSerializer { }
+}
+"""
+        )
+        # File 2: in a CHILD namespace — parent types visible without using
+        (temp_dir / "RegexConverter.cs").write_text(
+            """namespace Newtonsoft.Json.Converters {
+    class RegexConverter {
+        JsonSerializer serializer;
+    }
+}
+"""
+        )
+
+        db.create_all()
+        with db.session() as session:
+            ctx = Context(name="test", language_family="dotnet", root_path=str(temp_dir))
+            session.add(ctx)
+            session.commit()
+            context_id = ctx.id
+
+        indexer = StructuralIndexer(db, temp_dir)
+        indexer.index_files(["JsonSerializer.cs", "RegexConverter.cs"], context_id=context_id or 1)
+
+        # Before: UNKNOWN (no using directive)
+        with db.session() as session:
+            from sqlmodel import select
+
+            from codeplane.index.models import File
+
+            converter_file = session.exec(
+                select(File).where(File.path == "RegexConverter.cs")
+            ).first()
+            assert converter_file is not None
+            js_refs = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == converter_file.id,
+                    RefFact.token_text == "JsonSerializer",
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+            assert len(js_refs) >= 1
+            assert all(r.ref_tier == RefTier.UNKNOWN.value for r in js_refs)
+
+        from codeplane.index._internal.indexing.resolver import resolve_same_namespace_refs
+
+        stats = resolve_same_namespace_refs(db)
+        assert stats.refs_upgraded >= 1
+
+        # After: STRONG with target_def_uid linked
+        with db.session() as session:
+            js_refs_after = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == converter_file.id,
+                    RefFact.token_text == "JsonSerializer",
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+            assert all(r.ref_tier == RefTier.STRONG.value for r in js_refs_after)
+
+            serializer_def = session.exec(
+                select(DefFact).where(DefFact.name == "JsonSerializer")
+            ).first()
+            assert serializer_def is not None
+            assert all(r.target_def_uid == serializer_def.def_uid for r in js_refs_after), (
+                "target_def_uid must link to DefFact for rename discovery"
+            )
+
+    def test_csharp_unrelated_namespace_stays_unknown(self, db: Database, temp_dir: Path) -> None:
+        """Types in unrelated namespaces should NOT resolve via same-namespace."""
+        # File 1: defines Foo in Namespace.A
+        (temp_dir / "A.cs").write_text(
+            """namespace Namespace.A {
+    public class Foo { }
+}
+"""
+        )
+        # File 2: in Namespace.B — NOT a parent/child — should stay UNKNOWN
+        (temp_dir / "B.cs").write_text(
+            """namespace Namespace.B {
+    class Bar {
+        Foo x;
+    }
+}
+"""
+        )
+
+        db.create_all()
+        with db.session() as session:
+            ctx = Context(name="test", language_family="dotnet", root_path=str(temp_dir))
+            session.add(ctx)
+            session.commit()
+            context_id = ctx.id
+
+        indexer = StructuralIndexer(db, temp_dir)
+        indexer.index_files(["A.cs", "B.cs"], context_id=context_id or 1)
+
+        from codeplane.index._internal.indexing.resolver import resolve_same_namespace_refs
+
+        resolve_same_namespace_refs(db)
+
+        # Foo in Namespace.A is NOT visible from Namespace.B
+        with db.session() as session:
+            from sqlmodel import select
+
+            from codeplane.index.models import File
+
+            b_file = session.exec(select(File).where(File.path == "B.cs")).first()
+            assert b_file is not None
+            foo_refs = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == b_file.id,
+                    RefFact.token_text == "Foo",
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+            if foo_refs:
+                assert all(r.ref_tier == RefTier.UNKNOWN.value for r in foo_refs)

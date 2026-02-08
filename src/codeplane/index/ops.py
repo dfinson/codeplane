@@ -47,6 +47,7 @@ from codeplane.index._internal.indexing import (
     StructuralIndexer,
     resolve_namespace_refs,
     resolve_references,
+    resolve_same_namespace_refs,
     resolve_star_import_refs,
     resolve_type_traced,
 )
@@ -703,18 +704,9 @@ class IndexCoordinator:
                     # Compute content hash
                     content_hash = hashlib.sha256(full_path.read_bytes()).hexdigest()
                     # Detect language
-                    ext = full_path.suffix.lower()
-                    lang_map = {
-                        ".py": "python",
-                        ".pyi": "python",
-                        ".js": "javascript",
-                        ".jsx": "javascript",
-                        ".ts": "javascript",
-                        ".tsx": "javascript",
-                        ".go": "go",
-                        ".rs": "rust",
-                    }
-                    lang = lang_map.get(ext)
+                    from codeplane.core.languages import detect_language_family
+
+                    lang = detect_language_family(full_path)
 
                     file_record = File(
                         path=rel_path,
@@ -742,6 +734,7 @@ class IndexCoordinator:
 
             # Pass 1.5: DB-backed cross-file resolution
             resolve_namespace_refs(self.db)
+            resolve_same_namespace_refs(self.db)
             resolve_star_import_refs(self.db)
 
             # Resolve cross-file references (Pass 2 - follows ImportFact chains)
@@ -1721,28 +1714,8 @@ class IndexCoordinator:
         Returns:
             Count of test targets added/updated
         """
+        from codeplane.core.languages import is_test_file
         from codeplane.testing.runner_pack import runner_registry
-
-        # Test file patterns by language
-        test_patterns = {
-            "python": ["test_", "_test.py"],
-            "javascript": [".test.", ".spec.", "__tests__"],
-            "typescript": [".test.", ".spec.", "__tests__"],
-            "go": ["_test.go"],
-            "rust": ["tests/"],
-            "java": ["Test.java", "Tests.java"],
-            "kotlin": ["Test.kt", "Tests.kt"],
-        }
-
-        def is_test_file(path: Path) -> bool:
-            """Check if path matches any test file pattern."""
-            path_str = str(path)
-            name = path.name
-            for patterns in test_patterns.values():
-                for pattern in patterns:
-                    if pattern in name or pattern in path_str:
-                        return True
-            return False
 
         # Filter to only test files
         new_test_files = [p for p in new_paths if is_test_file(p)]
@@ -2030,6 +2003,7 @@ class IndexCoordinator:
                 # the 25-file batch that was visible to the old in-memory pass).
                 on_progress(0, 1, files_by_ext, "resolving_cross_file")
                 resolve_namespace_refs(self.db)
+                resolve_same_namespace_refs(self.db)
                 resolve_star_import_refs(self.db)
 
                 # Resolve cross-file references (phase: resolving_refs)
@@ -2186,6 +2160,7 @@ class IndexCoordinator:
         # Pass 1.5: DB-backed cross-file resolution (scoped to changed files)
         if changed_file_ids:
             resolve_namespace_refs(self.db, file_ids=changed_file_ids)
+            resolve_same_namespace_refs(self.db, file_ids=changed_file_ids)
             resolve_star_import_refs(self.db, file_ids=changed_file_ids)
 
         # Resolve cross-file references (Pass 2 - scoped to changed files)

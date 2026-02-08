@@ -13,6 +13,7 @@ from codeplane.index._internal.indexing.resolver import (
     ResolutionStats,
     resolve_namespace_refs,
     resolve_references,
+    resolve_same_namespace_refs,
     resolve_star_import_refs,
 )
 from codeplane.index._internal.indexing.structural import (
@@ -45,6 +46,7 @@ __all__ = [
     # Cross-file resolution (Pass 1.5 - DB-backed)
     "CrossFileResolutionStats",
     "resolve_namespace_refs",
+    "resolve_same_namespace_refs",
     "resolve_star_import_refs",
     # Type-Traced Resolution (Pass 3)
     "TypeTracedResolver",
