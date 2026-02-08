@@ -420,3 +420,271 @@ os.path.exists(".")
         assert all(
             r["ref_tier"] in (RefTier.UNKNOWN.value, RefTier.STRONG.value) for r in import_refs
         )
+
+    def test_csharp_using_creates_import_facts(self, temp_dir: Path) -> None:
+        """C# using directives should be extracted as ImportFacts."""
+        content = """using System;
+using Newtonsoft.Json;
+
+namespace Test {
+    class Foo { }
+}
+"""
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+
+        result = _extract_file("test.cs", str(temp_dir), unit_id=1)
+
+        import_names = [i["imported_name"] for i in result.imports]
+        assert "System" in import_names
+        assert "Newtonsoft.Json" in import_names
+
+    def test_csharp_aliased_using_creates_strong_ref(self, temp_dir: Path) -> None:
+        """Aliased C# usings should produce STRONG refs via import_uid_by_alias."""
+        content = """using MyAlias = System.Collections.Generic.List;
+
+namespace Test {
+    class Foo {
+        MyAlias x;
+    }
+}
+"""
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+
+        result = _extract_file("test.cs", str(temp_dir), unit_id=1)
+
+        # The identifier 'MyAlias' should be STRONG (matched via import_uid_by_alias)
+        alias_refs = [
+            r
+            for r in result.refs
+            if r["token_text"] == "MyAlias" and r["role"] == Role.REFERENCE.value
+        ]
+        strong_refs = [r for r in alias_refs if r["ref_tier"] == RefTier.STRONG.value]
+        assert len(strong_refs) >= 1
+
+    def test_csharp_namespace_type_map_populated(self, temp_dir: Path) -> None:
+        """C# extraction should populate namespace_type_map."""
+        content = """using System;
+
+namespace Foo.Bar {
+    class Baz { }
+    interface IBaz { }
+}
+"""
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+
+        result = _extract_file("test.cs", str(temp_dir), unit_id=1)
+
+        assert "Foo.Bar" in result.namespace_type_map
+        assert "Baz" in result.namespace_type_map["Foo.Bar"]
+        assert "IBaz" in result.namespace_type_map["Foo.Bar"]
+
+    def test_python_wildcard_import_extracted(self, temp_dir: Path) -> None:
+        """Python wildcard imports should be extracted as ImportFacts."""
+        content = "from os.path import *\n"
+        file_path = temp_dir / "test.py"
+        file_path.write_text(content)
+
+        result = _extract_file("test.py", str(temp_dir), unit_id=1)
+
+        star_imports = [i for i in result.imports if i["imported_name"] == "*"]
+        assert len(star_imports) == 1
+        assert star_imports[0]["import_kind"] == "python_from"
+
+
+class TestCrossFileResolution:
+    """Tests for cross-file ref_tier resolution."""
+
+    def test_csharp_namespace_using_upgrades_to_strong(self, temp_dir: Path) -> None:
+        """UNKNOWN refs matching project-internal namespace types should become STRONG."""
+        # File 1: defines the type in a namespace
+        (temp_dir / "Resolver.cs").write_text(
+            """namespace Newtonsoft.Json.Serialization {
+    public class DefaultContractResolver { }
+}
+"""
+        )
+        # File 2: uses the type via a using directive
+        (temp_dir / "Client.cs").write_text(
+            """using Newtonsoft.Json.Serialization;
+
+namespace App {
+    class Client {
+        DefaultContractResolver resolver;
+    }
+}
+"""
+        )
+
+        ext1 = _extract_file("Resolver.cs", str(temp_dir), unit_id=1)
+        ext2 = _extract_file("Client.cs", str(temp_dir), unit_id=1)
+
+        # Before resolution: the ref to DefaultContractResolver in Client.cs is UNKNOWN
+        dcr_refs_before = [
+            r
+            for r in ext2.refs
+            if r["token_text"] == "DefaultContractResolver" and r["role"] == Role.REFERENCE.value
+        ]
+        assert len(dcr_refs_before) >= 1
+        assert all(r["ref_tier"] == RefTier.UNKNOWN.value for r in dcr_refs_before)
+
+        # Run cross-file resolution
+        from codeplane.index._internal.indexing.structural import _resolve_cross_file_refs
+
+        _resolve_cross_file_refs([ext1, ext2])
+
+        # After resolution: should be STRONG
+        dcr_refs_after = [
+            r
+            for r in ext2.refs
+            if r["token_text"] == "DefaultContractResolver" and r["role"] == Role.REFERENCE.value
+        ]
+        assert all(r["ref_tier"] == RefTier.STRONG.value for r in dcr_refs_after)
+
+    def test_csharp_external_namespace_stays_unknown(self, temp_dir: Path) -> None:
+        """Refs to types from external namespaces (not in project) stay UNKNOWN."""
+        (temp_dir / "Client.cs").write_text(
+            """using System.Collections.Generic;
+
+namespace App {
+    class Client {
+        List items;
+    }
+}
+"""
+        )
+
+        ext = _extract_file("Client.cs", str(temp_dir), unit_id=1)
+
+        from codeplane.index._internal.indexing.structural import _resolve_cross_file_refs
+
+        _resolve_cross_file_refs([ext])
+
+        # 'List' comes from System.Collections.Generic (external) — stays UNKNOWN
+        list_refs = [
+            r for r in ext.refs if r["token_text"] == "List" and r["role"] == Role.REFERENCE.value
+        ]
+        if list_refs:
+            assert all(r["ref_tier"] == RefTier.UNKNOWN.value for r in list_refs)
+
+    def test_python_star_import_upgrades_to_strong(self, temp_dir: Path) -> None:
+        """Python star imports from project-internal modules should upgrade refs to STRONG."""
+        # Module with exported definitions
+        (temp_dir / "utils.py").write_text(
+            """def helper():
+    pass
+
+class Utility:
+    pass
+"""
+        )
+        # File that star-imports from utils
+        (temp_dir / "main.py").write_text(
+            """from utils import *
+
+x = helper()
+y = Utility()
+"""
+        )
+
+        ext_utils = _extract_file("utils.py", str(temp_dir), unit_id=1)
+        ext_main = _extract_file("main.py", str(temp_dir), unit_id=1)
+
+        # Before resolution: helper and Utility refs should be UNKNOWN
+        helper_refs = [
+            r
+            for r in ext_main.refs
+            if r["token_text"] == "helper" and r["role"] == Role.REFERENCE.value
+        ]
+        assert len(helper_refs) >= 1
+        assert all(r["ref_tier"] == RefTier.UNKNOWN.value for r in helper_refs)
+
+        # Run cross-file resolution
+        from codeplane.index._internal.indexing.structural import _resolve_cross_file_refs
+
+        _resolve_cross_file_refs([ext_utils, ext_main])
+
+        # After resolution: should be STRONG
+        helper_refs_after = [
+            r
+            for r in ext_main.refs
+            if r["token_text"] == "helper" and r["role"] == Role.REFERENCE.value
+        ]
+        assert all(r["ref_tier"] == RefTier.STRONG.value for r in helper_refs_after)
+
+        utility_refs_after = [
+            r
+            for r in ext_main.refs
+            if r["token_text"] == "Utility" and r["role"] == Role.REFERENCE.value
+        ]
+        assert all(r["ref_tier"] == RefTier.STRONG.value for r in utility_refs_after)
+
+    def test_python_star_import_external_stays_unknown(self, temp_dir: Path) -> None:
+        """Star imports from external modules should leave refs as UNKNOWN."""
+        (temp_dir / "main.py").write_text(
+            """from os.path import *
+
+x = exists("/tmp")
+"""
+        )
+
+        ext = _extract_file("main.py", str(temp_dir), unit_id=1)
+
+        from codeplane.index._internal.indexing.structural import _resolve_cross_file_refs
+
+        _resolve_cross_file_refs([ext])
+
+        # 'exists' comes from os.path (external) — stays UNKNOWN
+        exists_refs = [
+            r for r in ext.refs if r["token_text"] == "exists" and r["role"] == Role.REFERENCE.value
+        ]
+        if exists_refs:
+            assert all(r["ref_tier"] == RefTier.UNKNOWN.value for r in exists_refs)
+
+    def test_csharp_multiple_files_same_namespace(self, temp_dir: Path) -> None:
+        """Types from the same namespace across multiple files should all resolve."""
+        (temp_dir / "A.cs").write_text(
+            """namespace Shared {
+    public class TypeA { }
+}
+"""
+        )
+        (temp_dir / "B.cs").write_text(
+            """namespace Shared {
+    public class TypeB { }
+}
+"""
+        )
+        (temp_dir / "Consumer.cs").write_text(
+            """using Shared;
+
+namespace App {
+    class Consumer {
+        TypeA a;
+        TypeB b;
+    }
+}
+"""
+        )
+
+        ext_a = _extract_file("A.cs", str(temp_dir), unit_id=1)
+        ext_b = _extract_file("B.cs", str(temp_dir), unit_id=1)
+        ext_consumer = _extract_file("Consumer.cs", str(temp_dir), unit_id=1)
+
+        from codeplane.index._internal.indexing.structural import _resolve_cross_file_refs
+
+        _resolve_cross_file_refs([ext_a, ext_b, ext_consumer])
+
+        # Both TypeA and TypeB should be STRONG in Consumer
+        for type_name in ("TypeA", "TypeB"):
+            refs = [
+                r
+                for r in ext_consumer.refs
+                if r["token_text"] == type_name and r["role"] == Role.REFERENCE.value
+            ]
+            assert len(refs) >= 1, f"No refs found for {type_name}"
+            assert all(r["ref_tier"] == RefTier.STRONG.value for r in refs), (
+                f"{type_name} should be STRONG"
+            )
