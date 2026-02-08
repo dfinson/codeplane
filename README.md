@@ -29,13 +29,14 @@ The bottleneck is I/O and orchestration, not model capability.
 
 ## The Solution
 
-CodePlane turns a repository into a **deterministic, queryable system**:
+CodePlane turns a repository into a **structured, queryable system** designed to reduce exploratory overhead for agents:
 
 ```
 Agent plans and decides → CodePlane executes → Structured result → Next action
 ```
 
-Every operation returns complete, structured context in a single call. No probing. No guesswork.
+Operations return structured results with the relevant context needed for the next step, minimizing repeated probing and guesswork.
+
 
 ## Quick Start
 
