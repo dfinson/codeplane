@@ -1103,14 +1103,16 @@ class IndexCoordinator:
         def_fact: DefFact,
         _context_id: int,
         *,
-        limit: int = 100,
+        limit: int = 250,
+        offset: int = 0,
     ) -> list[RefFact]:
         """Get references to a definition. Thread-safe.
 
         Args:
             def_fact: DefFact to find references for
             _context_id: Context to search in (reserved for future use)
-            limit: Maximum number of results (bounded query)
+            limit: Maximum number of results per page (bounded query)
+            offset: Number of rows to skip for pagination
 
         Returns:
             List of RefFact objects
@@ -1118,7 +1120,29 @@ class IndexCoordinator:
         await self.wait_for_freshness()
         with self.db.session() as session:
             facts = FactQueries(session)
-            return facts.list_refs_by_def_uid(def_fact.def_uid, limit=limit)
+            return facts.list_refs_by_def_uid(def_fact.def_uid, limit=limit, offset=offset)
+
+    async def get_all_references(
+        self,
+        def_fact: DefFact,
+        _context_id: int,
+    ) -> list[RefFact]:
+        """Get ALL references to a definition exhaustively. Thread-safe.
+
+        Paginates internally to guarantee completeness. Use this for
+        mutation operations (rename, delete) that must see every reference.
+
+        Args:
+            def_fact: DefFact to find references for
+            _context_id: Context to search in (reserved for future use)
+
+        Returns:
+            Complete list of RefFact objects
+        """
+        await self.wait_for_freshness()
+        with self.db.session() as session:
+            facts = FactQueries(session)
+            return facts.list_all_refs_by_def_uid(def_fact.def_uid)
 
     async def get_file_state(self, file_id: int, context_id: int) -> FileState:
         """Get computed file state for mutation gating."""
