@@ -26,6 +26,7 @@ KNOWN AMBIGUOUS EXTENSIONS (require context for correct classification):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -1044,8 +1045,6 @@ def is_test_file(path: str | Path) -> bool:
     Returns:
         True if the file matches any test pattern for any language.
     """
-    from fnmatch import fnmatch
-
     p = Path(path) if isinstance(path, str) else path
     name = p.name
     path_str = str(p)

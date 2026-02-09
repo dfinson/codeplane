@@ -7,14 +7,6 @@
         "mcp-remote",
         "http://127.0.0.1:7654/mcp"
       ]
-    },
-    "codeplane-newtonsoft_json": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "mcp-remote",
-        "http://127.0.0.1:7657/mcp"
-      ]
     }
   }
 }
