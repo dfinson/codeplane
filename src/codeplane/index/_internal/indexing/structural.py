@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from codeplane.index._internal.db import Database
 
+from codeplane.core.languages import detect_language_family, has_grammar
 from codeplane.index._internal.parsing import (
     SyntacticScope,
     SyntacticSymbol,
@@ -70,19 +71,16 @@ def _compute_def_uid(
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
-def _has_grammar_for_file(file_path: str) -> bool:
-    """Check if a tree-sitter grammar is available for this file's language.
+def _has_grammar_for_family(language_family: str | None) -> bool:
+    """Check if a language family has a tree-sitter grammar available.
 
-    Returns True if the file's language has a grammar available on PyPI.
+    Returns True if the language has a grammar available on PyPI.
     Returns False for languages like F#, VB.NET, Erlang, etc. that lack PyPI grammars.
-    Also returns False for unknown file types.
+    Also returns False for None (unknown file types).
     """
-    from codeplane.core.languages import detect_language_family, has_grammar
-
-    language = detect_language_family(file_path)
-    if language is None:
+    if language_family is None:
         return False
-    return has_grammar(language)
+    return has_grammar(language_family)
 
 
 @dataclass
@@ -113,6 +111,8 @@ class ExtractionResult:
     namespace_type_map: dict[str, list[str]] = field(default_factory=dict)
     # Language detected for this file (used in cross-file resolution)
     language: str | None = None
+    # Language family detected from file path (avoids re-detection later)
+    language_family: str | None = None
 
 
 @dataclass
@@ -162,10 +162,14 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
             1 if content and not content.endswith(b"\n") else 0
         )
 
+        # Detect language family once for this file
+        family = detect_language_family(file_path)
+        result.language_family = family
+
         # Check if grammar is available BEFORE attempting to parse
         # This gracefully handles languages like F#, VB.NET, Erlang that
         # have language definitions but no PyPI-available tree-sitter grammar
-        if not _has_grammar_for_file(file_path):
+        if not _has_grammar_for_family(family):
             result.skipped_no_grammar = True
             result.parse_time_ms = int((time.monotonic() - start) * 1000)
             return result
@@ -636,7 +640,11 @@ class StructuralIndexer:
                 continue
             if extraction.file_path not in file_id_map:
                 file_id_map[extraction.file_path] = self._ensure_file_id(
-                    extraction.file_path, extraction.content_hash, extraction.line_count, context_id
+                    extraction.file_path,
+                    extraction.content_hash,
+                    extraction.line_count,
+                    context_id,
+                    language_family=extraction.language_family,
                 )
 
         with self.db.bulk_writer() as writer:
@@ -793,7 +801,12 @@ class StructuralIndexer:
         return results
 
     def _ensure_file_id(
-        self, file_path: str, content_hash: str | None, line_count: int, _context_id: int
+        self,
+        file_path: str,
+        content_hash: str | None,
+        line_count: int,
+        _context_id: int,
+        language_family: str | None = None,
     ) -> int:
         """Ensure file exists in database and return its ID."""
         import time
@@ -811,19 +824,13 @@ class StructuralIndexer:
                 path=file_path,
                 content_hash=content_hash,
                 line_count=line_count,
-                language_family=self._detect_family(file_path),
+                language_family=language_family,
                 indexed_at=time.time(),  # Mark as indexed
             )
             session.add(file)
             session.commit()
             session.refresh(file)
             return file.id if file.id is not None else 0
-
-    def _detect_family(self, file_path: str) -> str | None:
-        """Detect language family from file path using canonical definitions."""
-        from codeplane.core.languages import detect_language_family
-
-        return detect_language_family(file_path)
 
     def extract_single(self, file_path: str, unit_id: int = 0) -> ExtractionResult:
         """Extract facts from a single file without storing."""
