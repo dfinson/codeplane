@@ -13,6 +13,8 @@ Discovery -> Authority -> Membership -> Probe -> Router -> Index
 from __future__ import annotations
 
 import asyncio
+import fnmatch
+import hashlib
 import json
 import os
 import threading
@@ -22,8 +24,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from sqlmodel import select
+import structlog
+from sqlalchemy import delete, func, text
+from sqlmodel import col, select
 
+from codeplane.core.languages import detect_language_family, is_test_file
 from codeplane.index._internal.db import (
     Database,
     EpochManager,
@@ -41,6 +46,7 @@ from codeplane.index._internal.discovery import (
     MembershipResolver,
     Tier1AuthorityFilter,
 )
+from codeplane.index._internal.ignore import PRUNABLE_DIRS, IgnoreChecker
 from codeplane.index._internal.indexing import (
     FactQueries,
     LexicalIndex,
@@ -66,6 +72,9 @@ from codeplane.index.models import (
     RefFact,
     TestTarget,
 )
+from codeplane.lint.tools import registry as lint_registry
+from codeplane.testing.ops import detect_coverage_tools
+from codeplane.testing.runner_pack import runner_registry
 from codeplane.testing.runtime import ContextRuntime, RuntimeResolver
 from codeplane.tools.map_repo import IncludeOption, MapRepoResult, RepoMapper
 
@@ -75,8 +84,6 @@ if TYPE_CHECKING:
 
 def _matches_glob(rel_path: str, pattern: str) -> bool:
     """Check if a path matches a glob pattern, with ** support."""
-    import fnmatch
-
     if fnmatch.fnmatch(rel_path, pattern):
         return True
     return pattern.startswith("**/") and fnmatch.fnmatch(rel_path, pattern[3:])
@@ -511,12 +518,6 @@ class IndexCoordinator:
             # Create File records for new files BEFORE structural indexing
             file_id_map: dict[str, int] = {}
             if new_paths:
-                import hashlib
-
-                from codeplane.index._internal.discovery.language_detect import (
-                    detect_language_family,
-                )
-
                 with self.db.session() as session:
                     for path in new_paths:
                         full_path = self.repo_root / path
@@ -525,8 +526,7 @@ class IndexCoordinator:
                         try:
                             content_hash = hashlib.sha256(full_path.read_bytes()).hexdigest()
                             # Use canonical language detection
-                            lang_family = detect_language_family(full_path)
-                            lang = lang_family.value if lang_family else None
+                            lang = detect_language_family(full_path)
                             file_record = File(
                                 path=str(path),
                                 content_hash=content_hash,
@@ -694,8 +694,6 @@ class IndexCoordinator:
         # This ensures FKs are valid within the same transaction
         file_id_map: dict[str, int] = {}
         if to_add:
-            import hashlib
-
             with self.db.session() as session:
                 for rel_path in to_add:
                     full_path = self.repo_root / rel_path
@@ -704,8 +702,6 @@ class IndexCoordinator:
                     # Compute content hash
                     content_hash = hashlib.sha256(full_path.read_bytes()).hexdigest()
                     # Detect language
-                    from codeplane.core.languages import detect_language_family
-
                     lang = detect_language_family(full_path)
 
                     file_record = File(
@@ -767,8 +763,6 @@ class IndexCoordinator:
     def _remove_structural_facts_for_paths(self, paths: list[str]) -> None:
         """Remove all structural facts for the given file paths."""
         with self.db.session() as session:
-            from sqlalchemy import text
-
             for str_path in paths:
                 file = session.exec(select(File).where(File.path == str_path)).first()
                 if file and file.id is not None:
@@ -907,12 +901,6 @@ class IndexCoordinator:
 
             # Create File records for added files
             if to_add:
-                import hashlib
-
-                from codeplane.index._internal.discovery.language_detect import (
-                    detect_language_family,
-                )
-
                 with self.db.session() as session:
                     for rel_path in to_add:
                         full_path = self.repo_root / rel_path
@@ -920,8 +908,7 @@ class IndexCoordinator:
                             continue
                         content_hash = hashlib.sha256(full_path.read_bytes()).hexdigest()
                         # Use canonical language detection
-                        lang_family = detect_language_family(full_path)
-                        lang = lang_family.value if lang_family else None
+                        lang = detect_language_family(full_path)
 
                         file_record = File(
                             path=rel_path,
@@ -993,8 +980,6 @@ class IndexCoordinator:
         allowed_paths: set[str] | None = None
         if filter_languages:
             with self.db.session() as session:
-                from sqlmodel import col
-
                 stmt = select(File.path).where(col(File.language_family).in_(filter_languages))
                 allowed_paths = set(session.exec(stmt).all())
                 # If no files match the language filter, return empty results early
@@ -1089,8 +1074,6 @@ class IndexCoordinator:
         with self.db.session() as session:
             stmt = select(DefFact).where(DefFact.name == name)
             if path is not None:
-                from codeplane.index.models import File
-
                 subq = select(File.id).where(File.path == path).scalar_subquery()
                 stmt = stmt.where(DefFact.file_id == subq)
             if context_id is not None:
@@ -1162,8 +1145,6 @@ class IndexCoordinator:
         """
         await self.wait_for_freshness()
         with self.db.session() as session:
-            from sqlalchemy import func
-
             stmt = (
                 select(File.language_family, func.count())
                 .where(File.language_family != None)  # noqa: E711
@@ -1183,8 +1164,6 @@ class IndexCoordinator:
         """
         await self.wait_for_freshness()
         with self.db.session() as session:
-            from sqlalchemy import func
-
             stmt = select(func.count()).select_from(File)
             if language_family:
                 stmt = stmt.where(File.language_family == language_family)
@@ -1249,8 +1228,6 @@ class IndexCoordinator:
             stmt = select(TestTarget)
             if target_ids:
                 # Use col() for SQLAlchemy column access
-                from sqlmodel import col
-
                 stmt = stmt.where(col(TestTarget.target_id).in_(target_ids))
             return list(session.exec(stmt).all())
 
@@ -1273,8 +1250,6 @@ class IndexCoordinator:
         with self.db.session() as session:
             stmt = select(IndexedLintTool)
             if tool_ids:
-                from sqlmodel import col
-
                 stmt = stmt.where(col(IndexedLintTool.tool_id).in_(tool_ids))
             if category:
                 stmt = stmt.where(IndexedLintTool.category == category)
@@ -1439,8 +1414,6 @@ class IndexCoordinator:
         Returns:
             Count of runtimes resolved
         """
-        import structlog
-
         logger = structlog.get_logger()
         runtimes_resolved = 0
 
@@ -1515,8 +1488,6 @@ class IndexCoordinator:
         contexts are persisted. Returns count of targets discovered.
         """
 
-        from codeplane.testing.runner_pack import runner_registry
-
         targets_discovered = 0
         discovered_at = time.time()
 
@@ -1587,10 +1558,6 @@ class IndexCoordinator:
         Uses lint tool registry to find configured tools. Called during init()
         after contexts are persisted. Returns count of tools discovered.
         """
-        import json as json_module
-
-        from codeplane.lint.tools import registry as lint_registry
-
         tools_discovered = 0
         discovered_at = time.time()
 
@@ -1611,7 +1578,7 @@ class IndexCoordinator:
                     tool_id=tool.tool_id,
                     name=tool.name,
                     category=tool.category.value,
-                    languages=json_module.dumps(sorted(tool.languages)),
+                    languages=json.dumps(sorted(tool.languages)),
                     executable=tool.executable,
                     workspace_root=str(self.repo_root),
                     config_file=config_file,
@@ -1634,10 +1601,6 @@ class IndexCoordinator:
 
         Returns count of capabilities discovered.
         """
-        import json as json_module
-
-        from codeplane.testing.ops import detect_coverage_tools
-
         capabilities_discovered = 0
         discovered_at = time.time()
 
@@ -1675,7 +1638,7 @@ class IndexCoordinator:
                 capability = IndexedCoverageCapability(
                     workspace_root=workspace_root,
                     runner_pack_id=runner_pack_id,
-                    tools_json=json_module.dumps(tools),
+                    tools_json=json.dumps(tools),
                     discovered_at=discovered_at,
                 )
                 session.add(capability)
@@ -1695,8 +1658,6 @@ class IndexCoordinator:
         # Clear existing test targets
         with self.db.session() as session:
             session.exec(select(TestTarget)).all()  # Load for delete
-            from sqlalchemy import delete
-
             session.execute(delete(TestTarget))
             session.commit()
 
@@ -1711,8 +1672,6 @@ class IndexCoordinator:
         """
         # Clear existing lint tools
         with self.db.session() as session:
-            from sqlalchemy import delete
-
             session.execute(delete(IndexedLintTool))
             session.commit()
 
@@ -1738,9 +1697,6 @@ class IndexCoordinator:
         Returns:
             Count of test targets added/updated
         """
-        from codeplane.core.languages import is_test_file
-        from codeplane.testing.runner_pack import runner_registry
-
         # Filter to only test files
         new_test_files = [p for p in new_paths if is_test_file(p)]
         modified_test_files = [p for p in existing_paths if is_test_file(p)]
@@ -1758,9 +1714,6 @@ class IndexCoordinator:
                 for path in removed_test_files:
                     rel_path = str(path)
                     # Delete targets where path matches
-                    from sqlalchemy import delete
-                    from sqlmodel import col
-
                     session.execute(delete(TestTarget).where(col(TestTarget.path) == rel_path))
                     # Also try selector match (some targets use selector=path)
                     session.execute(delete(TestTarget).where(col(TestTarget.selector) == rel_path))
@@ -1793,9 +1746,6 @@ class IndexCoordinator:
 
                     # Delete existing target for this path (if modified)
                     if path in modified_test_files:
-                        from sqlalchemy import delete
-                        from sqlmodel import col
-
                         session.execute(delete(TestTarget).where(col(TestTarget.path) == rel_path))
                         session.execute(
                             delete(TestTarget).where(col(TestTarget.selector) == rel_path)
@@ -1850,8 +1800,6 @@ class IndexCoordinator:
         Returns:
             Count of tools updated
         """
-        from codeplane.lint.tools import registry as lint_registry
-
         # Get all known config files from registered tools
         config_filenames: set[str] = set()
         for tool in lint_registry.all():
@@ -1873,13 +1821,9 @@ class IndexCoordinator:
 
         with self.db.session() as session:
             # Clear existing tools
-            from sqlalchemy import delete
-
             session.execute(delete(IndexedLintTool))
 
             # Re-detect
-            import json as json_module
-
             detected_pairs = lint_registry.detect(self.repo_root)
 
             for tool, config_file in detected_pairs:
@@ -1887,7 +1831,7 @@ class IndexCoordinator:
                     tool_id=tool.tool_id,
                     name=tool.name,
                     category=tool.category.value,
-                    languages=json_module.dumps(sorted(tool.languages)),
+                    languages=json.dumps(sorted(tool.languages)),
                     executable=tool.executable,
                     workspace_root=str(self.repo_root),
                     config_file=config_file,
@@ -1918,8 +1862,6 @@ class IndexCoordinator:
         Returns:
             Tuple of (count of files indexed, list of indexed file paths, files by extension).
         """
-        from codeplane.index._internal.discovery.language_detect import detect_language_family
-
         if self._lexical is None or self._parser is None:
             return 0, [], {}
 
@@ -1978,8 +1920,7 @@ class IndexCoordinator:
 
                     # Detect language from extension (may be None for unknown types)
                     # Lexical index indexes ALL text files; language is optional
-                    lang_family = detect_language_family(file_path)
-                    lang_value = lang_family.value if lang_family else None
+                    lang_value = detect_language_family(file_path)
                     claimed_paths.add(rel_str)
                     files_to_index.append((file_path, rel_str, root_context_id, lang_value))
 
@@ -2114,8 +2055,6 @@ class IndexCoordinator:
 
         # Load contexts for routing
         with self.db.session() as session:
-            from sqlalchemy import text
-
             contexts = session.exec(
                 select(Context).where(Context.probe_status == ProbeStatus.VALID.value)
             ).all()
@@ -2200,8 +2139,6 @@ class IndexCoordinator:
         Used before full reindex to avoid duplicate key violations.
         """
         with self.db.session() as session:
-            from sqlalchemy import text
-
             # Clear all fact tables
             session.exec(text("DELETE FROM def_facts"))  # type: ignore[call-overload]
             session.exec(text("DELETE FROM ref_facts"))  # type: ignore[call-overload]
@@ -2242,8 +2179,6 @@ class IndexCoordinator:
         Applies PRUNABLE_DIRS pruning and .cplignore filtering.
         Does NOT use git - indexes any file on disk that isn't in .cplignore.
         """
-        from codeplane.index._internal.ignore import PRUNABLE_DIRS, IgnoreChecker
-
         # IgnoreChecker handles hierarchical .cplignore loading
         checker = IgnoreChecker(self.repo_root)
 

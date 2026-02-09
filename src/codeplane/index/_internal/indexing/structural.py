@@ -437,35 +437,20 @@ def _extract_type_aware_facts(
     """
     try:
         from codeplane.index._internal.extraction import get_registry
+        from codeplane.index._internal.extraction.languages import ALL_LANGUAGE_CONFIGS
 
-        # Get language name from file extension
-        ext = Path(file_path).suffix.lower()
-        ext_to_family = {
-            ".py": "python",
-            ".pyi": "python",
-            ".js": "javascript",
-            ".jsx": "javascript",
-            ".ts": "typescript",
-            ".tsx": "typescript",
-            ".go": "go",
-            ".rs": "rust",
-            ".java": "java",
-            ".kt": "kotlin",
-            ".scala": "scala",
-            ".cs": "csharp",
-            ".cpp": "cpp",
-            ".c": "c",
-            ".h": "cpp",
-            ".rb": "ruby",
-            ".php": "php",
-            ".swift": "swift",
-        }
-        language = ext_to_family.get(ext)
+        # Use the language already detected during parsing (avoids hardcoded ext map).
+        # Then map to the extractor registry's family key via ALL_LANGUAGE_CONFIGS.
+        language = extraction.language
         if not language:
             return
 
+        config = ALL_LANGUAGE_CONFIGS.get(language)
+        if config is None:
+            return
+
         registry = get_registry()
-        extractor = registry.get_or_fallback(language)
+        extractor = registry.get_or_fallback(config.language_family)
 
         # Extract type annotations
         annotations = extractor.extract_type_annotations(tree, file_path, extraction.scopes)
@@ -835,29 +820,10 @@ class StructuralIndexer:
             return file.id if file.id is not None else 0
 
     def _detect_family(self, file_path: str) -> str | None:
-        """Detect language name from file path."""
-        ext = Path(file_path).suffix.lower()
-        ext_map = {
-            ".py": "python",
-            ".pyi": "python",
-            ".js": "javascript",
-            ".jsx": "javascript",
-            ".ts": "javascript",
-            ".tsx": "javascript",
-            ".go": "go",
-            ".rs": "rust",
-            ".java": "jvm",
-            ".kt": "jvm",
-            ".scala": "jvm",
-            ".cs": "dotnet",
-            ".cpp": "cpp",
-            ".c": "cpp",
-            ".h": "cpp",
-            ".rb": "ruby",
-            ".php": "php",
-            ".swift": "swift",
-        }
-        return ext_map.get(ext)
+        """Detect language family from file path using canonical definitions."""
+        from codeplane.core.languages import detect_language_family
+
+        return detect_language_family(file_path)
 
     def extract_single(self, file_path: str, unit_id: int = 0) -> ExtractionResult:
         """Extract facts from a single file without storing."""

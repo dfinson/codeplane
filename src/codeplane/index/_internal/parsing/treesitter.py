@@ -233,6 +233,9 @@ SYMBOL_QUERIES: dict[str, str] = {
         (class_declaration name: (identifier) @name) @class
         (interface_declaration name: (identifier) @name) @interface
         (struct_declaration name: (identifier) @name) @struct
+        (enum_declaration name: (identifier) @name) @enum
+        (record_declaration name: (identifier) @name) @record
+        (record_struct_declaration name: (identifier) @name) @record_struct
     """,
     "c": """
         (function_definition declarator: (function_declarator declarator: (identifier) @name)) @function
@@ -1932,9 +1935,13 @@ class TreeSitterParser:
             "struct_item",
             "enum_definition",
             "enum_item",
+            "enum_declaration",
             "interface_declaration",
             "type_declaration",
             "trait_item",
+            # C# record types (SYNC: resolver.py _TYPE_KINDS)
+            "record_declaration",
+            "record_struct_declaration",
         }
 
         def walk(node: Any) -> None:

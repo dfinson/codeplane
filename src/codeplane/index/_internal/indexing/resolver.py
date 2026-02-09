@@ -391,12 +391,12 @@ class CrossFileResolutionStats:
     refs_scanned: int = 0
 
 
-_TYPE_KIND_FILTER = "('class', 'struct', 'interface', 'enum', 'record')"
-"""SQL IN-list for resolvable C# type declaration kinds.
-
-Must stay in sync with ``_TYPE_DECLS`` in ``treesitter.py``'s
-``extract_csharp_namespace_types``.
-"""
+# Resolvable C# type declaration kinds — used in SQL IN-lists.
+# SYNC: Must match the tree-sitter node types in ``_TYPE_DECLS`` within
+# ``treesitter.py::extract_csharp_namespace_types``, modulo the
+# ``_declaration`` suffix that generic symbol extraction strips.
+_TYPE_KINDS: tuple[str, ...] = ("class", "struct", "interface", "enum", "record", "record_struct")
+_TYPE_KIND_FILTER = f"({', '.join(repr(k) for k in _TYPE_KINDS)})"
 
 
 def _build_file_filter(
