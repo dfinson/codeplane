@@ -73,7 +73,6 @@ from codeplane.index.models import (
     TestTarget,
 )
 from codeplane.lint.tools import registry as lint_registry
-from codeplane.testing.ops import detect_coverage_tools
 from codeplane.testing.runner_pack import runner_registry
 from codeplane.testing.runtime import ContextRuntime, RuntimeResolver
 from codeplane.tools.map_repo import IncludeOption, MapRepoResult, RepoMapper
@@ -1086,7 +1085,7 @@ class IndexCoordinator:
         def_fact: DefFact,
         _context_id: int,
         *,
-        limit: int = 250,
+        limit: int = 10_000,
         offset: int = 0,
     ) -> list[RefFact]:
         """Get references to a definition. Thread-safe.
@@ -1174,14 +1173,12 @@ class IndexCoordinator:
         self,
         language_family: str | None = None,
         path_prefix: str | None = None,
-        limit: int = 1000,
     ) -> list[str]:
         """Get paths of indexed files.
 
         Args:
             language_family: Optional language family filter
             path_prefix: Optional path prefix filter (e.g., "src/")
-            limit: Maximum files to return
 
         Returns:
             List of file paths relative to repo root
@@ -1193,7 +1190,6 @@ class IndexCoordinator:
                 stmt = stmt.where(File.language_family == language_family)
             if path_prefix:
                 stmt = stmt.where(File.path.startswith(path_prefix))
-            stmt = stmt.limit(limit)
             return list(session.exec(stmt).all())
 
     async def get_contexts(self) -> list[Context]:
@@ -1627,6 +1623,11 @@ class IndexCoordinator:
                 if (workspace_root, runner_pack_id) in existing_pairs:
                     capabilities_discovered += 1
                     continue
+
+                # Lazy import: codeplane.testing.ops transitively imports
+                # codeplane.index.__init__ which imports codeplane.index.ops,
+                # creating a circular import if placed at module level.
+                from codeplane.testing.ops import detect_coverage_tools
 
                 # Detect coverage tools for this pair
                 tools = detect_coverage_tools(

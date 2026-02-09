@@ -1037,7 +1037,9 @@ def is_test_file(path: str | Path) -> bool:
     ``ALL_LANGUAGES``.  Patterns are ``fnmatch``-style globs matched
     against the filename (e.g. ``test_*.py``, ``*_test.go``).
     Additionally, if a pattern contains ``/`` it is matched against the
-    full path string to support directory-style patterns like ``tests/``.
+    full path string via ``fnmatch``.  Note that ``fnmatch`` requires the
+    pattern to match the *entire* string, so a bare prefix like ``tests/``
+    will **not** match; use ``tests/*`` or ``tests/*.py`` instead.
 
     Args:
         path: File path (string or Path object).
