@@ -960,14 +960,31 @@ class TreeSitterParser:
         """
         imports: list[SyntacticImport] = []
 
+        # Preprocessor wrapper node types that may contain using directives.
+        # Mirrors the set in extract_csharp_namespace_types.
+        _PREPROC_WRAPPERS = {
+            "preproc_if",
+            "preproc_ifdef",
+            "preproc_elif",
+            "preproc_else",
+            "preproc_region",
+        }
+
         def make_uid(name: str, line: int) -> str:
             raw = f"{file_path}:{line}:{name}"
             return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
-        for node in root.children:
-            if node.type != "using_directive":
-                continue
+        def _walk_for_usings(parent: Any) -> None:
+            """Walk tree nodes, descending into preprocessor wrappers."""
+            for node in parent.children:
+                if node.type in _PREPROC_WRAPPERS:
+                    _walk_for_usings(node)
+                    continue
+                if node.type != "using_directive":
+                    continue
+                _process_using_directive(node)
 
+        def _process_using_directive(node: Any) -> None:
             children = node.children
             has_static = any(c.type == "static" for c in children)
             has_equals = any(c.type == "=" or (c.text and c.text == b"=") for c in children)
@@ -1056,6 +1073,7 @@ class TreeSitterParser:
                         )
                     )
 
+        _walk_for_usings(root)
         return imports
 
     def extract_csharp_namespace_types(self, root: Any) -> dict[str, list[str]]:

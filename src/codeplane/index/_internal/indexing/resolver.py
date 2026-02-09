@@ -22,6 +22,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from sqlalchemy import text
 from sqlmodel import col, select
 
 from codeplane.index.models import (
@@ -390,6 +391,33 @@ class CrossFileResolutionStats:
     refs_scanned: int = 0
 
 
+_TYPE_KIND_FILTER = "('class', 'struct', 'interface', 'enum', 'record')"
+"""SQL IN-list for resolvable C# type declaration kinds.
+
+Must stay in sync with ``_TYPE_DECLS`` in ``treesitter.py``'s
+``extract_csharp_namespace_types``.
+"""
+
+
+def _build_file_filter(
+    file_ids: list[int] | None,
+    alias: str = "rf",
+) -> tuple[str, dict[str, int]]:
+    """Build a parameterized file_id filter clause and bind values.
+
+    Returns:
+        (sql_fragment, bind_dict) where sql_fragment is either empty or
+        ``AND <alias>.file_id IN (:fid_0, :fid_1, ...)`` and bind_dict
+        maps the placeholder names to integer values.
+    """
+    if not file_ids:
+        return ("", {})
+    placeholders = [f":fid_{i}" for i in range(len(file_ids))]
+    sql = f"AND {alias}.file_id IN ({', '.join(placeholders)})"
+    binds = {f"fid_{i}": fid for i, fid in enumerate(file_ids)}
+    return (sql, binds)
+
+
 def resolve_namespace_refs(
     db: Database,
     file_ids: list[int] | None = None,
@@ -407,27 +435,17 @@ def resolve_namespace_refs(
     Args:
         db: Database instance
         file_ids: Optional list of file IDs to scope resolution. None = all.
+            In multi-unit deployments the caller **must** supply the file IDs
+            belonging to the target unit; passing ``None`` resolves across
+            the entire database which may cause cross-unit contamination.
 
     Returns:
         CrossFileResolutionStats
     """
     stats = CrossFileResolutionStats()
+    file_filter, file_binds = _build_file_filter(file_ids)
 
     with db.session() as session:
-        from sqlalchemy import text
-
-        # Build the SQL query with optional file_id scoping
-        # Logic:
-        #   1. Find UNKNOWN REFERENCE refs
-        #   2. whose file has a csharp_using ImportFact (no alias)
-        #   3. where a DefFact exists with matching name and namespace
-        #   4. Upgrade those refs to STRONG
-        if file_ids:
-            file_id_list = ",".join(str(fid) for fid in file_ids)
-            file_filter = f"AND rf.file_id IN ({file_id_list})"
-        else:
-            file_filter = ""
-
         # Count refs that will be upgraded (for stats)
         count_sql = text(f"""
             SELECT COUNT(DISTINCT rf.ref_id)
@@ -437,16 +455,18 @@ def resolve_namespace_refs(
                 AND imf.alias IS NULL
             JOIN def_facts df ON df.name = rf.token_text
                 AND df.namespace = imf.imported_name
-                AND df.kind IN ('class', 'struct', 'interface', 'enum')
+                AND df.kind IN {_TYPE_KIND_FILTER}
             WHERE rf.ref_tier = :unknown_tier
                 AND rf.role = :ref_role
                 {file_filter}
         """)
         result = session.execute(
-            count_sql.bindparams(
-                unknown_tier=RefTier.UNKNOWN.value,
-                ref_role=Role.REFERENCE.value,
-            )
+            count_sql,
+            {
+                "unknown_tier": RefTier.UNKNOWN.value,
+                "ref_role": Role.REFERENCE.value,
+                **file_binds,
+            },
         )
         stats.refs_scanned = result.scalar_one()
 
@@ -465,10 +485,11 @@ def resolve_namespace_refs(
                     FROM import_facts imf
                     JOIN def_facts df ON df.name = ref_facts.token_text
                         AND df.namespace = imf.imported_name
-                        AND df.kind IN ('class', 'struct', 'interface', 'enum')
+                        AND df.kind IN {_TYPE_KIND_FILTER}
                     WHERE imf.file_id = ref_facts.file_id
                         AND imf.import_kind = 'csharp_using'
                         AND imf.alias IS NULL
+                    ORDER BY df.def_uid ASC
                     LIMIT 1
                 )
             WHERE ref_id IN (
@@ -479,21 +500,23 @@ def resolve_namespace_refs(
                     AND imf.alias IS NULL
                 JOIN def_facts df ON df.name = rf.token_text
                     AND df.namespace = imf.imported_name
-                    AND df.kind IN ('class', 'struct', 'interface', 'enum')
+                    AND df.kind IN {_TYPE_KIND_FILTER}
                 WHERE rf.ref_tier = :unknown_tier
                     AND rf.role = :ref_role
                     {file_filter}
             )
         """)
-        session.execute(
-            update_sql.bindparams(
-                strong_tier=RefTier.STRONG.value,
-                certain=Certainty.CERTAIN.value,
-                unknown_tier=RefTier.UNKNOWN.value,
-                ref_role=Role.REFERENCE.value,
-            )
+        update_result = session.execute(
+            update_sql,
+            {
+                "strong_tier": RefTier.STRONG.value,
+                "certain": Certainty.CERTAIN.value,
+                "unknown_tier": RefTier.UNKNOWN.value,
+                "ref_role": Role.REFERENCE.value,
+                **file_binds,
+            },
         )
-        stats.refs_upgraded = stats.refs_scanned
+        stats.refs_upgraded = update_result.rowcount  # type: ignore[attr-defined]
         session.commit()
 
     return stats
@@ -507,19 +530,30 @@ def resolve_star_import_refs(
 
     For each file with ``from X import *``, resolves the source module to a
     project file, builds the set of module-level exports, and upgrades
-    matching UNKNOWN refs to STRONG.
+    matching UNKNOWN refs to STRONG via a single SQL UPDATE.
 
-    This replaces the old in-memory ``_resolve_python_star_refs()`` which was
-    limited to seeing only 25 files per batch.
+    Resolution strategy:
+    1. Find star imports (ORM query).
+    2. Resolve each import's source literal to a project file_id using
+       Python-side heuristic matching (``_find_python_module_file``).
+    3. Insert the resulting (importing_file_id, source_file_id) mappings
+       into a SQLite temp table.
+    4. Execute a single UPDATE that joins ``ref_facts`` through
+       ``import_facts``, the temp mapping, and ``def_facts`` to upgrade
+       all eligible refs in one round-trip.
 
     Args:
         db: Database instance
         file_ids: Optional list of file IDs to scope resolution. None = all.
+            In multi-unit deployments the caller **must** supply the file IDs
+            belonging to the target unit; passing ``None`` resolves across
+            the entire database which may cause cross-unit contamination.
 
     Returns:
         CrossFileResolutionStats
     """
     stats = CrossFileResolutionStats()
+    file_filter, file_binds = _build_file_filter(file_ids)
 
     with db.session() as session:
         # Step 1: Find all star imports
@@ -534,7 +568,7 @@ def resolve_star_import_refs(
         if not star_imports:
             return stats
 
-        # Step 2: Build module path -> file_id mapping
+        # Step 2: Build module path -> file_id mapping (Python heuristic)
         all_files: list[tuple[int | None, str]] = list(
             session.exec(select(File.id, File.path)).all()
         )
@@ -546,50 +580,111 @@ def resolve_star_import_refs(
             if module_path:
                 module_to_file_id[module_path] = fid
 
-        # Step 3: For each star import, find source module and resolve refs
+        # Step 3: Resolve each star import's source to a file_id,
+        # build the temp mapping table.
+        session.execute(
+            text(
+                "CREATE TEMP TABLE IF NOT EXISTS _star_module_map "
+                "(importing_file_id INTEGER, source_file_id INTEGER)"
+            )
+        )
+        session.execute(text("DELETE FROM _star_module_map"))
+
+        mappings: list[dict[str, int]] = []
         for star_imp in star_imports:
             source_literal = star_imp.source_literal
             if not source_literal:
                 continue
-
-            # Resolve source module to file_id
             source_file_id = _find_python_module_file(
                 source_literal, star_imp.file_id, module_to_file_id, all_files
             )
-            if source_file_id is None:
-                continue
-
-            # Get module-level defs from source file (name + def_uid for linking)
-            source_def_rows = session.exec(
-                select(DefFact.name, DefFact.def_uid).where(
-                    DefFact.file_id == source_file_id,
-                    DefFact.lexical_path == DefFact.name,  # Module-level: lexical_path == name
+            if source_file_id is not None:
+                mappings.append(
+                    {
+                        "importing_file_id": star_imp.file_id,
+                        "source_file_id": source_file_id,
+                    }
                 )
-            ).all()
-            export_map: dict[str, str] = {
-                name: uid for name, uid in source_def_rows if not name.startswith("_")
-            }
 
-            if not export_map:
-                continue
+        if not mappings:
+            session.execute(text("DROP TABLE IF EXISTS _star_module_map"))
+            return stats
 
-            # Upgrade UNKNOWN refs in the importing file that match exports
-            unknown_refs = session.exec(
-                select(RefFact).where(
-                    RefFact.file_id == star_imp.file_id,
-                    RefFact.ref_tier == RefTier.UNKNOWN.value,
-                    RefFact.role == Role.REFERENCE.value,
+        for m in mappings:
+            session.execute(
+                text("INSERT INTO _star_module_map VALUES (:importing_file_id, :source_file_id)"),
+                m,
+            )
+
+        # Step 4: Count eligible refs (single query)
+        count_sql = text(f"""
+            SELECT COUNT(DISTINCT rf.ref_id)
+            FROM ref_facts rf
+            JOIN _star_module_map tsm ON tsm.importing_file_id = rf.file_id
+            JOIN def_facts df ON df.file_id = tsm.source_file_id
+                AND df.name = rf.token_text
+                AND df.lexical_path = df.name
+                AND df.name NOT LIKE '\\_%' ESCAPE '\\'
+            WHERE rf.ref_tier = :unknown_tier
+                AND rf.role = :ref_role
+                {file_filter}
+        """)
+        result = session.execute(
+            count_sql,
+            {
+                "unknown_tier": RefTier.UNKNOWN.value,
+                "ref_role": Role.REFERENCE.value,
+                **file_binds,
+            },
+        )
+        stats.refs_scanned = result.scalar_one()
+
+        if stats.refs_scanned == 0:
+            session.execute(text("DROP TABLE IF EXISTS _star_module_map"))
+            return stats
+
+        # Step 5: Single UPDATE with JOIN through temp table
+        update_sql = text(f"""
+            UPDATE ref_facts
+            SET ref_tier = :strong_tier,
+                certainty = :certain,
+                target_def_uid = (
+                    SELECT df.def_uid
+                    FROM _star_module_map tsm
+                    JOIN def_facts df ON df.file_id = tsm.source_file_id
+                        AND df.name = ref_facts.token_text
+                        AND df.lexical_path = df.name
+                        AND df.name NOT LIKE '\\_%' ESCAPE '\\'
+                    WHERE tsm.importing_file_id = ref_facts.file_id
+                    ORDER BY df.def_uid ASC
+                    LIMIT 1
                 )
-            ).all()
+            WHERE ref_id IN (
+                SELECT DISTINCT rf.ref_id
+                FROM ref_facts rf
+                JOIN _star_module_map tsm ON tsm.importing_file_id = rf.file_id
+                JOIN def_facts df ON df.file_id = tsm.source_file_id
+                    AND df.name = rf.token_text
+                    AND df.lexical_path = df.name
+                    AND df.name NOT LIKE '\\_%' ESCAPE '\\'
+                WHERE rf.ref_tier = :unknown_tier
+                    AND rf.role = :ref_role
+                    {file_filter}
+            )
+        """)
+        update_result = session.execute(
+            update_sql,
+            {
+                "strong_tier": RefTier.STRONG.value,
+                "certain": Certainty.CERTAIN.value,
+                "unknown_tier": RefTier.UNKNOWN.value,
+                "ref_role": Role.REFERENCE.value,
+                **file_binds,
+            },
+        )
+        stats.refs_upgraded = update_result.rowcount  # type: ignore[attr-defined]
 
-            for ref in unknown_refs:
-                stats.refs_scanned += 1
-                if ref.token_text in export_map:
-                    ref.ref_tier = RefTier.STRONG.value
-                    ref.certainty = Certainty.CERTAIN.value
-                    ref.target_def_uid = export_map[ref.token_text]
-                    stats.refs_upgraded += 1
-
+        session.execute(text("DROP TABLE IF EXISTS _star_module_map"))
         session.commit()
 
     return stats
@@ -619,21 +714,18 @@ def resolve_same_namespace_refs(
     Args:
         db: Database instance
         file_ids: Optional list of file IDs to scope resolution. None = all.
+            In multi-unit deployments the caller **must** supply the file IDs
+            belonging to the target unit; passing ``None`` resolves across
+            the entire database which may cause cross-unit contamination.
 
     Returns:
         CrossFileResolutionStats
     """
     stats = CrossFileResolutionStats()
 
+    file_filter, file_binds = _build_file_filter(file_ids)
+
     with db.session() as session:
-        from sqlalchemy import text
-
-        if file_ids:
-            file_id_list = ",".join(str(fid) for fid in file_ids)
-            file_filter = f"AND rf.file_id IN ({file_id_list})"
-        else:
-            file_filter = ""
-
         # Count refs that will be upgraded.
         # Join: ref's file has a DefFact with a namespace, and a target DefFact
         # exists with matching name whose namespace is the same as or a parent
@@ -644,7 +736,7 @@ def resolve_same_namespace_refs(
             JOIN def_facts file_def ON file_def.file_id = rf.file_id
                 AND file_def.namespace IS NOT NULL
             JOIN def_facts target_def ON target_def.name = rf.token_text
-                AND target_def.kind IN ('class', 'struct', 'interface', 'enum')
+                AND target_def.kind IN {_TYPE_KIND_FILTER}
                 AND (
                     target_def.namespace = file_def.namespace
                     OR file_def.namespace LIKE target_def.namespace || '.%'
@@ -654,10 +746,12 @@ def resolve_same_namespace_refs(
                 {file_filter}
         """)
         result = session.execute(
-            count_sql.bindparams(
-                unknown_tier=RefTier.UNKNOWN.value,
-                ref_role=Role.REFERENCE.value,
-            )
+            count_sql,
+            {
+                "unknown_tier": RefTier.UNKNOWN.value,
+                "ref_role": Role.REFERENCE.value,
+                **file_binds,
+            },
         )
         stats.refs_scanned = result.scalar_one()
 
@@ -673,13 +767,14 @@ def resolve_same_namespace_refs(
                     SELECT target_def.def_uid
                     FROM def_facts file_def
                     JOIN def_facts target_def ON target_def.name = ref_facts.token_text
-                        AND target_def.kind IN ('class', 'struct', 'interface', 'enum')
+                        AND target_def.kind IN {_TYPE_KIND_FILTER}
                         AND (
                             target_def.namespace = file_def.namespace
                             OR file_def.namespace LIKE target_def.namespace || '.%'
                         )
                     WHERE file_def.file_id = ref_facts.file_id
                         AND file_def.namespace IS NOT NULL
+                    ORDER BY target_def.def_uid ASC
                     LIMIT 1
                 )
             WHERE ref_id IN (
@@ -688,7 +783,7 @@ def resolve_same_namespace_refs(
                 JOIN def_facts file_def ON file_def.file_id = rf.file_id
                     AND file_def.namespace IS NOT NULL
                 JOIN def_facts target_def ON target_def.name = rf.token_text
-                    AND target_def.kind IN ('class', 'struct', 'interface', 'enum')
+                    AND target_def.kind IN {_TYPE_KIND_FILTER}
                     AND (
                         target_def.namespace = file_def.namespace
                         OR file_def.namespace LIKE target_def.namespace || '.%'
@@ -698,15 +793,17 @@ def resolve_same_namespace_refs(
                     {file_filter}
             )
         """)
-        session.execute(
-            update_sql.bindparams(
-                strong_tier=RefTier.STRONG.value,
-                certain=Certainty.CERTAIN.value,
-                unknown_tier=RefTier.UNKNOWN.value,
-                ref_role=Role.REFERENCE.value,
-            )
+        update_result = session.execute(
+            update_sql,
+            {
+                "strong_tier": RefTier.STRONG.value,
+                "certain": Certainty.CERTAIN.value,
+                "unknown_tier": RefTier.UNKNOWN.value,
+                "ref_role": Role.REFERENCE.value,
+                **file_binds,
+            },
         )
-        stats.refs_upgraded = stats.refs_scanned
+        stats.refs_upgraded = update_result.rowcount  # type: ignore[attr-defined]
         session.commit()
 
     return stats
@@ -735,11 +832,16 @@ def _find_python_module_file(
         return module_to_file_id[source_literal]
 
     # Try suffix-based matching (handles src/ prefixes etc.)
+    # Require a path separator (or start-of-string) before the match to avoid
+    # false positives like "afoo.py" matching a search for "foo".
     parts = source_literal.replace(".", "/")
+    suffix_py = f"/{parts}.py"
+    suffix_init = f"/{parts}/__init__.py"
     for fid, fpath in all_files:
         if fid is None or fpath is None:
             continue
-        if fpath.endswith(f"{parts}.py") or fpath.endswith(f"{parts}/__init__.py"):
+        prefixed = f"/{fpath}"
+        if prefixed.endswith(suffix_py) or prefixed.endswith(suffix_init):
             return fid
 
     return None
