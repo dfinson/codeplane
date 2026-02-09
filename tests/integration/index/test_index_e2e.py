@@ -24,7 +24,7 @@ def _make_coordinator(repo_path: Path) -> IndexCoordinator:
     return IndexCoordinator(repo_path, db_path, tantivy_path)
 
 
-def _noop_progress(indexed: int, total: int, by_ext: dict[str, int]) -> None:
+def _noop_progress(indexed: int, total: int, by_ext: dict[str, int], phase: str = "") -> None:
     """No-op progress callback."""
     pass
 

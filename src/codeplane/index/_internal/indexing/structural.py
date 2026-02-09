@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from codeplane.index._internal.db import Database
 
+from codeplane.core.languages import detect_language_family, has_grammar
 from codeplane.index._internal.parsing import (
     SyntacticScope,
     SyntacticSymbol,
@@ -70,19 +71,16 @@ def _compute_def_uid(
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
-def _has_grammar_for_file(file_path: str) -> bool:
-    """Check if a tree-sitter grammar is available for this file's language.
+def _has_grammar_for_family(language_family: str | None) -> bool:
+    """Check if a language family has a tree-sitter grammar available.
 
-    Returns True if the file's language has a grammar available on PyPI.
+    Returns True if the language has a grammar available on PyPI.
     Returns False for languages like F#, VB.NET, Erlang, etc. that lack PyPI grammars.
-    Also returns False for unknown file types.
+    Also returns False for None (unknown file types).
     """
-    from codeplane.core.languages import detect_language_family, has_grammar
-
-    language = detect_language_family(file_path)
-    if language is None:
+    if language_family is None:
         return False
-    return has_grammar(language)
+    return has_grammar(language_family)
 
 
 @dataclass
@@ -109,6 +107,12 @@ class ExtractionResult:
     parse_time_ms: int = 0
     # Flag indicating file was skipped due to no grammar (not an error)
     skipped_no_grammar: bool = False
+    # C# namespace -> type names mapping for cross-file resolution
+    namespace_type_map: dict[str, list[str]] = field(default_factory=dict)
+    # Language detected for this file (used in cross-file resolution)
+    language: str | None = None
+    # Language family detected from file path (avoids re-detection later)
+    language_family: str | None = None
 
 
 @dataclass
@@ -158,10 +162,14 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
             1 if content and not content.endswith(b"\n") else 0
         )
 
+        # Detect language family once for this file
+        family = detect_language_family(file_path)
+        result.language_family = family
+
         # Check if grammar is available BEFORE attempting to parse
         # This gracefully handles languages like F#, VB.NET, Erlang that
         # have language definitions but no PyPI-available tree-sitter grammar
-        if not _has_grammar_for_file(file_path):
+        if not _has_grammar_for_family(family):
             result.skipped_no_grammar = True
             result.parse_time_ms = int((time.monotonic() - start) * 1000)
             return result
@@ -185,6 +193,22 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
 
         # Extract dynamic accesses (for DynamicAccessSite)
         dynamics = parser.extract_dynamic_accesses(parse_result)
+
+        # Track language for cross-file resolution
+        result.language = parse_result.language
+
+        # Build namespace -> type name inversion map (populated for C#, empty for others)
+        _type_to_ns: dict[str, str] = {}
+
+        # Extract namespace -> type mapping for C# cross-file resolution
+        if parse_result.language == "csharp":
+            result.namespace_type_map = parser.extract_csharp_namespace_types(
+                parse_result.root_node
+            )
+            # Invert namespace_type_map: type_name -> namespace
+            for _ns_name, _type_names in result.namespace_type_map.items():
+                for _tname in _type_names:
+                    _type_to_ns[_tname] = _ns_name
 
         # Build scope ID mapping (local file scope ID -> will be assigned DB scope_id later)
         # For now, we store the local scope_id and parent mapping in the dict
@@ -235,6 +259,7 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
                 "kind": sym.kind,
                 "name": sym.name,
                 "lexical_path": _compute_lexical_path(sym, symbols),
+                "namespace": _type_to_ns.get(sym.name),
                 "start_line": sym.line,
                 "start_col": sym.column,
                 "end_line": sym.end_line,
@@ -416,35 +441,20 @@ def _extract_type_aware_facts(
     """
     try:
         from codeplane.index._internal.extraction import get_registry
+        from codeplane.index._internal.extraction.languages import ALL_LANGUAGE_CONFIGS
 
-        # Get language name from file extension
-        ext = Path(file_path).suffix.lower()
-        ext_to_family = {
-            ".py": "python",
-            ".pyi": "python",
-            ".js": "javascript",
-            ".jsx": "javascript",
-            ".ts": "typescript",
-            ".tsx": "typescript",
-            ".go": "go",
-            ".rs": "rust",
-            ".java": "java",
-            ".kt": "kotlin",
-            ".scala": "scala",
-            ".cs": "csharp",
-            ".cpp": "cpp",
-            ".c": "c",
-            ".h": "cpp",
-            ".rb": "ruby",
-            ".php": "php",
-            ".swift": "swift",
-        }
-        language = ext_to_family.get(ext)
+        # Use the language already detected during parsing (avoids hardcoded ext map).
+        # Then map to the extractor registry's family key via ALL_LANGUAGE_CONFIGS.
+        language = extraction.language
         if not language:
             return
 
+        config = ALL_LANGUAGE_CONFIGS.get(language)
+        if config is None:
+            return
+
         registry = get_registry()
-        extractor = registry.get_or_fallback(language)
+        extractor = registry.get_or_fallback(config.language_family)
 
         # Extract type annotations
         annotations = extractor.extract_type_annotations(tree, file_path, extraction.scopes)
@@ -630,7 +640,11 @@ class StructuralIndexer:
                 continue
             if extraction.file_path not in file_id_map:
                 file_id_map[extraction.file_path] = self._ensure_file_id(
-                    extraction.file_path, extraction.content_hash, extraction.line_count, context_id
+                    extraction.file_path,
+                    extraction.content_hash,
+                    extraction.line_count,
+                    context_id,
+                    language_family=extraction.language_family,
                 )
 
         with self.db.bulk_writer() as writer:
@@ -787,7 +801,12 @@ class StructuralIndexer:
         return results
 
     def _ensure_file_id(
-        self, file_path: str, content_hash: str | None, line_count: int, _context_id: int
+        self,
+        file_path: str,
+        content_hash: str | None,
+        line_count: int,
+        _context_id: int,
+        language_family: str | None = None,
     ) -> int:
         """Ensure file exists in database and return its ID."""
         import time
@@ -805,38 +824,13 @@ class StructuralIndexer:
                 path=file_path,
                 content_hash=content_hash,
                 line_count=line_count,
-                language_family=self._detect_family(file_path),
+                language_family=language_family,
                 indexed_at=time.time(),  # Mark as indexed
             )
             session.add(file)
             session.commit()
             session.refresh(file)
             return file.id if file.id is not None else 0
-
-    def _detect_family(self, file_path: str) -> str | None:
-        """Detect language name from file path."""
-        ext = Path(file_path).suffix.lower()
-        ext_map = {
-            ".py": "python",
-            ".pyi": "python",
-            ".js": "javascript",
-            ".jsx": "javascript",
-            ".ts": "javascript",
-            ".tsx": "javascript",
-            ".go": "go",
-            ".rs": "rust",
-            ".java": "jvm",
-            ".kt": "jvm",
-            ".scala": "jvm",
-            ".cs": "dotnet",
-            ".cpp": "cpp",
-            ".c": "cpp",
-            ".h": "cpp",
-            ".rb": "ruby",
-            ".php": "php",
-            ".swift": "swift",
-        }
-        return ext_map.get(ext)
 
     def extract_single(self, file_path: str, unit_id: int = 0) -> ExtractionResult:
         """Extract facts from a single file without storing."""
