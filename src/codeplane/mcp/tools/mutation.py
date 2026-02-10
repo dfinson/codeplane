@@ -158,7 +158,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             )
 
         try:
-            result = app_ctx.mutation_ops.atomic_edit_files(edit_list, dry_run=dry_run)
+            result = app_ctx.mutation_ops.write_files(edit_list, dry_run=dry_run)
 
             # Log successful operation
             for file_delta in result.delta.files:

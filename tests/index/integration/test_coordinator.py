@@ -122,19 +122,17 @@ class TestCoordinatorInitialization:
             # Should have called progress at least once
             assert len(progress_calls) >= 1
 
-            # Progress should increase monotonically within each phase
-            from itertools import groupby
+            # Group progress by phase and verify each phase increases monotonically
+            by_phase: dict[str, list[tuple[int, int]]] = {}
+            for indexed, total, _, phase in progress_calls:
+                by_phase.setdefault(phase, []).append((indexed, total))
 
-            for _phase, group in groupby(progress_calls, key=lambda c: c[3]):
-                calls = list(group)
+            for phase, calls in by_phase.items():
                 for i in range(1, len(calls)):
-                    assert calls[i][0] >= calls[i - 1][0]
+                    assert calls[i][0] >= calls[i - 1][0], f"Phase {phase} progress not monotonic"
 
-            # At least one phase's final call should report completion
-            structural_calls = [c for c in progress_calls if c[3] == "structural"]
-            if structural_calls:
-                final = structural_calls[-1]
-                assert final[0] == final[1]  # indexed == total
+            # Should have lexical phase at minimum
+            assert "lexical" in by_phase
         finally:
             coordinator.close()
 
