@@ -2062,6 +2062,11 @@ class IndexCoordinator:
                 select(Context).where(Context.probe_status == ProbeStatus.VALID.value)
             ).all()
 
+            # Find root fallback context (tier=3) to use as default for unmatched files
+            # This ensures all files get proper context scoping in Pass 1.5 resolvers
+            root_ctx = next((c for c in contexts if c.tier == 3), None)
+            root_ctx_id = root_ctx.id if root_ctx else None
+
             # Build file -> context_id mapping and collect file_ids
             file_to_context: dict[str, int] = {}
             changed_file_ids: list[int] = []
@@ -2128,10 +2133,12 @@ class IndexCoordinator:
 
         # Pass 1.5: DB-backed cross-file resolution (scoped to changed files)
         if changed_file_ids:
-            # Group changed file IDs by context for cross-context isolation
+            # Group changed file IDs by context for proper scoping.
+            # Use root_ctx_id as default for files not matching a specific context,
+            # ensuring all files get proper context scoping (vs None which skips scoping).
             ctx_file_ids: dict[int | None, list[int]] = {}
             for fid in changed_file_ids:
-                cid = file_id_to_context.get(fid)
+                cid = file_id_to_context.get(fid, root_ctx_id)
                 ctx_file_ids.setdefault(cid, []).append(fid)
             for cid, fids in ctx_file_ids.items():
                 resolve_namespace_refs(self.db, cid, file_ids=fids)
