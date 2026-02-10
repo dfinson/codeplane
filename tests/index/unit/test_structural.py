@@ -1079,3 +1079,218 @@ namespace App {
             ).all()
             if foo_refs:
                 assert all(r.ref_tier == RefTier.UNKNOWN.value for r in foo_refs)
+
+
+class TestExtractionResultUnifiedFields:
+    """Tests for content_text and symbol_names fields (unified single-pass indexing)."""
+
+    def test_content_text_populated_python(self, temp_dir: Path) -> None:
+        """content_text should contain the file's UTF-8 content."""
+        content = "def hello(): pass\n"
+        (temp_dir / "test.py").write_text(content)
+
+        result = _extract_file("test.py", str(temp_dir), unit_id=1)
+
+        assert result.error is None
+        assert result.content_text == content
+
+    def test_content_text_populated_no_grammar(self, temp_dir: Path) -> None:
+        """content_text should be populated even for files without a tree-sitter grammar."""
+        content = "some plain text content"
+        (temp_dir / "test.txt").write_text(content)
+
+        result = _extract_file("test.txt", str(temp_dir), unit_id=1)
+
+        assert result.skipped_no_grammar is True
+        assert result.content_text == content
+
+    def test_content_text_empty_for_binary(self, temp_dir: Path) -> None:
+        """content_text should be empty string for non-UTF-8 binary files."""
+        (temp_dir / "test.py").write_bytes(b"\x80\x81\x82\x83")
+
+        result = _extract_file("test.py", str(temp_dir), unit_id=1)
+
+        assert result.content_text == ""
+        assert result.error is None
+
+    def test_content_text_none_for_nonexistent(self, temp_dir: Path) -> None:
+        """content_text should remain None when file does not exist."""
+        result = _extract_file("nonexistent.py", str(temp_dir), unit_id=1)
+
+        assert result.error is not None
+        assert result.content_text is None
+
+    def test_symbol_names_python(self, temp_dir: Path) -> None:
+        """symbol_names should contain extracted symbol names from tree-sitter."""
+        content = "def hello(): pass\ndef world(): pass\nclass Greeter: pass\n"
+        (temp_dir / "test.py").write_text(content)
+
+        result = _extract_file("test.py", str(temp_dir), unit_id=1)
+
+        assert result.error is None
+        assert "hello" in result.symbol_names
+        assert "world" in result.symbol_names
+        assert "Greeter" in result.symbol_names
+
+    def test_symbol_names_empty_no_grammar(self, temp_dir: Path) -> None:
+        """symbol_names should be empty for files without a grammar."""
+        (temp_dir / "test.unknown").write_text("content")
+
+        result = _extract_file("test.unknown", str(temp_dir), unit_id=1)
+
+        assert result.skipped_no_grammar is True
+        assert result.symbol_names == []
+
+    def test_symbol_names_empty_for_nonexistent(self, temp_dir: Path) -> None:
+        """symbol_names should be empty for nonexistent files."""
+        result = _extract_file("nonexistent.py", str(temp_dir), unit_id=1)
+
+        assert result.symbol_names == []
+
+    def test_defaults_content_text_none(self) -> None:
+        """Default ExtractionResult should have content_text=None and empty symbol_names."""
+        result = ExtractionResult(file_path="test.py")
+
+        assert result.content_text is None
+        assert result.symbol_names == []
+
+    def test_content_text_matches_defs(self, temp_dir: Path) -> None:
+        """symbol_names count should match defs count for simple files."""
+        content = "def alpha(): pass\ndef beta(): pass\n"
+        (temp_dir / "test.py").write_text(content)
+
+        result = _extract_file("test.py", str(temp_dir), unit_id=1)
+
+        # Each def produces a symbol name
+        def_names = [d["name"] for d in result.defs]
+        for name in def_names:
+            assert name in result.symbol_names
+
+
+class TestExtractFilesMethod:
+    """Tests for StructuralIndexer.extract_files() public method."""
+
+    def test_extract_files_returns_results(
+        self, indexer: StructuralIndexer, temp_dir: Path
+    ) -> None:
+        """extract_files should return a list of ExtractionResult."""
+        (temp_dir / "a.py").write_text("def foo(): pass")
+        (temp_dir / "b.py").write_text("def bar(): pass")
+
+        results = indexer.extract_files(["a.py", "b.py"], context_id=1)
+
+        assert len(results) == 2
+        assert all(isinstance(r, ExtractionResult) for r in results)
+
+    def test_extract_files_populates_content_text(
+        self, indexer: StructuralIndexer, temp_dir: Path
+    ) -> None:
+        """extract_files results should have content_text populated."""
+        content = "def foo(): pass\n"
+        (temp_dir / "a.py").write_text(content)
+
+        results = indexer.extract_files(["a.py"], context_id=1)
+
+        assert len(results) == 1
+        assert results[0].content_text == content
+
+    def test_extract_files_populates_symbol_names(
+        self, indexer: StructuralIndexer, temp_dir: Path
+    ) -> None:
+        """extract_files results should have symbol_names populated."""
+        (temp_dir / "a.py").write_text("def foo(): pass\nclass Bar: pass\n")
+
+        results = indexer.extract_files(["a.py"], context_id=1)
+
+        assert "foo" in results[0].symbol_names
+        assert "Bar" in results[0].symbol_names
+
+    def test_extract_files_handles_missing_files(
+        self, indexer: StructuralIndexer, temp_dir: Path
+    ) -> None:
+        """extract_files should handle missing files gracefully."""
+        (temp_dir / "good.py").write_text("def foo(): pass")
+
+        results = indexer.extract_files(["good.py", "missing.py"], context_id=1)
+
+        assert len(results) == 2
+        good = next(r for r in results if r.file_path == "good.py")
+        missing = next(r for r in results if r.file_path == "missing.py")
+        assert good.error is None
+        assert good.content_text is not None
+        assert missing.error is not None
+        assert missing.content_text is None
+
+
+class TestPrecomputedExtractions:
+    """Tests for index_files with _extractions kwarg."""
+
+    def test_index_files_with_precomputed(
+        self, db: Database, indexer: StructuralIndexer, temp_dir: Path
+    ) -> None:
+        """index_files(_extractions=...) should persist facts without re-extracting."""
+        content = "def foo(): pass\ndef bar(): pass\n"
+        (temp_dir / "a.py").write_text(content)
+
+        with db.session() as session:
+            ctx = Context(
+                name="test",
+                language_family="python",
+                root_path=str(temp_dir),
+            )
+            session.add(ctx)
+            session.commit()
+            context_id = ctx.id
+
+        # Extract first
+        extractions = indexer.extract_files(["a.py"], context_id=context_id or 1)
+        assert len(extractions) == 1
+        assert extractions[0].content_text == content
+
+        # Index with pre-computed extractions
+        result = indexer.index_files(["a.py"], context_id=context_id or 1, _extractions=extractions)
+
+        assert result.files_processed == 1
+        assert result.defs_extracted >= 2  # foo and bar
+        assert result.errors == []
+
+    def test_precomputed_produces_same_facts(self, db: Database, temp_dir: Path) -> None:
+        """Pre-computed extractions should produce equivalent persisted facts."""
+        from sqlmodel import select
+
+        content = "def alpha(): pass\ndef beta(): pass\n"
+        (temp_dir / "a.py").write_text(content)
+
+        with db.session() as session:
+            ctx = Context(
+                name="test",
+                language_family="python",
+                root_path=str(temp_dir),
+            )
+            session.add(ctx)
+            session.commit()
+            context_id = ctx.id
+
+        indexer = StructuralIndexer(db, temp_dir)
+
+        # Direct indexing (extracts internally)
+        direct_result = indexer.index_files(["a.py"], context_id=context_id or 1)
+
+        with db.session() as session:
+            direct_def_count = len(list(session.exec(select(DefFact)).all()))
+            direct_ref_count = len(list(session.exec(select(RefFact)).all()))
+
+        # Re-index with pre-computed extractions (idempotent overwrite)
+        extractions = indexer.extract_files(["a.py"], context_id=context_id or 1)
+        precomputed_result = indexer.index_files(
+            ["a.py"], context_id=context_id or 1, _extractions=extractions
+        )
+
+        with db.session() as session:
+            precomputed_def_count = len(list(session.exec(select(DefFact)).all()))
+            precomputed_ref_count = len(list(session.exec(select(RefFact)).all()))
+
+        assert direct_result.defs_extracted == precomputed_result.defs_extracted
+        assert direct_result.refs_extracted == precomputed_result.refs_extracted
+        assert direct_def_count == precomputed_def_count
+        assert direct_ref_count == precomputed_ref_count
