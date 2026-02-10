@@ -162,7 +162,6 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
             1 if content and not content.endswith(b"\n") else 0
         )
 
-        # Detect language family once for this file
         family = detect_language_family(file_path)
         result.language_family = family
 
@@ -197,21 +196,18 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
         # Track language for cross-file resolution
         result.language = parse_result.language
 
-        # Build namespace -> type name inversion map (populated for C#, empty for others)
+        # Build type_name -> namespace inversion map (C# only, empty for others)
         _type_to_ns: dict[str, str] = {}
 
-        # Extract namespace -> type mapping for C# cross-file resolution
         if parse_result.language == "csharp":
             result.namespace_type_map = parser.extract_csharp_namespace_types(
                 parse_result.root_node
             )
-            # Invert namespace_type_map: type_name -> namespace
             for _ns_name, _type_names in result.namespace_type_map.items():
                 for _tname in _type_names:
                     _type_to_ns[_tname] = _ns_name
 
-        # Build scope ID mapping (local file scope ID -> will be assigned DB scope_id later)
-        # For now, we store the local scope_id and parent mapping in the dict
+        # Convert scopes to dicts with file-local IDs (resolved to DB IDs during insert)
         for scope in scopes:
             scope_dict = {
                 "unit_id": unit_id,
@@ -443,8 +439,6 @@ def _extract_type_aware_facts(
         from codeplane.index._internal.extraction import get_registry
         from codeplane.index._internal.extraction.languages import ALL_LANGUAGE_CONFIGS
 
-        # Use the language already detected during parsing (avoids hardcoded ext map).
-        # Then map to the extractor registry's family key via ALL_LANGUAGE_CONFIGS.
         language = extraction.language
         if not language:
             return

@@ -127,6 +127,19 @@ class ParseResult:
     root_node: Any  # Tree-sitter Node
 
 
+# C# preprocessor wrapper node types that may contain declarations.
+# Tree-sitter wraps code inside #if/#region blocks under these types.
+_CSHARP_PREPROC_WRAPPERS = frozenset(
+    {
+        "preproc_if",
+        "preproc_ifdef",
+        "preproc_elif",
+        "preproc_else",
+        "preproc_region",
+    }
+)
+
+
 # Language to Tree-sitter language name mapping
 # Maps our internal names to tree-sitter grammar module names
 LANGUAGE_MAP: dict[str, str] = {
@@ -963,16 +976,6 @@ class TreeSitterParser:
         """
         imports: list[SyntacticImport] = []
 
-        # Preprocessor wrapper node types that may contain using directives.
-        # Mirrors the set in extract_csharp_namespace_types.
-        _PREPROC_WRAPPERS = {
-            "preproc_if",
-            "preproc_ifdef",
-            "preproc_elif",
-            "preproc_else",
-            "preproc_region",
-        }
-
         def make_uid(name: str, line: int) -> str:
             raw = f"{file_path}:{line}:{name}"
             return hashlib.sha256(raw.encode()).hexdigest()[:16]
@@ -980,7 +983,7 @@ class TreeSitterParser:
         def _walk_for_usings(parent: Any) -> None:
             """Walk tree nodes, descending into preprocessor wrappers."""
             for node in parent.children:
-                if node.type in _PREPROC_WRAPPERS:
+                if node.type in _CSHARP_PREPROC_WRAPPERS:
                     _walk_for_usings(node)
                     continue
                 if node.type != "using_directive":
@@ -1107,17 +1110,6 @@ class TreeSitterParser:
                             break
             return names
 
-        # Preprocessor wrapper node types that may contain namespace declarations.
-        # In C# files with #if/#region, tree-sitter wraps contained declarations
-        # under these node types instead of placing them as direct root children.
-        _PREPROC_WRAPPERS = {
-            "preproc_if",
-            "preproc_ifdef",
-            "preproc_elif",
-            "preproc_else",
-            "preproc_region",
-        }
-
         ns_map: dict[str, list[str]] = {}
 
         def _walk_for_namespaces(parent: Any) -> None:
@@ -1146,7 +1138,7 @@ class TreeSitterParser:
                         # Scan all root-level nodes (including inside preproc wrappers).
                         _collect_file_scoped_types(root, ns_name)
 
-                elif node.type in _PREPROC_WRAPPERS:
+                elif node.type in _CSHARP_PREPROC_WRAPPERS:
                     # Recurse into preprocessor blocks to find wrapped namespaces
                     _walk_for_namespaces(node)
 
@@ -1158,7 +1150,7 @@ class TreeSitterParser:
                         if sub.type == "identifier":
                             ns_map.setdefault(ns_name, []).append(sub.text.decode("utf-8"))
                             break
-                elif sibling.type in _PREPROC_WRAPPERS:
+                elif sibling.type in _CSHARP_PREPROC_WRAPPERS:
                     _collect_file_scoped_types(sibling, ns_name)
 
         _walk_for_namespaces(root)

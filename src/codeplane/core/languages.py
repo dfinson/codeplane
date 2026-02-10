@@ -895,9 +895,6 @@ def detect_language_family(path: str | Path) -> str | None:
     Use get_families_for_extension() if you need all candidates, or use
     context-aware detection in the scanner layer.
 
-    Uses os.path string operations instead of Path() to avoid object allocation
-    overhead in hot paths (called once per file during indexing).
-
     Args:
         path: File path (string or Path)
 
