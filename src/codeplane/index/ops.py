@@ -728,9 +728,10 @@ class IndexCoordinator:
                 self._structural.index_files(paths, context_id=ctx_id, file_id_map=file_id_map)
 
             # Pass 1.5: DB-backed cross-file resolution
-            resolve_namespace_refs(self.db)
-            resolve_same_namespace_refs(self.db)
-            resolve_star_import_refs(self.db)
+            for ctx_id in by_context:
+                resolve_namespace_refs(self.db, ctx_id)
+                resolve_same_namespace_refs(self.db, ctx_id)
+                resolve_star_import_refs(self.db, ctx_id)
 
             # Resolve cross-file references (Pass 2 - follows ImportFact chains)
             resolve_references(self.db)
@@ -1968,9 +1969,10 @@ class IndexCoordinator:
                 # complete namespace-type mappings across all files (not just
                 # the 25-file batch that was visible to the old in-memory pass).
                 on_progress(0, 1, files_by_ext, "resolving_cross_file")
-                resolve_namespace_refs(self.db)
-                resolve_same_namespace_refs(self.db)
-                resolve_star_import_refs(self.db)
+                for ctx_id in context_files:
+                    resolve_namespace_refs(self.db, ctx_id)
+                    resolve_same_namespace_refs(self.db, ctx_id)
+                    resolve_star_import_refs(self.db, ctx_id)
 
                 # Resolve cross-file references (phase: resolving_refs)
                 # Pass 2 - follows ImportFact chains
@@ -2063,6 +2065,7 @@ class IndexCoordinator:
             # Build file -> context_id mapping and collect file_ids
             file_to_context: dict[str, int] = {}
             changed_file_ids: list[int] = []
+            file_id_to_context: dict[int, int] = {}
             for ctx in contexts:
                 if ctx.id is None:
                     continue
@@ -2084,6 +2087,8 @@ class IndexCoordinator:
                 if file and file.id is not None:
                     file_id = file.id
                     changed_file_ids.append(file_id)
+                    if str_path in file_to_context:
+                        file_id_to_context[file_id] = file_to_context[str_path]
                     # Delete facts for this file using raw SQL
                     session.exec(
                         text("DELETE FROM def_facts WHERE file_id = :fid").bindparams(fid=file_id)
@@ -2123,9 +2128,15 @@ class IndexCoordinator:
 
         # Pass 1.5: DB-backed cross-file resolution (scoped to changed files)
         if changed_file_ids:
-            resolve_namespace_refs(self.db, file_ids=changed_file_ids)
-            resolve_same_namespace_refs(self.db, file_ids=changed_file_ids)
-            resolve_star_import_refs(self.db, file_ids=changed_file_ids)
+            # Group changed file IDs by context for cross-context isolation
+            ctx_file_ids: dict[int | None, list[int]] = {}
+            for fid in changed_file_ids:
+                cid = file_id_to_context.get(fid)
+                ctx_file_ids.setdefault(cid, []).append(fid)
+            for cid, fids in ctx_file_ids.items():
+                resolve_namespace_refs(self.db, cid, file_ids=fids)
+                resolve_same_namespace_refs(self.db, cid, file_ids=fids)
+                resolve_star_import_refs(self.db, cid, file_ids=fids)
 
         # Resolve cross-file references (Pass 2 - scoped to changed files)
         if changed_file_ids:

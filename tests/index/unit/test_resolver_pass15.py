@@ -18,6 +18,9 @@ from codeplane.index._internal.indexing.graph import FactQueries
 from codeplane.index._internal.indexing.resolver import (
     _TYPE_KIND_FILTER,
     _build_file_filter,
+    _build_unit_filter,
+    resolve_namespace_refs,
+    resolve_same_namespace_refs,
     resolve_star_import_refs,
 )
 from codeplane.index._internal.indexing.structural import StructuralIndexer
@@ -358,7 +361,7 @@ y = Utility()
             assert len(helper_refs) >= 1
             assert all(r.ref_tier == RefTier.UNKNOWN.value for r in helper_refs)
 
-        stats = resolve_star_import_refs(db)
+        stats = resolve_star_import_refs(db, context_id)
         assert stats.refs_upgraded >= 2  # helper + Utility
 
         # After: should be STRONG with target_def_uid linked
@@ -394,7 +397,7 @@ result = join("/a", "b")
         indexer = StructuralIndexer(db, temp_dir)
         indexer.index_files(["consumer.py"], context_id=context_id or 1)
 
-        stats = resolve_star_import_refs(db)
+        stats = resolve_star_import_refs(db, context_id)
         assert stats.refs_upgraded == 0
 
     def test_private_names_excluded(self, db: Database, temp_dir: Path) -> None:
@@ -425,7 +428,7 @@ y = public()
         indexer = StructuralIndexer(db, temp_dir)
         indexer.index_files(["lib.py", "app.py"], context_id=context_id or 1)
 
-        resolve_star_import_refs(db)
+        resolve_star_import_refs(db, context_id)
 
         with db.session() as session:
             app_file = session.exec(select(File).where(File.path == "app.py")).first()
@@ -482,6 +485,7 @@ y = public()
 
         stats = resolve_star_import_refs(
             db,
+            context_id,
             file_ids=[consumer_a.id],  # type: ignore[list-item]
         )
         assert stats.refs_upgraded >= 1
@@ -535,7 +539,7 @@ b = beta()
         indexer = StructuralIndexer(db, temp_dir)
         indexer.index_files(["defs.py", "use.py"], context_id=context_id)
 
-        stats = resolve_star_import_refs(db)
+        stats = resolve_star_import_refs(db, context_id)
         assert stats.refs_upgraded >= 2
         assert stats.refs_scanned >= stats.refs_upgraded
 
@@ -555,7 +559,7 @@ b = beta()
         indexer.index_files(["empty.py", "importer.py"], context_id=context_id)
 
         # Should not raise
-        stats = resolve_star_import_refs(db)
+        stats = resolve_star_import_refs(db, context_id)
         assert stats.refs_upgraded == 0
 
 
@@ -610,3 +614,298 @@ class TestPaginatedReferencesIntegration:
             # Verify no duplicates
             ids = [r.ref_id for r in all_refs]
             assert len(ids) == len(set(ids))
+
+
+# ============================================================================
+# Cross-Context Isolation Tests
+# ============================================================================
+
+
+class TestCrossContextIsolation:
+    """unit_id scoping prevents cross-context contamination in Pass 1.5 resolvers."""
+
+    def test_build_unit_filter_empty(self) -> None:
+        """unit_id=None produces empty filter."""
+        sql, binds = _build_unit_filter(None)
+        assert sql == ""
+        assert binds == {}
+
+    def test_build_unit_filter_parameterized(self) -> None:
+        """unit_id produces parameterized clause."""
+        sql, binds = _build_unit_filter(42, "df")
+        assert "df.unit_id" in sql
+        assert ":unit_id" in sql
+        assert binds == {"unit_id": 42}
+
+    def test_namespace_refs_isolated_by_unit_id(self, db: Database, temp_dir: Path) -> None:
+        """resolve_namespace_refs with unit_id only matches defs in the same unit."""
+        db.create_all()
+        with db.session() as session:
+            ctx1 = Context(name="ctx1", language_family="dotnet", root_path="project_a")
+            ctx2 = Context(name="ctx2", language_family="dotnet", root_path="project_b")
+            session.add_all([ctx1, ctx2])
+            session.commit()
+            ctx1_id = ctx1.id
+            ctx2_id = ctx2.id
+
+        (temp_dir / "project_a").mkdir(exist_ok=True)
+        (temp_dir / "project_b").mkdir(exist_ok=True)
+
+        # Context 1: defines User in namespace Acme.Models
+        (temp_dir / "project_a" / "User.cs").write_text(
+            """namespace Acme.Models {
+    public class User { }
+}
+"""
+        )
+        # Context 1: references User via using directive
+        (temp_dir / "project_a" / "Service.cs").write_text(
+            """using Acme.Models;
+
+namespace Acme.Services {
+    class UserService {
+        User user;
+    }
+}
+"""
+        )
+        # Context 2: defines SAME type name in SAME namespace (collision)
+        (temp_dir / "project_b" / "User.cs").write_text(
+            """namespace Acme.Models {
+    public class User { }
+}
+"""
+        )
+
+        indexer = StructuralIndexer(db, temp_dir)
+        indexer.index_files(
+            ["project_a/User.cs", "project_a/Service.cs"],
+            context_id=ctx1_id or 1,
+        )
+        indexer.index_files(
+            ["project_b/User.cs"],
+            context_id=ctx2_id or 2,
+        )
+
+        # Resolve scoped to context 1 only
+        stats = resolve_namespace_refs(db, ctx1_id)
+        assert stats.refs_upgraded >= 1
+
+        # Verify: User ref resolves to ctx1's def, not ctx2's
+        with db.session() as session:
+            service_file = session.exec(
+                select(File).where(File.path == "project_a/Service.cs")
+            ).first()
+            assert service_file is not None
+            user_refs = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == service_file.id,
+                    RefFact.token_text == "User",
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+            assert len(user_refs) >= 1
+            assert all(r.ref_tier == RefTier.STRONG.value for r in user_refs)
+
+            ctx1_user_def = session.exec(
+                select(DefFact).where(
+                    DefFact.name == "User",
+                    DefFact.unit_id == ctx1_id,
+                )
+            ).first()
+            assert ctx1_user_def is not None
+            assert all(r.target_def_uid == ctx1_user_def.def_uid for r in user_refs), (
+                "target_def_uid must point to ctx1's User def, not ctx2's"
+            )
+
+    def test_same_namespace_refs_isolated_by_unit_id(self, db: Database, temp_dir: Path) -> None:
+        """resolve_same_namespace_refs with unit_id only matches defs in the same unit."""
+        db.create_all()
+        with db.session() as session:
+            ctx1 = Context(name="ctx1", language_family="dotnet", root_path="project_a")
+            ctx2 = Context(name="ctx2", language_family="dotnet", root_path="project_b")
+            session.add_all([ctx1, ctx2])
+            session.commit()
+            ctx1_id = ctx1.id
+            ctx2_id = ctx2.id
+
+        (temp_dir / "project_a").mkdir(exist_ok=True)
+        (temp_dir / "project_b").mkdir(exist_ok=True)
+
+        # Same-namespace: types visible without using directive
+        (temp_dir / "project_a" / "Serializer.cs").write_text(
+            """namespace Acme.Json {
+    public class JsonSerializer { }
+}
+"""
+        )
+        (temp_dir / "project_a" / "Convert.cs").write_text(
+            """namespace Acme.Json {
+    class JsonConvert {
+        JsonSerializer serializer;
+    }
+}
+"""
+        )
+        # Context 2: same type name, same namespace (collision)
+        (temp_dir / "project_b" / "Serializer.cs").write_text(
+            """namespace Acme.Json {
+    public class JsonSerializer { }
+}
+"""
+        )
+
+        indexer = StructuralIndexer(db, temp_dir)
+        indexer.index_files(
+            ["project_a/Serializer.cs", "project_a/Convert.cs"],
+            context_id=ctx1_id or 1,
+        )
+        indexer.index_files(
+            ["project_b/Serializer.cs"],
+            context_id=ctx2_id or 2,
+        )
+
+        stats = resolve_same_namespace_refs(db, ctx1_id)
+        assert stats.refs_upgraded >= 1
+
+        with db.session() as session:
+            convert_file = session.exec(
+                select(File).where(File.path == "project_a/Convert.cs")
+            ).first()
+            assert convert_file is not None
+            js_refs = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == convert_file.id,
+                    RefFact.token_text == "JsonSerializer",
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+            assert len(js_refs) >= 1
+            assert all(r.ref_tier == RefTier.STRONG.value for r in js_refs)
+
+            ctx1_def = session.exec(
+                select(DefFact).where(
+                    DefFact.name == "JsonSerializer",
+                    DefFact.unit_id == ctx1_id,
+                )
+            ).first()
+            assert ctx1_def is not None
+            assert all(r.target_def_uid == ctx1_def.def_uid for r in js_refs), (
+                "target_def_uid must point to ctx1's def, not ctx2's"
+            )
+
+    def test_star_import_refs_isolated_by_unit_id(self, db: Database, temp_dir: Path) -> None:
+        """resolve_star_import_refs with unit_id only processes imports in the same unit."""
+        db.create_all()
+        with db.session() as session:
+            ctx1 = Context(name="ctx1", language_family="python", root_path="project_a")
+            ctx2 = Context(name="ctx2", language_family="python", root_path="project_b")
+            session.add_all([ctx1, ctx2])
+            session.commit()
+            ctx1_id = ctx1.id
+            ctx2_id = ctx2.id
+
+        (temp_dir / "project_a").mkdir(exist_ok=True)
+        (temp_dir / "project_b").mkdir(exist_ok=True)
+
+        (temp_dir / "project_a" / "utils.py").write_text("def helper():\n    pass\n")
+        (temp_dir / "project_a" / "main.py").write_text("from utils import *\nx = helper()\n")
+        (temp_dir / "project_b" / "utils.py").write_text("def helper():\n    pass\n")
+
+        indexer = StructuralIndexer(db, temp_dir)
+        indexer.index_files(
+            ["project_a/utils.py", "project_a/main.py"],
+            context_id=ctx1_id or 1,
+        )
+        indexer.index_files(
+            ["project_b/utils.py"],
+            context_id=ctx2_id or 2,
+        )
+
+        stats = resolve_star_import_refs(db, ctx1_id)
+        assert stats.refs_upgraded >= 1
+
+        with db.session() as session:
+            main_file = session.exec(select(File).where(File.path == "project_a/main.py")).first()
+            assert main_file is not None
+            helper_refs = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == main_file.id,
+                    RefFact.token_text == "helper",
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+            assert len(helper_refs) >= 1
+            assert all(r.ref_tier == RefTier.STRONG.value for r in helper_refs)
+
+    def test_unit_id_none_resolves_all_contexts(self, db: Database, temp_dir: Path) -> None:
+        """unit_id=None resolves across all contexts (backward compat)."""
+        db.create_all()
+        with db.session() as session:
+            ctx = Context(name="test", language_family="dotnet", root_path=str(temp_dir))
+            session.add(ctx)
+            session.commit()
+            context_id = ctx.id
+
+        (temp_dir / "Types.cs").write_text(
+            """namespace App {
+    public class Widget { }
+}
+"""
+        )
+        (temp_dir / "Consumer.cs").write_text(
+            """using App;
+
+namespace Client {
+    class Program {
+        Widget w;
+    }
+}
+"""
+        )
+
+        indexer = StructuralIndexer(db, temp_dir)
+        indexer.index_files(["Types.cs", "Consumer.cs"], context_id=context_id or 1)
+
+        stats = resolve_namespace_refs(db, None)
+        assert stats.refs_upgraded >= 1
+
+    def test_dual_axis_file_ids_and_unit_id(self, db: Database, temp_dir: Path) -> None:
+        """file_ids and unit_id can be used together for maximum scoping."""
+        db.create_all()
+        with db.session() as session:
+            ctx = Context(name="test", language_family="dotnet", root_path=str(temp_dir))
+            session.add(ctx)
+            session.commit()
+            context_id = ctx.id
+
+        (temp_dir / "Defs.cs").write_text(
+            """namespace Lib {
+    public class Helper { }
+}
+"""
+        )
+        (temp_dir / "Use.cs").write_text(
+            """using Lib;
+
+namespace App {
+    class Prog {
+        Helper h;
+    }
+}
+"""
+        )
+
+        indexer = StructuralIndexer(db, temp_dir)
+        indexer.index_files(["Defs.cs", "Use.cs"], context_id=context_id or 1)
+
+        with db.session() as session:
+            use_file = session.exec(select(File).where(File.path == "Use.cs")).first()
+            assert use_file is not None
+
+        stats = resolve_namespace_refs(
+            db,
+            context_id,
+            file_ids=[use_file.id],  # type: ignore[list-item]
+        )
+        assert stats.refs_upgraded >= 1

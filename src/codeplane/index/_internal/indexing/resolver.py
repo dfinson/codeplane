@@ -418,8 +418,27 @@ def _build_file_filter(
     return (sql, binds)
 
 
+def _build_unit_filter(
+    unit_id: int | None,
+    alias: str = "rf",
+) -> tuple[str, dict[str, int]]:
+    """Build a parameterized unit_id filter clause and bind values.
+
+    Returns:
+        (sql_fragment, bind_dict) where sql_fragment is either empty or
+        ``AND <alias>.unit_id = :unit_id`` and bind_dict maps the
+        placeholder name to the integer value.
+    """
+    if unit_id is None:
+        return ("", {})
+    sql = f"AND {alias}.unit_id = :unit_id"
+    binds = {"unit_id": unit_id}
+    return (sql, binds)
+
+
 def resolve_namespace_refs(
     db: Database,
+    unit_id: int | None,
     file_ids: list[int] | None = None,
 ) -> CrossFileResolutionStats:
     """Upgrade UNKNOWN refs using C# namespace-using evidence (DB-backed).
@@ -435,15 +454,17 @@ def resolve_namespace_refs(
     Args:
         db: Database instance
         file_ids: Optional list of file IDs to scope resolution. None = all.
-            In multi-unit deployments the caller **must** supply the file IDs
-            belonging to the target unit; passing ``None`` resolves across
-            the entire database which may cause cross-unit contamination.
+        unit_id: Context/unit ID to scope resolution to. Pass the context ID
+            to prevent cross-context contamination in multi-unit repos, or
+            None to resolve across all contexts.
 
     Returns:
         CrossFileResolutionStats
     """
     stats = CrossFileResolutionStats()
     file_filter, file_binds = _build_file_filter(file_ids)
+    ref_unit_filter, ref_unit_binds = _build_unit_filter(unit_id, "rf")
+    def_unit_filter, def_unit_binds = _build_unit_filter(unit_id, "df")
 
     with db.session() as session:
         # Count refs that will be upgraded (for stats)
@@ -456,9 +477,11 @@ def resolve_namespace_refs(
             JOIN def_facts df ON df.name = rf.token_text
                 AND df.namespace = imf.imported_name
                 AND df.kind IN {_TYPE_KIND_FILTER}
+                {def_unit_filter}
             WHERE rf.ref_tier = :unknown_tier
                 AND rf.role = :ref_role
                 {file_filter}
+                {ref_unit_filter}
         """)
         result = session.execute(
             count_sql,
@@ -466,6 +489,8 @@ def resolve_namespace_refs(
                 "unknown_tier": RefTier.UNKNOWN.value,
                 "ref_role": Role.REFERENCE.value,
                 **file_binds,
+                **ref_unit_binds,
+                **def_unit_binds,
             },
         )
         stats.refs_scanned = result.scalar_one()
@@ -486,6 +511,7 @@ def resolve_namespace_refs(
                     JOIN def_facts df ON df.name = ref_facts.token_text
                         AND df.namespace = imf.imported_name
                         AND df.kind IN {_TYPE_KIND_FILTER}
+                        {def_unit_filter}
                     WHERE imf.file_id = ref_facts.file_id
                         AND imf.import_kind = 'csharp_using'
                         AND imf.alias IS NULL
@@ -501,9 +527,11 @@ def resolve_namespace_refs(
                 JOIN def_facts df ON df.name = rf.token_text
                     AND df.namespace = imf.imported_name
                     AND df.kind IN {_TYPE_KIND_FILTER}
+                    {def_unit_filter}
                 WHERE rf.ref_tier = :unknown_tier
                     AND rf.role = :ref_role
                     {file_filter}
+                    {ref_unit_filter}
             )
         """)
         update_result = session.execute(
@@ -514,6 +542,8 @@ def resolve_namespace_refs(
                 "unknown_tier": RefTier.UNKNOWN.value,
                 "ref_role": Role.REFERENCE.value,
                 **file_binds,
+                **ref_unit_binds,
+                **def_unit_binds,
             },
         )
         stats.refs_upgraded = update_result.rowcount  # type: ignore[attr-defined]
@@ -524,6 +554,7 @@ def resolve_namespace_refs(
 
 def resolve_star_import_refs(
     db: Database,
+    unit_id: int | None,
     file_ids: list[int] | None = None,
 ) -> CrossFileResolutionStats:
     """Upgrade UNKNOWN refs using Python star-import evidence (DB-backed).
@@ -544,16 +575,17 @@ def resolve_star_import_refs(
 
     Args:
         db: Database instance
+        unit_id: Context/unit ID to scope resolution to. Pass the context ID
+            to prevent cross-context contamination in multi-unit repos, or
+            None to resolve across all contexts.
         file_ids: Optional list of file IDs to scope resolution. None = all.
-            In multi-unit deployments the caller **must** supply the file IDs
-            belonging to the target unit; passing ``None`` resolves across
-            the entire database which may cause cross-unit contamination.
 
     Returns:
         CrossFileResolutionStats
     """
     stats = CrossFileResolutionStats()
     file_filter, file_binds = _build_file_filter(file_ids)
+    ref_unit_filter, ref_unit_binds = _build_unit_filter(unit_id, "rf")
 
     with db.session() as session:
         # Step 1: Find all star imports
@@ -563,6 +595,8 @@ def resolve_star_import_refs(
         )
         if file_ids:
             star_stmt = star_stmt.where(col(ImportFact.file_id).in_(file_ids))
+        if unit_id is not None:
+            star_stmt = star_stmt.where(ImportFact.unit_id == unit_id)
         star_imports = list(session.exec(star_stmt).all())
 
         if not star_imports:
@@ -628,6 +662,7 @@ def resolve_star_import_refs(
             WHERE rf.ref_tier = :unknown_tier
                 AND rf.role = :ref_role
                 {file_filter}
+                {ref_unit_filter}
         """)
         result = session.execute(
             count_sql,
@@ -635,6 +670,7 @@ def resolve_star_import_refs(
                 "unknown_tier": RefTier.UNKNOWN.value,
                 "ref_role": Role.REFERENCE.value,
                 **file_binds,
+                **ref_unit_binds,
             },
         )
         stats.refs_scanned = result.scalar_one()
@@ -670,6 +706,7 @@ def resolve_star_import_refs(
                 WHERE rf.ref_tier = :unknown_tier
                     AND rf.role = :ref_role
                     {file_filter}
+                    {ref_unit_filter}
             )
         """)
         update_result = session.execute(
@@ -680,6 +717,7 @@ def resolve_star_import_refs(
                 "unknown_tier": RefTier.UNKNOWN.value,
                 "ref_role": Role.REFERENCE.value,
                 **file_binds,
+                **ref_unit_binds,
             },
         )
         stats.refs_upgraded = update_result.rowcount  # type: ignore[attr-defined]
@@ -692,6 +730,7 @@ def resolve_star_import_refs(
 
 def resolve_same_namespace_refs(
     db: Database,
+    unit_id: int | None,
     file_ids: list[int] | None = None,
 ) -> CrossFileResolutionStats:
     """Upgrade UNKNOWN refs using same/parent namespace visibility (DB-backed).
@@ -713,10 +752,10 @@ def resolve_same_namespace_refs(
 
     Args:
         db: Database instance
+        unit_id: Context/unit ID to scope resolution to. Pass the context ID
+            to prevent cross-context contamination in multi-unit repos, or
+            None to resolve across all contexts.
         file_ids: Optional list of file IDs to scope resolution. None = all.
-            In multi-unit deployments the caller **must** supply the file IDs
-            belonging to the target unit; passing ``None`` resolves across
-            the entire database which may cause cross-unit contamination.
 
     Returns:
         CrossFileResolutionStats
@@ -724,6 +763,8 @@ def resolve_same_namespace_refs(
     stats = CrossFileResolutionStats()
 
     file_filter, file_binds = _build_file_filter(file_ids)
+    ref_unit_filter, ref_unit_binds = _build_unit_filter(unit_id, "rf")
+    target_unit_filter, target_unit_binds = _build_unit_filter(unit_id, "target_def")
 
     with db.session() as session:
         # Count refs that will be upgraded.
@@ -741,9 +782,11 @@ def resolve_same_namespace_refs(
                     target_def.namespace = file_def.namespace
                     OR file_def.namespace LIKE target_def.namespace || '.%'
                 )
+                {target_unit_filter}
             WHERE rf.ref_tier = :unknown_tier
                 AND rf.role = :ref_role
                 {file_filter}
+                {ref_unit_filter}
         """)
         result = session.execute(
             count_sql,
@@ -751,6 +794,8 @@ def resolve_same_namespace_refs(
                 "unknown_tier": RefTier.UNKNOWN.value,
                 "ref_role": Role.REFERENCE.value,
                 **file_binds,
+                **ref_unit_binds,
+                **target_unit_binds,
             },
         )
         stats.refs_scanned = result.scalar_one()
@@ -772,6 +817,7 @@ def resolve_same_namespace_refs(
                             target_def.namespace = file_def.namespace
                             OR file_def.namespace LIKE target_def.namespace || '.%'
                         )
+                        {target_unit_filter}
                     WHERE file_def.file_id = ref_facts.file_id
                         AND file_def.namespace IS NOT NULL
                     ORDER BY target_def.def_uid ASC
@@ -788,9 +834,11 @@ def resolve_same_namespace_refs(
                         target_def.namespace = file_def.namespace
                         OR file_def.namespace LIKE target_def.namespace || '.%'
                     )
+                    {target_unit_filter}
                 WHERE rf.ref_tier = :unknown_tier
                     AND rf.role = :ref_role
                     {file_filter}
+                    {ref_unit_filter}
             )
         """)
         update_result = session.execute(
@@ -801,6 +849,8 @@ def resolve_same_namespace_refs(
                 "unknown_tier": RefTier.UNKNOWN.value,
                 "ref_role": Role.REFERENCE.value,
                 **file_binds,
+                **ref_unit_binds,
+                **target_unit_binds,
             },
         )
         stats.refs_upgraded = update_result.rowcount  # type: ignore[attr-defined]

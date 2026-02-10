@@ -587,7 +587,7 @@ namespace App {
         # Run DB-backed resolution (Pass 1.5)
         from codeplane.index._internal.indexing.resolver import resolve_namespace_refs
 
-        stats = resolve_namespace_refs(db)
+        stats = resolve_namespace_refs(db, context_id)
         assert stats.refs_upgraded >= 1
 
         # After resolution: should be STRONG with target_def_uid linked
@@ -635,7 +635,7 @@ namespace App {
 
         from codeplane.index._internal.indexing.resolver import resolve_namespace_refs
 
-        resolve_namespace_refs(db)
+        resolve_namespace_refs(db, context_id)
 
         # 'List' comes from System.Collections.Generic (external) — stays UNKNOWN
         with db.session() as session:
@@ -706,7 +706,7 @@ y = Utility()
         # Run DB-backed resolution (Pass 1.5)
         from codeplane.index._internal.indexing.resolver import resolve_star_import_refs
 
-        stats = resolve_star_import_refs(db)
+        stats = resolve_star_import_refs(db, context_id)
         assert stats.refs_upgraded >= 1
 
         # After resolution: should be STRONG with target_def_uid linked
@@ -763,7 +763,7 @@ x = exists("/tmp")
 
         from codeplane.index._internal.indexing.resolver import resolve_star_import_refs
 
-        resolve_star_import_refs(db)
+        resolve_star_import_refs(db, context_id)
 
         # 'exists' comes from os.path (external) — stays UNKNOWN
         with db.session() as session:
@@ -824,7 +824,7 @@ namespace App {
 
         from codeplane.index._internal.indexing.resolver import resolve_namespace_refs
 
-        stats = resolve_namespace_refs(db)
+        stats = resolve_namespace_refs(db, context_id)
         assert stats.refs_upgraded >= 1
         with db.session() as session:
             from sqlmodel import select
@@ -930,11 +930,11 @@ namespace App {
             resolve_same_namespace_refs,
         )
 
-        ns_stats = resolve_namespace_refs(db)
+        ns_stats = resolve_namespace_refs(db, context_id)
         assert ns_stats.refs_upgraded == 0  # No using directive → no match
 
         # Same-namespace resolution SHOULD match
-        same_stats = resolve_same_namespace_refs(db)
+        same_stats = resolve_same_namespace_refs(db, context_id)
         assert same_stats.refs_upgraded >= 1
 
         # After resolution: STRONG with target_def_uid
@@ -1007,7 +1007,7 @@ namespace App {
 
         from codeplane.index._internal.indexing.resolver import resolve_same_namespace_refs
 
-        stats = resolve_same_namespace_refs(db)
+        stats = resolve_same_namespace_refs(db, context_id)
         assert stats.refs_upgraded >= 1
 
         # After: STRONG with target_def_uid linked
@@ -1060,7 +1060,7 @@ namespace App {
 
         from codeplane.index._internal.indexing.resolver import resolve_same_namespace_refs
 
-        resolve_same_namespace_refs(db)
+        resolve_same_namespace_refs(db, context_id)
 
         # Foo in Namespace.A is NOT visible from Namespace.B
         with db.session() as session:
