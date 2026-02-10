@@ -4,12 +4,12 @@ import asyncio
 import hashlib
 import json
 import math
-import re
 import sys
 from pathlib import Path
 from typing import Any
 
 import click
+import json5
 from rich.table import Table
 
 from codeplane.config.user_config import (
@@ -244,56 +244,20 @@ def _get_mcp_server_name(repo_root: Path) -> str:
     return f"codeplane-{normalized}"
 
 
-def _strip_jsonc_comments(text: str) -> str:
-    """Strip ``//`` and ``/* */`` comments from JSONC, respecting string literals."""
-    result: list[str] = []
-    i = 0
-    n = len(text)
-    in_string = False
-    while i < n:
-        if in_string:
-            if text[i] == "\\" and i + 1 < n:
-                result.append(text[i : i + 2])
-                i += 2
-                continue
-            if text[i] == '"':
-                in_string = False
-            result.append(text[i])
-            i += 1
-        else:
-            if text[i] == '"':
-                in_string = True
-                result.append(text[i])
-                i += 1
-            elif i + 1 < n and text[i] == "/" and text[i + 1] == "/":
-                # Line comment — skip to end of line
-                i += 2
-                while i < n and text[i] != "\n":
-                    i += 1
-            elif i + 1 < n and text[i] == "/" and text[i + 1] == "*":
-                # Block comment — skip to */
-                i += 2
-                while i < n - 1 and not (text[i] == "*" and text[i + 1] == "/"):
-                    i += 1
-                if i < n - 1:
-                    i += 2  # Skip */
-            else:
-                result.append(text[i])
-                i += 1
-    return "".join(result)
-
-
 def _parse_jsonc(text: str) -> dict[str, Any] | None:
     """Parse JSONC (JSON with comments and trailing commas) into a dict.
 
+    Uses json5 library which handles all JSONC features:
+    - Single and multi-line comments (// and /* */)
+    - Trailing commas
+    - Unquoted keys
+    - Single-quoted strings
+
     Returns None if the content cannot be parsed.
     """
-    stripped = _strip_jsonc_comments(text)
-    # Remove trailing commas before } or ] (common in VS Code JSONC files)
-    stripped = re.sub(r",\s*([}\]])", r"\1", stripped)
     try:
-        return json.loads(stripped)  # type: ignore[no-any-return]
-    except json.JSONDecodeError:
+        return json5.loads(text)  # type: ignore[no-any-return]
+    except ValueError:
         return None
 
 
