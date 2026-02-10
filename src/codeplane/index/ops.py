@@ -2067,24 +2067,37 @@ class IndexCoordinator:
             root_ctx = next((c for c in contexts if c.tier == 3), None)
             root_ctx_id = root_ctx.id if root_ctx else None
 
+            # Exclude tier=3 from matching and sort by root_path length descending
+            # so more specific contexts claim files before less specific ones.
+            specific_contexts = [c for c in contexts if c.tier != 3 and c.id is not None]
+            specific_contexts.sort(
+                key=lambda c: len(c.root_path) if c.root_path else 0,
+                reverse=True,
+            )
+
             # Build file -> context_id mapping and collect file_ids
             file_to_context: dict[str, int] = {}
             changed_file_ids: list[int] = []
             file_id_to_context: dict[int, int] = {}
-            for ctx in contexts:
-                if ctx.id is None:
-                    continue
-                ctx_root = ctx.root_path
-                # NOTE: include_globs and exclude_globs available for future glob matching
-                # TODO(#XXX): Apply proper glob matching from include/exclude specs
+            for ctx in specific_contexts:
+                ctx_root = ctx.root_path or ""
 
                 for str_path in str_paths:
-                    # Check if file is under this context root
-                    if not str_path.startswith(ctx_root):
+                    # Skip if already claimed by a more specific context
+                    if str_path in file_to_context:
                         continue
-                    # For now, accept all files under context root
-                    if str_path not in file_to_context:
-                        file_to_context[str_path] = ctx.id
+
+                    # Path-boundary-aware matching:
+                    # - Empty ctx_root matches everything (but tier=3 is excluded above)
+                    # - Non-empty ctx_root requires exact match or path + "/" prefix
+                    if (
+                        ctx_root
+                        and str_path != ctx_root
+                        and not str_path.startswith(ctx_root + "/")
+                    ):
+                        continue
+
+                    file_to_context[str_path] = ctx.id  # type: ignore[assignment]
 
             # Delete existing facts for these files before re-indexing
             for str_path in str_paths:
