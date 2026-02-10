@@ -244,23 +244,6 @@ def _get_mcp_server_name(repo_root: Path) -> str:
     return f"codeplane-{normalized}"
 
 
-def _parse_jsonc(text: str) -> dict[str, Any] | None:
-    """Parse JSONC (JSON with comments and trailing commas) into a dict.
-
-    Uses json5 library which handles all JSONC features:
-    - Single and multi-line comments (// and /* */)
-    - Trailing commas
-    - Unquoted keys
-    - Single-quoted strings
-
-    Returns None if the content cannot be parsed.
-    """
-    try:
-        return json5.loads(text)  # type: ignore[no-any-return]
-    except ValueError:
-        return None
-
-
 def _ensure_vscode_mcp_config(repo_root: Path, port: int) -> tuple[bool, str]:
     """Ensure .vscode/mcp.json has the CodePlane server entry with static port.
 
@@ -281,8 +264,9 @@ def _ensure_vscode_mcp_config(repo_root: Path, port: int) -> tuple[bool, str]:
 
     if mcp_json_path.exists():
         content = mcp_json_path.read_text()
-        existing = _parse_jsonc(content)
-        if existing is None:
+        try:
+            existing: dict[str, Any] = json5.loads(content)
+        except ValueError:
             # Unparseable JSONC — don't risk overwriting existing servers
             status(
                 "Warning: .vscode/mcp.json is not valid JSON(C), skipping update",
@@ -335,8 +319,9 @@ def sync_vscode_mcp_port(repo_root: Path, port: int) -> bool:
     expected_url = f"http://127.0.0.1:{port}/mcp"
 
     content = mcp_json_path.read_text()
-    existing = _parse_jsonc(content)
-    if existing is None:
+    try:
+        existing: dict[str, Any] = json5.loads(content)
+    except ValueError:
         # Unparseable JSONC — don't risk overwriting existing servers
         return False
 

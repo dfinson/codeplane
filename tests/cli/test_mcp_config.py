@@ -1,7 +1,6 @@
 """Tests for .vscode/mcp.json config management.
 
-Covers _parse_jsonc, _get_mcp_server_name,
-_ensure_vscode_mcp_config, and sync_vscode_mcp_port.
+Covers _get_mcp_server_name, _ensure_vscode_mcp_config, and sync_vscode_mcp_port.
 """
 
 import json
@@ -10,93 +9,8 @@ from pathlib import Path
 from codeplane.cli.init import (
     _ensure_vscode_mcp_config,
     _get_mcp_server_name,
-    _parse_jsonc,
     sync_vscode_mcp_port,
 )
-
-# ── _parse_jsonc ─────────────────────────────────────────────────────────────
-
-
-class TestParseJsonc:
-    """JSONC parsing including trailing commas and comments."""
-
-    def test_valid_json(self) -> None:
-        assert _parse_jsonc('{"a": 1}') == {"a": 1}
-
-    def test_trailing_comma_object(self) -> None:
-        assert _parse_jsonc('{"a": 1,}') == {"a": 1}
-
-    def test_trailing_comma_array(self) -> None:
-        assert _parse_jsonc('{"a": [1, 2,]}') == {"a": [1, 2]}
-
-    def test_line_comment_removed(self) -> None:
-        text = '{"key": "value"} // comment'
-        assert _parse_jsonc(text) == {"key": "value"}
-
-    def test_block_comment_removed(self) -> None:
-        text = '{"key": /* inline */ "value"}'
-        assert _parse_jsonc(text) == {"key": "value"}
-
-    def test_url_inside_string_preserved(self) -> None:
-        """URLs with // inside JSON strings must NOT be stripped."""
-        text = '{"url": "http://127.0.0.1:3000/mcp"}'
-        result = _parse_jsonc(text)
-        assert result is not None
-        assert result["url"] == "http://127.0.0.1:3000/mcp"
-
-    def test_escaped_quote_inside_string(self) -> None:
-        text = r'{"msg": "say \"hello\""}'
-        result = _parse_jsonc(text)
-        assert result == {"msg": 'say "hello"'}
-
-    def test_comment_after_url_string(self) -> None:
-        """Comment after a URL-containing string value is stripped."""
-        text = '{"url": "http://example.com"} // trailing'
-        result = _parse_jsonc(text)
-        assert result is not None
-        assert result["url"] == "http://example.com"
-
-    def test_multiline_block_comment(self) -> None:
-        text = '{\n/* multi\nline\ncomment */\n"key": 1}'
-        result = _parse_jsonc(text)
-        assert result == {"key": 1}
-
-    def test_comments_plus_trailing_comma(self) -> None:
-        text = """
-        {
-            // server config
-            "servers": {
-                "foo": {"cmd": "bar"},
-            }
-        }
-        """
-        result = _parse_jsonc(text)
-        assert result is not None
-        assert "foo" in result["servers"]
-
-    def test_unparseable_returns_none(self) -> None:
-        assert _parse_jsonc("not json at all") is None
-
-    def test_empty_object(self) -> None:
-        assert _parse_jsonc("{}") == {}
-
-    def test_url_values_survive_round_trip(self) -> None:
-        """Real-world mcp.json with URL args must parse correctly."""
-        text = json.dumps(
-            {
-                "servers": {
-                    "other-server": {
-                        "command": "npx",
-                        "args": ["-y", "mcp-remote", "http://127.0.0.1:9999/mcp"],
-                    }
-                }
-            },
-            indent=2,
-        )
-        result = _parse_jsonc(text)
-        assert result is not None
-        assert result["servers"]["other-server"]["args"][-1] == "http://127.0.0.1:9999/mcp"
-
 
 # ── _get_mcp_server_name ─────────────────────────────────────────────────────
 
