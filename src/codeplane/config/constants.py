@@ -15,6 +15,12 @@ For configurable values, see models.py (TimeoutsConfig, LimitsConfig, etc.).
 SEARCH_MAX_LIMIT = 100
 """Maximum results for index search queries."""
 
+SEARCH_CONTEXT_LINES_MAX = 25
+"""Maximum context lines for line-based search context modes."""
+
+SEARCH_SCOPE_FALLBACK_LINES_DEFAULT = 25
+"""Default fallback lines when structural scope resolution fails."""
+
 MAP_DEPTH_MAX = 10
 """Maximum directory tree depth for repo mapping."""
 

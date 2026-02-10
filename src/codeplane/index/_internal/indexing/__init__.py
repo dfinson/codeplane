@@ -16,6 +16,12 @@ from codeplane.index._internal.indexing.resolver import (
     resolve_same_namespace_refs,
     resolve_star_import_refs,
 )
+from codeplane.index._internal.indexing.scope_resolver import (
+    ScopeRegion,
+    find_enclosing_scope,
+    resolve_scope_region,
+    resolve_scope_region_for_path,
+)
 from codeplane.index._internal.indexing.structural import (
     BatchResult,
     ExtractionResult,
@@ -52,6 +58,11 @@ __all__ = [
     "TypeTracedResolver",
     "TypeTracedStats",
     "resolve_type_traced",
+    # Scope Resolution (for search context)
+    "ScopeRegion",
+    "find_enclosing_scope",
+    "resolve_scope_region",
+    "resolve_scope_region_for_path",
     # Fact Queries
     "FactQueries",
 ]

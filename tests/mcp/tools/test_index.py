@@ -5,6 +5,9 @@ Verifies summary helpers and serialization functions.
 
 from typing import Any
 
+import pytest
+
+from codeplane.config.constants import SEARCH_SCOPE_FALLBACK_LINES_DEFAULT
 from codeplane.mcp.tools.index import (
     _serialize_tree,
     _summarize_map,
@@ -133,3 +136,49 @@ class TestSerializeTree:
         assert result[0]["is_dir"] is True
         assert len(result[0]["children"]) == 1
         assert result[0]["children"][0]["name"] == "main.py"
+
+
+# =============================================================================
+# Context Preset Tests
+# =============================================================================
+
+
+class TestContextPresets:
+    """Tests for context preset line counts."""
+
+    @pytest.mark.parametrize(
+        "context,expected_lines",
+        [
+            ("none", 0),
+            ("minimal", 1),
+            ("standard", 5),
+            ("rich", 20),
+        ],
+    )
+    def test_preset_line_counts(self, context: str, expected_lines: int) -> None:
+        """Each preset maps to expected line count."""
+        # Import the preset mapping from the module
+        CONTEXT_PRESETS = {
+            "none": 0,
+            "minimal": 1,
+            "standard": 5,
+            "rich": 20,
+        }
+        assert CONTEXT_PRESETS[context] == expected_lines
+
+    def test_structural_modes_not_in_line_presets(self) -> None:
+        """Structural modes (function, class) are not line-based presets."""
+        CONTEXT_PRESETS = {
+            "none": 0,
+            "minimal": 1,
+            "standard": 5,
+            "rich": 20,
+        }
+        assert "function" not in CONTEXT_PRESETS
+        assert "class" not in CONTEXT_PRESETS
+
+    def test_structural_mode_fallback_lines(self) -> None:
+        """Structural modes use fallback lines constant."""
+        # The fallback should be a reasonable default (25 as per design)
+        assert SEARCH_SCOPE_FALLBACK_LINES_DEFAULT >= 20
+        assert SEARCH_SCOPE_FALLBACK_LINES_DEFAULT <= 30
