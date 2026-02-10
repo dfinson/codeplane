@@ -749,6 +749,53 @@ namespace Foo {
         assert len(aliased) == 1
         assert aliased[0].alias == "Alias"
 
+    def test_extract_csharp_using_inside_namespace(
+        self, parser: TreeSitterParser, temp_dir: Path
+    ) -> None:
+        """Should extract using directives inside namespace declarations.
+
+        C# allows using directives inside namespace blocks, not just at file scope.
+        This tests that _walk_for_usings correctly descends into namespace_declaration
+        and declaration_list nodes.
+        """
+        content = """using System;
+
+namespace MyApp {
+    using System.Linq;
+    using static System.Math;
+
+    namespace Nested {
+        using Newtonsoft.Json;
+
+        public class Foo { }
+    }
+
+    public class Bar { }
+}
+"""
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+        result = parser.parse(file_path, content.encode())
+
+        imports = parser.extract_imports(result, str(file_path))
+
+        # Should find all 4 usings: root-level + namespace-scoped + nested namespace
+        assert len(imports) == 4
+
+        names = [i.imported_name for i in imports]
+        assert "System" in names  # root level
+        assert "System.Linq" in names  # inside MyApp namespace
+        assert "System.Math" in names  # static inside MyApp namespace
+        assert "Newtonsoft.Json" in names  # inside MyApp.Nested namespace
+
+        # Verify import kinds
+        regular = [i for i in imports if i.import_kind == "csharp_using" and i.alias is None]
+        assert len(regular) == 3  # System, System.Linq, Newtonsoft.Json
+
+        static = [i for i in imports if i.import_kind == "csharp_using_static"]
+        assert len(static) == 1
+        assert static[0].imported_name == "System.Math"
+
 
 class TestNamespaceTypeExtraction:
     """Tests for C# namespace -> type name extraction."""
