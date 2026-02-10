@@ -1044,12 +1044,15 @@ def is_test_file(path: str | Path) -> bool:
     p = Path(path) if isinstance(path, str) else path
     name = p.name
     path_str = str(p)
+    # Normalize to POSIX-style separators so directory-style patterns
+    # like "spec/**/*.cr" reliably match on Windows as well.
+    path_str_posix = path_str.replace(os.sep, "/")
 
     for lang in ALL_LANGUAGES:
         for pattern in lang.test_patterns:
             if "/" in pattern:
-                # Directory-style pattern — use fnmatch against full path
-                if fnmatch(path_str, pattern):
+                # Directory-style pattern — use fnmatch against normalized full path
+                if fnmatch(path_str_posix, pattern):
                     return True
             else:
                 if fnmatch(name, pattern):
