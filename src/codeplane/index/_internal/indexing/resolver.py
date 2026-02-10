@@ -388,7 +388,7 @@ class CrossFileResolutionStats:
     """Statistics from cross-file DB-backed resolution."""
 
     refs_upgraded: int = 0
-    refs_scanned: int = 0
+    refs_matched: int = 0
 
 
 # Resolvable C# type declaration kinds — used in SQL IN-lists.
@@ -493,9 +493,9 @@ def resolve_namespace_refs(
                 **def_unit_binds,
             },
         )
-        stats.refs_scanned = result.scalar_one()
+        stats.refs_matched = result.scalar_one()
 
-        if stats.refs_scanned == 0:
+        if stats.refs_matched == 0:
             return stats
 
         # Perform the upgrade — also link target_def_uid so the rename
@@ -673,9 +673,9 @@ def resolve_star_import_refs(
                 **ref_unit_binds,
             },
         )
-        stats.refs_scanned = result.scalar_one()
+        stats.refs_matched = result.scalar_one()
 
-        if stats.refs_scanned == 0:
+        if stats.refs_matched == 0:
             session.execute(text("DROP TABLE IF EXISTS _star_module_map"))
             return stats
 
@@ -798,9 +798,9 @@ def resolve_same_namespace_refs(
                 **target_unit_binds,
             },
         )
-        stats.refs_scanned = result.scalar_one()
+        stats.refs_matched = result.scalar_one()
 
-        if stats.refs_scanned == 0:
+        if stats.refs_matched == 0:
             return stats
 
         # Perform the upgrade with target_def_uid linking.

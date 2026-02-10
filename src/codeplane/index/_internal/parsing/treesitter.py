@@ -1091,7 +1091,11 @@ class TreeSitterParser:
     def extract_csharp_namespace_types(self, root: Any) -> dict[str, list[str]]:
         """Extract namespace -> type names mapping from a C# AST.
 
-        Handles both block-scoped and file-scoped namespace declarations.
+        Handles both block-scoped and file-scoped namespace declarations,
+        including nested namespace declarations with composed prefixes
+        (e.g., ``namespace Outer { namespace Inner { class Foo {} } }``
+        extracts ``{"Outer.Inner": ["Foo"]}``).
+
         Returns a dict mapping fully-qualified namespace names to lists of
         top-level type names (classes, interfaces, structs, enums) declared
         within that namespace.
@@ -1105,32 +1109,39 @@ class TreeSitterParser:
             "record_struct_declaration",
         }
 
-        def _type_names_from(declaration_list: Any) -> list[str]:
-            """Collect type names from a declaration_list node."""
-            names: list[str] = []
+        ns_map: dict[str, list[str]] = {}
+
+        def _type_names_from(declaration_list: Any, ns_name: str) -> None:
+            """Collect type names from a declaration_list node, recursing into nested namespaces."""
             for child in declaration_list.children:
                 if child.type in _TYPE_DECLS:
                     for sub in child.children:
                         if sub.type == "identifier":
-                            names.append(sub.text.decode("utf-8"))
+                            ns_map.setdefault(ns_name, []).append(sub.text.decode("utf-8"))
                             break
-            return names
+                elif child.type == "namespace_declaration":
+                    # Nested namespace: namespace Inner { ... }
+                    _process_namespace(child, ns_name)
+                elif child.type in _CSHARP_PREPROC_WRAPPERS:
+                    # Recurse into preprocessor blocks
+                    _type_names_from(child, ns_name)
 
-        ns_map: dict[str, list[str]] = {}
+        def _process_namespace(node: Any, parent_ns: str | None) -> None:
+            """Process a namespace_declaration node, composing the full namespace path."""
+            ns_name = None
+            for child in node.children:
+                if child.type in ("qualified_name", "identifier"):
+                    local_ns = self._qualified_name_text(child)
+                    ns_name = f"{parent_ns}.{local_ns}" if parent_ns else local_ns
+                elif child.type == "declaration_list" and ns_name:
+                    _type_names_from(child, ns_name)
 
-        def _walk_for_namespaces(parent: Any) -> None:
+        def _walk_for_namespaces(parent: Any, parent_ns: str | None = None) -> None:
             """Walk tree nodes, descending into preprocessor wrappers."""
             for node in parent.children:
                 if node.type == "namespace_declaration":
                     # Block-scoped: namespace X.Y { class A {} }
-                    ns_name = None
-                    for child in node.children:
-                        if child.type in ("qualified_name", "identifier"):
-                            ns_name = self._qualified_name_text(child)
-                        elif child.type == "declaration_list" and ns_name:
-                            types = _type_names_from(child)
-                            if types:
-                                ns_map.setdefault(ns_name, []).extend(types)
+                    _process_namespace(node, parent_ns)
 
                 elif node.type == "file_scoped_namespace_declaration":
                     # File-scoped: namespace X.Y;
@@ -1146,7 +1157,7 @@ class TreeSitterParser:
 
                 elif node.type in _CSHARP_PREPROC_WRAPPERS:
                     # Recurse into preprocessor blocks to find wrapped namespaces
-                    _walk_for_namespaces(node)
+                    _walk_for_namespaces(node, parent_ns)
 
         def _collect_file_scoped_types(parent: Any, ns_name: str) -> None:
             """Collect type declarations for file-scoped namespaces, including inside preproc blocks."""

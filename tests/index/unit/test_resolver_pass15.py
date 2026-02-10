@@ -512,7 +512,7 @@ y = public()
             assert all(r.ref_tier == RefTier.UNKNOWN.value for r in b_refs)
 
     def test_stats_counts_match(self, db: Database, temp_dir: Path) -> None:
-        """refs_scanned >= refs_upgraded, and both are correct."""
+        """refs_matched >= refs_upgraded, and both are correct."""
         (temp_dir / "defs.py").write_text(
             """def alpha():
     pass
@@ -541,7 +541,7 @@ b = beta()
 
         stats = resolve_star_import_refs(db, context_id)
         assert stats.refs_upgraded >= 2
-        assert stats.refs_scanned >= stats.refs_upgraded
+        assert stats.refs_matched >= stats.refs_upgraded
 
     def test_empty_module_no_crash(self, db: Database, temp_dir: Path) -> None:
         """Star-importing from an empty module doesn't crash."""
