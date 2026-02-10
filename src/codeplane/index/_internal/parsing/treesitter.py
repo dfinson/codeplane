@@ -981,14 +981,20 @@ class TreeSitterParser:
             return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
         def _walk_for_usings(parent: Any) -> None:
-            """Walk tree nodes, descending into preprocessor wrappers."""
+            """Walk tree nodes, descending into namespaces and preprocessor wrappers.
+
+            C# allows `using` directives inside namespace declarations, so we must
+            recurse into namespace_declaration and declaration_list nodes.
+            """
+            _DESCEND_INTO = _CSHARP_PREPROC_WRAPPERS | {
+                "namespace_declaration",
+                "declaration_list",
+            }
             for node in parent.children:
-                if node.type in _CSHARP_PREPROC_WRAPPERS:
+                if node.type in _DESCEND_INTO:
                     _walk_for_usings(node)
-                    continue
-                if node.type != "using_directive":
-                    continue
-                _process_using_directive(node)
+                if node.type == "using_directive":
+                    _process_using_directive(node)
 
         def _process_using_directive(node: Any) -> None:
             children = node.children
