@@ -489,6 +489,31 @@ class TestIsTestFile:
         assert is_test_file("widget_test.dart") is True  # Dart
         assert is_test_file("UserTest.php") is True  # PHP
 
+    # -- Cross-platform path handling --
+    # Note: The is_test_file() function normalizes paths to POSIX separators
+    # before matching directory-style patterns (patterns containing "/").
+    # This ensures patterns like "spec/**/*.cr" work on Windows where
+    # str(Path) produces backslashes.
+
+    def test_nested_test_paths_posix_style(self) -> None:
+        """Nested paths with forward slashes work for all patterns."""
+        # POSIX-style paths (standard case)
+        assert is_test_file("tests/test_utils.py") is True
+        assert is_test_file("src/tests/test_models.py") is True
+        assert is_test_file("project/spec/integration_spec.cr") is True
+
+    def test_path_object_with_nested_structure(self) -> None:
+        """Path objects work correctly for nested test files."""
+        # Path objects are correctly handled
+        assert is_test_file(Path("tests") / "test_utils.py") is True
+        assert is_test_file(Path("src") / "tests" / "test_models.py") is True
+
+    def test_deeply_nested_test_files(self) -> None:
+        """Deeply nested test files are correctly identified."""
+        assert is_test_file("project/src/module/tests/test_feature.py") is True
+        assert is_test_file("apps/backend/spec/models/user_spec.rb") is True
+        assert is_test_file(Path("a") / "b" / "c" / "d" / "test_deep.py") is True
+
 
 class TestBuildIncludeSpecs:
     """Tests for build_include_specs function."""

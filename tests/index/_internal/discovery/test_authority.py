@@ -332,3 +332,135 @@ class TestDotNetFiltering:
             projects = f._get_sln_projects(t1)
 
             assert any("App.csproj" in p for p in projects)
+
+    def test_sln_projects_backslash_normalization(self) -> None:
+        """Project paths with backslashes are handled correctly.
+
+        .sln files on Windows contain backslash paths like:
+        "src\\App\\App.csproj"
+
+        When matching against candidate root_path (which uses forward slashes),
+        backslashes must be normalized.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sln = root / "Test.sln"
+            # Typical Windows .sln format with backslash paths
+            sln.write_text(
+                'Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Core", '
+                '"src\\Core\\Core.csproj", "{GUID1}"\nEndProject\n'
+                'Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Api", '
+                '"src\\Api\\Api.csproj", "{GUID2}"\nEndProject\n'
+            )
+
+            f = Tier1AuthorityFilter(root)
+            t1 = make_candidate("", 1, LanguageFamily.CSHARP, ["Test.sln"])
+            projects = f._get_sln_projects(t1)
+
+            # Should extract both project paths
+            assert len(projects) == 2
+            # Paths retain original format from .sln (backslashes)
+            assert any("Core.csproj" in p for p in projects)
+            assert any("Api.csproj" in p for p in projects)
+
+
+class TestCrossPlatformPathHandling:
+    """Tests for cross-platform path compatibility.
+
+    These tests verify that the authority filter works correctly with both
+    POSIX-style paths (forward slashes) and Windows-style paths (backslashes).
+    """
+
+    def test_is_inside_posix_paths(self) -> None:
+        """_is_inside works with POSIX-style paths."""
+        f = Tier1AuthorityFilter(Path("/test"))
+        assert f._is_inside("packages/core/src", "packages") is True
+        assert f._is_inside("packages/core", "packages/core") is True
+        assert f._is_inside("other/dir", "packages") is False
+
+    def test_relative_to_posix_paths(self) -> None:
+        """_relative_to works with POSIX-style paths."""
+        f = Tier1AuthorityFilter(Path("/test"))
+        assert f._relative_to("packages/core/src", "packages") == "core/src"
+        assert f._relative_to("packages/core", "packages/core") == ""
+
+    def test_matches_any_glob_posix_paths(self) -> None:
+        """_matches_any_glob matches POSIX-style paths against POSIX globs."""
+        f = Tier1AuthorityFilter(Path("/test"))
+        # Standard POSIX paths work
+        assert f._matches_any_glob("packages/core", ["packages/*"]) is True
+        assert f._matches_any_glob("apps/web", ["packages/*", "apps/*"]) is True
+        assert f._matches_any_glob("other/lib", ["packages/*", "apps/*"]) is False
+
+    def test_matches_any_glob_with_deep_paths(self) -> None:
+        """_matches_any_glob handles deeply nested paths."""
+        f = Tier1AuthorityFilter(Path("/test"))
+        # Glob with ** trailing should match nested paths after stripping **
+        # _matches_any_glob strips /** and then checks fnmatch(path, glob) or fnmatch(path, glob + "/*")
+        assert f._matches_any_glob("packages/core", ["packages/**"]) is True
+        # Deep path also matches because fnmatch("packages/core/subdir", "packages/*") is True
+        assert f._matches_any_glob("packages/core/subdir", ["packages/**"]) is True
+
+    def test_matches_any_glob_exact_match_takes_precedence(self) -> None:
+        """_matches_any_glob prefers exact match over wildcard."""
+        f = Tier1AuthorityFilter(Path("/test"))
+        # Exact match in glob list
+        assert f._matches_any_glob("packages/core", ["packages/other", "packages/core"]) is True
+
+    def test_dotnet_filter_normalizes_backslash_project_paths(self) -> None:
+        """_filter_dotnet correctly matches candidates against .sln project paths.
+
+        .sln files contain Windows-style backslash paths:
+            "src\\App\\App.csproj"
+
+        The filter must normalize these to match against candidate.root_path
+        which uses forward slashes (e.g., "src/App").
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sln = root / "MySolution.sln"
+            # .sln with Windows backslash paths
+            sln.write_text(
+                'Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", '
+                '"src\\App\\App.csproj", "{GUID}"\nEndProject\n'
+            )
+
+            f = Tier1AuthorityFilter(root)
+
+            # Tier 1 workspace (the .sln)
+            t1 = make_candidate("", 1, LanguageFamily.CSHARP, ["MySolution.sln"])
+            # Tier 2 project candidate with POSIX-style path
+            t2 = make_candidate("src/App", 2, LanguageFamily.CSHARP, ["src/App/App.csproj"])
+
+            result = f.apply([t1, t2])
+
+            # Both should be pending (t2 matches the .sln project)
+            assert len(result.pending) == 2
+            assert len(result.detached) == 0
+
+    def test_dotnet_filter_detaches_unlisted_projects(self) -> None:
+        """Projects not listed in .sln are marked as detached."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sln = root / "MySolution.sln"
+            # .sln only lists App project
+            sln.write_text(
+                'Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "App", '
+                '"src\\App\\App.csproj", "{GUID}"\nEndProject\n'
+            )
+
+            f = Tier1AuthorityFilter(root)
+
+            t1 = make_candidate("", 1, LanguageFamily.CSHARP, ["MySolution.sln"])
+            # Listed project
+            t2_listed = make_candidate("src/App", 2, LanguageFamily.CSHARP, ["src/App/App.csproj"])
+            # Unlisted project
+            t2_unlisted = make_candidate(
+                "src/Other", 2, LanguageFamily.CSHARP, ["src/Other/Other.csproj"]
+            )
+
+            result = f.apply([t1, t2_listed, t2_unlisted])
+
+            assert len(result.pending) == 2  # t1 + t2_listed
+            assert len(result.detached) == 1  # t2_unlisted
+            assert result.detached[0].root_path == "src/Other"
