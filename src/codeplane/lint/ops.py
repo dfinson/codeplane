@@ -357,7 +357,7 @@ class LintOps:
                 return await self._coordinator.get_indexed_file_count(lang_family)
 
             # For specific paths, get files and count those matching
-            indexed_files = await self._coordinator.get_indexed_files(lang_family)
+            indexed_files = await self._coordinator.get_indexed_files(lang_family, limit=10000)
             count = 0
             for f in indexed_files:
                 for p in paths:

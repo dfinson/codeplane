@@ -68,7 +68,6 @@ dev = [
     "tree-sitter-json>=0.23.0",
     "tree-sitter-yaml>=0.6.0",
     "tree-sitter-rust>=0.23.0",
-    "tree-sitter-c-sharp>=0.23.0",
 ]
 
 [project.scripts]

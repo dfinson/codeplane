@@ -303,8 +303,6 @@ class ImportKind(StrEnum):
     TS_IMPORT_TYPE = "ts_import_type"  # import type { Foo } from 'bar'
     GO_IMPORT = "go_import"  # import "foo"
     RUST_USE = "rust_use"  # use foo::bar
-    CSHARP_USING = "csharp_using"  # using Namespace;
-    CSHARP_USING_STATIC = "csharp_using_static"  # using static Namespace.Type;
 
 
 class ExportThunkMode(StrEnum):
@@ -558,9 +556,6 @@ class DefFact(SQLModel, table=True):
     name: str = Field(index=True)  # Simple name
     qualified_name: str | None = None  # Full path (e.g., module.Class.method)
     lexical_path: str = Field(index=True)  # Syntactic nesting path for identity
-    namespace: str | None = Field(
-        default=None, index=True
-    )  # Declaring namespace/package (C#, Java, Go, etc.)
     start_line: int
     start_col: int
     end_line: int
@@ -886,10 +881,10 @@ class MemberAccessFact(SQLModel, table=True):
     access_style: str  # AccessStyle value: dot, arrow, scope
 
     # The chain
-    full_expression: str  # "ctx.mutation_ops.atomic_edit_files"
+    full_expression: str  # "ctx.mutation_ops.write_files"
     receiver_name: str = Field(index=True)  # Leftmost identifier: "ctx"
-    member_chain: str  # Rest of chain: "mutation_ops.atomic_edit_files"
-    final_member: str = Field(index=True)  # Rightmost: "atomic_edit_files"
+    member_chain: str  # Rest of chain: "mutation_ops.write_files"
+    final_member: str = Field(index=True)  # Rightmost: "write_files"
     chain_depth: int  # Number of accesses: 2
 
     # Call info

@@ -354,7 +354,7 @@ class RefactorOps:
                     )
 
             # Get references for this definition
-            refs = await self._coordinator.get_all_references(def_fact, _context_id=0)
+            refs = await self._coordinator.get_references(def_fact, _context_id=0)
             for ref in refs:
                 ref_file = await self._get_file_path(ref.file_id)
                 if ref_file:
@@ -959,7 +959,7 @@ class RefactorOps:
                     )
 
             # Get all references
-            refs = await self._coordinator.get_all_references(def_fact, _context_id=0)
+            refs = await self._coordinator.get_references(def_fact, _context_id=0)
             for ref in refs:
                 ref_file = await self._get_file_path(ref.file_id)
                 if ref_file:
@@ -1026,7 +1026,7 @@ class RefactorOps:
             f"Delete does NOT auto-remove references. You must:\n"
             f"  1. Review each reference with refactor_inspect\n"
             f"  2. Decide how to handle: remove import, replace with alternative, etc.\n"
-            f"  3. Use atomic_edit_files to make changes manually\n"
+            f"  3. Use write_files to make changes manually\n"
             f"  4. Call refactor_cancel to clear this preview\n\n"
             f"High certainty: {preview.high_certainty_count} (index-backed)\n"
             f"Low certainty: {preview.low_certainty_count} (lexical matches)"
@@ -1090,7 +1090,7 @@ class RefactorOps:
             edits.append(Edit(path=file_edit.path, action="update", content=new_content))
 
         # Execute mutation
-        mutation_result = mutation_ops.atomic_edit_files(edits)
+        mutation_result = mutation_ops.write_files(edits)
 
         # Clear pending
         del self._pending[refactor_id]
