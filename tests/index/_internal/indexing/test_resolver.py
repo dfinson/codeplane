@@ -147,5 +147,5 @@ class TestResolveReferencesFunction:
             mock_db = MagicMock()
             stats = resolve_references(mock_db, file_ids=[1, 2, 3])
 
-            mock_resolve.assert_called_once_with([1, 2, 3])
+            mock_resolve.assert_called_once_with([1, 2, 3], None)
             assert stats.refs_resolved == 5

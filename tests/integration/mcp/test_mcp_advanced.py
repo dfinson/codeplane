@@ -26,7 +26,7 @@ def _make_coordinator(repo_path: Path) -> IndexCoordinator:
     return IndexCoordinator(repo_path, db_path, tantivy_path)
 
 
-def _noop_progress(indexed: int, total: int, by_ext: dict[str, int]) -> None:
+def _noop_progress(indexed: int, total: int, by_ext: dict[str, int], phase: str = "") -> None:
     """No-op progress callback."""
     pass
 
@@ -54,7 +54,7 @@ class TestGitAfterMutation:
     def test_git_status_after_create(self, integration_repo: Path) -> None:
         """Git status shows newly created file."""
         mutation_ops = MutationOps(integration_repo)
-        mutation_ops.atomic_edit_files(
+        mutation_ops.write_files(
             edits=[
                 Edit(
                     path="src/new_file.py",
@@ -74,7 +74,7 @@ class TestGitAfterMutation:
     def test_git_diff_after_update(self, integration_repo: Path) -> None:
         """Git diff shows file modifications."""
         mutation_ops = MutationOps(integration_repo)
-        mutation_ops.atomic_edit_files(
+        mutation_ops.write_files(
             edits=[
                 Edit(
                     path="src/main.py",
@@ -96,7 +96,7 @@ class TestGitAfterMutation:
         git_ops = GitOps(integration_repo)
 
         # Create file
-        mutation_ops.atomic_edit_files(
+        mutation_ops.write_files(
             edits=[
                 Edit(
                     path="src/feature.py",
@@ -169,10 +169,10 @@ class TestMultiFileOperations:
     """Tests involving multiple files."""
 
     def test_atomic_edit_multiple_files(self, integration_repo: Path) -> None:
-        """atomic_edit_files can modify multiple files atomically."""
+        """write_files can modify multiple files atomically."""
         mutation_ops = MutationOps(integration_repo)
 
-        result = mutation_ops.atomic_edit_files(
+        result = mutation_ops.write_files(
             edits=[
                 Edit(
                     path="src/a.py",
