@@ -159,35 +159,186 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         paths: list[str] | None = Field(None, description="Paths to stage before commit"),
         allow_empty: bool = Field(False, description="Allow empty commits"),
     ) -> dict[str, Any]:
-        """Create a commit."""
+        """Create a commit.
+
+        Stages paths (if provided), runs pre-commit hooks, and commits.
+        If hooks auto-fix files (e.g. formatters), automatically re-stages
+        and retries once. On retry success the commit goes through with a
+        warning. On retry failure the full hook output from both attempts
+        is returned.
+        """
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
-        if paths:
+        if isinstance(paths, list) and paths:
             app_ctx.git_ops.stage(paths)
 
         repo_path = Path(app_ctx.git_ops.repo.workdir)
         hook_result = run_hook(repo_path, "pre-commit")
 
         if not hook_result.success:
-            return {
-                "hook_failure": {
-                    "code": "HOOK_FAILED",
-                    "hook_type": "pre-commit",
-                    "exit_code": hook_result.exit_code,
-                    "stdout": hook_result.stdout,
-                    "stderr": hook_result.stderr,
-                    "modified_files": hook_result.modified_files or [],
-                },
-                "summary": f"pre-commit hook failed (exit {hook_result.exit_code})",
-                "agentic_hint": "Fix issues reported above. If files were auto-fixed, stage them and retry.",
-            }
+            auto_fixed = hook_result.modified_files or []
+
+            if not auto_fixed:
+                # Hook failed with no auto-fixes — manual intervention needed
+                return {
+                    "hook_failure": {
+                        "code": "HOOK_FAILED",
+                        "hook_type": "pre-commit",
+                        "exit_code": hook_result.exit_code,
+                        "stdout": hook_result.stdout,
+                        "stderr": hook_result.stderr,
+                        "modified_files": [],
+                    },
+                    "summary": f"pre-commit hook failed (exit {hook_result.exit_code})",
+                    "agentic_hint": "Hook failed with errors that require manual fixing. Review the output above and fix the reported issues, then retry.",
+                }
+
+            # Hook auto-fixed files — re-stage and retry
+            original_paths = paths if isinstance(paths, list) else []
+            restage_paths = list(set(auto_fixed + original_paths))
+            app_ctx.git_ops.stage(restage_paths)
+
+            retry_result = run_hook(repo_path, "pre-commit")
+
+            if not retry_result.success:
+                # Second attempt also failed — return combined output
+                return {
+                    "hook_failure": {
+                        "code": "HOOK_FAILED_AFTER_RETRY",
+                        "hook_type": "pre-commit",
+                        "exit_code": retry_result.exit_code,
+                        "attempts": [
+                            {
+                                "attempt": 1,
+                                "exit_code": hook_result.exit_code,
+                                "stdout": hook_result.stdout,
+                                "stderr": hook_result.stderr,
+                                "auto_fixed_files": auto_fixed,
+                            },
+                            {
+                                "attempt": 2,
+                                "exit_code": retry_result.exit_code,
+                                "stdout": retry_result.stdout,
+                                "stderr": retry_result.stderr,
+                                "modified_files": retry_result.modified_files or [],
+                            },
+                        ],
+                    },
+                    "summary": "pre-commit hook failed after auto-fix retry",
+                    "agentic_hint": "Hook auto-fixed files on the first attempt but still failed on retry. This requires manual fixing. Review the output from both attempts above.",
+                }
 
         sha = app_ctx.git_ops.commit(message, allow_empty=allow_empty)
-        return {
+        result: dict[str, Any] = {
             "oid": sha,
             "short_oid": sha[:7],
             "summary": _summarize_commit(sha, message),
         }
+
+        # If we got here via a retry, include a warning about what was auto-fixed
+        if not hook_result.success:
+            auto_fixed = hook_result.modified_files or []
+            result["hook_warning"] = {
+                "code": "HOOK_AUTO_FIXED",
+                "message": "Pre-commit hooks auto-fixed files. Changes were re-staged and commit succeeded.",
+                "auto_fixed_files": auto_fixed,
+                "hook_stdout": hook_result.stdout,
+            }
+
+        return result
+
+    @mcp.tool
+    async def git_stage_and_commit(
+        ctx: Context,
+        message: str = Field(..., description="Commit message"),
+        paths: list[str] = Field(..., description="Paths to stage before commit"),
+        allow_empty: bool = Field(False, description="Allow empty commits"),
+    ) -> dict[str, Any]:
+        """Stage files and create a commit in one step.
+
+        Stages the given paths, runs pre-commit hooks, and commits.
+        If hooks auto-fix files (e.g. formatters), automatically re-stages
+        and retries once.  On retry success the commit goes through with a
+        warning.  On retry failure the full hook output from both attempts
+        is returned.
+        """
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        app_ctx.git_ops.stage(paths)
+
+        repo_path = Path(app_ctx.git_ops.repo.workdir)
+        hook_result = run_hook(repo_path, "pre-commit")
+
+        if not hook_result.success:
+            auto_fixed = hook_result.modified_files or []
+
+            if not auto_fixed:
+                # Hook failed with no auto-fixes — manual intervention needed
+                return {
+                    "hook_failure": {
+                        "code": "HOOK_FAILED",
+                        "hook_type": "pre-commit",
+                        "exit_code": hook_result.exit_code,
+                        "stdout": hook_result.stdout,
+                        "stderr": hook_result.stderr,
+                        "modified_files": [],
+                    },
+                    "summary": f"pre-commit hook failed (exit {hook_result.exit_code})",
+                    "agentic_hint": "Hook failed with errors that require manual fixing. Review the output above and fix the reported issues, then retry.",
+                }
+
+            # Hook auto-fixed files — re-stage and retry
+            restage_paths = list(set(auto_fixed + paths))
+            app_ctx.git_ops.stage(restage_paths)
+
+            retry_result = run_hook(repo_path, "pre-commit")
+
+            if not retry_result.success:
+                # Second attempt also failed — return combined output
+                return {
+                    "hook_failure": {
+                        "code": "HOOK_FAILED_AFTER_RETRY",
+                        "hook_type": "pre-commit",
+                        "exit_code": retry_result.exit_code,
+                        "attempts": [
+                            {
+                                "attempt": 1,
+                                "exit_code": hook_result.exit_code,
+                                "stdout": hook_result.stdout,
+                                "stderr": hook_result.stderr,
+                                "auto_fixed_files": auto_fixed,
+                            },
+                            {
+                                "attempt": 2,
+                                "exit_code": retry_result.exit_code,
+                                "stdout": retry_result.stdout,
+                                "stderr": retry_result.stderr,
+                                "modified_files": retry_result.modified_files or [],
+                            },
+                        ],
+                    },
+                    "summary": "pre-commit hook failed after auto-fix retry",
+                    "agentic_hint": "Hook auto-fixed files on the first attempt but still failed on retry. This requires manual fixing. Review the output from both attempts above.",
+                }
+
+        sha = app_ctx.git_ops.commit(message, allow_empty=allow_empty)
+        result: dict[str, Any] = {
+            "oid": sha,
+            "short_oid": sha[:7],
+            "summary": _summarize_commit(sha, message),
+        }
+
+        # If we got here via a retry, include a warning about what was auto-fixed
+        if not hook_result.success:
+            auto_fixed = hook_result.modified_files or []
+            result["hook_warning"] = {
+                "code": "HOOK_AUTO_FIXED",
+                "message": "Pre-commit hooks auto-fixed files. Changes were re-staged and commit succeeded.",
+                "auto_fixed_files": auto_fixed,
+                "hook_stdout": hook_result.stdout,
+            }
+
+        return result
 
     @mcp.tool
     async def git_log(

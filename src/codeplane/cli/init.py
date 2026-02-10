@@ -108,14 +108,24 @@ include: list[str]         # optional - values: "structure", "languages", "entry
 depth: int                 # default 3
 ```
 
+**{tool_prefix}_git_stage_and_commit**
+```
+message: str               # REQUIRED
+paths: list[str]           # REQUIRED - files to stage and commit
+allow_empty: bool          # optional, default false
+```
+
+**Preferred tool for committing changes.** Stages paths, runs pre-commit hooks,
+and commits in one call. If hooks auto-fix files (formatters, linters), changes are
+automatically re-staged and retried once.
+
 **{tool_prefix}_git_commit**
 ```
 message: str               # REQUIRED
 paths: list[str]           # optional - files to stage before commit
 ```
 
-**IMPORTANT:** `git_commit` only commits what is already staged. The `paths` parameter does NOT auto-stage.
-Always call `git_stage` first to stage files, then call `git_commit`.
+**Use only when you need low-level staging control.** Commits what is already staged.
 
 **{tool_prefix}_git_stage**
 ```
