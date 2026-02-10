@@ -203,21 +203,22 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
     ),
     "search": ToolDocumentation(
         name="search",
-        description="Search code, symbols, or references.",
+        description="Search code, symbols, or references with configurable context.",
         category=ToolCategory.SEARCH,
         when_to_use=[
             "Finding where a function is defined",
             "Finding usages of a symbol",
             "Text search across codebase",
+            "Getting edit-ready code snippets with context=function/class",
         ],
         when_not_to_use=[
             "When you know the exact file - use read_files",
         ],
         hints_before=None,
-        hints_after="Use read_files to get full context around matches.",
+        hints_after="Use context='function' or 'class' for edit-ready results. Use context='rich' for 20 lines. Only use read_files if you need more context than search provides.",
         alternatives=["map_repo (for structure overview)"],
         commonly_preceded_by=["map_repo"],
-        commonly_followed_by=["read_files"],
+        commonly_followed_by=["write_files", "read_files"],
         behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
         possible_errors=[],
         examples=[
@@ -228,6 +229,14 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             {
                 "description": "Find all references",
                 "params": {"query": "handle_request", "mode": "references"},
+            },
+            {
+                "description": "Search with enclosing function body (edit-ready)",
+                "params": {"query": "handle_request", "context": "function"},
+            },
+            {
+                "description": "Search with enclosing class body",
+                "params": {"query": "UserService", "mode": "symbol", "context": "class"},
             },
         ],
     ),

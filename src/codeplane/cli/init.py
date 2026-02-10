@@ -90,6 +90,10 @@ dry_run: bool              # optional, default false
 ```
 query: str                 # REQUIRED
 mode: "lexical"|"symbol"|"references"|"definitions"  # default "lexical", NOT "scope" or "text"
+context: "none"|"minimal"|"standard"|"rich"|"function"|"class"  # default "standard"
+                           # none=0, minimal=1, standard=5, rich=20 lines
+                           # function/class: enclosing scope body (structural) with 25-line fallback
+context_lines: int         # optional - override lines for line-based, or fallback for structural
 limit: int                 # default 20, NOT "max_results"
 ```
 
