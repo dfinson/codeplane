@@ -262,7 +262,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         commonly_preceded_by=["git_stage", "write_files"],
         commonly_followed_by=["git_push"],
         behavior=BehaviorFlags(has_side_effects=True, atomic=True),
-        possible_errors=["DIRTY_WORKING_TREE"],
+        possible_errors=["DIRTY_WORKING_TREE", "HOOK_FAILED", "HOOK_FAILED_AFTER_RETRY"],
     ),
     "git_stage_and_commit": ToolDocumentation(
         name="git_stage_and_commit",
@@ -1154,7 +1154,7 @@ def get_common_workflows() -> list[dict[str, Any]]:
         {
             "name": "modification",
             "description": "Making code changes",
-            "tools": ["read_files", "atomic_edit_files", "git_stage_and_commit"],
+            "tools": ["read_files", "write_files", "git_stage_and_commit"],
         },
         {
             "name": "refactoring",

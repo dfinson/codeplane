@@ -125,7 +125,10 @@ message: str               # REQUIRED
 paths: list[str]           # optional - files to stage before commit
 ```
 
-**Use only when you need low-level staging control.** Commits what is already staged.
+**Use only when you need low-level staging control.** When called without `paths`, it
+commits what is already staged. When `paths` are provided, those files are staged
+before committing; if hooks auto-fix files, they may be re-staged and the commit
+retried once.
 
 **{tool_prefix}_git_stage**
 ```

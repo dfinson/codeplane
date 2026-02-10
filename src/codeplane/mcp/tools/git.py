@@ -80,6 +80,88 @@ def _summarize_log(count: int, has_more: bool) -> str:
     return f"{count} commits{more}"
 
 
+# =============================================================================
+# Hook Helpers
+# =============================================================================
+
+
+def _run_hook_with_retry(
+    repo_path: Path,
+    paths_to_restage: list[str],
+    stage_fn: Any,
+) -> tuple[Any, dict[str, Any] | None]:
+    """Run pre-commit hooks with auto-fix retry logic.
+
+    Args:
+        repo_path: Repository root path
+        paths_to_restage: Original paths that should be included in restaging
+        stage_fn: Function to call for staging files
+
+    Returns:
+        Tuple of (hook_result, failure_response).
+        If failure_response is None, hooks passed and commit can proceed.
+        If failure_response is not None, return it from the tool.
+    """
+    hook_result = run_hook(repo_path, "pre-commit")
+
+    if hook_result.success:
+        return hook_result, None
+
+    auto_fixed = hook_result.modified_files or []
+
+    if not auto_fixed:
+        # Hook failed with no auto-fixes — manual intervention needed
+        return hook_result, {
+            "hook_failure": {
+                "code": "HOOK_FAILED",
+                "hook_type": "pre-commit",
+                "exit_code": hook_result.exit_code,
+                "stdout": hook_result.stdout,
+                "stderr": hook_result.stderr,
+                "modified_files": [],
+            },
+            "summary": f"pre-commit hook failed (exit {hook_result.exit_code})",
+            "agentic_hint": "Hook failed with errors that require manual fixing. Review the output above and fix the reported issues, then retry.",
+        }
+
+    # Hook auto-fixed files — re-stage and retry
+    restage_paths = list(set(auto_fixed + paths_to_restage))
+    stage_fn(restage_paths)
+
+    retry_result = run_hook(repo_path, "pre-commit")
+
+    if not retry_result.success:
+        # Second attempt also failed — return combined output
+        return hook_result, {
+            "hook_failure": {
+                "code": "HOOK_FAILED_AFTER_RETRY",
+                "hook_type": "pre-commit",
+                "exit_code": retry_result.exit_code,
+                "attempts": [
+                    {
+                        "attempt": 1,
+                        "exit_code": hook_result.exit_code,
+                        "stdout": hook_result.stdout,
+                        "stderr": hook_result.stderr,
+                        "auto_fixed_files": auto_fixed,
+                    },
+                    {
+                        "attempt": 2,
+                        "exit_code": retry_result.exit_code,
+                        "stdout": retry_result.stdout,
+                        "stderr": retry_result.stderr,
+                        "auto_fixed_files": retry_result.modified_files or [],
+                    },
+                ],
+            },
+            "summary": "pre-commit hook failed after auto-fix retry",
+            "agentic_hint": "Hook auto-fixed files on the first attempt but still failed on retry. This requires manual fixing. Review the output from both attempts above.",
+        }
+
+    # Retry succeeded
+    return hook_result, None
+
+
 def _summarize_branches(count: int, current: str | None) -> str:
     if current:
         return f"{count} branches, current: {current}"
@@ -173,60 +255,12 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             app_ctx.git_ops.stage(paths)
 
         repo_path = Path(app_ctx.git_ops.repo.workdir)
-        hook_result = run_hook(repo_path, "pre-commit")
-
-        if not hook_result.success:
-            auto_fixed = hook_result.modified_files or []
-
-            if not auto_fixed:
-                # Hook failed with no auto-fixes — manual intervention needed
-                return {
-                    "hook_failure": {
-                        "code": "HOOK_FAILED",
-                        "hook_type": "pre-commit",
-                        "exit_code": hook_result.exit_code,
-                        "stdout": hook_result.stdout,
-                        "stderr": hook_result.stderr,
-                        "modified_files": [],
-                    },
-                    "summary": f"pre-commit hook failed (exit {hook_result.exit_code})",
-                    "agentic_hint": "Hook failed with errors that require manual fixing. Review the output above and fix the reported issues, then retry.",
-                }
-
-            # Hook auto-fixed files — re-stage and retry
-            original_paths = paths if isinstance(paths, list) else []
-            restage_paths = list(set(auto_fixed + original_paths))
-            app_ctx.git_ops.stage(restage_paths)
-
-            retry_result = run_hook(repo_path, "pre-commit")
-
-            if not retry_result.success:
-                # Second attempt also failed — return combined output
-                return {
-                    "hook_failure": {
-                        "code": "HOOK_FAILED_AFTER_RETRY",
-                        "hook_type": "pre-commit",
-                        "exit_code": retry_result.exit_code,
-                        "attempts": [
-                            {
-                                "attempt": 1,
-                                "exit_code": hook_result.exit_code,
-                                "stdout": hook_result.stdout,
-                                "stderr": hook_result.stderr,
-                                "auto_fixed_files": auto_fixed,
-                            },
-                            {
-                                "attempt": 2,
-                                "exit_code": retry_result.exit_code,
-                                "stdout": retry_result.stdout,
-                                "stderr": retry_result.stderr,
-                                "modified_files": retry_result.modified_files or [],
-                            },
-                        ],
-                    },
-                    "summary": "pre-commit hook failed after auto-fix retry",
-                    "agentic_hint": "Hook auto-fixed files on the first attempt but still failed on retry. This requires manual fixing. Review the output from both attempts above.",
-                }
+        original_paths = paths if isinstance(paths, list) else []
+        hook_result, failure = _run_hook_with_retry(
+            repo_path, original_paths, app_ctx.git_ops.stage
+        )
+        if failure:
+            return failure
 
         sha = app_ctx.git_ops.commit(message, allow_empty=allow_empty)
         result: dict[str, Any] = {
@@ -267,59 +301,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         app_ctx.git_ops.stage(paths)
 
         repo_path = Path(app_ctx.git_ops.repo.workdir)
-        hook_result = run_hook(repo_path, "pre-commit")
-
-        if not hook_result.success:
-            auto_fixed = hook_result.modified_files or []
-
-            if not auto_fixed:
-                # Hook failed with no auto-fixes — manual intervention needed
-                return {
-                    "hook_failure": {
-                        "code": "HOOK_FAILED",
-                        "hook_type": "pre-commit",
-                        "exit_code": hook_result.exit_code,
-                        "stdout": hook_result.stdout,
-                        "stderr": hook_result.stderr,
-                        "modified_files": [],
-                    },
-                    "summary": f"pre-commit hook failed (exit {hook_result.exit_code})",
-                    "agentic_hint": "Hook failed with errors that require manual fixing. Review the output above and fix the reported issues, then retry.",
-                }
-
-            # Hook auto-fixed files — re-stage and retry
-            restage_paths = list(set(auto_fixed + paths))
-            app_ctx.git_ops.stage(restage_paths)
-
-            retry_result = run_hook(repo_path, "pre-commit")
-
-            if not retry_result.success:
-                # Second attempt also failed — return combined output
-                return {
-                    "hook_failure": {
-                        "code": "HOOK_FAILED_AFTER_RETRY",
-                        "hook_type": "pre-commit",
-                        "exit_code": retry_result.exit_code,
-                        "attempts": [
-                            {
-                                "attempt": 1,
-                                "exit_code": hook_result.exit_code,
-                                "stdout": hook_result.stdout,
-                                "stderr": hook_result.stderr,
-                                "auto_fixed_files": auto_fixed,
-                            },
-                            {
-                                "attempt": 2,
-                                "exit_code": retry_result.exit_code,
-                                "stdout": retry_result.stdout,
-                                "stderr": retry_result.stderr,
-                                "modified_files": retry_result.modified_files or [],
-                            },
-                        ],
-                    },
-                    "summary": "pre-commit hook failed after auto-fix retry",
-                    "agentic_hint": "Hook auto-fixed files on the first attempt but still failed on retry. This requires manual fixing. Review the output from both attempts above.",
-                }
+        hook_result, failure = _run_hook_with_retry(repo_path, paths, app_ctx.git_ops.stage)
+        if failure:
+            return failure
 
         sha = app_ctx.git_ops.commit(message, allow_empty=allow_empty)
         result: dict[str, Any] = {
