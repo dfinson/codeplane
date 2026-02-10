@@ -214,7 +214,7 @@ class IndexCoordinator:
         Args:
             on_index_progress: Callback(indexed_count, total_count, files_by_ext, phase)
                               called during indexing for progress updates.
-                              phase is one of: "lexical", "structural", "resolving"
+                              phase is one of: "indexing", "resolving_refs", "resolving_types"
 
         Flow:
         1. Create database schema
@@ -1852,16 +1852,18 @@ class IndexCoordinator:
         self,
         on_progress: Callable[[int, int, dict[str, int], str], None],
     ) -> tuple[int, list[str], dict[str, int]]:
-        """Index all files in valid contexts.
+        """Index all files in valid contexts (unified single-pass).
 
-        Populates both:
-        - Tantivy (lexical search)
-        - SQLite fact tables (DefFact, RefFact, etc.)
+        Single-pass architecture:
+        - Each file is read and tree-sitter parsed ONCE by the structural extractor
+        - ExtractionResult carries content_text and symbol_names for Tantivy
+        - Tantivy uses batched stage_file() + commit_staged() (1 commit, not N)
+        - Structural extraction runs in parallel via ProcessPoolExecutor
 
         Args:
             on_progress: Callback(indexed_count, total_count, files_by_ext, phase)
-                         called after each file for progress updates.
-                         phase is one of: "lexical", "structural", "resolving"
+                         called for progress updates.
+                         phase is one of: "indexing", "resolving_refs", "resolving_types"
 
         Returns:
             Tuple of (count of files indexed, list of indexed file paths, files by extension).
@@ -1928,121 +1930,83 @@ class IndexCoordinator:
                     claimed_paths.add(rel_str)
                     files_to_index.append((file_path, rel_str, root_context_id, lang_value))
 
-            # Index files with progress callback (phase: lexical)
-            count, indexed_paths, files_by_ext, context_files = self._index_files_with_progress(
-                files_to_index, on_progress
-            )
+            # === Unified single-pass indexing ===
+            # Each file is read and tree-sitter parsed ONCE by the structural
+            # extractor. ExtractionResult carries content_text for Tantivy and
+            # structural facts for SQLite. Tantivy uses batched stage_file()
+            # with a single commit_staged() at the end.
+            total = len(files_to_index)
+            count = 0
+            indexed_paths: list[str] = []
+            files_by_ext: dict[str, int] = {}
+            workers = os.cpu_count() or 4
 
-            # Run structural indexer for each context (phase: structural)
-            # Process in batches for smoother progress updates
             if self._structural is not None:
-                # Flatten all files with their context IDs for batched processing
-                all_structural_files: list[tuple[str, int]] = []
-                for context_id, file_paths in context_files.items():
-                    for path in file_paths:
-                        all_structural_files.append((path, context_id))
+                batch_size = 50
 
-                total_structural = len(all_structural_files)
-                structural_batch_size = 25  # Process in chunks for progress visibility
-
-                for batch_start in range(0, total_structural, structural_batch_size):
-                    batch_end = min(batch_start + structural_batch_size, total_structural)
-                    batch = all_structural_files[batch_start:batch_end]
+                for batch_start in range(0, total, batch_size):
+                    batch_end = min(batch_start + batch_size, total)
+                    batch = files_to_index[batch_start:batch_end]
 
                     # Group batch by context_id
                     batch_by_context: dict[int, list[str]] = {}
-                    for path, ctx_id in batch:
-                        batch_by_context.setdefault(ctx_id, []).append(path)
+                    for _full_path, rel_str, ctx_id, _lang in batch:
+                        batch_by_context.setdefault(ctx_id, []).append(rel_str)
 
-                    # Index this batch
                     for ctx_id, paths in batch_by_context.items():
-                        self._structural.index_files(paths, ctx_id)
+                        # Extract facts (parallel for speed)
+                        extractions = self._structural.extract_files(paths, ctx_id, workers=workers)
 
-                    # Report progress after each batch
-                    on_progress(
-                        batch_end,
-                        total_structural,
-                        files_by_ext,
-                        "structural",
-                    )
+                        # Stage each file into Tantivy using extraction results
+                        for extraction in extractions:
+                            if extraction.content_text is None:
+                                continue  # File not readable
+
+                            self._lexical.stage_file(
+                                extraction.file_path,
+                                extraction.content_text,
+                                context_id=ctx_id,
+                                symbols=extraction.symbol_names,
+                            )
+                            count += 1
+                            indexed_paths.append(extraction.file_path)
+
+                            # Track by file extension
+                            ext = os.path.splitext(extraction.file_path)[1].lower()
+                            if not ext:
+                                ext = os.path.basename(extraction.file_path).lower()
+                            files_by_ext[ext] = files_by_ext.get(ext, 0) + 1
+
+                            # Report per-file progress
+                            on_progress(count, total, files_by_ext, "indexing")
+
+                        # Persist structural facts (re-uses pre-computed extractions)
+                        self._structural.index_files(paths, ctx_id, _extractions=extractions)
+
+                # Commit all Tantivy changes in one batch (1 commit, not N)
+                self._lexical.commit_staged()
 
                 # Pass 1.5: DB-backed cross-file resolution
-                # Runs after ALL structural facts are persisted, so it sees the
-                # complete namespace-type mappings across all files (not just
-                # the 25-file batch that was visible to the old in-memory pass).
-                # Use unit_id=None to allow cross-context resolution (shared libs).
                 on_progress(0, 1, files_by_ext, "resolving_cross_file")
                 resolve_namespace_refs(self.db, None)
                 resolve_same_namespace_refs(self.db, None)
                 resolve_star_import_refs(self.db, None)
 
-                # Resolve cross-file references (phase: resolving_refs)
-                # Pass 2 - follows ImportFact chains
+                # Pass 2: Resolve cross-file references
                 def pass2_progress(processed: int, total: int) -> None:
                     on_progress(processed, total, files_by_ext, "resolving_refs")
 
-                on_progress(0, 1, files_by_ext, "resolving_refs")  # Start
+                on_progress(0, 1, files_by_ext, "resolving_refs")
                 resolve_references(self.db, on_progress=pass2_progress)
 
-                # Resolve type-traced accesses (phase: resolving_types)
-                # Pass 3 - follows type annotations
+                # Pass 3: Resolve type-traced accesses
                 def pass3_progress(processed: int, total: int) -> None:
                     on_progress(processed, total, files_by_ext, "resolving_types")
 
-                on_progress(0, 1, files_by_ext, "resolving_types")  # Start
+                on_progress(0, 1, files_by_ext, "resolving_types")
                 resolve_type_traced(self.db, on_progress=pass3_progress)
 
         return count, indexed_paths, files_by_ext
-
-    def _index_files_with_progress(
-        self,
-        files_to_index: list[tuple[Path, str, int, str | None]],
-        on_progress: Callable[[int, int, dict[str, int], str], None],
-    ) -> tuple[int, list[str], dict[str, int], dict[int, list[str]]]:
-        """Index files, calling progress callback after each file.
-
-        Pure data operation - no UI rendering. Caller owns presentation.
-
-        Args:
-            files_to_index: List of (file_path, rel_str, context_id, lang_family)
-            on_progress: Callback(indexed_count, total_count, files_by_ext, phase)
-                         called after each file for progress updates
-
-        Returns:
-            Tuple of (count, indexed_paths, files_by_ext, context_files)
-        """
-        count = 0
-        indexed_paths: list[str] = []
-        files_by_ext: dict[str, int] = {}
-        context_files: dict[int, list[str]] = {}
-        total = len(files_to_index)
-
-        for file_path, rel_str, context_id, _lang_family in files_to_index:
-            try:
-                content = self._safe_read_text(file_path)
-                symbols = self._extract_symbols(file_path)
-                if self._lexical is not None:
-                    self._lexical.add_file(
-                        rel_str,
-                        content,
-                        context_id=context_id,
-                        symbols=symbols,
-                    )
-                count += 1
-                indexed_paths.append(rel_str)
-                context_files.setdefault(context_id, []).append(rel_str)
-
-                # Track by file extension
-                ext = file_path.suffix.lower() or file_path.name.lower()
-                files_by_ext[ext] = files_by_ext.get(ext, 0) + 1
-
-                # Report progress (lexical phase)
-                on_progress(count, total, files_by_ext, "lexical")
-
-            except (OSError, UnicodeDecodeError):
-                pass
-
-        return count, indexed_paths, files_by_ext, context_files
 
     async def _update_structural_index(self, changed_paths: list[Path]) -> None:
         """Update structural index for changed files.

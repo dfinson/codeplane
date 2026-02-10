@@ -131,8 +131,47 @@ class TestCoordinatorInitialization:
                 for i in range(1, len(calls)):
                     assert calls[i][0] >= calls[i - 1][0], f"Phase {phase} progress not monotonic"
 
-            # Should have lexical phase at minimum
-            assert "lexical" in by_phase
+            # Should have indexing phase at minimum (unified single-pass)
+            assert "indexing" in by_phase
+        finally:
+            coordinator.close()
+
+    @pytest.mark.asyncio
+    async def test_progress_phases_unified(self, integration_repo: Path, tmp_path: Path) -> None:
+        """Progress phases should use unified naming (no 'lexical' or 'structural')."""
+        db_path = tmp_path / "index.db"
+        tantivy_path = tmp_path / "tantivy"
+
+        coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
+        phases_seen: list[str] = []
+
+        def track_phases(
+            _indexed: int, _total: int, _files_by_ext: dict[str, int], phase: str = ""
+        ) -> None:
+            if phase and (not phases_seen or phases_seen[-1] != phase):
+                phases_seen.append(phase)
+
+        try:
+            await coordinator.initialize(on_index_progress=track_phases)
+
+            # "indexing" must appear (unified single-pass replaces old "lexical" + "structural")
+            assert "indexing" in phases_seen, f"Expected 'indexing' phase, got: {phases_seen}"
+
+            # Old phase names must NOT appear
+            assert "lexical" not in phases_seen, (
+                "'lexical' phase should not exist in unified pipeline"
+            )
+            assert "structural" not in phases_seen, (
+                "'structural' phase should not exist in unified pipeline"
+            )
+
+            # "indexing" should appear before any resolution phases
+            indexing_idx = phases_seen.index("indexing")
+            for resolution_phase in ["resolving_cross_file", "resolving_refs", "resolving_types"]:
+                if resolution_phase in phases_seen:
+                    assert phases_seen.index(resolution_phase) > indexing_idx, (
+                        f"{resolution_phase} must come after 'indexing'"
+                    )
         finally:
             coordinator.close()
 

@@ -581,3 +581,114 @@ class TestReload:
 
         results = lexical_index.search("reload_content")
         assert len(results.results) >= 1
+
+
+class TestStagedCommitEquivalence:
+    """Tests that stage_file + commit_staged produces equivalent results to add_file."""
+
+    def test_staged_content_searchable(self, temp_dir: Path) -> None:
+        """Files indexed via stage_file + commit_staged should be searchable."""
+        index = LexicalIndex(temp_dir / "staged_idx")
+
+        index.stage_file("src/main.py", "def hello(): pass\n", context_id=1, symbols=["hello"])
+        index.commit_staged()
+        index.reload()
+
+        results = index.search("hello")
+        assert len(results.results) >= 1
+        assert any("main.py" in r.file_path for r in results.results)
+
+    def test_staged_symbols_searchable(self, temp_dir: Path) -> None:
+        """Symbols indexed via stage_file should be searchable via search_symbols."""
+        index = LexicalIndex(temp_dir / "staged_sym_idx")
+
+        index.stage_file(
+            "src/utils.py",
+            "def foo(): pass\nclass Bar: pass\n",
+            context_id=1,
+            symbols=["foo", "Bar"],
+        )
+        index.commit_staged()
+        index.reload()
+
+        for name in ["foo", "Bar"]:
+            results = index.search_symbols(name)
+            assert len(results.results) >= 1
+
+    def test_staged_vs_add_file_equivalence(self, temp_dir: Path) -> None:
+        """stage_file + commit_staged should produce identical search results to add_file."""
+        files = [
+            ("src/a.py", "def alpha(): pass\nALPHA_CONST = 1\n", ["alpha"]),
+            ("src/b.py", "class Beta:\n    def method(self): pass\n", ["Beta", "method"]),
+            ("src/c.py", "import os\nGAMMA = os.getcwd()\n", ["GAMMA"]),
+        ]
+
+        # Index via add_file (old API)
+        idx_add = LexicalIndex(temp_dir / "add_idx")
+        for path, content, symbols in files:
+            idx_add.add_file(path, content, context_id=1, symbols=symbols)
+        idx_add.reload()
+
+        # Index via stage_file + commit_staged (new API)
+        idx_staged = LexicalIndex(temp_dir / "staged_idx2")
+        for path, content, symbols in files:
+            idx_staged.stage_file(path, content, context_id=1, symbols=symbols)
+        idx_staged.commit_staged()
+        idx_staged.reload()
+
+        # Both should have same doc count
+        assert idx_add.doc_count() == idx_staged.doc_count()
+
+        # Content search should return same files
+        for query in ["alpha", "Beta", "GAMMA", "os"]:
+            add_results = idx_add.search(query)
+            staged_results = idx_staged.search(query)
+            add_paths = sorted(r.file_path for r in add_results.results)
+            staged_paths = sorted(r.file_path for r in staged_results.results)
+            assert add_paths == staged_paths, f"Mismatch for query '{query}'"
+
+        # Symbol search should return same files
+        for sym in ["alpha", "Beta", "GAMMA"]:
+            add_results = idx_add.search_symbols(sym)
+            staged_results = idx_staged.search_symbols(sym)
+            add_paths = sorted(r.file_path for r in add_results.results)
+            staged_paths = sorted(r.file_path for r in staged_results.results)
+            assert add_paths == staged_paths, f"Symbol mismatch for '{sym}'"
+
+    def test_staged_batch_single_commit(self, temp_dir: Path) -> None:
+        """Multiple stage_file calls should be committed atomically in one commit."""
+        index = LexicalIndex(temp_dir / "batch_idx")
+
+        # Stage 5 files
+        for i in range(5):
+            index.stage_file(f"file_{i}.py", f"content_{i}\n", context_id=1)
+
+        # Before commit: nothing visible
+        index.reload()
+        assert index.doc_count() == 0
+
+        # After single commit: all 5 visible
+        count = index.commit_staged()
+        index.reload()
+
+        assert count == 5
+        assert index.doc_count() == 5
+
+    def test_staged_context_id_filtering(self, temp_dir: Path) -> None:
+        """Staged files should respect context_id for filtered searches."""
+        index = LexicalIndex(temp_dir / "ctx_idx")
+
+        index.stage_file("ctx1.py", "shared_term", context_id=1)
+        index.stage_file("ctx2.py", "shared_term", context_id=2)
+        index.commit_staged()
+        index.reload()
+
+        results = index.search("shared_term", context_id=1)
+        assert all(r.context_id == 1 for r in results.results)
+
+    def test_commit_staged_empty_is_noop(self, temp_dir: Path) -> None:
+        """commit_staged with no staged files should return 0."""
+        index = LexicalIndex(temp_dir / "empty_idx")
+
+        count = index.commit_staged()
+        assert count == 0

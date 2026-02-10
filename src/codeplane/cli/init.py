@@ -542,98 +542,78 @@ def initialize_repo(
 
     # Shared state for phase transitions
     indexing_state: dict[str, object] = {
-        "lexical_done": False,
+        "indexing_done": False,
         "files_indexed": 0,
         "files_by_ext": {},
-        "lexical_elapsed": 0.0,
     }
-    structural_progress: dict[str, tuple[int, int]] = {}  # phase -> (done, total)
-    # Track phase box and task IDs for structural phase
-    structural_phase: PhaseBox | None = None
-    structural_task_id: Any = None
+    # Track resolution phase box and task IDs
+    resolution_phase: PhaseBox | None = None
     refs_task_id: Any = None
     types_task_id: Any = None
-    lexical_elapsed = 0.0
+    indexing_elapsed = 0.0
 
     try:
         import time
 
         start_time = time.time()
 
-        # Phase box 1: Lexical Indexing (files only)
-        lexical_phase = phase_box("Lexical Indexing", width=60)
-        lexical_phase.__enter__()
-        lexical_task_id = lexical_phase.add_progress("Indexing files", total=100)
+        # Phase box 1: Indexing (unified file processing)
+        indexing_phase = phase_box("Indexing", width=60)
+        indexing_phase.__enter__()
+        indexing_task_id = indexing_phase.add_progress("Indexing files", total=100)
 
         def on_index_progress(
             indexed: int, total: int, files_by_ext: dict[str, int], progress_phase: str
         ) -> None:
-            nonlocal \
-                lexical_phase, \
-                structural_phase, \
-                structural_task_id, \
-                refs_task_id, \
-                types_task_id, \
-                lexical_elapsed
+            nonlocal resolution_phase, refs_task_id, types_task_id, indexing_elapsed
 
-            if progress_phase == "lexical":
-                # Update lexical phase box
+            if progress_phase == "indexing":
+                # Update indexing phase box
                 pct = int(indexed / total * 100) if total > 0 else 0
-                lexical_phase._progress.update(lexical_task_id, completed=pct)  # type: ignore[union-attr]
+                indexing_phase._progress.update(indexing_task_id, completed=pct)  # type: ignore[union-attr]
 
                 if files_by_ext:
                     table = _make_init_extension_table(files_by_ext)
-                    lexical_phase.set_live_table(table)
+                    indexing_phase.set_live_table(table)
 
                 # Store latest state
                 indexing_state["files_indexed"] = indexed
                 indexing_state["files_by_ext"] = files_by_ext
 
-            elif progress_phase == "structural":
-                # First structural callback - close lexical box, open structural box
-                if not indexing_state["lexical_done"]:
-                    indexing_state["lexical_done"] = True
-                    lexical_elapsed = time.time() - start_time
+            elif progress_phase in ("resolving_cross_file", "resolving_refs", "resolving_types"):
+                # First resolution callback — close indexing box, open resolution box
+                if not indexing_state["indexing_done"]:
+                    indexing_state["indexing_done"] = True
+                    indexing_elapsed = time.time() - start_time
 
-                    # Finalize lexical box
-                    lexical_phase.set_live_table(None)
+                    # Finalize indexing box
+                    indexing_phase.set_live_table(None)
                     files = indexing_state["files_indexed"]
-                    lexical_phase.complete(f"{files} files ({lexical_elapsed:.1f}s)")
+                    indexing_phase.complete(f"{files} files ({indexing_elapsed:.1f}s)")
                     if indexing_state["files_by_ext"]:
-                        lexical_phase.add_text("")
+                        indexing_phase.add_text("")
                         ext_table = _make_init_extension_table(indexing_state["files_by_ext"])  # type: ignore[arg-type]
-                        lexical_phase.add_table(ext_table)
-                    lexical_phase.__exit__(None, None, None)
+                        indexing_phase.add_table(ext_table)
+                    indexing_phase.__exit__(None, None, None)
 
-                    # Open structural phase box
-                    structural_phase = phase_box("Structural Indexing", width=60)
-                    structural_phase.__enter__()
-                    # Only create first progress bar; others added when their phase starts
-                    structural_task_id = structural_phase.add_progress("Parsing symbols", total=100)
+                    # Open resolution phase box
+                    resolution_phase = phase_box("Resolution", width=60)
+                    resolution_phase.__enter__()
 
-                # Update structural progress
-                if structural_phase is not None:
-                    pct = int(indexed / total * 100) if total > 0 else 0
-                    structural_phase._progress.update(structural_task_id, completed=pct)  # type: ignore[union-attr]
-                structural_progress["structural"] = (indexed, total)
+                if progress_phase == "resolving_refs":
+                    if resolution_phase is not None:
+                        if refs_task_id is None:
+                            refs_task_id = resolution_phase.add_progress(
+                                "Resolving imports", total=100
+                            )
+                        pct = int(indexed / total * 100) if total > 0 else 0
+                        resolution_phase._progress.update(refs_task_id, completed=pct)  # type: ignore[union-attr]
 
-            elif progress_phase == "resolving_refs":
-                if structural_phase is not None:
-                    # Create progress bar on first callback for this phase
-                    if refs_task_id is None:
-                        refs_task_id = structural_phase.add_progress("Resolving imports", total=100)
-                    pct = int(indexed / total * 100) if total > 0 else 0
-                    structural_phase._progress.update(refs_task_id, completed=pct)  # type: ignore[union-attr]
-                structural_progress["resolving_refs"] = (indexed, total)
-
-            elif progress_phase == "resolving_types":
-                if structural_phase is not None:
-                    # Create progress bar on first callback for this phase
+                elif progress_phase == "resolving_types" and resolution_phase is not None:
                     if types_task_id is None:
-                        types_task_id = structural_phase.add_progress("Resolving types", total=100)
+                        types_task_id = resolution_phase.add_progress("Resolving types", total=100)
                     pct = int(indexed / total * 100) if total > 0 else 0
-                    structural_phase._progress.update(types_task_id, completed=pct)  # type: ignore[union-attr]
-                structural_progress["resolving_types"] = (indexed, total)
+                    resolution_phase._progress.update(types_task_id, completed=pct)  # type: ignore[union-attr]
 
         loop = asyncio.new_event_loop()
         try:
@@ -641,23 +621,23 @@ def initialize_repo(
         finally:
             loop.close()
 
-        # Handle case where there were no structural phases (shouldn't happen normally)
-        if not indexing_state["lexical_done"]:
-            lexical_elapsed = time.time() - start_time
-            lexical_phase.set_live_table(None)
-            lexical_phase.complete(f"{result.files_indexed} files ({lexical_elapsed:.1f}s)")
+        # Handle case where there were no resolution phases (shouldn't happen normally)
+        if not indexing_state["indexing_done"]:
+            indexing_elapsed = time.time() - start_time
+            indexing_phase.set_live_table(None)
+            indexing_phase.complete(f"{result.files_indexed} files ({indexing_elapsed:.1f}s)")
             if result.files_by_ext:
-                lexical_phase.add_text("")
+                indexing_phase.add_text("")
                 ext_table = _make_init_extension_table(result.files_by_ext)
-                lexical_phase.add_table(ext_table)
-            lexical_phase.__exit__(None, None, None)
+                indexing_phase.add_table(ext_table)
+            indexing_phase.__exit__(None, None, None)
 
-        # Close structural phase box if it was opened
-        if structural_phase is not None:
+        # Close resolution phase box if it was opened
+        if resolution_phase is not None:
             total_elapsed = time.time() - start_time
-            structural_elapsed = total_elapsed - lexical_elapsed
-            structural_phase.complete(f"Done ({structural_elapsed:.1f}s)")
-            structural_phase.__exit__(None, None, None)
+            resolution_elapsed = total_elapsed - indexing_elapsed
+            resolution_phase.complete(f"Done ({resolution_elapsed:.1f}s)")
+            resolution_phase.__exit__(None, None, None)
 
         if result.errors:
             for err in result.errors:

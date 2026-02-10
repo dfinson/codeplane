@@ -113,6 +113,10 @@ class ExtractionResult:
     language: str | None = None
     # Language family detected from file path (avoids re-detection later)
     language_family: str | None = None
+    # File content as UTF-8 text (for unified single-pass lexical+structural indexing)
+    content_text: str | None = None
+    # Symbol names extracted from tree-sitter parse (for Tantivy symbol field)
+    symbol_names: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -162,6 +166,12 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
             1 if content and not content.endswith(b"\n") else 0
         )
 
+        # Decode to UTF-8 text for lexical index (single-pass)
+        try:
+            result.content_text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            result.content_text = ""
+
         family = detect_language_family(file_path)
         result.language_family = family
 
@@ -183,6 +193,8 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
         # Extract symbols (for DefFact)
         symbols = parser.extract_symbols(parse_result)
         result.interface_hash = parser.compute_interface_hash(symbols)
+        # Populate symbol names for Tantivy lexical indexing (single-pass)
+        result.symbol_names = [s.name for s in symbols]
 
         # Extract scopes (for ScopeFact)
         scopes = parser.extract_scopes(parse_result)
@@ -610,18 +622,46 @@ class StructuralIndexer:
         self.repo_path = Path(repo_path)
         self._parser = TreeSitterParser()
 
+    def extract_files(
+        self,
+        file_paths: list[str],
+        context_id: int,
+        workers: int = 1,
+    ) -> list[ExtractionResult]:
+        """Extract facts from files without persisting.
+
+        Returns ExtractionResult list that can be passed to
+        index_files(_extractions=...) for persistence.
+
+        Each result includes content_text and symbol_names for
+        unified single-pass indexing (lexical + structural).
+        """
+        if workers > 1 and len(file_paths) > 1:
+            return self._parallel_extract(file_paths, context_id, workers)
+        return self._sequential_extract(file_paths, context_id)
+
     def index_files(
         self,
         file_paths: list[str],
         context_id: int,
         file_id_map: dict[str, int] | None = None,
         workers: int = 1,
+        *,
+        _extractions: list[ExtractionResult] | None = None,
     ) -> BatchResult:
-        """Index a batch of files."""
+        """Index a batch of files.
+
+        If _extractions is provided, uses pre-computed extraction results
+        instead of extracting from disk. This enables single-pass indexing
+        where the coordinator extracts once and reuses results for both
+        Tantivy staging and structural fact persistence.
+        """
         start = time.monotonic()
         result = BatchResult()
 
-        if workers > 1:
+        if _extractions is not None:
+            extractions = _extractions
+        elif workers > 1:
             extractions = self._parallel_extract(file_paths, context_id, workers)
         else:
             extractions = self._sequential_extract(file_paths, context_id)
