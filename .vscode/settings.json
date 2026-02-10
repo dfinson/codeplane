@@ -1,4 +1,5 @@
 {
+    "github.copilot.chat.virtualTools.threshold": 128,
     "chat.mcp.serverSampling": {
         "codeplane/.vscode/mcp.json: codeplane": {
             "allowedModels": [

@@ -13,21 +13,21 @@ Terminal fallback is permitted ONLY when no CodePlane tool exists for the operat
 
 | Operation | REQUIRED Tool | FORBIDDEN Alternative |
 |-----------|---------------|----------------------|
-| Read files | `mcp_codeplane_codeplane_read_files` | `cat`, `head`, `less`, `tail` |
-| Write/edit files | `mcp_codeplane_codeplane_write_files` | `sed`, `echo >>`, `awk`, `tee` |
-| List directory | `mcp_codeplane_codeplane_list_files` | `ls`, `find`, `tree` |
-| Search code | `mcp_codeplane_codeplane_search` | `grep`, `rg`, `ag`, `ack` |
-| Repository overview | `mcp_codeplane_codeplane_map_repo` | Manual file traversal |
-| All git operations | `mcp_codeplane_codeplane_git_*` | Raw `git` commands |
-| Run linters/formatters | `mcp_codeplane_codeplane_lint_check` | `ruff`, `black`, `mypy` directly |
-| Discover tests | `mcp_codeplane_codeplane_discover_test_targets` | Manual test file search |
-| Run tests | `mcp_codeplane_codeplane_run_test_targets` | `pytest`, `jest` directly |
-| Rename symbols | `mcp_codeplane_codeplane_refactor_rename` | Find-and-replace, `sed` |
-| Move files | `mcp_codeplane_codeplane_refactor_move` | `mv` + manual import fixes |
+| Read files | `mcp_codeplane-codeplane_read_files` | `cat`, `head`, `less`, `tail` |
+| Write/edit files | `mcp_codeplane-codeplane_write_files` | `sed`, `echo >>`, `awk`, `tee` |
+| List directory | `mcp_codeplane-codeplane_list_files` | `ls`, `find`, `tree` |
+| Search code | `mcp_codeplane-codeplane_search` | `grep`, `rg`, `ag`, `ack` |
+| Repository overview | `mcp_codeplane-codeplane_map_repo` | Manual file traversal |
+| All git operations | `mcp_codeplane-codeplane_git_*` | Raw `git` commands |
+| Run linters/formatters | `mcp_codeplane-codeplane_lint_check` | `ruff`, `black`, `mypy` directly |
+| Discover tests | `mcp_codeplane-codeplane_discover_test_targets` | Manual test file search |
+| Run tests | `mcp_codeplane-codeplane_run_test_targets` | `pytest`, `jest` directly |
+| Rename symbols | `mcp_codeplane-codeplane_refactor_rename` | Find-and-replace, `sed` |
+| Move files | `mcp_codeplane-codeplane_refactor_move` | `mv` + manual import fixes |
 
 ### Critical Parameter Reference
 
-**mcp_codeplane_codeplane_read_files**
+**mcp_codeplane-codeplane_read_files**
 ```
 paths: list[str]           # REQUIRED - file paths relative to repo root
 ranges: list[RangeParam]   # optional - NOT "line_ranges"
@@ -35,7 +35,7 @@ ranges: list[RangeParam]   # optional - NOT "line_ranges"
   end_line: int            # 1-indexed, NOT "end"
 ```
 
-**mcp_codeplane_codeplane_write_files**
+**mcp_codeplane-codeplane_write_files**
 ```
 edits: list[EditParam]     # REQUIRED - array of edits
   path: str                # file path relative to repo root
@@ -45,14 +45,14 @@ edits: list[EditParam]     # REQUIRED - array of edits
 dry_run: bool              # optional, default false
 ```
 
-**mcp_codeplane_codeplane_search**
+**mcp_codeplane-codeplane_search**
 ```
 query: str                 # REQUIRED
 mode: "lexical"|"symbol"|"references"|"definitions"  # default "lexical", NOT "scope" or "text"
 limit: int                 # default 20, NOT "max_results"
 ```
 
-**mcp_codeplane_codeplane_list_files**
+**mcp_codeplane-codeplane_list_files**
 ```
 path: str                  # optional - directory to list, NOT "directory"
 pattern: str               # optional - glob pattern (e.g., "*.py")
@@ -60,29 +60,42 @@ recursive: bool            # default false
 limit: int                 # default 200
 ```
 
-**mcp_codeplane_codeplane_map_repo**
+**mcp_codeplane-codeplane_map_repo**
 ```
 include: list[str]         # optional - values: "structure", "languages", "entry_points",
                            #   "dependencies", "test_layout", "public_api"
 depth: int                 # default 3
 ```
 
-**mcp_codeplane_codeplane_git_commit**
+**mcp_codeplane-codeplane_git_stage_and_commit**
+```
+message: str               # REQUIRED
+paths: list[str]           # REQUIRED - files to stage and commit
+allow_empty: bool          # optional, default false
+```
+
+**Preferred tool for committing changes.** Stages paths, runs pre-commit hooks,
+and commits in one call. If hooks auto-fix files (formatters, linters), changes are
+automatically re-staged and retried once.
+
+**mcp_codeplane-codeplane_git_commit**
 ```
 message: str               # REQUIRED
 paths: list[str]           # optional - files to stage before commit
 ```
 
-**IMPORTANT:** `git_commit` only commits what is already staged. The `paths` parameter does NOT auto-stage.
-Always call `git_stage` first to stage files, then call `git_commit`.
+**Use only when you need low-level staging control.** When called without `paths`, it
+commits what is already staged. When `paths` are provided, those files are staged
+before committing; if hooks auto-fix files, they may be re-staged and the commit
+retried once.
 
-**mcp_codeplane_codeplane_git_stage**
+**mcp_codeplane-codeplane_git_stage**
 ```
 action: "add"|"remove"|"all"|"discard"  # REQUIRED
 paths: list[str]           # REQUIRED for add/remove/discard (not for "all")
 ```
 
-**mcp_codeplane_codeplane_run_test_targets**
+**mcp_codeplane-codeplane_run_test_targets**
 ```
 targets: list[str]         # optional - target_ids from discover_test_targets
 target_filter: str         # optional - substring match on target paths
@@ -99,7 +112,7 @@ Refactor tools use a **preview → review → apply** workflow:
 2. **`refactor_inspect`** — Review low-certainty matches with context (recommended)
 3. **`refactor_apply`** or **`refactor_cancel`** — Execute or discard
 
-**mcp_codeplane_codeplane_refactor_rename**
+**mcp_codeplane-codeplane_refactor_rename**
 ```
 symbol: str                # REQUIRED - the symbol NAME only (e.g., "MyClass", "my_function")
                            # WRONG: "src/file.py:42:6" - do NOT use path:line:col format

@@ -8,9 +8,13 @@ from codeplane.index._internal.indexing.lexical import (
     create_index,
 )
 from codeplane.index._internal.indexing.resolver import (
+    CrossFileResolutionStats,
     ReferenceResolver,
     ResolutionStats,
+    resolve_namespace_refs,
     resolve_references,
+    resolve_same_namespace_refs,
+    resolve_star_import_refs,
 )
 from codeplane.index._internal.indexing.scope_resolver import (
     ScopeRegion,
@@ -45,6 +49,11 @@ __all__ = [
     "ReferenceResolver",
     "ResolutionStats",
     "resolve_references",
+    # Cross-file resolution (Pass 1.5 - DB-backed)
+    "CrossFileResolutionStats",
+    "resolve_namespace_refs",
+    "resolve_same_namespace_refs",
+    "resolve_star_import_refs",
     # Type-Traced Resolution (Pass 3)
     "TypeTracedResolver",
     "TypeTracedStats",

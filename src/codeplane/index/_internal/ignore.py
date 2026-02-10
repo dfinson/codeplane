@@ -258,7 +258,8 @@ class IgnoreChecker:
         except ValueError:
             return True
 
-        rel_str = str(rel_path)
+        # Normalize to POSIX-style separators for pattern matching on Windows
+        rel_str = rel_path.as_posix()
 
         for pattern in self._patterns:
             if pattern.startswith("!"):
@@ -270,25 +271,27 @@ class IgnoreChecker:
                 return True
 
             for parent in rel_path.parents:
-                if fnmatch.fnmatch(str(parent), pattern):
+                if fnmatch.fnmatch(parent.as_posix(), pattern):
                     return True
 
         return False
 
     def is_excluded_rel(self, rel_path: str) -> bool:
+        # Normalize to POSIX-style separators for pattern matching on Windows
+        rel_path_posix = rel_path.replace("\\", "/")
         path_obj = Path(rel_path)
 
         for pattern in self._patterns:
             if pattern.startswith("!"):
-                if fnmatch.fnmatch(rel_path, pattern[1:]):
+                if fnmatch.fnmatch(rel_path_posix, pattern[1:]):
                     return False
                 continue
 
-            if fnmatch.fnmatch(rel_path, pattern):
+            if fnmatch.fnmatch(rel_path_posix, pattern):
                 return True
 
             for parent in path_obj.parents:
-                if parent != Path(".") and fnmatch.fnmatch(str(parent), pattern):
+                if parent != Path(".") and fnmatch.fnmatch(parent.as_posix(), pattern):
                     return True
 
         return False

@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from codeplane.core.languages import detect_language_family
 from codeplane.git import GitOps
 from codeplane.index.models import File, Freshness, RepoState
 
@@ -309,41 +310,8 @@ class Reconciler:
         return str(path).replace("\\", "/")
 
     def _detect_language(self, path: str) -> str | None:
-        """Detect language from file extension."""
-        ext_map = {
-            ".py": "python",
-            ".pyi": "python",
-            ".js": "javascript",
-            ".jsx": "javascript",
-            ".ts": "typescript",
-            ".tsx": "typescript",
-            ".go": "go",
-            ".rs": "rust",
-            ".java": "java",
-            ".kt": "kotlin",
-            ".scala": "scala",
-            ".cs": "csharp",
-            ".fs": "fsharp",
-            ".rb": "ruby",
-            ".php": "php",
-            ".swift": "swift",
-            ".ex": "elixir",
-            ".exs": "elixir",
-            ".hs": "haskell",
-            ".tf": "terraform",
-            ".sql": "sql",
-            ".md": "markdown",
-            ".json": "json",
-            ".yaml": "yaml",
-            ".yml": "yaml",
-            ".toml": "toml",
-            ".proto": "protobuf",
-            ".graphql": "graphql",
-            ".gql": "graphql",
-            ".nix": "nix",
-        }
-        ext = Path(path).suffix.lower()
-        return ext_map.get(ext)
+        """Detect language from file path using canonical language definitions."""
+        return detect_language_family(path)
 
     def _get_git_diff(self, from_commit: str, to_commit: str) -> list[ChangedFile]:
         """Get files changed between two commits using git diff."""

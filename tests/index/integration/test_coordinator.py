@@ -903,3 +903,136 @@ func SearchHandler() string {
             assert len(results_none.results) >= 0
         finally:
             coordinator.close()
+
+
+class TestCoordinatorTestTargetIncremental:
+    """Tests for _update_test_targets_incremental via reindex_incremental.
+
+    Validates that incremental reindex correctly identifies test files using
+    the canonical is_test_file from codeplane.core.languages, and that it
+    creates/removes TestTarget records accordingly.
+    """
+
+    @pytest.mark.asyncio
+    async def test_new_test_file_creates_target(
+        self, integration_repo: Path, tmp_path: Path
+    ) -> None:
+        """Adding a new test file should create a TestTarget."""
+        db_path = tmp_path / "index.db"
+        tantivy_path = tmp_path / "tantivy"
+
+        coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
+
+        try:
+            await coordinator.initialize(on_index_progress=_noop_progress)
+
+            # Get initial test targets
+            initial_targets = await coordinator.get_test_targets()
+            initial_count = len(initial_targets)
+
+            # Add a new test file
+            (integration_repo / "tests" / "test_utils.py").write_text(
+                '"""Tests for utils."""\n\ndef test_helper():\n    assert True\n'
+            )
+
+            # Reindex incrementally with the new file
+            await coordinator.reindex_incremental([Path("tests/test_utils.py")])
+
+            # Should have more test targets now
+            updated_targets = await coordinator.get_test_targets()
+            assert len(updated_targets) > initial_count
+
+            # The new target should reference our file
+            target_paths = [t.path for t in updated_targets]
+            assert "tests/test_utils.py" in target_paths
+        finally:
+            coordinator.close()
+
+    @pytest.mark.asyncio
+    async def test_non_test_file_does_not_create_target(
+        self, integration_repo: Path, tmp_path: Path
+    ) -> None:
+        """Adding a non-test file should not create a TestTarget."""
+        db_path = tmp_path / "index.db"
+        tantivy_path = tmp_path / "tantivy"
+
+        coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
+
+        try:
+            await coordinator.initialize(on_index_progress=_noop_progress)
+
+            initial_targets = await coordinator.get_test_targets()
+            initial_count = len(initial_targets)
+
+            # Add a regular (non-test) Python file
+            (integration_repo / "src" / "helpers.py").write_text(
+                '"""Helper module."""\n\ndef helper():\n    return 42\n'
+            )
+
+            await coordinator.reindex_incremental([Path("src/helpers.py")])
+
+            updated_targets = await coordinator.get_test_targets()
+            assert len(updated_targets) == initial_count
+        finally:
+            coordinator.close()
+
+    @pytest.mark.asyncio
+    async def test_modified_test_file_updates_target(
+        self, integration_repo: Path, tmp_path: Path
+    ) -> None:
+        """Modifying an existing test file should update its target."""
+        db_path = tmp_path / "index.db"
+        tantivy_path = tmp_path / "tantivy"
+
+        coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
+
+        try:
+            await coordinator.initialize(on_index_progress=_noop_progress)
+
+            # Add a test file via incremental reindex
+            test_file = integration_repo / "tests" / "test_updatable.py"
+            test_file.write_text('"""First version."""\n\ndef test_v1():\n    assert True\n')
+            await coordinator.reindex_incremental([Path("tests/test_updatable.py")])
+
+            targets = await coordinator.get_test_targets()
+            target_paths = [t.path for t in targets]
+            assert "tests/test_updatable.py" in target_paths
+
+            # Modify the test file
+            test_file.write_text('"""Second version."""\n\ndef test_v2():\n    assert True\n')
+            await coordinator.reindex_incremental([Path("tests/test_updatable.py")])
+
+            # Target should still exist
+            targets = await coordinator.get_test_targets()
+            target_paths = [t.path for t in targets]
+            assert "tests/test_updatable.py" in target_paths
+        finally:
+            coordinator.close()
+
+    @pytest.mark.asyncio
+    async def test_suffix_test_file_detected(self, integration_repo: Path, tmp_path: Path) -> None:
+        """Files matching *_test.py pattern are detected as test files."""
+        db_path = tmp_path / "index.db"
+        tantivy_path = tmp_path / "tantivy"
+
+        coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
+
+        try:
+            await coordinator.initialize(on_index_progress=_noop_progress)
+
+            initial_targets = await coordinator.get_test_targets()
+            initial_count = len(initial_targets)
+
+            # Add a _test.py suffixed file (alternate Python convention)
+            (integration_repo / "tests" / "utils_test.py").write_text(
+                '"""Utils tests."""\n\ndef test_something():\n    assert True\n'
+            )
+
+            await coordinator.reindex_incremental([Path("tests/utils_test.py")])
+
+            updated_targets = await coordinator.get_test_targets()
+            assert len(updated_targets) > initial_count
+            target_paths = [t.path for t in updated_targets]
+            assert "tests/utils_test.py" in target_paths
+        finally:
+            coordinator.close()

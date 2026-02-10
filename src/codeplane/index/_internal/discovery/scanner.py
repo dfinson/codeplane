@@ -97,7 +97,8 @@ class ContextDiscovery:
             if marker.family not in candidates_by_family:
                 candidates_by_family[marker.family] = []
 
-            marker_dir = str(Path(marker.path).parent)
+            # Use as_posix() to ensure POSIX-style paths on Windows
+            marker_dir = Path(marker.path).parent.as_posix()
             if marker_dir == ".":
                 marker_dir = ""
 
@@ -164,7 +165,8 @@ class ContextDiscovery:
         candidates: list[CandidateContext] = []
 
         for marker in markers:
-            marker_dir = str(Path(marker.path).parent)
+            # Use as_posix() to ensure POSIX-style paths on Windows
+            marker_dir = Path(marker.path).parent.as_posix()
             if marker_dir == ".":
                 marker_dir = ""
 

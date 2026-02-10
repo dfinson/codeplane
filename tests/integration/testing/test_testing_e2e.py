@@ -54,7 +54,7 @@ class TestRunnerPackIntegration:
         # Discover should find our test file
         import asyncio
 
-        targets = asyncio.get_event_loop().run_until_complete(pack.discover(integration_repo))
+        targets = asyncio.run(pack.discover(integration_repo))
 
         # Should find test_main.py
         selectors = {t.selector for t in targets}

@@ -29,6 +29,7 @@ dependencies = [
     "pydantic>=2.12.0",
     "pydantic-settings>=2.12.0",
     "pyyaml>=6.0.0",
+    "json5>=0.9.0",
     # Index
     "sqlmodel>=0.0.24",
     "tantivy>=0.25.0",
@@ -68,6 +69,7 @@ dev = [
     "tree-sitter-json>=0.23.0",
     "tree-sitter-yaml>=0.6.0",
     "tree-sitter-rust>=0.23.0",
+    "tree-sitter-c-sharp>=0.23.0",
 ]
 
 [project.scripts]
@@ -141,6 +143,7 @@ module = [
     "questionary.*",
     "tenacity.*",
     "opentelemetry.*",
+    "json5.*",
 ]
 ignore_missing_imports = true
 
