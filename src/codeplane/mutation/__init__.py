@@ -1,4 +1,4 @@
-"""Mutation operations module - atomic_edit_files tool."""
+"""Mutation operations module - write_files tool."""
 
 from codeplane.mutation.ops import (
     Edit,
