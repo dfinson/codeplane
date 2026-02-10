@@ -419,3 +419,105 @@ class TestScannerEdgeCases:
         # Fallback has empty root and no tier
         fallback = [c for c in result.candidates if c.tier is None]
         assert len(fallback) >= 1
+
+
+class TestCrossPlatformPathNormalization:
+    """Tests for cross-platform path handling in scanner.
+
+    These tests verify that the scanner produces POSIX-style paths regardless
+    of the underlying OS, enabling consistent glob matching and path comparisons.
+    """
+
+    def test_candidate_root_path_uses_forward_slashes(self, temp_dir: Path) -> None:
+        """CandidateContext.root_path should use forward slashes (POSIX).
+
+        On Windows, Path objects produce backslash strings, but our candidates
+        must use forward slashes for consistent glob matching.
+        """
+        repo_path = temp_dir / "repo"
+        repo_path.mkdir()
+
+        # Nested package structure
+        (repo_path / "packages").mkdir()
+        (repo_path / "packages" / "core").mkdir()
+        (repo_path / "packages" / "core" / "package.json").write_text('{"name": "core"}\n')
+
+        discovery = ContextDiscovery(repo_path)
+        result = discovery.discover_all()
+
+        js_candidates = [
+            c for c in result.candidates if c.language_family == LanguageFamily.JAVASCRIPT
+        ]
+        nested_candidates = [c for c in js_candidates if c.root_path and "packages" in c.root_path]
+
+        for candidate in nested_candidates:
+            # root_path must use forward slashes, not backslashes
+            assert "\\" not in candidate.root_path, (
+                f"root_path contains backslash: {candidate.root_path}"
+            )
+            # Should contain forward slash for nested path
+            assert "/" in candidate.root_path or candidate.root_path == "packages"
+
+    def test_marker_paths_use_forward_slashes(self, temp_dir: Path) -> None:
+        """Marker paths in candidates should use forward slashes."""
+        repo_path = temp_dir / "repo"
+        repo_path.mkdir()
+
+        (repo_path / "src").mkdir()
+        (repo_path / "src" / "app").mkdir()
+        (repo_path / "src" / "app" / "pyproject.toml").write_text('[project]\nname = "app"\n')
+
+        discovery = ContextDiscovery(repo_path)
+        result = discovery.discover_all()
+
+        for marker in result.markers:
+            assert "\\" not in marker.path, f"marker path contains backslash: {marker.path}"
+
+    def test_deeply_nested_paths_normalized(self, temp_dir: Path) -> None:
+        """Deeply nested paths should be normalized to POSIX."""
+        repo_path = temp_dir / "repo"
+        repo_path.mkdir()
+
+        # Create deeply nested structure (not using 'pkg' since it's prunable)
+        deep_path = repo_path / "modules" / "sub1" / "sub2" / "sub3"
+        deep_path.mkdir(parents=True)
+        (deep_path / "go.mod").write_text("module example.com/deep\n\ngo 1.21\n")
+
+        discovery = ContextDiscovery(repo_path)
+        result = discovery.discover_all()
+
+        go_candidates = [c for c in result.candidates if c.language_family == LanguageFamily.GO]
+
+        # Should find exactly one Go candidate (the deeply nested one)
+        assert len(go_candidates) == 1
+        # Path should be normalized to POSIX: modules/sub1/sub2/sub3
+        assert go_candidates[0].root_path == "modules/sub1/sub2/sub3"
+        assert "\\" not in go_candidates[0].root_path
+
+    def test_discovery_handles_mixed_separators_consistently(self, temp_dir: Path) -> None:
+        """Discovery should produce consistent paths even if OS uses different separators."""
+        repo_path = temp_dir / "repo"
+        repo_path.mkdir()
+
+        # Multiple packages at same depth
+        (repo_path / "apps").mkdir()
+        (repo_path / "apps" / "web").mkdir()
+        (repo_path / "apps" / "api").mkdir()
+        (repo_path / "apps" / "web" / "package.json").write_text('{"name": "web"}\n')
+        (repo_path / "apps" / "api" / "package.json").write_text('{"name": "api"}\n')
+
+        discovery = ContextDiscovery(repo_path)
+        result = discovery.discover_all()
+
+        js_candidates = [
+            c for c in result.candidates if c.language_family == LanguageFamily.JAVASCRIPT
+        ]
+        app_candidates = [c for c in js_candidates if c.root_path and "apps" in c.root_path]
+
+        # Both should use forward slashes
+        paths = sorted(c.root_path for c in app_candidates)
+        assert "apps/api" in paths
+        assert "apps/web" in paths
+        # No backslashes anywhere
+        for path in paths:
+            assert "\\" not in path

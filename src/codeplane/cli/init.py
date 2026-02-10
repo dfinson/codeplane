@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import click
+import json5
 from rich.table import Table
 
 from codeplane.config.user_config import (
@@ -275,15 +276,16 @@ def _ensure_vscode_mcp_config(repo_root: Path, port: int) -> tuple[bool, str]:
     }
 
     if mcp_json_path.exists():
+        content = mcp_json_path.read_text()
         try:
-            content = mcp_json_path.read_text()
-            # Remove JSONC comments before parsing
-            import re
-
-            content_no_comments = re.sub(r"//.*$", "", content, flags=re.MULTILINE)
-            existing = json.loads(content_no_comments)
-        except json.JSONDecodeError:
-            existing = {}
+            existing: dict[str, Any] = json5.loads(content)
+        except ValueError:
+            # Unparseable JSONC — don't risk overwriting existing servers
+            status(
+                "Warning: .vscode/mcp.json is not valid JSON(C), skipping update",
+                style="warning",
+            )
+            return False, server_name
 
         servers = existing.get("servers", {})
 
@@ -329,15 +331,12 @@ def sync_vscode_mcp_port(repo_root: Path, port: int) -> bool:
     server_name = _get_mcp_server_name(repo_root)
     expected_url = f"http://127.0.0.1:{port}/mcp"
 
+    content = mcp_json_path.read_text()
     try:
-        content = mcp_json_path.read_text()
-        import re
-
-        content_no_comments = re.sub(r"//.*$", "", content, flags=re.MULTILINE)
-        existing = json.loads(content_no_comments)
-    except json.JSONDecodeError:
-        # Invalid JSON, recreate the file
-        return _ensure_vscode_mcp_config(repo_root, port)[0]
+        existing: dict[str, Any] = json5.loads(content)
+    except ValueError:
+        # Unparseable JSONC — don't risk overwriting existing servers
+        return False
 
     servers = existing.get("servers", {})
     if server_name not in servers:

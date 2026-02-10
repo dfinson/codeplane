@@ -303,6 +303,8 @@ class ImportKind(StrEnum):
     TS_IMPORT_TYPE = "ts_import_type"  # import type { Foo } from 'bar'
     GO_IMPORT = "go_import"  # import "foo"
     RUST_USE = "rust_use"  # use foo::bar
+    CSHARP_USING = "csharp_using"  # using Namespace;
+    CSHARP_USING_STATIC = "csharp_using_static"  # using static Namespace.Type;
 
 
 class ExportThunkMode(StrEnum):
@@ -556,6 +558,9 @@ class DefFact(SQLModel, table=True):
     name: str = Field(index=True)  # Simple name
     qualified_name: str | None = None  # Full path (e.g., module.Class.method)
     lexical_path: str = Field(index=True)  # Syntactic nesting path for identity
+    namespace: str | None = Field(
+        default=None, index=True
+    )  # Declaring namespace/package (C#, Java, Go, etc.)
     start_line: int
     start_col: int
     end_line: int

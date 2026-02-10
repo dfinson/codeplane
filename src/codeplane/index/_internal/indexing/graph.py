@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlmodel import select
+from sqlmodel import col, select
 
 from codeplane.index.models import (
     AnchorGroup,
@@ -61,14 +61,60 @@ class FactQueries:
     # -------------------------------------------------------------------------
 
     def list_refs_by_def_uid(
-        self, def_uid: str, *, tier: RefTier | None = None, limit: int = 100
+        self,
+        def_uid: str,
+        *,
+        tier: RefTier | None = None,
+        limit: int = 250,
+        offset: int = 0,
     ) -> list[RefFact]:
-        """List references to a definition."""
+        """List references to a definition with pagination.
+
+        Args:
+            def_uid: Stable definition UID.
+            tier: Optional tier filter.
+            limit: Maximum results per page (default 250).
+            offset: Number of rows to skip for pagination.
+
+        Returns:
+            List of RefFact objects for the requested page.
+        """
         stmt = select(RefFact).where(RefFact.target_def_uid == def_uid)
         if tier is not None:
             stmt = stmt.where(RefFact.ref_tier == tier.value)
-        stmt = stmt.limit(limit)
+        stmt = stmt.order_by(col(RefFact.ref_id)).offset(offset).limit(limit)
         return list(self._session.exec(stmt).all())
+
+    def list_all_refs_by_def_uid(
+        self,
+        def_uid: str,
+        *,
+        tier: RefTier | None = None,
+        page_size: int = 250,
+    ) -> list[RefFact]:
+        """Exhaustively list ALL references to a definition.
+
+        Paginates internally to avoid unbounded single queries while
+        guaranteeing completeness.  Use this for mutation operations
+        (rename, delete) that **must** see every reference.
+
+        Args:
+            def_uid: Stable definition UID.
+            tier: Optional tier filter.
+            page_size: Internal page size (default 250).
+
+        Returns:
+            Complete list of RefFact objects.
+        """
+        all_refs: list[RefFact] = []
+        offset = 0
+        while True:
+            page = self.list_refs_by_def_uid(def_uid, tier=tier, limit=page_size, offset=offset)
+            all_refs.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
+        return all_refs
 
     def list_proven_refs(self, def_uid: str, *, limit: int = 100) -> list[RefFact]:
         """List PROVEN references to a definition (convenience)."""

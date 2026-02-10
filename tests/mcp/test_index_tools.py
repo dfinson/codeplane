@@ -162,7 +162,7 @@ class MockTreeNode:
     is_dir: bool
     file_count: int = 0  # Only for directories
     line_count: int = 0  # Only for files
-    children: list[Any] = None
+    children: list[Any] | None = None
 
     def __post_init__(self) -> None:
         if self.children is None:

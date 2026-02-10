@@ -127,6 +127,19 @@ class ParseResult:
     root_node: Any  # Tree-sitter Node
 
 
+# C# preprocessor wrapper node types that may contain declarations.
+# Tree-sitter wraps code inside #if/#region blocks under these types.
+_CSHARP_PREPROC_WRAPPERS = frozenset(
+    {
+        "preproc_if",
+        "preproc_ifdef",
+        "preproc_elif",
+        "preproc_else",
+        "preproc_region",
+    }
+)
+
+
 # Language to Tree-sitter language name mapping
 # Maps our internal names to tree-sitter grammar module names
 LANGUAGE_MAP: dict[str, str] = {
@@ -233,6 +246,9 @@ SYMBOL_QUERIES: dict[str, str] = {
         (class_declaration name: (identifier) @name) @class
         (interface_declaration name: (identifier) @name) @interface
         (struct_declaration name: (identifier) @name) @struct
+        (enum_declaration name: (identifier) @name) @enum
+        (record_declaration name: (identifier) @name) @record
+        (record_struct_declaration name: (identifier) @name) @record_struct
     """,
     "c": """
         (function_definition declarator: (function_declarator declarator: (identifier) @name)) @function
@@ -630,6 +646,8 @@ class TreeSitterParser:
             return self._extract_python_imports(result.root_node, file_path)
         elif result.language in ("javascript", "typescript", "tsx"):
             return self._extract_js_imports(result.root_node, file_path)
+        elif result.language == "csharp":
+            return self._extract_csharp_imports(result.root_node, file_path)
         else:
             return []
 
@@ -914,12 +932,247 @@ class TreeSitterParser:
                                     end_col=node.end_point[1],
                                 )
                             )
+                    elif child.type == "wildcard_import":
+                        # from X import * — namespace-level wildcard import
+                        imports.append(
+                            SyntacticImport(
+                                import_uid=make_uid("*", node.start_point[0] + 1),
+                                imported_name="*",
+                                alias=None,
+                                source_literal=source,
+                                import_kind="python_from",
+                                start_line=node.start_point[0] + 1,
+                                start_col=node.start_point[1],
+                                end_line=node.end_point[0] + 1,
+                                end_col=node.end_point[1],
+                            )
+                        )
 
             for child in node.children:
                 walk(child)
 
         walk(root)
         return imports
+
+    # ------------------------------------------------------------------
+    # C# using directive and namespace extraction
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _qualified_name_text(node: Any) -> str:
+        """Extract full text of a qualified_name or identifier node."""
+        if node.text:
+            text: str = node.text.decode("utf-8")
+            return text
+        return ""
+
+    def _extract_csharp_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract using directives from C# AST.
+
+        Handles three forms:
+        - ``using Namespace;``  -> import_kind = csharp_using
+        - ``using static Type;`` -> import_kind = csharp_using_static
+        - ``using Alias = Namespace.Type;`` -> import_kind = csharp_using, alias set
+        """
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def _walk_for_usings(parent: Any) -> None:
+            """Walk tree nodes, descending into namespaces and preprocessor wrappers.
+
+            C# allows `using` directives inside namespace declarations, so we must
+            recurse into namespace_declaration and declaration_list nodes.
+            """
+            _DESCEND_INTO = _CSHARP_PREPROC_WRAPPERS | {
+                "namespace_declaration",
+                "declaration_list",
+            }
+            for node in parent.children:
+                if node.type in _DESCEND_INTO:
+                    _walk_for_usings(node)
+                if node.type == "using_directive":
+                    _process_using_directive(node)
+
+        def _process_using_directive(node: Any) -> None:
+            children = node.children
+            has_static = any(c.type == "static" for c in children)
+            has_equals = any(c.type == "=" or (c.text and c.text == b"=") for c in children)
+
+            if has_equals:
+                # Aliased using: using Alias = Namespace.Type;
+                alias_node = None
+                target_node = None
+                found_equals = False
+                for c in children:
+                    if c.type == "using":
+                        continue
+                    if c.type == ";":
+                        continue
+                    if c.type == "=" or (c.text and c.text == b"="):
+                        found_equals = True
+                        continue
+                    if not found_equals and c.type == "identifier":
+                        alias_node = c
+                    elif found_equals and c.type in (
+                        "qualified_name",
+                        "identifier",
+                        "generic_name",
+                    ):
+                        target_node = c
+
+                if alias_node and target_node:
+                    alias_text = self._qualified_name_text(alias_node)
+                    target_text = self._qualified_name_text(target_node)
+                    imports.append(
+                        SyntacticImport(
+                            import_uid=make_uid(target_text, node.start_point[0] + 1),
+                            imported_name=target_text,
+                            alias=alias_text,
+                            source_literal=target_text,
+                            import_kind="csharp_using",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_col=node.end_point[1],
+                        )
+                    )
+
+            elif has_static:
+                # Static using: using static Namespace.Type;
+                target_node = None
+                for c in children:
+                    if c.type in ("qualified_name", "identifier", "generic_name"):
+                        target_node = c
+                if target_node:
+                    target_text = self._qualified_name_text(target_node)
+                    imports.append(
+                        SyntacticImport(
+                            import_uid=make_uid(target_text, node.start_point[0] + 1),
+                            imported_name=target_text,
+                            alias=None,
+                            source_literal=target_text,
+                            import_kind="csharp_using_static",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_col=node.end_point[1],
+                        )
+                    )
+
+            else:
+                # Regular namespace using: using Namespace;
+                target_node = None
+                for c in children:
+                    if c.type in ("qualified_name", "identifier"):
+                        target_node = c
+                        break
+                if target_node:
+                    target_text = self._qualified_name_text(target_node)
+                    imports.append(
+                        SyntacticImport(
+                            import_uid=make_uid(target_text, node.start_point[0] + 1),
+                            imported_name=target_text,
+                            alias=None,
+                            source_literal=target_text,
+                            import_kind="csharp_using",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_col=node.end_point[1],
+                        )
+                    )
+
+        _walk_for_usings(root)
+        return imports
+
+    def extract_csharp_namespace_types(self, root: Any) -> dict[str, list[str]]:
+        """Extract namespace -> type names mapping from a C# AST.
+
+        Handles both block-scoped and file-scoped namespace declarations,
+        including nested namespace declarations with composed prefixes
+        (e.g., ``namespace Outer { namespace Inner { class Foo {} } }``
+        extracts ``{"Outer.Inner": ["Foo"]}``).
+
+        Returns a dict mapping fully-qualified namespace names to lists of
+        top-level type names (classes, interfaces, structs, enums) declared
+        within that namespace.
+        """
+        _TYPE_DECLS = {
+            "class_declaration",
+            "interface_declaration",
+            "struct_declaration",
+            "enum_declaration",
+            "record_declaration",
+            "record_struct_declaration",
+        }
+
+        ns_map: dict[str, list[str]] = {}
+
+        def _type_names_from(declaration_list: Any, ns_name: str) -> None:
+            """Collect type names from a declaration_list node, recursing into nested namespaces."""
+            for child in declaration_list.children:
+                if child.type in _TYPE_DECLS:
+                    for sub in child.children:
+                        if sub.type == "identifier":
+                            ns_map.setdefault(ns_name, []).append(sub.text.decode("utf-8"))
+                            break
+                elif child.type == "namespace_declaration":
+                    # Nested namespace: namespace Inner { ... }
+                    _process_namespace(child, ns_name)
+                elif child.type in _CSHARP_PREPROC_WRAPPERS:
+                    # Recurse into preprocessor blocks
+                    _type_names_from(child, ns_name)
+
+        def _process_namespace(node: Any, parent_ns: str | None) -> None:
+            """Process a namespace_declaration node, composing the full namespace path."""
+            ns_name = None
+            for child in node.children:
+                if child.type in ("qualified_name", "identifier"):
+                    local_ns = self._qualified_name_text(child)
+                    ns_name = f"{parent_ns}.{local_ns}" if parent_ns else local_ns
+                elif child.type == "declaration_list" and ns_name:
+                    _type_names_from(child, ns_name)
+
+        def _walk_for_namespaces(parent: Any, parent_ns: str | None = None) -> None:
+            """Walk tree nodes, descending into preprocessor wrappers."""
+            for node in parent.children:
+                if node.type == "namespace_declaration":
+                    # Block-scoped: namespace X.Y { class A {} }
+                    _process_namespace(node, parent_ns)
+
+                elif node.type == "file_scoped_namespace_declaration":
+                    # File-scoped: namespace X.Y;
+                    ns_name = None
+                    for child in node.children:
+                        if child.type in ("qualified_name", "identifier"):
+                            ns_name = self._qualified_name_text(child)
+                            break
+                    if ns_name:
+                        # Types are siblings in compilation_unit, not children.
+                        # Scan all root-level nodes (including inside preproc wrappers).
+                        _collect_file_scoped_types(root, ns_name)
+
+                elif node.type in _CSHARP_PREPROC_WRAPPERS:
+                    # Recurse into preprocessor blocks to find wrapped namespaces
+                    _walk_for_namespaces(node, parent_ns)
+
+        def _collect_file_scoped_types(parent: Any, ns_name: str) -> None:
+            """Collect type declarations for file-scoped namespaces, including inside preproc blocks."""
+            for sibling in parent.children:
+                if sibling.type in _TYPE_DECLS:
+                    for sub in sibling.children:
+                        if sub.type == "identifier":
+                            ns_map.setdefault(ns_name, []).append(sub.text.decode("utf-8"))
+                            break
+                elif sibling.type in _CSHARP_PREPROC_WRAPPERS:
+                    _collect_file_scoped_types(sibling, ns_name)
+
+        _walk_for_namespaces(root)
+
+        return ns_map
 
     def _extract_js_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
         """Extract imports from JavaScript/TypeScript AST."""
@@ -1691,9 +1944,13 @@ class TreeSitterParser:
             "struct_item",
             "enum_definition",
             "enum_item",
+            "enum_declaration",
             "interface_declaration",
             "type_declaration",
             "trait_item",
+            # C# record types (SYNC: resolver.py _TYPE_KINDS)
+            "record_declaration",
+            "record_struct_declaration",
         }
 
         def walk(node: Any) -> None:

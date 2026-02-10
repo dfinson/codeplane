@@ -158,7 +158,8 @@ class FileOps:
             if pattern:
                 try:
                     rel_path = item.relative_to(target_dir)
-                    rel_str = str(rel_path)
+                    # Use as_posix() for cross-platform pattern matching
+                    rel_str = rel_path.as_posix()
                 except ValueError:
                     continue
 
@@ -173,7 +174,8 @@ class FileOps:
             if len(entries) < limit:
                 try:
                     full_rel = item.relative_to(self._repo_root)
-                    rel_path_str = str(full_rel)
+                    # Use as_posix() for consistent cross-platform paths
+                    rel_path_str = full_rel.as_posix()
                 except ValueError:
                     rel_path_str = item.name
 

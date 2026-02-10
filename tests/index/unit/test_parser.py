@@ -628,6 +628,296 @@ import * as utils from './utils';
         if namespace_import:
             assert namespace_import.alias == "utils"
 
+    def test_extract_python_wildcard_import(self, parser: TreeSitterParser, temp_dir: Path) -> None:
+        """Should extract wildcard (star) imports from Python."""
+        content = """from os.path import *
+from collections import *
+"""
+        file_path = temp_dir / "test.py"
+        file_path.write_text(content)
+        result = parser.parse(file_path, content.encode())
+
+        imports = parser.extract_imports(result, str(file_path))
+
+        # Should find two star imports
+        star_imports = [i for i in imports if i.imported_name == "*"]
+        assert len(star_imports) == 2
+
+        # Check source modules
+        sources = sorted(i.source_literal for i in star_imports if i.source_literal)
+        assert "collections" in sources
+        assert "os.path" in sources
+
+        # All should be python_from kind
+        assert all(i.import_kind == "python_from" for i in star_imports)
+
+        # No alias for star imports
+        assert all(i.alias is None for i in star_imports)
+
+    def test_extract_python_wildcard_import_relative(
+        self, parser: TreeSitterParser, temp_dir: Path
+    ) -> None:
+        """Should extract relative wildcard imports from Python."""
+        content = "from . import *\n"
+        file_path = temp_dir / "test.py"
+        file_path.write_text(content)
+        result = parser.parse(file_path, content.encode())
+
+        imports = parser.extract_imports(result, str(file_path))
+
+        star_imports = [i for i in imports if i.imported_name == "*"]
+        assert len(star_imports) == 1
+        assert star_imports[0].import_kind == "python_from"
+
+    def test_extract_csharp_using_regular(self, parser: TreeSitterParser, temp_dir: Path) -> None:
+        """Should extract regular C# using directives."""
+        content = """using System;
+using System.Collections.Generic;
+using Newtonsoft.Json;
+"""
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+        result = parser.parse(file_path, content.encode())
+
+        imports = parser.extract_imports(result, str(file_path))
+
+        assert len(imports) == 3
+        names = [i.imported_name for i in imports]
+        assert "System" in names
+        assert "System.Collections.Generic" in names
+        assert "Newtonsoft.Json" in names
+
+        # All should be csharp_using kind, no aliases
+        assert all(i.import_kind == "csharp_using" for i in imports)
+        assert all(i.alias is None for i in imports)
+
+    def test_extract_csharp_using_static(self, parser: TreeSitterParser, temp_dir: Path) -> None:
+        """Should extract static C# using directives."""
+        content = "using static System.Math;\n"
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+        result = parser.parse(file_path, content.encode())
+
+        imports = parser.extract_imports(result, str(file_path))
+
+        assert len(imports) == 1
+        assert imports[0].imported_name == "System.Math"
+        assert imports[0].import_kind == "csharp_using_static"
+        assert imports[0].alias is None
+
+    def test_extract_csharp_using_aliased(self, parser: TreeSitterParser, temp_dir: Path) -> None:
+        """Should extract aliased C# using directives."""
+        content = "using MyList = System.Collections.Generic.List;\n"
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+        result = parser.parse(file_path, content.encode())
+
+        imports = parser.extract_imports(result, str(file_path))
+
+        assert len(imports) == 1
+        assert imports[0].alias == "MyList"
+        assert "System.Collections.Generic.List" in imports[0].imported_name
+        assert imports[0].import_kind == "csharp_using"
+
+    def test_extract_csharp_mixed_usings(self, parser: TreeSitterParser, temp_dir: Path) -> None:
+        """Should handle mixed using directive forms in a single file."""
+        content = """using System;
+using static System.Math;
+using Alias = System.Collections.Generic.List;
+
+namespace Foo {
+    class Bar { }
+}
+"""
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+        result = parser.parse(file_path, content.encode())
+
+        imports = parser.extract_imports(result, str(file_path))
+
+        assert len(imports) == 3
+
+        regular = [i for i in imports if i.import_kind == "csharp_using" and i.alias is None]
+        assert len(regular) == 1
+        assert regular[0].imported_name == "System"
+
+        static = [i for i in imports if i.import_kind == "csharp_using_static"]
+        assert len(static) == 1
+        assert static[0].imported_name == "System.Math"
+
+        aliased = [i for i in imports if i.alias is not None]
+        assert len(aliased) == 1
+        assert aliased[0].alias == "Alias"
+
+    def test_extract_csharp_using_inside_namespace(
+        self, parser: TreeSitterParser, temp_dir: Path
+    ) -> None:
+        """Should extract using directives inside namespace declarations.
+
+        C# allows using directives inside namespace blocks, not just at file scope.
+        This tests that _walk_for_usings correctly descends into namespace_declaration
+        and declaration_list nodes.
+        """
+        content = """using System;
+
+namespace MyApp {
+    using System.Linq;
+    using static System.Math;
+
+    namespace Nested {
+        using Newtonsoft.Json;
+
+        public class Foo { }
+    }
+
+    public class Bar { }
+}
+"""
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+        result = parser.parse(file_path, content.encode())
+
+        imports = parser.extract_imports(result, str(file_path))
+
+        # Should find all 4 usings: root-level + namespace-scoped + nested namespace
+        assert len(imports) == 4
+
+        names = [i.imported_name for i in imports]
+        assert "System" in names  # root level
+        assert "System.Linq" in names  # inside MyApp namespace
+        assert "System.Math" in names  # static inside MyApp namespace
+        assert "Newtonsoft.Json" in names  # inside MyApp.Nested namespace
+
+        # Verify import kinds
+        regular = [i for i in imports if i.import_kind == "csharp_using" and i.alias is None]
+        assert len(regular) == 3  # System, System.Linq, Newtonsoft.Json
+
+        static = [i for i in imports if i.import_kind == "csharp_using_static"]
+        assert len(static) == 1
+        assert static[0].imported_name == "System.Math"
+
+
+class TestNamespaceTypeExtraction:
+    """Tests for C# namespace -> type name extraction."""
+
+    def test_extract_block_scoped_namespace(self, parser: TreeSitterParser, temp_dir: Path) -> None:
+        """Should extract types from block-scoped namespace declarations."""
+        content = """namespace Foo.Bar {
+    public class MyClass { }
+    public interface IMyInterface { }
+    public struct MyStruct { }
+    public enum MyEnum { A, B }
+}
+"""
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+        result = parser.parse(file_path, content.encode())
+
+        ns_map = parser.extract_csharp_namespace_types(result.root_node)
+
+        assert "Foo.Bar" in ns_map
+        types = ns_map["Foo.Bar"]
+        assert "MyClass" in types
+        assert "IMyInterface" in types
+        assert "MyStruct" in types
+        assert "MyEnum" in types
+
+    def test_extract_multiple_namespaces(self, parser: TreeSitterParser, temp_dir: Path) -> None:
+        """Should extract types from multiple namespaces in one file."""
+        content = """namespace A {
+    class Foo { }
+}
+namespace B {
+    class Bar { }
+}
+"""
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+        result = parser.parse(file_path, content.encode())
+
+        ns_map = parser.extract_csharp_namespace_types(result.root_node)
+
+        assert "A" in ns_map
+        assert "Foo" in ns_map["A"]
+        assert "B" in ns_map
+        assert "Bar" in ns_map["B"]
+
+    def test_extract_file_scoped_namespace(self, parser: TreeSitterParser, temp_dir: Path) -> None:
+        """Should extract types from file-scoped namespace declarations."""
+        content = """namespace Foo.Bar;
+
+public class Baz { }
+public interface IBaz { }
+"""
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+        result = parser.parse(file_path, content.encode())
+
+        ns_map = parser.extract_csharp_namespace_types(result.root_node)
+
+        assert "Foo.Bar" in ns_map
+        types = ns_map["Foo.Bar"]
+        assert "Baz" in types
+        assert "IBaz" in types
+
+    def test_empty_namespace(self, parser: TreeSitterParser, temp_dir: Path) -> None:
+        """Should handle empty namespaces without error."""
+        content = "namespace Empty { }\n"
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+        result = parser.parse(file_path, content.encode())
+
+        ns_map = parser.extract_csharp_namespace_types(result.root_node)
+
+        # Empty namespace should not appear in map
+        assert "Empty" not in ns_map
+
+    def test_extract_nested_namespaces(self, parser: TreeSitterParser, temp_dir: Path) -> None:
+        """Should extract types from nested namespace declarations with composed paths."""
+        content = """namespace Outer {
+    namespace Inner {
+        class Foo { }
+        interface IBar { }
+    }
+    class OuterOnly { }
+}
+"""
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+        result = parser.parse(file_path, content.encode())
+
+        ns_map = parser.extract_csharp_namespace_types(result.root_node)
+
+        # Nested namespace should be composed as Outer.Inner
+        assert "Outer.Inner" in ns_map
+        assert "Foo" in ns_map["Outer.Inner"]
+        assert "IBar" in ns_map["Outer.Inner"]
+
+        # Types declared directly in Outer should also be extracted
+        assert "Outer" in ns_map
+        assert "OuterOnly" in ns_map["Outer"]
+
+    def test_extract_deeply_nested_namespaces(
+        self, parser: TreeSitterParser, temp_dir: Path
+    ) -> None:
+        """Should handle deeply nested namespaces (3+ levels)."""
+        content = """namespace A {
+    namespace B {
+        namespace C {
+            class DeepClass { }
+        }
+    }
+}
+"""
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+        result = parser.parse(file_path, content.encode())
+
+        ns_map = parser.extract_csharp_namespace_types(result.root_node)
+
+        assert "A.B.C" in ns_map
+        assert "DeepClass" in ns_map["A.B.C"]
+
 
 class TestDynamicAccessExtraction:
     """Tests for dynamic access pattern detection."""
