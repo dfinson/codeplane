@@ -215,3 +215,27 @@ class RebaseConflictError(RebaseError):
     def __init__(self, paths: list[str]) -> None:
         super().__init__(f"Rebase conflict in: {', '.join(paths)}")
         self.paths = paths
+
+
+# =============================================================================
+# Commit Validation Errors
+# =============================================================================
+
+
+class EmptyCommitMessageError(GitError):
+    """Commit message is empty or whitespace only."""
+
+    def __init__(self) -> None:
+        super().__init__("Commit message cannot be empty")
+
+
+class PathsNotFoundError(GitError):
+    """One or more paths do not exist."""
+
+    def __init__(self, missing_paths: list[str]) -> None:
+        if len(missing_paths) == 1:
+            msg = f"Path not found: {missing_paths[0]}"
+        else:
+            msg = f"Paths not found: {', '.join(missing_paths)}"
+        super().__init__(msg)
+        self.missing_paths = missing_paths

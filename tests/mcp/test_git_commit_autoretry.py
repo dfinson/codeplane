@@ -184,10 +184,15 @@ class TestGitCommitHookAutoRetry:
 
     @pytest.mark.asyncio
     async def test_paths_staged_before_hook(
-        self, git_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock
+        self, git_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock, tmp_path: Any
     ) -> None:
         """When paths are provided, they are staged before running hooks."""
         mock_context.git_ops.commit.return_value = "abc1234567890"
+        mock_context.git_ops.repo.workdir = str(tmp_path)
+
+        # Create the files that will be staged
+        (tmp_path / "file1.py").write_text("# file1")
+        (tmp_path / "file2.py").write_text("# file2")
 
         with patch(
             "codeplane.mcp.tools.git.run_hook",
@@ -200,10 +205,16 @@ class TestGitCommitHookAutoRetry:
 
     @pytest.mark.asyncio
     async def test_autofix_restages_both_fixed_and_original_paths(
-        self, git_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock
+        self, git_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock, tmp_path: Any
     ) -> None:
         """On retry, both auto-fixed files AND original paths are re-staged."""
         mock_context.git_ops.commit.return_value = "abc1234567890"
+        mock_context.git_ops.repo.workdir = str(tmp_path)
+
+        # Create the file that will be staged
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        (src_dir / "my_file.py").write_text("# my_file")
 
         call_count = 0
 
@@ -243,3 +254,38 @@ class TestGitCommitHookAutoRetry:
             await git_commit_tool(mock_ctx, message="test")
 
         mock_context.git_ops.stage.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_message(
+        self, git_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock
+    ) -> None:
+        """Rejects empty or whitespace-only commit messages."""
+        from codeplane.git.errors import EmptyCommitMessageError
+
+        with pytest.raises(EmptyCommitMessageError):
+            await git_commit_tool(mock_ctx, message="")
+
+        with pytest.raises(EmptyCommitMessageError):
+            await git_commit_tool(mock_ctx, message="   ")
+
+        with pytest.raises(EmptyCommitMessageError):
+            await git_commit_tool(mock_ctx, message="\n\t")
+
+        mock_context.git_ops.stage.assert_not_called()
+        mock_context.git_ops.commit.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_rejects_nonexistent_paths(
+        self, git_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock, tmp_path: Any
+    ) -> None:
+        """Rejects paths that don't exist with detailed error."""
+        from codeplane.git.errors import PathsNotFoundError
+
+        mock_context.git_ops.repo.workdir = str(tmp_path)
+
+        with pytest.raises(PathsNotFoundError) as exc_info:
+            await git_commit_tool(mock_ctx, message="test", paths=["missing.py"])
+        assert exc_info.value.missing_paths == ["missing.py"]
+
+        mock_context.git_ops.stage.assert_not_called()
+        mock_context.git_ops.commit.assert_not_called()

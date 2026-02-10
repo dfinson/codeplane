@@ -12,6 +12,7 @@ from pydantic import Field
 
 from codeplane.config.constants import GIT_BLAME_MAX, GIT_LOG_MAX
 from codeplane.git._internal.hooks import run_hook
+from codeplane.git.errors import EmptyCommitMessageError, PathsNotFoundError
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -78,6 +79,35 @@ def _summarize_commit(sha: str, message: str) -> str:
 def _summarize_log(count: int, has_more: bool) -> str:
     more = " (more available)" if has_more else ""
     return f"{count} commits{more}"
+
+
+# =============================================================================
+# Validation Helpers
+# =============================================================================
+
+
+def _validate_commit_message(message: str) -> None:
+    """Validate commit message is not empty or whitespace-only."""
+    if not message or not message.strip():
+        raise EmptyCommitMessageError()
+
+
+def _validate_paths_exist(repo_path: Path, paths: list[str]) -> None:
+    """Validate all paths exist in the repository or working tree.
+
+    Raises PathsNotFoundError with details about which paths are missing.
+    """
+    if not paths:
+        return
+
+    missing: list[str] = []
+    for p in paths:
+        full_path = repo_path / p
+        if not full_path.exists():
+            missing.append(p)
+
+    if missing:
+        raise PathsNotFoundError(missing)
 
 
 # =============================================================================
@@ -251,10 +281,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         """
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
+        # Validate inputs
+        _validate_commit_message(message)
+        repo_path = Path(app_ctx.git_ops.repo.workdir)
         if isinstance(paths, list) and paths:
+            _validate_paths_exist(repo_path, paths)
             app_ctx.git_ops.stage(paths)
 
-        repo_path = Path(app_ctx.git_ops.repo.workdir)
         original_paths = paths if isinstance(paths, list) else []
         hook_result, failure = _run_hook_with_retry(
             repo_path, original_paths, app_ctx.git_ops.stage
@@ -297,6 +330,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         is returned.
         """
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        # Validate inputs
+        _validate_commit_message(message)
+        repo_path = Path(app_ctx.git_ops.repo.workdir)
+        _validate_paths_exist(repo_path, paths)
 
         app_ctx.git_ops.stage(paths)
 
