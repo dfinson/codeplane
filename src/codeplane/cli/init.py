@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import math
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -243,6 +244,59 @@ def _get_mcp_server_name(repo_root: Path) -> str:
     return f"codeplane-{normalized}"
 
 
+def _strip_jsonc_comments(text: str) -> str:
+    """Strip ``//`` and ``/* */`` comments from JSONC, respecting string literals."""
+    result: list[str] = []
+    i = 0
+    n = len(text)
+    in_string = False
+    while i < n:
+        if in_string:
+            if text[i] == "\\" and i + 1 < n:
+                result.append(text[i : i + 2])
+                i += 2
+                continue
+            if text[i] == '"':
+                in_string = False
+            result.append(text[i])
+            i += 1
+        else:
+            if text[i] == '"':
+                in_string = True
+                result.append(text[i])
+                i += 1
+            elif i + 1 < n and text[i] == "/" and text[i + 1] == "/":
+                # Line comment — skip to end of line
+                i += 2
+                while i < n and text[i] != "\n":
+                    i += 1
+            elif i + 1 < n and text[i] == "/" and text[i + 1] == "*":
+                # Block comment — skip to */
+                i += 2
+                while i < n - 1 and not (text[i] == "*" and text[i + 1] == "/"):
+                    i += 1
+                if i < n - 1:
+                    i += 2  # Skip */
+            else:
+                result.append(text[i])
+                i += 1
+    return "".join(result)
+
+
+def _parse_jsonc(text: str) -> dict[str, Any] | None:
+    """Parse JSONC (JSON with comments and trailing commas) into a dict.
+
+    Returns None if the content cannot be parsed.
+    """
+    stripped = _strip_jsonc_comments(text)
+    # Remove trailing commas before } or ] (common in VS Code JSONC files)
+    stripped = re.sub(r",\s*([}\]])", r"\1", stripped)
+    try:
+        return json.loads(stripped)  # type: ignore[no-any-return]
+    except json.JSONDecodeError:
+        return None
+
+
 def _ensure_vscode_mcp_config(repo_root: Path, port: int) -> tuple[bool, str]:
     """Ensure .vscode/mcp.json has the CodePlane server entry with static port.
 
@@ -262,15 +316,15 @@ def _ensure_vscode_mcp_config(repo_root: Path, port: int) -> tuple[bool, str]:
     }
 
     if mcp_json_path.exists():
-        try:
-            content = mcp_json_path.read_text()
-            # Remove JSONC comments before parsing
-            import re
-
-            content_no_comments = re.sub(r"//.*$", "", content, flags=re.MULTILINE)
-            existing = json.loads(content_no_comments)
-        except json.JSONDecodeError:
-            existing = {}
+        content = mcp_json_path.read_text()
+        existing = _parse_jsonc(content)
+        if existing is None:
+            # Unparseable JSONC — don't risk overwriting existing servers
+            status(
+                "Warning: .vscode/mcp.json is not valid JSON(C), skipping update",
+                style="warning",
+            )
+            return False, server_name
 
         servers = existing.get("servers", {})
 
@@ -316,15 +370,11 @@ def sync_vscode_mcp_port(repo_root: Path, port: int) -> bool:
     server_name = _get_mcp_server_name(repo_root)
     expected_url = f"http://127.0.0.1:{port}/mcp"
 
-    try:
-        content = mcp_json_path.read_text()
-        import re
-
-        content_no_comments = re.sub(r"//.*$", "", content, flags=re.MULTILINE)
-        existing = json.loads(content_no_comments)
-    except json.JSONDecodeError:
-        # Invalid JSON, recreate the file
-        return _ensure_vscode_mcp_config(repo_root, port)[0]
+    content = mcp_json_path.read_text()
+    existing = _parse_jsonc(content)
+    if existing is None:
+        # Unparseable JSONC — don't risk overwriting existing servers
+        return False
 
     servers = existing.get("servers", {})
     if server_name not in servers:
