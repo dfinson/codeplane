@@ -621,6 +621,140 @@ class TestPaginatedReferencesIntegration:
 # ============================================================================
 
 
+class TestRootFallbackContextDefault:
+    """Files without specific context mapping get root fallback context ID.
+
+    Verifies the fix for ops.py:2136 Copilot comment: files in `ctx_file_ids`
+    with no specific context mapping should default to the root fallback context
+    (tier=3) rather than `None`, ensuring Pass 1.5 resolvers receive proper
+    unit_id scoping.
+    """
+
+    def test_root_fallback_used_for_unmapped_files(self, db: Database, temp_dir: Path) -> None:
+        """Files not matching any specific context should use root fallback ID."""
+        db.create_all()
+        with db.session() as session:
+            # Create a specific context (tier=1) with narrow root_path
+            ctx_specific = Context(
+                name="specific",
+                language_family="python",
+                root_path="project_a",
+                tier=1,
+            )
+            # Create root fallback context (tier=3) which catches everything else
+            ctx_root = Context(
+                name="_root",
+                language_family="python",
+                root_path="",
+                tier=3,
+            )
+            session.add_all([ctx_specific, ctx_root])
+            session.commit()
+            specific_id = ctx_specific.id
+            root_id = ctx_root.id
+
+        (temp_dir / "project_a").mkdir(exist_ok=True)
+        # File in specific context
+        (temp_dir / "project_a" / "module.py").write_text("def in_specific(): pass\n")
+        # File NOT in any specific context - should use root fallback
+        (temp_dir / "utils.py").write_text("def in_root(): pass\n")
+
+        indexer = StructuralIndexer(db, temp_dir)
+        # Index file in specific context
+        indexer.index_files(["project_a/module.py"], context_id=specific_id or 1)
+        # Index file that has no specific context
+        indexer.index_files(["utils.py"], context_id=root_id or 2)
+
+        # Verify facts were created with correct unit_ids
+        with db.session() as session:
+            specific_def = session.exec(
+                select(DefFact).where(DefFact.name == "in_specific")
+            ).first()
+            root_def = session.exec(select(DefFact).where(DefFact.name == "in_root")).first()
+
+            assert specific_def is not None
+            assert specific_def.unit_id == specific_id
+
+            assert root_def is not None
+            assert root_def.unit_id == root_id, (
+                f"Expected unit_id={root_id} (root fallback), got {root_def.unit_id}"
+            )
+
+    def test_pass15_resolvers_with_root_fallback_context(
+        self, db: Database, temp_dir: Path
+    ) -> None:
+        """Pass 1.5 resolvers work correctly with root fallback context ID."""
+        db.create_all()
+        with db.session() as session:
+            ctx_root = Context(
+                name="_root",
+                language_family="python",
+                root_path="",
+                tier=3,
+            )
+            session.add(ctx_root)
+            session.commit()
+            root_id = ctx_root.id
+
+        # Create module with definition and consumer with star import
+        (temp_dir / "lib.py").write_text("def helper(): pass\n")
+        (temp_dir / "app.py").write_text("from lib import *\nx = helper()\n")
+
+        indexer = StructuralIndexer(db, temp_dir)
+        indexer.index_files(["lib.py", "app.py"], context_id=root_id or 1)
+
+        # Run star-import resolver with root context ID
+        stats = resolve_star_import_refs(db, root_id)
+        assert stats.refs_upgraded >= 1
+
+        # Verify resolution worked
+        with db.session() as session:
+            app_file = session.exec(select(File).where(File.path == "app.py")).first()
+            assert app_file is not None
+            helper_refs = session.exec(
+                select(RefFact).where(
+                    RefFact.file_id == app_file.id,
+                    RefFact.token_text == "helper",
+                    RefFact.role == Role.REFERENCE.value,
+                )
+            ).all()
+            assert len(helper_refs) >= 1
+            assert all(r.ref_tier == RefTier.STRONG.value for r in helper_refs)
+
+    def test_unit_id_none_skipped_if_root_fallback_missing(
+        self, db: Database, temp_dir: Path
+    ) -> None:
+        """When no root fallback exists, files without context get unit_id=None.
+
+        This documents the edge case where the fix has no effect because there's
+        no tier=3 context to use as default. In practice, initialization always
+        creates a root fallback context.
+        """
+        db.create_all()
+        with db.session() as session:
+            # Only create specific context, no root fallback
+            ctx_specific = Context(
+                name="specific",
+                language_family="python",
+                root_path="project_a",
+                tier=1,
+            )
+            session.add(ctx_specific)
+            session.commit()
+            specific_id = ctx_specific.id
+
+        (temp_dir / "project_a").mkdir(exist_ok=True)
+        (temp_dir / "project_a" / "module.py").write_text("def func(): pass\n")
+
+        indexer = StructuralIndexer(db, temp_dir)
+        indexer.index_files(["project_a/module.py"], context_id=specific_id or 1)
+
+        with db.session() as session:
+            func_def = session.exec(select(DefFact).where(DefFact.name == "func")).first()
+            assert func_def is not None
+            assert func_def.unit_id == specific_id
+
+
 class TestCrossContextIsolation:
     """unit_id scoping prevents cross-context contamination in Pass 1.5 resolvers."""
 
