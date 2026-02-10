@@ -872,6 +872,52 @@ public interface IBaz { }
         # Empty namespace should not appear in map
         assert "Empty" not in ns_map
 
+    def test_extract_nested_namespaces(self, parser: TreeSitterParser, temp_dir: Path) -> None:
+        """Should extract types from nested namespace declarations with composed paths."""
+        content = """namespace Outer {
+    namespace Inner {
+        class Foo { }
+        interface IBar { }
+    }
+    class OuterOnly { }
+}
+"""
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+        result = parser.parse(file_path, content.encode())
+
+        ns_map = parser.extract_csharp_namespace_types(result.root_node)
+
+        # Nested namespace should be composed as Outer.Inner
+        assert "Outer.Inner" in ns_map
+        assert "Foo" in ns_map["Outer.Inner"]
+        assert "IBar" in ns_map["Outer.Inner"]
+
+        # Types declared directly in Outer should also be extracted
+        assert "Outer" in ns_map
+        assert "OuterOnly" in ns_map["Outer"]
+
+    def test_extract_deeply_nested_namespaces(
+        self, parser: TreeSitterParser, temp_dir: Path
+    ) -> None:
+        """Should handle deeply nested namespaces (3+ levels)."""
+        content = """namespace A {
+    namespace B {
+        namespace C {
+            class DeepClass { }
+        }
+    }
+}
+"""
+        file_path = temp_dir / "test.cs"
+        file_path.write_text(content)
+        result = parser.parse(file_path, content.encode())
+
+        ns_map = parser.extract_csharp_namespace_types(result.root_node)
+
+        assert "A.B.C" in ns_map
+        assert "DeepClass" in ns_map["A.B.C"]
+
 
 class TestDynamicAccessExtraction:
     """Tests for dynamic access pattern detection."""
