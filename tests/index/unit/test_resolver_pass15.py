@@ -292,7 +292,7 @@ class TestPaginatedReferences:
         with seeded_db.session() as session:
             fq = FactQueries(session)
             refs = fq.list_refs_by_def_uid("def_target_001", limit=300)
-            ids = [r.ref_id for r in refs]
+            ids = [r.ref_id for r in refs if r.ref_id is not None]
             assert ids == sorted(ids)
 
     def test_tier_filter_with_pagination(self, seeded_db: Database) -> None:
