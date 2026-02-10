@@ -728,10 +728,12 @@ class IndexCoordinator:
                 self._structural.index_files(paths, context_id=ctx_id, file_id_map=file_id_map)
 
             # Pass 1.5: DB-backed cross-file resolution
-            for ctx_id in by_context:
-                resolve_namespace_refs(self.db, ctx_id)
-                resolve_same_namespace_refs(self.db, ctx_id)
-                resolve_star_import_refs(self.db, ctx_id)
+            # Use unit_id=None to allow cross-context resolution, which is the
+            # common case (shared libraries, common utilities, framework code).
+            # Strict context isolation would break legitimate cross-project refs.
+            resolve_namespace_refs(self.db, None)
+            resolve_same_namespace_refs(self.db, None)
+            resolve_star_import_refs(self.db, None)
 
             # Resolve cross-file references (Pass 2 - follows ImportFact chains)
             resolve_references(self.db)
@@ -1968,11 +1970,11 @@ class IndexCoordinator:
                 # Runs after ALL structural facts are persisted, so it sees the
                 # complete namespace-type mappings across all files (not just
                 # the 25-file batch that was visible to the old in-memory pass).
+                # Use unit_id=None to allow cross-context resolution (shared libs).
                 on_progress(0, 1, files_by_ext, "resolving_cross_file")
-                for ctx_id in context_files:
-                    resolve_namespace_refs(self.db, ctx_id)
-                    resolve_same_namespace_refs(self.db, ctx_id)
-                    resolve_star_import_refs(self.db, ctx_id)
+                resolve_namespace_refs(self.db, None)
+                resolve_same_namespace_refs(self.db, None)
+                resolve_star_import_refs(self.db, None)
 
                 # Resolve cross-file references (phase: resolving_refs)
                 # Pass 2 - follows ImportFact chains
@@ -2062,11 +2064,6 @@ class IndexCoordinator:
                 select(Context).where(Context.probe_status == ProbeStatus.VALID.value)
             ).all()
 
-            # Find root fallback context (tier=3) to use as default for unmatched files
-            # This ensures all files get proper context scoping in Pass 1.5 resolvers
-            root_ctx = next((c for c in contexts if c.tier == 3), None)
-            root_ctx_id = root_ctx.id if root_ctx else None
-
             # Exclude tier=3 from matching and sort by root_path length descending
             # so more specific contexts claim files before less specific ones.
             specific_contexts = [c for c in contexts if c.tier != 3 and c.id is not None]
@@ -2078,7 +2075,6 @@ class IndexCoordinator:
             # Build file -> context_id mapping and collect file_ids
             file_to_context: dict[str, int] = {}
             changed_file_ids: list[int] = []
-            file_id_to_context: dict[int, int] = {}
             for ctx in specific_contexts:
                 ctx_root = ctx.root_path or ""
 
@@ -2105,8 +2101,6 @@ class IndexCoordinator:
                 if file and file.id is not None:
                     file_id = file.id
                     changed_file_ids.append(file_id)
-                    if str_path in file_to_context:
-                        file_id_to_context[file_id] = file_to_context[str_path]
                     # Delete facts for this file using raw SQL
                     session.exec(
                         text("DELETE FROM def_facts WHERE file_id = :fid").bindparams(fid=file_id)
@@ -2145,18 +2139,12 @@ class IndexCoordinator:
             self._structural.index_files(paths, context_id=ctx_id)
 
         # Pass 1.5: DB-backed cross-file resolution (scoped to changed files)
+        # Use unit_id=None to allow cross-context resolution (shared libs).
+        # The file_ids parameter still scopes which refs get upgraded.
         if changed_file_ids:
-            # Group changed file IDs by context for proper scoping.
-            # Use root_ctx_id as default for files not matching a specific context,
-            # ensuring all files get proper context scoping (vs None which skips scoping).
-            ctx_file_ids: dict[int | None, list[int]] = {}
-            for fid in changed_file_ids:
-                cid = file_id_to_context.get(fid, root_ctx_id)
-                ctx_file_ids.setdefault(cid, []).append(fid)
-            for cid, fids in ctx_file_ids.items():
-                resolve_namespace_refs(self.db, cid, file_ids=fids)
-                resolve_same_namespace_refs(self.db, cid, file_ids=fids)
-                resolve_star_import_refs(self.db, cid, file_ids=fids)
+            resolve_namespace_refs(self.db, None, file_ids=changed_file_ids)
+            resolve_same_namespace_refs(self.db, None, file_ids=changed_file_ids)
+            resolve_star_import_refs(self.db, None, file_ids=changed_file_ids)
 
         # Resolve cross-file references (Pass 2 - scoped to changed files)
         if changed_file_ids:
