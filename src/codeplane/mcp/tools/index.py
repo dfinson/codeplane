@@ -6,7 +6,13 @@ from fastmcp import Context
 from fastmcp.utilities.json_schema import dereference_refs
 from pydantic import Field
 
-from codeplane.config.constants import MAP_DEPTH_MAX, MAP_LIMIT_MAX, SEARCH_MAX_LIMIT
+from codeplane.config.constants import (
+    MAP_DEPTH_MAX,
+    MAP_LIMIT_MAX,
+    SEARCH_CONTEXT_LINES_MAX,
+    SEARCH_MAX_LIMIT,
+    SEARCH_SCOPE_FALLBACK_LINES_DEFAULT,
+)
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -78,6 +84,14 @@ async def _get_file_path(app_ctx: "AppContext", file_id: int) -> str:
 def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     """Register index tools with FastMCP server."""
 
+    # Context preset line counts
+    CONTEXT_PRESETS = {
+        "none": 0,
+        "minimal": 1,
+        "standard": 5,
+        "rich": 20,
+    }
+
     @mcp.tool
     async def search(
         ctx: Context,
@@ -85,27 +99,63 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         mode: Literal["lexical", "symbol", "references", "definitions"] = Field(
             "lexical", description="Search mode"
         ),
+        context: Literal["none", "minimal", "standard", "rich", "function", "class"] = Field(
+            "standard",
+            description=(
+                "Context mode: 'none' (path+line only), 'minimal' (1 line), "
+                "'standard' (5 lines), 'rich' (20 lines), "
+                "'function' (enclosing function body), 'class' (enclosing class body)"
+            ),
+        ),
+        context_lines: int | None = Field(
+            None,
+            ge=0,
+            le=SEARCH_CONTEXT_LINES_MAX,
+            description=(
+                "Override context lines for line-based modes; "
+                "fallback lines for structural modes (function/class)"
+            ),
+        ),
         filter_paths: list[str] | None = Field(None, description="Filter by paths"),
         filter_languages: list[str] | None = Field(None, description="Filter by languages"),
         filter_kinds: list[str] | None = Field(None, description="Filter by symbol kinds"),
         limit: int = Field(default=20, le=SEARCH_MAX_LIMIT, description="Maximum results"),
-        context_lines: int = Field(
-            default=1, ge=0, le=5, description="Lines of context before/after each match"
-        ),
         cursor: str | None = Field(None, description="Pagination cursor"),
-        include_snippets: bool = Field(True, description="Include code snippets"),
     ) -> dict[str, Any]:
-        """Search code, symbols, or references."""
+        """Search code, symbols, or references.
+
+        Context modes control how much content is returned around each match:
+        - 'none': Path and line only, no content (for counting/listing)
+        - 'minimal': 1 line of context (for quick location)
+        - 'standard': 5 lines of context (default, for understanding)
+        - 'rich': 20 lines of context (edit-ready, line-based)
+        - 'function': Enclosing function body (edit-ready, structural)
+        - 'class': Enclosing class body (broad context, structural)
+
+        Structural modes ('function', 'class') use the indexed scope facts to return
+        complete function or class bodies. If scope resolution fails (e.g., unsupported
+        language), they fall back to context_lines (default 25).
+        """
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
+        from codeplane.index._internal.indexing import resolve_scope_region_for_path
         from codeplane.index.ops import SearchMode
+
+        # Determine effective context lines
+        is_structural = context in ("function", "class")
+        if context_lines is not None:
+            effective_lines = context_lines
+        elif is_structural:
+            effective_lines = SEARCH_SCOPE_FALLBACK_LINES_DEFAULT
+        else:
+            effective_lines = CONTEXT_PRESETS.get(context, 5)
 
         # Map mode to SearchMode
         mode_map = {
             "lexical": SearchMode.TEXT,
             "symbol": SearchMode.SYMBOL,
             "definitions": SearchMode.SYMBOL,
-            "references": SearchMode.TEXT,  # Handled specially below
+            "references": SearchMode.TEXT,
         }
 
         if mode == "definitions":
@@ -118,22 +168,47 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "query_time_ms": 0,
                     "summary": _summarize_search(0, "definitions", query),
                 }
-            return {
-                "results": [
-                    {
-                        "path": await _get_file_path(app_ctx, def_fact.file_id),
-                        "line": def_fact.start_line,
-                        "column": def_fact.start_col,
-                        "snippet": def_fact.display_name or def_fact.name,
-                        "symbol": {
-                            "name": def_fact.name,
-                            "kind": def_fact.kind,
-                            "qualified_name": def_fact.qualified_name,
-                        },
-                        "score": 1.0,
-                        "match_type": "exact",
+
+            file_path = await _get_file_path(app_ctx, def_fact.file_id)
+
+            # Build result with context handling
+            result_item: dict[str, Any] = {
+                "path": file_path,
+                "line": def_fact.start_line,
+                "column": def_fact.start_col,
+                "score": 1.0,
+                "match_type": "exact",
+                "symbol": {
+                    "name": def_fact.name,
+                    "kind": def_fact.kind,
+                    "qualified_name": def_fact.qualified_name,
+                },
+            }
+
+            # Add content based on context mode
+            if context != "none":
+                if is_structural:
+                    with app_ctx.coordinator.db.session() as session:
+                        scope_region, content = resolve_scope_region_for_path(
+                            session,
+                            app_ctx.coordinator.repo_root,
+                            file_path,
+                            def_fact.start_line,
+                            preference="function" if context == "function" else "class",
+                            fallback_lines=effective_lines,
+                        )
+                    result_item["content"] = content
+                    result_item["content_range"] = {
+                        "start": scope_region.start_line,
+                        "end": scope_region.end_line,
                     }
-                ],
+                    result_item["context_resolved"] = scope_region.kind
+                else:
+                    result_item["snippet"] = def_fact.display_name or def_fact.name
+                    result_item["context_resolved"] = "lines"
+
+            return {
+                "results": [result_item],
                 "pagination": {},
                 "query_time_ms": 0,
                 "summary": _summarize_search(1, "definitions", query),
@@ -153,19 +228,43 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             refs = await app_ctx.coordinator.get_references(def_fact, _context_id=0, limit=limit)
             ref_results: list[dict[str, Any]] = []
             ref_files: set[str] = set()
+
             for ref in refs:
                 path = await _get_file_path(app_ctx, ref.file_id)
                 ref_files.add(path)
-                ref_results.append(
-                    {
-                        "path": path,
-                        "line": ref.start_line,
-                        "column": ref.start_col,
-                        "snippet": ref.token_text,
-                        "score": 1.0 if ref.certainty == "CERTAIN" else 0.5,
-                        "match_type": "exact" if ref.certainty == "CERTAIN" else "fuzzy",
-                    }
-                )
+
+                result_item = {
+                    "path": path,
+                    "line": ref.start_line,
+                    "column": ref.start_col,
+                    "score": 1.0 if ref.certainty == "CERTAIN" else 0.5,
+                    "match_type": "exact" if ref.certainty == "CERTAIN" else "fuzzy",
+                }
+
+                # Add content based on context mode
+                if context != "none":
+                    if is_structural:
+                        with app_ctx.coordinator.db.session() as session:
+                            scope_region, content = resolve_scope_region_for_path(
+                                session,
+                                app_ctx.coordinator.repo_root,
+                                path,
+                                ref.start_line,
+                                preference="function" if context == "function" else "class",
+                                fallback_lines=effective_lines,
+                            )
+                        result_item["content"] = content
+                        result_item["content_range"] = {
+                            "start": scope_region.start_line,
+                            "end": scope_region.end_line,
+                        }
+                        result_item["context_resolved"] = scope_region.kind
+                    else:
+                        result_item["snippet"] = ref.token_text
+                        result_item["context_resolved"] = "lines"
+
+                ref_results.append(result_item)
+
             return {
                 "results": ref_results,
                 "pagination": {},
@@ -180,25 +279,50 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             query,
             mode_map[mode],
             limit=limit,
-            context_lines=context_lines,
+            context_lines=effective_lines if not is_structural else 1,
             filter_languages=filter_languages,
         )
 
         # Count unique files
         unique_files = {r.path for r in search_response.results}
 
+        # Build results with context handling
+        results: list[dict[str, Any]] = []
+        for r in search_response.results:
+            result_item = {
+                "path": r.path,
+                "line": r.line,
+                "column": r.column,
+                "score": r.score,
+                "match_type": "fuzzy",
+            }
+
+            # Add content based on context mode
+            if context != "none":
+                if is_structural:
+                    with app_ctx.coordinator.db.session() as session:
+                        scope_region, content = resolve_scope_region_for_path(
+                            session,
+                            app_ctx.coordinator.repo_root,
+                            r.path,
+                            r.line,
+                            preference="function" if context == "function" else "class",
+                            fallback_lines=effective_lines,
+                        )
+                    result_item["content"] = content
+                    result_item["content_range"] = {
+                        "start": scope_region.start_line,
+                        "end": scope_region.end_line,
+                    }
+                    result_item["context_resolved"] = scope_region.kind
+                else:
+                    result_item["snippet"] = r.snippet
+                    result_item["context_resolved"] = "lines"
+
+            results.append(result_item)
+
         result: dict[str, Any] = {
-            "results": [
-                {
-                    "path": r.path,
-                    "line": r.line,
-                    "column": r.column,
-                    "snippet": r.snippet,
-                    "score": r.score,
-                    "match_type": "fuzzy",
-                }
-                for r in search_response.results
-            ],
+            "results": results,
             "pagination": {},
             "query_time_ms": 0,
             "summary": _summarize_search(
