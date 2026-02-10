@@ -29,7 +29,7 @@ The bottleneck is I/O and orchestration, not model capability.
 
 ## The Solution
 
-CodePlane turns a repository into a **structured, queryable system** designed to reduce exploratory overhead for agents:
+CodePlane is an environment-agnostic code intelligence layer purpose-built for agents, not humans. It turns a repository into a **structured, queryable system** designed to reduce exploratory overhead for agents:
 
 ```
 Agent plans and decides → CodePlane executes → Structured result → Next action
