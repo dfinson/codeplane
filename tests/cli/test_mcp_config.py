@@ -1,6 +1,6 @@
 """Tests for .vscode/mcp.json config management.
 
-Covers _strip_jsonc_comments, _parse_jsonc, _get_mcp_server_name,
+Covers _parse_jsonc, _get_mcp_server_name,
 _ensure_vscode_mcp_config, and sync_vscode_mcp_port.
 """
 
@@ -11,51 +11,8 @@ from codeplane.cli.init import (
     _ensure_vscode_mcp_config,
     _get_mcp_server_name,
     _parse_jsonc,
-    _strip_jsonc_comments,
     sync_vscode_mcp_port,
 )
-
-# ── _strip_jsonc_comments ────────────────────────────────────────────────────
-
-
-class TestStripJsoncComments:
-    """String-aware JSONC comment stripping."""
-
-    def test_no_comments(self) -> None:
-        text = '{"key": "value"}'
-        assert _strip_jsonc_comments(text) == text
-
-    def test_line_comment_removed(self) -> None:
-        text = '{"key": "value"} // comment'
-        assert json.loads(_strip_jsonc_comments(text)) == {"key": "value"}
-
-    def test_block_comment_removed(self) -> None:
-        text = '{"key": /* inline */ "value"}'
-        assert json.loads(_strip_jsonc_comments(text)) == {"key": "value"}
-
-    def test_url_inside_string_preserved(self) -> None:
-        """URLs with // inside JSON strings must NOT be stripped."""
-        text = '{"url": "http://127.0.0.1:3000/mcp"}'
-        result = _strip_jsonc_comments(text)
-        parsed = json.loads(result)
-        assert parsed["url"] == "http://127.0.0.1:3000/mcp"
-
-    def test_escaped_quote_inside_string(self) -> None:
-        text = r'{"msg": "say \"hello\""}'
-        result = _strip_jsonc_comments(text)
-        assert json.loads(result) == {"msg": 'say "hello"'}
-
-    def test_comment_after_url_string(self) -> None:
-        """Comment after a URL-containing string value is stripped."""
-        text = '{"url": "http://example.com"} // trailing'
-        parsed = json.loads(_strip_jsonc_comments(text))
-        assert parsed["url"] == "http://example.com"
-
-    def test_multiline_block_comment(self) -> None:
-        text = '{\n/* multi\nline\ncomment */\n"key": 1}'
-        parsed = json.loads(_strip_jsonc_comments(text))
-        assert parsed == {"key": 1}
-
 
 # ── _parse_jsonc ─────────────────────────────────────────────────────────────
 
@@ -71,6 +28,38 @@ class TestParseJsonc:
 
     def test_trailing_comma_array(self) -> None:
         assert _parse_jsonc('{"a": [1, 2,]}') == {"a": [1, 2]}
+
+    def test_line_comment_removed(self) -> None:
+        text = '{"key": "value"} // comment'
+        assert _parse_jsonc(text) == {"key": "value"}
+
+    def test_block_comment_removed(self) -> None:
+        text = '{"key": /* inline */ "value"}'
+        assert _parse_jsonc(text) == {"key": "value"}
+
+    def test_url_inside_string_preserved(self) -> None:
+        """URLs with // inside JSON strings must NOT be stripped."""
+        text = '{"url": "http://127.0.0.1:3000/mcp"}'
+        result = _parse_jsonc(text)
+        assert result is not None
+        assert result["url"] == "http://127.0.0.1:3000/mcp"
+
+    def test_escaped_quote_inside_string(self) -> None:
+        text = r'{"msg": "say \"hello\""}'
+        result = _parse_jsonc(text)
+        assert result == {"msg": 'say "hello"'}
+
+    def test_comment_after_url_string(self) -> None:
+        """Comment after a URL-containing string value is stripped."""
+        text = '{"url": "http://example.com"} // trailing'
+        result = _parse_jsonc(text)
+        assert result is not None
+        assert result["url"] == "http://example.com"
+
+    def test_multiline_block_comment(self) -> None:
+        text = '{\n/* multi\nline\ncomment */\n"key": 1}'
+        result = _parse_jsonc(text)
+        assert result == {"key": 1}
 
     def test_comments_plus_trailing_comma(self) -> None:
         text = """
