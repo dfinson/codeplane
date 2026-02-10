@@ -1868,7 +1868,7 @@ class IndexCoordinator:
         Returns:
             Tuple of (count of files indexed, list of indexed file paths, files by extension).
         """
-        if self._lexical is None or self._parser is None:
+        if self._lexical is None or self._parser is None or self._structural is None:
             return 0, [], {}
 
         with self._tantivy_write_lock:
@@ -1939,7 +1939,9 @@ class IndexCoordinator:
             count = 0
             indexed_paths: list[str] = []
             files_by_ext: dict[str, int] = {}
-            workers = os.cpu_count() or 4
+            # Use all available cores for CPU-bound tree-sitter extraction,
+            # capped at 16 to prevent runaway on high-core-count servers.
+            workers = min(os.cpu_count() or 4, 16)
 
             if self._structural is not None:
                 batch_size = 50
@@ -1959,8 +1961,12 @@ class IndexCoordinator:
 
                         # Stage each file into Tantivy using extraction results
                         for extraction in extractions:
+                            # content_text is None only for unreadable/nonexistent files.
+                            # Binary files get content_text="" and are still staged.
                             if extraction.content_text is None:
-                                continue  # File not readable
+                                count += 1
+                                on_progress(count, total, files_by_ext, "indexing")
+                                continue
 
                             self._lexical.stage_file(
                                 extraction.file_path,

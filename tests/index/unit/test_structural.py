@@ -1111,6 +1111,7 @@ class TestExtractionResultUnifiedFields:
         result = _extract_file("test.py", str(temp_dir), unit_id=1)
 
         assert result.content_text == ""
+        assert result.error is None
 
     def test_content_text_none_for_nonexistent(self, temp_dir: Path) -> None:
         """content_text should remain None when file does not exist."""
