@@ -229,6 +229,10 @@ class LimitsConfig(BaseModel):
         default=100,
         description="Default git blame line count.",
     )
+    indexed_files_max: int = Field(
+        default=1000,
+        description="Max files to return in indexed files query.",
+    )
     operation_records_max: int = Field(
         default=1000,
         description="Max ledger operation records to return.",

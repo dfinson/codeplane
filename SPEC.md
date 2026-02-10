@@ -737,7 +737,7 @@ Explicit import statements (syntactic only, no dynamic resolution).
 | `imported_name` | TEXT | Name being imported |
 | `alias` | TEXT | Local alias (NULL if none) |
 | `source_literal` | TEXT | Import source string literal (if extractable) |
-| `import_kind` | TEXT | python_import, python_from, js_import, ts_import_type, go_import, rust_use, csharp_using, csharp_using_static, etc. |
+| `import_kind` | TEXT | python_import, python_from, js_import, ts_import_type, etc. |
 | `certainty` | TEXT | CERTAIN, UNCERTAIN |
 
 **What is NOT imported:** Dynamic imports (`importlib.import_module(var)`), computed imports, or any form where the source cannot be statically extracted.

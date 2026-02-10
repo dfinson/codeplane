@@ -22,7 +22,6 @@ Covers:
 """
 
 from dataclasses import dataclass
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -279,7 +278,7 @@ class TestGitDiff:
             files_changed: int = 2
             total_additions: int = 50
             total_deletions: int = 20
-            files: list[Any] | None = None
+            files: list = None
             patch: str = ""
 
         mock_app_ctx.git_ops.diff.return_value = MockDiff(files=[])

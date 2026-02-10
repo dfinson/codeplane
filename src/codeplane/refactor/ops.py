@@ -354,7 +354,7 @@ class RefactorOps:
                     )
 
             # Get references for this definition
-            refs = await self._coordinator.get_all_references(def_fact, _context_id=0)
+            refs = await self._coordinator.get_references(def_fact, _context_id=0)
             for ref in refs:
                 ref_file = await self._get_file_path(ref.file_id)
                 if ref_file:
@@ -959,7 +959,7 @@ class RefactorOps:
                     )
 
             # Get all references
-            refs = await self._coordinator.get_all_references(def_fact, _context_id=0)
+            refs = await self._coordinator.get_references(def_fact, _context_id=0)
             for ref in refs:
                 ref_file = await self._get_file_path(ref.file_id)
                 if ref_file:

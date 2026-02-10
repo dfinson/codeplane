@@ -25,9 +25,7 @@ KNOWN AMBIGUOUS EXTENSIONS (require context for correct classification):
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
-from fnmatch import fnmatch
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -504,7 +502,7 @@ ALL_LANGUAGES: tuple[Language, ...] = (
         markers_workspace=(),
         markers_package=("shard.yml",),
         grammar="crystal",
-        test_patterns=("*_spec.cr",),
+        test_patterns=("spec/**/*.cr",),
         priority=60,
     ),
     Language(
@@ -895,31 +893,35 @@ def detect_language_family(path: str | Path) -> str | None:
     Use get_families_for_extension() if you need all candidates, or use
     context-aware detection in the scanner layer.
 
-    Uses os.path string operations instead of Path() to avoid object allocation
-    overhead in hot paths (called once per file during indexing).
-
     Args:
         path: File path (string or Path)
 
     Returns:
         Family name or None if unknown.
     """
-    path_str = str(path) if isinstance(path, Path) else path
-    basename = os.path.basename(path_str).lower()
+    p = Path(path) if isinstance(path, str) else path
+    name_lower = p.name.lower()
 
     # 1. Exact filename match
-    if name := FILENAME_TO_NAME.get(basename):
+    if name := FILENAME_TO_NAME.get(name_lower):
         return name
 
-    # 2. Compound suffix check (only when multiple dots in basename)
-    if basename.count(".") >= 2:
-        for compound, lang in _COMPOUND_SUFFIXES.items():
-            if basename.endswith(compound):
-                return lang
+    # 2. Compound suffix match (check longer compounds first)
+    suffixes = p.suffixes
+    if len(suffixes) >= 2:
+        # Try 3-suffix compound
+        if len(suffixes) >= 3:
+            compound3 = "".join(suffixes[-3:]).lower()
+            if name := _COMPOUND_SUFFIXES.get(compound3):
+                return name
+        # Try 2-suffix compound
+        compound2 = "".join(suffixes[-2:]).lower()
+        if name := _COMPOUND_SUFFIXES.get(compound2):
+            return name
 
     # 3. Simple suffix match (returns highest priority name)
-    _, ext = os.path.splitext(path_str)
-    return EXTENSION_TO_NAME.get(ext.lower()) if ext else None
+    suffix_lower = p.suffix.lower()
+    return EXTENSION_TO_NAME.get(suffix_lower)
 
 
 def detect_language_family_enum(path: str | Path) -> LanguageFamily | None:
@@ -1025,39 +1027,6 @@ def build_include_specs() -> dict[str, tuple[str, ...]]:
 def get_test_patterns(name: str) -> tuple[str, ...]:
     """Get test file patterns for a name."""
     return LANGUAGES_BY_NAME[name].test_patterns if name in LANGUAGES_BY_NAME else ()
-
-
-def is_test_file(path: str | Path) -> bool:
-    """Check if a file path matches any known test file pattern.
-
-    Uses the canonical ``test_patterns`` defined on each ``Language`` in
-    ``ALL_LANGUAGES``.  Patterns are ``fnmatch``-style globs matched
-    against the filename (e.g. ``test_*.py``, ``*_test.go``).
-    Additionally, if a pattern contains ``/`` it is matched against the
-    full path string via ``fnmatch``.  Note that ``fnmatch`` requires the
-    pattern to match the *entire* string, so a bare prefix like ``tests/``
-    will **not** match; use ``tests/*`` or ``tests/*.py`` instead.
-
-    Args:
-        path: File path (string or Path object).
-
-    Returns:
-        True if the file matches any test pattern for any language.
-    """
-    p = Path(path) if isinstance(path, str) else path
-    name = p.name
-    path_str = str(p)
-
-    for lang in ALL_LANGUAGES:
-        for pattern in lang.test_patterns:
-            if "/" in pattern:
-                # Directory-style pattern — use fnmatch against full path
-                if fnmatch(path_str, pattern):
-                    return True
-            else:
-                if fnmatch(name, pattern):
-                    return True
-    return False
 
 
 def get_grammar_name(name: str) -> str | None:
