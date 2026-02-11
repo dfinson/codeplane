@@ -45,10 +45,6 @@ class FileTarget(BaseModel):
         return self
 
 
-# Backward compatibility alias
-RangeParam = FileTarget
-
-
 # =============================================================================
 # Summary Helpers
 # =============================================================================
