@@ -597,8 +597,16 @@ class IndexCoordinator:
                     root_ctx = next((c for c in contexts if c.tier == 3 and c.id is not None), None)
                     if root_ctx is not None and root_ctx.id is not None:
                         root_id: int = root_ctx.id
+                        root_exclude = root_ctx.get_exclude_globs()
+                        root_include = root_ctx.get_include_globs()
                         for str_path in str_changed:
                             if str_path not in file_to_context:
+                                if any(_matches_glob(str_path, p) for p in root_exclude):
+                                    continue
+                                if root_include and not any(
+                                    _matches_glob(str_path, p) for p in root_include
+                                ):
+                                    continue
                                 file_to_context[str_path] = root_id
 
                     # Collect file IDs for scoped resolution passes (batch query)
@@ -670,6 +678,18 @@ class IndexCoordinator:
                     resolve_star_import_refs(self.db, None, file_ids=changed_file_ids)
                     resolve_references(self.db, file_ids=changed_file_ids)
                     resolve_type_traced(self.db, file_ids=changed_file_ids)
+
+                # Mark successfully indexed files as indexed
+                if changed_file_ids:
+                    now = time.time()
+                    with self.db.session() as session:
+                        for fid in changed_file_ids:
+                            session.exec(
+                                text(
+                                    "UPDATE files SET indexed_at = :ts WHERE id = :fid"
+                                ).bindparams(ts=now, fid=fid)
+                            )  # type: ignore[call-overload]
+                        session.commit()
             else:
                 # Only removals (or nothing changed)
                 with self._tantivy_write_lock:
@@ -2101,115 +2121,6 @@ class IndexCoordinator:
                 resolve_type_traced(self.db, on_progress=pass3_progress)
 
         return count, indexed_paths, files_by_ext
-
-    async def _update_structural_index(self, changed_paths: list[Path]) -> None:
-        """Update structural index for changed files.
-
-        Clears existing facts for changed files, then re-extracts.
-        Groups files by context and indexes each group with its context_id.
-        """
-        if self._structural is None:
-            return
-
-        # Convert to string paths
-        str_paths = [str(p) for p in changed_paths if (self.repo_root / p).exists()]
-        if not str_paths:
-            return
-
-        # Load contexts for routing
-        with self.db.session() as session:
-            contexts = session.exec(
-                select(Context).where(Context.probe_status == ProbeStatus.VALID.value)
-            ).all()
-
-            # Exclude tier=3 from matching and sort by root_path length descending
-            # so more specific contexts claim files before less specific ones.
-            specific_contexts = [c for c in contexts if c.tier != 3 and c.id is not None]
-            specific_contexts.sort(
-                key=lambda c: len(c.root_path) if c.root_path else 0,
-                reverse=True,
-            )
-
-            # Build file -> context_id mapping and collect file_ids
-            file_to_context: dict[str, int] = {}
-            changed_file_ids: list[int] = []
-            for ctx in specific_contexts:
-                ctx_root = ctx.root_path or ""
-
-                for str_path in str_paths:
-                    # Skip if already claimed by a more specific context
-                    if str_path in file_to_context:
-                        continue
-
-                    # Path-boundary-aware matching:
-                    # - Empty ctx_root matches everything (but tier=3 is excluded above)
-                    # - Non-empty ctx_root requires exact match or path + "/" prefix
-                    if (
-                        ctx_root
-                        and str_path != ctx_root
-                        and not str_path.startswith(ctx_root + "/")
-                    ):
-                        continue
-
-                    file_to_context[str_path] = ctx.id  # type: ignore[assignment]
-
-            # Delete existing facts for these files before re-indexing
-            for str_path in str_paths:
-                file = session.exec(select(File).where(File.path == str_path)).first()
-                if file and file.id is not None:
-                    file_id = file.id
-                    changed_file_ids.append(file_id)
-                    # Delete facts for this file using raw SQL
-                    session.exec(
-                        text("DELETE FROM def_facts WHERE file_id = :fid").bindparams(fid=file_id)
-                    )  # type: ignore[call-overload]
-                    session.exec(
-                        text("DELETE FROM ref_facts WHERE file_id = :fid").bindparams(fid=file_id)
-                    )  # type: ignore[call-overload]
-                    session.exec(
-                        text("DELETE FROM scope_facts WHERE file_id = :fid").bindparams(fid=file_id)
-                    )  # type: ignore[call-overload]
-                    session.exec(
-                        text("DELETE FROM import_facts WHERE file_id = :fid").bindparams(
-                            fid=file_id
-                        )
-                    )  # type: ignore[call-overload]
-                    session.exec(
-                        text("DELETE FROM local_bind_facts WHERE file_id = :fid").bindparams(
-                            fid=file_id
-                        )
-                    )  # type: ignore[call-overload]
-                    session.exec(
-                        text("DELETE FROM dynamic_access_sites WHERE file_id = :fid").bindparams(
-                            fid=file_id
-                        )
-                    )  # type: ignore[call-overload]
-            session.commit()
-
-        # Group files by context_id and re-index
-        context_files: dict[int, list[str]] = {}
-        for str_path, ctx_id in file_to_context.items():
-            if ctx_id not in context_files:
-                context_files[ctx_id] = []
-            context_files[ctx_id].append(str_path)
-
-        for ctx_id, paths in context_files.items():
-            self._structural.index_files(paths, context_id=ctx_id)
-
-        # Pass 1.5: DB-backed cross-file resolution (scoped to changed files)
-        # Use unit_id=None to allow cross-context resolution (shared libs).
-        # The file_ids parameter still scopes which refs get upgraded.
-        if changed_file_ids:
-            resolve_namespace_refs(self.db, None, file_ids=changed_file_ids)
-            resolve_same_namespace_refs(self.db, None, file_ids=changed_file_ids)
-            resolve_star_import_refs(self.db, None, file_ids=changed_file_ids)
-
-        # Resolve cross-file references (Pass 2 - scoped to changed files)
-        if changed_file_ids:
-            resolve_references(self.db, file_ids=changed_file_ids)
-
-            # Resolve type-traced member accesses (Pass 3 - scoped to changed files)
-            resolve_type_traced(self.db, file_ids=changed_file_ids)
 
     def _clear_all_structural_facts(self) -> None:
         """Clear all structural facts from the database.
