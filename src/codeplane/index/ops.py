@@ -568,7 +568,12 @@ class IndexCoordinator:
 
                     file_to_context: dict[str, int] = {}
                     for ctx in specific_contexts:
+                        if ctx.id is None:
+                            continue
+                        ctx_id: int = ctx.id
                         ctx_root = ctx.root_path or ""
+                        exclude_globs = ctx.get_exclude_globs()
+                        include_globs = ctx.get_include_globs()
                         for str_path in str_changed:
                             if str_path in file_to_context:
                                 continue
@@ -578,14 +583,23 @@ class IndexCoordinator:
                                 and not str_path.startswith(ctx_root + "/")
                             ):
                                 continue
-                            file_to_context[str_path] = ctx.id  # type: ignore[assignment]
+                            # Apply include/exclude globs (mirrors _filter_files_for_context)
+                            rel_to_ctx = str_path[len(ctx_root) + 1 :] if ctx_root else str_path
+                            if any(_matches_glob(rel_to_ctx, p) for p in exclude_globs):
+                                continue
+                            if include_globs and not any(
+                                _matches_glob(rel_to_ctx, p) for p in include_globs
+                            ):
+                                continue
+                            file_to_context[str_path] = ctx_id
 
                     # Assign unclaimed files to root fallback context
                     root_ctx = next((c for c in contexts if c.tier == 3 and c.id is not None), None)
-                    if root_ctx is not None:
+                    if root_ctx is not None and root_ctx.id is not None:
+                        root_id: int = root_ctx.id
                         for str_path in str_changed:
                             if str_path not in file_to_context:
-                                file_to_context[str_path] = root_ctx.id  # type: ignore[assignment]
+                                file_to_context[str_path] = root_id
 
                     # Collect file IDs for scoped resolution passes
                     changed_file_ids: list[int] = []
@@ -606,6 +620,10 @@ class IndexCoordinator:
 
                         for extraction in extractions:
                             if extraction.content_text is None:
+                                # File became unreadable — remove stale Tantivy doc
+                                if extraction.file_path in existing_set:
+                                    self._lexical.stage_remove(extraction.file_path)
+                                    files_removed += 1
                                 continue
                             fid = file_id_map.get(extraction.file_path, 0)
                             self._lexical.stage_file(
@@ -703,7 +721,6 @@ class IndexCoordinator:
         with self.db.session() as session:
             ctx_stmt = select(Context).where(
                 Context.probe_status == ProbeStatus.VALID.value,
-                Context.enabled == True,  # noqa: E712
             )
             contexts = list(session.exec(ctx_stmt).all())
 
@@ -905,7 +922,6 @@ class IndexCoordinator:
             with self.db.session() as session:
                 ctx_stmt = select(Context).where(
                     Context.probe_status == ProbeStatus.VALID.value,
-                    Context.enabled == True,  # noqa: E712
                 )
                 contexts = list(session.exec(ctx_stmt).all())
 
@@ -1267,13 +1283,12 @@ class IndexCoordinator:
         """Get all valid contexts from the index.
 
         Returns:
-            List of Context objects for valid, enabled contexts
+            List of Context objects for valid contexts
         """
         await self.wait_for_freshness()
         with self.db.session() as session:
             stmt = select(Context).where(
                 Context.probe_status == ProbeStatus.VALID.value,
-                Context.enabled == True,  # noqa: E712
             )
             return list(session.exec(stmt).all())
 
@@ -1349,7 +1364,6 @@ class IndexCoordinator:
             stmt = select(Context).where(
                 Context.root_path == rel_path,
                 Context.probe_status == ProbeStatus.VALID.value,
-                Context.enabled == True,  # noqa: E712
             )
             context = session.exec(stmt).first()
             if not context or context.id is None:
@@ -1491,7 +1505,6 @@ class IndexCoordinator:
             # Get all valid contexts
             stmt = select(Context).where(
                 Context.probe_status == ProbeStatus.VALID.value,
-                Context.enabled == True,  # noqa: E712
             )
             contexts = list(session.exec(stmt).all())
 
@@ -1565,7 +1578,6 @@ class IndexCoordinator:
             # Get all valid contexts
             stmt = select(Context).where(
                 Context.probe_status == ProbeStatus.VALID.value,
-                Context.enabled == True,  # noqa: E712
             )
             contexts = list(session.exec(stmt).all())
 
@@ -1797,7 +1809,6 @@ class IndexCoordinator:
                 # Get primary context
                 ctx_stmt = select(Context).where(
                     Context.probe_status == ProbeStatus.VALID.value,
-                    Context.enabled == True,  # noqa: E712
                 )
                 contexts = list(session.exec(ctx_stmt).all())
                 if not contexts:
@@ -1944,7 +1955,6 @@ class IndexCoordinator:
             with self.db.session() as session:
                 stmt = select(Context).where(
                     Context.probe_status == ProbeStatus.VALID.value,
-                    Context.enabled == True,  # noqa: E712
                 )
                 all_contexts = list(session.exec(stmt).all())
 
