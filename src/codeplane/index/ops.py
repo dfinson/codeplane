@@ -463,14 +463,18 @@ class IndexCoordinator:
 
     async def _reindex_incremental_impl(self, changed_paths: list[Path]) -> IndexStats:
         """
-        Incremental reindex for changed files.
+        Incremental reindex for changed files (unified single-pass).
+
+        Single-pass architecture (mirrors _index_all_files):
+        - Each file is read and tree-sitter parsed ONCE by extract_files()
+        - ExtractionResult carries content_text + symbol_names for Tantivy
+        - Same ExtractionResult reused for structural fact persistence
+        - Tantivy uses batched stage_file() + single commit_staged()
 
         SERIALIZED: Acquires reconcile_lock and tantivy_write_lock.
 
         If .cplignore changes, triggers a full reindex to apply new patterns.
-
-        File record creation is handled before structural indexing to ensure
-        FK constraints are satisfied.
+        File record creation is handled before indexing to satisfy FK constraints.
         """
         if not self._initialized:
             msg = "Coordinator not initialized"
@@ -540,51 +544,174 @@ class IndexCoordinator:
                             continue
                     session.commit()
 
-            # Update Tantivy (use staging for atomicity with epoch)
-            with self._tantivy_write_lock:
-                # Stage updates for existing files
-                for path in existing_paths:
-                    full_path = self.repo_root / path
-                    content = self._safe_read_text(full_path)
-                    symbols = self._extract_symbols(full_path)
-                    if self._lexical is not None:
-                        self._lexical.stage_file(
-                            str(path),
-                            content,
-                            context_id=0,
-                            symbols=symbols,
-                        )
-                    files_updated += 1
-                    symbols_indexed += len(symbols)
-
-                # Stage additions for new files
-                for path in new_paths:
-                    full_path = self.repo_root / path
-                    if not full_path.exists():
-                        continue
-                    content = self._safe_read_text(full_path)
-                    symbols = self._extract_symbols(full_path)
-                    if self._lexical is not None:
-                        file_id = file_id_map.get(str(path), 0)
-                        self._lexical.stage_file(
-                            str(path),
-                            content,
-                            context_id=0,
-                            file_id=file_id,
-                            symbols=symbols,
-                        )
-                    symbols_indexed += len(symbols)
-
-                # Stage removals
-                for path in removed_paths:
-                    if self._lexical is not None:
-                        self._lexical.stage_remove(str(path))
-                    files_removed += 1
-
-            # Update structural index with file_id_map for new files
+            # === Unified single-pass: extract, stage Tantivy, persist structural facts ===
+            # Each file is read and tree-sitter parsed ONCE by the structural
+            # extractor.  ExtractionResult carries content_text for Tantivy and
+            # symbol_names for the symbol field, eliminating the redundant
+            # _safe_read_text() + _extract_symbols() calls.
             all_changed = existing_paths + new_paths
-            if all_changed:
-                await self._update_structural_index(all_changed)
+            str_changed = [str(p) for p in all_changed if (self.repo_root / p).exists()]
+            existing_set = {str(p) for p in existing_paths}
+
+            if str_changed and self._structural is not None and self._lexical is not None:
+                # --- Context routing (group files by owning context) ---
+                with self.db.session() as session:
+                    contexts = session.exec(
+                        select(Context).where(Context.probe_status == ProbeStatus.VALID.value)
+                    ).all()
+
+                    specific_contexts = [c for c in contexts if c.tier != 3 and c.id is not None]
+                    specific_contexts.sort(
+                        key=lambda c: len(c.root_path) if c.root_path else 0,
+                        reverse=True,
+                    )
+
+                    file_to_context: dict[str, int] = {}
+                    for ctx in specific_contexts:
+                        if ctx.id is None:
+                            continue
+                        ctx_id: int = ctx.id
+                        ctx_root = ctx.root_path or ""
+                        exclude_globs = ctx.get_exclude_globs()
+                        include_globs = ctx.get_include_globs()
+                        for str_path in str_changed:
+                            if str_path in file_to_context:
+                                continue
+                            if (
+                                ctx_root
+                                and str_path != ctx_root
+                                and not str_path.startswith(ctx_root + "/")
+                            ):
+                                continue
+                            # Apply include/exclude globs (mirrors _filter_files_for_context)
+                            rel_to_ctx = str_path[len(ctx_root) + 1 :] if ctx_root else str_path
+                            if any(_matches_glob(rel_to_ctx, p) for p in exclude_globs):
+                                continue
+                            if include_globs and not any(
+                                _matches_glob(rel_to_ctx, p) for p in include_globs
+                            ):
+                                continue
+                            file_to_context[str_path] = ctx_id
+
+                    # Assign unclaimed files to root fallback context
+                    root_ctx = next((c for c in contexts if c.tier == 3 and c.id is not None), None)
+                    if root_ctx is not None and root_ctx.id is not None:
+                        root_id: int = root_ctx.id
+                        root_exclude = root_ctx.get_exclude_globs()
+                        root_include = root_ctx.get_include_globs()
+                        for str_path in str_changed:
+                            if str_path not in file_to_context:
+                                if any(_matches_glob(str_path, p) for p in root_exclude):
+                                    continue
+                                if root_include and not any(
+                                    _matches_glob(str_path, p) for p in root_include
+                                ):
+                                    continue
+                                file_to_context[str_path] = root_id
+
+                    # Collect file IDs for scoped resolution passes (batch query)
+                    files = session.exec(select(File).where(col(File.path).in_(str_changed))).all()
+                    changed_file_ids: list[int] = [f.id for f in files if f.id is not None]
+                    # Populate file_id_map for existing files so index_files()
+                    # reuses them instead of querying _ensure_file_id() per file
+                    for f in files:
+                        if f.id is not None:
+                            file_id_map[f.path] = f.id
+
+                # Group files by context_id
+                context_files: dict[int, list[str]] = {}
+                for str_path, ctx_id in file_to_context.items():
+                    context_files.setdefault(ctx_id, []).append(str_path)
+
+                # --- Single-pass: extract once, feed Tantivy + structural ---
+                # Use parallel extraction when batch is large enough to
+                # amortise process-pool overhead (~8 files threshold).
+                _PARALLEL_THRESHOLD = 8
+                workers = (
+                    min(os.cpu_count() or 4, 16) if len(str_changed) >= _PARALLEL_THRESHOLD else 1
+                )
+                with self._tantivy_write_lock:
+                    for ctx_id, paths in context_files.items():
+                        extractions = self._structural.extract_files(paths, ctx_id, workers=workers)
+
+                        failed_paths: list[str] = []
+                        for extraction in extractions:
+                            if extraction.content_text is None:
+                                # File became unreadable — remove stale Tantivy doc
+                                if extraction.file_path in existing_set:
+                                    self._lexical.stage_remove(extraction.file_path)
+                                    files_removed += 1
+                                failed_paths.append(extraction.file_path)
+                                continue
+                            fid = file_id_map.get(extraction.file_path, 0)
+                            self._lexical.stage_file(
+                                extraction.file_path,
+                                extraction.content_text,
+                                context_id=ctx_id,
+                                file_id=fid,
+                                symbols=extraction.symbol_names,
+                            )
+                            if extraction.file_path in existing_set:
+                                files_updated += 1
+                            symbols_indexed += len(extraction.symbol_names)
+
+                        # Persist structural facts (reuses pre-computed extractions)
+                        # Filter out failed extractions — index_files skips them
+                        # but doesn't purge existing facts
+                        ok_extractions = [e for e in extractions if e.content_text is not None]
+                        ok_paths = [e.file_path for e in ok_extractions]
+                        self._structural.index_files(
+                            ok_paths,
+                            ctx_id,
+                            file_id_map=file_id_map,
+                            _extractions=ok_extractions,
+                        )
+
+                        # Purge stale structural facts for failed extractions
+                        if failed_paths:
+                            self._remove_structural_facts_for_paths(failed_paths)
+
+                    # Stage removals
+                    for path in removed_paths:
+                        self._lexical.stage_remove(str(path))
+                        files_removed += 1
+
+                    # Commit all staged changes atomically
+                    self._lexical.commit_staged()
+
+                # Reload searcher to see committed changes
+                self._lexical.reload()
+
+                # Pass 1.5 / 2 / 3: cross-file resolution (scoped to changed files)
+                if changed_file_ids:
+                    resolve_namespace_refs(self.db, None, file_ids=changed_file_ids)
+                    resolve_same_namespace_refs(self.db, None, file_ids=changed_file_ids)
+                    resolve_star_import_refs(self.db, None, file_ids=changed_file_ids)
+                    resolve_references(self.db, file_ids=changed_file_ids)
+                    resolve_type_traced(self.db, file_ids=changed_file_ids)
+
+                # Mark successfully indexed files as indexed
+                if changed_file_ids:
+                    now = time.time()
+                    with self.db.session() as session:
+                        for fid in changed_file_ids:
+                            session.exec(
+                                text(
+                                    "UPDATE files SET indexed_at = :ts WHERE id = :fid"
+                                ).bindparams(ts=now, fid=fid)
+                            )  # type: ignore[call-overload]
+                        session.commit()
+            else:
+                # Only removals (or nothing changed)
+                with self._tantivy_write_lock:
+                    for path in removed_paths:
+                        if self._lexical is not None:
+                            self._lexical.stage_remove(str(path))
+                        files_removed += 1
+                    if self._lexical is not None:
+                        self._lexical.commit_staged()
+                if self._lexical is not None:
+                    self._lexical.reload()
 
             # Remove structural facts for removed files
             if removed_paths:
@@ -635,7 +762,6 @@ class IndexCoordinator:
         with self.db.session() as session:
             ctx_stmt = select(Context).where(
                 Context.probe_status == ProbeStatus.VALID.value,
-                Context.enabled == True,  # noqa: E712
             )
             contexts = list(session.exec(ctx_stmt).all())
 
@@ -837,7 +963,6 @@ class IndexCoordinator:
             with self.db.session() as session:
                 ctx_stmt = select(Context).where(
                     Context.probe_status == ProbeStatus.VALID.value,
-                    Context.enabled == True,  # noqa: E712
                 )
                 contexts = list(session.exec(ctx_stmt).all())
 
@@ -1199,13 +1324,12 @@ class IndexCoordinator:
         """Get all valid contexts from the index.
 
         Returns:
-            List of Context objects for valid, enabled contexts
+            List of Context objects for valid contexts
         """
         await self.wait_for_freshness()
         with self.db.session() as session:
             stmt = select(Context).where(
                 Context.probe_status == ProbeStatus.VALID.value,
-                Context.enabled == True,  # noqa: E712
             )
             return list(session.exec(stmt).all())
 
@@ -1281,7 +1405,6 @@ class IndexCoordinator:
             stmt = select(Context).where(
                 Context.root_path == rel_path,
                 Context.probe_status == ProbeStatus.VALID.value,
-                Context.enabled == True,  # noqa: E712
             )
             context = session.exec(stmt).first()
             if not context or context.id is None:
@@ -1423,7 +1546,6 @@ class IndexCoordinator:
             # Get all valid contexts
             stmt = select(Context).where(
                 Context.probe_status == ProbeStatus.VALID.value,
-                Context.enabled == True,  # noqa: E712
             )
             contexts = list(session.exec(stmt).all())
 
@@ -1497,7 +1619,6 @@ class IndexCoordinator:
             # Get all valid contexts
             stmt = select(Context).where(
                 Context.probe_status == ProbeStatus.VALID.value,
-                Context.enabled == True,  # noqa: E712
             )
             contexts = list(session.exec(stmt).all())
 
@@ -1729,7 +1850,6 @@ class IndexCoordinator:
                 # Get primary context
                 ctx_stmt = select(Context).where(
                     Context.probe_status == ProbeStatus.VALID.value,
-                    Context.enabled == True,  # noqa: E712
                 )
                 contexts = list(session.exec(ctx_stmt).all())
                 if not contexts:
@@ -1876,7 +1996,6 @@ class IndexCoordinator:
             with self.db.session() as session:
                 stmt = select(Context).where(
                     Context.probe_status == ProbeStatus.VALID.value,
-                    Context.enabled == True,  # noqa: E712
                 )
                 all_contexts = list(session.exec(stmt).all())
 
@@ -2013,115 +2132,6 @@ class IndexCoordinator:
                 resolve_type_traced(self.db, on_progress=pass3_progress)
 
         return count, indexed_paths, files_by_ext
-
-    async def _update_structural_index(self, changed_paths: list[Path]) -> None:
-        """Update structural index for changed files.
-
-        Clears existing facts for changed files, then re-extracts.
-        Groups files by context and indexes each group with its context_id.
-        """
-        if self._structural is None:
-            return
-
-        # Convert to string paths
-        str_paths = [str(p) for p in changed_paths if (self.repo_root / p).exists()]
-        if not str_paths:
-            return
-
-        # Load contexts for routing
-        with self.db.session() as session:
-            contexts = session.exec(
-                select(Context).where(Context.probe_status == ProbeStatus.VALID.value)
-            ).all()
-
-            # Exclude tier=3 from matching and sort by root_path length descending
-            # so more specific contexts claim files before less specific ones.
-            specific_contexts = [c for c in contexts if c.tier != 3 and c.id is not None]
-            specific_contexts.sort(
-                key=lambda c: len(c.root_path) if c.root_path else 0,
-                reverse=True,
-            )
-
-            # Build file -> context_id mapping and collect file_ids
-            file_to_context: dict[str, int] = {}
-            changed_file_ids: list[int] = []
-            for ctx in specific_contexts:
-                ctx_root = ctx.root_path or ""
-
-                for str_path in str_paths:
-                    # Skip if already claimed by a more specific context
-                    if str_path in file_to_context:
-                        continue
-
-                    # Path-boundary-aware matching:
-                    # - Empty ctx_root matches everything (but tier=3 is excluded above)
-                    # - Non-empty ctx_root requires exact match or path + "/" prefix
-                    if (
-                        ctx_root
-                        and str_path != ctx_root
-                        and not str_path.startswith(ctx_root + "/")
-                    ):
-                        continue
-
-                    file_to_context[str_path] = ctx.id  # type: ignore[assignment]
-
-            # Delete existing facts for these files before re-indexing
-            for str_path in str_paths:
-                file = session.exec(select(File).where(File.path == str_path)).first()
-                if file and file.id is not None:
-                    file_id = file.id
-                    changed_file_ids.append(file_id)
-                    # Delete facts for this file using raw SQL
-                    session.exec(
-                        text("DELETE FROM def_facts WHERE file_id = :fid").bindparams(fid=file_id)
-                    )  # type: ignore[call-overload]
-                    session.exec(
-                        text("DELETE FROM ref_facts WHERE file_id = :fid").bindparams(fid=file_id)
-                    )  # type: ignore[call-overload]
-                    session.exec(
-                        text("DELETE FROM scope_facts WHERE file_id = :fid").bindparams(fid=file_id)
-                    )  # type: ignore[call-overload]
-                    session.exec(
-                        text("DELETE FROM import_facts WHERE file_id = :fid").bindparams(
-                            fid=file_id
-                        )
-                    )  # type: ignore[call-overload]
-                    session.exec(
-                        text("DELETE FROM local_bind_facts WHERE file_id = :fid").bindparams(
-                            fid=file_id
-                        )
-                    )  # type: ignore[call-overload]
-                    session.exec(
-                        text("DELETE FROM dynamic_access_sites WHERE file_id = :fid").bindparams(
-                            fid=file_id
-                        )
-                    )  # type: ignore[call-overload]
-            session.commit()
-
-        # Group files by context_id and re-index
-        context_files: dict[int, list[str]] = {}
-        for str_path, ctx_id in file_to_context.items():
-            if ctx_id not in context_files:
-                context_files[ctx_id] = []
-            context_files[ctx_id].append(str_path)
-
-        for ctx_id, paths in context_files.items():
-            self._structural.index_files(paths, context_id=ctx_id)
-
-        # Pass 1.5: DB-backed cross-file resolution (scoped to changed files)
-        # Use unit_id=None to allow cross-context resolution (shared libs).
-        # The file_ids parameter still scopes which refs get upgraded.
-        if changed_file_ids:
-            resolve_namespace_refs(self.db, None, file_ids=changed_file_ids)
-            resolve_same_namespace_refs(self.db, None, file_ids=changed_file_ids)
-            resolve_star_import_refs(self.db, None, file_ids=changed_file_ids)
-
-        # Resolve cross-file references (Pass 2 - scoped to changed files)
-        if changed_file_ids:
-            resolve_references(self.db, file_ids=changed_file_ids)
-
-            # Resolve type-traced member accesses (Pass 3 - scoped to changed files)
-            resolve_type_traced(self.db, file_ids=changed_file_ids)
 
     def _clear_all_structural_facts(self) -> None:
         """Clear all structural facts from the database.

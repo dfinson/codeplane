@@ -508,7 +508,6 @@ class Context(SQLModel, table=True):
     include_spec: str | None = None
     exclude_spec: str | None = None
     config_hash: str | None = None
-    enabled: bool = Field(default=True)
     refreshed_at: float | None = None
 
     # Relationships

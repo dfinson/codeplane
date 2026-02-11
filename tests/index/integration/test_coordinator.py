@@ -1075,3 +1075,73 @@ class TestCoordinatorTestTargetIncremental:
             assert "tests/utils_test.py" in target_paths
         finally:
             coordinator.close()
+
+
+class TestCoordinatorStaleTantivyRemoval:
+    """Tests that stale Tantivy docs are removed when extraction fails."""
+
+    @pytest.mark.asyncio
+    async def test_unreadable_file_removes_stale_tantivy_doc(
+        self, integration_repo: Path, tmp_path: Path
+    ) -> None:
+        """When extraction returns content_text=None, its Tantivy doc is removed."""
+        from unittest.mock import patch
+
+        from codeplane.index._internal.indexing.structural import (
+            ExtractionResult,
+            _extract_file,
+        )
+
+        db_path = tmp_path / "index.db"
+        tantivy_path = tmp_path / "tantivy"
+
+        coordinator = IndexCoordinator(integration_repo, db_path, tantivy_path)
+
+        try:
+            await coordinator.initialize(on_index_progress=_noop_progress)
+
+            # Confirm the file is searchable before
+            results_before = await coordinator.search("helper", mode=SearchMode.TEXT)
+            helper_paths = [r.path for r in results_before.results]
+            assert "src/utils.py" in helper_paths
+
+            # Patch _extract_file to simulate TOCTOU: file passes .exists()
+            # but extraction returns content_text=None (file vanished mid-read)
+            real_extract = _extract_file
+
+            def _failing_extract(file_path: str, repo_root: str, unit_id: int) -> ExtractionResult:
+                if file_path == "src/utils.py":
+                    return ExtractionResult(file_path=file_path, error="File not found")
+                return real_extract(file_path, repo_root, unit_id)
+
+            with patch(
+                "codeplane.index._internal.indexing.structural._extract_file",
+                side_effect=_failing_extract,
+            ):
+                stats = await coordinator.reindex_incremental([Path("src/utils.py")])
+
+            # The file should be counted as removed (stale doc cleaned up)
+            assert stats.files_removed >= 1
+
+            # Confirm content from the deleted file is no longer searchable
+            results_after = await coordinator.search("helper", mode=SearchMode.TEXT)
+            after_paths = [r.path for r in results_after.results]
+            assert "src/utils.py" not in after_paths
+
+            # Confirm structural facts were also purged
+            with coordinator.db.session() as session:
+                from sqlmodel import select as sel
+
+                from codeplane.index.models import DefFact
+                from codeplane.index.models import File as FileModel
+
+                file_row = session.exec(
+                    sel(FileModel).where(FileModel.path == "src/utils.py")
+                ).first()
+                if file_row and file_row.id is not None:
+                    defs = session.exec(sel(DefFact).where(DefFact.file_id == file_row.id)).all()
+                    assert len(defs) == 0, (
+                        f"Expected 0 structural facts for failed file, got {len(defs)}"
+                    )
+        finally:
+            coordinator.close()
