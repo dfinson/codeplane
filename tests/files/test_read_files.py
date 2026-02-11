@@ -105,7 +105,7 @@ class TestReadFilesRanges:
     def test_read_with_range(self, temp_repo: Path) -> None:
         """Should extract line range."""
         ops = FileOps(temp_repo)
-        result = ops.read_files("main.py", ranges=[{"path": "main.py", "start": 2, "end": 4}])
+        result = ops.read_files("main.py", targets={"main.py": (2, 4)})
 
         assert len(result.files) == 1
         content = result.files[0].content
@@ -118,13 +118,13 @@ class TestReadFilesRanges:
     def test_range_sets_line_count(self, temp_repo: Path) -> None:
         """Should set line_count to range size."""
         ops = FileOps(temp_repo)
-        result = ops.read_files("main.py", ranges=[{"path": "main.py", "start": 2, "end": 4}])
+        result = ops.read_files("main.py", targets={"main.py": (2, 4)})
         assert result.files[0].line_count == 3  # lines 2, 3, 4
 
     def test_range_includes_range_tuple(self, temp_repo: Path) -> None:
         """Should include range tuple in result."""
         ops = FileOps(temp_repo)
-        result = ops.read_files("main.py", ranges=[{"path": "main.py", "start": 2, "end": 4}])
+        result = ops.read_files("main.py", targets={"main.py": (2, 4)})
         assert result.files[0].range == (2, 4)
 
     def test_range_clamps_to_file_bounds(self, temp_repo: Path) -> None:
@@ -132,7 +132,7 @@ class TestReadFilesRanges:
         ops = FileOps(temp_repo)
         result = ops.read_files(
             "main.py",
-            ranges=[{"path": "main.py", "start": 1, "end": 100}],  # Beyond file
+            targets={"main.py": (1, 100)},  # Beyond file
         )
         # Should read all 5 lines
         assert result.files[0].line_count == 5

@@ -9,7 +9,7 @@ from __future__ import annotations
 import fnmatch
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from codeplane.core.languages import EXTENSION_TO_NAME
 from codeplane.mcp.errors import MCPError, MCPErrorCode
@@ -209,14 +209,14 @@ class FileOps:
         self,
         paths: str | list[str],
         *,
-        ranges: list[dict[str, Any]] | None = None,
+        targets: dict[str, tuple[int, int]] | None = None,
         include_metadata: bool = False,
     ) -> ReadFilesResult:
         """Read file contents with optional line ranges.
 
         Args:
             paths: Single path or list of paths (relative to repo root)
-            ranges: Optional line ranges per file [{"path": str, "start_line": int, "end_line": int}]
+            targets: Optional target map {path: (start_line, end_line)} (1-indexed, inclusive)
             include_metadata: Include file stats (size, mtime, git status)
 
         Returns:
@@ -225,15 +225,7 @@ class FileOps:
         if isinstance(paths, str):
             paths = [paths]
 
-        # Build range lookup - expects 'start' and 'end' keys (1-indexed)
-        range_map: dict[str, tuple[int, int]] = {}
-        if ranges:
-            for r in ranges:
-                path_key = str(r.get("path", ""))
-                start = r.get("start")
-                end = r.get("end")
-                if start is not None and end is not None:
-                    range_map[path_key] = (int(start), int(end))
+        target_map: dict[str, tuple[int, int]] = targets or {}
 
         results: list[FileResult] = []
         for rel_path in paths:
@@ -251,16 +243,16 @@ class FileOps:
             lines = content.splitlines(keepends=True)
 
             # Apply range if specified
-            file_range = range_map.get(rel_path)
-            if file_range:
-                start, end = file_range
+            file_target = target_map.get(rel_path)
+            if file_target:
+                start, end = file_target
                 # Convert to 0-indexed, clamp to bounds
                 start_idx = max(0, start - 1)
                 end_idx = min(len(lines), end)
                 content = "".join(lines[start_idx:end_idx])
                 line_count = end_idx - start_idx
             else:
-                file_range = None
+                file_target = None
                 line_count = len(lines)
 
             # Detect language from extension
@@ -280,7 +272,7 @@ class FileOps:
                     content=content,
                     language=lang,
                     line_count=line_count,
-                    range=file_range,
+                    range=file_target,
                     metadata=metadata,
                 )
             )

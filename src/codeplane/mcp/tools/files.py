@@ -19,24 +19,29 @@ if TYPE_CHECKING:
 # =============================================================================
 
 
-class RangeParam(BaseModel):
-    """Line range specification for partial file reads."""
+class FileTarget(BaseModel):
+    """File read target with optional line range.
+
+    Each target specifies a file path and optional line range.
+    The path is always required, eliminating the old failure mode where
+    targets without paths silently failed to match any file.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str | None = Field(
-        None,
-        description="File path this range applies to. Required when reading multiple files with different ranges.",
-    )
-    start_line: int = Field(..., gt=0, description="Start line (1-indexed, inclusive)")
-    end_line: int = Field(..., gt=0, description="End line (1-indexed, inclusive)")
+    path: str = Field(..., description="File path relative to repo root")
+    start_line: int | None = Field(None, gt=0, description="Start line (1-indexed, inclusive)")
+    end_line: int | None = Field(None, gt=0, description="End line (1-indexed, inclusive)")
 
     @model_validator(mode="after")
-    def validate_range(self) -> "RangeParam":
-        if self.end_line < self.start_line:
-            raise ValueError(
-                f"end_line ({self.end_line}) must be >= start_line ({self.start_line})"
-            )
+    def validate_range(self) -> "FileTarget":
+        if self.start_line is not None and self.end_line is not None:
+            if self.end_line < self.start_line:
+                raise ValueError(
+                    f"end_line ({self.end_line}) must be >= start_line ({self.start_line})"
+                )
+        elif (self.start_line is None) != (self.end_line is None):
+            raise ValueError("start_line and end_line must both be set or both omitted")
         return self
 
 
@@ -88,11 +93,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     async def read_files(
         ctx: Context,
         paths: list[str] = Field(..., description="File paths relative to repo root"),
-        ranges: list[RangeParam] | None = Field(
+        targets: list[FileTarget] | None = Field(
             None,
             description=(
-                "Optional line ranges per file. Each range can specify a 'path' to apply "
-                "different ranges to different files in one call."
+                "Optional file targets with line ranges. Each target specifies a file path "
+                "and optional start_line/end_line to read a subset of the file."
             ),
         ),
         include_metadata: bool = Field(False, description="Include file stats (size, mtime)"),
@@ -100,15 +105,20 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         """Read file contents with optional line ranges."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
-        ranges_dict = None
-        if ranges:
-            ranges_dict = [
-                {"path": r.path or "", "start": r.start_line, "end": r.end_line} for r in ranges
-            ]
+        # Build target map keyed by path.  FileTarget guarantees path is always
+        # set, so we never get the old "" key-mismatch bug.
+        target_map: dict[str, tuple[int, int]] = {}
+        if targets:
+            for t in targets:
+                # Ensure the target's file is in paths so it gets read.
+                if t.path not in paths:
+                    paths.append(t.path)
+                if t.start_line is not None and t.end_line is not None:
+                    target_map[t.path] = (t.start_line, t.end_line)
 
         result = app_ctx.file_ops.read_files(
             paths,
-            ranges=ranges_dict,
+            targets=target_map,
             include_metadata=include_metadata,
         )
 

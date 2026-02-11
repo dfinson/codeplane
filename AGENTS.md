@@ -30,9 +30,10 @@ Terminal fallback is permitted ONLY when no CodePlane tool exists for the operat
 **mcp_codeplane-codeplane_read_files**
 ```
 paths: list[str]           # REQUIRED - file paths relative to repo root
-ranges: list[RangeParam]   # optional - NOT "line_ranges"
-  start_line: int          # 1-indexed, NOT "start"
-  end_line: int            # 1-indexed, NOT "end"
+targets: list[FileTarget]  # optional - NOT "line_ranges" or "ranges"
+  path: str                # REQUIRED - file path this target applies to
+  start_line: int          # optional, 1-indexed; must be provided with end_line, NOT "start"
+  end_line: int            # optional, 1-indexed; must be provided with start_line, NOT "end"
 ```
 
 **mcp_codeplane-codeplane_write_files**
