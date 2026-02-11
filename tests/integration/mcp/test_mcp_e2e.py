@@ -48,7 +48,7 @@ class TestMCPFilesIntegration:
         file_ops = FileOps(integration_repo)
         result = file_ops.read_files(
             ["src/main.py"],
-            ranges={"src/main.py": (1, 5)},
+            targets={"src/main.py": (1, 5)},
         )
 
         assert len(result.files) == 1

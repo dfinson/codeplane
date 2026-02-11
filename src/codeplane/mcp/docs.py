@@ -126,7 +126,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
                 "description": "Read lines 10-50 of a file",
                 "params": {
                     "paths": ["src/main.py"],
-                    "ranges": [{"path": "src/main.py", "start_line": 10, "end_line": 50}],
+                    "targets": [{"path": "src/main.py", "start_line": 10, "end_line": 50}],
                 },
             },
         ],

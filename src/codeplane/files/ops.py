@@ -209,14 +209,14 @@ class FileOps:
         self,
         paths: str | list[str],
         *,
-        ranges: dict[str, tuple[int, int]] | None = None,
+        targets: dict[str, tuple[int, int]] | None = None,
         include_metadata: bool = False,
     ) -> ReadFilesResult:
         """Read file contents with optional line ranges.
 
         Args:
             paths: Single path or list of paths (relative to repo root)
-            ranges: Optional range map {path: (start_line, end_line)} (1-indexed, inclusive)
+            targets: Optional target map {path: (start_line, end_line)} (1-indexed, inclusive)
             include_metadata: Include file stats (size, mtime, git status)
 
         Returns:
@@ -225,7 +225,7 @@ class FileOps:
         if isinstance(paths, str):
             paths = [paths]
 
-        range_map: dict[str, tuple[int, int]] = ranges or {}
+        target_map: dict[str, tuple[int, int]] = targets or {}
 
         results: list[FileResult] = []
         for rel_path in paths:
@@ -243,16 +243,16 @@ class FileOps:
             lines = content.splitlines(keepends=True)
 
             # Apply range if specified
-            file_range = range_map.get(rel_path)
-            if file_range:
-                start, end = file_range
+            file_target = target_map.get(rel_path)
+            if file_target:
+                start, end = file_target
                 # Convert to 0-indexed, clamp to bounds
                 start_idx = max(0, start - 1)
                 end_idx = min(len(lines), end)
                 content = "".join(lines[start_idx:end_idx])
                 line_count = end_idx - start_idx
             else:
-                file_range = None
+                file_target = None
                 line_count = len(lines)
 
             # Detect language from extension
@@ -272,7 +272,7 @@ class FileOps:
                     content=content,
                     language=lang,
                     line_count=line_count,
-                    range=file_range,
+                    range=file_target,
                     metadata=metadata,
                 )
             )

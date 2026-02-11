@@ -123,8 +123,8 @@ Terminal fallback is permitted ONLY when no CodePlane tool exists for the operat
 **mcp_codeplane-codeplane_read_files**
 ```
 paths: list[str]           # REQUIRED - file paths relative to repo root
-ranges: list[FileTarget]   # optional - NOT "line_ranges"
-  path: str                # REQUIRED - file path this range applies to
+targets: list[FileTarget]  # optional - NOT "line_ranges" or "ranges"
+  path: str                # REQUIRED - file path this target applies to
   start_line: int          # 1-indexed, NOT "start"
   end_line: int            # 1-indexed, NOT "end"
 ```

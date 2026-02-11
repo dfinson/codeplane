@@ -24,7 +24,7 @@ class FileTarget(BaseModel):
 
     Each target specifies a file path and optional line range.
     The path is always required, eliminating the old failure mode where
-    ranges without paths silently failed to match any file.
+    targets without paths silently failed to match any file.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -97,11 +97,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     async def read_files(
         ctx: Context,
         paths: list[str] = Field(..., description="File paths relative to repo root"),
-        ranges: list[FileTarget] | None = Field(
+        targets: list[FileTarget] | None = Field(
             None,
             description=(
-                "Optional line ranges per file. Each range can specify a 'path' to apply "
-                "different ranges to different files in one call."
+                "Optional file targets with line ranges. Each target specifies a file path "
+                "and optional start_line/end_line to read a subset of the file."
             ),
         ),
         include_metadata: bool = Field(False, description="Include file stats (size, mtime)"),
@@ -109,20 +109,20 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         """Read file contents with optional line ranges."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
-        # Build range map keyed by path.  FileTarget guarantees path is always
+        # Build target map keyed by path.  FileTarget guarantees path is always
         # set, so we never get the old "" key-mismatch bug.
-        range_map: dict[str, tuple[int, int]] = {}
-        if ranges:
-            for r in ranges:
-                # Ensure the range's file is in paths so it gets read.
-                if r.path not in paths:
-                    paths.append(r.path)
-                if r.start_line is not None and r.end_line is not None:
-                    range_map[r.path] = (r.start_line, r.end_line)
+        target_map: dict[str, tuple[int, int]] = {}
+        if targets:
+            for t in targets:
+                # Ensure the target's file is in paths so it gets read.
+                if t.path not in paths:
+                    paths.append(t.path)
+                if t.start_line is not None and t.end_line is not None:
+                    target_map[t.path] = (t.start_line, t.end_line)
 
         result = app_ctx.file_ops.read_files(
             paths,
-            ranges=range_map,
+            targets=target_map,
             include_metadata=include_metadata,
         )
 
