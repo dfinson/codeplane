@@ -10,9 +10,10 @@ from fastmcp import Context
 from fastmcp.utilities.json_schema import dereference_refs
 from pydantic import Field
 
-from codeplane.config.constants import GIT_BLAME_MAX, GIT_LOG_MAX
+from codeplane.config.constants import GIT_BLAME_MAX, GIT_LOG_MAX, RESPONSE_BUDGET_BYTES
 from codeplane.git._internal.hooks import run_hook
 from codeplane.git.errors import EmptyCommitMessageError, PathsNotFoundError
+from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination, measure_bytes
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -248,6 +249,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         base: str | None = Field(None, description="Base ref for comparison"),
         target: str | None = Field(None, description="Target ref for comparison"),
         staged: bool = Field(False, description="Show staged changes only"),
+        cursor: str | None = Field(None, description="Pagination cursor (file index)"),
     ) -> dict[str, Any]:
         """Get diff between refs or working tree."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
@@ -258,10 +260,116 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             staged=staged,
             include_patch=True,
         )
-        result = asdict(diff)
-        result["summary"] = _summarize_diff(
-            diff.files_changed, diff.total_additions, diff.total_deletions, staged
-        )
+
+        all_files = list(diff.files)
+        full_patch = diff.patch or ""
+
+        # Apply cursor: skip files already returned
+        start_idx = 0
+        if cursor:
+            import contextlib
+
+            with contextlib.suppress(ValueError):
+                start_idx = int(cursor)
+
+        page_files = all_files[start_idx:]
+
+        # Use BudgetAccumulator to add files one by one
+        acc = BudgetAccumulator()
+        for f in page_files:
+            item = {
+                "old_path": f.old_path,
+                "new_path": f.new_path,
+                "status": f.status,
+                "additions": f.additions,
+                "deletions": f.deletions,
+            }
+            if not acc.try_add(item):
+                break
+
+        # Build result with paginated files
+        files_in_page = acc.items
+        has_more = len(files_in_page) < len(page_files)
+        next_offset = start_idx + len(files_in_page)
+
+        # Extract patch sections for only the files we're returning
+        # Patches are delimited by 'diff --git' headers
+        page_paths = {f["new_path"] or f["old_path"] for f in files_in_page}
+        patch_lines: list[str] = []
+        current_file_patch: list[str] = []
+        current_file_path: str | None = None
+
+        for line in full_patch.splitlines(keepends=True):
+            if line.startswith("diff --git "):
+                # Flush previous file's patch if it was in our page
+                if current_file_path and current_file_path in page_paths:
+                    patch_lines.extend(current_file_patch)
+                # Start new file
+                current_file_patch = [line]
+                # Extract path: 'diff --git a/path b/path' -> 'path'
+                parts = line.split()
+                current_file_path = parts[3][2:] if len(parts) >= 4 else None
+            else:
+                current_file_patch.append(line)
+
+        # Flush last file
+        if current_file_path and current_file_path in page_paths:
+            patch_lines.extend(current_file_patch)
+
+        page_patch = "".join(patch_lines)
+
+        # Build totals from page files
+        page_additions = sum(f["additions"] for f in files_in_page)
+        page_deletions = sum(f["deletions"] for f in files_in_page)
+
+        result: dict[str, Any] = {
+            "files": files_in_page,
+            "total_additions": page_additions,
+            "total_deletions": page_deletions,
+            "files_changed": len(files_in_page),
+            "patch": page_patch,
+            "summary": _summarize_diff(len(files_in_page), page_additions, page_deletions, staged),
+            "pagination": make_budget_pagination(
+                has_more=has_more,
+                next_cursor=str(next_offset) if has_more else None,
+                total_estimate=len(all_files),
+            ),
+        }
+
+        # If patch is still too large, truncate it with binary search
+        size = measure_bytes(result)
+        if size > RESPONSE_BUDGET_BYTES and page_patch:
+            truncation_notice = "\n\n[... PATCH TRUNCATED — more content on next page ...]\n"
+
+            base_result: dict[str, Any] = dict(result)
+            base_result["patch"] = ""
+            base_size = measure_bytes(base_result)
+
+            if base_size >= RESPONSE_BUDGET_BYTES:
+                # Even file metadata for this page exceeds budget.
+                # This shouldn't happen since we used BudgetAccumulator,
+                # but handle gracefully: return what we have without patch.
+                result["patch"] = ""
+                return result
+
+            # Binary search for longest patch prefix that fits
+            low, high = 0, len(page_patch)
+            best_patch: str | None = None
+
+            while low <= high:
+                mid = (low + high) // 2
+                candidate = page_patch[:mid] + truncation_notice
+                base_result["patch"] = candidate
+                if measure_bytes(base_result) <= RESPONSE_BUDGET_BYTES:
+                    best_patch = candidate
+                    low = mid + 1
+                else:
+                    high = mid - 1
+
+            result["patch"] = best_patch or ""
+
+        return result
+
         return result
 
     @mcp.tool
@@ -375,26 +483,47 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         """Get commit history."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
+        # When cursor is provided, it's a commit SHA — start walking from
+        # that commit and skip it (it was the last item of the prior page).
+        effective_ref = cursor if cursor else ref
+        skip_first = cursor is not None
+
         commits = app_ctx.git_ops.log(
-            ref=ref,
-            limit=limit + 1,
+            ref=effective_ref,
+            limit=limit + 1 + (1 if skip_first else 0),
             since=since,
             until=until,
             paths=paths,
         )
 
+        if skip_first and commits:
+            commits = commits[1:]
+
         has_more = len(commits) > limit
         if has_more:
             commits = commits[:limit]
 
-        pagination: dict[str, Any] = {}
-        if has_more and commits:
-            pagination["next_cursor"] = commits[-1].sha
+        acc = BudgetAccumulator()
+        for c in commits:
+            d = asdict(c)
+            # Convert datetime fields to ISO strings for JSON serialization
+            for sig_key in ("author", "committer"):
+                if sig_key in d and "time" in d[sig_key]:
+                    d[sig_key]["time"] = d[sig_key]["time"].isoformat()
+            if not acc.try_add(d):
+                break
+
+        budget_more = has_more or (not acc.has_room and len(commits) > acc.count)
+
+        pagination = make_budget_pagination(
+            has_more=budget_more,
+            next_cursor=acc.items[-1]["sha"] if acc.items and budget_more else None,
+        )
 
         return {
-            "results": [asdict(c) for c in commits],
+            "results": acc.items,
             "pagination": pagination,
-            "summary": _summarize_log(len(commits), has_more),
+            "summary": _summarize_log(acc.count, budget_more),
         }
 
     @mcp.tool
@@ -751,21 +880,31 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     start_idx = int(cursor)
 
             end_idx = start_idx + limit
-            page = lines[start_idx:end_idx]
-            has_more = end_idx < len(lines)
+            candidate_page = lines[start_idx:end_idx]
 
-            pagination: dict[str, Any] = {}
-            if has_more:
-                pagination["next_cursor"] = str(end_idx)
-                pagination["total_estimate"] = len(lines)
+            # Apply budget to blame lines
+            acc = BudgetAccumulator()
+            for line in candidate_page:
+                if not acc.try_add(line):
+                    break
+
+            count_more = len(lines) - start_idx - acc.count
+            has_more = count_more > 0
+
+            next_cursor_val = str(start_idx + acc.count) if has_more else None
+            pagination = make_budget_pagination(
+                has_more=has_more,
+                next_cursor=next_cursor_val,
+                total_estimate=len(lines) if has_more else None,
+            )
 
             from codeplane.core.formatting import compress_path
 
             return {
-                "results": page,
+                "results": acc.items,
                 "pagination": pagination,
                 **blame_dict,
-                "summary": f"{len(page)} lines from {compress_path(path, 35)}",
+                "summary": f"{acc.count} lines from {compress_path(path, 35)}",
             }
 
         raise ValueError(f"Unknown action: {action}")

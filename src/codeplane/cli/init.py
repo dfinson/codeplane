@@ -71,12 +71,15 @@ Terminal fallback is permitted ONLY when no CodePlane tool exists for the operat
 
 **{tool_prefix}_read_files**
 ```
-paths: list[str]           # REQUIRED - file paths relative to repo root
-targets: list[FileTarget]  # optional - NOT "line_ranges" or "ranges"
+targets: list[FileTarget]  # REQUIRED - NOT "line_ranges" or "ranges"
   path: str                # REQUIRED - file path this target applies to
   start_line: int          # optional, 1-indexed; must be provided together with end_line
   end_line: int            # optional, 1-indexed; must be provided together with start_line
+cursor: str                # optional - pagination cursor from previous response
 ```
+
+**Response includes:**
+- `not_found`: list of paths that don't exist (explicit, not just a count)
 
 **{tool_prefix}_write_files**
 ```
@@ -97,6 +100,7 @@ context: "none"|"minimal"|"standard"|"rich"|"function"|"class"  # default "stand
                            # function/class: enclosing scope body (structural) with 25-line fallback
 context_lines: int         # optional - override lines for line-based, or fallback for structural
 limit: int                 # default 20, NOT "max_results"
+cursor: str                # optional - pagination cursor from previous response
 ```
 
 **{tool_prefix}_list_files**
@@ -188,6 +192,28 @@ CodePlane responses include structured metadata. You must inspect and act on:
 - `display_to_user`: Content that should be surfaced to the user
 
 Ignoring these hints degrades agent performance and may cause incorrect behavior.
+
+### Response Size Budget & Pagination
+
+All data-returning endpoints enforce a per-response byte budget (~40 KB) to stay
+within VS Code's output limits. When a response is truncated:
+
+- The `pagination` object will contain `"truncated": true`
+- If more data is available, `pagination.next_cursor` provides a cursor to fetch
+  the next page (pass it as the `cursor` parameter on the next call)
+- `pagination.total_estimate` may indicate the total number of results available
+
+**If `truncated: true` but no `next_cursor`:** The data cannot be paginated (e.g.,
+metadata alone exceeds budget). Check `agentic_hint` for guidance on narrowing the request.
+
+**Affected endpoints:** `search`, `read_files`, `git_log`, `git_diff`, `git_inspect` (blame), `map_repo`
+
+**Agent behavior when `truncated` is true:**
+1. Process the results already returned
+2. If `next_cursor` is present and more context is needed, call again with `cursor` set to `next_cursor`
+3. If `next_cursor` is absent, narrow the request (e.g., filter by paths, reduce limit)
+
+The first result is always included regardless of size (no empty pages).
 <!-- /codeplane-instructions -->
 """
 
@@ -276,8 +302,8 @@ def _ensure_vscode_mcp_config(repo_root: Path, port: int) -> tuple[bool, str]:
 
     expected_url = f"http://127.0.0.1:{port}/mcp"
     expected_config: dict[str, Any] = {
-        "command": "npx",
-        "args": ["-y", "mcp-remote", expected_url],
+        "type": "http",
+        "url": expected_url,
     }
 
     if mcp_json_path.exists():
@@ -296,14 +322,13 @@ def _ensure_vscode_mcp_config(repo_root: Path, port: int) -> tuple[bool, str]:
 
         # Check if our server entry already exists with correct config
         if server_name in servers:
-            current_args = servers[server_name].get("args", [])
-            current_url = current_args[-1] if current_args else ""
+            current_url = servers[server_name].get("url", "")
 
             # If URL matches exactly, no change needed
             if current_url == expected_url:
                 return False, server_name
 
-            # Update with new port
+            # Update with new config (also migrates from old mcp-remote format)
             servers[server_name] = expected_config
         else:
             # Add new server entry
@@ -347,22 +372,21 @@ def sync_vscode_mcp_port(repo_root: Path, port: int) -> bool:
     if server_name not in servers:
         # Our server entry doesn't exist, add it
         servers[server_name] = {
-            "command": "npx",
-            "args": ["-y", "mcp-remote", expected_url],
+            "type": "http",
+            "url": expected_url,
         }
         existing["servers"] = servers
         output = json.dumps(existing, indent=2) + "\n"
         mcp_json_path.write_text(output)
         return True
 
-    current_args = servers[server_name].get("args", [])
-    current_url = current_args[-1] if current_args else ""
+    current_url = servers[server_name].get("url", "")
 
     if current_url == expected_url:
         return False
 
-    # Update port
-    servers[server_name]["args"] = ["-y", "mcp-remote", expected_url]
+    # Update config (also migrates from old mcp-remote format)
+    servers[server_name] = {"type": "http", "url": expected_url}
     existing["servers"] = servers
     output = json.dumps(existing, indent=2) + "\n"
     mcp_json_path.write_text(output)

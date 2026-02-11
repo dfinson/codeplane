@@ -7,6 +7,7 @@ from fastmcp.utilities.json_schema import dereference_refs
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from codeplane.config.constants import FILES_LIST_MAX
+from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -92,38 +93,49 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     @mcp.tool
     async def read_files(
         ctx: Context,
-        paths: list[str] = Field(..., description="File paths relative to repo root"),
-        targets: list[FileTarget] | None = Field(
-            None,
+        targets: list[FileTarget] = Field(
+            ...,
             description=(
-                "Optional file targets with line ranges. Each target specifies a file path "
-                "and optional start_line/end_line to read a subset of the file."
+                "File targets to read. Each specifies a path and optional "
+                "start_line/end_line to read a subset of the file."
             ),
         ),
         include_metadata: bool = Field(False, description="Include file stats (size, mtime)"),
+        cursor: str | None = Field(None, description="Pagination cursor"),
     ) -> dict[str, Any]:
         """Read file contents with optional line ranges."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
-        # Build target map keyed by path.  FileTarget guarantees path is always
-        # set, so we never get the old "" key-mismatch bug.
+        # Apply cursor: skip targets already returned
+        start_idx = 0
+        if cursor:
+            import contextlib
+
+            with contextlib.suppress(ValueError):
+                start_idx = int(cursor)
+
+        page_targets = targets[start_idx:]
+
+        # Derive paths and target map from FileTarget objects.
+        paths: list[str] = []
         target_map: dict[str, tuple[int, int]] = {}
-        if targets:
-            for t in targets:
-                # Ensure the target's file is in paths so it gets read.
-                if t.path not in paths:
-                    paths.append(t.path)
-                if t.start_line is not None and t.end_line is not None:
-                    target_map[t.path] = (t.start_line, t.end_line)
+        for t in page_targets:
+            if t.path not in paths:
+                paths.append(t.path)
+            if t.start_line is not None and t.end_line is not None:
+                target_map[t.path] = (t.start_line, t.end_line)
 
         result = app_ctx.file_ops.read_files(
             paths,
-            targets=target_map,
+            targets=target_map if target_map else None,
             include_metadata=include_metadata,
         )
 
-        files = [
-            {
+        acc = BudgetAccumulator()
+        # Track all files that were found (before budget filtering)
+        found_paths: set[str] = {f.path for f in result.files}
+        for f in result.files:
+            item = {
                 "path": f.path,
                 "content": f.content,
                 "language": f.language,
@@ -131,14 +143,27 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "range": f.range,
                 "metadata": f.metadata,
             }
-            for f in result.files
-        ]
+            if not acc.try_add(item):
+                break
 
-        not_found = len(paths) - len(files)
-        return {
-            "files": files,
-            "summary": _summarize_read(files, not_found),
+        # Compute which requested paths were not found
+        requested_paths = [t.path for t in page_targets]
+        missing_paths = [p for p in requested_paths if p not in found_paths]
+
+        budget_more = not acc.has_room and len(result.files) > acc.count
+        next_offset = start_idx + acc.count
+        response: dict[str, Any] = {
+            "files": acc.items,
+            "pagination": make_budget_pagination(
+                has_more=budget_more,
+                next_cursor=str(next_offset) if budget_more else None,
+                total_estimate=len(targets) if budget_more else None,
+            ),
+            "summary": _summarize_read(acc.items, len(missing_paths)),
         }
+        if missing_paths:
+            response["not_found"] = missing_paths
+        return response
 
     @mcp.tool
     async def list_files(

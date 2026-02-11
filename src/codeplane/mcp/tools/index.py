@@ -13,6 +13,7 @@ from codeplane.config.constants import (
     SEARCH_MAX_LIMIT,
     SEARCH_SCOPE_FALLBACK_LINES_DEFAULT,
 )
+from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -164,7 +165,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             if def_fact is None:
                 return {
                     "results": [],
-                    "pagination": {},
+                    "pagination": make_budget_pagination(has_more=False),
                     "query_time_ms": 0,
                     "summary": _summarize_search(0, "definitions", query),
                 }
@@ -209,7 +210,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
             return {
                 "results": [result_item],
-                "pagination": {},
+                "pagination": make_budget_pagination(has_more=False),
                 "query_time_ms": 0,
                 "summary": _summarize_search(1, "definitions", query),
             }
@@ -220,18 +221,26 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             if def_fact is None:
                 return {
                     "results": [],
-                    "pagination": {},
+                    "pagination": make_budget_pagination(has_more=False),
                     "query_time_ms": 0,
                     "summary": _summarize_search(0, "references", query),
                 }
 
             refs = await app_ctx.coordinator.get_references(def_fact, _context_id=0, limit=limit)
-            ref_results: list[dict[str, Any]] = []
+
+            # Apply cursor: skip past previously returned results
+            start_idx = 0
+            if cursor:
+                import contextlib
+
+                with contextlib.suppress(ValueError):
+                    start_idx = int(cursor)
+
+            acc = BudgetAccumulator()
             ref_files: set[str] = set()
 
-            for ref in refs:
+            for ref in refs[start_idx:]:
                 path = await _get_file_path(app_ctx, ref.file_id)
-                ref_files.add(path)
 
                 result_item = {
                     "path": path,
@@ -263,14 +272,23 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                         result_item["snippet"] = ref.token_text
                         result_item["context_resolved"] = "lines"
 
-                ref_results.append(result_item)
+                if not acc.try_add(result_item):
+                    break
+                ref_files.add(path)
 
+            items_remaining = len(refs) - start_idx
+            budget_more = not acc.has_room and items_remaining > acc.count
+            next_offset = start_idx + acc.count
             return {
-                "results": ref_results,
-                "pagination": {},
+                "results": acc.items,
+                "pagination": make_budget_pagination(
+                    has_more=budget_more,
+                    next_cursor=str(next_offset) if budget_more else None,
+                    total_estimate=len(refs) if budget_more else None,
+                ),
                 "query_time_ms": 0,
                 "summary": _summarize_search(
-                    len(ref_results), "references", query, file_count=len(ref_files)
+                    acc.count, "references", query, file_count=len(ref_files)
                 ),
             }
 
@@ -283,12 +301,19 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             filter_languages=filter_languages,
         )
 
-        # Count unique files
-        unique_files = {r.path for r in search_response.results}
+        # Apply cursor: skip past previously returned results
+        start_idx = 0
+        if cursor:
+            import contextlib
 
-        # Build results with context handling
-        results: list[dict[str, Any]] = []
-        for r in search_response.results:
+            with contextlib.suppress(ValueError):
+                start_idx = int(cursor)
+
+        # Build results with context handling, bounded by budget
+        all_results = search_response.results
+        acc = BudgetAccumulator()
+        unique_files: set[str] = set()
+        for r in all_results[start_idx:]:
             result_item = {
                 "path": r.path,
                 "line": r.line,
@@ -319,14 +344,25 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     result_item["snippet"] = r.snippet
                     result_item["context_resolved"] = "lines"
 
-            results.append(result_item)
+            if not acc.try_add(result_item):
+                break
+            unique_files.add(r.path)
+
+        total_available = len(all_results)
+        items_remaining = total_available - start_idx
+        budget_more = not acc.has_room and items_remaining > acc.count
+        next_offset = start_idx + acc.count
 
         result: dict[str, Any] = {
-            "results": results,
-            "pagination": {},
+            "results": acc.items,
+            "pagination": make_budget_pagination(
+                has_more=budget_more,
+                next_cursor=str(next_offset) if budget_more else None,
+                total_estimate=total_available if budget_more else None,
+            ),
             "query_time_ms": 0,
             "summary": _summarize_search(
-                len(search_response.results),
+                acc.count,
                 mode,
                 query,
                 fallback=search_response.fallback_reason is not None,
@@ -437,15 +473,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 for sym in result.public_api
             ]
 
-        # Add pagination info
-        output["pagination"] = {
-            "truncated": result.truncated,
-        }
-        if result.next_cursor:
-            output["pagination"]["next_cursor"] = result.next_cursor
-        if result.total_estimate:
-            output["pagination"]["total_estimate"] = result.total_estimate
-
         # Build sections list for summary
         sections: list[str] = []
         if result.structure:
@@ -462,8 +489,16 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             sections.append("public_api")
 
         file_count = result.structure.file_count if result.structure else 0
-        output["summary"] = _summarize_map(file_count, sections, result.truncated)
 
+        # Add pagination and summary before measuring budget so the
+        # measurement reflects the full serialized response.
+        truncated = result.truncated
+        output["pagination"] = make_budget_pagination(
+            has_more=truncated,
+            next_cursor=result.next_cursor,
+            total_estimate=result.total_estimate,
+        )
+        output["summary"] = _summarize_map(file_count, sections, truncated)
         return output
 
     # Flatten schemas to remove $ref/$defs for Claude compatibility

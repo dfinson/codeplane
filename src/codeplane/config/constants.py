@@ -46,6 +46,17 @@ MOVE_LEXICAL_MAX = 200
 """Maximum lexical search results for move refactor."""
 
 # =============================================================================
+# Response Budget
+# =============================================================================
+# Server-side byte budget for MCP tool responses. All paginated endpoints
+# share this single constant. Sits between the MCP fetch server default
+# (5 KB) and VS Code's terminal truncation ceiling (60 KB), giving ~33%
+# headroom for JSON overhead.  Tunable later if empirical data warrants it.
+
+RESPONSE_BUDGET_BYTES = 40_000
+"""Per-response byte budget shared by all size-bounded endpoints."""
+
+# =============================================================================
 # Internal Implementation Constants
 # =============================================================================
 # These are not exposed to users and are implementation details.
