@@ -612,6 +612,11 @@ class IndexCoordinator:
                     # Collect file IDs for scoped resolution passes (batch query)
                     files = session.exec(select(File).where(col(File.path).in_(str_changed))).all()
                     changed_file_ids: list[int] = [f.id for f in files if f.id is not None]
+                    # Populate file_id_map for existing files so index_files()
+                    # reuses them instead of querying _ensure_file_id() per file
+                    for f in files:
+                        if f.id is not None:
+                            file_id_map[f.path] = f.id
 
                 # Group files by context_id
                 context_files: dict[int, list[str]] = {}
@@ -619,9 +624,15 @@ class IndexCoordinator:
                     context_files.setdefault(ctx_id, []).append(str_path)
 
                 # --- Single-pass: extract once, feed Tantivy + structural ---
+                # Use parallel extraction when batch is large enough to
+                # amortise process-pool overhead (~8 files threshold).
+                _PARALLEL_THRESHOLD = 8
+                workers = (
+                    min(os.cpu_count() or 4, 16) if len(str_changed) >= _PARALLEL_THRESHOLD else 1
+                )
                 with self._tantivy_write_lock:
                     for ctx_id, paths in context_files.items():
-                        extractions = self._structural.extract_files(paths, ctx_id)
+                        extractions = self._structural.extract_files(paths, ctx_id, workers=workers)
 
                         failed_paths: list[str] = []
                         for extraction in extractions:
