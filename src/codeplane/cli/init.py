@@ -74,8 +74,8 @@ Terminal fallback is permitted ONLY when no CodePlane tool exists for the operat
 paths: list[str]           # REQUIRED - file paths relative to repo root
 targets: list[FileTarget]  # optional - NOT "line_ranges" or "ranges"
   path: str                # REQUIRED - file path this target applies to
-  start_line: int          # 1-indexed, NOT "start"
-  end_line: int            # 1-indexed, NOT "end"
+  start_line: int          # optional, 1-indexed; must be provided together with end_line
+  end_line: int            # optional, 1-indexed; must be provided together with start_line
 ```
 
 **{tool_prefix}_write_files**
