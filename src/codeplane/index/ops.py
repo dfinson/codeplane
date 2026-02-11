@@ -601,12 +601,9 @@ class IndexCoordinator:
                             if str_path not in file_to_context:
                                 file_to_context[str_path] = root_id
 
-                    # Collect file IDs for scoped resolution passes
-                    changed_file_ids: list[int] = []
-                    for str_path in str_changed:
-                        file = session.exec(select(File).where(File.path == str_path)).first()
-                        if file and file.id is not None:
-                            changed_file_ids.append(file.id)
+                    # Collect file IDs for scoped resolution passes (batch query)
+                    files = session.exec(select(File).where(col(File.path).in_(str_changed))).all()
+                    changed_file_ids: list[int] = [f.id for f in files if f.id is not None]
 
                 # Group files by context_id
                 context_files: dict[int, list[str]] = {}
@@ -618,12 +615,14 @@ class IndexCoordinator:
                     for ctx_id, paths in context_files.items():
                         extractions = self._structural.extract_files(paths, ctx_id)
 
+                        failed_paths: list[str] = []
                         for extraction in extractions:
                             if extraction.content_text is None:
                                 # File became unreadable — remove stale Tantivy doc
                                 if extraction.file_path in existing_set:
                                     self._lexical.stage_remove(extraction.file_path)
                                     files_removed += 1
+                                failed_paths.append(extraction.file_path)
                                 continue
                             fid = file_id_map.get(extraction.file_path, 0)
                             self._lexical.stage_file(
@@ -638,9 +637,20 @@ class IndexCoordinator:
                             symbols_indexed += len(extraction.symbol_names)
 
                         # Persist structural facts (reuses pre-computed extractions)
+                        # Filter out failed extractions — index_files skips them
+                        # but doesn't purge existing facts
+                        ok_extractions = [e for e in extractions if e.content_text is not None]
+                        ok_paths = [e.file_path for e in ok_extractions]
                         self._structural.index_files(
-                            paths, ctx_id, file_id_map=file_id_map, _extractions=extractions
+                            ok_paths,
+                            ctx_id,
+                            file_id_map=file_id_map,
+                            _extractions=ok_extractions,
                         )
+
+                        # Purge stale structural facts for failed extractions
+                        if failed_paths:
+                            self._remove_structural_facts_for_paths(failed_paths)
 
                     # Stage removals
                     for path in removed_paths:

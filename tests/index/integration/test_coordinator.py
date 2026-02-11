@@ -1127,5 +1127,21 @@ class TestCoordinatorStaleTantivyRemoval:
             results_after = await coordinator.search("helper", mode=SearchMode.TEXT)
             after_paths = [r.path for r in results_after.results]
             assert "src/utils.py" not in after_paths
+
+            # Confirm structural facts were also purged
+            with coordinator.db.session() as session:
+                from sqlmodel import select as sel
+
+                from codeplane.index.models import DefFact
+                from codeplane.index.models import File as FileModel
+
+                file_row = session.exec(
+                    sel(FileModel).where(FileModel.path == "src/utils.py")
+                ).first()
+                if file_row and file_row.id is not None:
+                    defs = session.exec(sel(DefFact).where(DefFact.file_id == file_row.id)).all()
+                    assert len(defs) == 0, (
+                        f"Expected 0 structural facts for failed file, got {len(defs)}"
+                    )
         finally:
             coordinator.close()
