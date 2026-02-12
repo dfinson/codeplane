@@ -2988,7 +2988,7 @@ Tools returning collections support cursor-based pagination for large result set
 | `git_blame` | Yes | Line authorship |
 | `read_files` | No | Uses explicit line ranges |
 | `write_files` | No | Single operation |
-| `semantic_diff` | No | Single structured result |
+| `semantic_diff` | Yes | Structural changes list |
 
 ### 23.7 Tool Specifications
 
@@ -3497,6 +3497,7 @@ Structural change summary from index facts. Compares definitions between two sta
   base?: string;           // Default "HEAD". Git ref or "epoch:N"
   target?: string | null;  // Default null (working tree). Git ref or "epoch:M"
   paths?: string[] | null; // Limit to specific file paths
+  cursor?: string | null;  // Pagination cursor from previous response
 }
 ```
 
@@ -3511,7 +3512,11 @@ Structural change summary from index facts. Compares definitions between two sta
   target: string;                     // Resolved target description
   structural_changes: StructuralChange[];
   non_structural_changes: string[];   // File paths without grammar support
-  agentic_hint: string;               // Priority-ordered action list
+  agentic_hint: string;               // Priority-ordered action list (computed from ALL changes)
+  pagination: {                       // Pagination metadata
+    next_cursor?: string;             // Cursor for next page (absent if last page)
+    total_estimate?: number;          // Total structural changes count
+  };
 }
 ```
 

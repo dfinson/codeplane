@@ -12,6 +12,7 @@ import structlog
 from fastmcp import Context
 from pydantic import Field
 
+from codeplane.config.constants import DIFF_CHANGES_MAX
 from codeplane.core.languages import detect_language_family, has_grammar
 from codeplane.git.models import _DELTA_STATUS_MAP
 from codeplane.index._internal.diff.engine import compute_structural_diff
@@ -45,6 +46,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         base: str = Field("HEAD", description="Base ref (commit, branch, tag) or epoch:N"),
         target: str | None = Field(None, description="Target ref (None = working tree)"),
         paths: list[str] | None = Field(None, description="Limit to specific paths"),
+        cursor: str | None = Field(None, description="Pagination cursor"),
     ) -> dict[str, Any]:
         """Structural change summary from index facts.
 
@@ -63,7 +65,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         else:
             result = _run_git_diff(app_ctx, base, target, paths)
 
-        return _result_to_dict(result)
+        return _result_to_dict(result, cursor=cursor)
 
 
 def _run_git_diff(
@@ -294,8 +296,13 @@ def _build_agentic_hint(result: SemanticDiffResult) -> str:
     return "\n".join(hints)
 
 
-def _result_to_dict(result: SemanticDiffResult) -> dict[str, Any]:
-    """Convert SemanticDiffResult to a serializable dict."""
+def _result_to_dict(
+    result: SemanticDiffResult,
+    *,
+    cursor: str | None = None,
+    limit: int = DIFF_CHANGES_MAX,
+) -> dict[str, Any]:
+    """Convert SemanticDiffResult to a serializable dict with pagination."""
 
     def _change_to_dict(c: StructuralChange) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -317,7 +324,19 @@ def _result_to_dict(result: SemanticDiffResult) -> dict[str, Any]:
             d["nested_changes"] = [_change_to_dict(nc) for nc in c.nested_changes]
         return d
 
+    # Compute agentic_hint from ALL changes before pagination
     agentic_hint = _build_agentic_hint(result)
+
+    # Paginate structural_changes
+    all_changes = result.structural_changes
+    offset = int(cursor) if cursor else 0
+    page = all_changes[offset : offset + limit]
+    has_more = offset + limit < len(all_changes)
+
+    pagination: dict[str, Any] = {}
+    if has_more:
+        pagination["next_cursor"] = str(offset + limit)
+        pagination["total_estimate"] = len(all_changes)
 
     return {
         "summary": result.summary,
@@ -325,7 +344,8 @@ def _result_to_dict(result: SemanticDiffResult) -> dict[str, Any]:
         "files_analyzed": result.files_analyzed,
         "base": result.base_description,
         "target": result.target_description,
-        "structural_changes": [_change_to_dict(c) for c in result.structural_changes],
+        "structural_changes": [_change_to_dict(c) for c in page],
         "non_structural_changes": result.non_structural_changes,
         "agentic_hint": agentic_hint,
+        "pagination": pagination,
     }

@@ -45,6 +45,9 @@ LEXICAL_FALLBACK_MAX = 500
 MOVE_LEXICAL_MAX = 200
 """Maximum lexical search results for move refactor."""
 
+DIFF_CHANGES_MAX = 100
+"""Maximum structural changes per page for semantic diff."""
+
 # =============================================================================
 # Internal Implementation Constants
 # =============================================================================

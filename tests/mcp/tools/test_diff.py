@@ -130,3 +130,50 @@ class TestResultSerialization:
         impact = ImpactInfo(reference_count=3, referencing_files=["a.py"])
         d = _result_to_dict(_result([_change("removed", "breaking", "foo", impact=impact)]))
         assert d["structural_changes"][0]["impact"]["reference_count"] == 3
+
+
+# ============================================================================
+# Tests: Pagination
+# ============================================================================
+
+
+class TestPagination:
+    """Tests for _result_to_dict pagination."""
+
+    def test_empty_pagination_when_no_changes(self) -> None:
+        d = _result_to_dict(_result())
+        assert d["pagination"] == {}
+
+    def test_no_pagination_under_limit(self) -> None:
+        changes = [_change(name=f"fn_{i}") for i in range(5)]
+        d = _result_to_dict(_result(changes))
+        assert len(d["structural_changes"]) == 5
+        assert d["pagination"] == {}
+
+    def test_pagination_triggers_over_limit(self) -> None:
+        changes = [_change(name=f"fn_{i}") for i in range(10)]
+        d = _result_to_dict(_result(changes), limit=3)
+        assert len(d["structural_changes"]) == 3
+        assert d["pagination"]["next_cursor"] == "3"
+        assert d["pagination"]["total_estimate"] == 10
+
+    def test_cursor_continues_from_offset(self) -> None:
+        changes = [_change(name=f"fn_{i}") for i in range(10)]
+        d = _result_to_dict(_result(changes), cursor="3", limit=3)
+        assert len(d["structural_changes"]) == 3
+        assert d["structural_changes"][0]["name"] == "fn_3"
+        assert d["pagination"]["next_cursor"] == "6"
+
+    def test_cursor_last_page(self) -> None:
+        changes = [_change(name=f"fn_{i}") for i in range(10)]
+        d = _result_to_dict(_result(changes), cursor="9", limit=3)
+        assert len(d["structural_changes"]) == 1
+        assert d["structural_changes"][0]["name"] == "fn_9"
+        assert d["pagination"] == {}
+
+    def test_agentic_hint_computed_from_all_changes(self) -> None:
+        """agentic_hint reflects ALL changes, not just the paginated page."""
+        changes = [_change("body_changed", "non_breaking", f"fn_{i}") for i in range(10)]
+        d = _result_to_dict(_result(changes), limit=3)
+        # Hint should mention all 10, not just the 3 on this page
+        assert "10 function bodies changed" in d["agentic_hint"]

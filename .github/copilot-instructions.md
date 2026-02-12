@@ -208,6 +208,7 @@ coverage_dir: str          # REQUIRED when coverage=true
 base: str                  # default "HEAD" - git ref or "epoch:N"
 target: str | None         # default None (working tree) - git ref or "epoch:M"
 paths: list[str] | None    # optional - limit to specific file paths
+cursor: str | None         # optional - pagination cursor from previous response
 ```
 
 **Structural change summary from index facts.** Compares definitions between two
