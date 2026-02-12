@@ -1,12 +1,8 @@
 {
   "servers": {
     "codeplane-codeplane": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "mcp-remote",
-        "http://127.0.0.1:7654/mcp"
-      ]
+      "type": "http",
+      "url": "http://127.0.0.1:7654/mcp"
     }
   }
 }

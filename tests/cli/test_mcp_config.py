@@ -48,7 +48,7 @@ class TestEnsureVscodeMcpConfig:
         assert modified is True
         mcp = json.loads((tmp_path / ".vscode" / "mcp.json").read_text())
         assert name in mcp["servers"]
-        assert mcp["servers"][name]["args"][-1] == "http://127.0.0.1:3100/mcp"
+        assert mcp["servers"][name]["url"] == "http://127.0.0.1:3100/mcp"
 
     def test_no_op_when_config_matches(self, tmp_path: Path) -> None:
         _ensure_vscode_mcp_config(tmp_path, 3100)
@@ -60,7 +60,7 @@ class TestEnsureVscodeMcpConfig:
         modified, name = _ensure_vscode_mcp_config(tmp_path, 4200)
         assert modified is True
         mcp = json.loads((tmp_path / ".vscode" / "mcp.json").read_text())
-        assert mcp["servers"][name]["args"][-1] == "http://127.0.0.1:4200/mcp"
+        assert mcp["servers"][name]["url"] == "http://127.0.0.1:4200/mcp"
 
     def test_preserves_other_servers(self, tmp_path: Path) -> None:
         """Adding CodePlane entry must NOT remove existing servers."""
@@ -184,7 +184,7 @@ class TestSyncVscodeMcpPort:
         name = _get_mcp_server_name(tmp_path)
         assert sync_vscode_mcp_port(tmp_path, 5000) is True
         mcp = json.loads((tmp_path / ".vscode" / "mcp.json").read_text())
-        assert mcp["servers"][name]["args"][-1] == "http://127.0.0.1:5000/mcp"
+        assert mcp["servers"][name]["url"] == "http://127.0.0.1:5000/mcp"
 
     def test_adds_entry_when_missing_from_existing_file(self, tmp_path: Path) -> None:
         """If mcp.json exists but has no CodePlane entry, adds it."""
@@ -206,8 +206,8 @@ class TestSyncVscodeMcpPort:
         existing = {
             "servers": {
                 name: {
-                    "command": "npx",
-                    "args": ["-y", "mcp-remote", "http://127.0.0.1:3100/mcp"],
+                    "type": "http",
+                    "url": "http://127.0.0.1:3100/mcp",
                 },
                 "keep-me": {"command": "node", "args": ["s.js"]},
             }
@@ -217,7 +217,7 @@ class TestSyncVscodeMcpPort:
         assert sync_vscode_mcp_port(tmp_path, 4200) is True
         mcp = json.loads((vscode / "mcp.json").read_text())
         assert mcp["servers"]["keep-me"]["command"] == "node"
-        assert mcp["servers"][name]["args"][-1] == "http://127.0.0.1:4200/mcp"
+        assert mcp["servers"][name]["url"] == "http://127.0.0.1:4200/mcp"
 
     def test_unparseable_json_does_not_overwrite(self, tmp_path: Path) -> None:
         vscode = tmp_path / ".vscode"
