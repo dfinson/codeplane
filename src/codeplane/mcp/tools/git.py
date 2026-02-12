@@ -310,9 +310,21 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 # This handles both simple paths and quoted paths with spaces
                 current_file_path = None
                 for path in page_paths:
-                    # Check if path appears in the header (handles a/path b/path format)
-                    if f"a/{path}" in line or f"b/{path}" in line:
-                        current_file_path = path
+                    # Check for exact path match in the header (a/path or b/path)
+                    # Use word boundaries to avoid substring false positives
+                    # e.g., "a/file.py" should NOT match "a/myfile.py"
+                    a_prefix = f"a/{path}"
+                    b_prefix = f"b/{path}"
+                    # Path must be followed by space, quote, or end of line
+                    for prefix in (a_prefix, b_prefix):
+                        idx = line.find(prefix)
+                        if idx != -1:
+                            end_idx = idx + len(prefix)
+                            # Check that path ends at a boundary (space, quote, or EOL)
+                            if end_idx >= len(line.rstrip()) or line[end_idx] in (" ", '"', "'"):
+                                current_file_path = path
+                                break
+                    if current_file_path:
                         break
             else:
                 current_file_patch.append(line)
@@ -349,7 +361,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         # If patch is still too large, truncate it with binary search
         size = measure_bytes(result)
         if size > RESPONSE_BUDGET_BYTES and page_patch:
-            truncation_notice = "\n\n[... PATCH TRUNCATED — more content on next page ...]\n"
+            truncation_notice = (
+                "\n\n[... PATCH TRUNCATED — content omitted due to size limit ...]\n"
+            )
 
             base_result: dict[str, Any] = dict(result)
             base_result["patch"] = ""

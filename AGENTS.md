@@ -36,6 +36,8 @@ targets: list[FileTarget]  # REQUIRED - NOT "line_ranges" or "ranges"
 cursor: str                # optional - pagination cursor from previous response
 ```
 
+Response includes `not_found: list[str]` when requested files don't exist.
+
 **mcp_codeplane-codeplane_write_files**
 ```
 edits: list[EditParam]     # REQUIRED - array of edits
@@ -55,6 +57,7 @@ context: "none"|"minimal"|"standard"|"rich"|"function"|"class"  # default "stand
                            # function/class: enclosing scope body (structural) with 25-line fallback
 context_lines: int         # optional - override lines for line-based, or fallback for structural
 limit: int                 # default 20, NOT "max_results"
+cursor: str                # optional - pagination cursor from previous response
 ```
 
 **mcp_codeplane-codeplane_list_files**
