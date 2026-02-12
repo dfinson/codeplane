@@ -250,6 +250,30 @@ class EpochManager:
                     )
                     session.execute(stmt)
 
+                # Snapshot DefFacts for semantic diff
+                if indexed_paths:
+                    from codeplane.index.models import DefFact, DefSnapshotRecord
+
+                    snap_stmt = (
+                        select(DefFact, File.path)
+                        .join(File, DefFact.file_id == File.id)  # type: ignore[arg-type]
+                        .where(File.path.in_(indexed_paths))  # type: ignore[attr-defined]
+                    )
+                    for def_fact, fpath in session.execute(snap_stmt).all():
+                        session.add(
+                            DefSnapshotRecord(
+                                epoch_id=new_epoch_id,
+                                file_path=fpath,
+                                kind=def_fact.kind,
+                                name=def_fact.name,
+                                lexical_path=def_fact.lexical_path,
+                                signature_hash=def_fact.signature_hash,
+                                display_name=def_fact.display_name,
+                                start_line=def_fact.start_line,
+                                end_line=def_fact.end_line,
+                            )
+                        )
+
                 session.commit()
 
             journal.sqlite_committed = True

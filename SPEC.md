@@ -816,6 +816,27 @@ Telemetry for dynamic access patterns (reporting only, never blocks).
 | `extracted_literals` | TEXT | JSON array of literal strings (if any) |
 | `has_non_literal_key` | BOOLEAN | True if key is computed/dynamic |
 
+##### 7.3.11 DefSnapshotRecord
+
+Historical snapshots of definitions at each epoch, enabling epoch-based semantic diff.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER PK | Auto-incrementing identifier |
+| `epoch_id` | INTEGER (indexed) | Epoch when snapshot was taken |
+| `file_path` | TEXT (indexed) | File containing the definition |
+| `kind` | TEXT | Symbol kind (function, class, variable, etc.) |
+| `name` | TEXT | Symbol name |
+| `lexical_path` | TEXT | Dot-separated qualified path (e.g., `MyClass.my_method`) |
+| `signature_hash` | TEXT | Hash of the symbol's signature for change detection |
+| `display_name` | TEXT | Human-readable display name |
+| `start_line` | INTEGER | Definition start line |
+| `end_line` | INTEGER | Definition end line |
+
+Populated during `publish_epoch()` — snapshots all `DefFact` rows for files indexed in that epoch. No foreign key to `File` table (file_path stored directly for historical stability).
+
+Used by `semantic_diff` tool in epoch mode (`base="epoch:N"`, `target="epoch:M"`) to compare structural definitions across index states without requiring git history.
+
 ### 7.4 Identity Scheme (def_uid)
 
 #### Purpose
@@ -2846,6 +2867,12 @@ Tools are organized into namespaced families. Each tool has a single responsibil
 |------|---------|
 | `search` | Unified search (lexical, symbol, references, definitions) |
 
+#### Analysis Tools
+
+| Tool | Purpose |
+|------|---------|
+| `semantic_diff` | Structural change summary from index facts (added, removed, signature/body changed, renamed) with blast-radius enrichment |
+
 #### Read Tools
 
 | Tool | Purpose |
@@ -2881,7 +2908,7 @@ Tools are organized into namespaced families. Each tool has a single responsibil
 |------|---------|
 | `status` | Server health, index state |
 
-**Total: ~35 tools**
+**Total: ~36 tools**
 
 ### 23.5 Progress Reporting
 
@@ -2961,6 +2988,7 @@ Tools returning collections support cursor-based pagination for large result set
 | `git_blame` | Yes | Line authorship |
 | `read_files` | No | Uses explicit line ranges |
 | `write_files` | No | Single operation |
+| `semantic_diff` | Yes | Structural changes list |
 
 ### 23.7 Tool Specifications
 
@@ -3447,6 +3475,125 @@ Semantic refactoring via SCIP index.
   _session: SessionState;
 }
 ```
+
+---
+
+#### Test Tools (`test_*`)
+
+---
+
+#### `semantic_diff`
+
+Structural change summary from index facts. Compares definitions between two states and reports what changed structurally with blast-radius enrichment.
+
+**Modes:**
+- **Git mode** (default): `base`/`target` are git refs (commit, branch, tag)
+- **Epoch mode**: `base="epoch:N"`, `target="epoch:M"`
+
+**Parameters:**
+
+```typescript
+{
+  base?: string;           // Default "HEAD". Git ref or "epoch:N"
+  target?: string | null;  // Default null (working tree). Git ref or "epoch:M"
+  paths?: string[] | null; // Limit to specific file paths
+  cursor?: string | null;  // Pagination cursor from previous response
+}
+```
+
+**Response:**
+
+```typescript
+{
+  summary: string;                    // e.g. "5 added, 2 signature changed"
+  breaking_summary: string | null;    // e.g. "3 breaking changes: foo, bar, baz"
+  files_analyzed: number;
+  base: string;                       // Resolved base description
+  target: string;                     // Resolved target description
+  structural_changes: StructuralChange[];
+  non_structural_changes: FileChangeInfo[];  // Files without grammar support
+  agentic_hint: string;               // Priority-ordered action list (computed from ALL changes)
+  pagination: {                       // Pagination metadata
+    next_cursor?: string;             // Cursor for next page (absent if last page)
+    total_estimate?: number;          // Total structural changes count
+  };
+}
+```
+
+**FileChangeInfo:**
+
+```typescript
+{
+  path: string;
+  status: string;                     // "added", "modified", "deleted", "renamed"
+  category: string;                   // "prod", "test", "build", "config", "docs"
+  language?: string;                  // Detected language family
+}
+```
+
+**StructuralChange:**
+
+```typescript
+{
+  path: string;
+  kind: string;                       // "function", "class", "variable", etc.
+  name: string;
+  qualified_name?: string;            // Dot-separated path (e.g., "MyClass.method")
+  change: "added" | "removed" | "signature_changed" | "body_changed" | "renamed";
+  structural_severity: "breaking" | "non_breaking";
+  behavior_change_risk: "low" | "medium" | "high" | "unknown";
+  entity_id?: string;                 // Stable def_uid from index
+  old_signature?: string;
+  new_signature?: string;
+  old_name?: string;                  // For renames
+  start_line?: number;
+  start_col?: number;
+  end_line?: number;
+  end_col?: number;
+  lines_changed?: number;             // Count of changed lines in entity span
+  delta_tags?: string[];              // e.g. ["parameters_changed", "minor_change"]
+  change_preview?: string;            // First N changed lines within span
+  impact?: ImpactInfo;
+  nested_changes?: StructuralChange[]; // Methods nested under their class
+}
+```
+
+**Delta Tag Taxonomy:**
+- `symbol_added`, `symbol_removed`, `symbol_renamed`
+- `parameters_changed`, `return_type_changed`, `signature_changed`
+- `minor_change` (≤3 lines), `body_logic_changed`, `major_change` (>20 lines)
+
+**ImpactInfo (blast-radius enrichment):**
+
+```typescript
+{
+  reference_count?: number;           // Total RefFact-based cross-reference count
+  ref_tiers?: {                       // Reference counts by resolution tier
+    proven: number;                   // Same-file lexical bind, certain
+    strong: number;                   // Cross-file with explicit import trace
+    anchored: number;                 // Ambiguous but grouped in anchor group
+    unknown: number;                  // Cannot classify
+  };
+  reference_basis: string;            // "ref_facts_resolved" | "ref_facts_partial" | "unknown"
+  referencing_files?: string[];       // Files containing references
+  importing_files?: string[];         // Files importing this symbol
+  affected_test_files?: string[];     // Test files that may need updating
+  confidence: "high" | "low";
+  visibility?: string;                // "public" | "private" | "protected" | "internal"
+  is_static?: boolean;
+}
+```
+
+**Identity & Classification:**
+- Identity key: `(kind, lexical_path)` for cross-state symbol correspondence
+- Rename detection: same kind + same `signature_hash` across added/removed sets
+- Enrichment is fail-open: each annotation (refs, imports, tests) independently wrapped
+
+**Agentic hint priority:**
+1. Signature changes with references (callers may need updating, includes tier breakdown)
+2. Removed symbols (broken references)
+3. Body changes with behavior risk assessment (review for correctness)
+4. Affected test files (re-run)
 
 ---
 

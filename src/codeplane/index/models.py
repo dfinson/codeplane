@@ -1004,6 +1004,28 @@ class Epoch(SQLModel, table=True):
     commit_hash: str | None = None  # Git commit at epoch time (if available)
 
 
+class DefSnapshotRecord(SQLModel, table=True):
+    """Point-in-time snapshot of a DefFact, captured when an epoch is published.
+
+    Used by semantic diff to compare symbol state across epochs without
+    needing the full Index data to still exist.  No FK to File — the
+    snapshot must survive file deletions.
+    """
+
+    __tablename__ = "def_snapshot_record"
+
+    id: int | None = Field(default=None, primary_key=True)
+    epoch_id: int = Field(index=True)
+    file_path: str = Field(index=True)
+    kind: str
+    name: str
+    lexical_path: str
+    signature_hash: str | None = None
+    display_name: str | None = None
+    start_line: int | None = None
+    end_line: int | None = None
+
+
 # ============================================================================
 # NON-TABLE MODELS (Pydantic only, for data transfer)
 # ============================================================================
