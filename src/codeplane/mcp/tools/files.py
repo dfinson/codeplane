@@ -111,7 +111,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         start_idx = 0
         if cursor:
             with contextlib.suppress(ValueError):
-                start_idx = int(cursor)
+                parsed = int(cursor)
+                if parsed >= 0:
+                    start_idx = parsed
 
         page_targets = targets[start_idx:]
 

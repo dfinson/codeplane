@@ -233,7 +233,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             start_idx = 0
             if cursor:
                 with contextlib.suppress(ValueError):
-                    start_idx = int(cursor)
+                    parsed = int(cursor)
+                    if parsed >= 0:
+                        start_idx = parsed
 
             acc = BudgetAccumulator()
             ref_files: set[str] = set()
@@ -304,7 +306,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         start_idx = 0
         if cursor:
             with contextlib.suppress(ValueError):
-                start_idx = int(cursor)
+                parsed = int(cursor)
+                if parsed >= 0:
+                    start_idx = parsed
 
         # Build results with context handling, bounded by budget
         all_results = search_response.results

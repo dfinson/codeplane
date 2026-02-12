@@ -268,7 +268,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         start_idx = 0
         if cursor:
             with contextlib.suppress(ValueError):
-                start_idx = int(cursor)
+                parsed = int(cursor)
+                if parsed >= 0:
+                    start_idx = parsed
 
         page_files = all_files[start_idx:]
 
@@ -883,7 +885,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             start_idx = 0
             if cursor:
                 with contextlib.suppress(ValueError):
-                    start_idx = int(cursor)
+                    parsed = int(cursor)
+                    if parsed >= 0:
+                        start_idx = parsed
 
             end_idx = start_idx + limit
             candidate_page = lines[start_idx:end_idx]
