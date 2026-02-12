@@ -142,6 +142,7 @@ def _enrich_single_change(
         end_line=rc.end_line,
         end_col=rc.end_col,
         lines_changed=rc.lines_changed,
+        delta_tags=rc.delta_tags or [],
     )
 
 

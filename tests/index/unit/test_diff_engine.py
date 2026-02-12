@@ -274,3 +274,126 @@ class TestComputeStructuralDiff:
             changed_files=[ChangedFile("src/a.py", "modified", True)],
         )
         assert result.changes[0].qualified_name == "MyClass.foo"
+
+
+# ============================================================================
+# Tests: Delta Tags
+# ============================================================================
+
+
+class TestDeltaTags:
+    """Tests for _compute_delta_tags and derived tag functions."""
+
+    def test_added_symbol_tag(self) -> None:
+        from codeplane.index._internal.diff.engine import _compute_delta_tags
+
+        tags = _compute_delta_tags("added", None, _snap())
+        assert tags == ["symbol_added"]
+
+    def test_removed_symbol_tag(self) -> None:
+        from codeplane.index._internal.diff.engine import _compute_delta_tags
+
+        tags = _compute_delta_tags("removed", _snap(), None)
+        assert tags == ["symbol_removed"]
+
+    def test_renamed_symbol_tag(self) -> None:
+        from codeplane.index._internal.diff.engine import _compute_delta_tags
+
+        old = _snap(name="old_func", display_name="def old_func()")
+        new = _snap(name="new_func", display_name="def new_func()")
+        tags = _compute_delta_tags("renamed", old, new)
+        assert "symbol_renamed" in tags
+
+    def test_signature_parameters_changed(self) -> None:
+        from codeplane.index._internal.diff.engine import _compute_delta_tags
+
+        old = _snap(display_name="def foo(x: int)")
+        new = _snap(display_name="def foo(x: int, y: str)")
+        tags = _compute_delta_tags("signature_changed", old, new)
+        assert "parameters_changed" in tags
+
+    def test_signature_return_type_changed(self) -> None:
+        from codeplane.index._internal.diff.engine import _compute_delta_tags
+
+        old = _snap(display_name="def foo(x: int) -> int")
+        new = _snap(display_name="def foo(x: int) -> str")
+        tags = _compute_delta_tags("signature_changed", old, new)
+        assert "return_type_changed" in tags
+        assert "parameters_changed" not in tags
+
+    def test_signature_both_changed(self) -> None:
+        from codeplane.index._internal.diff.engine import _compute_delta_tags
+
+        old = _snap(display_name="def foo(x: int) -> int")
+        new = _snap(display_name="def foo(x: str) -> str")
+        tags = _compute_delta_tags("signature_changed", old, new)
+        assert "parameters_changed" in tags
+        assert "return_type_changed" in tags
+
+    def test_body_minor_change(self) -> None:
+        from codeplane.index._internal.diff.engine import _compute_delta_tags
+
+        tags = _compute_delta_tags("body_changed", _snap(), _snap(), lines_changed=2)
+        assert tags == ["minor_change"]
+
+    def test_body_logic_change(self) -> None:
+        from codeplane.index._internal.diff.engine import _compute_delta_tags
+
+        tags = _compute_delta_tags("body_changed", _snap(), _snap(), lines_changed=10)
+        assert tags == ["body_logic_changed"]
+
+    def test_body_major_change(self) -> None:
+        from codeplane.index._internal.diff.engine import _compute_delta_tags
+
+        tags = _compute_delta_tags("body_changed", _snap(), _snap(), lines_changed=25)
+        assert tags == ["major_change"]
+
+    def test_body_no_lines_defaults_to_logic(self) -> None:
+        from codeplane.index._internal.diff.engine import _compute_delta_tags
+
+        tags = _compute_delta_tags("body_changed", _snap(), _snap())
+        assert tags == ["body_logic_changed"]
+
+
+class TestExtractParams:
+    """Tests for _extract_params."""
+
+    def test_simple_params(self) -> None:
+        from codeplane.index._internal.diff.engine import _extract_params
+
+        assert _extract_params("def foo(x, y)") == "(x, y)"
+
+    def test_no_params(self) -> None:
+        from codeplane.index._internal.diff.engine import _extract_params
+
+        assert _extract_params("class Foo") == ""
+
+    def test_nested_parens(self) -> None:
+        from codeplane.index._internal.diff.engine import _extract_params
+
+        assert _extract_params("def foo(x: tuple[int, str])") == "(x: tuple[int, str])"
+
+    def test_empty_parens(self) -> None:
+        from codeplane.index._internal.diff.engine import _extract_params
+
+        assert _extract_params("def foo()") == "()"
+
+
+class TestExtractReturnType:
+    """Tests for _extract_return_type."""
+
+    def test_python_style(self) -> None:
+        from codeplane.index._internal.diff.engine import _extract_return_type
+
+        assert _extract_return_type("def foo(x: int) -> bool") == "bool"
+
+    def test_no_return_type(self) -> None:
+        from codeplane.index._internal.diff.engine import _extract_return_type
+
+        assert _extract_return_type("def foo(x: int)") == ""
+
+    def test_complex_return_type(self) -> None:
+        from codeplane.index._internal.diff.engine import _extract_return_type
+
+        result = _extract_return_type("def foo(x) -> list[int]")
+        assert result == "list[int]"

@@ -120,6 +120,7 @@ class RawStructuralChange:
     end_col: int = 0
     old_name: str | None = None  # For renames
     lines_changed: int | None = None
+    delta_tags: list[str] | None = None  # e.g. ["parameters_changed", "minor_change"]
 
 
 @dataclass

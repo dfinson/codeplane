@@ -138,6 +138,102 @@ def _classify_file(path: str) -> str:
     return "prod"
 
 
+def _compute_delta_tags(
+    change: str,
+    old: DefSnapshot | None,
+    new: DefSnapshot | None,
+    lines_changed: int | None = None,
+) -> list[str]:
+    """Compute delta tags describing what kind of change occurred.
+
+    Tags are additive and describe observable structural properties.
+    They are NOT behavioral assertions — an agent should treat them
+    as heuristic signals, not guarantees.
+    """
+    tags: list[str] = []
+
+    if change == "added":
+        return ["symbol_added"]
+    if change == "removed":
+        return ["symbol_removed"]
+    if change == "renamed":
+        tags.append("symbol_renamed")
+        return tags
+
+    if change == "signature_changed" and old and new:
+        old_sig = old.display_name or ""
+        new_sig = new.display_name or ""
+        # Compare parameter list heuristically
+        old_params = _extract_params(old_sig)
+        new_params = _extract_params(new_sig)
+        if old_params != new_params:
+            tags.append("parameters_changed")
+        # Compare return type heuristically
+        old_ret = _extract_return_type(old_sig)
+        new_ret = _extract_return_type(new_sig)
+        if old_ret != new_ret:
+            tags.append("return_type_changed")
+        if not tags:
+            tags.append("signature_changed")
+        return tags
+
+    if change == "body_changed":
+        if lines_changed is not None:
+            if lines_changed <= 3:
+                tags.append("minor_change")
+            elif lines_changed > 20:
+                tags.append("major_change")
+            else:
+                tags.append("body_logic_changed")
+        else:
+            tags.append("body_logic_changed")
+        return tags
+
+    return tags
+
+
+def _extract_params(sig: str) -> str:
+    """Extract parameter portion from a signature string.
+
+    Looks for content between first '(' and its matching ')'.
+    Returns empty string if no parens found.
+    """
+    paren_start = sig.find("(")
+    if paren_start == -1:
+        return ""
+    depth = 0
+    for i in range(paren_start, len(sig)):
+        if sig[i] == "(":
+            depth += 1
+        elif sig[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return sig[paren_start : i + 1]
+    return sig[paren_start:]
+
+
+def _extract_return_type(sig: str) -> str:
+    """Extract return type annotation from a signature.
+
+    Looks for '->...' after the parameter list (Python style)
+    or ':...' before '{' (TypeScript/C-style).
+    Returns empty string if none found.
+    """
+    # Python-style: -> ReturnType
+    arrow = sig.rfind("->")
+    if arrow != -1:
+        return sig[arrow + 2 :].strip().rstrip(":")
+    # TypeScript/C-style: ): ReturnType or ): ReturnType {
+    paren_close = sig.rfind(")")
+    if paren_close != -1 and paren_close + 1 < len(sig):
+        rest = sig[paren_close + 1 :].strip().lstrip(":").strip()
+        brace = rest.find("{")
+        if brace != -1:
+            rest = rest[:brace].strip()
+        return rest
+    return ""
+
+
 def _diff_file(
     path: str,
     base: list[DefSnapshot],
@@ -185,6 +281,7 @@ def _diff_file(
                 end_line=new.end_line,
                 end_col=new.end_col,
                 old_name=old.name,
+                delta_tags=_compute_delta_tags("renamed", old, new),
             )
         )
 
@@ -207,6 +304,7 @@ def _diff_file(
                 start_col=snap.start_col,
                 end_line=snap.end_line,
                 end_col=snap.end_col,
+                delta_tags=_compute_delta_tags("removed", snap, None),
             )
         )
 
@@ -229,6 +327,7 @@ def _diff_file(
                 start_col=snap.start_col,
                 end_line=snap.end_line,
                 end_col=snap.end_col,
+                delta_tags=_compute_delta_tags("added", None, snap),
             )
         )
 
@@ -254,6 +353,7 @@ def _diff_file(
                         start_col=new.start_col,
                         end_line=new.end_line,
                         end_col=new.end_col,
+                        delta_tags=_compute_delta_tags("signature_changed", old, new),
                     )
                 )
             elif _intersects_hunks(new.start_line, new.end_line, hunks):
@@ -275,6 +375,7 @@ def _diff_file(
                         end_line=new.end_line,
                         end_col=new.end_col,
                         lines_changed=lc,
+                        delta_tags=_compute_delta_tags("body_changed", old, new, lc),
                     )
                 )
 

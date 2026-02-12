@@ -142,6 +142,9 @@ def _run_git_diff(
     with db.session() as session:
         result = enrich_diff(raw, session, app_ctx.repo_root)
 
+    # Annotate with change previews from the actual patch lines
+    _annotate_change_previews(result, pygit2_diff)
+
     result.base_description = base or "HEAD"
     result.target_description = target or "working tree"
 
@@ -254,6 +257,85 @@ def _run_epoch_diff(
     result.target_description = f"epoch {target_epoch}" if target_epoch else "current index"
 
     return result
+
+
+_PREVIEW_MAX_LINES = 5  # Max changed lines to include in preview
+
+
+def _extract_patch_lines(
+    pygit2_diff: object,
+) -> dict[str, list[tuple[str, int, str]]]:
+    """Extract per-file patch lines from a pygit2 diff.
+
+    Returns a dict mapping file_path -> list of (origin, line_number, content)
+    where origin is '+' for additions, '-' for deletions.
+    """
+    import pygit2
+
+    assert isinstance(pygit2_diff, pygit2.Diff)
+
+    result: dict[str, list[tuple[str, int, str]]] = {}
+    for patch in pygit2_diff:
+        file_path = patch.delta.new_file.path or patch.delta.old_file.path  # type: ignore[union-attr]
+        lines: list[tuple[str, int, str]] = []
+        for hunk in patch.hunks:  # type: ignore[union-attr]
+            for line in hunk.lines:
+                if line.origin in ("+", "-"):
+                    lineno = line.new_lineno if line.origin == "+" else line.old_lineno
+                    lines.append((line.origin, lineno, line.content.rstrip("\n")))
+        result[file_path] = lines
+    return result
+
+
+def _annotate_change_previews(
+    result: SemanticDiffResult,
+    pygit2_diff: object,
+) -> None:
+    """Annotate structural changes with a text preview of what changed.
+
+    Only applies to body_changed and signature_changed entries in git mode.
+    Patches each StructuralChange.change_preview in place.
+    """
+    try:
+        patch_lines = _extract_patch_lines(pygit2_diff)
+    except Exception:
+        log.debug("patch_line_extraction_failed", exc_info=True)
+        return
+
+    for change in result.structural_changes:
+        if change.change not in ("body_changed", "signature_changed"):
+            continue
+        file_lines = patch_lines.get(change.path)
+        if not file_lines:
+            continue
+
+        # Filter lines within this entity's span
+        relevant: list[str] = []
+        for origin, lineno, content in file_lines:
+            if change.start_line <= lineno <= change.end_line:
+                relevant.append(f"{origin} {content}")
+                if len(relevant) >= _PREVIEW_MAX_LINES:
+                    break
+
+        if relevant:
+            change.change_preview = "\n".join(relevant)
+
+        # Also annotate nested changes
+        if change.nested_changes:
+            for nc in change.nested_changes:
+                if nc.change not in ("body_changed", "signature_changed"):
+                    continue
+                nc_lines = patch_lines.get(nc.path)
+                if not nc_lines:
+                    continue
+                nc_relevant: list[str] = []
+                for origin, lineno, content in nc_lines:
+                    if nc.start_line <= lineno <= nc.end_line:
+                        nc_relevant.append(f"{origin} {content}")
+                        if len(nc_relevant) >= _PREVIEW_MAX_LINES:
+                            break
+                if nc_relevant:
+                    nc.change_preview = "\n".join(nc_relevant)
 
 
 def _build_agentic_hint(result: SemanticDiffResult) -> str:
