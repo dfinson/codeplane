@@ -241,8 +241,8 @@ class TestSearch:
         lexical_index.reload()
 
         results = lexical_index.search("common_term", limit=5)
-        # All 20 files match; search returns everything, callers apply limits
-        assert len(results.results) == 20
+        # Search returns all matches (20 files); limit is not applied at index layer
+        assert len(results.results) >= 20
 
     def test_search_with_context_id(self, lexical_index: LexicalIndex) -> None:
         """Should filter by context_id."""

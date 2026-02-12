@@ -20,11 +20,12 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
-from sqlalchemy import delete, func, text
+from sqlalchemy import case, delete, func, text
 from sqlmodel import col, select
 
 from codeplane.core.languages import detect_language_family, is_test_file
@@ -89,8 +90,6 @@ def _matches_glob(rel_path: str, pattern: str) -> bool:
     """
     if not pattern:
         return not rel_path  # empty pattern matches only empty path
-
-    from pathlib import PurePosixPath
 
     if not rel_path:
         return False
@@ -1165,8 +1164,17 @@ class IndexCoordinator:
 
         # Use appropriate search method based on mode
         if mode == SearchMode.SYMBOL:
-            search_results = self._lexical.search_symbols(
-                query, limit=search_limit, context_lines=context_lines
+            # Delegate to search_symbols() which uses SQLite + Tantivy fallback.
+            # Callers using coordinator.search(mode=SYMBOL) get the same
+            # two-phase pipeline as the MCP tool handler.
+            # Convert filter_languages to filter_paths so search_symbols can apply it.
+            symbol_filter_paths = filter_paths
+            if allowed_paths is not None:
+                symbol_filter_paths = list(allowed_paths)
+            return await self.search_symbols(
+                query,
+                filter_paths=symbol_filter_paths,
+                limit=limit,
             )
         elif mode == SearchMode.PATH:
             search_results = self._lexical.search_path(
@@ -1239,7 +1247,7 @@ class IndexCoordinator:
         with self.db.session() as session:
             # Compute match quality in SQL so ORDER BY is deterministic
             # and the best matches (exact > prefix > substring) come first.
-            match_score = func.case(
+            match_score = case(
                 (func.lower(DefFact.name) == query_lower, 1.0),
                 (func.lower(DefFact.name).startswith(query_lower), 0.8),
                 else_=0.6,
