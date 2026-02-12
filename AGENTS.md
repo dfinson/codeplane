@@ -37,7 +37,8 @@ targets: list[FileTarget]  # REQUIRED - NOT "line_ranges" or "ranges"
 cursor: str                # optional - pagination cursor from previous response
 ```
 
-Response includes `not_found: list[str]` when requested files don't exist.
+**Response includes:**
+- `not_found`: list of paths that don't exist (explicit, not just a count)
 
 **mcp_codeplane-codeplane_write_files**
 ```
