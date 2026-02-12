@@ -13,7 +13,6 @@ Discovery -> Authority -> Membership -> Probe -> Router -> Index
 from __future__ import annotations
 
 import asyncio
-import fnmatch
 import hashlib
 import json
 import os
@@ -21,11 +20,12 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import structlog
-from sqlalchemy import delete, func, text
+from sqlalchemy import case, delete, func, text
 from sqlmodel import col, select
 
 from codeplane.core.languages import detect_language_family, is_test_file
@@ -82,10 +82,52 @@ if TYPE_CHECKING:
 
 
 def _matches_glob(rel_path: str, pattern: str) -> bool:
-    """Check if a path matches a glob pattern, with ** support."""
-    if fnmatch.fnmatch(rel_path, pattern):
+    """Check if a path matches a glob pattern, with ** support.
+
+    Uses pathlib.PurePosixPath.match() which correctly treats ** as
+    "zero or more directories" (fnmatch does not).
+    For **/X patterns, also matches X at root (zero directories).
+    """
+    if not pattern:
+        return not rel_path  # empty pattern matches only empty path
+
+    if not rel_path:
+        return False
+
+    if PurePosixPath(rel_path).match(pattern):
         return True
-    return pattern.startswith("**/") and fnmatch.fnmatch(rel_path, pattern[3:])
+    # **/X should also match X at root level (zero directories)
+    if pattern.startswith("**/"):
+        return PurePosixPath(rel_path).match(pattern[3:])
+    return False
+
+
+def _matches_filter_paths(rel_path: str, filter_paths: list[str]) -> bool:
+    """Check if a path matches any of the filter_paths patterns.
+
+    Supports:
+    - Directory prefix matching: "src/" or "src" matches all files under src/
+    - Exact file paths: "src/foo.py" matches that specific file
+    - Glob patterns: "src/**/*.py", "*.ts" via pathlib (** aware)
+    """
+    for pattern in filter_paths:
+        # Glob pattern — delegate to _matches_glob (handles ** correctly)
+        if any(ch in pattern for ch in "*?[]"):
+            if _matches_glob(rel_path, pattern):
+                return True
+            continue
+
+        # Normalize potential directory patterns like "src/" -> "src"
+        normalized = pattern.rstrip("/")
+
+        # Exact match
+        if rel_path == pattern or rel_path == normalized:
+            return True
+
+        # Directory prefix — require path boundary to avoid "src" matching "src2/"
+        if normalized and rel_path.startswith(normalized + "/"):
+            return True
+    return False
 
 
 @dataclass
@@ -1085,6 +1127,7 @@ class IndexCoordinator:
         offset: int = 0,
         context_lines: int = 1,
         filter_languages: list[str] | None = None,
+        filter_paths: list[str] | None = None,
     ) -> SearchResponse:
         """
         Search the index. Thread-safe, no locks needed.
@@ -1097,6 +1140,8 @@ class IndexCoordinator:
             context_lines: Lines of context before/after each match (default 1)
             filter_languages: Optional list of language families to filter by
                              (e.g., ["python", "javascript"]). If None, returns all.
+            filter_paths: Optional list of path prefixes or glob patterns to filter by
+                         (e.g., ["src/", "lib/**/*.py"]). If None, returns all.
 
         Returns:
             SearchResponse with results and optional fallback_reason
@@ -1118,12 +1163,22 @@ class IndexCoordinator:
         # Request more results than limit if filtering, to account for filtering
         # Also account for offset to support pagination
         base_limit = offset + limit
-        search_limit = base_limit * 3 if filter_languages else base_limit
+        has_filters = filter_languages or filter_paths
+        search_limit = base_limit * 3 if has_filters else base_limit
 
         # Use appropriate search method based on mode
         if mode == SearchMode.SYMBOL:
-            search_results = self._lexical.search_symbols(
-                query, limit=search_limit, context_lines=context_lines
+            # Delegate to search_symbols() which uses SQLite + Tantivy fallback.
+            # Callers using coordinator.search(mode=SYMBOL) get the same
+            # two-phase pipeline as the MCP tool handler.
+            # Convert filter_languages to filter_paths so search_symbols can apply it.
+            symbol_filter_paths = filter_paths
+            if allowed_paths is not None:
+                symbol_filter_paths = list(allowed_paths)
+            return await self.search_symbols(
+                query,
+                filter_paths=symbol_filter_paths,
+                limit=limit,
             )
         elif mode == SearchMode.PATH:
             search_results = self._lexical.search_path(
@@ -1138,6 +1193,12 @@ class IndexCoordinator:
         filtered_hits = search_results.results
         if allowed_paths is not None:
             filtered_hits = [hit for hit in filtered_hits if hit.file_path in allowed_paths]
+
+        # Filter results by path patterns if requested
+        if filter_paths:
+            filtered_hits = [
+                hit for hit in filtered_hits if _matches_filter_paths(hit.file_path, filter_paths)
+            ]
 
         # Apply offset and limit after filtering
         results = [
@@ -1155,6 +1216,120 @@ class IndexCoordinator:
             results=results,
             fallback_reason=search_results.fallback_reason,
         )
+
+    async def search_symbols(
+        self,
+        query: str,
+        *,
+        filter_kinds: list[str] | None = None,
+        filter_paths: list[str] | None = None,
+        limit: int = 100,
+    ) -> SearchResponse:
+        """Search symbols by substring match. Thread-safe.
+
+        Uses SQLite (DefFact table) as primary source for substring + kind
+        filtering, with Tantivy fallback for symbols not in the structural
+        index (unsupported languages, parse failures, timing gaps).
+
+        Args:
+            query: Symbol name or substring to search for
+            filter_kinds: Optional list of symbol kinds to filter by
+                         (e.g., ["class", "function"])
+            filter_paths: Optional list of path prefixes/globs to filter by
+            limit: Maximum results to return
+
+        Returns:
+            SearchResponse with results scored by match quality
+        """
+        await self.wait_for_freshness()
+
+        # Phase 1: SQLite structured search (substring + kind filtering)
+        results: list[SearchResult] = []
+        seen: set[tuple[str, int, int]] = set()  # (path, line, col) dedup key
+        query_lower = query.lower()
+
+        with self.db.session() as session:
+            # Compute match quality in SQL so ORDER BY is deterministic
+            # and the best matches (exact > prefix > substring) come first.
+            match_score = case(
+                (func.lower(DefFact.name) == query_lower, 1.0),
+                (func.lower(DefFact.name).startswith(query_lower), 0.8),
+                else_=0.6,
+            ).label("match_score")
+
+            stmt = (
+                select(DefFact, File.path, match_score)
+                .join(
+                    File,
+                    DefFact.file_id == File.id,  # type: ignore[arg-type]
+                )
+                .where(func.lower(DefFact.name).contains(query_lower))
+            )
+            if filter_kinds:
+                stmt = stmt.where(col(DefFact.kind).in_(filter_kinds))
+            stmt = stmt.order_by(
+                match_score.desc(),  # type: ignore[union-attr]
+                DefFact.name,
+                File.path,
+                DefFact.start_line,
+                DefFact.start_col,
+            )
+            stmt = stmt.limit(limit * 2)  # over-fetch to account for path filtering
+
+            rows = session.exec(stmt).all()
+
+        for def_fact, file_path, score in rows:
+            # Apply path filter if requested
+            if filter_paths and not _matches_filter_paths(file_path, filter_paths):
+                continue
+
+            key = (file_path, def_fact.start_line, def_fact.start_col)
+            if key not in seen:
+                seen.add(key)
+                results.append(
+                    SearchResult(
+                        path=file_path,
+                        line=def_fact.start_line,
+                        column=def_fact.start_col,
+                        snippet=def_fact.display_name or def_fact.name,
+                        score=float(score),
+                    )
+                )
+
+            if len(results) >= limit:
+                break
+
+        # Phase 2: Tantivy fallback (only if Phase 1 didn't fill limit)
+        # Skip fallback when filter_kinds is set — Tantivy has no kind metadata
+        # so we'd return results that violate the caller's kind constraint.
+        if len(results) < limit and self._lexical is not None and not filter_kinds:
+            tantivy_results = self._lexical.search_symbols(query, limit=limit, context_lines=1)
+            # Cap fallback scores below the lowest Phase 1 score so
+            # structural matches always rank first.
+            phase1_min = min((r.score for r in results), default=0.5)
+            for hit in tantivy_results.results:
+                key = (hit.file_path, hit.line, hit.column)
+                if key in seen:
+                    continue
+                # Apply path filter if requested
+                if filter_paths and not _matches_filter_paths(hit.file_path, filter_paths):
+                    continue
+                seen.add(key)
+                results.append(
+                    SearchResult(
+                        path=hit.file_path,
+                        line=hit.line,
+                        column=hit.column,
+                        snippet=hit.snippet,
+                        score=min(hit.score * 0.5, phase1_min - 0.01),
+                    )
+                )
+                if len(results) >= limit:
+                    break
+
+        # Sort by score descending
+        results.sort(key=lambda r: -r.score)
+        return SearchResponse(results=results[:limit])
 
     async def get_def(
         self,

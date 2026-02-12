@@ -311,15 +311,25 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 if parsed >= 0:
                     start_idx = parsed
 
-        # Lexical or symbol search - fetch limit+1 to detect has_more
-        search_response = await app_ctx.coordinator.search(
-            query,
-            mode_map[mode],
-            limit=limit + 1,
-            offset=start_idx,
-            context_lines=effective_lines if not is_structural else 1,
-            filter_languages=filter_languages,
-        )
+        # Symbol search — uses dedicated search_symbols with SQLite + Tantivy fallback
+        if mode == "symbol":
+            search_response = await app_ctx.coordinator.search_symbols(
+                query,
+                filter_kinds=filter_kinds,
+                filter_paths=filter_paths,
+                limit=limit + 1,
+            )
+        else:
+            # Lexical search - fetch limit+1 to detect has_more
+            search_response = await app_ctx.coordinator.search(
+                query,
+                mode_map[mode],
+                limit=limit + 1,
+                offset=start_idx,
+                context_lines=effective_lines if not is_structural else 1,
+                filter_languages=filter_languages,
+                filter_paths=filter_paths,
+            )
 
         # Check if there are more results beyond this page
         all_results = search_response.results
