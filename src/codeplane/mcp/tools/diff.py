@@ -5,6 +5,9 @@ Orchestrates the full pipeline: sources -> engine -> enrichment -> output.
 
 from __future__ import annotations
 
+import threading
+import time
+from collections import OrderedDict
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
@@ -12,7 +15,6 @@ import structlog
 from fastmcp import Context
 from pydantic import Field
 
-from codeplane.config.constants import DIFF_CHANGES_MAX
 from codeplane.core.languages import detect_language_family, has_grammar
 from codeplane.git.models import _DELTA_STATUS_MAP
 from codeplane.index._internal.diff.engine import compute_structural_diff
@@ -28,6 +30,7 @@ from codeplane.index._internal.diff.sources import (
     snapshots_from_epoch,
     snapshots_from_index,
 )
+from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -35,6 +38,64 @@ if TYPE_CHECKING:
     from codeplane.mcp.context import AppContext
 
 log = structlog.get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Result cache — avoids re-computing the full pipeline on paginated calls.
+# ---------------------------------------------------------------------------
+_CACHE_MAX_ENTRIES = 4
+_CACHE_TTL_SECONDS = 120.0  # 2 minutes
+
+
+class _CacheEntry:
+    """A cached SemanticDiffResult with creation timestamp."""
+
+    __slots__ = ("result", "created_at")
+
+    def __init__(self, result: SemanticDiffResult) -> None:
+        self.result = result
+        self.created_at = time.monotonic()
+
+    def is_expired(self) -> bool:
+        return (time.monotonic() - self.created_at) > _CACHE_TTL_SECONDS
+
+
+class _DiffCache:
+    """Thread-safe LRU cache for SemanticDiffResult objects."""
+
+    def __init__(self, max_entries: int = _CACHE_MAX_ENTRIES) -> None:
+        self._entries: OrderedDict[int, _CacheEntry] = OrderedDict()
+        self._counter = 0
+        self._lock = threading.Lock()
+        self._max = max_entries
+
+    def store(self, result: SemanticDiffResult) -> int:
+        """Store a result and return its cache ID."""
+        with self._lock:
+            self._counter += 1
+            cache_id = self._counter
+            self._entries[cache_id] = _CacheEntry(result)
+            # Evict oldest if over capacity
+            while len(self._entries) > self._max:
+                self._entries.popitem(last=False)
+            return cache_id
+
+    def get(self, cache_id: int) -> SemanticDiffResult | None:
+        """Retrieve a cached result (returns None if expired or missing)."""
+        with self._lock:
+            entry = self._entries.get(cache_id)
+            if entry is None or entry.is_expired():
+                self._entries.pop(cache_id, None)
+                return None
+            # Move to end (LRU)
+            self._entries.move_to_end(cache_id)
+            return entry.result
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+_diff_cache = _DiffCache()
 
 
 def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
@@ -60,12 +121,47 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         """
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
-        if base.startswith("epoch:"):
-            result = _run_epoch_diff(app_ctx, base, target, paths)
-        else:
-            result = _run_git_diff(app_ctx, base, target, paths)
+        # Parse cursor: "<cache_id>:<offset>" or None
+        cache_id, offset = _parse_cursor(cursor)
 
-        return _result_to_dict(result, cursor=cursor)
+        # Try cache hit for paginated continuations
+        result: SemanticDiffResult | None = None
+        if cache_id is not None:
+            result = _diff_cache.get(cache_id)
+            if result is not None:
+                log.debug("diff_cache_hit", cache_id=cache_id, offset=offset)
+
+        # Cache miss or first call — compute fresh
+        if result is None:
+            if base.startswith("epoch:"):
+                result = _run_epoch_diff(app_ctx, base, target, paths)
+            else:
+                result = _run_git_diff(app_ctx, base, target, paths)
+            cache_id = _diff_cache.store(result)
+            log.debug("diff_cache_store", cache_id=cache_id, changes=len(result.structural_changes))
+
+        return _result_to_dict(result, cursor_offset=offset, cache_id=cache_id)
+
+
+def _parse_cursor(cursor: str | None) -> tuple[int | None, int]:
+    """Parse a pagination cursor into (cache_id, offset).
+
+    Cursor format: ``"<cache_id>:<offset>"``.
+    Returns ``(None, 0)`` when *cursor* is ``None``.
+    """
+    if cursor is None:
+        return None, 0
+    parts = cursor.split(":", 1)
+    if len(parts) == 2:
+        try:
+            return int(parts[0]), int(parts[1])
+        except ValueError:
+            pass
+    # Legacy / malformed — treat as plain offset for backwards compat
+    try:
+        return None, int(cursor)
+    except ValueError:
+        return None, 0
 
 
 def _run_git_diff(
@@ -121,25 +217,25 @@ def _run_git_diff(
     coordinator = app_ctx.coordinator
     db = coordinator.db
 
-    for cf in changed_files:
-        if not cf.has_grammar:
-            continue
+    # Single session for all index lookups + enrichment
+    with db.session() as session:
+        for cf in changed_files:
+            if not cf.has_grammar:
+                continue
 
-        # Target: current index state
-        with db.session() as session:
+            # Target: current index state
             target_facts[cf.path] = snapshots_from_index(session, cf.path)
 
-        # Base: parse from git blob
-        if base_commit and cf.status != "added":
-            base_facts[cf.path] = snapshots_from_blob(repo, base_commit, cf.path)
-        else:
-            base_facts[cf.path] = []
+            # Base: parse from git blob (CPU, no DB)
+            if base_commit and cf.status != "added":
+                base_facts[cf.path] = snapshots_from_blob(repo, base_commit, cf.path)
+            else:
+                base_facts[cf.path] = []
 
-    # Run engine
-    raw = compute_structural_diff(base_facts, target_facts, changed_files, hunks)
+        # Run engine
+        raw = compute_structural_diff(base_facts, target_facts, changed_files, hunks)
 
-    # Enrich
-    with db.session() as session:
+        # Enrich (reuse same session)
         result = enrich_diff(raw, session, app_ctx.repo_root)
 
     # Annotate with change previews from the actual patch lines
@@ -246,11 +342,10 @@ def _run_epoch_diff(
             base_facts[fp] = base_snaps
             target_facts[fp] = target_snaps
 
-    # Run engine (no hunks in epoch mode)
-    raw = compute_structural_diff(base_facts, target_facts, changed_files, hunks=None)
+        # Run engine (no hunks in epoch mode)
+        raw = compute_structural_diff(base_facts, target_facts, changed_files, hunks=None)
 
-    # Enrich
-    with db.session() as session:
+        # Enrich (reuse same session)
         result = enrich_diff(raw, session, app_ctx.repo_root)
 
     result.base_description = f"epoch {base_epoch}"
@@ -395,10 +490,10 @@ def _build_agentic_hint(result: SemanticDiffResult) -> str:
 def _result_to_dict(
     result: SemanticDiffResult,
     *,
-    cursor: str | None = None,
-    limit: int = DIFF_CHANGES_MAX,
+    cursor_offset: int = 0,
+    cache_id: int | None = None,
 ) -> dict[str, Any]:
-    """Convert SemanticDiffResult to a serializable dict with pagination."""
+    """Convert SemanticDiffResult to a serializable dict with budget-based pagination."""
 
     def _change_to_dict(c: StructuralChange) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -449,16 +544,23 @@ def _result_to_dict(
     # Compute agentic_hint from ALL changes before pagination
     agentic_hint = _build_agentic_hint(result)
 
-    # Paginate structural_changes
+    # Paginate structural_changes using byte-budget accumulator (~40 KB)
     all_changes = result.structural_changes
-    offset = int(cursor) if cursor else 0
-    page = all_changes[offset : offset + limit]
-    has_more = offset + limit < len(all_changes)
+    offset = cursor_offset
 
-    pagination: dict[str, Any] = {}
-    if has_more:
-        pagination["next_cursor"] = str(offset + limit)
-        pagination["total_estimate"] = len(all_changes)
+    acc = BudgetAccumulator()
+    for c in all_changes[offset:]:
+        if not acc.try_add(_change_to_dict(c)):
+            break
+
+    items_consumed = acc.count
+    has_more = offset + items_consumed < len(all_changes)
+    next_offset = offset + items_consumed
+
+    # Build cursor: "<cache_id>:<offset>"
+    next_cursor: str | None = None
+    if has_more and cache_id is not None:
+        next_cursor = f"{cache_id}:{next_offset}"
 
     return {
         "summary": result.summary,
@@ -466,8 +568,12 @@ def _result_to_dict(
         "files_analyzed": result.files_analyzed,
         "base": result.base_description,
         "target": result.target_description,
-        "structural_changes": [_change_to_dict(c) for c in page],
+        "structural_changes": acc.items,
         "non_structural_changes": [asdict(f) for f in result.non_structural_changes],
         "agentic_hint": agentic_hint,
-        "pagination": pagination,
+        "pagination": make_budget_pagination(
+            has_more=has_more,
+            next_cursor=next_cursor,
+            total_estimate=len(all_changes),
+        ),
     }
