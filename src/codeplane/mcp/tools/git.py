@@ -267,8 +267,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         # Apply cursor: skip files already returned
         start_idx = 0
         if cursor:
-            import contextlib
-
             with contextlib.suppress(ValueError):
                 start_idx = int(cursor)
 
@@ -306,9 +304,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     patch_lines.extend(current_file_patch)
                 # Start new file
                 current_file_patch = [line]
-                # Extract path: 'diff --git a/path b/path' -> 'path'
-                parts = line.split()
-                current_file_path = parts[3][2:] if len(parts) >= 4 else None
+                # Extract path robustly: look for any page path in the header
+                # This handles both simple paths and quoted paths with spaces
+                current_file_path = None
+                for path in page_paths:
+                    # Check if path appears in the header (handles a/path b/path format)
+                    if f"a/{path}" in line or f"b/{path}" in line:
+                        current_file_path = path
+                        break
             else:
                 current_file_patch.append(line)
 
@@ -318,15 +321,20 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         page_patch = "".join(patch_lines)
 
-        # Build totals from page files
+        # Compute totals: overall for the entire diff, page for this page
+        overall_additions = sum(f.additions for f in all_files)
+        overall_deletions = sum(f.deletions for f in all_files)
         page_additions = sum(f["additions"] for f in files_in_page)
         page_deletions = sum(f["deletions"] for f in files_in_page)
 
         result: dict[str, Any] = {
             "files": files_in_page,
-            "total_additions": page_additions,
-            "total_deletions": page_deletions,
-            "files_changed": len(files_in_page),
+            "total_additions": overall_additions,
+            "total_deletions": overall_deletions,
+            "files_changed": len(all_files),
+            "page_additions": page_additions,
+            "page_deletions": page_deletions,
+            "page_files": len(files_in_page),
             "patch": page_patch,
             "summary": _summarize_diff(len(files_in_page), page_additions, page_deletions, staged),
             "pagination": make_budget_pagination(
@@ -367,8 +375,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     high = mid - 1
 
             result["patch"] = best_patch or ""
-
-        return result
 
         return result
 

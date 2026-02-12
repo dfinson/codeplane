@@ -126,6 +126,7 @@ targets: list[FileTarget]  # REQUIRED - NOT "line_ranges" or "ranges"
   path: str                # REQUIRED - file path this target applies to
   start_line: int          # optional, 1-indexed; must be provided together with end_line
   end_line: int            # optional, 1-indexed; must be provided together with start_line
+cursor: str                # optional - pagination cursor from previous response
 ```
 
 **mcp_codeplane-codeplane_write_files**

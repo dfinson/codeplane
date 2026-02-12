@@ -1,5 +1,6 @@
 """Files MCP tools - read_files, list_files handlers."""
 
+import contextlib
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
@@ -109,8 +110,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         # Apply cursor: skip targets already returned
         start_idx = 0
         if cursor:
-            import contextlib
-
             with contextlib.suppress(ValueError):
                 start_idx = int(cursor)
 
@@ -131,33 +130,44 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             include_metadata=include_metadata,
         )
 
+        # Build a map from path to file result for efficient lookup
+        file_by_path: dict[str, Any] = {f.path: f for f in result.files}
+
         acc = BudgetAccumulator()
-        # Track all files that were found (before budget filtering)
-        found_paths: set[str] = {f.path for f in result.files}
-        for f in result.files:
-            item = {
-                "path": f.path,
-                "content": f.content,
-                "language": f.language,
-                "line_count": f.line_count,
-                "range": f.range,
-                "metadata": f.metadata,
-            }
-            if not acc.try_add(item):
-                break
+        processed_targets = 0
+        missing_paths: list[str] = []
 
-        # Compute which requested paths were not found
-        requested_paths = [t.path for t in page_targets]
-        missing_paths = [p for p in requested_paths if p not in found_paths]
+        # Process targets in order, tracking both found and missing
+        for t in page_targets:
+            if t.path in file_by_path:
+                f = file_by_path[t.path]
+                item = {
+                    "path": f.path,
+                    "content": f.content,
+                    "language": f.language,
+                    "line_count": f.line_count,
+                    "range": f.range,
+                    "metadata": f.metadata,
+                }
+                if not acc.try_add(item):
+                    # Budget exhausted, stop processing
+                    break
+            else:
+                # Target not found - track it but don't count against budget
+                # Cap missing_paths to prevent unbounded growth
+                if len(missing_paths) < 100:
+                    missing_paths.append(t.path)
+            processed_targets += 1
 
-        budget_more = not acc.has_room and len(result.files) > acc.count
-        next_offset = start_idx + acc.count
+        # Check if there are more targets to process
+        has_more_targets = processed_targets < len(page_targets)
+        next_offset = start_idx + processed_targets
         response: dict[str, Any] = {
             "files": acc.items,
             "pagination": make_budget_pagination(
-                has_more=budget_more,
-                next_cursor=str(next_offset) if budget_more else None,
-                total_estimate=len(targets) if budget_more else None,
+                has_more=has_more_targets,
+                next_cursor=str(next_offset) if has_more_targets else None,
+                total_estimate=len(targets) if has_more_targets else None,
             ),
             "summary": _summarize_read(acc.items, len(missing_paths)),
         }
