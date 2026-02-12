@@ -45,7 +45,7 @@ from codeplane.index._internal.discovery import (
     MembershipResolver,
     Tier1AuthorityFilter,
 )
-from codeplane.index._internal.ignore import PRUNABLE_DIRS, IgnoreChecker
+from codeplane.index._internal.ignore import IgnoreChecker
 from codeplane.index._internal.indexing import (
     FactQueries,
     LexicalIndex,
@@ -1175,14 +1175,19 @@ class IndexCoordinator:
             # Delegate to search_symbols() which uses SQLite + Tantivy fallback.
             # Callers using coordinator.search(mode=SYMBOL) get the same
             # two-phase pipeline as the MCP tool handler.
-            # Convert filter_languages to filter_paths so search_symbols can apply it.
+            # Combine filter_languages (resolved to allowed_paths) with user filter_paths
             symbol_filter_paths = filter_paths
             if allowed_paths is not None:
-                symbol_filter_paths = list(allowed_paths)
+                if symbol_filter_paths:
+                    # Both filters present: combine them
+                    symbol_filter_paths = list(allowed_paths) + symbol_filter_paths
+                else:
+                    symbol_filter_paths = list(allowed_paths)
             return await self.search_symbols(
                 query,
                 filter_paths=symbol_filter_paths,
                 limit=limit,
+                offset=offset,
             )
         elif mode == SearchMode.PATH:
             search_results = self._lexical.search_path(
@@ -1228,6 +1233,7 @@ class IndexCoordinator:
         filter_kinds: list[str] | None = None,
         filter_paths: list[str] | None = None,
         limit: int = 100,
+        offset: int = 0,
     ) -> SearchResponse:
         """Search symbols by substring match. Thread-safe.
 
@@ -1241,6 +1247,7 @@ class IndexCoordinator:
                          (e.g., ["class", "function"])
             filter_paths: Optional list of path prefixes/globs to filter by
             limit: Maximum results to return
+            offset: Number of results to skip for pagination
 
         Returns:
             SearchResponse with results scored by match quality
@@ -1278,10 +1285,12 @@ class IndexCoordinator:
                 col(DefFact.start_line),
                 col(DefFact.start_col),
             )
-            stmt = stmt.limit(limit * 2)  # over-fetch to account for path filtering
+            # Over-fetch to account for offset + path filtering
+            stmt = stmt.limit((offset + limit) * 2)
 
             rows = session.exec(stmt).all()
 
+        skipped = 0
         for def_fact, file_path, score in rows:
             # Apply path filter if requested
             if filter_paths and not _matches_filter_paths(file_path, filter_paths):
@@ -1290,6 +1299,10 @@ class IndexCoordinator:
             key = (file_path, def_fact.start_line, def_fact.start_col)
             if key not in seen:
                 seen.add(key)
+                # Skip offset results before collecting
+                if skipped < offset:
+                    skipped += 1
+                    continue
                 results.append(
                     SearchResult(
                         path=file_path,
@@ -2418,20 +2431,42 @@ class IndexCoordinator:
     def _walk_all_files(self) -> list[str]:
         """Walk filesystem once, return all indexable file paths (relative to repo root).
 
-        Uses IgnoreChecker for hierarchical .cplignore support.
+        Uses a streaming IgnoreChecker that loads .cplignore/.gitignore patterns
+        on-the-fly as directories are entered, avoiding a separate pre-walk.
         Applies PRUNABLE_DIRS pruning and .cplignore filtering.
         Does NOT use git - indexes any file on disk that isn't in .cplignore.
         """
-        # IgnoreChecker handles hierarchical .cplignore loading
-        checker = IgnoreChecker(self.repo_root)
+        checker = IgnoreChecker.empty(self.repo_root)
+
+        # Eagerly load root-level ignore files BEFORE os.walk so patterns
+        # are available regardless of directory traversal order.
+        # .codeplane/.cplignore is a legacy root-level location (global scope).
+        for root_ignore in (
+            self.repo_root / ".codeplane" / IgnoreChecker.CPLIGNORE_NAME,
+            self.repo_root / IgnoreChecker.CPLIGNORE_NAME,
+            self.repo_root / ".gitignore",
+        ):
+            if root_ignore.exists():
+                checker.load_ignore_file(root_ignore, "")
 
         all_files: list[str] = []
         for dirpath, dirnames, filenames in os.walk(self.repo_root):
             # Prune dirs in-place to skip expensive subtrees
-            dirnames[:] = [d for d in dirnames if d not in PRUNABLE_DIRS]
+            dirnames[:] = [d for d in dirnames if not checker.should_prune_dir(d)]
+
+            dirpath_p = Path(dirpath)
+            rel_dir = str(dirpath_p.relative_to(self.repo_root)).replace("\\", "/")
+            prefix = "" if rel_dir == "." else rel_dir
+
+            # Load nested ignore files (skip root — already loaded above)
+            if prefix:
+                for ignore_name in (IgnoreChecker.CPLIGNORE_NAME, ".gitignore"):
+                    ignore_path = dirpath_p / ignore_name
+                    if ignore_path.exists():
+                        checker.load_ignore_file(ignore_path, prefix)
 
             for filename in filenames:
-                full_path = Path(dirpath) / filename
+                full_path = dirpath_p / filename
                 rel_str = str(full_path.relative_to(self.repo_root)).replace("\\", "/")
 
                 # Skip .codeplane dir but NOT .cplignore files (they need to be indexed)

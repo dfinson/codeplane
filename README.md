@@ -103,24 +103,6 @@ CodePlane exposes 35+ MCP tools organized by domain:
 | **Lint** | `lint_check`, `lint_tools` | Auto-detected linters, formatters, type checkers |
 | **Introspection** | `describe` | Self-documenting tool schemas |
 
-## Roadmap
-
-Track progress via [GitHub Milestones](https://github.com/dfinson/codeplane/milestones):
-
-| Milestone | Description | Status |
-|-----------|-------------|--------|
-| **M0** | Foundation: Core types, errors, logging, configuration | ✅ |
-| **M1** | Git Operations: Status, staging, commits, branches, diffs | ✅ |
-| **M2** | Index Engine: Tantivy lexical + Tree-sitter/SQLite structural facts | 🚧 |
-| **M3** | Refactor Planner: Bounded candidate sets with coverage/risk manifests | ✅ |
-| **M4** | Mutation Engine: Atomic file changes with rollback | ✅ |
-| **M5** | Ledger & Task Model: Operation history, convergence metrics | 🚧 |
-| **M6** | Daemon & CLI: HTTP daemon, `cpl` CLI commands | ✅ |
-| **M7** | Core MCP Tools: File ops, search, git tools for agents | ✅ |
-| **M8** | Test Runner: Framework detection, parallel execution | ✅ |
-| **M9** | Polish & Hardening: Docs, benchmarks, security, packaging | 🚧 |
-| **M10** | Advanced Semantic Support (SCIP/LSP analysis) | 🔬 |
-
 ## Contributing
 
 ```bash
