@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from sqlalchemy import ColumnElement, or_
 from sqlmodel import col, select
 
 from codeplane.core.languages import is_test_file
@@ -111,15 +112,17 @@ class ImportGraph:
         self._session = session
         self._module_index: dict[str, str] | None = None  # module_key -> file_path
         self._file_paths: list[str] | None = None
+        self._test_file_paths: list[str] | None = None
 
     def _ensure_caches(self) -> None:
-        """Build module index and file path list on first use."""
+        """Build module index, file path list, and test file list on first use."""
         if self._module_index is not None:
             return
         stmt = select(File.path)
         paths = list(self._session.exec(stmt).all())
         self._file_paths = [p for p in paths if p is not None]
         self._module_index = build_module_index(self._file_paths)
+        self._test_file_paths = [fp for fp in self._file_paths if is_test_file(fp)]
 
     # -----------------------------------------------------------------
     # 1. affected_tests: changed files → test files
@@ -178,41 +181,57 @@ class ImportGraph:
             if mod.startswith("src."):
                 search_modules.add(mod[4:])
 
-        # Step 3: Query ImportFact for test files importing these modules
-        # We need source_literal matching at module level (prefix match for submodule imports)
+        assert self._test_file_paths is not None
+
+        # Step 3: Build SQL conditions for module matching.
+        # Three match types pushed into the query:
+        #   a) Exact: source_literal == search_mod
+        #   b) Parent: source_literal is a parent prefix of search_mod
+        #      (test imports a parent package that re-exports from the changed module)
+        #   c) Child: source_literal starts with search_mod + "."
+        #      (test imports a submodule of the changed module)
+        #
+        # For (a) and (b), pre-compute all exact + parent module names into an IN set.
+        # For (c), use SQL LIKE per search module.
+        exact_or_parent: set[str] = set()
+        like_prefixes: list[str] = []
+        for mod in search_modules:
+            exact_or_parent.add(mod)  # exact match
+            like_prefixes.append(f"{mod}.")  # child match
+            # Parent matches: all prefixes of this module
+            parts = mod.split(".")
+            for i in range(1, len(parts)):
+                exact_or_parent.add(".".join(parts[:i]))
+
+        match_conditions: list[ColumnElement[bool]] = [
+            col(ImportFact.source_literal).in_(list(exact_or_parent)),
+        ]
+        for prefix in like_prefixes:
+            match_conditions.append(col(ImportFact.source_literal).startswith(prefix))
+
+        # Single query: only test files, only matching modules
         stmt = (
             select(File.path, ImportFact.source_literal)
             .join(ImportFact, ImportFact.file_id == File.id)  # type: ignore[arg-type]
-            .where(ImportFact.source_literal != None)  # noqa: E711
+            .where(col(File.path).in_(self._test_file_paths))
+            .where(or_(*match_conditions))
         )
-        all_imports = list(self._session.exec(stmt).all())
+        matched_rows = list(self._session.exec(stmt).all())
 
         # Count NULL source_literals in test files for confidence
         null_stmt = (
             select(File.path)
             .join(ImportFact, ImportFact.file_id == File.id)  # type: ignore[arg-type]
+            .where(col(File.path).in_(self._test_file_paths))
             .where(ImportFact.source_literal == None)  # noqa: E711
         )
-        null_paths = list(self._session.exec(null_stmt).all())
-        null_in_tests = sum(1 for p in null_paths if is_test_file(p))
+        null_in_tests = len(list(self._session.exec(null_stmt).all()))
 
-        # Step 4: Match — a test file is affected if it imports a module
-        # that matches (or is a parent of) a changed module
+        # Step 4: Group matches by test file
         matches_by_file: dict[str, list[str]] = {}
-        for file_path, source_literal in all_imports:
-            if not is_test_file(file_path):
-                continue
-            if source_literal is None:
-                continue
-            for search_mod in search_modules:
-                # Exact match or prefix match (importing a parent package)
-                if source_literal == search_mod or search_mod.startswith(f"{source_literal}."):
-                    matches_by_file.setdefault(file_path, []).append(source_literal)
-                    break
-                # Or the test imports a child of the changed module
-                if source_literal.startswith(f"{search_mod}."):
-                    matches_by_file.setdefault(file_path, []).append(source_literal)
-                    break
+        for file_path, source_literal in matched_rows:
+            if source_literal is not None:
+                matches_by_file.setdefault(file_path, []).append(source_literal)
 
         # Step 5: Build results with confidence
         matches: list[ImpactMatch] = []
@@ -241,12 +260,14 @@ class ImportGraph:
             "complete" if (resolved_ratio == 1.0 and null_in_tests == 0) else "partial"
         )
 
-        parts: list[str] = []
+        reason_parts: list[str] = []
         if unresolved:
-            parts.append(f"{len(unresolved)} files could not be mapped to modules")
+            reason_parts.append(f"{len(unresolved)} files could not be mapped to modules")
         if null_in_tests:
-            parts.append(f"{null_in_tests} test imports have no source_literal")
-        reasoning = "; ".join(parts) if parts else "all files resolved, all imports traced"
+            reason_parts.append(f"{null_in_tests} test imports have no source_literal")
+        reasoning = (
+            "; ".join(reason_parts) if reason_parts else "all files resolved, all imports traced"
+        )
 
         return ImportGraphResult(
             matches=matches,
@@ -345,23 +366,16 @@ class ImportGraph:
                 if mod:
                     all_source_modules.add(mod)
 
-        # Modules imported by test files
-        # Single batch query: get all (source_literal, file_path) pairs,
-        # then filter to find source_literals imported by at least one test file
+        # Modules imported by test files — scope query to test files only
+        test_file_paths = self._test_file_paths
+        assert test_file_paths is not None
         stmt = (
-            select(ImportFact.source_literal, File.path)
+            select(ImportFact.source_literal)
             .join(File, ImportFact.file_id == File.id)  # type: ignore[arg-type]
             .where(ImportFact.source_literal != None)  # noqa: E711
+            .where(col(File.path).in_(test_file_paths))
         )
-        all_import_rows = list(self._session.exec(stmt).all())
-
-        # Collect modules that have test coverage via imports
-        covered_modules: set[str] = set()
-        for source_literal, importer_path in all_import_rows:
-            if source_literal is None:
-                continue
-            if is_test_file(importer_path):
-                covered_modules.add(source_literal)
+        covered_modules: set[str] = {s for s in self._session.exec(stmt).all() if s is not None}
 
         # Also consider short-form matches (src.X matches X)
         covered_short: set[str] = set()
