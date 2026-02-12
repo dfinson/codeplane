@@ -77,8 +77,17 @@ class CoverageEmitter(ABC):
         self,
         cmd: list[str],
         output_dir: Path,
+        source_dirs: list[str] | None = None,
     ) -> list[str]:
-        """Modify test command to enable coverage."""
+        """Modify test command to enable coverage.
+
+        Args:
+            cmd: Base test command.
+            output_dir: Directory for coverage artifacts.
+            source_dirs: Optional list of source directories to scope coverage.
+                        When provided, generates targeted ``--cov=<dir>`` args
+                        instead of ``--cov=.``.
+        """
         ...
 
     @abstractmethod
@@ -107,13 +116,20 @@ class PytestCovEmitter(CoverageEmitter):
             return CoverageCapability.MISSING_PREREQ
         return CoverageCapability.AVAILABLE
 
-    def modify_command(self, cmd: list[str], output_dir: Path) -> list[str]:
+    def modify_command(
+        self,
+        cmd: list[str],
+        output_dir: Path,
+        source_dirs: list[str] | None = None,
+    ) -> list[str]:
         cov_path = output_dir / "coverage"
-        return [
-            *cmd,
-            f"--cov-report=lcov:{cov_path}/lcov.info",
-            "--cov=.",
-        ]
+        result = [*cmd, f"--cov-report=lcov:{cov_path}/lcov.info"]
+        if source_dirs:
+            for d in source_dirs:
+                result.append(f"--cov={d}")
+        else:
+            result.append("--cov=.")
+        return result
 
     def artifact_path(self, output_dir: Path) -> Path:
         return output_dir / "coverage" / "lcov.info"
@@ -137,7 +153,12 @@ class JestCoverageEmitter(CoverageEmitter):
         # Jest has built-in coverage, no extra tool needed
         return CoverageCapability.AVAILABLE
 
-    def modify_command(self, cmd: list[str], output_dir: Path) -> list[str]:
+    def modify_command(
+        self,
+        cmd: list[str],
+        output_dir: Path,
+        source_dirs: list[str] | None = None,  # noqa: ARG002
+    ) -> list[str]:
         cov_path = output_dir / "coverage"
         return [
             *cmd,
@@ -164,7 +185,12 @@ class VitestCoverageEmitter(CoverageEmitter):
         # Vitest has built-in coverage with v8 or istanbul
         return CoverageCapability.AVAILABLE
 
-    def modify_command(self, cmd: list[str], output_dir: Path) -> list[str]:
+    def modify_command(
+        self,
+        cmd: list[str],
+        output_dir: Path,
+        source_dirs: list[str] | None = None,  # noqa: ARG002
+    ) -> list[str]:
         cov_path = output_dir / "coverage"
         return [
             *cmd,
@@ -196,7 +222,12 @@ class GoCoverageEmitter(CoverageEmitter):
         # go test has built-in coverage
         return CoverageCapability.AVAILABLE
 
-    def modify_command(self, cmd: list[str], output_dir: Path) -> list[str]:
+    def modify_command(
+        self,
+        cmd: list[str],
+        output_dir: Path,
+        source_dirs: list[str] | None = None,  # noqa: ARG002
+    ) -> list[str]:
         cov_path = output_dir / "coverage" / "coverage.out"
         cov_path.parent.mkdir(parents=True, exist_ok=True)
         return [*cmd, f"-coverprofile={cov_path}"]
@@ -224,7 +255,12 @@ class CargoLlvmCovEmitter(CoverageEmitter):
             return CoverageCapability.MISSING_PREREQ
         return CoverageCapability.AVAILABLE
 
-    def modify_command(self, cmd: list[str], output_dir: Path) -> list[str]:
+    def modify_command(
+        self,
+        cmd: list[str],
+        output_dir: Path,
+        source_dirs: list[str] | None = None,  # noqa: ARG002
+    ) -> list[str]:
         # Replace 'cargo test' with 'cargo llvm-cov'
         cov_path = output_dir / "coverage" / "lcov.info"
         cov_path.parent.mkdir(parents=True, exist_ok=True)
@@ -258,7 +294,12 @@ class MavenJacocoEmitter(CoverageEmitter):
         # For now assume available if Maven is available
         return CoverageCapability.AVAILABLE
 
-    def modify_command(self, cmd: list[str], output_dir: Path) -> list[str]:  # noqa: ARG002
+    def modify_command(
+        self,
+        cmd: list[str],
+        output_dir: Path,  # noqa: ARG002
+        source_dirs: list[str] | None = None,  # noqa: ARG002
+    ) -> list[str]:
         # JaCoCo configured via pom.xml, just ensure report generation
         return [*cmd, "jacoco:report"]
 
@@ -279,7 +320,12 @@ class GradleJacocoEmitter(CoverageEmitter):
             return CoverageCapability.UNSUPPORTED
         return CoverageCapability.AVAILABLE
 
-    def modify_command(self, cmd: list[str], output_dir: Path) -> list[str]:  # noqa: ARG002
+    def modify_command(
+        self,
+        cmd: list[str],
+        output_dir: Path,  # noqa: ARG002
+        source_dirs: list[str] | None = None,  # noqa: ARG002
+    ) -> list[str]:
         # Add jacocoTestReport task
         return [*cmd, "jacocoTestReport"]
 
@@ -306,7 +352,12 @@ class DotnetCoverletEmitter(CoverageEmitter):
         # coverlet.collector usually included in test project
         return CoverageCapability.AVAILABLE
 
-    def modify_command(self, cmd: list[str], output_dir: Path) -> list[str]:
+    def modify_command(
+        self,
+        cmd: list[str],
+        output_dir: Path,
+        source_dirs: list[str] | None = None,  # noqa: ARG002
+    ) -> list[str]:
         cov_path = output_dir / "coverage"
         return [
             *cmd,
@@ -337,7 +388,12 @@ class SimpleCovEmitter(CoverageEmitter):
             return CoverageCapability.MISSING_PREREQ
         return CoverageCapability.AVAILABLE
 
-    def modify_command(self, cmd: list[str], output_dir: Path) -> list[str]:
+    def modify_command(
+        self,
+        cmd: list[str],
+        output_dir: Path,
+        source_dirs: list[str] | None = None,  # noqa: ARG002
+    ) -> list[str]:
         # SimpleCov typically configured in spec_helper.rb
         # Set environment variable to specify output directory
         cov_path = output_dir / "coverage"
@@ -370,7 +426,12 @@ class PHPUnitCoverageEmitter(CoverageEmitter):
             return CoverageCapability.MISSING_PREREQ
         return CoverageCapability.AVAILABLE
 
-    def modify_command(self, cmd: list[str], output_dir: Path) -> list[str]:
+    def modify_command(
+        self,
+        cmd: list[str],
+        output_dir: Path,
+        source_dirs: list[str] | None = None,  # noqa: ARG002
+    ) -> list[str]:
         cov_path = output_dir / "coverage" / "clover.xml"
         return [*cmd, f"--coverage-clover={cov_path}"]
 
@@ -395,7 +456,12 @@ class DartCoverageEmitter(CoverageEmitter):
             return CoverageCapability.UNSUPPORTED
         return CoverageCapability.AVAILABLE
 
-    def modify_command(self, cmd: list[str], output_dir: Path) -> list[str]:
+    def modify_command(
+        self,
+        cmd: list[str],
+        output_dir: Path,
+        source_dirs: list[str] | None = None,  # noqa: ARG002
+    ) -> list[str]:
         cov_path = output_dir / "coverage"
         return [*cmd, f"--coverage={cov_path}"]
 

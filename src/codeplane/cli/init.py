@@ -63,6 +63,7 @@ Terminal fallback is permitted ONLY when no CodePlane tool exists for the operat
 | All git operations | `{tool_prefix}_git_*` | Raw `git` commands |
 | Run linters/formatters | `{tool_prefix}_lint_check` | `ruff`, `black`, `mypy` directly |
 | Discover tests | `{tool_prefix}_discover_test_targets` | Manual test file search |
+| Impact-aware test selection | `{tool_prefix}_inspect_affected_tests` | Manual import tracing |
 | Run tests | `{tool_prefix}_run_test_targets` | `pytest`, `jest` directly |
 | Rename symbols | `{tool_prefix}_refactor_rename` | Find-and-replace, `sed` |
 | Move files | `{tool_prefix}_refactor_move` | `mv` + manual import fixes |
@@ -155,6 +156,39 @@ test_filter: str           # optional - filter test NAMES (pytest -k), does NOT 
 coverage: bool             # default false
 coverage_dir: str          # REQUIRED when coverage=true
 ```
+
+**{tool_prefix}_discover_test_targets**
+```
+paths: list[str]           # optional - paths to search for tests
+affected_by: list[str]     # optional - changed file paths for impact-aware filtering
+```
+
+**Impact-aware test selection:** When `affected_by` is provided, uses the structural
+index import graph to return only tests that import the changed modules. Response
+includes `impact` object with confidence tier and match counts. If low-confidence
+matches exist, an `agentic_hint` directs you to `inspect_affected_tests` for review.
+
+**{tool_prefix}_inspect_affected_tests**
+```
+changed_files: list[str]   # REQUIRED - changed file paths to analyze
+```
+
+**Detailed import graph inspection.** Returns per-test-file match info with
+confidence levels, changed modules, coverage gaps, and agentic hints. Use this
+to review uncertain matches before deciding which tests to run.
+
+### Impact-Aware Test Workflow
+
+When you've made changes and need to run only affected tests:
+
+1. `discover_test_targets(affected_by=["path/to/changed.py", ...])` — get filtered targets
+2. Check `impact.confidence` in the response:
+   - `complete` with all high-confidence: safe to run as-is
+   - `partial` or low-confidence matches: use `inspect_affected_tests` to review
+3. `run_test_targets(targets=[...])` — run the selected subset
+
+Coverage is automatically scoped to relevant source directories when running
+impact-selected tests.
 
 **{tool_prefix}_semantic_diff**
 ```

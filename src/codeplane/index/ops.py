@@ -77,6 +77,11 @@ from codeplane.testing.runtime import ContextRuntime, RuntimeResolver
 from codeplane.tools.map_repo import IncludeOption, MapRepoResult, RepoMapper
 
 if TYPE_CHECKING:
+    from codeplane.index._internal.indexing.import_graph import (
+        CoverageGap,
+        CoverageSourceResult,
+        ImportGraphResult,
+    )
     from codeplane.index.models import FileState
 
 
@@ -1544,6 +1549,66 @@ class IndexCoordinator:
                 # Use col() for SQLAlchemy column access
                 stmt = stmt.where(col(TestTarget.target_id).in_(target_ids))
             return list(session.exec(stmt).all())
+
+    async def get_affected_test_targets(
+        self,
+        changed_files: list[str],
+    ) -> ImportGraphResult:
+        """Given changed source files, find test targets affected by those changes.
+
+        Uses the reverse import graph to trace which test files import
+        the changed modules, then maps those back to TestTarget records.
+
+        Args:
+            changed_files: File paths that changed (relative to repo root).
+
+        Returns:
+            ImportGraphResult with matches and confidence.
+        """
+        from codeplane.index._internal.indexing.import_graph import (
+            ImportGraph,
+        )
+
+        await self.wait_for_freshness()
+        with self.db.session() as session:
+            graph = ImportGraph(session)
+            return graph.affected_tests(changed_files)
+
+    async def get_coverage_sources(
+        self,
+        test_files: list[str],
+    ) -> CoverageSourceResult:
+        """Given test files, find source directories for --cov scoping.
+
+        Args:
+            test_files: Test file paths about to be executed.
+
+        Returns:
+            CoverageSourceResult with source_dirs and confidence.
+        """
+        from codeplane.index._internal.indexing.import_graph import (
+            ImportGraph,
+        )
+
+        await self.wait_for_freshness()
+        with self.db.session() as session:
+            graph = ImportGraph(session)
+            return graph.imported_sources(test_files)
+
+    async def get_coverage_gaps(self) -> list[CoverageGap]:
+        """Find source modules with no test imports.
+
+        Returns:
+            List of CoverageGap for each uncovered module.
+        """
+        from codeplane.index._internal.indexing.import_graph import (
+            ImportGraph,
+        )
+
+        await self.wait_for_freshness()
+        with self.db.session() as session:
+            graph = ImportGraph(session)
+            return graph.uncovered_modules()
 
     async def get_lint_tools(
         self,

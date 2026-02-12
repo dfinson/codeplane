@@ -48,6 +48,7 @@
 - [10. Git and File Operations](#10-git-and-file-operations-no-terminal-mediation)
 - [11. Tests: Planning, Parallelism, Execution](#11-tests-planning-parallelism-execution)
   - [11.1–11.8 Test Model](#111-goal)
+  - [11.9 Impact-Aware Test Selection](#119-impact-aware-test-selection)
 - [12. Task Model, Convergence Controls, and Ledger](#12-task-model-convergence-controls-and-ledger)
   - [12.1–12.5 Task and Ledger Design](#121-scope-and-principle)
 - [13. Observability and Operator Insight](#13-observability-and-operator-insight)
@@ -1999,6 +2000,100 @@ Target rules depend on language + available runner; supports any language with:
 - Per-test-case parallelism
 - CI sharding or remote execution
 - API interface definition (handled separately)
+
+### 11.9 Impact-Aware Test Selection
+
+CodePlane uses the structural index's `ImportFact.source_literal` data to
+build a reverse import graph: given changed source files, which test files
+transitively depend on them?
+
+#### 11.9.1 Design Principles
+
+- **Index-backed, not heuristic.** All queries are answered from the Tier 1
+  structural index. No AST re-parsing, no regex, no guessing.
+- **Confidence over coverage.** Every result carries a confidence tier
+  (`complete` or `partial`) and per-match confidence (`high` or `low`).
+  The agent always decides — CodePlane never silently drops uncertain matches.
+- **SQL-side filtering.** Module matching and test-file scoping are pushed into
+  SQL (`IN`, `LIKE`) so memory usage scales with matched rows, not total
+  imports. This is mandatory for large-repo viability.
+
+#### 11.9.2 Three Capabilities
+
+| Capability | Entry Point | Purpose |
+|-----------|-------------|----------|
+| `affected_tests(changed_files)` | `discover_test_targets(affected_by=...)` | Which test files import the changed modules? |
+| `imported_sources(test_files)` | Internal (coverage scoping) | Which source modules does a test import? Used to auto-scope `--cov=` |
+| `uncovered_modules()` | `inspect_affected_tests(changed_files)` | Which source modules have zero test imports? |
+
+#### 11.9.3 Module Matching
+
+Changed file paths are converted to dotted module names via `path_to_module()`.
+Three match types are evaluated, all in SQL:
+
+1. **Exact match**: `source_literal == changed_module`
+2. **Parent match**: `source_literal` is a prefix of the changed module
+   (test imports a parent package that re-exports from the changed module)
+3. **Child match**: `source_literal` starts with `changed_module.`
+   (test imports a submodule of the changed module)
+
+Parent matches pre-compute all prefix segments into an `IN(...)` set.
+Child matches use `LIKE 'module.%'` per search module.
+All conditions are combined with `OR` in a single query scoped to test files.
+
+#### 11.9.4 Confidence Model
+
+**Tier-level confidence** (`complete` vs `partial`):
+- `complete`: all changed files resolved to modules AND zero `NULL` `source_literal` values in test scope
+- `partial`: some files unresolved OR some test imports have `NULL` `source_literal`
+
+**Per-match confidence** (`high` vs `low`):
+- `high`: test file has an exact `source_literal` match against a changed module
+- `low`: test file matched only via parent/child prefix
+
+Empty input (no changed files) returns `complete` with zero matches.
+All non-Python files return `partial` with those files listed in `unresolved_files`.
+
+#### 11.9.5 Coverage Auto-Scoping
+
+When running impact-selected tests, CodePlane derives `source_dirs` from
+the import graph and passes them to the coverage emitter as targeted
+`--cov=<dir>` arguments instead of `--cov=.`. This avoids measuring
+coverage for the entire repo when only a subset of sources is relevant.
+
+#### 11.9.6 MCP Surface
+
+**`discover_test_targets(affected_by=[...])`**
+
+The existing `discover_test_targets` tool accepts an optional `affected_by`
+parameter. When provided, it filters discovered targets to only those
+whose selector matches an affected test file path. The response includes
+an `impact` object with confidence metadata and may include an `agentic_hint`
+if low-confidence matches exist.
+
+**`inspect_affected_tests(changed_files=[...])`**
+
+A dedicated inspection tool (analogous to `refactor_inspect`) that returns:
+- Per-test-file match details with confidence and reason
+- Changed modules derived from the input files
+- Coverage gaps (source modules with zero test imports, capped at 20)
+- Agentic hints guiding the agent on next steps
+
+The agent workflow is: `discover_test_targets(affected_by=...)` → review
+confidence → optionally `inspect_affected_tests(...)` for uncertain matches
+→ `run_test_targets(targets=...)` with the selected subset.
+
+#### 11.9.7 Invariants
+
+- All queries operate on `ImportFact.source_literal` (module-level).
+  Never `imported_name` (symbol-level, noisy).
+- No auto-broadening: if confidence is `partial`, the agent decides
+  whether to widen the test set. CodePlane does not silently include
+  "maybe affected" tests.
+- Module index and test file list are built lazily on first query
+  and cached for the session.
+- SQL queries are always scoped to test files via `WHERE File.path IN (...)`
+  to avoid loading the full import table.
 
 ---
 
