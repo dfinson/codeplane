@@ -46,17 +46,21 @@ MOVE_LEXICAL_MAX = 200
 """Maximum lexical search results for move refactor."""
 
 TANTIVY_SEARCH_DOC_FLOOR = 1000
-"""Minimum Tantivy document limit regardless of repo size.
+"""Baseline Tantivy document batch size for large repos.
 
-Repos with fewer than this many indexed files search all docs.
-For larger repos, the limit scales proportionally."""
+Repos with fewer than this many indexed files search all docs
+in a single pass. For larger repos, this value acts as a minimum
+target batch size, balancing startup overhead against per-query work."""
 
 TANTIVY_SEARCH_DOC_RATIO = 2
-"""Divisor for proportional Tantivy doc cap on large repos.
+"""Divisor controlling proportional Tantivy batch sizing on large repos.
 
-For repos exceeding TANTIVY_SEARCH_DOC_FLOOR files, the search
-limit is max(FLOOR, total_docs // RATIO). A ratio of 2 means
-we examine at most half the repo's files per query."""
+For repos exceeding TANTIVY_SEARCH_DOC_FLOOR files, the per-query
+doc target is max(FLOOR, total_docs // RATIO). With a ratio of 2,
+a single Tantivy query considers roughly half the repo's documents.
+This is a performance tradeoff — very large repos may not surface
+every match in a single pass, but downstream pagination and the
+two-phase search pipeline compensate for coverage."""
 
 # =============================================================================
 # Response Budget

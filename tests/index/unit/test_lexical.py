@@ -231,8 +231,8 @@ class TestSearch:
         results = lexical_index.search_path("src/unique_path_name.py")
         assert len(results.results) >= 1
 
-    def test_search_with_limit(self, lexical_index: LexicalIndex) -> None:
-        """Search returns all matches; callers handle limiting."""
+    def test_search_returns_all_matches(self, lexical_index: LexicalIndex) -> None:
+        """Index layer returns all matches without artificial capping."""
         files = [
             {"path": f"src/file_{i}.py", "content": f"common_term = {i}\n", "context_id": 1}
             for i in range(20)
