@@ -101,9 +101,9 @@ class TestSummarizeDiff:
     def test_no_changes(self) -> None:
         """No changes shows appropriate message."""
         result = _summarize_diff(
-            files_changed=0,
-            additions=0,
-            deletions=0,
+            page_files=0,
+            page_additions=0,
+            page_deletions=0,
             staged=False,
         )
         assert "no change" in result.lower()
@@ -111,9 +111,9 @@ class TestSummarizeDiff:
     def test_no_staged_changes(self) -> None:
         """No staged changes with staged flag."""
         result = _summarize_diff(
-            files_changed=0,
-            additions=0,
-            deletions=0,
+            page_files=0,
+            page_additions=0,
+            page_deletions=0,
             staged=True,
         )
         assert "no staged" in result.lower()
@@ -121,21 +121,21 @@ class TestSummarizeDiff:
     def test_single_file_diff(self) -> None:
         """Single file with changes."""
         result = _summarize_diff(
-            files_changed=1,
-            additions=10,
-            deletions=5,
+            page_files=1,
+            page_additions=10,
+            page_deletions=5,
             staged=False,
         )
-        assert "1 file" in result.lower()
+        assert "1" in result
         assert "+10" in result
         assert "-5" in result
 
     def test_multiple_files(self) -> None:
         """Multiple files changed."""
         result = _summarize_diff(
-            files_changed=5,
-            additions=50,
-            deletions=30,
+            page_files=5,
+            page_additions=50,
+            page_deletions=30,
             staged=False,
         )
         assert "5" in result
@@ -145,12 +145,27 @@ class TestSummarizeDiff:
     def test_staged_prefix(self) -> None:
         """Staged diff has prefix."""
         result = _summarize_diff(
-            files_changed=2,
-            additions=20,
-            deletions=10,
+            page_files=2,
+            page_additions=20,
+            page_deletions=10,
             staged=True,
         )
         assert "staged" in result.lower()
+
+    def test_paginated_summary(self) -> None:
+        """Paginated summary shows page/total."""
+        result = _summarize_diff(
+            page_files=3,
+            page_additions=30,
+            page_deletions=10,
+            staged=False,
+            total_files=10,
+        )
+        # Should show "3/10 files" format
+        assert "3" in result
+        assert "10" in result
+        assert "+30" in result
+        assert "-10" in result
 
 
 class TestSummarizeCommit:

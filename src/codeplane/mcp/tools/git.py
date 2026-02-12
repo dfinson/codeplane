@@ -61,11 +61,21 @@ def _summarize_status(branch: str | None, files: dict[str, int], is_clean: bool,
     return f"{status_str}, branch: {branch or 'detached'}{state_str}"
 
 
-def _summarize_diff(files_changed: int, additions: int, deletions: int, staged: bool) -> str:
-    if files_changed == 0:
+def _summarize_diff(
+    page_files: int,
+    page_additions: int,
+    page_deletions: int,
+    staged: bool,
+    *,
+    total_files: int | None = None,
+) -> str:
+    if page_files == 0:
         return "no changes" if not staged else "no staged changes"
     prefix = "staged: " if staged else ""
-    return f"{prefix}{files_changed} files changed (+{additions}/-{deletions})"
+    # If paginated, show "page X of Y files"
+    if total_files is not None and total_files > page_files:
+        return f"{prefix}{page_files}/{total_files} files (+{page_additions}/-{page_deletions})"
+    return f"{prefix}{page_files} files changed (+{page_additions}/-{page_deletions})"
 
 
 def _summarize_commit(sha: str, message: str) -> str:
@@ -350,7 +360,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             "page_deletions": page_deletions,
             "page_files": len(files_in_page),
             "patch": page_patch,
-            "summary": _summarize_diff(len(files_in_page), page_additions, page_deletions, staged),
+            "summary": _summarize_diff(
+                len(files_in_page),
+                page_additions,
+                page_deletions,
+                staged,
+                total_files=len(all_files),
+            ),
             "pagination": make_budget_pagination(
                 has_more=has_more,
                 next_cursor=str(next_offset) if has_more else None,

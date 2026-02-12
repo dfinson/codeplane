@@ -386,7 +386,14 @@ def sync_vscode_mcp_port(repo_root: Path, port: int) -> bool:
         return False
 
     # Update config (also migrates from old mcp-remote format)
-    servers[server_name] = {"type": "http", "url": expected_url}
+    # Preserve existing settings (headers, env, etc.) while updating type/url
+    existing_entry = servers.get(server_name, {})
+    if isinstance(existing_entry, dict):
+        existing_entry["type"] = "http"
+        existing_entry["url"] = expected_url
+        servers[server_name] = existing_entry
+    else:
+        servers[server_name] = {"type": "http", "url": expected_url}
     existing["servers"] = servers
     output = json.dumps(existing, indent=2) + "\n"
     mcp_json_path.write_text(output)

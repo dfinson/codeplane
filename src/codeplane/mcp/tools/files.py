@@ -118,6 +118,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         page_targets = targets[start_idx:]
 
         # Derive paths and target map from FileTarget objects.
+        # Note: If the same path appears multiple times with different ranges,
+        # only the last range is used. The underlying read_files API reads the
+        # entire file once, and the range is applied post-read. Multiple ranges
+        # for the same file would require multiple reads. For now, we document
+        # this behavior and process targets in order (last range wins).
         paths: list[str] = []
         target_map: dict[str, tuple[int, int]] = {}
         for t in page_targets:
