@@ -20,8 +20,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import PurePosixPath
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 import structlog
@@ -121,7 +120,7 @@ def _matches_filter_paths(rel_path: str, filter_paths: list[str]) -> bool:
         normalized = pattern.rstrip("/")
 
         # Exact match
-        if rel_path == pattern or rel_path == normalized:
+        if rel_path in (pattern, normalized):
             return True
 
         # Directory prefix — require path boundary to avoid "src" matching "src2/"
@@ -1268,11 +1267,11 @@ class IndexCoordinator:
             if filter_kinds:
                 stmt = stmt.where(col(DefFact.kind).in_(filter_kinds))
             stmt = stmt.order_by(
-                match_score.desc(),  # type: ignore[union-attr]
+                match_score.desc(),
                 DefFact.name,
                 File.path,
-                DefFact.start_line,
-                DefFact.start_col,
+                col(DefFact.start_line),
+                col(DefFact.start_col),
             )
             stmt = stmt.limit(limit * 2)  # over-fetch to account for path filtering
 
