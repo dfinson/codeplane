@@ -1,5 +1,6 @@
 """Index MCP tools - search, map_repo handlers."""
 
+import contextlib
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
@@ -231,8 +232,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             # Apply cursor: skip past previously returned results
             start_idx = 0
             if cursor:
-                import contextlib
-
                 with contextlib.suppress(ValueError):
                     start_idx = int(cursor)
 
@@ -304,8 +303,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         # Apply cursor: skip past previously returned results
         start_idx = 0
         if cursor:
-            import contextlib
-
             with contextlib.suppress(ValueError):
                 start_idx = int(cursor)
 
