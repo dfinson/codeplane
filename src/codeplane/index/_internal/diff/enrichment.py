@@ -26,6 +26,42 @@ if TYPE_CHECKING:
 log = structlog.get_logger(__name__)
 
 
+def _is_test_or_build_path(path: str) -> bool:
+    """Check if a file is in a test or build directory."""
+    from codeplane.core.languages import is_test_file
+
+    if is_test_file(path):
+        return True
+    # Check common build/config paths
+    lower = path.lower()
+    build_indicators = (
+        "setup.py",
+        "setup.cfg",
+        "pyproject.toml",
+        "conftest.py",
+        "makefile",
+        "dockerfile",
+        "docker-compose",
+        ".github/",
+        ".circleci/",
+        "jenkinsfile",
+    )
+    return any(indicator in lower for indicator in build_indicators)
+
+
+def _resolve_entity_id(session: Session, file_path: str, kind: str, name: str) -> str | None:
+    """Look up entity_id (def_uid) for a symbol."""
+    from codeplane.index.models import DefFact, File
+
+    stmt = (
+        select(DefFact.def_uid)
+        .join(File, DefFact.file_id == File.id)  # type: ignore[arg-type]
+        .where(File.path == file_path, DefFact.kind == kind, DefFact.name == name)
+    )
+    result = session.exec(stmt).first()
+    return result if result else None
+
+
 def enrich_diff(
     raw: RawDiffResult,
     session: Session,
@@ -128,19 +164,45 @@ def _enrich_single_change(
     # Determine behavior_change_risk from change type
     behavior_change_risk, risk_basis = _assess_behavior_risk(rc.change, ref_count)
 
+    # Downgrade structural_severity for non-public surfaces:
+    # private/internal symbols and test files are not breaking API changes
+    effective_severity = rc.structural_severity
+    if effective_severity == "breaking" and (
+        visibility in ("private", "internal") or _is_test_or_build_path(rc.path)
+    ):
+        effective_severity = "non_breaking"
+
+    # Classification confidence is based on language/grammar support
+    classification_confidence = _get_confidence(rc.path)
+
+    # For renames, resolve old entity_id for correlation
+    previous_entity_id: str | None = None
+    old_name: str | None = None
+    if rc.change == "renamed" and rc.old_name:
+        old_name = rc.old_name
+        try:
+            old_entity_id = _resolve_entity_id(session, rc.path, rc.kind, rc.old_name)
+            if old_entity_id:
+                previous_entity_id = old_entity_id
+        except Exception:
+            log.debug("old_entity_id_failed", path=rc.path, old_name=rc.old_name, exc_info=True)
+
     return StructuralChange(
         path=rc.path,
         kind=rc.kind,
         name=rc.name,
         qualified_name=rc.qualified_name,
         change=rc.change,
-        structural_severity=rc.structural_severity,
+        structural_severity=effective_severity,
         behavior_change_risk=behavior_change_risk,
         risk_basis=risk_basis,
+        classification_confidence=classification_confidence,
         old_sig=rc.old_sig,
         new_sig=rc.new_sig,
         impact=impact,
         entity_id=entity_id,
+        previous_entity_id=previous_entity_id,
+        old_name=old_name,
         start_line=rc.start_line,
         start_col=rc.start_col,
         end_line=rc.end_line,

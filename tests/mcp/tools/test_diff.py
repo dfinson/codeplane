@@ -154,7 +154,7 @@ class TestPagination:
     def test_empty_pagination_when_no_changes(self) -> None:
         d = _result_to_dict(_result())
         assert "next_cursor" not in d["pagination"]
-        assert d["pagination"].get("total_estimate") == 0
+        assert d["pagination"].get("total") == 0
 
     def test_no_pagination_under_budget(self) -> None:
         changes = [_change(name=f"fn_{i}") for i in range(5)]
@@ -177,7 +177,7 @@ class TestPagination:
         assert "next_cursor" in d["pagination"]
         # Cursor format: "<cache_id>:<offset>"
         assert d["pagination"]["next_cursor"].startswith("1:")
-        assert d["pagination"]["total_estimate"] == 10
+        assert d["pagination"]["total"] == 10
 
     def test_cursor_continues_from_offset(self) -> None:
         changes = [_change(name=f"fn_{i}") for i in range(10)]
@@ -316,7 +316,7 @@ class TestScopeSerialization:
         assert d["scope"]["files_parsed"] == 10
         assert d["scope"]["files_no_grammar"] == 3
         assert d["scope"]["languages_analyzed"] == ["python", "typescript"]
-        assert d["scope"]["entity_id_scheme"] == "def_uid"
+        assert d["scope"]["entity_id_scheme"] == "def_uid_v1"
 
     def test_scope_omitted_when_none(self) -> None:
         d = _result_to_dict(_result())
@@ -365,8 +365,27 @@ class TestRiskBasisSerialization:
         d = _result_to_dict(_result([c]))
         assert d["structural_changes"][0]["risk_basis"] == "symbol_removed"
 
-    def test_risk_basis_omitted_when_none(self) -> None:
+    def test_risk_basis_fallback_when_risk_not_low(self) -> None:
+        """Schema invariant: risk != low and no basis → unclassified_change."""
         d = _result_to_dict(_result([_change(name="bar")]))
+        # _change() sets behavior_change_risk="unknown" and risk_basis=None
+        assert d["structural_changes"][0]["risk_basis"] == "unclassified_change"
+
+    def test_risk_basis_omitted_when_risk_low(self) -> None:
+        c = StructuralChange(
+            path="src/a.py",
+            kind="function",
+            name="bar",
+            qualified_name=None,
+            change="added",
+            structural_severity="non_breaking",
+            behavior_change_risk="low",
+            risk_basis=None,
+            old_sig=None,
+            new_sig=None,
+            impact=None,
+        )
+        d = _result_to_dict(_result([c]))
         assert "risk_basis" not in d["structural_changes"][0]
 
 
@@ -395,3 +414,142 @@ class TestImportCountSerialization:
         d = _result_to_dict(_result([_change(name="fn", impact=impact)]))
         impact_d = d["structural_changes"][0]["impact"]
         assert "import_count" not in impact_d
+
+
+# ============================================================================
+# Tests: Schema Refinements (classification_confidence, invariants, renames)
+# ============================================================================
+
+
+class TestClassificationConfidence:
+    """Tests for classification_confidence always present in serialized output."""
+
+    def test_classification_confidence_always_emitted(self) -> None:
+        d = _result_to_dict(_result([_change(name="fn")]))
+        assert d["structural_changes"][0]["classification_confidence"] == "high"
+
+    def test_classification_confidence_value_propagated(self) -> None:
+        c = StructuralChange(
+            path="src/a.py",
+            kind="function",
+            name="fn",
+            qualified_name=None,
+            change="added",
+            structural_severity="non_breaking",
+            behavior_change_risk="low",
+            old_sig=None,
+            new_sig=None,
+            impact=None,
+            classification_confidence="low",
+        )
+        d = _result_to_dict(_result([c]))
+        assert d["structural_changes"][0]["classification_confidence"] == "low"
+
+
+class TestRenameFields:
+    """Tests for old_name and previous_entity_id on renames."""
+
+    def test_rename_includes_old_name(self) -> None:
+        c = StructuralChange(
+            path="src/a.py",
+            kind="function",
+            name="new_fn",
+            qualified_name=None,
+            change="renamed",
+            structural_severity="breaking",
+            behavior_change_risk="high",
+            old_sig=None,
+            new_sig=None,
+            impact=None,
+            old_name="old_fn",
+        )
+        d = _result_to_dict(_result([c]))
+        assert d["structural_changes"][0]["old_name"] == "old_fn"
+
+    def test_rename_includes_previous_entity_id(self) -> None:
+        c = StructuralChange(
+            path="src/a.py",
+            kind="function",
+            name="new_fn",
+            qualified_name=None,
+            change="renamed",
+            structural_severity="breaking",
+            behavior_change_risk="high",
+            old_sig=None,
+            new_sig=None,
+            impact=None,
+            previous_entity_id="some-old-uid",
+        )
+        d = _result_to_dict(_result([c]))
+        assert d["structural_changes"][0]["previous_entity_id"] == "some-old-uid"
+
+    def test_rename_fields_absent_on_non_rename(self) -> None:
+        d = _result_to_dict(_result([_change(change="added")]))
+        ch = d["structural_changes"][0]
+        assert "old_name" not in ch
+        assert "previous_entity_id" not in ch
+
+
+class TestSchemaInvariants:
+    """Tests for mandatory field invariants in serializer."""
+
+    def test_signature_changed_emits_both_sigs(self) -> None:
+        c = StructuralChange(
+            path="src/a.py",
+            kind="function",
+            name="fn",
+            qualified_name=None,
+            change="signature_changed",
+            structural_severity="breaking",
+            behavior_change_risk="high",
+            old_sig="def fn(x)",
+            new_sig=None,
+            impact=None,
+        )
+        d = _result_to_dict(_result([c]))
+        ch = d["structural_changes"][0]
+        assert ch["old_signature"] == "def fn(x)"
+        assert ch["new_signature"] == ""  # Falls back to empty string
+
+    def test_body_changed_emits_lines_changed(self) -> None:
+        c = StructuralChange(
+            path="src/a.py",
+            kind="function",
+            name="fn",
+            qualified_name=None,
+            change="body_changed",
+            structural_severity="non_breaking",
+            behavior_change_risk="unknown",
+            old_sig=None,
+            new_sig=None,
+            impact=None,
+            lines_changed=None,
+        )
+        d = _result_to_dict(_result([c]))
+        assert d["structural_changes"][0]["lines_changed"] == 0  # Default
+
+    def test_body_changed_preserves_actual_lines(self) -> None:
+        c = StructuralChange(
+            path="src/a.py",
+            kind="function",
+            name="fn",
+            qualified_name=None,
+            change="body_changed",
+            structural_severity="non_breaking",
+            behavior_change_risk="unknown",
+            old_sig=None,
+            new_sig=None,
+            impact=None,
+            lines_changed=42,
+        )
+        d = _result_to_dict(_result([c]))
+        assert d["structural_changes"][0]["lines_changed"] == 42
+
+
+class TestPaginationTotal:
+    """Tests for 'total' field in pagination (replaces total_estimate)."""
+
+    def test_pagination_uses_total_not_total_estimate(self) -> None:
+        d = _result_to_dict(_result([_change()]))
+        assert "total" in d["pagination"]
+        assert "total_estimate" not in d["pagination"]

@@ -32,7 +32,7 @@ from codeplane.index._internal.diff.sources import (
     snapshots_from_epoch,
     snapshots_from_index,
 )
-from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination
+from codeplane.mcp.budget import BudgetAccumulator
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -543,17 +543,32 @@ def _result_to_dict(
             "change": c.change,
             "structural_severity": c.structural_severity,
             "behavior_change_risk": c.behavior_change_risk,
+            "classification_confidence": c.classification_confidence,
         }
+        # Schema invariant: risk_basis present when risk != low
         if c.risk_basis:
             d["risk_basis"] = c.risk_basis
+        elif c.behavior_change_risk != "low":
+            d["risk_basis"] = "unclassified_change"
         if c.qualified_name:
             d["qualified_name"] = c.qualified_name
         if c.entity_id:
             d["entity_id"] = c.entity_id
-        if c.old_sig:
-            d["old_signature"] = c.old_sig
-        if c.new_sig:
-            d["new_signature"] = c.new_sig
+        # Rename-specific fields for correlation
+        if c.change == "renamed":
+            if c.old_name:
+                d["old_name"] = c.old_name
+            if c.previous_entity_id:
+                d["previous_entity_id"] = c.previous_entity_id
+        # Schema invariant: signature_changed requires both sigs
+        if c.change == "signature_changed":
+            d["old_signature"] = c.old_sig or ""
+            d["new_signature"] = c.new_sig or ""
+        else:
+            if c.old_sig:
+                d["old_signature"] = c.old_sig
+            if c.new_sig:
+                d["new_signature"] = c.new_sig
         if c.start_line:
             d["start_line"] = c.start_line
             if c.start_col:
@@ -562,7 +577,10 @@ def _result_to_dict(
             d["end_line"] = c.end_line
             if c.end_col:
                 d["end_col"] = c.end_col
-        if c.lines_changed is not None:
+        # Schema invariant: body_changed requires lines_changed
+        if c.change == "body_changed":
+            d["lines_changed"] = c.lines_changed if c.lines_changed is not None else 0
+        elif c.lines_changed is not None:
             d["lines_changed"] = c.lines_changed
         if c.delta_tags:
             d["delta_tags"] = c.delta_tags
@@ -618,9 +636,8 @@ def _result_to_dict(
             else {}
         ),
         "agentic_hint": agentic_hint,
-        "pagination": make_budget_pagination(
-            has_more=has_more,
-            next_cursor=next_cursor,
-            total_estimate=len(all_changes),
-        ),
+        "pagination": {
+            "total": len(all_changes),
+            **({"next_cursor": next_cursor, "truncated": True} if has_more and next_cursor else {}),
+        },
     }

@@ -92,7 +92,12 @@ class StructuralChange:
     new_sig: str | None
     impact: ImpactInfo | None
     risk_basis: str | None = None  # machine-readable reason for behavior_change_risk
-    entity_id: str | None = None  # stable ID (def_uid or hash)
+    classification_confidence: str = (
+        "high"  # high | medium | low — confidence in change classification
+    )
+    entity_id: str | None = None  # stable ID (def_uid); best-effort, may change on rename/move
+    previous_entity_id: str | None = None  # entity_id of pre-rename symbol, for rename correlation
+    old_name: str | None = None  # original name before rename
     start_line: int = 0
     start_col: int = 0
     end_line: int = 0
@@ -146,7 +151,7 @@ class AnalysisScope:
     target_sha: str | None = None  # resolved SHA of target ref (None for worktree)
     worktree_dirty: bool | None = None  # True if target is worktree and has uncommitted changes
     mode: str = "git"  # "git" | "epoch"
-    entity_id_scheme: str = "def_uid"  # how entity_id is derived
+    entity_id_scheme: str = "def_uid_v1"  # how entity_id is derived; v1 = not stable across renames
     files_parsed: int = 0  # files successfully parsed with tree-sitter
     files_no_grammar: int = 0  # files with no supported grammar
     files_parse_failed: int = 0  # files where parsing was attempted but failed

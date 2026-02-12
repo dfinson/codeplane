@@ -215,3 +215,42 @@ class TestSummaryFormat:
         result = _build_summary([])
         assert result == "No changes detected"
         assert "(symbols)" not in result
+
+
+# ============================================================================
+# Tests: Test/Build Path Categorization
+# ============================================================================
+
+
+class TestIsTestOrBuildPath:
+    """Tests for _is_test_or_build_path."""
+
+    def test_python_test_file(self) -> None:
+        from codeplane.index._internal.diff.enrichment import _is_test_or_build_path
+
+        assert _is_test_or_build_path("tests/test_main.py") is True
+
+    def test_source_file(self) -> None:
+        from codeplane.index._internal.diff.enrichment import _is_test_or_build_path
+
+        assert _is_test_or_build_path("src/main.py") is False
+
+    def test_setup_py(self) -> None:
+        from codeplane.index._internal.diff.enrichment import _is_test_or_build_path
+
+        assert _is_test_or_build_path("setup.py") is True
+
+    def test_github_workflow(self) -> None:
+        from codeplane.index._internal.diff.enrichment import _is_test_or_build_path
+
+        assert _is_test_or_build_path(".github/workflows/ci.yml") is True
+
+    def test_dockerfile(self) -> None:
+        from codeplane.index._internal.diff.enrichment import _is_test_or_build_path
+
+        assert _is_test_or_build_path("Dockerfile") is True
+
+    def test_conftest(self) -> None:
+        from codeplane.index._internal.diff.enrichment import _is_test_or_build_path
+
+        assert _is_test_or_build_path("tests/conftest.py") is True
