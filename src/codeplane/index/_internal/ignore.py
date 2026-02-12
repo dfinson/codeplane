@@ -30,6 +30,8 @@ __all__ = [
     "HARDCODED_DIRS",
     "DEFAULT_PRUNABLE_DIRS",
     "IgnoreChecker",
+    "compute_cplignore_hash",
+    "discover_cplignore_files",
     "matches_glob",
 ]
 
@@ -53,6 +55,35 @@ class IgnoreChecker:
 
     # Filename for ignore files (like .gitignore but for CodePlane)
     CPLIGNORE_NAME = ".cplignore"
+
+    @classmethod
+    def empty(cls, root: Path) -> IgnoreChecker:
+        """Create a checker with base patterns only — no filesystem walk.
+
+        Use with :meth:`load_ignore_file` to build patterns incrementally
+        during an existing ``os.walk``, avoiding a redundant tree traversal.
+        """
+        instance = cls.__new__(cls)
+        instance._root = root
+        instance._patterns = list(DEFAULT_PRUNABLE_DIRS)
+        instance._negated_dirs = set()
+        instance._cplignore_paths = []
+        return instance
+
+    def load_ignore_file(self, path: Path, prefix: str = "") -> None:
+        """Load patterns from a single ignore file.
+
+        Public wrapper around ``_load_ignore_file`` for streaming/
+        incremental use during an ``os.walk``.
+
+        Args:
+            path: Absolute path to a ``.cplignore`` or ``.gitignore`` file.
+            prefix: Relative directory prefix for nested ignore files
+                (e.g. ``"src/deep"``).  Root-level files use ``""``.
+        """
+        self._load_ignore_file(path, prefix)
+        if path.name == self.CPLIGNORE_NAME:
+            self._cplignore_paths.append(path)
 
     def __init__(
         self,
@@ -305,3 +336,56 @@ def matches_glob(rel_path: str, pattern: str) -> bool:
     if pattern.startswith("**/"):
         return fnmatch.fnmatch(rel_path, pattern[3:])
     return False
+
+
+def discover_cplignore_files(root: Path) -> list[Path]:
+    """Walk tree to find all .cplignore files.
+
+    Lightweight alternative to constructing a full IgnoreChecker when
+    only file discovery (not pattern matching) is needed.
+    """
+    found: list[Path] = []
+
+    # Legacy location
+    legacy_path = root / ".codeplane" / IgnoreChecker.CPLIGNORE_NAME
+    if legacy_path.exists():
+        found.append(legacy_path)
+
+    # Root
+    root_cplignore = root / IgnoreChecker.CPLIGNORE_NAME
+    if root_cplignore.exists():
+        found.append(root_cplignore)
+
+    # Walk for nested .cplignore files
+    for dirpath, dirnames, filenames in root.walk():
+        dirnames[:] = [d for d in dirnames if d not in PRUNABLE_DIRS or d == ".codeplane"]
+        if dirpath == root or dirpath == root / ".codeplane":
+            continue
+        if IgnoreChecker.CPLIGNORE_NAME in filenames:
+            found.append(dirpath / IgnoreChecker.CPLIGNORE_NAME)
+
+    return found
+
+
+def compute_cplignore_hash(root: Path) -> str | None:
+    """Compute combined hash of all .cplignore files without loading patterns.
+
+    Returns a hash that changes if ANY .cplignore file changes.
+    Returns None if no .cplignore files exist.
+    """
+    import hashlib
+
+    paths = discover_cplignore_files(root)
+    if not paths:
+        return None
+
+    hasher = hashlib.sha256()
+    for path in sorted(paths):
+        try:
+            content = path.read_bytes()
+            hasher.update(str(path).encode())
+            hasher.update(content)
+        except OSError:
+            hasher.update(str(path).encode())
+            hasher.update(b"__DELETED__")
+    return hasher.hexdigest()

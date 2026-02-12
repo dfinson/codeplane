@@ -20,8 +20,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from pathlib import PurePosixPath
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 import structlog
@@ -46,7 +45,7 @@ from codeplane.index._internal.discovery import (
     MembershipResolver,
     Tier1AuthorityFilter,
 )
-from codeplane.index._internal.ignore import PRUNABLE_DIRS, IgnoreChecker
+from codeplane.index._internal.ignore import IgnoreChecker
 from codeplane.index._internal.indexing import (
     FactQueries,
     LexicalIndex,
@@ -2354,20 +2353,42 @@ class IndexCoordinator:
     def _walk_all_files(self) -> list[str]:
         """Walk filesystem once, return all indexable file paths (relative to repo root).
 
-        Uses IgnoreChecker for hierarchical .cplignore support.
+        Uses a streaming IgnoreChecker that loads .cplignore/.gitignore patterns
+        on-the-fly as directories are entered, avoiding a separate pre-walk.
         Applies PRUNABLE_DIRS pruning and .cplignore filtering.
         Does NOT use git - indexes any file on disk that isn't in .cplignore.
         """
-        # IgnoreChecker handles hierarchical .cplignore loading
-        checker = IgnoreChecker(self.repo_root)
+        checker = IgnoreChecker.empty(self.repo_root)
+
+        # Eagerly load root-level ignore files BEFORE os.walk so patterns
+        # are available regardless of directory traversal order.
+        # .codeplane/.cplignore is a legacy root-level location (global scope).
+        for root_ignore in (
+            self.repo_root / ".codeplane" / IgnoreChecker.CPLIGNORE_NAME,
+            self.repo_root / IgnoreChecker.CPLIGNORE_NAME,
+            self.repo_root / ".gitignore",
+        ):
+            if root_ignore.exists():
+                checker.load_ignore_file(root_ignore, "")
 
         all_files: list[str] = []
         for dirpath, dirnames, filenames in os.walk(self.repo_root):
             # Prune dirs in-place to skip expensive subtrees
-            dirnames[:] = [d for d in dirnames if d not in PRUNABLE_DIRS]
+            dirnames[:] = [d for d in dirnames if not checker.should_prune_dir(d)]
+
+            dirpath_p = Path(dirpath)
+            rel_dir = str(dirpath_p.relative_to(self.repo_root)).replace("\\", "/")
+            prefix = "" if rel_dir == "." else rel_dir
+
+            # Load nested ignore files (skip root — already loaded above)
+            if prefix:
+                for ignore_name in (IgnoreChecker.CPLIGNORE_NAME, ".gitignore"):
+                    ignore_path = dirpath_p / ignore_name
+                    if ignore_path.exists():
+                        checker.load_ignore_file(ignore_path, prefix)
 
             for filename in filenames:
-                full_path = Path(dirpath) / filename
+                full_path = dirpath_p / filename
                 rel_str = str(full_path.relative_to(self.repo_root)).replace("\\", "/")
 
                 # Skip .codeplane dir but NOT .cplignore files (they need to be indexed)

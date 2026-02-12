@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Literal
 
 from sqlmodel import col, func, select
 
-from codeplane.index._internal.ignore import IgnoreChecker, matches_glob
+from codeplane.index._internal.ignore import matches_glob
 from codeplane.index.models import (
     Context,
     DefFact,
@@ -128,43 +128,44 @@ class RepoMapper:
         limit: int = 100,
         include_globs: list[str] | None = None,
         exclude_globs: list[str] | None = None,
-        respect_gitignore: bool = True,
+        respect_gitignore: bool = True,  # noqa: ARG002  # kept for backward compat
     ) -> MapRepoResult:
-        """Map the repository from indexed data."""
+        """Map the repository from indexed data.
+
+        The index is the authority: files in the File table already passed
+        ignore checks during indexing.  Only user-provided include/exclude
+        globs are applied at query time.  ``respect_gitignore`` is accepted
+        for backward compatibility but ignored (the index already respects it).
+        """
         if include is None:
             include = ["structure", "languages", "entry_points"]
 
-        # Build ignore checker if gitignore enabled
-        ignore_checker: IgnoreChecker | None = None
-        if respect_gitignore:
-            ignore_checker = IgnoreChecker(self._repo_root, respect_gitignore=True)
+        # --- single query, single filter pass (Change 2) ----------------
+        needs_file_data = {"structure", "languages", "test_layout"} & set(include)
+        filtered_files: list[tuple[str, str | None, int | None]] | None = None
+        if needs_file_data:
+            filtered_files = self._load_filtered_files(include_globs, exclude_globs)
 
         result = MapRepoResult()
 
-        if "structure" in include:
+        if "structure" in include and filtered_files is not None:
             result.structure, truncated, file_count = self._build_structure(
-                depth, limit, include_globs, exclude_globs, ignore_checker
+                depth, limit, filtered_files
             )
             result.truncated = truncated
             result.total_estimate = file_count
 
-        if "languages" in include:
-            result.languages = self._analyze_languages(
-                limit, include_globs, exclude_globs, ignore_checker
-            )
+        if "languages" in include and filtered_files is not None:
+            result.languages = self._analyze_languages(limit, filtered_files)
 
         if "entry_points" in include:
-            result.entry_points = self._find_entry_points(
-                limit, include_globs, exclude_globs, ignore_checker
-            )
+            result.entry_points = self._find_entry_points(limit, include_globs, exclude_globs)
 
         if "dependencies" in include:
             result.dependencies = self._extract_dependencies(limit)
 
-        if "test_layout" in include:
-            result.test_layout = self._analyze_test_layout(
-                limit, include_globs, exclude_globs, ignore_checker
-            )
+        if "test_layout" in include and filtered_files is not None:
+            result.test_layout = self._analyze_test_layout(limit, filtered_files)
 
         if "public_api" in include:
             result.public_api = self._extract_public_api(limit)
@@ -176,13 +177,11 @@ class RepoMapper:
         path: str,
         include_globs: list[str] | None,
         exclude_globs: list[str] | None,
-        ignore_checker: IgnoreChecker | None,
     ) -> bool:
-        """Check if a path should be included based on filters."""
-        # Check gitignore
-        if ignore_checker and ignore_checker.is_excluded_rel(path):
-            return False
+        """Check if a path should be included based on glob filters.
 
+        No IgnoreChecker — the index already filtered at ingest time.
+        """
         # Check exclude globs
         if exclude_globs:
             for pattern in exclude_globs:
@@ -195,35 +194,41 @@ class RepoMapper:
 
         return True
 
+    def _load_filtered_files(
+        self,
+        include_globs: list[str] | None,
+        exclude_globs: list[str] | None,
+    ) -> list[tuple[str, str | None, int | None]]:
+        """Single query for file data, filtered once.
+
+        Returns list of (path, language_family, line_count) tuples.
+        All sections that need File data share this result set.
+        """
+        stmt = select(File.path, File.language_family, File.line_count)
+        rows = list(self._session.exec(stmt).all())
+        return [
+            (path, lang, lines)
+            for path, lang, lines in rows
+            if self._should_include_path(path, include_globs, exclude_globs)
+        ]
+
     def _build_structure(
         self,
         depth: int,
         limit: int,
-        include_globs: list[str] | None,
-        exclude_globs: list[str] | None,
-        ignore_checker: IgnoreChecker | None,
+        filtered_files: list[tuple[str, str | None, int | None]],
     ) -> tuple[StructureInfo, bool, int]:
-        """Build directory tree from indexed files.
+        """Build directory tree from pre-filtered file data.
 
         Returns:
             Tuple of (structure, truncated, total_file_count)
         """
-        # Get all indexed file paths with line counts
-        stmt = select(File.path, File.line_count)
-        all_file_data = list(self._session.exec(stmt).all())
-
-        # Filter based on globs and gitignore
-        filtered_paths: list[tuple[str, int | None]] = []
-        for path, line_count in all_file_data:
-            if self._should_include_path(path, include_globs, exclude_globs, ignore_checker):
-                filtered_paths.append((path, line_count))
-
-        total_count = len(filtered_paths)
+        total_count = len(filtered_files)
         truncated = total_count > limit
 
         # Apply limit
-        limited_paths = filtered_paths[:limit]
-        path_to_lines: dict[str, int | None] = dict(limited_paths)
+        limited = filtered_files[:limit]
+        path_to_lines: dict[str, int | None] = {path: lines for path, _, lines in limited}
 
         # Get valid contexts
         ctx_stmt = select(Context.root_path).where(Context.probe_status == ProbeStatus.VALID.value)
@@ -292,22 +297,13 @@ class RepoMapper:
     def _analyze_languages(
         self,
         limit: int,
-        include_globs: list[str] | None,
-        exclude_globs: list[str] | None,
-        ignore_checker: IgnoreChecker | None,
+        filtered_files: list[tuple[str, str | None, int | None]],
     ) -> list[LanguageStats]:
-        """Analyze language distribution from File.language_family."""
-        # Get all files with language info
-        stmt = select(File.path, File.language_family).where(col(File.language_family).isnot(None))
-        results = list(self._session.exec(stmt).all())
-
-        # Filter and count
+        """Analyze language distribution from pre-filtered file data."""
         lang_counts: dict[str, int] = {}
-        for path, lang in results:
-            if not self._should_include_path(path, include_globs, exclude_globs, ignore_checker):
-                continue
-            lang_str = lang or "unknown"
-            lang_counts[lang_str] = lang_counts.get(lang_str, 0) + 1
+        for _, lang, _ in filtered_files:
+            if lang is not None:
+                lang_counts[lang] = lang_counts.get(lang, 0) + 1
 
         total = sum(lang_counts.values())
         if total == 0:
@@ -329,7 +325,6 @@ class RepoMapper:
         limit: int,
         include_globs: list[str] | None,
         exclude_globs: list[str] | None,
-        ignore_checker: IgnoreChecker | None,
     ) -> list[EntryPoint]:
         """Find entry point definitions from DefFact."""
         # Get top-level definitions (functions, classes) that look like entry points
@@ -363,7 +358,7 @@ class RepoMapper:
         for d, path in all_defs:
             if d.def_uid in seen:
                 continue
-            if not self._should_include_path(path, include_globs, exclude_globs, ignore_checker):
+            if not self._should_include_path(path, include_globs, exclude_globs):
                 continue
             if len(entry_points) >= limit:
                 break
@@ -405,21 +400,13 @@ class RepoMapper:
     def _analyze_test_layout(
         self,
         limit: int,
-        include_globs: list[str] | None,
-        exclude_globs: list[str] | None,
-        ignore_checker: IgnoreChecker | None,
+        filtered_files: list[tuple[str, str | None, int | None]],
     ) -> TestLayout:
-        """Analyze test files from indexed paths."""
-        # Find files with test patterns
+        """Analyze test files from pre-filtered file data."""
         test_patterns = ("test_", "_test.py", "tests/", "test/")
 
-        stmt = select(File.path)
-        all_paths = list(self._session.exec(stmt).all())
-
         test_files: list[str] = []
-        for path in all_paths:
-            if not self._should_include_path(path, include_globs, exclude_globs, ignore_checker):
-                continue
+        for path, _, _ in filtered_files:
             path_lower = path.lower()
             if any(pattern in path_lower for pattern in test_patterns):
                 test_files.append(path)

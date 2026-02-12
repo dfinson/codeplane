@@ -266,18 +266,16 @@ class Reconciler:
     def _compute_cplignore_hash(self) -> str | None:
         """Compute combined hash of ALL .cplignore files in repo.
 
-        Uses IgnoreChecker to find all .cplignore files hierarchically,
-        then computes a combined hash. Any change to any .cplignore file
-        will change this hash, triggering a full reindex.
+        Uses lightweight file discovery (no pattern loading) to find
+        all .cplignore files hierarchically, then computes a combined
+        hash. Any change to any .cplignore file will change this hash,
+        triggering a full reindex.
 
         Returns None if no .cplignore files exist.
         """
-        from codeplane.index._internal.ignore import IgnoreChecker
+        from codeplane.index._internal.ignore import compute_cplignore_hash
 
-        # Create a fresh IgnoreChecker to discover all .cplignore files
-        # We don't need the patterns - just the file discovery
-        checker = IgnoreChecker(self.repo_root)
-        return checker.compute_combined_hash()
+        return compute_cplignore_hash(self.repo_root)
 
     def _get_all_tracked_files(self) -> list[str]:
         """Get all files tracked by git."""
