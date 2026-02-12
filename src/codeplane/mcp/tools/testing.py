@@ -390,12 +390,39 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     async def discover_test_targets(
         ctx: Context,
         paths: list[str] | None = Field(None, description="Paths to search for tests"),
+        affected_by: list[str] | None = Field(
+            None,
+            description="Changed file paths. When provided, returns only test targets "
+            "affected by these changes (via import graph analysis). "
+            "Includes confidence assessment — 'complete' means all files resolved, "
+            "'partial' means some files could not be mapped.",
+        ),
     ) -> dict[str, Any]:
         """Find test targets in the repository. Returns testable files/directories with runner info."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
         result = await app_ctx.test_ops.discover(paths=paths)
         targets = result.targets or []
+
+        # Impact-aware filtering: use import graph to select affected targets
+        impact_info: dict[str, Any] | None = None
+        if affected_by and targets:
+            graph_result = await app_ctx.coordinator.get_affected_test_targets(affected_by)
+            affected_paths = set(graph_result.test_files)
+            targets = [t for t in targets if t.selector in affected_paths]
+
+            impact_info = {
+                "confidence": graph_result.confidence.tier,
+                "resolved_ratio": graph_result.confidence.resolved_ratio,
+                "changed_modules": graph_result.confidence.resolved_ratio,
+                "reasoning": graph_result.confidence.reasoning,
+                "total_matches": len(graph_result.matches),
+                "high_confidence": len(graph_result.high_confidence_tests),
+                "low_confidence": len(graph_result.low_confidence_tests),
+            }
+            if graph_result.confidence.unresolved_files:
+                impact_info["unresolved_files"] = graph_result.confidence.unresolved_files
+
         output: dict[str, Any] = {
             "action": result.action,
             "targets": [
@@ -416,8 +443,95 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             "summary": _summarize_discover(len(targets), targets),
             "display_to_user": _display_discover(len(targets), targets),
         }
-        if result.agentic_hint:
+
+        if impact_info:
+            output["impact"] = impact_info
+            if graph_result.low_confidence_tests:
+                output["agentic_hint"] = (
+                    f"{len(graph_result.low_confidence_tests)} test(s) matched with low "
+                    "confidence (parent/child module prefix). Use inspect_affected_tests "
+                    "to review uncertain matches before deciding whether to include them."
+                )
+        if result.agentic_hint and not impact_info:
             output["agentic_hint"] = result.agentic_hint
+        return output
+
+    @mcp.tool
+    async def inspect_affected_tests(
+        ctx: Context,
+        changed_files: list[str] = Field(
+            ...,
+            description="Changed file paths to analyze for test impact.",
+        ),
+    ) -> dict[str, Any]:
+        """Inspect how changed files map to test targets via the import graph.
+
+        Returns detailed match information including confidence levels for each
+        test file. Use this to review uncertain matches before running tests.
+        Analogous to refactor_inspect — surfaces uncertainty so the agent can decide.
+        """
+        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        graph_result = await app_ctx.coordinator.get_affected_test_targets(changed_files)
+
+        matches_out: list[dict[str, Any]] = []
+        for m in graph_result.matches:
+            matches_out.append(
+                {
+                    "test_file": m.test_file,
+                    "confidence": m.confidence,
+                    "source_modules": m.source_modules,
+                    "reason": m.reason,
+                }
+            )
+
+        output: dict[str, Any] = {
+            "action": "inspect_affected_tests",
+            "changed_modules": graph_result.changed_modules,
+            "confidence": {
+                "tier": graph_result.confidence.tier,
+                "resolved_ratio": graph_result.confidence.resolved_ratio,
+                "reasoning": graph_result.confidence.reasoning,
+            },
+            "matches": matches_out,
+            "summary": (
+                f"{len(graph_result.high_confidence_tests)} high-confidence, "
+                f"{len(graph_result.low_confidence_tests)} low-confidence matches"
+            ),
+        }
+
+        if graph_result.confidence.unresolved_files:
+            output["confidence"]["unresolved_files"] = graph_result.confidence.unresolved_files
+
+        # Coverage gap info
+        try:
+            gaps = await app_ctx.coordinator.get_coverage_gaps()
+            if gaps:
+                output["coverage_gaps"] = [
+                    {"module": g.module, "file_path": g.file_path}
+                    for g in gaps[:20]  # Cap at 20 to avoid noise
+                ]
+                output["coverage_gaps_total"] = len(gaps)
+        except Exception:  # noqa: BLE001
+            pass
+
+        if graph_result.confidence.tier == "partial":
+            output["agentic_hint"] = (
+                "Some matches are low-confidence. Review the 'matches' list — "
+                "'low' confidence means parent/child module prefix match only. "
+                "Decide whether to include these tests or run only high-confidence ones."
+            )
+        else:
+            output["agentic_hint"] = (
+                "All matches are high-confidence (direct import traced). "
+                "Safe to run the listed test targets."
+            )
+
+        output["display_to_user"] = (
+            f"Import graph analysis: {len(graph_result.matches)} affected test(s) found "
+            f"({graph_result.confidence.tier} confidence)."
+        )
+
         return output
 
     @mcp.tool

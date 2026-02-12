@@ -813,6 +813,18 @@ class TestOps:
         diagnostics: list[ExecutionDiagnostic] = []
         coverage_artifacts: list[CoverageArtifact] = []
 
+        # Auto-scope coverage: derive source_dirs from import graph
+        source_dirs: list[str] | None = None
+        if coverage and coverage_dir:
+            try:
+                test_files = [t.selector for t in targets]
+                cov_result = await self._coordinator.get_coverage_sources(test_files)
+                if cov_result.source_dirs:
+                    source_dirs = cov_result.source_dirs
+            except Exception:  # noqa: BLE001
+                # Non-fatal: fall back to --cov=. if import graph fails
+                pass
+
         # Create semaphore for parallelism
         sem = asyncio.Semaphore(parallelism)
 
@@ -830,6 +842,7 @@ class TestOps:
                     timeout_sec=timeout_sec,
                     coverage=coverage,
                     coverage_dir=coverage_dir,
+                    source_dirs=source_dirs,
                 )
                 return (target, result, cov_artifact)
 
@@ -986,6 +999,7 @@ class TestOps:
         timeout_sec: int,
         coverage: bool,
         coverage_dir: Path | None,
+        source_dirs: list[str] | None = None,
     ) -> tuple[ParsedTestSuite, CoverageArtifact | None]:
         """Run a single test target using its runner pack.
 
@@ -1000,6 +1014,7 @@ class TestOps:
             timeout_sec: Timeout for the test run
             coverage: Whether to collect coverage
             coverage_dir: Directory for coverage artifacts (required when coverage=True)
+            source_dirs: Optional source directories for targeted coverage scoping.
 
         Returns:
             Tuple of (test results, coverage artifact if collected)
@@ -1085,7 +1100,7 @@ class TestOps:
 
         # NOW add our coverage flags after sanitization
         if coverage_available and emitter and coverage_dir:
-            cmd = emitter.modify_command(cmd, coverage_dir)
+            cmd = emitter.modify_command(cmd, coverage_dir, source_dirs=source_dirs)
             cov_artifact = CoverageArtifact(
                 format=emitter.format_id,
                 path=emitter.artifact_path(coverage_dir),
