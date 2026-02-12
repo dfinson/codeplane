@@ -32,6 +32,7 @@ __all__ = [
     "IgnoreChecker",
     "compute_cplignore_hash",
     "discover_cplignore_files",
+    "_iter_cplignore_files",
     "matches_glob",
 ]
 
@@ -81,6 +82,8 @@ class IgnoreChecker:
             prefix: Relative directory prefix for nested ignore files
                 (e.g. ``"src/deep"``).  Root-level files use ``""``.
         """
+        if not path.exists():
+            return
         self._load_ignore_file(path, prefix)
         if path.name == self.CPLIGNORE_NAME:
             self._cplignore_paths.append(path)
@@ -182,37 +185,10 @@ class IgnoreChecker:
 
         Handles nested .cplignore files by prefixing patterns with their
         relative directory path (same behavior as .gitignore).
-
-        Also loads legacy .codeplane/.cplignore if it exists.
         """
-        # Load legacy .codeplane/.cplignore first (highest priority)
-        legacy_path = root / ".codeplane" / self.CPLIGNORE_NAME
-        if legacy_path.exists():
-            self._load_ignore_file(legacy_path)
-            self._cplignore_paths.append(legacy_path)
-
-        # Load root .cplignore (if not the same as legacy)
-        root_cplignore = root / self.CPLIGNORE_NAME
-        if root_cplignore.exists():
-            self._load_ignore_file(root_cplignore)
-            self._cplignore_paths.append(root_cplignore)
-
-        # Walk for nested .cplignore files
-        for dirpath, dirnames, filenames in root.walk():
-            # Skip prunable dirs (but allow walking into .codeplane)
-            dirnames[:] = [d for d in dirnames if d not in PRUNABLE_DIRS or d == ".codeplane"]
-
-            # Skip root (already loaded) and .codeplane (legacy already loaded)
-            if dirpath == root:
-                continue
-            if dirpath == root / ".codeplane":
-                continue
-
-            if self.CPLIGNORE_NAME in filenames:
-                cplignore_path = dirpath / self.CPLIGNORE_NAME
-                rel_dir = dirpath.relative_to(root)
-                self._load_ignore_file(cplignore_path, prefix=str(rel_dir))
-                self._cplignore_paths.append(cplignore_path)
+        for cplignore_path, prefix in _iter_cplignore_files(root):
+            self._load_ignore_file(cplignore_path, prefix=prefix)
+            self._cplignore_paths.append(cplignore_path)
 
     def _load_gitignore_recursive(self, root: Path) -> None:
         """Load .gitignore from root and all subdirectories.
@@ -338,33 +314,49 @@ def matches_glob(rel_path: str, pattern: str) -> bool:
     return False
 
 
+def _iter_cplignore_files(root: Path) -> list[tuple[Path, str]]:
+    """Find all .cplignore files with their relative prefix.
+
+    Returns list of (path, prefix) tuples where prefix is used for
+    pattern scoping (empty string for root-level files).
+
+    Shared by IgnoreChecker._load_cplignore_recursive and discover_cplignore_files.
+    """
+    results: list[tuple[Path, str]] = []
+
+    # Legacy location (root-scoped)
+    legacy_path = root / ".codeplane" / IgnoreChecker.CPLIGNORE_NAME
+    if legacy_path.exists():
+        results.append((legacy_path, ""))
+
+    # Root .cplignore (root-scoped)
+    root_cplignore = root / IgnoreChecker.CPLIGNORE_NAME
+    if root_cplignore.exists():
+        results.append((root_cplignore, ""))
+
+    # Walk for nested .cplignore files
+    for dirpath, dirnames, filenames in root.walk():
+        # Skip prunable dirs (but allow walking into .codeplane)
+        dirnames[:] = [d for d in dirnames if d not in PRUNABLE_DIRS or d == ".codeplane"]
+
+        # Skip root and .codeplane (already handled above)
+        if dirpath == root or dirpath == root / ".codeplane":
+            continue
+
+        if IgnoreChecker.CPLIGNORE_NAME in filenames:
+            rel_dir = str(dirpath.relative_to(root))
+            results.append((dirpath / IgnoreChecker.CPLIGNORE_NAME, rel_dir))
+
+    return results
+
+
 def discover_cplignore_files(root: Path) -> list[Path]:
     """Walk tree to find all .cplignore files.
 
     Lightweight alternative to constructing a full IgnoreChecker when
     only file discovery (not pattern matching) is needed.
     """
-    found: list[Path] = []
-
-    # Legacy location
-    legacy_path = root / ".codeplane" / IgnoreChecker.CPLIGNORE_NAME
-    if legacy_path.exists():
-        found.append(legacy_path)
-
-    # Root
-    root_cplignore = root / IgnoreChecker.CPLIGNORE_NAME
-    if root_cplignore.exists():
-        found.append(root_cplignore)
-
-    # Walk for nested .cplignore files
-    for dirpath, dirnames, filenames in root.walk():
-        dirnames[:] = [d for d in dirnames if d not in PRUNABLE_DIRS or d == ".codeplane"]
-        if dirpath == root or dirpath == root / ".codeplane":
-            continue
-        if IgnoreChecker.CPLIGNORE_NAME in filenames:
-            found.append(dirpath / IgnoreChecker.CPLIGNORE_NAME)
-
-    return found
+    return [path for path, _ in _iter_cplignore_files(root)]
 
 
 def compute_cplignore_hash(root: Path) -> str | None:

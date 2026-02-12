@@ -6,6 +6,7 @@ Does NOT scan the filesystem - reflects only what's indexed.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -128,7 +129,7 @@ class RepoMapper:
         limit: int = 100,
         include_globs: list[str] | None = None,
         exclude_globs: list[str] | None = None,
-        respect_gitignore: bool = True,  # noqa: ARG002  # kept for backward compat
+        respect_gitignore: bool = True,  # deprecated, ignored
     ) -> MapRepoResult:
         """Map the repository from indexed data.
 
@@ -137,6 +138,16 @@ class RepoMapper:
         globs are applied at query time.  ``respect_gitignore`` is accepted
         for backward compatibility but ignored (the index already respects it).
         """
+        # Deprecation warning for respect_gitignore
+        if respect_gitignore is not True:
+            warnings.warn(
+                "respect_gitignore parameter is deprecated and ignored. "
+                "The index already respects .gitignore during indexing.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        del respect_gitignore  # Ensure it's not used accidentally
+
         if include is None:
             include = ["structure", "languages", "entry_points"]
 
