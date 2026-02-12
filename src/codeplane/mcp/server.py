@@ -81,6 +81,7 @@ def create_mcp_server(context: "AppContext") -> "FastMCP":
 
     from codeplane.mcp.middleware import ToolMiddleware
     from codeplane.mcp.tools import (
+        diff,
         files,
         git,
         index,
@@ -110,6 +111,7 @@ def create_mcp_server(context: "AppContext") -> "FastMCP":
     mcp.add_middleware(ToolMiddleware())
 
     # Register all tools using native FastMCP decorators
+    diff.register_tools(mcp, context)
     files.register_tools(mcp, context)
     git.register_tools(mcp, context)
     index.register_tools(mcp, context)
