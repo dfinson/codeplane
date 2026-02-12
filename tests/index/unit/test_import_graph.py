@@ -9,6 +9,7 @@ Tests cover:
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -93,7 +94,7 @@ class TestAffectedTests:
     """Tests for ImportGraph.affected_tests."""
 
     @pytest.fixture
-    def graph(self, db: Database) -> ImportGraph:
+    def graph(self, db: Database) -> Generator[ImportGraph, None, None]:
         """Create an import graph with seeded data."""
         _seed_data(
             db,
@@ -117,8 +118,8 @@ class TestAffectedTests:
                 ("tests/test_core.py", "pytest"),
             ],
         )
-        session = db.session()
-        return ImportGraph(session.__enter__())
+        with db.session() as session:
+            yield ImportGraph(session)
 
     def test_single_file_change(self, graph: ImportGraph) -> None:
         result = graph.affected_tests(["src/mylib/core.py"])
@@ -173,13 +174,15 @@ class TestAffectedTests:
     def test_empty_changed_files(self, graph: ImportGraph) -> None:
         result = graph.affected_tests([])
         assert len(result.matches) == 0
+        assert result.confidence.tier == "complete"
+        assert result.confidence.resolved_ratio == 1.0
 
 
 class TestAffectedTestsWithNulls:
     """Test confidence with NULL source_literal."""
 
     @pytest.fixture
-    def graph_with_nulls(self, db: Database) -> ImportGraph:
+    def graph_with_nulls(self, db: Database) -> Generator[ImportGraph, None, None]:
         _seed_data(
             db,
             files=[
@@ -191,8 +194,8 @@ class TestAffectedTestsWithNulls:
                 ("tests/test_core.py", None),  # NULL source_literal
             ],
         )
-        session = db.session()
-        return ImportGraph(session.__enter__())
+        with db.session() as session:
+            yield ImportGraph(session)
 
     def test_partial_confidence_with_nulls(self, graph_with_nulls: ImportGraph) -> None:
         result = graph_with_nulls.affected_tests(["src/mylib/core.py"])
@@ -209,7 +212,7 @@ class TestImportedSources:
     """Tests for ImportGraph.imported_sources."""
 
     @pytest.fixture
-    def graph(self, db: Database) -> ImportGraph:
+    def graph(self, db: Database) -> Generator[ImportGraph, None, None]:
         _seed_data(
             db,
             files=[
@@ -224,8 +227,8 @@ class TestImportedSources:
                 ("tests/test_core.py", "pytest"),
             ],
         )
-        session = db.session()
-        return ImportGraph(session.__enter__())
+        with db.session() as session:
+            yield ImportGraph(session)
 
     def test_returns_source_dirs(self, graph: ImportGraph) -> None:
         result = graph.imported_sources(["tests/test_core.py"])
@@ -259,7 +262,7 @@ class TestUncoveredModules:
     """Tests for ImportGraph.uncovered_modules."""
 
     @pytest.fixture
-    def graph(self, db: Database) -> ImportGraph:
+    def graph(self, db: Database) -> Generator[ImportGraph, None, None]:
         _seed_data(
             db,
             files=[
@@ -275,8 +278,8 @@ class TestUncoveredModules:
                 # mylib.orphan not imported by anything
             ],
         )
-        session = db.session()
-        return ImportGraph(session.__enter__())
+        with db.session() as session:
+            yield ImportGraph(session)
 
     def test_finds_uncovered(self, graph: ImportGraph) -> None:
         gaps = graph.uncovered_modules()

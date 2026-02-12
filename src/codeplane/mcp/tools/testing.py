@@ -414,7 +414,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             impact_info = {
                 "confidence": graph_result.confidence.tier,
                 "resolved_ratio": graph_result.confidence.resolved_ratio,
-                "changed_modules": graph_result.confidence.resolved_ratio,
+                "changed_modules": len(graph_result.changed_modules),
                 "reasoning": graph_result.confidence.reasoning,
                 "total_matches": len(graph_result.matches),
                 "high_confidence": len(graph_result.high_confidence_tests),
@@ -515,11 +515,17 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         except Exception:  # noqa: BLE001
             pass
 
-        if graph_result.confidence.tier == "partial":
+        if graph_result.low_confidence_tests:
             output["agentic_hint"] = (
-                "Some matches are low-confidence. Review the 'matches' list — "
-                "'low' confidence means parent/child module prefix match only. "
-                "Decide whether to include these tests or run only high-confidence ones."
+                f"{len(graph_result.low_confidence_tests)} match(es) are low-confidence "
+                "(parent/child module prefix only). Review the 'matches' list and "
+                "decide whether to include these tests or run only high-confidence ones."
+            )
+        elif graph_result.confidence.tier == "partial":
+            output["agentic_hint"] = (
+                "Some changed files could not be resolved to modules. "
+                "Review 'confidence.unresolved_files' and consider running "
+                "a broader test set if those files are significant."
             )
         else:
             output["agentic_hint"] = (

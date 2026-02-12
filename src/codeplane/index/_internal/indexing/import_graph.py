@@ -148,14 +148,23 @@ class ImportGraph:
                 unresolved.append(fp)
 
         if not changed_modules:
+            # Empty input or all non-Python files
+            early_tier: Literal["complete", "partial"] = (
+                "complete" if not changed_files else "partial"
+            )
+            reasoning = (
+                "no files provided"
+                if not changed_files
+                else "No changed files could be mapped to module names"
+            )
             return ImportGraphResult(
                 matches=[],
                 confidence=ImpactConfidence(
-                    tier="partial",
-                    resolved_ratio=0.0,
+                    tier=early_tier,
+                    resolved_ratio=0.0 if changed_files else 1.0,
                     unresolved_files=unresolved,
                     null_source_count=0,
-                    reasoning="No changed files could be mapped to module names",
+                    reasoning=reasoning,
                 ),
                 changed_modules=[],
             )
@@ -337,26 +346,21 @@ class ImportGraph:
                     all_source_modules.add(mod)
 
         # Modules imported by test files
+        # Single batch query: get all (source_literal, file_path) pairs,
+        # then filter to find source_literals imported by at least one test file
         stmt = (
-            select(ImportFact.source_literal)
+            select(ImportFact.source_literal, File.path)
             .join(File, ImportFact.file_id == File.id)  # type: ignore[arg-type]
             .where(ImportFact.source_literal != None)  # noqa: E711
         )
-        all_imports = list(self._session.exec(stmt).all())
+        all_import_rows = list(self._session.exec(stmt).all())
 
         # Collect modules that have test coverage via imports
         covered_modules: set[str] = set()
-        for source_literal in all_imports:
+        for source_literal, importer_path in all_import_rows:
             if source_literal is None:
                 continue
-            # Check if ANY test file imports this module
-            test_stmt = (
-                select(File.path)
-                .join(ImportFact, ImportFact.file_id == File.id)  # type: ignore[arg-type]
-                .where(ImportFact.source_literal == source_literal)
-            )
-            importers = list(self._session.exec(test_stmt).all())
-            if any(is_test_file(p) for p in importers):
+            if is_test_file(importer_path):
                 covered_modules.add(source_literal)
 
         # Also consider short-form matches (src.X matches X)
@@ -372,6 +376,7 @@ class ImportGraph:
             short = mod[4:] if mod.startswith("src.") else mod
             if mod not in covered_short and short not in covered_short:
                 file_path = resolve_module_to_path(mod, self._module_index)
-                gaps.append(CoverageGap(module=short or mod, file_path=file_path))
+                display_module = short if short else mod
+                gaps.append(CoverageGap(module=display_module, file_path=file_path))
 
         return gaps
