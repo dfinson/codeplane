@@ -389,10 +389,25 @@ class LexicalIndex:
                 results.fallback_reason = "query could not be parsed even after escaping"
                 return results
 
-        # Search - fetch all matching documents (files) from Tantivy.
+        # Search - fetch matching documents (files) from Tantivy.
         # Tantivy returns 1 doc per file; we expand each to N matching lines.
-        # No artificial cap — pagination downstream handles large result sets.
-        top_docs = searcher.search(parsed, limit=10000).hits
+        # The doc limit scales proportionally with repo size:
+        #   - Repos ≤ FLOOR files: search all docs (no cap)
+        #   - Repos > FLOOR files: cap at max(FLOOR, total // RATIO)
+        # This bounds memory (each doc loads full file content for snippet
+        # extraction) while ensuring small/medium repos are unaffected.
+        from codeplane.config.constants import (
+            TANTIVY_SEARCH_DOC_FLOOR,
+            TANTIVY_SEARCH_DOC_RATIO,
+        )
+
+        total_docs = searcher.num_docs
+        if total_docs <= TANTIVY_SEARCH_DOC_FLOOR:
+            doc_limit = total_docs
+        else:
+            doc_limit = max(TANTIVY_SEARCH_DOC_FLOOR, total_docs // TANTIVY_SEARCH_DOC_RATIO)
+
+        top_docs = searcher.search(parsed, limit=doc_limit).hits
         results.total_hits = len(top_docs)
 
         for score, doc_addr in top_docs:

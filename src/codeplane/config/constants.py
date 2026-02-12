@@ -45,6 +45,19 @@ LEXICAL_FALLBACK_MAX = 500
 MOVE_LEXICAL_MAX = 200
 """Maximum lexical search results for move refactor."""
 
+TANTIVY_SEARCH_DOC_FLOOR = 1000
+"""Minimum Tantivy document limit regardless of repo size.
+
+Repos with fewer than this many indexed files search all docs.
+For larger repos, the limit scales proportionally."""
+
+TANTIVY_SEARCH_DOC_RATIO = 2
+"""Divisor for proportional Tantivy doc cap on large repos.
+
+For repos exceeding TANTIVY_SEARCH_DOC_FLOOR files, the search
+limit is max(FLOOR, total_docs // RATIO). A ratio of 2 means
+we examine at most half the repo's files per query."""
+
 # =============================================================================
 # Response Budget
 # =============================================================================

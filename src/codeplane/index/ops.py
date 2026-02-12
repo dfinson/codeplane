@@ -13,7 +13,6 @@ Discovery -> Authority -> Membership -> Probe -> Router -> Index
 from __future__ import annotations
 
 import asyncio
-import fnmatch
 import hashlib
 import json
 import os
@@ -82,29 +81,52 @@ if TYPE_CHECKING:
 
 
 def _matches_glob(rel_path: str, pattern: str) -> bool:
-    """Check if a path matches a glob pattern, with ** support."""
-    if fnmatch.fnmatch(rel_path, pattern):
+    """Check if a path matches a glob pattern, with ** support.
+
+    Uses pathlib.PurePosixPath.match() which correctly treats ** as
+    "zero or more directories" (fnmatch does not).
+    For **/X patterns, also matches X at root (zero directories).
+    """
+    if not pattern:
+        return not rel_path  # empty pattern matches only empty path
+
+    from pathlib import PurePosixPath
+
+    if not rel_path:
+        return False
+
+    if PurePosixPath(rel_path).match(pattern):
         return True
-    return pattern.startswith("**/") and fnmatch.fnmatch(rel_path, pattern[3:])
+    # **/X should also match X at root level (zero directories)
+    if pattern.startswith("**/"):
+        return PurePosixPath(rel_path).match(pattern[3:])
+    return False
 
 
 def _matches_filter_paths(rel_path: str, filter_paths: list[str]) -> bool:
     """Check if a path matches any of the filter_paths patterns.
 
     Supports:
-    - Prefix matching: "src/" matches all files under src/
+    - Directory prefix matching: "src/" or "src" matches all files under src/
     - Exact file paths: "src/foo.py" matches that specific file
-    - Glob patterns: "src/**/*.py" matches via fnmatch
+    - Glob patterns: "src/**/*.py", "*.ts" via pathlib (** aware)
     """
     for pattern in filter_paths:
-        # Bare directory prefix (e.g., "src/" or "src")
-        if rel_path.startswith(pattern) or rel_path.startswith(pattern.rstrip("/") + "/"):
-            return True
+        # Glob pattern — delegate to _matches_glob (handles ** correctly)
+        if any(ch in pattern for ch in "*?[]"):
+            if _matches_glob(rel_path, pattern):
+                return True
+            continue
+
+        # Normalize potential directory patterns like "src/" -> "src"
+        normalized = pattern.rstrip("/")
+
         # Exact match
-        if rel_path == pattern:
+        if rel_path == pattern or rel_path == normalized:
             return True
-        # Glob match
-        if _matches_glob(rel_path, pattern):
+
+        # Directory prefix — require path boundary to avoid "src" matching "src2/"
+        if normalized and rel_path.startswith(normalized + "/"):
             return True
     return False
 
@@ -1211,12 +1233,20 @@ class IndexCoordinator:
 
         # Phase 1: SQLite structured search (substring + kind filtering)
         results: list[SearchResult] = []
-        seen: set[tuple[str, int]] = set()  # (path, line) dedup key
+        seen: set[tuple[str, int, int]] = set()  # (path, line, col) dedup key
         query_lower = query.lower()
 
         with self.db.session() as session:
+            # Compute match quality in SQL so ORDER BY is deterministic
+            # and the best matches (exact > prefix > substring) come first.
+            match_score = func.case(
+                (func.lower(DefFact.name) == query_lower, 1.0),
+                (func.lower(DefFact.name).startswith(query_lower), 0.8),
+                else_=0.6,
+            ).label("match_score")
+
             stmt = (
-                select(DefFact, File.path)
+                select(DefFact, File.path, match_score)
                 .join(
                     File,
                     DefFact.file_id == File.id,  # type: ignore[arg-type]
@@ -1225,25 +1255,23 @@ class IndexCoordinator:
             )
             if filter_kinds:
                 stmt = stmt.where(col(DefFact.kind).in_(filter_kinds))
+            stmt = stmt.order_by(
+                match_score.desc(),  # type: ignore[union-attr]
+                DefFact.name,
+                File.path,
+                DefFact.start_line,
+                DefFact.start_col,
+            )
             stmt = stmt.limit(limit * 2)  # over-fetch to account for path filtering
 
             rows = session.exec(stmt).all()
 
-        for def_fact, file_path in rows:
+        for def_fact, file_path, score in rows:
             # Apply path filter if requested
             if filter_paths and not _matches_filter_paths(file_path, filter_paths):
                 continue
 
-            # Score: exact > prefix > substring
-            name_lower = def_fact.name.lower()
-            if name_lower == query_lower:
-                score = 1.0
-            elif name_lower.startswith(query_lower):
-                score = 0.8
-            else:
-                score = 0.6
-
-            key = (file_path, def_fact.start_line)
+            key = (file_path, def_fact.start_line, def_fact.start_col)
             if key not in seen:
                 seen.add(key)
                 results.append(
@@ -1252,7 +1280,7 @@ class IndexCoordinator:
                         line=def_fact.start_line,
                         column=def_fact.start_col,
                         snippet=def_fact.display_name or def_fact.name,
-                        score=score,
+                        score=float(score),
                     )
                 )
 
@@ -1268,7 +1296,7 @@ class IndexCoordinator:
             # structural matches always rank first.
             phase1_min = min((r.score for r in results), default=0.5)
             for hit in tantivy_results.results:
-                key = (hit.file_path, hit.line)
+                key = (hit.file_path, hit.line, hit.column)
                 if key in seen:
                     continue
                 # Apply path filter if requested
