@@ -15,6 +15,7 @@ from sqlmodel import select
 from codeplane.index._internal.diff.models import (
     ImpactInfo,
     RawDiffResult,
+    RefTierBreakdown,
     SemanticDiffResult,
     StructuralChange,
 )
@@ -74,13 +75,19 @@ def _enrich_single_change(
     impact: ImpactInfo | None = None
 
     # Try each enrichment independently (fail-open)
-    ref_count: int | None = None
+    ref_tiers: RefTierBreakdown | None = None
     ref_files: list[str] | None = None
+    ref_basis: str = "unknown"
     imp_files: list[str] | None = None
     test_files: list[str] | None = None
+    entity_id: str | None = None
+    visibility: str | None = None
+    is_static: bool | None = None
 
     try:
-        ref_count, ref_files = _enrich_references(session, rc.path, rc.kind, rc.name)
+        ref_tiers, ref_files, ref_basis, entity_id = _enrich_references(
+            session, rc.path, rc.kind, rc.name
+        )
     except Exception:
         log.debug("enrich_refs_failed", path=rc.path, name=rc.name, exc_info=True)
 
@@ -94,14 +101,29 @@ def _enrich_single_change(
     except Exception:
         log.debug("enrich_tests_failed", path=rc.path, name=rc.name, exc_info=True)
 
-    if ref_count is not None or ref_files or imp_files or test_files:
+    try:
+        visibility, is_static = _enrich_visibility(session, rc.path, rc.kind, rc.name)
+    except Exception:
+        log.debug("enrich_visibility_failed", path=rc.path, name=rc.name, exc_info=True)
+
+    ref_count = ref_tiers.total if ref_tiers else None
+    has_any = ref_count is not None or ref_files or imp_files or test_files or visibility
+
+    if has_any:
         impact = ImpactInfo(
             reference_count=ref_count,
+            ref_tiers=ref_tiers,
+            reference_basis=ref_basis,
             referencing_files=ref_files,
             importing_files=imp_files,
             affected_test_files=test_files,
             confidence=_get_confidence(rc.path),
+            visibility=visibility,
+            is_static=is_static,
         )
+
+    # Determine behavior_change_risk from change type
+    behavior_change_risk = _assess_behavior_risk(rc.change, ref_count)
 
     return StructuralChange(
         path=rc.path,
@@ -109,11 +131,39 @@ def _enrich_single_change(
         name=rc.name,
         qualified_name=rc.qualified_name,
         change=rc.change,
-        severity=rc.severity,
+        structural_severity=rc.structural_severity,
+        behavior_change_risk=behavior_change_risk,
         old_sig=rc.old_sig,
         new_sig=rc.new_sig,
         impact=impact,
+        entity_id=entity_id,
+        start_line=rc.start_line,
+        start_col=rc.start_col,
+        end_line=rc.end_line,
+        end_col=rc.end_col,
+        lines_changed=rc.lines_changed,
     )
+
+
+def _assess_behavior_risk(change: str, ref_count: int | None) -> str:
+    """Assess behavior change risk based on change type and blast radius.
+
+    This is an honest heuristic — it cannot detect actual behavioral changes,
+    only estimate likelihood based on structural signals.
+    """
+    if change in ("added",):
+        return "low"
+    if change in ("removed", "renamed"):
+        return "high"
+    if change == "signature_changed":
+        return "high"
+    if change == "body_changed":
+        # Body changes are unknown by default — we can't tell if the behavior
+        # actually changed without deeper analysis (delta tags can help)
+        if ref_count is not None and ref_count > 10:
+            return "medium"  # High blast radius body change
+        return "unknown"
+    return "unknown"
 
 
 def _enrich_references(
@@ -121,8 +171,12 @@ def _enrich_references(
     file_path: str,
     kind: str,
     name: str,
-) -> tuple[int | None, list[str] | None]:
-    """Find references to a symbol via DefFact + RefFact."""
+) -> tuple[RefTierBreakdown | None, list[str] | None, str, str | None]:
+    """Find references to a symbol via DefFact + RefFact.
+
+    Returns:
+        (tier_breakdown, referencing_files, reference_basis, entity_id)
+    """
     from codeplane.index.models import DefFact, File, RefFact
 
     # Find the DefFact for this symbol
@@ -133,20 +187,43 @@ def _enrich_references(
     )
     def_fact = session.exec(stmt).first()
     if not def_fact:
-        return None, None
+        return None, None, "unknown", None
+
+    entity_id = def_fact.def_uid
 
     # Find RefFacts pointing to this def_uid
     ref_stmt = select(RefFact).where(RefFact.target_def_uid == def_fact.def_uid)
     refs = session.exec(ref_stmt).all()
     if not refs:
-        return 0, []
+        return RefTierBreakdown(), [], "ref_facts_resolved", entity_id
+
+    # Build tier breakdown
+    tiers = RefTierBreakdown()
+    for r in refs:
+        tier = r.ref_tier
+        if tier == "proven":
+            tiers.proven += 1
+        elif tier == "strong":
+            tiers.strong += 1
+        elif tier == "anchored":
+            tiers.anchored += 1
+        else:
+            tiers.unknown += 1
+
+    # Determine basis honesty
+    if tiers.proven + tiers.strong > 0:
+        basis = "ref_facts_resolved"
+    elif tiers.anchored + tiers.unknown > 0:
+        basis = "ref_facts_partial"
+    else:
+        basis = "unknown"
 
     # Get unique file paths for referencing files
     ref_file_ids = {r.file_id for r in refs}
     file_stmt = select(File.path).where(File.id.in_(list(ref_file_ids)))  # type: ignore[union-attr]
     file_paths = list(session.exec(file_stmt).all())
 
-    return len(refs), file_paths
+    return tiers, file_paths, basis, entity_id
 
 
 def _enrich_imports(
@@ -163,6 +240,33 @@ def _enrich_imports(
     )
     paths = list(session.exec(stmt).all())
     return paths if paths else None
+
+
+def _enrich_visibility(
+    session: Session,
+    file_path: str,
+    _kind: str,
+    name: str,
+) -> tuple[str | None, bool | None]:
+    """Look up visibility and static status from TypeMemberFact.
+
+    Returns (visibility, is_static) or (None, None) if not found.
+    """
+    from codeplane.index.models import File, TypeMemberFact
+
+    stmt = (
+        select(TypeMemberFact)
+        .join(File, TypeMemberFact.file_id == File.id)  # type: ignore[arg-type]
+        .where(
+            File.path == file_path,
+            TypeMemberFact.member_name == name,
+        )
+    )
+    member = session.exec(stmt).first()
+    if not member:
+        return None, None
+
+    return member.visibility, member.is_static
 
 
 def _enrich_test_files(
@@ -240,7 +344,7 @@ def _build_summary(changes: list[StructuralChange]) -> str:
 
 def _build_breaking_summary(changes: list[StructuralChange]) -> str | None:
     """Build a summary of breaking changes, or None if none."""
-    breaking = [c for c in changes if c.severity == "breaking"]
+    breaking = [c for c in changes if c.structural_severity == "breaking"]
     if not breaking:
         return None
 

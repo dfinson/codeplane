@@ -18,6 +18,7 @@ import structlog
 from codeplane.index._internal.diff.models import (
     ChangedFile,
     DefSnapshot,
+    FileChangeInfo,
     RawDiffResult,
     RawStructuralChange,
 )
@@ -47,12 +48,19 @@ def compute_structural_diff(
         RawDiffResult with classified changes.
     """
     all_changes: list[RawStructuralChange] = []
-    non_structural_files: list[str] = []
+    non_structural_files: list[FileChangeInfo] = []
     files_analyzed = 0
 
     for cf in changed_files:
         if not cf.has_grammar:
-            non_structural_files.append(cf.path)
+            non_structural_files.append(
+                FileChangeInfo(
+                    path=cf.path,
+                    status=cf.status,
+                    category=_classify_file(cf.path),
+                    language=cf.language,
+                )
+            )
             continue
 
         files_analyzed += 1
@@ -65,13 +73,69 @@ def compute_structural_diff(
         if changes:
             all_changes.extend(changes)
         else:
-            non_structural_files.append(cf.path)
+            non_structural_files.append(
+                FileChangeInfo(
+                    path=cf.path,
+                    status=cf.status,
+                    category=_classify_file(cf.path),
+                    language=cf.language,
+                )
+            )
 
     return RawDiffResult(
         changes=all_changes,
         non_structural_files=non_structural_files,
         files_analyzed=files_analyzed,
     )
+
+
+def _classify_file(path: str) -> str:
+    """Classify a file into a category based on path patterns."""
+    from codeplane.core.languages import is_test_file
+
+    lower = path.lower()
+
+    if is_test_file(path):
+        return "test"
+
+    # Build/config patterns
+    build_names = {
+        "makefile",
+        "cmakelists.txt",
+        "meson.build",
+        "build.gradle",
+        "build.gradle.kts",
+        "pom.xml",
+        "build.sbt",
+        "cargo.toml",
+        "go.mod",
+        "package.json",
+        "pyproject.toml",
+        "setup.py",
+        "setup.cfg",
+        ".eslintrc",
+        ".prettierrc",
+        "tsconfig.json",
+        "dockerfile",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+    }
+    basename = lower.rsplit("/", 1)[-1]
+    if basename in build_names:
+        return "build"
+
+    config_exts = {".yml", ".yaml", ".toml", ".ini", ".cfg", ".env", ".json", ".xml"}
+    ext = "." + basename.rsplit(".", 1)[-1] if "." in basename else ""
+    if ext in config_exts and "/" not in path.replace(".", "", 1):
+        # Root-level config files
+        return "config"
+
+    doc_patterns = ("/docs/", "/doc/", "readme", "changelog", "license", "contributing")
+    doc_exts = {".md", ".rst", ".txt", ".adoc"}
+    if any(p in lower for p in doc_patterns) or ext in doc_exts:
+        return "docs"
+
+    return "prod"
 
 
 def _diff_file(
@@ -112,12 +176,14 @@ def _diff_file(
                 name=new.name,
                 qualified_name=new.lexical_path if "." in new.lexical_path else None,
                 change="renamed",
-                severity="breaking",
+                structural_severity="breaking",
                 old_sig=old.display_name,
                 new_sig=new.display_name,
                 is_internal=_is_internal_variable(new, target),
                 start_line=new.start_line,
+                start_col=new.start_col,
                 end_line=new.end_line,
+                end_col=new.end_col,
                 old_name=old.name,
             )
         )
@@ -133,12 +199,14 @@ def _diff_file(
                 name=snap.name,
                 qualified_name=snap.lexical_path if "." in snap.lexical_path else None,
                 change="removed",
-                severity="breaking",
+                structural_severity="breaking",
                 old_sig=snap.display_name,
                 new_sig=None,
                 is_internal=_is_internal_variable(snap, base),
                 start_line=snap.start_line,
+                start_col=snap.start_col,
                 end_line=snap.end_line,
+                end_col=snap.end_col,
             )
         )
 
@@ -153,12 +221,14 @@ def _diff_file(
                 name=snap.name,
                 qualified_name=snap.lexical_path if "." in snap.lexical_path else None,
                 change="added",
-                severity="non_breaking",
+                structural_severity="non_breaking",
                 old_sig=None,
                 new_sig=snap.display_name,
                 is_internal=_is_internal_variable(snap, target),
                 start_line=snap.start_line,
+                start_col=snap.start_col,
                 end_line=snap.end_line,
+                end_col=snap.end_col,
             )
         )
 
@@ -176,16 +246,19 @@ def _diff_file(
                         name=new.name,
                         qualified_name=(new.lexical_path if "." in new.lexical_path else None),
                         change="signature_changed",
-                        severity="breaking",
+                        structural_severity="breaking",
                         old_sig=old.display_name,
                         new_sig=new.display_name,
                         is_internal=_is_internal_variable(new, target),
                         start_line=new.start_line,
+                        start_col=new.start_col,
                         end_line=new.end_line,
+                        end_col=new.end_col,
                     )
                 )
             elif _intersects_hunks(new.start_line, new.end_line, hunks):
                 # Same signature but source changed in span
+                lc = _count_changed_lines(new.start_line, new.end_line, hunks)
                 changes.append(
                     RawStructuralChange(
                         path=path,
@@ -193,16 +266,36 @@ def _diff_file(
                         name=new.name,
                         qualified_name=(new.lexical_path if "." in new.lexical_path else None),
                         change="body_changed",
-                        severity="non_breaking",
+                        structural_severity="non_breaking",
                         old_sig=old.display_name,
                         new_sig=new.display_name,
                         is_internal=_is_internal_variable(new, target),
                         start_line=new.start_line,
+                        start_col=new.start_col,
                         end_line=new.end_line,
+                        end_col=new.end_col,
+                        lines_changed=lc,
                     )
                 )
 
     return changes
+
+
+def _count_changed_lines(
+    start: int,
+    end: int,
+    hunks: list[tuple[int, int]] | None,
+) -> int | None:
+    """Count lines within [start, end] that are covered by diff hunks."""
+    if hunks is None:
+        return None
+    total = 0
+    for h_start, h_end in hunks:
+        overlap_start = max(start, h_start)
+        overlap_end = min(end, h_end)
+        if overlap_start <= overlap_end:
+            total += overlap_end - overlap_start + 1
+    return total if total > 0 else None
 
 
 def _detect_renames(

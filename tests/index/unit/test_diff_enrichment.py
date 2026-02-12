@@ -76,7 +76,7 @@ class TestConfidence:
 
 def _change(
     change: str = "added",
-    severity: str = "non_breaking",
+    structural_severity: str = "non_breaking",
     name: str = "foo",
     kind: str = "function",
 ) -> StructuralChange:
@@ -86,7 +86,8 @@ def _change(
         name=name,
         qualified_name=None,
         change=change,
-        severity=severity,
+        structural_severity=structural_severity,
+        behavior_change_risk="unknown",
         old_sig=None,
         new_sig=None,
         impact=None,

@@ -47,7 +47,9 @@ def snapshots_from_index(session: Session, file_path: str) -> list[DefSnapshot]:
             signature_hash=r.signature_hash,
             display_name=r.display_name,
             start_line=r.start_line,
+            start_col=r.start_col,
             end_line=r.end_line,
+            end_col=r.end_col,
         )
         for r in rows
     ]
@@ -171,6 +173,7 @@ def snapshots_from_blob(
                 signature_hash=sig_hash,
                 display_name=sym.signature or sym.name,
                 start_line=sym.line,
+                start_col=sym.column,
                 end_line=sym.end_line,
             )
         )

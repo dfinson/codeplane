@@ -21,7 +21,7 @@ from codeplane.mcp.tools.diff import _build_agentic_hint, _result_to_dict
 
 def _change(
     change: str = "added",
-    severity: str = "non_breaking",
+    structural_severity: str = "non_breaking",
     name: str = "foo",
     kind: str = "function",
     qualified_name: str | None = None,
@@ -33,7 +33,8 @@ def _change(
         name=name,
         qualified_name=qualified_name,
         change=change,
-        severity=severity,
+        structural_severity=structural_severity,
+        behavior_change_risk="unknown",
         old_sig="def old()",
         new_sig="def new()",
         impact=impact,

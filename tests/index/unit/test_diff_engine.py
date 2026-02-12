@@ -163,7 +163,7 @@ class TestComputeStructuralDiff:
         assert len(result.changes) == 1
         assert result.changes[0].change == "added"
         assert result.changes[0].name == "new_func"
-        assert result.changes[0].severity == "non_breaking"
+        assert result.changes[0].structural_severity == "non_breaking"
 
     def test_removed_function(self) -> None:
         base = _snap(kind="function", name="old_func")
@@ -174,7 +174,7 @@ class TestComputeStructuralDiff:
         )
         assert len(result.changes) == 1
         assert result.changes[0].change == "removed"
-        assert result.changes[0].severity == "breaking"
+        assert result.changes[0].structural_severity == "breaking"
 
     def test_signature_changed(self) -> None:
         base = _snap(kind="function", name="foo", sig_hash="old")
@@ -186,7 +186,7 @@ class TestComputeStructuralDiff:
         )
         assert len(result.changes) == 1
         assert result.changes[0].change == "signature_changed"
-        assert result.changes[0].severity == "breaking"
+        assert result.changes[0].structural_severity == "breaking"
 
     def test_body_changed_with_hunks(self) -> None:
         snap = _snap(kind="function", name="foo", sig_hash="same", start=5, end=15)
@@ -198,7 +198,7 @@ class TestComputeStructuralDiff:
         )
         assert len(result.changes) == 1
         assert result.changes[0].change == "body_changed"
-        assert result.changes[0].severity == "non_breaking"
+        assert result.changes[0].structural_severity == "non_breaking"
 
     def test_body_changed_no_hunks_epoch_mode(self) -> None:
         snap = _snap(kind="function", name="foo", sig_hash="same")
@@ -232,7 +232,7 @@ class TestComputeStructuralDiff:
         )
         assert len(result.changes) == 1
         assert result.changes[0].change == "renamed"
-        assert result.changes[0].severity == "breaking"
+        assert result.changes[0].structural_severity == "breaking"
 
     def test_empty_diff(self) -> None:
         result = compute_structural_diff(
@@ -250,7 +250,7 @@ class TestComputeStructuralDiff:
             changed_files=[ChangedFile("README.md", "modified", False)],
         )
         assert len(result.changes) == 0
-        assert "README.md" in result.non_structural_files
+        assert result.non_structural_files[0].path == "README.md"
 
     def test_multiple_files(self) -> None:
         base_a = _snap(kind="function", name="foo")

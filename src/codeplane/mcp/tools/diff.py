@@ -98,7 +98,7 @@ def _run_git_diff(
         lang = detect_language_family(file_path)
         file_has_grammar = bool(lang and has_grammar(lang))
 
-        changed_files.append(ChangedFile(file_path, status, file_has_grammar))
+        changed_files.append(ChangedFile(file_path, status, file_has_grammar, language=lang))
 
         # Extract hunks
         file_hunks: list[tuple[int, int]] = []
@@ -238,7 +238,7 @@ def _run_epoch_diff(
             else:
                 status = "modified"
 
-            changed_files.append(ChangedFile(fp, status, file_has_grammar))
+            changed_files.append(ChangedFile(fp, status, file_has_grammar, language=lang))
 
             base_facts[fp] = base_snaps
             target_facts[fp] = target_snaps
@@ -267,9 +267,16 @@ def _build_agentic_hint(result: SemanticDiffResult) -> str:
     for c in result.structural_changes:
         if c.change == "signature_changed" and c.impact:
             ref_count = c.impact.reference_count or 0
+            tiers = c.impact.ref_tiers
             name = c.qualified_name or f"{c.name}()"
+            tier_detail = ""
+            if tiers and tiers.total > 0:
+                tier_detail = (
+                    f" (proven={tiers.proven}, strong={tiers.strong}, "
+                    f"anchored={tiers.anchored}, unknown={tiers.unknown})"
+                )
             hints.append(
-                f"Signature of {name} changed — {ref_count} references in "
+                f"Signature of {name} changed — {ref_count} references{tier_detail} in "
                 f"{len(c.impact.referencing_files or [])} files may need updating."
             )
 
@@ -278,10 +285,17 @@ def _build_agentic_hint(result: SemanticDiffResult) -> str:
         if c.change == "removed":
             hints.append(f"{c.name} was removed — check for broken references.")
 
-    # Priority 3: Body changes summary
+    # Priority 3: Body changes with risk assessment
     body_changes = [c for c in result.structural_changes if c.change == "body_changed"]
     if body_changes:
-        hints.append(f"{len(body_changes)} function bodies changed — review for correctness.")
+        high_risk = [c for c in body_changes if c.behavior_change_risk in ("high", "medium")]
+        if high_risk:
+            hints.append(
+                f"{len(body_changes)} function bodies changed "
+                f"({len(high_risk)} with elevated behavior-change risk) — review for correctness."
+            )
+        else:
+            hints.append(f"{len(body_changes)} function bodies changed — review for correctness.")
 
     # Priority 4: Affected tests
     all_test_files: set[str] = set()
@@ -310,16 +324,42 @@ def _result_to_dict(
             "kind": c.kind,
             "name": c.name,
             "change": c.change,
-            "severity": c.severity,
+            "structural_severity": c.structural_severity,
+            "behavior_change_risk": c.behavior_change_risk,
         }
         if c.qualified_name:
             d["qualified_name"] = c.qualified_name
+        if c.entity_id:
+            d["entity_id"] = c.entity_id
         if c.old_sig:
             d["old_signature"] = c.old_sig
         if c.new_sig:
             d["new_signature"] = c.new_sig
+        if c.start_line is not None:
+            d["start_line"] = c.start_line
+            if c.start_col is not None:
+                d["start_col"] = c.start_col
+        if c.end_line is not None:
+            d["end_line"] = c.end_line
+            if c.end_col is not None:
+                d["end_col"] = c.end_col
+        if c.lines_changed is not None:
+            d["lines_changed"] = c.lines_changed
+        if c.delta_tags:
+            d["delta_tags"] = c.delta_tags
+        if c.change_preview:
+            d["change_preview"] = c.change_preview
         if c.impact:
-            d["impact"] = {k: v for k, v in asdict(c.impact).items() if v is not None}
+            impact_d: dict[str, Any] = {}
+            for k, v in asdict(c.impact).items():
+                if v is None:
+                    continue
+                if k == "ref_tiers" and v is not None:
+                    # RefTierBreakdown is a dataclass; asdict already made it a dict
+                    impact_d[k] = v
+                else:
+                    impact_d[k] = v
+            d["impact"] = impact_d
         if c.nested_changes:
             d["nested_changes"] = [_change_to_dict(nc) for nc in c.nested_changes]
         return d
@@ -345,7 +385,7 @@ def _result_to_dict(
         "base": result.base_description,
         "target": result.target_description,
         "structural_changes": [_change_to_dict(c) for c in page],
-        "non_structural_changes": result.non_structural_changes,
+        "non_structural_changes": [asdict(f) for f in result.non_structural_changes],
         "agentic_hint": agentic_hint,
         "pagination": pagination,
     }
