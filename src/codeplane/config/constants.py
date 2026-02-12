@@ -6,10 +6,8 @@ These are protocol constraints, API stability limits, and implementation details
 For configurable values, see models.py (TimeoutsConfig, LimitsConfig, etc.).
 """
 
-# =============================================================================
-# MCP Tool Pagination Maximums
-# =============================================================================
-# These are hard caps for API stability and security. Users can configure
+# ======================================================================# MCP Tool Pagination Maximums
+# ======================================================================# These are hard caps for API stability and security. Users can configure
 # defaults below these, but cannot exceed them.
 
 SEARCH_MAX_LIMIT = 100
@@ -47,11 +45,34 @@ MOVE_LEXICAL_MAX = 200
 
 DIFF_CHANGES_MAX = 100
 """Maximum structural changes per page for semantic diff."""
+TANTIVY_SEARCH_DOC_FLOOR = 1000
+"""Baseline Tantivy document batch size for large repos.
 
-# =============================================================================
-# Internal Implementation Constants
-# =============================================================================
-# These are not exposed to users and are implementation details.
+Repos with fewer than this many indexed files search all docs
+in a single pass. For larger repos, this value acts as a minimum
+target batch size, balancing startup overhead against per-query work."""
+
+TANTIVY_SEARCH_DOC_RATIO = 2
+"""Divisor controlling proportional Tantivy batch sizing on large repos.
+
+For repos exceeding TANTIVY_SEARCH_DOC_FLOOR files, the per-query
+doc target is max(FLOOR, total_docs // RATIO). With a ratio of 2,
+a single Tantivy query considers roughly half the repo's documents.
+This is a performance tradeoff — very large repos may not surface
+every match in a single pass, but downstream pagination and the
+two-phase search pipeline compensate for coverage."""
+
+# ======================================================================# Response Budget
+# ======================================================================# Server-side byte budget for MCP tool responses. All paginated endpoints
+# share this single constant. Sits between the MCP fetch server default
+# (5 KB) and VS Code's terminal truncation ceiling (60 KB), giving ~33%
+# headroom for JSON overhead.  Tunable later if empirical data warrants it.
+
+RESPONSE_BUDGET_BYTES = 40_000
+"""Per-response byte budget shared by all size-bounded endpoints."""
+
+# ======================================================================# Internal Implementation Constants
+# ======================================================================# These are not exposed to users and are implementation details.
 
 EPOCH_POLL_MS = 10
 """Polling interval (ms) for epoch await. Tight loop, not configurable."""
@@ -59,10 +80,8 @@ EPOCH_POLL_MS = 10
 INSPECT_CONTEXT_LINES_DEFAULT = 2
 """Default context lines for refactor inspection."""
 
-# =============================================================================
-# Protocol/Validation Constants
-# =============================================================================
-
+# ======================================================================# Protocol/Validation Constants
+# ======================================================================
 PORT_MIN = 0
 PORT_MAX = 65535
 """Valid port range."""

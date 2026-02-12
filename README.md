@@ -81,7 +81,7 @@ CodePlane provides a **full stacked index**:
 
 | File | Purpose |
 |------|---------|
-| `.vscode/mcp.json` | VS Code MCP server config (uses `mcp-remote` for HTTP transport) |
+| `.vscode/mcp.json` | VS Code MCP server config (native HTTP transport) |
 | `AGENTS.md` | Tool reference for AI agents (tool names, parameters, patterns) |
 | `.github/copilot-instructions.md` | Same instructions for GitHub Copilot |
 

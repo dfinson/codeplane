@@ -1,5 +1,6 @@
 """Files MCP tools - read_files, list_files handlers."""
 
+import contextlib
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
@@ -7,6 +8,7 @@ from fastmcp.utilities.json_schema import dereference_refs
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from codeplane.config.constants import FILES_LIST_MAX
+from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -92,53 +94,103 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     @mcp.tool
     async def read_files(
         ctx: Context,
-        paths: list[str] = Field(..., description="File paths relative to repo root"),
-        targets: list[FileTarget] | None = Field(
-            None,
+        targets: list[FileTarget] = Field(
+            ...,
             description=(
-                "Optional file targets with line ranges. Each target specifies a file path "
-                "and optional start_line/end_line to read a subset of the file."
+                "File targets to read. Each specifies a path and optional "
+                "start_line/end_line to read a subset of the file."
             ),
         ),
         include_metadata: bool = Field(False, description="Include file stats (size, mtime)"),
+        cursor: str | None = Field(None, description="Pagination cursor"),
     ) -> dict[str, Any]:
         """Read file contents with optional line ranges."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
-        # Build target map keyed by path.  FileTarget guarantees path is always
-        # set, so we never get the old "" key-mismatch bug.
-        target_map: dict[str, tuple[int, int]] = {}
-        if targets:
-            for t in targets:
-                # Ensure the target's file is in paths so it gets read.
-                if t.path not in paths:
-                    paths.append(t.path)
-                if t.start_line is not None and t.end_line is not None:
-                    target_map[t.path] = (t.start_line, t.end_line)
+        # Apply cursor: skip targets already returned
+        start_idx = 0
+        if cursor:
+            with contextlib.suppress(ValueError):
+                parsed = int(cursor)
+                if parsed >= 0:
+                    start_idx = parsed
 
+        page_targets = targets[start_idx:]
+
+        # Collect unique paths - read each file once (full content), then apply ranges per-target
+        unique_paths: list[str] = []
+        for t in page_targets:
+            if t.path not in unique_paths:
+                unique_paths.append(t.path)
+
+        # Read files WITHOUT ranges - we'll apply ranges per-target below
         result = app_ctx.file_ops.read_files(
-            paths,
-            targets=target_map,
+            unique_paths,
+            targets=None,  # Read full content
             include_metadata=include_metadata,
         )
 
-        files = [
-            {
-                "path": f.path,
-                "content": f.content,
-                "language": f.language,
-                "line_count": f.line_count,
-                "range": f.range,
-                "metadata": f.metadata,
-            }
-            for f in result.files
-        ]
+        # Build a map from path to full file content for efficient lookup
+        file_by_path: dict[str, Any] = {f.path: f for f in result.files}
 
-        not_found = len(paths) - len(files)
-        return {
-            "files": files,
-            "summary": _summarize_read(files, not_found),
+        acc = BudgetAccumulator()
+        processed_targets = 0
+        missing_paths: list[str] = []
+        missing_count = 0  # Track total missing, not just capped list
+
+        # Process targets in order, applying each target's range independently
+        for t in page_targets:
+            if t.path in file_by_path:
+                f = file_by_path[t.path]
+                # Apply range if specified for this target
+                if t.start_line is not None and t.end_line is not None:
+                    lines = f.content.splitlines(keepends=True)
+                    start_idx = max(0, t.start_line - 1)
+                    end_idx = min(len(lines), t.end_line)
+                    content = "".join(lines[start_idx:end_idx])
+                    line_count = end_idx - start_idx
+                    target_range: tuple[int, int] | None = (t.start_line, t.end_line)
+                else:
+                    content = f.content
+                    line_count = f.line_count
+                    target_range = None
+                item = {
+                    "path": f.path,
+                    "content": content,
+                    "language": f.language,
+                    "line_count": line_count,
+                    "range": target_range,
+                    "metadata": f.metadata,
+                }
+                if not acc.try_add(item):
+                    # Budget exhausted, stop processing
+                    break
+            else:
+                # Target not found - track it but don't count against budget
+                missing_count += 1
+                # Cap missing_paths list to prevent unbounded response size
+                if len(missing_paths) < 100:
+                    missing_paths.append(t.path)
+            processed_targets += 1
+
+        # Check if there are more targets to process
+        has_more_targets = processed_targets < len(page_targets)
+        next_offset = start_idx + processed_targets
+        response: dict[str, Any] = {
+            "files": acc.items,
+            "pagination": make_budget_pagination(
+                has_more=has_more_targets,
+                next_cursor=str(next_offset) if has_more_targets else None,
+                total_estimate=len(targets) if has_more_targets else None,
+            ),
+            "summary": _summarize_read(acc.items, missing_count),
         }
+        if missing_paths:
+            response["not_found"] = missing_paths
+            if missing_count > len(missing_paths):
+                # Indicate there are more missing than listed
+                response["not_found_count"] = missing_count
+        return response
 
     @mcp.tool
     async def list_files(
