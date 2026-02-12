@@ -88,7 +88,7 @@ def test_read_files(
                 "method": "tools/call",
                 "params": {
                     "name": "read_files",
-                    "arguments": {"paths": [expected_file]},
+                    "arguments": {"targets": [{"path": expected_file}]},
                 },
                 "id": 1,
             },

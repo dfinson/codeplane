@@ -337,7 +337,7 @@ class LexicalIndex:
     def search(
         self,
         query: str,
-        limit: int = 20,
+        limit: int = 20,  # noqa: ARG002 - kept for API compat; callers handle limiting
         context_id: int | None = None,
         context_lines: int = 1,
     ) -> SearchResults:
@@ -346,7 +346,7 @@ class LexicalIndex:
 
         Args:
             query: Search query (supports Tantivy query syntax)
-            limit: Maximum results to return (applies after line expansion)
+            limit: Unused — all matches are returned; callers apply limits.
             context_id: Optional context to filter by
             context_lines: Lines of context before/after each match (default 1)
 
@@ -389,10 +389,25 @@ class LexicalIndex:
                 results.fallback_reason = "query could not be parsed even after escaping"
                 return results
 
-        # Search - fetch more docs than limit since we expand to lines
-        # Tantivy returns 1 doc per file, we expand to N lines per file
-        doc_limit = min(limit, 500)  # Cap doc fetch to avoid memory issues
-        top_docs = searcher.search(parsed, doc_limit).hits
+        # Search - fetch matching documents (files) from Tantivy.
+        # Tantivy returns 1 doc per file; we expand each to N matching lines.
+        # The doc limit scales proportionally with repo size:
+        #   - Repos ≤ FLOOR files: search all docs (no cap)
+        #   - Repos > FLOOR files: cap at max(FLOOR, total // RATIO)
+        # This bounds memory (each doc loads full file content for snippet
+        # extraction) while ensuring small/medium repos are unaffected.
+        from codeplane.config.constants import (
+            TANTIVY_SEARCH_DOC_FLOOR,
+            TANTIVY_SEARCH_DOC_RATIO,
+        )
+
+        total_docs = searcher.num_docs
+        if total_docs <= TANTIVY_SEARCH_DOC_FLOOR:
+            doc_limit = total_docs
+        else:
+            doc_limit = max(TANTIVY_SEARCH_DOC_FLOOR, total_docs // TANTIVY_SEARCH_DOC_RATIO)
+
+        top_docs = searcher.search(parsed, limit=doc_limit).hits
         results.total_hits = len(top_docs)
 
         for score, doc_addr in top_docs:
@@ -403,8 +418,6 @@ class LexicalIndex:
 
             # Extract ALL matching lines from this file
             for snippet, line_num in self._extract_all_snippets(content, query, context_lines):
-                if len(results.results) >= limit:
-                    break
                 results.results.append(
                     SearchResult(
                         file_path=file_path,
@@ -415,9 +428,6 @@ class LexicalIndex:
                         context_id=ctx_id,
                     )
                 )
-
-            if len(results.results) >= limit:
-                break
 
         results.query_time_ms = int((time.monotonic() - start) * 1000)
         results.fallback_reason = fallback_reason

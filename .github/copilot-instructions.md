@@ -122,12 +122,14 @@ Terminal fallback is permitted ONLY when no CodePlane tool exists for the operat
 
 **mcp_codeplane-codeplane_read_files**
 ```
-paths: list[str]           # REQUIRED - file paths relative to repo root
-targets: list[FileTarget]  # optional - NOT "line_ranges" or "ranges"
+targets: list[FileTarget]  # REQUIRED - NOT "line_ranges" or "ranges"
   path: str                # REQUIRED - file path this target applies to
-  start_line: int          # optional; 1-indexed, NOT "start"; must be provided with end_line if set
-  end_line: int            # optional; 1-indexed, NOT "end"; must be provided with start_line if set
+  start_line: int          # optional, 1-indexed; must be provided together with end_line
+  end_line: int            # optional, 1-indexed; must be provided together with start_line
+cursor: str                # optional - pagination cursor from previous response
 ```
+
+Response includes `not_found: list[str]` when requested files don't exist.
 
 **mcp_codeplane-codeplane_write_files**
 ```
@@ -143,7 +145,12 @@ dry_run: bool              # optional, default false
 ```
 query: str                 # REQUIRED
 mode: "lexical"|"symbol"|"references"|"definitions"  # default "lexical", NOT "scope" or "text"
+context: "none"|"minimal"|"standard"|"rich"|"function"|"class"  # default "standard"
+                           # none=0, minimal=1, standard=5, rich=20 lines
+                           # function/class: enclosing scope body (structural) with 25-line fallback
+context_lines: int         # optional - override lines for line-based, or fallback for structural
 limit: int                 # default 20, NOT "max_results"
+cursor: str                # optional - pagination cursor from previous response
 ```
 
 **mcp_codeplane-codeplane_list_files**
@@ -235,4 +242,26 @@ CodePlane responses include structured metadata. You must inspect and act on:
 - `display_to_user`: Content that should be surfaced to the user
 
 Ignoring these hints degrades agent performance and may cause incorrect behavior.
+
+### Response Size Budget & Pagination
+
+All data-returning endpoints enforce a per-response byte budget (~40 KB) to stay
+within VS Code's output limits. When a response is truncated:
+
+- The `pagination` object will contain `"truncated": true`
+- If more data is available, `pagination.next_cursor` provides a cursor to fetch
+  the next page (pass it as the `cursor` parameter on the next call)
+- `pagination.total_estimate` may indicate the total number of results available
+
+**If `truncated: true` but no `next_cursor`:** The data cannot be paginated (e.g.,
+metadata alone exceeds budget). Check `agentic_hint` for guidance on narrowing the request.
+
+**Affected endpoints:** `search`, `read_files`, `git_log`, `git_diff`, `git_inspect` (blame), `map_repo`
+
+**Agent behavior when `truncated` is true:**
+1. Process the results already returned
+2. If `next_cursor` is present and more context is needed, call again with `cursor` set to `next_cursor`
+3. If `next_cursor` is absent, narrow the request (e.g., filter by paths, reduce limit)
+
+The first result is always included regardless of size (no empty pages).
 <!-- /codeplane-instructions -->
