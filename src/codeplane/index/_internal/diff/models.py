@@ -70,6 +70,7 @@ class ImpactInfo:
     reference_basis: str = "unknown"  # "ref_facts_resolved" | "ref_facts_partial" | "unknown"
     referencing_files: list[str] | None = None
     importing_files: list[str] | None = None
+    import_count: int | None = None  # distinct from reference_count (import mentions vs usage refs)
     affected_test_files: list[str] | None = None
     confidence: str = "high"  # high | medium | low
     visibility: str | None = None  # public | private | protected | internal
@@ -90,6 +91,7 @@ class StructuralChange:
     old_sig: str | None
     new_sig: str | None
     impact: ImpactInfo | None
+    risk_basis: str | None = None  # machine-readable reason for behavior_change_risk
     entity_id: str | None = None  # stable ID (def_uid or hash)
     start_line: int = 0
     start_col: int = 0
@@ -133,6 +135,25 @@ class RawDiffResult:
 
 
 @dataclass
+class AnalysisScope:
+    """Metadata about what was analyzed and how.
+
+    Provides provenance, capability disclosure, and reproducibility
+    information so consumers can reason about completeness.
+    """
+
+    base_sha: str | None = None  # resolved SHA of base ref (None for epoch mode)
+    target_sha: str | None = None  # resolved SHA of target ref (None for worktree)
+    worktree_dirty: bool | None = None  # True if target is worktree and has uncommitted changes
+    mode: str = "git"  # "git" | "epoch"
+    entity_id_scheme: str = "def_uid"  # how entity_id is derived
+    files_parsed: int = 0  # files successfully parsed with tree-sitter
+    files_no_grammar: int = 0  # files with no supported grammar
+    files_parse_failed: int = 0  # files where parsing was attempted but failed
+    languages_analyzed: list[str] = field(default_factory=list)  # languages seen
+
+
+@dataclass
 class SemanticDiffResult:
     """Final enriched semantic diff result."""
 
@@ -143,3 +164,4 @@ class SemanticDiffResult:
     files_analyzed: int
     base_description: str
     target_description: str
+    scope: AnalysisScope | None = None

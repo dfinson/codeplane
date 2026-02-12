@@ -109,6 +109,8 @@ def _enrich_single_change(
     ref_count = ref_tiers.total if ref_tiers else None
     has_any = ref_count is not None or ref_files or imp_files or test_files or visibility
 
+    import_count = len(imp_files) if imp_files else None
+
     if has_any:
         impact = ImpactInfo(
             reference_count=ref_count,
@@ -116,6 +118,7 @@ def _enrich_single_change(
             reference_basis=ref_basis,
             referencing_files=ref_files,
             importing_files=imp_files,
+            import_count=import_count,
             affected_test_files=test_files,
             confidence=_get_confidence(rc.path),
             visibility=visibility,
@@ -123,7 +126,7 @@ def _enrich_single_change(
         )
 
     # Determine behavior_change_risk from change type
-    behavior_change_risk = _assess_behavior_risk(rc.change, ref_count)
+    behavior_change_risk, risk_basis = _assess_behavior_risk(rc.change, ref_count)
 
     return StructuralChange(
         path=rc.path,
@@ -133,6 +136,7 @@ def _enrich_single_change(
         change=rc.change,
         structural_severity=rc.structural_severity,
         behavior_change_risk=behavior_change_risk,
+        risk_basis=risk_basis,
         old_sig=rc.old_sig,
         new_sig=rc.new_sig,
         impact=impact,
@@ -146,25 +150,28 @@ def _enrich_single_change(
     )
 
 
-def _assess_behavior_risk(change: str, ref_count: int | None) -> str:
+def _assess_behavior_risk(change: str, ref_count: int | None) -> tuple[str, str]:
     """Assess behavior change risk based on change type and blast radius.
+
+    Returns (risk_level, risk_basis).  risk_basis is a machine-readable
+    reason string so consumers can audit/override the heuristic.
 
     This is an honest heuristic — it cannot detect actual behavioral changes,
     only estimate likelihood based on structural signals.
     """
     if change in ("added",):
-        return "low"
+        return "low", "new_symbol"
     if change in ("removed", "renamed"):
-        return "high"
+        return "high", f"symbol_{change}"
     if change == "signature_changed":
-        return "high"
+        return "high", "signature_changed"
     if change == "body_changed":
         # Body changes are unknown by default — we can't tell if the behavior
         # actually changed without deeper analysis (delta tags can help)
         if ref_count is not None and ref_count > 10:
-            return "medium"  # High blast radius body change
-        return "unknown"
-    return "unknown"
+            return "medium", f"body_changed_high_blast_radius(refs={ref_count})"
+        return "unknown", "body_changed_unknown_impact"
+    return "unknown", "unclassified_change"
 
 
 def _enrich_references(
@@ -340,7 +347,7 @@ def _build_summary(changes: list[StructuralChange]) -> str:
         counts[key] = counts.get(key, 0) + 1
 
     parts = [f"{count} {kind}" for kind, count in sorted(counts.items())]
-    return ", ".join(parts)
+    return f"{', '.join(parts)} (symbols)"
 
 
 def _build_breaking_summary(changes: list[StructuralChange]) -> str | None:

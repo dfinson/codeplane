@@ -143,3 +143,75 @@ class TestBuildBreakingSummary:
         )
         assert result is not None
         assert "2 breaking changes" in result
+
+
+# ============================================================================
+# Tests: Behavior Risk Assessment
+# ============================================================================
+
+
+class TestAssessBehaviorRisk:
+    """Tests for _assess_behavior_risk."""
+
+    def test_added_returns_low_with_basis(self) -> None:
+        from codeplane.index._internal.diff.enrichment import _assess_behavior_risk
+
+        risk, basis = _assess_behavior_risk("added", None)
+        assert risk == "low"
+        assert basis == "new_symbol"
+
+    def test_removed_returns_high_with_basis(self) -> None:
+        from codeplane.index._internal.diff.enrichment import _assess_behavior_risk
+
+        risk, basis = _assess_behavior_risk("removed", None)
+        assert risk == "high"
+        assert basis == "symbol_removed"
+
+    def test_renamed_returns_high_with_basis(self) -> None:
+        from codeplane.index._internal.diff.enrichment import _assess_behavior_risk
+
+        risk, basis = _assess_behavior_risk("renamed", None)
+        assert risk == "high"
+        assert basis == "symbol_renamed"
+
+    def test_signature_changed_returns_high(self) -> None:
+        from codeplane.index._internal.diff.enrichment import _assess_behavior_risk
+
+        risk, basis = _assess_behavior_risk("signature_changed", None)
+        assert risk == "high"
+        assert basis == "signature_changed"
+
+    def test_body_changed_high_blast_radius(self) -> None:
+        from codeplane.index._internal.diff.enrichment import _assess_behavior_risk
+
+        risk, basis = _assess_behavior_risk("body_changed", 15)
+        assert risk == "medium"
+        assert "blast_radius" in basis
+        assert "15" in basis
+
+    def test_body_changed_unknown(self) -> None:
+        from codeplane.index._internal.diff.enrichment import _assess_behavior_risk
+
+        risk, basis = _assess_behavior_risk("body_changed", 3)
+        assert risk == "unknown"
+        assert basis == "body_changed_unknown_impact"
+
+    def test_unknown_change_type(self) -> None:
+        from codeplane.index._internal.diff.enrichment import _assess_behavior_risk
+
+        risk, basis = _assess_behavior_risk("weird_change", None)
+        assert risk == "unknown"
+        assert basis == "unclassified_change"
+
+
+class TestSummaryFormat:
+    """Tests for summary output format."""
+
+    def test_summary_contains_symbols_suffix(self) -> None:
+        result = _build_summary([_change("added")])
+        assert "(symbols)" in result
+
+    def test_summary_no_changes_no_suffix(self) -> None:
+        result = _build_summary([])
+        assert result == "No changes detected"
+        assert "(symbols)" not in result

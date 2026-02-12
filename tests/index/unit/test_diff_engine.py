@@ -334,7 +334,8 @@ class TestDeltaTags:
         from codeplane.index._internal.diff.engine import _compute_delta_tags
 
         tags = _compute_delta_tags("body_changed", _snap(), _snap(), lines_changed=2)
-        assert tags == ["minor_change"]
+        assert "minor_change" in tags
+        assert "possibly_comment_or_whitespace" in tags
 
     def test_body_logic_change(self) -> None:
         from codeplane.index._internal.diff.engine import _compute_delta_tags
@@ -353,6 +354,22 @@ class TestDeltaTags:
 
         tags = _compute_delta_tags("body_changed", _snap(), _snap())
         assert tags == ["body_logic_changed"]
+
+    def test_body_minor_3_lines_no_comment_guard(self) -> None:
+        """3 lines_changed gets minor_change but NOT possibly_comment_or_whitespace."""
+        from codeplane.index._internal.diff.engine import _compute_delta_tags
+
+        tags = _compute_delta_tags("body_changed", _snap(), _snap(), lines_changed=3)
+        assert tags == ["minor_change"]
+        assert "possibly_comment_or_whitespace" not in tags
+
+    def test_body_1_line_gets_comment_guard(self) -> None:
+        """1 line change triggers the comment-only misclassification guard."""
+        from codeplane.index._internal.diff.engine import _compute_delta_tags
+
+        tags = _compute_delta_tags("body_changed", _snap(), _snap(), lines_changed=1)
+        assert "minor_change" in tags
+        assert "possibly_comment_or_whitespace" in tags
 
 
 class TestExtractParams:

@@ -5,6 +5,7 @@ Orchestrates the full pipeline: sources -> engine -> enrichment -> output.
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 from collections import OrderedDict
@@ -20,6 +21,7 @@ from codeplane.git.models import _DELTA_STATUS_MAP
 from codeplane.index._internal.diff.engine import compute_structural_diff
 from codeplane.index._internal.diff.enrichment import enrich_diff
 from codeplane.index._internal.diff.models import (
+    AnalysisScope,
     ChangedFile,
     DefSnapshot,
     SemanticDiffResult,
@@ -244,6 +246,28 @@ def _run_git_diff(
     result.base_description = base or "HEAD"
     result.target_description = target or "working tree"
 
+    # Build analysis scope
+    files_parsed = len([cf for cf in changed_files if cf.has_grammar])
+    files_no_grammar = len([cf for cf in changed_files if not cf.has_grammar])
+    languages = sorted({cf.language for cf in changed_files if cf.language})
+
+    # Detect worktree dirty state (target is worktree when target param is None)
+    worktree_dirty: bool | None = None
+    if target is None:
+        with contextlib.suppress(Exception):
+            worktree_dirty = repo.status() != {}
+
+    result.scope = AnalysisScope(
+        base_sha=str(plan.base_oid) if plan.base_oid else None,
+        target_sha=str(plan.target_oid) if plan.target_oid else None,
+        worktree_dirty=worktree_dirty,
+        mode="git",
+        entity_id_scheme="def_uid",
+        files_parsed=files_parsed,
+        files_no_grammar=files_no_grammar,
+        languages_analyzed=languages,
+    )
+
     return result
 
 
@@ -350,6 +374,22 @@ def _run_epoch_diff(
 
     result.base_description = f"epoch {base_epoch}"
     result.target_description = f"epoch {target_epoch}" if target_epoch else "current index"
+
+    # Build analysis scope for epoch mode
+    files_parsed = len([cf for cf in changed_files if cf.has_grammar])
+    files_no_grammar = len([cf for cf in changed_files if not cf.has_grammar])
+    languages = sorted({cf.language for cf in changed_files if cf.language})
+
+    result.scope = AnalysisScope(
+        base_sha=None,
+        target_sha=None,
+        worktree_dirty=None,
+        mode="epoch",
+        entity_id_scheme="def_uid",
+        files_parsed=files_parsed,
+        files_no_grammar=files_no_grammar,
+        languages_analyzed=languages,
+    )
 
     return result
 
@@ -504,6 +544,8 @@ def _result_to_dict(
             "structural_severity": c.structural_severity,
             "behavior_change_risk": c.behavior_change_risk,
         }
+        if c.risk_basis:
+            d["risk_basis"] = c.risk_basis
         if c.qualified_name:
             d["qualified_name"] = c.qualified_name
         if c.entity_id:
@@ -570,6 +612,11 @@ def _result_to_dict(
         "target": result.target_description,
         "structural_changes": acc.items,
         "non_structural_changes": [asdict(f) for f in result.non_structural_changes],
+        **(
+            {"scope": {k: v for k, v in asdict(result.scope).items() if v is not None}}
+            if result.scope
+            else {}
+        ),
         "agentic_hint": agentic_hint,
         "pagination": make_budget_pagination(
             has_more=has_more,

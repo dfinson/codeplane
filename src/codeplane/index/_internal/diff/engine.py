@@ -181,6 +181,11 @@ def _compute_delta_tags(
         if lines_changed is not None:
             if lines_changed <= 3:
                 tags.append("minor_change")
+                # Guard against comment-only misclassification: very small
+                # body changes (≤2 lines) often turn out to be comment edits,
+                # whitespace, or docstring tweaks rather than logic changes.
+                if lines_changed <= 2:
+                    tags.append("possibly_comment_or_whitespace")
             elif lines_changed > 20:
                 tags.append("major_change")
             else:
