@@ -59,12 +59,39 @@ def snapshots_from_index(session: Session, file_path: str) -> list[DefSnapshot]:
 
 
 def snapshots_from_epoch(session: Session, epoch_id: int, file_path: str) -> list[DefSnapshot]:
-    """Read DefSnapshotRecords for a file at a given epoch."""
+    """Read DefSnapshotRecords for a file at a given epoch.
+
+    Reconstructs the file state at `epoch_id` by selecting the latest
+    snapshot per symbol with epoch_id <= the requested epoch. This is
+    necessary because publish_epoch() only writes rows for files touched
+    in each epoch — unchanged files have no rows for that epoch.
+    """
+    from sqlalchemy import func
+
     from codeplane.index.models import DefSnapshotRecord
 
-    stmt = select(DefSnapshotRecord).where(
-        DefSnapshotRecord.epoch_id == epoch_id,
-        DefSnapshotRecord.file_path == file_path,
+    # Subquery: max epoch_id per (file_path, lexical_path) where epoch_id <= target
+    latest = (
+        select(
+            DefSnapshotRecord.lexical_path,
+            func.max(DefSnapshotRecord.epoch_id).label("max_epoch"),
+        )
+        .where(
+            DefSnapshotRecord.file_path == file_path,
+            DefSnapshotRecord.epoch_id <= epoch_id,
+        )
+        .group_by(DefSnapshotRecord.lexical_path)
+        .subquery()
+    )
+
+    stmt = (
+        select(DefSnapshotRecord)
+        .join(
+            latest,
+            (DefSnapshotRecord.lexical_path == latest.c.lexical_path)  # type: ignore[arg-type]
+            & (DefSnapshotRecord.epoch_id == latest.c.max_epoch),
+        )
+        .where(DefSnapshotRecord.file_path == file_path)
     )
     rows = session.exec(stmt).all()
     return [
@@ -168,7 +195,12 @@ def _compute_lexical_path(sym: SyntacticSymbol, all_symbols: list[SyntacticSymbo
 
 
 def _compute_signature_hash(sym: SyntacticSymbol) -> str | None:
-    """Compute a hash of the symbol's signature for change detection."""
+    """Compute a hash of the symbol's signature for change detection.
+
+    Must use the same hashing/truncation scheme as the structural indexer
+    (see structural.py: SHA-256 hexdigest truncated to 8 chars) so blob
+    snapshots are directly comparable to DB snapshots.
+    """
     if sym.signature:
-        return hashlib.sha256(sym.signature.encode()).hexdigest()[:16]
+        return hashlib.sha256(sym.signature.encode()).hexdigest()[:8]
     return None

@@ -54,8 +54,8 @@ def seeded_db(db: Database) -> Database:
 
         d = DefFact(
             def_uid="uid1",
-            file_id=f.id,  # type: ignore[arg-type]
-            unit_id=ctx.id,  # type: ignore[arg-type]
+            file_id=f.id,
+            unit_id=ctx.id,
             kind="function",
             name="foo",
             lexical_path="foo",
@@ -124,6 +124,27 @@ class TestSnapshotsFromEpoch:
         assert snaps[0].name == "foo"
 
     def test_empty_for_wrong_epoch(self, db: Database) -> None:
+        """Epoch 0 should not see a record written at epoch 1."""
+        with db.session() as session:
+            record = DefSnapshotRecord(
+                epoch_id=1,
+                file_path="src/main.py",
+                kind="function",
+                name="foo",
+                lexical_path="foo",
+                start_line=1,
+                end_line=10,
+            )
+            session.add(record)
+            session.commit()
+
+        with db.session() as session:
+            # epoch 0 is before the record at epoch 1
+            snaps = snapshots_from_epoch(session, 0, "src/main.py")
+        assert len(snaps) == 0
+
+    def test_reconstructs_state_at_later_epoch(self, db: Database) -> None:
+        """Querying epoch 99 should find a record written at epoch 1 (<=)."""
         with db.session() as session:
             record = DefSnapshotRecord(
                 epoch_id=1,
@@ -139,7 +160,8 @@ class TestSnapshotsFromEpoch:
 
         with db.session() as session:
             snaps = snapshots_from_epoch(session, 99, "src/main.py")
-        assert len(snaps) == 0
+        assert len(snaps) == 1
+        assert snaps[0].name == "foo"
 
 
 # ============================================================================

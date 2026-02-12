@@ -13,6 +13,7 @@ from fastmcp import Context
 from pydantic import Field
 
 from codeplane.core.languages import detect_language_family, has_grammar
+from codeplane.git.models import _DELTA_STATUS_MAP
 from codeplane.index._internal.diff.engine import compute_structural_diff
 from codeplane.index._internal.diff.enrichment import enrich_diff
 from codeplane.index._internal.diff.models import (
@@ -90,13 +91,7 @@ def _run_git_diff(
         if paths and file_path not in paths:
             continue
 
-        status_map = {
-            1: "added",
-            2: "deleted",
-            3: "modified",
-            5: "renamed",
-        }  # pygit2 delta.status codes
-        status = status_map.get(patch.delta.status, "modified")  # type: ignore[union-attr]
+        status = _DELTA_STATUS_MAP.get(patch.delta.status, "modified")  # type: ignore[union-attr]
 
         lang = detect_language_family(file_path)
         file_has_grammar = bool(lang and has_grammar(lang))
@@ -151,6 +146,29 @@ def _run_git_diff(
     return result
 
 
+def _parse_epoch_ref(ref: str) -> int:
+    """Parse an epoch reference like 'epoch:3' into an integer.
+
+    Only numeric epoch IDs are supported (e.g. epoch:1, epoch:42).
+    Named aliases like 'epoch:previous' are not implemented.
+
+    Raises:
+        ValueError: If the epoch value is not a valid integer.
+    """
+    parts = ref.split(":", 1)
+    if len(parts) != 2 or parts[0] != "epoch":
+        msg = f"Invalid epoch reference: {ref!r}. Expected format: epoch:<int>"
+        raise ValueError(msg)
+    try:
+        return int(parts[1])
+    except ValueError:
+        msg = (
+            f"Invalid epoch value: {parts[1]!r}. "
+            f"Only numeric epoch IDs are supported (e.g. epoch:1, epoch:42)."
+        )
+        raise ValueError(msg) from None
+
+
 def _run_epoch_diff(
     app_ctx: AppContext,
     base: str,
@@ -160,8 +178,8 @@ def _run_epoch_diff(
     """Run semantic diff in epoch mode."""
     from codeplane.index.models import DefSnapshotRecord
 
-    base_epoch = int(base.split(":")[1])
-    target_epoch = int(target.split(":")[1]) if target and target.startswith("epoch:") else None
+    base_epoch = _parse_epoch_ref(base)
+    target_epoch = _parse_epoch_ref(target) if target and target.startswith("epoch:") else None
 
     coordinator = app_ctx.coordinator
     db = coordinator.db
@@ -169,10 +187,11 @@ def _run_epoch_diff(
     with db.session() as session:
         from sqlmodel import select
 
-        # Find all files that have snapshots in either epoch
+        # Reconstruct file state at each epoch by finding all files
+        # that have any snapshot at or before the epoch
         base_files_stmt = (
             select(DefSnapshotRecord.file_path)
-            .where(DefSnapshotRecord.epoch_id == base_epoch)
+            .where(DefSnapshotRecord.epoch_id <= base_epoch)
             .distinct()
         )
         base_file_paths = set(session.exec(base_files_stmt).all())
@@ -181,7 +200,7 @@ def _run_epoch_diff(
         if target_epoch is not None:
             target_files_stmt = (
                 select(DefSnapshotRecord.file_path)
-                .where(DefSnapshotRecord.epoch_id == target_epoch)
+                .where(DefSnapshotRecord.epoch_id <= target_epoch)
                 .distinct()
             )
             target_file_paths = set(session.exec(target_files_stmt).all())
@@ -199,20 +218,28 @@ def _run_epoch_diff(
             lang = detect_language_family(fp)
             file_has_grammar = bool(lang and has_grammar(lang))
 
-            if fp in base_file_paths and fp not in target_file_paths:
+            # Reconstruct per-epoch state via snapshots_from_epoch
+            # (which uses epoch_id <= target to get full state)
+            base_snaps = snapshots_from_epoch(session, base_epoch, fp)
+            if target_epoch is not None:
+                target_snaps = snapshots_from_epoch(session, target_epoch, fp)
+            else:
+                target_snaps = snapshots_from_index(session, fp)
+
+            base_exists = bool(base_snaps)
+            target_exists = bool(target_snaps)
+
+            if base_exists and not target_exists:
                 status = "deleted"
-            elif fp not in base_file_paths and fp in target_file_paths:
+            elif not base_exists and target_exists:
                 status = "added"
             else:
                 status = "modified"
 
             changed_files.append(ChangedFile(fp, status, file_has_grammar))
 
-            base_facts[fp] = snapshots_from_epoch(session, base_epoch, fp)
-            if target_epoch is not None:
-                target_facts[fp] = snapshots_from_epoch(session, target_epoch, fp)
-            else:
-                target_facts[fp] = snapshots_from_index(session, fp)
+            base_facts[fp] = base_snaps
+            target_facts[fp] = target_snaps
 
     # Run engine (no hunks in epoch mode)
     raw = compute_structural_diff(base_facts, target_facts, changed_files, hunks=None)
