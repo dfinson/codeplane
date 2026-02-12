@@ -138,6 +138,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         acc = BudgetAccumulator()
         processed_targets = 0
         missing_paths: list[str] = []
+        missing_count = 0  # Track total missing, not just capped list
 
         # Process targets in order, tracking both found and missing
         for t in page_targets:
@@ -156,7 +157,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     break
             else:
                 # Target not found - track it but don't count against budget
-                # Cap missing_paths to prevent unbounded growth
+                missing_count += 1
+                # Cap missing_paths list to prevent unbounded response size
                 if len(missing_paths) < 100:
                     missing_paths.append(t.path)
             processed_targets += 1
@@ -171,10 +173,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 next_cursor=str(next_offset) if has_more_targets else None,
                 total_estimate=len(targets) if has_more_targets else None,
             ),
-            "summary": _summarize_read(acc.items, len(missing_paths)),
+            "summary": _summarize_read(acc.items, missing_count),
         }
         if missing_paths:
             response["not_found"] = missing_paths
+            if missing_count > len(missing_paths):
+                # Indicate there are more missing than listed
+                response["not_found_count"] = missing_count
         return response
 
     @mcp.tool

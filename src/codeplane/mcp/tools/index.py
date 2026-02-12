@@ -227,8 +227,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "summary": _summarize_search(0, "references", query),
                 }
 
-            refs = await app_ctx.coordinator.get_references(def_fact, _context_id=0, limit=limit)
-
             # Apply cursor: skip past previously returned results
             start_idx = 0
             if cursor:
@@ -237,10 +235,20 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     if parsed >= 0:
                         start_idx = parsed
 
+            # Fetch refs with offset for pagination (fetch limit+1 to detect has_more)
+            refs = await app_ctx.coordinator.get_references(
+                def_fact, _context_id=0, limit=limit + 1, offset=start_idx
+            )
+
+            # Check if there are more refs beyond this page
+            has_more_refs = len(refs) > limit
+            if has_more_refs:
+                refs = refs[:limit]
+
             acc = BudgetAccumulator()
             ref_files: set[str] = set()
 
-            for ref in refs[start_idx:]:
+            for ref in refs:
                 path = await _get_file_path(app_ctx, ref.file_id)
 
                 result_item = {
@@ -277,15 +285,17 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     break
                 ref_files.add(path)
 
-            items_remaining = len(refs) - start_idx
-            budget_more = not acc.has_room and items_remaining > acc.count
+            # Determine if there are more results
+            # has_more_refs = True if we fetched limit+1 rows
+            # budget_more = True if budget was exhausted before all refs in page
+            budget_more = not acc.has_room and len(refs) > acc.count
+            has_more = has_more_refs or budget_more
             next_offset = start_idx + acc.count
             return {
                 "results": acc.items,
                 "pagination": make_budget_pagination(
-                    has_more=budget_more,
-                    next_cursor=str(next_offset) if budget_more else None,
-                    total_estimate=len(refs) if budget_more else None,
+                    has_more=has_more,
+                    next_cursor=str(next_offset) if has_more else None,
                 ),
                 "query_time_ms": 0,
                 "summary": _summarize_search(

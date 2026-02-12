@@ -377,6 +377,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     high = mid - 1
 
             result["patch"] = best_patch or ""
+            # Update pagination to indicate patch was truncated
+            result["pagination"]["truncated"] = True
+            if "patch_truncated" not in result:
+                result["patch_truncated"] = True
 
         return result
 
