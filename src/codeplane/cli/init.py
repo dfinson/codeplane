@@ -328,7 +328,7 @@ def _ensure_vscode_mcp_config(repo_root: Path, port: int) -> tuple[bool, str]:
             if current_url == expected_url:
                 return False, server_name
 
-            # Update with new config (also migrates from old mcp-remote format)
+            # Update with new native HTTP config
             servers[server_name] = expected_config
         else:
             # Add new server entry
@@ -385,7 +385,7 @@ def sync_vscode_mcp_port(repo_root: Path, port: int) -> bool:
     if current_url == expected_url:
         return False
 
-    # Update config (also migrates from old mcp-remote format)
+    # Update config to native HTTP format
     # Preserve existing settings (headers, env, etc.) while updating type/url
     existing_entry = servers.get(server_name, {})
     if isinstance(existing_entry, dict):
