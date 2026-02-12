@@ -1082,6 +1082,7 @@ class IndexCoordinator:
         query: str,
         mode: str = SearchMode.TEXT,
         limit: int = 100,
+        offset: int = 0,
         context_lines: int = 1,
         filter_languages: list[str] | None = None,
     ) -> SearchResponse:
@@ -1092,6 +1093,7 @@ class IndexCoordinator:
             query: Search query string
             mode: SearchMode.TEXT, SYMBOL, or PATH
             limit: Maximum results to return
+            offset: Number of results to skip (for pagination)
             context_lines: Lines of context before/after each match (default 1)
             filter_languages: Optional list of language families to filter by
                              (e.g., ["python", "javascript"]). If None, returns all.
@@ -1114,7 +1116,9 @@ class IndexCoordinator:
                     return SearchResponse(results=[])
 
         # Request more results than limit if filtering, to account for filtering
-        search_limit = limit * 3 if filter_languages else limit
+        # Also account for offset to support pagination
+        base_limit = offset + limit
+        search_limit = base_limit * 3 if filter_languages else base_limit
 
         # Use appropriate search method based on mode
         if mode == SearchMode.SYMBOL:
@@ -1135,7 +1139,7 @@ class IndexCoordinator:
         if allowed_paths is not None:
             filtered_hits = [hit for hit in filtered_hits if hit.file_path in allowed_paths]
 
-        # Apply limit after filtering
+        # Apply offset and limit after filtering
         results = [
             SearchResult(
                 path=hit.file_path,
@@ -1144,7 +1148,7 @@ class IndexCoordinator:
                 snippet=hit.snippet,
                 score=hit.score,
             )
-            for hit in filtered_hits[:limit]
+            for hit in filtered_hits[offset : offset + limit]
         ]
 
         return SearchResponse(

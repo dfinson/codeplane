@@ -303,16 +303,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 ),
             }
 
-        # Lexical or symbol search
-        search_response = await app_ctx.coordinator.search(
-            query,
-            mode_map[mode],
-            limit=limit,
-            context_lines=effective_lines if not is_structural else 1,
-            filter_languages=filter_languages,
-        )
-
-        # Apply cursor: skip past previously returned results
+        # Parse cursor for pagination
         start_idx = 0
         if cursor:
             with contextlib.suppress(ValueError):
@@ -320,11 +311,26 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 if parsed >= 0:
                     start_idx = parsed
 
-        # Build results with context handling, bounded by budget
+        # Lexical or symbol search - fetch limit+1 to detect has_more
+        search_response = await app_ctx.coordinator.search(
+            query,
+            mode_map[mode],
+            limit=limit + 1,
+            offset=start_idx,
+            context_lines=effective_lines if not is_structural else 1,
+            filter_languages=filter_languages,
+        )
+
+        # Check if there are more results beyond this page
         all_results = search_response.results
+        has_more_results = len(all_results) > limit
+        if has_more_results:
+            all_results = all_results[:limit]
+
+        # Build results with context handling, bounded by budget
         acc = BudgetAccumulator()
         unique_files: set[str] = set()
-        for r in all_results[start_idx:]:
+        for r in all_results:
             result_item = {
                 "path": r.path,
                 "line": r.line,
@@ -359,17 +365,18 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 break
             unique_files.add(r.path)
 
-        total_available = len(all_results)
-        items_remaining = total_available - start_idx
-        budget_more = not acc.has_room and items_remaining > acc.count
+        # Determine if there are more results
+        # has_more_results = True if coordinator returned limit+1 rows
+        # budget_more = True if budget was exhausted before all results in page
+        budget_more = not acc.has_room and len(all_results) > acc.count
+        has_more = has_more_results or budget_more
         next_offset = start_idx + acc.count
 
         result: dict[str, Any] = {
             "results": acc.items,
             "pagination": make_budget_pagination(
-                has_more=budget_more,
-                next_cursor=str(next_offset) if budget_more else None,
-                total_estimate=total_available if budget_more else None,
+                has_more=has_more,
+                next_cursor=str(next_offset) if has_more else None,
             ),
             "query_time_ms": 0,
             "summary": _summarize_search(
