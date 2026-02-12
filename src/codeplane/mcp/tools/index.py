@@ -318,6 +318,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 filter_kinds=filter_kinds,
                 filter_paths=filter_paths,
                 limit=limit + 1,
+                offset=start_idx,
             )
         else:
             # Lexical search - fetch limit+1 to detect has_more

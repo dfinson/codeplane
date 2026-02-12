@@ -118,11 +118,18 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         page_targets = targets[start_idx:]
 
         # Derive paths and target map from FileTarget objects.
+        # Reject duplicate paths - only one FileTarget per path is supported.
         paths: list[str] = []
         target_map: dict[str, tuple[int, int]] = {}
+        seen_paths: set[str] = set()
         for t in page_targets:
-            if t.path not in paths:
-                paths.append(t.path)
+            if t.path in seen_paths:
+                return {
+                    "error": f"Duplicate path '{t.path}' in targets is not supported; "
+                    "provide only one FileTarget per file path.",
+                }
+            seen_paths.add(t.path)
+            paths.append(t.path)
             if t.start_line is not None and t.end_line is not None:
                 target_map[t.path] = (t.start_line, t.end_line)
 
