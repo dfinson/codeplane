@@ -1260,8 +1260,13 @@ class IndexCoordinator:
                 break
 
         # Phase 2: Tantivy fallback (only if Phase 1 didn't fill limit)
-        if len(results) < limit and self._lexical is not None:
+        # Skip fallback when filter_kinds is set — Tantivy has no kind metadata
+        # so we'd return results that violate the caller's kind constraint.
+        if len(results) < limit and self._lexical is not None and not filter_kinds:
             tantivy_results = self._lexical.search_symbols(query, limit=limit, context_lines=1)
+            # Cap fallback scores below the lowest Phase 1 score so
+            # structural matches always rank first.
+            phase1_min = min((r.score for r in results), default=0.5)
             for hit in tantivy_results.results:
                 key = (hit.file_path, hit.line)
                 if key in seen:
@@ -1269,7 +1274,6 @@ class IndexCoordinator:
                 # Apply path filter if requested
                 if filter_paths and not _matches_filter_paths(hit.file_path, filter_paths):
                     continue
-                # No kind filtering in fallback — structured data not available
                 seen.add(key)
                 results.append(
                     SearchResult(
@@ -1277,7 +1281,7 @@ class IndexCoordinator:
                         line=hit.line,
                         column=hit.column,
                         snippet=hit.snippet,
-                        score=hit.score * 0.5,  # discount fallback results
+                        score=min(hit.score * 0.5, phase1_min - 0.01),
                     )
                 )
                 if len(results) >= limit:
