@@ -117,6 +117,7 @@ Terminal fallback is permitted ONLY when no CodePlane tool exists for the operat
 | Run tests | `mcp_codeplane-codeplane_run_test_targets` | `pytest`, `jest` directly |
 | Rename symbols | `mcp_codeplane-codeplane_refactor_rename` | Find-and-replace, `sed` |
 | Move files | `mcp_codeplane-codeplane_refactor_move` | `mv` + manual import fixes |
+| Semantic diff | `mcp_codeplane-codeplane_semantic_diff` | Manual comparison of git diffs |
 
 ### Critical Parameter Reference
 
@@ -125,8 +126,8 @@ Terminal fallback is permitted ONLY when no CodePlane tool exists for the operat
 paths: list[str]           # REQUIRED - file paths relative to repo root
 targets: list[FileTarget]  # optional - NOT "line_ranges" or "ranges"
   path: str                # REQUIRED - file path this target applies to
-  start_line: int          # optional; 1-indexed, NOT "start"; must be provided with end_line if set
-  end_line: int            # optional; 1-indexed, NOT "end"; must be provided with start_line if set
+  start_line: int          # optional, 1-indexed; must be provided together with end_line
+  end_line: int            # optional, 1-indexed; must be provided together with start_line
 ```
 
 **mcp_codeplane-codeplane_write_files**
@@ -143,6 +144,10 @@ dry_run: bool              # optional, default false
 ```
 query: str                 # REQUIRED
 mode: "lexical"|"symbol"|"references"|"definitions"  # default "lexical", NOT "scope" or "text"
+context: "none"|"minimal"|"standard"|"rich"|"function"|"class"  # default "standard"
+                           # none=0, minimal=1, standard=5, rich=20 lines
+                           # function/class: enclosing scope body (structural) with 25-line fallback
+context_lines: int         # optional - override lines for line-based, or fallback for structural
 limit: int                 # default 20, NOT "max_results"
 ```
 
@@ -197,6 +202,22 @@ test_filter: str           # optional - filter test NAMES (pytest -k), does NOT 
 coverage: bool             # default false
 coverage_dir: str          # REQUIRED when coverage=true
 ```
+
+**mcp_codeplane-codeplane_semantic_diff**
+```
+base: str                  # default "HEAD" - git ref or "epoch:N"
+target: str | None         # default None (working tree) - git ref or "epoch:M"
+paths: list[str] | None    # optional - limit to specific file paths
+```
+
+**Structural change summary from index facts.** Compares definitions between two
+states and classifies changes as added, removed, signature_changed, body_changed,
+or renamed. Includes blast-radius enrichment (reference counts, importing files,
+affected test files) and priority-ordered agentic hints.
+
+Modes:
+- Git mode (default): base/target are git refs
+- Epoch mode: base="epoch:N", target="epoch:M"
 
 ### Refactor Tools Workflow
 

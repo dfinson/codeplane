@@ -66,6 +66,7 @@ Terminal fallback is permitted ONLY when no CodePlane tool exists for the operat
 | Run tests | `{tool_prefix}_run_test_targets` | `pytest`, `jest` directly |
 | Rename symbols | `{tool_prefix}_refactor_rename` | Find-and-replace, `sed` |
 | Move files | `{tool_prefix}_refactor_move` | `mv` + manual import fixes |
+| Semantic diff | `{tool_prefix}_semantic_diff` | Manual comparison of git diffs |
 
 ### Critical Parameter Reference
 
@@ -150,6 +151,22 @@ test_filter: str           # optional - filter test NAMES (pytest -k), does NOT 
 coverage: bool             # default false
 coverage_dir: str          # REQUIRED when coverage=true
 ```
+
+**{tool_prefix}_semantic_diff**
+```
+base: str                  # default "HEAD" - git ref or "epoch:N"
+target: str | None         # default None (working tree) - git ref or "epoch:M"
+paths: list[str] | None    # optional - limit to specific file paths
+```
+
+**Structural change summary from index facts.** Compares definitions between two
+states and classifies changes as added, removed, signature_changed, body_changed,
+or renamed. Includes blast-radius enrichment (reference counts, importing files,
+affected test files) and priority-ordered agentic hints.
+
+Modes:
+- Git mode (default): base/target are git refs
+- Epoch mode: base="epoch:N", target="epoch:M"
 
 ### Refactor Tools Workflow
 
