@@ -417,13 +417,13 @@ def _result_to_dict(
             d["old_signature"] = c.old_sig
         if c.new_sig:
             d["new_signature"] = c.new_sig
-        if c.start_line is not None:
+        if c.start_line:
             d["start_line"] = c.start_line
-            if c.start_col is not None:
+            if c.start_col:
                 d["start_col"] = c.start_col
-        if c.end_line is not None:
+        if c.end_line:
             d["end_line"] = c.end_line
-            if c.end_col is not None:
+            if c.end_col:
                 d["end_col"] = c.end_col
         if c.lines_changed is not None:
             d["lines_changed"] = c.lines_changed

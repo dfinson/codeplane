@@ -3511,12 +3511,23 @@ Structural change summary from index facts. Compares definitions between two sta
   base: string;                       // Resolved base description
   target: string;                     // Resolved target description
   structural_changes: StructuralChange[];
-  non_structural_changes: string[];   // File paths without grammar support
+  non_structural_changes: FileChangeInfo[];  // Files without grammar support
   agentic_hint: string;               // Priority-ordered action list (computed from ALL changes)
   pagination: {                       // Pagination metadata
     next_cursor?: string;             // Cursor for next page (absent if last page)
     total_estimate?: number;          // Total structural changes count
   };
+}
+```
+
+**FileChangeInfo:**
+
+```typescript
+{
+  path: string;
+  status: string;                     // "added", "modified", "deleted", "renamed"
+  category: string;                   // "prod", "test", "build", "config", "docs"
+  language?: string;                  // Detected language family
 }
 ```
 
@@ -3529,24 +3540,47 @@ Structural change summary from index facts. Compares definitions between two sta
   name: string;
   qualified_name?: string;            // Dot-separated path (e.g., "MyClass.method")
   change: "added" | "removed" | "signature_changed" | "body_changed" | "renamed";
-  severity: "breaking" | "non_breaking";
+  structural_severity: "breaking" | "non_breaking";
+  behavior_change_risk: "low" | "medium" | "high" | "unknown";
+  entity_id?: string;                 // Stable def_uid from index
   old_signature?: string;
   new_signature?: string;
   old_name?: string;                  // For renames
+  start_line?: number;
+  start_col?: number;
+  end_line?: number;
+  end_col?: number;
+  lines_changed?: number;             // Count of changed lines in entity span
+  delta_tags?: string[];              // e.g. ["parameters_changed", "minor_change"]
+  change_preview?: string;            // First N changed lines within span
   impact?: ImpactInfo;
   nested_changes?: StructuralChange[]; // Methods nested under their class
 }
 ```
 
+**Delta Tag Taxonomy:**
+- `symbol_added`, `symbol_removed`, `symbol_renamed`
+- `parameters_changed`, `return_type_changed`, `signature_changed`
+- `minor_change` (≤3 lines), `body_logic_changed`, `major_change` (>20 lines)
+
 **ImpactInfo (blast-radius enrichment):**
 
 ```typescript
 {
-  reference_count: number;            // RefFact-based cross-reference count
+  reference_count?: number;           // Total RefFact-based cross-reference count
+  ref_tiers?: {                       // Reference counts by resolution tier
+    proven: number;                   // Same-file lexical bind, certain
+    strong: number;                   // Cross-file with explicit import trace
+    anchored: number;                 // Ambiguous but grouped in anchor group
+    unknown: number;                  // Cannot classify
+  };
+  reference_basis: string;            // "ref_facts_resolved" | "ref_facts_partial" | "unknown"
   referencing_files?: string[];       // Files containing references
   importing_files?: string[];         // Files importing this symbol
   affected_test_files?: string[];     // Test files that may need updating
-  confidence: "high" | "medium" | "low";
+  confidence: "high" | "low";
+  visibility?: string;                // "public" | "private" | "protected" | "internal"
+  is_static?: boolean;
 }
 ```
 
@@ -3556,9 +3590,9 @@ Structural change summary from index facts. Compares definitions between two sta
 - Enrichment is fail-open: each annotation (refs, imports, tests) independently wrapped
 
 **Agentic hint priority:**
-1. Signature changes with references (callers may need updating)
+1. Signature changes with references (callers may need updating, includes tier breakdown)
 2. Removed symbols (broken references)
-3. Body changes summary (review for correctness)
+3. Body changes with behavior risk assessment (review for correctness)
 4. Affected test files (re-run)
 
 ---
