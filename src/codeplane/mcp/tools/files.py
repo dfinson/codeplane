@@ -117,20 +117,29 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         page_targets = targets[start_idx:]
 
-        # Collect unique paths - read each file once (full content), then apply ranges per-target
-        unique_paths: list[str] = []
+        # Derive paths and target map from FileTarget objects.
+        # Reject duplicate paths - only one FileTarget per path is supported.
+        paths: list[str] = []
+        target_map: dict[str, tuple[int, int]] = {}
+        seen_paths: set[str] = set()
         for t in page_targets:
-            if t.path not in unique_paths:
-                unique_paths.append(t.path)
+            if t.path in seen_paths:
+                return {
+                    "error": f"Duplicate path '{t.path}' in targets is not supported; "
+                    "provide only one FileTarget per file path.",
+                }
+            seen_paths.add(t.path)
+            paths.append(t.path)
+            if t.start_line is not None and t.end_line is not None:
+                target_map[t.path] = (t.start_line, t.end_line)
 
-        # Read files WITHOUT ranges - we'll apply ranges per-target below
         result = app_ctx.file_ops.read_files(
-            unique_paths,
-            targets=None,  # Read full content
+            paths,
+            targets=target_map if target_map else None,
             include_metadata=include_metadata,
         )
 
-        # Build a map from path to full file content for efficient lookup
+        # Build a map from path to file result for efficient lookup
         file_by_path: dict[str, Any] = {f.path: f for f in result.files}
 
         acc = BudgetAccumulator()
@@ -138,28 +147,16 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         missing_paths: list[str] = []
         missing_count = 0  # Track total missing, not just capped list
 
-        # Process targets in order, applying each target's range independently
+        # Process targets in order, tracking both found and missing
         for t in page_targets:
             if t.path in file_by_path:
                 f = file_by_path[t.path]
-                # Apply range if specified for this target
-                if t.start_line is not None and t.end_line is not None:
-                    lines = f.content.splitlines(keepends=True)
-                    start_idx = max(0, t.start_line - 1)
-                    end_idx = min(len(lines), t.end_line)
-                    content = "".join(lines[start_idx:end_idx])
-                    line_count = end_idx - start_idx
-                    target_range: tuple[int, int] | None = (t.start_line, t.end_line)
-                else:
-                    content = f.content
-                    line_count = f.line_count
-                    target_range = None
                 item = {
                     "path": f.path,
-                    "content": content,
+                    "content": f.content,
                     "language": f.language,
-                    "line_count": line_count,
-                    "range": target_range,
+                    "line_count": f.line_count,
+                    "range": f.range,
                     "metadata": f.metadata,
                 }
                 if not acc.try_add(item):

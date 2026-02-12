@@ -312,22 +312,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     start_idx = parsed
 
         # Symbol search — uses dedicated search_symbols with SQLite + Tantivy fallback
-        # Note: search_symbols doesn't support offset, so we fetch start_idx + limit + 1
-        # and slice locally to handle pagination.
         if mode == "symbol":
-            fetch_limit = start_idx + limit + 1
             search_response = await app_ctx.coordinator.search_symbols(
                 query,
                 filter_kinds=filter_kinds,
                 filter_paths=filter_paths,
-                limit=fetch_limit,
+                limit=limit + 1,
+                offset=start_idx,
             )
-            # Apply offset to results
-            all_fetched = search_response.results
-            all_results = all_fetched[start_idx : start_idx + limit + 1]
-            has_more_results = len(all_results) > limit
-            if has_more_results:
-                all_results = all_results[:limit]
         else:
             # Lexical search - fetch limit+1 to detect has_more
             search_response = await app_ctx.coordinator.search(
@@ -339,11 +331,12 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 filter_languages=filter_languages,
                 filter_paths=filter_paths,
             )
-            # Check if there are more results beyond this page
-            all_results = search_response.results
-            has_more_results = len(all_results) > limit
-            if has_more_results:
-                all_results = all_results[:limit]
+
+        # Check if there are more results beyond this page
+        all_results = search_response.results
+        has_more_results = len(all_results) > limit
+        if has_more_results:
+            all_results = all_results[:limit]
 
         # Build results with context handling, bounded by budget
         acc = BudgetAccumulator()
