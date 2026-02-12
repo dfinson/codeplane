@@ -1,5 +1,6 @@
 """Index MCP tools - search, map_repo handlers."""
 
+import contextlib
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
@@ -226,20 +227,28 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "summary": _summarize_search(0, "references", query),
                 }
 
-            refs = await app_ctx.coordinator.get_references(def_fact, _context_id=0, limit=limit)
-
             # Apply cursor: skip past previously returned results
             start_idx = 0
             if cursor:
-                import contextlib
-
                 with contextlib.suppress(ValueError):
-                    start_idx = int(cursor)
+                    parsed = int(cursor)
+                    if parsed >= 0:
+                        start_idx = parsed
+
+            # Fetch refs with offset for pagination (fetch limit+1 to detect has_more)
+            refs = await app_ctx.coordinator.get_references(
+                def_fact, _context_id=0, limit=limit + 1, offset=start_idx
+            )
+
+            # Check if there are more refs beyond this page
+            has_more_refs = len(refs) > limit
+            if has_more_refs:
+                refs = refs[:limit]
 
             acc = BudgetAccumulator()
             ref_files: set[str] = set()
 
-            for ref in refs[start_idx:]:
+            for ref in refs:
                 path = await _get_file_path(app_ctx, ref.file_id)
 
                 result_item = {
@@ -276,15 +285,17 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     break
                 ref_files.add(path)
 
-            items_remaining = len(refs) - start_idx
-            budget_more = not acc.has_room and items_remaining > acc.count
+            # Determine if there are more results
+            # has_more_refs = True if we fetched limit+1 rows
+            # budget_more = True if budget was exhausted before all refs in page
+            budget_more = not acc.has_room and len(refs) > acc.count
+            has_more = has_more_refs or budget_more
             next_offset = start_idx + acc.count
             return {
                 "results": acc.items,
                 "pagination": make_budget_pagination(
-                    has_more=budget_more,
-                    next_cursor=str(next_offset) if budget_more else None,
-                    total_estimate=len(refs) if budget_more else None,
+                    has_more=has_more,
+                    next_cursor=str(next_offset) if has_more else None,
                 ),
                 "query_time_ms": 0,
                 "summary": _summarize_search(
@@ -292,38 +303,44 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 ),
             }
 
+        # Parse cursor for pagination
+        start_idx = 0
+        if cursor:
+            with contextlib.suppress(ValueError):
+                parsed = int(cursor)
+                if parsed >= 0:
+                    start_idx = parsed
+
         # Symbol search — uses dedicated search_symbols with SQLite + Tantivy fallback
         if mode == "symbol":
             search_response = await app_ctx.coordinator.search_symbols(
                 query,
                 filter_kinds=filter_kinds,
                 filter_paths=filter_paths,
-                limit=limit,
+                limit=limit + 1,
             )
         else:
-            # Lexical search
+            # Lexical search - fetch limit+1 to detect has_more
             search_response = await app_ctx.coordinator.search(
                 query,
                 mode_map[mode],
-                limit=limit,
+                limit=limit + 1,
+                offset=start_idx,
                 context_lines=effective_lines if not is_structural else 1,
                 filter_languages=filter_languages,
                 filter_paths=filter_paths,
             )
 
-        # Apply cursor: skip past previously returned results
-        start_idx = 0
-        if cursor:
-            import contextlib
-
-            with contextlib.suppress(ValueError):
-                start_idx = int(cursor)
+        # Check if there are more results beyond this page
+        all_results = search_response.results
+        has_more_results = len(all_results) > limit
+        if has_more_results:
+            all_results = all_results[:limit]
 
         # Build results with context handling, bounded by budget
-        all_results = search_response.results
         acc = BudgetAccumulator()
         unique_files: set[str] = set()
-        for r in all_results[start_idx:]:
+        for r in all_results:
             result_item = {
                 "path": r.path,
                 "line": r.line,
@@ -358,17 +375,18 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 break
             unique_files.add(r.path)
 
-        total_available = len(all_results)
-        items_remaining = total_available - start_idx
-        budget_more = not acc.has_room and items_remaining > acc.count
+        # Determine if there are more results
+        # has_more_results = True if coordinator returned limit+1 rows
+        # budget_more = True if budget was exhausted before all results in page
+        budget_more = not acc.has_room and len(all_results) > acc.count
+        has_more = has_more_results or budget_more
         next_offset = start_idx + acc.count
 
         result: dict[str, Any] = {
             "results": acc.items,
             "pagination": make_budget_pagination(
-                has_more=budget_more,
-                next_cursor=str(next_offset) if budget_more else None,
-                total_estimate=total_available if budget_more else None,
+                has_more=has_more,
+                next_cursor=str(next_offset) if has_more else None,
             ),
             "query_time_ms": 0,
             "summary": _summarize_search(

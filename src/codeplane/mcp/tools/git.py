@@ -267,10 +267,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         # Apply cursor: skip files already returned
         start_idx = 0
         if cursor:
-            import contextlib
-
             with contextlib.suppress(ValueError):
-                start_idx = int(cursor)
+                parsed = int(cursor)
+                if parsed >= 0:
+                    start_idx = parsed
 
         page_files = all_files[start_idx:]
 
@@ -306,9 +306,26 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     patch_lines.extend(current_file_patch)
                 # Start new file
                 current_file_patch = [line]
-                # Extract path: 'diff --git a/path b/path' -> 'path'
-                parts = line.split()
-                current_file_path = parts[3][2:] if len(parts) >= 4 else None
+                # Extract path robustly: look for any page path in the header
+                # This handles both simple paths and quoted paths with spaces
+                current_file_path = None
+                for path in page_paths:
+                    # Check for exact path match in the header (a/path or b/path)
+                    # Use word boundaries to avoid substring false positives
+                    # e.g., "a/file.py" should NOT match "a/myfile.py"
+                    a_prefix = f"a/{path}"
+                    b_prefix = f"b/{path}"
+                    # Path must be followed by space, quote, or end of line
+                    for prefix in (a_prefix, b_prefix):
+                        idx = line.find(prefix)
+                        if idx != -1:
+                            end_idx = idx + len(prefix)
+                            # Check that path ends at a boundary (space, quote, or EOL)
+                            if end_idx >= len(line.rstrip()) or line[end_idx] in (" ", '"', "'"):
+                                current_file_path = path
+                                break
+                    if current_file_path:
+                        break
             else:
                 current_file_patch.append(line)
 
@@ -318,15 +335,20 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         page_patch = "".join(patch_lines)
 
-        # Build totals from page files
+        # Compute totals: overall for the entire diff, page for this page
+        overall_additions = sum(f.additions for f in all_files)
+        overall_deletions = sum(f.deletions for f in all_files)
         page_additions = sum(f["additions"] for f in files_in_page)
         page_deletions = sum(f["deletions"] for f in files_in_page)
 
         result: dict[str, Any] = {
             "files": files_in_page,
-            "total_additions": page_additions,
-            "total_deletions": page_deletions,
-            "files_changed": len(files_in_page),
+            "total_additions": overall_additions,
+            "total_deletions": overall_deletions,
+            "files_changed": len(all_files),
+            "page_additions": page_additions,
+            "page_deletions": page_deletions,
+            "page_files": len(files_in_page),
             "patch": page_patch,
             "summary": _summarize_diff(len(files_in_page), page_additions, page_deletions, staged),
             "pagination": make_budget_pagination(
@@ -339,7 +361,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         # If patch is still too large, truncate it with binary search
         size = measure_bytes(result)
         if size > RESPONSE_BUDGET_BYTES and page_patch:
-            truncation_notice = "\n\n[... PATCH TRUNCATED — more content on next page ...]\n"
+            truncation_notice = (
+                "\n\n[... PATCH TRUNCATED — content omitted due to size limit ...]\n"
+            )
 
             base_result: dict[str, Any] = dict(result)
             base_result["patch"] = ""
@@ -367,8 +391,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     high = mid - 1
 
             result["patch"] = best_patch or ""
-
-        return result
+            # Update pagination to indicate patch was truncated
+            result["pagination"]["truncated"] = True
+            if "patch_truncated" not in result:
+                result["patch_truncated"] = True
 
         return result
 
@@ -877,7 +903,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             start_idx = 0
             if cursor:
                 with contextlib.suppress(ValueError):
-                    start_idx = int(cursor)
+                    parsed = int(cursor)
+                    if parsed >= 0:
+                        start_idx = parsed
 
             end_idx = start_idx + limit
             candidate_page = lines[start_idx:end_idx]

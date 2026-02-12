@@ -475,3 +475,142 @@ class TestBudgetConstantIntegration:
         for item in items:
             expected = len(json.dumps(item, separators=(",", ":")).encode("utf-8"))
             assert measure_bytes(item) == expected
+
+
+# =============================================================================
+# read_files cursor pagination pattern
+# =============================================================================
+
+
+class TestReadFilesCursorPagination:
+    """Tests cursor calculation and pagination for read_files handler."""
+
+    def test_cursor_calculated_from_processed_count(self) -> None:
+        """Cursor is based on number of targets processed, not files returned."""
+        targets = [f"file{i}.py" for i in range(10)]
+        acc = BudgetAccumulator()
+
+        # Simulate processing large files where only some fit
+        processed = 0
+        for target in targets:
+            file_result = _make_file_result(target, lines=800)  # Large files
+            if not acc.try_add(file_result):
+                break
+            processed += 1
+
+        # Cursor should point to next target to process
+        next_cursor = str(processed) if processed < len(targets) else None
+        has_more = processed < len(targets)
+
+        pagination = make_budget_pagination(
+            has_more=has_more,
+            next_cursor=next_cursor,
+        )
+
+        if has_more:
+            assert pagination.get("truncated") is True
+            assert pagination.get("next_cursor") == str(processed)
+            # Cursor should be valid for continuing from this position
+            cursor_value = int(pagination["next_cursor"])
+            assert 0 <= cursor_value < len(targets)
+
+    def test_subsequent_page_starts_at_cursor(self) -> None:
+        """Subsequent requests with cursor continue from correct position."""
+        targets = [f"file{i}.py" for i in range(20)]
+
+        # First page: process until budget exceeded
+        acc1 = BudgetAccumulator()
+        page1_count = 0
+        for target in targets:
+            file_result = _make_file_result(target, lines=600)
+            if not acc1.try_add(file_result):
+                break
+            page1_count += 1
+
+        # Simulate page 2 starting at cursor
+        start_idx = page1_count
+        acc2 = BudgetAccumulator()
+        page2_count = 0
+        for target in targets[start_idx:]:
+            file_result = _make_file_result(target, lines=600)
+            if not acc2.try_add(file_result):
+                break
+            page2_count += 1
+
+        # Verify we processed more files and didn't skip any
+        total_processed = page1_count + page2_count
+        assert total_processed > page1_count  # Made progress
+        assert total_processed <= len(targets)
+
+
+# =============================================================================
+# git_diff file-level pagination pattern
+# =============================================================================
+
+
+def _make_diff_file(path: str, additions: int = 10, deletions: int = 5) -> dict[str, Any]:
+    """Build a diff file entry resembling actual git_diff handler output."""
+    return {
+        "path": path,
+        "additions": additions,
+        "deletions": deletions,
+        "status": "modified",
+    }
+
+
+class TestGitDiffFileLevelPagination:
+    """Tests file-level cursor pagination for git_diff handler."""
+
+    def test_files_accumulated_with_budget(self) -> None:
+        """Files are accumulated within budget, cursor reflects offset."""
+        all_files = [_make_diff_file(f"src/file{i}.py", additions=50) for i in range(100)]
+        acc = BudgetAccumulator()
+
+        for f in all_files:
+            if not acc.try_add(f):
+                break
+
+        has_more = acc.count < len(all_files)
+        next_cursor = str(acc.count) if has_more else None
+
+        pagination = make_budget_pagination(
+            has_more=has_more,
+            next_cursor=next_cursor,
+            total_estimate=len(all_files),
+        )
+
+        # Should have processed many files but not all
+        assert acc.count > 0
+        if has_more:
+            assert pagination.get("truncated") is True
+            assert pagination.get("next_cursor") is not None
+            assert pagination.get("total_estimate") == 100
+
+    def test_cursor_iteration_covers_all_files(self) -> None:
+        """Iterating with cursor eventually covers all files."""
+        all_files = [_make_diff_file(f"src/file{i}.py", additions=100) for i in range(50)]
+        offset = 0
+        total_collected = 0
+        pages = 0
+        max_pages = 100  # Safety limit
+
+        while offset < len(all_files) and pages < max_pages:
+            acc = BudgetAccumulator()
+            page_files = all_files[offset:]
+
+            for f in page_files:
+                if not acc.try_add(f):
+                    break
+
+            total_collected += acc.count
+            offset += acc.count
+            pages += 1
+
+            if acc.count == 0 and offset < len(all_files):
+                # Single file too large - skip it (first item guarantee)
+                offset += 1
+                total_collected += 1
+
+        # Eventually processes all files
+        assert offset >= len(all_files)
+        assert pages < max_pages  # Didn't hit safety limit
