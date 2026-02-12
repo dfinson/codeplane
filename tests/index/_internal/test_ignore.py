@@ -175,3 +175,79 @@ class TestIgnoreChecker:
         checker = IgnoreChecker(tmp_path)
         outside_path = tmp_path.parent / "outside.py"
         assert checker.should_ignore(outside_path)
+
+
+class TestIgnoreCheckerEmpty:
+    """Tests for IgnoreChecker.empty() and load_ignore_file() streaming API."""
+
+    def test_empty_creates_instance_without_walk(self, tmp_path: Path) -> None:
+        """empty() should create checker without walking filesystem."""
+        # Create nested .cplignore that would be found by normal constructor
+        (tmp_path / ".cplignore").write_text("*.log\n")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / ".cplignore").write_text("*.tmp\n")
+
+        # empty() should NOT load these
+        checker = IgnoreChecker.empty(tmp_path)
+        assert len(checker.cplignore_paths) == 0
+        # Should not ignore .log files since patterns weren't loaded
+        assert not checker.should_ignore(tmp_path / "debug.log")
+
+    def test_empty_with_prunable_dirs(self, tmp_path: Path) -> None:
+        """empty() should still respect DEFAULT_PRUNABLE_DIRS."""
+        checker = IgnoreChecker.empty(tmp_path)
+        assert checker.should_ignore(tmp_path / "node_modules" / "pkg" / "index.js")
+        assert checker.should_ignore(tmp_path / "__pycache__" / "cache.pyc")
+
+    def test_load_ignore_file(self, tmp_path: Path) -> None:
+        """load_ignore_file() should incrementally add patterns."""
+        (tmp_path / ".cplignore").write_text("*.log\n")
+
+        checker = IgnoreChecker.empty(tmp_path)
+        # Before loading: no patterns
+        assert not checker.should_ignore(tmp_path / "debug.log")
+
+        # Load the file
+        checker.load_ignore_file(tmp_path / ".cplignore")
+
+        # After loading: pattern now active
+        assert checker.should_ignore(tmp_path / "debug.log")
+        assert tmp_path / ".cplignore" in checker.cplignore_paths
+
+    def test_load_ignore_file_with_prefix(self, tmp_path: Path) -> None:
+        """load_ignore_file() should apply prefix for nested files."""
+        sub = tmp_path / "src" / "utils"
+        sub.mkdir(parents=True)
+        (sub / ".cplignore").write_text("*.generated.py\n")
+
+        checker = IgnoreChecker.empty(tmp_path)
+        checker.load_ignore_file(sub / ".cplignore", prefix="src/utils")
+
+        # Pattern applies only under src/utils/
+        assert checker.should_ignore(tmp_path / "src" / "utils" / "model.generated.py")
+        # Not at root level
+        assert not checker.should_ignore(tmp_path / "model.generated.py")
+
+    def test_load_ignore_file_multiple(self, tmp_path: Path) -> None:
+        """load_ignore_file() can be called multiple times."""
+        (tmp_path / ".cplignore").write_text("*.log\n")
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        (sub / ".cplignore").write_text("*.tmp\n")
+
+        checker = IgnoreChecker.empty(tmp_path)
+        checker.load_ignore_file(tmp_path / ".cplignore")
+        checker.load_ignore_file(sub / ".cplignore", prefix="sub")
+
+        # Both patterns should be active
+        assert checker.should_ignore(tmp_path / "debug.log")
+        assert checker.should_ignore(tmp_path / "sub" / "cache.tmp")
+        assert len(checker.cplignore_paths) == 2
+
+    def test_load_ignore_file_nonexistent(self, tmp_path: Path) -> None:
+        """load_ignore_file() should silently skip nonexistent files."""
+        checker = IgnoreChecker.empty(tmp_path)
+        # Should not raise
+        checker.load_ignore_file(tmp_path / "nonexistent" / ".cplignore")
+        assert len(checker.cplignore_paths) == 0
