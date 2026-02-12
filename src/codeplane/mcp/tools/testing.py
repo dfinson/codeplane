@@ -406,6 +406,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         # Impact-aware filtering: use import graph to select affected targets
         impact_info: dict[str, Any] | None = None
+        low_confidence_hint: str | None = None
         if affected_by and targets:
             graph_result = await app_ctx.coordinator.get_affected_test_targets(affected_by)
             affected_paths = set(graph_result.test_files)
@@ -422,6 +423,12 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             }
             if graph_result.confidence.unresolved_files:
                 impact_info["unresolved_files"] = graph_result.confidence.unresolved_files
+            if graph_result.low_confidence_tests:
+                low_confidence_hint = (
+                    f"{len(graph_result.low_confidence_tests)} test(s) matched with low "
+                    "confidence (parent/child module prefix). Use inspect_affected_tests "
+                    "to review uncertain matches before deciding whether to include them."
+                )
 
         output: dict[str, Any] = {
             "action": result.action,
@@ -446,12 +453,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         if impact_info:
             output["impact"] = impact_info
-            if graph_result.low_confidence_tests:
-                output["agentic_hint"] = (
-                    f"{len(graph_result.low_confidence_tests)} test(s) matched with low "
-                    "confidence (parent/child module prefix). Use inspect_affected_tests "
-                    "to review uncertain matches before deciding whether to include them."
-                )
+            if low_confidence_hint:
+                output["agentic_hint"] = low_confidence_hint
         if result.agentic_hint and not impact_info:
             output["agentic_hint"] = result.agentic_hint
         return output

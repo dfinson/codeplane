@@ -60,10 +60,10 @@ class TestModuleToCandidatePaths:
     def test_basic_candidates(self) -> None:
         candidates = module_to_candidate_paths("codeplane.refactor.ops")
         assert "codeplane.refactor.ops" in candidates
-        assert "codeplane/refactor/ops" in candidates
-        assert "codeplane/refactor/ops/__init__" in candidates
         assert "src.codeplane.refactor.ops" in candidates
-        assert "src/codeplane/refactor/ops" in candidates
+        # Slash-form candidates should NOT exist (path_to_module uses dots)
+        assert "codeplane/refactor/ops" not in candidates
+        assert "src/codeplane/refactor/ops" not in candidates
 
     def test_single_segment(self) -> None:
         candidates = module_to_candidate_paths("utils")

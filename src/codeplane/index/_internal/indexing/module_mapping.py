@@ -41,7 +41,9 @@ def module_to_candidate_paths(source_literal: str) -> list[str]:
     """Generate candidate module keys for a dotted import path.
 
     These are keys to match against ``path_to_module()`` output.
-    Order is significant — earlier entries are preferred matches.
+    ``path_to_module`` always returns dot-separated keys (e.g.
+    ``src.codeplane.refactor.ops``), so all candidates must be
+    dot-separated too.
 
     Args:
         source_literal: Dotted module name (e.g. ``codeplane.refactor.ops``).
@@ -49,14 +51,10 @@ def module_to_candidate_paths(source_literal: str) -> list[str]:
     Returns:
         List of candidate module key strings to look up.
     """
-    slash_form = source_literal.replace(".", "/")
     return [
         source_literal,
-        slash_form,
-        f"{slash_form}/__init__",
-        # src/ prefix convention
+        # src/ prefix convention (path_to_module keeps the src. prefix)
         f"src.{source_literal}",
-        f"src/{slash_form}",
     ]
 
 
