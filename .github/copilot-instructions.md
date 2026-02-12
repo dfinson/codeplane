@@ -106,22 +106,23 @@ Terminal fallback is permitted ONLY when no CodePlane tool exists for the operat
 
 | Operation | REQUIRED Tool | FORBIDDEN Alternative |
 |-----------|---------------|----------------------|
-| Read files | `mcp_codeplane-codeplane_read_files` | `cat`, `head`, `less`, `tail` |
-| Write/edit files | `mcp_codeplane-codeplane_write_files` | `sed`, `echo >>`, `awk`, `tee` |
-| List directory | `mcp_codeplane-codeplane_list_files` | `ls`, `find`, `tree` |
-| Search code | `mcp_codeplane-codeplane_search` | `grep`, `rg`, `ag`, `ack` |
-| Repository overview | `mcp_codeplane-codeplane_map_repo` | Manual file traversal |
-| All git operations | `mcp_codeplane-codeplane_git_*` | Raw `git` commands |
-| Run linters/formatters | `mcp_codeplane-codeplane_lint_check` | `ruff`, `black`, `mypy` directly |
-| Discover tests | `mcp_codeplane-codeplane_discover_test_targets` | Manual test file search |
-| Run tests | `mcp_codeplane-codeplane_run_test_targets` | `pytest`, `jest` directly |
-| Rename symbols | `mcp_codeplane-codeplane_refactor_rename` | Find-and-replace, `sed` |
-| Move files | `mcp_codeplane-codeplane_refactor_move` | `mv` + manual import fixes |
-| Semantic diff | `mcp_codeplane-codeplane_semantic_diff` | Manual comparison of git diffs |
+| Read files | `mcp_codeplane-codeplane_copy3_read_files` | `cat`, `head`, `less`, `tail` |
+| Write/edit files | `mcp_codeplane-codeplane_copy3_write_files` | `sed`, `echo >>`, `awk`, `tee` |
+| List directory | `mcp_codeplane-codeplane_copy3_list_files` | `ls`, `find`, `tree` |
+| Search code | `mcp_codeplane-codeplane_copy3_search` | `grep`, `rg`, `ag`, `ack` |
+| Repository overview | `mcp_codeplane-codeplane_copy3_map_repo` | Manual file traversal |
+| All git operations | `mcp_codeplane-codeplane_copy3_git_*` | Raw `git` commands |
+| Run linters/formatters | `mcp_codeplane-codeplane_copy3_lint_check` | `ruff`, `black`, `mypy` directly |
+| Discover tests | `mcp_codeplane-codeplane_copy3_discover_test_targets` | Manual test file search |
+| Impact-aware test selection | `mcp_codeplane-codeplane_copy3_inspect_affected_tests` | Manual import tracing |
+| Run tests | `mcp_codeplane-codeplane_copy3_run_test_targets` | `pytest`, `jest` directly |
+| Rename symbols | `mcp_codeplane-codeplane_copy3_refactor_rename` | Find-and-replace, `sed` |
+| Move files | `mcp_codeplane-codeplane_copy3_refactor_move` | `mv` + manual import fixes |
+| Semantic diff | `mcp_codeplane-codeplane_copy3_semantic_diff` | Manual comparison of git diffs |
 
 ### Critical Parameter Reference
 
-**mcp_codeplane-codeplane_read_files**
+**mcp_codeplane-codeplane_copy3_read_files**
 ```
 targets: list[FileTarget]  # REQUIRED - NOT "line_ranges" or "ranges"
   path: str                # REQUIRED - file path this target applies to
@@ -133,7 +134,7 @@ cursor: str                # optional - pagination cursor from previous response
 **Response includes:**
 - `not_found`: list of paths that don't exist (explicit, not just a count)
 
-**mcp_codeplane-codeplane_write_files**
+**mcp_codeplane-codeplane_copy3_write_files**
 ```
 edits: list[EditParam]     # REQUIRED - array of edits
   path: str                # file path relative to repo root
@@ -143,7 +144,7 @@ edits: list[EditParam]     # REQUIRED - array of edits
 dry_run: bool              # optional, default false
 ```
 
-**mcp_codeplane-codeplane_search**
+**mcp_codeplane-codeplane_copy3_search**
 ```
 query: str                 # REQUIRED
 mode: "lexical"|"symbol"|"references"|"definitions"  # default "lexical", NOT "scope" or "text"
@@ -155,7 +156,7 @@ limit: int                 # default 20, NOT "max_results"
 cursor: str                # optional - pagination cursor from previous response
 ```
 
-**mcp_codeplane-codeplane_list_files**
+**mcp_codeplane-codeplane_copy3_list_files**
 ```
 path: str                  # optional - directory to list, NOT "directory"
 pattern: str               # optional - glob pattern (e.g., "*.py")
@@ -163,14 +164,14 @@ recursive: bool            # default false
 limit: int                 # default 200
 ```
 
-**mcp_codeplane-codeplane_map_repo**
+**mcp_codeplane-codeplane_copy3_map_repo**
 ```
 include: list[str]         # optional - values: "structure", "languages", "entry_points",
                            #   "dependencies", "test_layout", "public_api"
 depth: int                 # default 3
 ```
 
-**mcp_codeplane-codeplane_git_stage_and_commit**
+**mcp_codeplane-codeplane_copy3_git_stage_and_commit**
 ```
 message: str               # REQUIRED
 paths: list[str]           # REQUIRED - files to stage and commit
@@ -181,7 +182,7 @@ allow_empty: bool          # optional, default false
 and commits in one call. If hooks auto-fix files (formatters, linters), changes are
 automatically re-staged and retried once.
 
-**mcp_codeplane-codeplane_git_commit**
+**mcp_codeplane-codeplane_copy3_git_commit**
 ```
 message: str               # REQUIRED
 paths: list[str]           # optional - files to stage before commit
@@ -192,13 +193,13 @@ commits what is already staged. When `paths` are provided, those files are stage
 before committing; if hooks auto-fix files, they may be re-staged and the commit
 retried once.
 
-**mcp_codeplane-codeplane_git_stage**
+**mcp_codeplane-codeplane_copy3_git_stage**
 ```
 action: "add"|"remove"|"all"|"discard"  # REQUIRED
 paths: list[str]           # REQUIRED for add/remove/discard (not for "all")
 ```
 
-**mcp_codeplane-codeplane_run_test_targets**
+**mcp_codeplane-codeplane_copy3_run_test_targets**
 ```
 targets: list[str]         # optional - target_ids from discover_test_targets
 target_filter: str         # optional - substring match on target paths
@@ -207,7 +208,40 @@ coverage: bool             # default false
 coverage_dir: str          # REQUIRED when coverage=true
 ```
 
-**mcp_codeplane-codeplane_semantic_diff**
+**mcp_codeplane-codeplane_copy3_discover_test_targets**
+```
+paths: list[str]           # optional - paths to search for tests
+affected_by: list[str]     # optional - changed file paths for impact-aware filtering
+```
+
+**Impact-aware test selection:** When `affected_by` is provided, uses the structural
+index import graph to return only tests that import the changed modules. Response
+includes `impact` object with confidence tier and match counts. If low-confidence
+matches exist, an `agentic_hint` directs you to `inspect_affected_tests` for review.
+
+**mcp_codeplane-codeplane_copy3_inspect_affected_tests**
+```
+changed_files: list[str]   # REQUIRED - changed file paths to analyze
+```
+
+**Detailed import graph inspection.** Returns per-test-file match info with
+confidence levels, changed modules, coverage gaps, and agentic hints. Use this
+to review uncertain matches before deciding which tests to run.
+
+### Impact-Aware Test Workflow
+
+When you've made changes and need to run only affected tests:
+
+1. `discover_test_targets(affected_by=["path/to/changed.py", ...])` — get filtered targets
+2. Check `impact.confidence` in the response:
+   - `complete` with all high-confidence: safe to run as-is
+   - `partial` or low-confidence matches: use `inspect_affected_tests` to review
+3. `run_test_targets(targets=[...])` — run the selected subset
+
+Coverage is automatically scoped to relevant source directories when running
+impact-selected tests.
+
+**mcp_codeplane-codeplane_copy3_semantic_diff**
 ```
 base: str                  # default "HEAD" - git ref or "epoch:N"
 target: str | None         # default None (working tree) - git ref or "epoch:M"
@@ -231,7 +265,7 @@ Refactor tools use a **preview → review → apply** workflow:
 2. **`refactor_inspect`** — Review low-certainty matches with context (recommended)
 3. **`refactor_apply`** or **`refactor_cancel`** — Execute or discard
 
-**mcp_codeplane-codeplane_refactor_rename**
+**mcp_codeplane-codeplane_copy3_refactor_rename**
 ```
 symbol: str                # REQUIRED - the symbol NAME only (e.g., "MyClass", "my_function")
                            # WRONG: "src/file.py:42:6" - do NOT use path:line:col format
