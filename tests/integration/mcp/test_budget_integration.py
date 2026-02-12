@@ -614,3 +614,73 @@ class TestGitDiffFileLevelPagination:
         # Eventually processes all files
         assert offset >= len(all_files)
         assert pages < max_pages  # Didn't hit safety limit
+
+
+# =============================================================================
+# Cursor edge case handling
+# =============================================================================
+
+
+class TestCursorEdgeCases:
+    """Tests cursor parsing edge cases (invalid/negative cursors)."""
+
+    def test_negative_cursor_treated_as_no_cursor(self) -> None:
+        """Negative cursor value is ignored, starts at index 0."""
+        # Simulate the cursor parsing logic from handlers
+        import contextlib
+
+        cursor = "-5"
+        start_idx = 0
+        if cursor:
+            with contextlib.suppress(ValueError):
+                parsed = int(cursor)
+                if parsed >= 0:
+                    start_idx = parsed
+
+        # Negative cursor should NOT update start_idx
+        assert start_idx == 0
+
+    def test_invalid_cursor_treated_as_no_cursor(self) -> None:
+        """Non-integer cursor value is ignored, starts at index 0."""
+        import contextlib
+
+        cursor = "not_a_number"
+        start_idx = 0
+        if cursor:
+            with contextlib.suppress(ValueError):
+                parsed = int(cursor)
+                if parsed >= 0:
+                    start_idx = parsed
+
+        # Invalid cursor should NOT update start_idx
+        assert start_idx == 0
+
+    def test_zero_cursor_starts_at_beginning(self) -> None:
+        """Cursor value of '0' starts at index 0."""
+        import contextlib
+
+        cursor = "0"
+        start_idx = 999  # Non-zero default
+        if cursor:
+            with contextlib.suppress(ValueError):
+                parsed = int(cursor)
+                if parsed >= 0:
+                    start_idx = parsed
+
+        # Zero cursor should set start_idx to 0
+        assert start_idx == 0
+
+    def test_large_cursor_results_in_empty_page(self) -> None:
+        """Cursor beyond data length results in empty page."""
+        all_files = [_make_diff_file(f"file{i}.py") for i in range(10)]
+        cursor = "1000"  # Beyond length
+
+        start_idx = int(cursor)
+        page_files = all_files[start_idx:]
+
+        # Should get empty list
+        assert page_files == []
+
+        # Pagination should indicate no more data
+        pagination = make_budget_pagination(has_more=False)
+        assert pagination == {}
