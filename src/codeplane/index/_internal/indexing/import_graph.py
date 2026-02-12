@@ -113,6 +113,7 @@ class ImportGraph:
         self._module_index: dict[str, str] | None = None  # module_key -> file_path
         self._file_paths: list[str] | None = None
         self._test_file_paths: list[str] | None = None
+        self._test_file_set: set[str] | None = None  # O(1) membership checks
 
     def _ensure_caches(self) -> None:
         """Build module index, file path list, and test file list on first use."""
@@ -123,6 +124,7 @@ class ImportGraph:
         self._file_paths = [p for p in paths if p is not None]
         self._module_index = build_module_index(self._file_paths)
         self._test_file_paths = [fp for fp in self._file_paths if is_test_file(fp)]
+        self._test_file_set = set(self._test_file_paths)
 
     # -----------------------------------------------------------------
     # 1. affected_tests: changed files → test files
@@ -218,14 +220,15 @@ class ImportGraph:
         )
         matched_rows = list(self._session.exec(stmt).all())
 
-        # Count NULL source_literals in test files for confidence
+        # Count NULL source_literals in test files for confidence.
+        # Use DISTINCT to count unique test files, not duplicate rows.
         null_stmt = (
             select(File.path)
             .join(ImportFact, ImportFact.file_id == File.id)  # type: ignore[arg-type]
             .where(col(File.path).in_(self._test_file_paths))
             .where(ImportFact.source_literal == None)  # noqa: E711
         )
-        null_in_tests = len(list(self._session.exec(null_stmt).all()))
+        null_in_tests = len(set(self._session.exec(null_stmt).all()))
 
         # Step 4: Group matches by test file
         matches_by_file: dict[str, list[str]] = {}
@@ -358,10 +361,12 @@ class ImportGraph:
         assert self._module_index is not None
         assert self._file_paths is not None
 
-        # All source modules: files not in test paths
+        # All source modules: files not in test paths (use cached set for O(1) lookup)
+        test_set = self._test_file_set
+        assert test_set is not None
         all_source_modules: set[str] = set()
         for fp in self._file_paths:
-            if not is_test_file(fp):
+            if fp not in test_set:
                 mod = path_to_module(fp)
                 if mod:
                     all_source_modules.add(mod)
