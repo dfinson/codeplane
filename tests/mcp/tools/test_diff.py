@@ -298,6 +298,49 @@ class TestNonStructuralPagination:
         assert d["pagination"]["total_non_structural"] == 0
         assert "next_cursor" not in d["pagination"]
 
+    def test_mixed_pagination_structural_then_non_structural(self, monkeypatch: Any) -> None:
+        """Pagination flows from structural to non_structural across pages."""
+
+        class _TinyBudget(BudgetAccumulator):
+            def __init__(self, budget: int = 400) -> None:
+                super().__init__(budget=budget)
+
+        monkeypatch.setattr("codeplane.mcp.tools.diff.BudgetAccumulator", _TinyBudget)
+
+        # 5 structural + 5 non_structural - should span multiple pages
+        structural = [_change(name=f"fn_{i}") for i in range(5)]
+        non_structural = [_file_change(f"data/file_{i}.json") for i in range(5)]
+
+        # Page 1: some structural
+        d1 = _result_to_dict(_result(structural, non_structural), cache_id=1)
+        structural_page1 = len(d1["structural_changes"])
+        assert structural_page1 > 0
+        assert d1["pagination"]["total_structural"] == 5
+        assert d1["pagination"]["total_non_structural"] == 5
+
+        if structural_page1 < 5:
+            # Page 2: continue structural, maybe start non_structural
+            assert d1["pagination"]["truncated"] is True
+            cursor = d1["pagination"]["next_cursor"]
+            parts = cursor.split(":")
+            d2 = _result_to_dict(
+                _result(structural, non_structural),
+                cursor_offset=int(parts[1]),
+                non_structural_offset=int(parts[2]),
+                cache_id=1,
+            )
+
+            # Eventually all items should be seen across all pages
+            total_structural_seen = structural_page1 + len(d2["structural_changes"])
+            total_non_structural_seen = len(d1["non_structural_changes"]) + len(
+                d2["non_structural_changes"]
+            )
+
+            # Either we've seen all, or there's more to paginate
+            if "next_cursor" not in d2["pagination"]:
+                assert total_structural_seen == 5
+                assert total_non_structural_seen == 5
+
 
 # ============================================================================
 # Tests: Cursor Parsing

@@ -130,7 +130,6 @@ jobs:
           files: junit.xml
           report_type: test_results
           fail_ci_if_error: false
-          exclude: tests/testing/fixtures/**
 
   # Integration tests - may use network, private repo tests auto-skip without creds
   integration-test:
@@ -168,7 +167,6 @@ jobs:
           files: junit-integration.xml
           report_type: test_results
           fail_ci_if_error: false
-          exclude: tests/testing/fixtures/**
 
   # E2E tests - disabled pending fix: https://github.com/dfinson/codeplane/issues/130
   # e2e-test:
