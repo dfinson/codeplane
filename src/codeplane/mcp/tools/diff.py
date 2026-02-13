@@ -633,6 +633,7 @@ def _result_to_dict(
 
     # Compute overhead for fixed response fields (summary, scope, agentic_hint, etc.)
     # These are included in every page regardless of array item count.
+    # We use a worst-case pagination dict to ensure accurate overhead.
     base_response: dict[str, Any] = {
         "summary": result.summary,
         "breaking_summary": result.breaking_summary,
@@ -650,9 +651,15 @@ def _result_to_dict(
         "pagination": {
             "total_structural": len(all_structural),
             "total_non_structural": len(all_non_structural),
+            # Assume worst-case: we'll have truncation and a cursor
+            "truncated": True,
+            "next_cursor": "99999:99999:99999",
         },
     }
     overhead = measure_bytes(base_response)
+    # Add buffer for array framing (empty [] becomes [\n...\n])
+    # Each array with items adds ~6 bytes framing vs empty
+    overhead += 20  # safety margin for array framing
 
     # Paginate structural_changes first, reserving space for overhead
     acc = BudgetAccumulator()

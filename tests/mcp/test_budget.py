@@ -27,15 +27,15 @@ class TestMeasureBytes:
         assert measure_bytes({}) == 2
 
     def test_simple_dict(self) -> None:
-        """Simple dict matches compact JSON encoding."""
+        """Simple dict matches pretty-printed JSON encoding."""
         item = {"key": "value"}
-        expected = len(json.dumps(item, separators=(",", ":")).encode("utf-8"))
+        expected = len(json.dumps(item, indent=2).encode("utf-8"))
         assert measure_bytes(item) == expected
 
     def test_nested_dict(self) -> None:
         """Nested structures are measured correctly."""
         item = {"outer": {"inner": [1, 2, 3]}}
-        expected = len(json.dumps(item, separators=(",", ":")).encode("utf-8"))
+        expected = len(json.dumps(item, indent=2).encode("utf-8"))
         assert measure_bytes(item) == expected
 
     def test_unicode_correct_byte_count(self) -> None:
@@ -44,7 +44,7 @@ class TestMeasureBytes:
         # so the byte measurement reflects the escaped representation.
         item = {"text": "caf\u00e9 \u2603 \U0001f600"}
         result = measure_bytes(item)
-        expected = len(json.dumps(item, separators=(",", ":")).encode("utf-8"))
+        expected = len(json.dumps(item, indent=2).encode("utf-8"))
         assert result == expected
         # The key property: measurement is deterministic and positive
         assert result > 0
@@ -52,16 +52,16 @@ class TestMeasureBytes:
     def test_large_dict(self) -> None:
         """Large dict measures correctly."""
         item = {f"key_{i}": f"value_{i}" for i in range(100)}
-        expected = len(json.dumps(item, separators=(",", ":")).encode("utf-8"))
+        expected = len(json.dumps(item, indent=2).encode("utf-8"))
         assert measure_bytes(item) == expected
 
-    def test_uses_compact_separators(self) -> None:
-        """Measurement uses compact separators, not default pretty ones."""
+    def test_uses_pretty_printed_format(self) -> None:
+        """Measurement uses pretty-printed JSON to match VS Code display."""
         item = {"a": 1, "b": 2}
+        pretty = len(json.dumps(item, indent=2).encode("utf-8"))
         compact = len(json.dumps(item, separators=(",", ":")).encode("utf-8"))
-        pretty = len(json.dumps(item).encode("utf-8"))
-        assert measure_bytes(item) == compact
-        assert compact < pretty  # compact is smaller
+        assert measure_bytes(item) == pretty
+        assert pretty > compact  # pretty is larger
 
 
 # =============================================================================
@@ -100,7 +100,7 @@ class TestBudgetAccumulator:
     def test_try_add_single_item(self) -> None:
         """Single item within budget is accepted."""
         acc = BudgetAccumulator(budget=1000)
-        assert acc.try_add({"x": 1}) is True
+        assert acc.try_add({"x": 1}, nested=False) is True
         assert acc.count == 1
         assert acc.items == [{"x": 1}]
 
@@ -108,7 +108,7 @@ class TestBudgetAccumulator:
         """Multiple items within budget are all accepted."""
         acc = BudgetAccumulator(budget=10_000)
         for i in range(10):
-            assert acc.try_add({"i": i}) is True
+            assert acc.try_add({"i": i}, nested=False) is True
         assert acc.count == 10
 
     def test_try_add_tracks_bytes(self) -> None:
@@ -116,9 +116,9 @@ class TestBudgetAccumulator:
         acc = BudgetAccumulator(budget=10_000)
         item = {"data": "hello"}
         size = measure_bytes(item)
-        acc.try_add(item)
+        acc.try_add(item, nested=False)
         assert acc.used_bytes == size
-        acc.try_add(item)
+        acc.try_add(item, nested=False)
         assert acc.used_bytes == size * 2
 
     # ---- try_add: budget exhaustion ----
@@ -129,8 +129,8 @@ class TestBudgetAccumulator:
         size = measure_bytes(item)
         # Budget for exactly one item
         acc = BudgetAccumulator(budget=size + 1)
-        assert acc.try_add(item) is True
-        assert acc.try_add(item) is False
+        assert acc.try_add(item, nested=False) is True
+        assert acc.try_add(item, nested=False) is False
         assert acc.count == 1
 
     def test_try_add_rejects_all_after_exhaustion(self) -> None:
@@ -138,9 +138,9 @@ class TestBudgetAccumulator:
         item = {"data": "x" * 50}
         size = measure_bytes(item)
         acc = BudgetAccumulator(budget=size + 1)  # room for 1
-        acc.try_add(item)
-        assert acc.try_add(item) is False
-        assert acc.try_add({"tiny": 1}) is False  # even small items rejected
+        acc.try_add(item, nested=False)
+        assert acc.try_add(item, nested=False) is False
+        assert acc.try_add({"tiny": 1}, nested=False) is False  # even small items rejected
         assert acc.count == 1
 
     def test_has_room_false_after_exhaustion(self) -> None:
@@ -148,8 +148,8 @@ class TestBudgetAccumulator:
         item = {"data": "x" * 50}
         size = measure_bytes(item)
         acc = BudgetAccumulator(budget=size + 1)
-        acc.try_add(item)
-        acc.try_add(item)  # rejected
+        acc.try_add(item, nested=False)
+        acc.try_add(item, nested=False)  # rejected
         assert acc.has_room is False
 
     def test_remaining_bytes_decreases(self) -> None:
@@ -157,7 +157,7 @@ class TestBudgetAccumulator:
         acc = BudgetAccumulator(budget=1000)
         item = {"x": 1}
         size = measure_bytes(item)
-        acc.try_add(item)
+        acc.try_add(item, nested=False)
         assert acc.remaining_bytes == 1000 - size
 
     def test_remaining_bytes_zero_when_exhausted(self) -> None:
@@ -166,7 +166,7 @@ class TestBudgetAccumulator:
         size = measure_bytes(item)
         # Budget slightly less than item size — first item still accepted
         acc = BudgetAccumulator(budget=size - 5)
-        acc.try_add(item)  # accepted (first item guarantee)
+        acc.try_add(item, nested=False)  # accepted (first item guarantee)
         assert acc.remaining_bytes == 0
 
     # ---- try_add: first-item guarantee ----
@@ -175,7 +175,7 @@ class TestBudgetAccumulator:
         """First item is accepted even if it exceeds the entire budget."""
         big_item = {"data": "x" * 10_000}
         acc = BudgetAccumulator(budget=10)  # very small budget
-        assert acc.try_add(big_item) is True
+        assert acc.try_add(big_item, nested=False) is True
         assert acc.count == 1
         assert acc.items == [big_item]
 
@@ -183,14 +183,14 @@ class TestBudgetAccumulator:
         """First oversized item is accepted but marks accumulator as exhausted."""
         big_item = {"data": "x" * 10_000}
         acc = BudgetAccumulator(budget=10)
-        acc.try_add(big_item)
+        acc.try_add(big_item, nested=False)
         assert acc.has_room is False
-        assert acc.try_add({"tiny": 1}) is False
+        assert acc.try_add({"tiny": 1}, nested=False) is False
 
     def test_no_empty_pages(self) -> None:
         """Even with budget=1, the first item is accepted."""
         acc = BudgetAccumulator(budget=1)
-        assert acc.try_add({"k": "v"}) is True
+        assert acc.try_add({"k": "v"}, nested=False) is True
         assert acc.count == 1
 
     # ---- try_add: exact budget boundary ----
@@ -200,7 +200,7 @@ class TestBudgetAccumulator:
         item = {"x": 1}
         size = measure_bytes(item)
         acc = BudgetAccumulator(budget=size)
-        assert acc.try_add(item) is True
+        assert acc.try_add(item, nested=False) is True
         assert acc.has_room is False  # exactly at budget → exhausted
 
     def test_exact_budget_two_items(self) -> None:
@@ -208,8 +208,8 @@ class TestBudgetAccumulator:
         item = {"x": 1}
         size = measure_bytes(item)
         acc = BudgetAccumulator(budget=size * 2)
-        assert acc.try_add(item) is True
-        assert acc.try_add(item) is True
+        assert acc.try_add(item, nested=False) is True
+        assert acc.try_add(item, nested=False) is True
         assert acc.count == 2
         assert acc.has_room is False
 
@@ -220,7 +220,7 @@ class TestBudgetAccumulator:
         acc = BudgetAccumulator(budget=10_000)
         items = [{"i": 0}, {"i": 1}, {"i": 2}]
         for item in items:
-            acc.try_add(item)
+            acc.try_add(item, nested=False)
         assert acc.items == items
 
     def test_items_excludes_rejected(self) -> None:
@@ -228,8 +228,8 @@ class TestBudgetAccumulator:
         item = {"data": "x" * 100}
         size = measure_bytes(item)
         acc = BudgetAccumulator(budget=size + 1)
-        acc.try_add({"data": "x" * 100})
-        acc.try_add({"data": "y" * 100})  # rejected
+        acc.try_add({"data": "x" * 100}, nested=False)
+        acc.try_add({"data": "y" * 100}, nested=False)  # rejected
         assert len(acc.items) == 1
         assert acc.items[0]["data"] == "x" * 100
 
@@ -248,9 +248,9 @@ class TestBudgetAccumulator:
         size = measure_bytes(item)
         acc = BudgetAccumulator(budget=500 + size * 2)  # space for 500 overhead + 2 items
         acc.reserve(500)
-        assert acc.try_add(item) is True
-        assert acc.try_add(item) is True
-        assert acc.try_add(item) is False  # no more room
+        assert acc.try_add(item, nested=False) is True
+        assert acc.try_add(item, nested=False) is True
+        assert acc.try_add(item, nested=False) is False  # no more room
         assert acc.count == 2
 
     def test_reserve_can_exhaust_budget(self) -> None:
@@ -260,7 +260,7 @@ class TestBudgetAccumulator:
         assert acc.has_room is False
         # No items can be added when budget is exhausted by reservation
         # (first-item guarantee only applies when items list is empty AND has_room)
-        assert acc.try_add({"x": 1}) is False
+        assert acc.try_add({"x": 1}, nested=False) is False
 
 
 # =============================================================================
@@ -335,7 +335,7 @@ class TestBudgetAccumulatorEdgeCases:
     def test_tiny_budgets(self, budget: int) -> None:
         """Extremely small budgets still guarantee first item."""
         acc = BudgetAccumulator(budget=budget)
-        assert acc.try_add({"x": 1}) is True
+        assert acc.try_add({"x": 1}, nested=False) is True
         assert acc.count == 1
 
     def test_many_small_items(self) -> None:
@@ -347,7 +347,7 @@ class TestBudgetAccumulatorEdgeCases:
 
         accepted = 0
         for i in range(100):
-            if acc.try_add({"i": i}):
+            if acc.try_add({"i": i}, nested=False):
                 accepted += 1
             else:
                 break
@@ -359,15 +359,15 @@ class TestBudgetAccumulatorEdgeCases:
     def test_heterogeneous_item_sizes(self) -> None:
         """Mix of small and large items works correctly."""
         acc = BudgetAccumulator(budget=200)
-        small = {"x": 1}  # ~7 bytes
-        large = {"data": "x" * 100}  # ~115 bytes
+        small = {"x": 1}  # ~12 bytes pretty-printed
+        large = {"data": "x" * 100}  # ~115 bytes pretty-printed
 
-        assert acc.try_add(small) is True
-        assert acc.try_add(large) is True
-        assert acc.try_add(small) is True
-        # At this point ~129 bytes used, ~71 remaining
+        assert acc.try_add(small, nested=False) is True
+        assert acc.try_add(large, nested=False) is True
+        assert acc.try_add(small, nested=False) is True
+        # At this point ~139 bytes used, ~61 remaining
         # Another large should fail
-        assert acc.try_add(large) is False
+        assert acc.try_add(large, nested=False) is False
         assert acc.count == 3
 
     def test_budget_accumulator_is_deterministic(self) -> None:

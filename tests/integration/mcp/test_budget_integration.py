@@ -473,7 +473,7 @@ class TestBudgetConstantIntegration:
             {"path": "src/very/long/path/to/some/file.py", "line": 9999},
         ]
         for item in items:
-            expected = len(json.dumps(item, separators=(",", ":")).encode("utf-8"))
+            expected = len(json.dumps(item, indent=2).encode("utf-8"))
             assert measure_bytes(item) == expected
 
 

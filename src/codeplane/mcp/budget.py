@@ -63,18 +63,26 @@ class BudgetAccumulator:
         if self._used >= self._budget:
             self._exhausted = True
 
-    def try_add(self, item: dict[str, Any]) -> bool:
+    def try_add(self, item: dict[str, Any], *, nested: bool = True) -> bool:
         """Attempt to add *item* to the accumulator.
 
         Returns ``True`` if the item fit within the remaining budget,
         ``False`` if the budget is exhausted.  The first item is always
         accepted regardless of size so that a single oversized result
         still produces output rather than an empty page.
+
+        Args:
+            item: The item to add.
+            nested: If True (default), measure the item with nesting_depth=2
+                to account for extra indentation when embedded in an array
+                inside the response object.
         """
         if self._exhausted:
             return False
 
-        size = measure_bytes(item)
+        # Items in arrays like structural_changes are at depth 2:
+        # response object (0) -> array field (1) -> array item (2)
+        size = measure_bytes(item, nesting_depth=2 if nested else 0)
 
         # Always accept the first item even if it exceeds the budget,
         # so the caller never gets an empty page.
@@ -122,15 +130,42 @@ class BudgetAccumulator:
 # -----------------------------------------------------------------
 
 
-def measure_bytes(item: dict[str, Any]) -> int:
-    """Return the UTF-8 byte size of *item* serialised as JSON.
+def measure_bytes(item: dict[str, Any], *, nesting_depth: int = 0) -> int:
+    """Return the UTF-8 byte size of *item* serialised as pretty-printed JSON.
 
-    Uses compact separators (',', ':') to approximate the tightest
-    reasonable on-wire encoding.  This is intentionally a slight
-    undercount relative to pretty-printed JSON, which adds safety
-    margin in the budget direction we want (we stop sooner).
+    Uses indent=2 to match VS Code's display format. This ensures our
+    budget calculations match what users actually see, preventing the
+    "Large tool result" warnings from VS Code.
+
+    Args:
+        item: The dict to measure.
+        nesting_depth: How many levels deep this item will be nested in the
+            final response. Each level adds 2 extra spaces per line.
+            For items in a top-level array, use nesting_depth=1.
+
+    Example:
+        measure_bytes({"x": 1})  # standalone object
+        measure_bytes({"x": 1}, nesting_depth=1)  # item in an array
     """
-    return len(json.dumps(item, separators=(",", ":")).encode("utf-8"))
+    base = json.dumps(item, indent=2)
+    if nesting_depth > 0:
+        # Add extra indentation to each line
+        extra_indent = "  " * nesting_depth
+        lines = base.split("\n")
+        indented = "\n".join(extra_indent + line for line in lines)
+        # Also add 2 bytes for array item separator (",\n")
+        return len(indented.encode("utf-8")) + 2
+    return len(base.encode("utf-8"))
+
+
+# Convenience function for measuring items inside arrays
+def measure_nested_item(item: dict[str, Any]) -> int:
+    """Measure an item that will be nested inside a top-level array.
+
+    Items in arrays like `structural_changes` get extra indentation
+    compared to standalone measurement. This function accounts for that.
+    """
+    return measure_bytes(item, nesting_depth=1)
 
 
 # Keep private alias for internal use

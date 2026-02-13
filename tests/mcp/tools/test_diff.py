@@ -7,8 +7,10 @@ Tests cover:
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
+from codeplane.config.constants import RESPONSE_BUDGET_BYTES
 from codeplane.index._internal.diff.models import (
     AnalysisScope,
     FileChangeInfo,
@@ -16,7 +18,7 @@ from codeplane.index._internal.diff.models import (
     SemanticDiffResult,
     StructuralChange,
 )
-from codeplane.mcp.budget import BudgetAccumulator
+from codeplane.mcp.budget import BudgetAccumulator, measure_bytes
 from codeplane.mcp.tools.diff import (
     _build_agentic_hint,
     _DiffCache,
@@ -700,3 +702,189 @@ class TestPaginationTotal:
         assert "total_structural" in d["pagination"]
         assert "total_non_structural" in d["pagination"]
         assert "total_estimate" not in d["pagination"]
+
+
+# ============================================================================
+# Tests: Response Size Budget Enforcement (Integration)
+# ============================================================================
+
+
+class TestResponseSizeBudgetEnforcement:
+    """Integration tests verifying response stays within 40KB budget.
+
+    These tests ensure the actual serialized response size (with indent=2,
+    matching VS Code's display format) stays under RESPONSE_BUDGET_BYTES.
+
+    The budget is measured using pretty-printed JSON (indent=2) because:
+    1. VS Code displays responses in this format
+    2. Users see "Large tool result (XXkb)" warnings based on this size
+    3. Our measure_bytes() now uses indent=2 to match this behavior
+    """
+
+    def test_single_page_under_budget(self) -> None:
+        """Single-page response stays under budget."""
+        changes = [_change(name=f"fn_{i}") for i in range(5)]
+        d = _result_to_dict(_result(changes))
+
+        # Serialize with indent=2 like VS Code does
+        response_bytes = len(json.dumps(d, indent=2).encode("utf-8"))
+        assert response_bytes <= RESPONSE_BUDGET_BYTES, (
+            f"Response {response_bytes} bytes exceeds budget {RESPONSE_BUDGET_BYTES}"
+        )
+
+    def test_paginated_page_under_budget(self, monkeypatch: Any) -> None:
+        """Each paginated page stays under budget."""
+        # Use a smaller budget to trigger pagination
+        TEST_BUDGET = 5000
+
+        class _SmallBudget(BudgetAccumulator):
+            def __init__(self, budget: int = TEST_BUDGET) -> None:
+                super().__init__(budget=budget)
+
+        monkeypatch.setattr("codeplane.mcp.tools.diff.BudgetAccumulator", _SmallBudget)
+
+        # Create enough changes to require pagination
+        changes = [_change(name=f"function_{i}_with_long_name") for i in range(50)]
+        d = _result_to_dict(_result(changes), cache_id=1)
+
+        # Should be paginated
+        assert d["pagination"].get("truncated") is True
+
+        # But the page should still be under the test budget
+        response_bytes = len(json.dumps(d, indent=2).encode("utf-8"))
+        assert response_bytes <= TEST_BUDGET, (
+            f"Paginated response {response_bytes} bytes exceeds budget {TEST_BUDGET}"
+        )
+
+    def test_measure_bytes_matches_indent2_serialization(self) -> None:
+        """measure_bytes() uses indent=2 to match VS Code display format."""
+        item = {"key": "value", "nested": {"a": [1, 2, 3]}}
+        measured = measure_bytes(item)
+        actual = len(json.dumps(item, indent=2).encode("utf-8"))
+        assert measured == actual, f"measure_bytes ({measured}) != indent=2 size ({actual})"
+
+    def test_overhead_reserved_before_items(self) -> None:
+        """Overhead fields are reserved before adding items."""
+        # Create a result with a known agentic_hint
+        changes = [
+            _change(
+                "signature_changed",
+                "breaking",
+                "important_fn",
+                "function",
+                impact=ImpactInfo(reference_count=100),
+            )
+        ]
+        d = _result_to_dict(_result(changes, summary="test"))
+
+        # Measure overhead (all fields except structural_changes and non_structural_changes)
+        overhead = {
+            k: v for k, v in d.items() if k not in ["structural_changes", "non_structural_changes"]
+        }
+        overhead["structural_changes"] = []
+        overhead["non_structural_changes"] = []
+        overhead_bytes = measure_bytes(overhead)
+
+        # Measure items
+        items_bytes = sum(measure_bytes(c) for c in d["structural_changes"])
+
+        # Total should be close to measured total (allowing for JSON framing)
+        total_measured = overhead_bytes + items_bytes
+        total_actual = measure_bytes(d)
+
+        # The difference is just array brackets and commas, should be small
+        # Allow up to 100 bytes for framing overhead
+        assert abs(total_actual - total_measured) < 100, (
+            f"Overhead calculation off: measured {total_measured}, actual {total_actual}"
+        )
+
+    def test_large_result_requires_pagination(self) -> None:
+        """Large results trigger pagination to stay under budget."""
+        # Create many changes that would exceed budget without pagination
+        changes = [
+            _change(
+                "body_changed",
+                "non_breaking",
+                f"function_with_very_long_descriptive_name_number_{i}",
+                "function",
+                qualified_name=f"module.submodule.ClassName.function_with_very_long_descriptive_name_number_{i}",
+                impact=ImpactInfo(
+                    reference_count=i * 10,
+                    importing_files=[f"file_{j}.py" for j in range(5)],
+                ),
+            )
+            for i in range(200)
+        ]
+
+        # First page
+        d = _result_to_dict(_result(changes), cache_id=1)
+
+        # Must be paginated
+        assert d["pagination"].get("truncated") is True, "Expected pagination for large result"
+
+        # Page must be under budget
+        response_bytes = len(json.dumps(d, indent=2).encode("utf-8"))
+        assert response_bytes <= RESPONSE_BUDGET_BYTES, (
+            f"Large result page {response_bytes} bytes exceeds budget {RESPONSE_BUDGET_BYTES}"
+        )
+
+        # Items should be fewer than total
+        items_on_page = len(d["structural_changes"])
+        total_items = d["pagination"]["total_structural"]
+        assert items_on_page < total_items, (
+            f"Expected fewer items ({items_on_page}) than total ({total_items})"
+        )
+
+    def test_all_pages_under_budget(self) -> None:
+        """Verify every page of a paginated response stays under budget."""
+        # Create a moderately large result
+        changes = [
+            _change(
+                "body_changed",
+                "non_breaking",
+                f"module_function_{i}",
+                "function",
+                impact=ImpactInfo(reference_count=i),
+            )
+            for i in range(100)
+        ]
+        non_structural = [_file_change(f"data/config_{i}.yaml") for i in range(50)]
+
+        # Iterate through all pages
+        cursor_offset = 0
+        non_structural_offset = 0
+        pages_seen = 0
+        max_pages = 50  # Safety limit
+
+        while pages_seen < max_pages:
+            d = _result_to_dict(
+                _result(changes, non_structural),
+                cursor_offset=cursor_offset,
+                non_structural_offset=non_structural_offset,
+                cache_id=1,
+            )
+
+            # Every page must be under budget
+            response_bytes = len(json.dumps(d, indent=2).encode("utf-8"))
+            assert response_bytes <= RESPONSE_BUDGET_BYTES, (
+                f"Page {pages_seen + 1}: {response_bytes} bytes exceeds budget {RESPONSE_BUDGET_BYTES}"
+            )
+
+            pages_seen += 1
+
+            # Check if there are more pages
+            if "next_cursor" not in d["pagination"]:
+                break
+
+            # Parse cursor for next page
+            cursor = d["pagination"]["next_cursor"]
+            parts = cursor.split(":")
+            if len(parts) >= 3:
+                cursor_offset = int(parts[1])
+                non_structural_offset = int(parts[2])
+            else:
+                cursor_offset = int(parts[1]) if len(parts) > 1 else 0
+                non_structural_offset = 0
+
+        # Should have seen multiple pages for this data size
+        assert pages_seen >= 2, f"Expected multiple pages, got {pages_seen}"
