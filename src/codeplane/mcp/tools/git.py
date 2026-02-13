@@ -10,7 +10,7 @@ from fastmcp import Context
 from fastmcp.utilities.json_schema import dereference_refs
 from pydantic import Field
 
-from codeplane.config.constants import GIT_BLAME_MAX, GIT_LOG_MAX, RESPONSE_BUDGET_BYTES
+from codeplane.config.constants import GIT_BLAME_MAX, GIT_LOG_MAX
 from codeplane.git._internal.hooks import run_hook
 from codeplane.git.errors import EmptyCommitMessageError, PathsNotFoundError
 from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination, measure_bytes
@@ -294,10 +294,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 if len(parts) >= 4:
                     # Try b/ path first (for modified/added), then a/ (for deleted)
                     for p in (parts[3], parts[2]):
-                        if p.startswith("b/"):
-                            current_file_path = p[2:]
-                            break
-                        elif p.startswith("a/"):
+                        if p.startswith("b/") or p.startswith("a/"):
                             current_file_path = p[2:]
                             break
             else:
@@ -536,7 +533,15 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         if has_more:
             commits = commits[:limit]
 
+        # Reserve overhead for fixed response fields
+        base_response = {
+            "results": [],
+            "pagination": {"truncated": False, "next_cursor": "x" * 40, "total_estimate": 99999},
+            "summary": "X" * 200,
+        }
+        overhead = measure_bytes(base_response)
         acc = BudgetAccumulator()
+        acc.reserve(overhead)
         for c in commits:
             d = asdict(c)
             # Convert datetime fields to ISO strings for JSON serialization
@@ -918,7 +923,18 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             candidate_page = lines[start_idx:end_idx]
 
             # Apply budget to blame lines
+            # Reserve overhead for fixed response fields (blame_dict has path, newest_sha, oldest_sha)
+            base_response = {
+                "results": [],
+                "pagination": {"truncated": False, "next_cursor": "x" * 40, "total_estimate": 99999},
+                "path": "X" * 200,
+                "newest_sha": "x" * 40,
+                "oldest_sha": "x" * 40,
+                "summary": "X" * 200,
+            }
+            overhead = measure_bytes(base_response)
             acc = BudgetAccumulator()
+            acc.reserve(overhead)
             for line in candidate_page:
                 if not acc.try_add(line):
                     break

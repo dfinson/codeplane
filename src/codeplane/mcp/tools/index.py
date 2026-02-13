@@ -14,7 +14,7 @@ from codeplane.config.constants import (
     SEARCH_MAX_LIMIT,
     SEARCH_SCOPE_FALLBACK_LINES_DEFAULT,
 )
-from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination
+from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination, measure_bytes
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -245,7 +245,20 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             if has_more_refs:
                 refs = refs[:limit]
 
+            # Reserve overhead for fixed response fields
+            base_response = {
+                "results": [],
+                "pagination": {
+                    "truncated": False,
+                    "next_cursor": "x" * 40,
+                    "total_estimate": 99999,
+                },
+                "query_time_ms": 99999,
+                "summary": "X" * 200,
+            }
+            overhead = measure_bytes(base_response)
             acc = BudgetAccumulator()
+            acc.reserve(overhead)
             ref_files: set[str] = set()
 
             for ref in refs:
@@ -339,7 +352,17 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             all_results = all_results[:limit]
 
         # Build results with context handling, bounded by budget
+        # Reserve overhead for fixed response fields
+        base_response = {
+            "results": [],
+            "pagination": {"truncated": False, "next_cursor": "x" * 40, "total_estimate": 99999},
+            "query_time_ms": 99999,
+            "summary": "X" * 200,
+            "agentic_hint": "X" * 200,
+        }
+        overhead = measure_bytes(base_response)
         acc = BudgetAccumulator()
+        acc.reserve(overhead)
         unique_files: set[str] = set()
         for r in all_results:
             result_item = {

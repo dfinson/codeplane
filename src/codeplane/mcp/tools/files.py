@@ -8,7 +8,7 @@ from fastmcp.utilities.json_schema import dereference_refs
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from codeplane.config.constants import FILES_LIST_MAX
-from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination
+from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination, measure_bytes
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -142,7 +142,17 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         # Build a map from path to file result for efficient lookup
         file_by_path: dict[str, Any] = {f.path: f for f in result.files}
 
+        # Reserve overhead for fixed response fields
+        base_response = {
+            "files": [],
+            "pagination": {"truncated": False, "next_cursor": "x" * 40, "total_estimate": 99999},
+            "summary": "X" * 200,
+            "not_found": ["X" * 100] * 10,  # Worst case: 10 paths of ~100 chars
+            "not_found_count": 99999,
+        }
+        overhead = measure_bytes(base_response)
         acc = BudgetAccumulator()
+        acc.reserve(overhead)
         processed_targets = 0
         missing_paths: list[str] = []
         missing_count = 0  # Track total missing, not just capped list
