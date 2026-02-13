@@ -340,7 +340,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         patches_in_page: list[str] = []
 
         for f in page_files:
-            file_path = f.new_path or f.old_path
+            file_path = f.new_path or f.old_path or ""
             file_patch = file_patches.get(file_path, "")
 
             file_item = {
@@ -926,7 +926,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             # Reserve overhead for fixed response fields (blame_dict has path, newest_sha, oldest_sha)
             base_response = {
                 "results": [],
-                "pagination": {"truncated": False, "next_cursor": "x" * 40, "total_estimate": 99999},
+                "pagination": {
+                    "truncated": False,
+                    "next_cursor": "x" * 40,
+                    "total_estimate": 99999,
+                },
                 "path": "X" * 200,
                 "newest_sha": "x" * 40,
                 "oldest_sha": "x" * 40,
