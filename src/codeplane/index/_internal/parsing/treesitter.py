@@ -1460,16 +1460,6 @@ class TreeSitterParser:
         walk(root)
         return imports
 
-    def _extract_kotlin_type_path(self, node: Any) -> str:
-        """Extract qualified path from Kotlin user_type node."""
-        parts: list[str] = []
-        for child in node.children:
-            if child.type == "simple_identifier":
-                parts.append(child.text.decode("utf-8") if child.text else "")
-            elif child.type == "user_type":
-                parts.append(self._extract_kotlin_type_path(child))
-        return ".".join(parts)
-
     def _extract_ruby_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
         """Extract require/require_relative calls from Ruby AST.
 
