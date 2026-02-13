@@ -172,25 +172,35 @@ class TestBudgetAccumulator:
     # ---- try_add: first-item guarantee ----
 
     def test_first_item_always_accepted(self) -> None:
-        """First item is accepted even if it exceeds the entire budget."""
-        big_item = {"data": "x" * 10_000}
-        acc = BudgetAccumulator(budget=10)  # very small budget
+        """First item is accepted if it's under 2x budget (slight overage OK)."""
+        # Items up to 2x budget are accepted as first item
+        big_item = {"data": "x" * 30}  # ~45 bytes
+        acc = BudgetAccumulator(budget=30)  # allows up to 2x = 60 bytes
         assert acc.try_add(big_item, nested=False) is True
         assert acc.count == 1
         assert acc.items == [big_item]
 
+    def test_first_item_rejected_if_massively_over(self) -> None:
+        """First item is rejected if it exceeds 2x budget (prevents blowouts)."""
+        big_item = {"data": "x" * 10_000}  # ~10KB
+        acc = BudgetAccumulator(budget=100)  # 2x = 200 bytes max
+        assert acc.try_add(big_item, nested=False) is False
+        assert acc.count == 0
+        assert acc.items == []
+
     def test_first_item_accepted_marks_exhausted(self) -> None:
-        """First oversized item is accepted but marks accumulator as exhausted."""
-        big_item = {"data": "x" * 10_000}
-        acc = BudgetAccumulator(budget=10)
-        acc.try_add(big_item, nested=False)
+        """First slightly-over item is accepted but marks accumulator as exhausted."""
+        item = {"data": "x" * 50}  # ~65 bytes
+        acc = BudgetAccumulator(budget=50)  # 2x = 100 bytes max, so item fits
+        acc.try_add(item, nested=False)
         assert acc.has_room is False
         assert acc.try_add({"tiny": 1}, nested=False) is False
 
-    def test_no_empty_pages(self) -> None:
-        """Even with budget=1, the first item is accepted."""
-        acc = BudgetAccumulator(budget=1)
-        assert acc.try_add({"k": "v"}, nested=False) is True
+    def test_no_empty_pages_with_reasonable_items(self) -> None:
+        """Items under 2x budget are accepted to avoid empty pages."""
+        item = {"k": "v"}  # ~16 bytes
+        acc = BudgetAccumulator(budget=10)  # 2x = 20 bytes, item fits
+        assert acc.try_add(item, nested=False) is True
         assert acc.count == 1
 
     # ---- try_add: exact budget boundary ----
@@ -331,12 +341,14 @@ class TestMakeBudgetPagination:
 class TestBudgetAccumulatorEdgeCases:
     """Edge cases and stress scenarios."""
 
-    @pytest.mark.parametrize("budget", [0, 1, 2])
+    @pytest.mark.parametrize("budget", [10, 20, 50])
     def test_tiny_budgets(self, budget: int) -> None:
-        """Extremely small budgets still guarantee first item."""
+        """Small budgets accept items under 2x budget."""
+        item = {"x": 1}  # ~12 bytes
         acc = BudgetAccumulator(budget=budget)
-        assert acc.try_add({"x": 1}, nested=False) is True
-        assert acc.count == 1
+        expected = measure_bytes(item) <= budget * 2
+        assert acc.try_add(item, nested=False) is expected
+        assert acc.count == (1 if expected else 0)
 
     def test_many_small_items(self) -> None:
         """Many small items are accepted until budget runs out."""

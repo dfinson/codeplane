@@ -67,9 +67,10 @@ class BudgetAccumulator:
         """Attempt to add *item* to the accumulator.
 
         Returns ``True`` if the item fit within the remaining budget,
-        ``False`` if the budget is exhausted.  The first item is always
-        accepted regardless of size so that a single oversized result
-        still produces output rather than an empty page.
+        ``False`` if the budget is exhausted.  The first item is accepted
+        even if slightly over budget (up to 2x) so a single moderately
+        oversized result still produces output rather than an empty page.
+        Items over 2x budget are rejected even as the first item.
 
         Args:
             item: The item to add.
@@ -84,11 +85,20 @@ class BudgetAccumulator:
         # response object (0) -> array field (1) -> array item (2)
         size = measure_bytes(item, nesting_depth=2 if nested else 0)
 
-        # Always accept the first item even if it exceeds the budget,
-        # so the caller never gets an empty page.
-        if self._items and self._used + size > self._budget:
-            self._exhausted = True
-            return False
+        # First item gets a 2x budget allowance (to avoid empty pages),
+        # but items over 2x budget are rejected even as first item
+        # to prevent massive blowouts (e.g., 44KB file on 7.5KB budget).
+        is_first = not self._items
+        over_budget = self._used + size > self._budget
+        massively_over = size > self._budget * 2
+
+        if over_budget:
+            if is_first and not massively_over:
+                # Accept slightly-over first item to avoid empty page
+                pass
+            else:
+                self._exhausted = True
+                return False
 
         self._items.append(item)
         self._used += size

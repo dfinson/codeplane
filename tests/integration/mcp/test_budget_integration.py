@@ -156,13 +156,22 @@ class TestReadFilesBudgetPattern:
         assert acc.count == 3
 
     def test_large_file_exceeds_on_second(self) -> None:
-        """A very large file is accepted as first, blocks second."""
-        acc = BudgetAccumulator()
-        big = _make_file_result("src/huge.py", lines=5000)
+        """A large file that's slightly over budget is accepted as first."""
+        # With 7.5KB budget, 2x = 15KB max for first item
+        # A ~10KB file should be accepted as first item
+        acc = BudgetAccumulator(budget=10_000)  # 2x = 20KB
+        big = _make_file_result("src/large.py", lines=500)  # ~3.5KB
         small = _make_file_result("src/tiny.py", lines=5)
-        assert acc.try_add(big) is True  # first item guarantee
-        assert acc.try_add(small) is False  # budget exceeded
-        assert acc.count == 1
+        assert acc.try_add(big) is True  # under 2x cap
+        assert acc.try_add(small) is True  # still room
+        assert acc.count == 2
+
+    def test_massive_file_rejected_even_as_first(self) -> None:
+        """A file over 2x budget is rejected even as first item."""
+        acc = BudgetAccumulator()  # 7.5KB default, 2x = 15KB
+        huge = _make_file_result("src/massive.py", lines=5000)  # ~35KB
+        assert acc.try_add(huge) is False  # over 2x cap
+        assert acc.count == 0
 
     def test_pagination_with_remaining_files(self) -> None:
         """Pagination correctly signals remaining files."""
