@@ -17,3 +17,8 @@ comment:
 ignore:
   - "tests/**"
   - "**/__pycache__/**"
+
+# Test Analytics configuration
+test_analytics:
+  ignore:
+    - "tests/testing/fixtures/**"  # Fixture XML files, not real test results
