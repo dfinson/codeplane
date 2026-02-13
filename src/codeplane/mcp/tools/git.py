@@ -274,6 +274,39 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         all_files = list(diff.files)
         full_patch = diff.patch or ""
 
+        # Parse the full patch into per-file sections FIRST
+        # This allows us to budget files + their patches together
+        file_patches: dict[str, str] = {}
+        current_file_path: str | None = None
+        current_file_lines: list[str] = []
+
+        for line in full_patch.splitlines(keepends=True):
+            if line.startswith("diff --git "):
+                # Flush previous file's patch
+                if current_file_path:
+                    file_patches[current_file_path] = "".join(current_file_lines)
+                # Start new file - extract path from header
+                current_file_lines = [line]
+                current_file_path = None
+                # Extract both a/ and b/ paths from the header
+                # Format: "diff --git a/path b/path\n"
+                parts = line.strip().split()
+                if len(parts) >= 4:
+                    # Try b/ path first (for modified/added), then a/ (for deleted)
+                    for p in (parts[3], parts[2]):
+                        if p.startswith("b/"):
+                            current_file_path = p[2:]
+                            break
+                        elif p.startswith("a/"):
+                            current_file_path = p[2:]
+                            break
+            else:
+                current_file_lines.append(line)
+
+        # Flush last file
+        if current_file_path:
+            file_patches[current_file_path] = "".join(current_file_lines)
+
         # Apply cursor: skip files already returned
         start_idx = 0
         if cursor:
@@ -284,68 +317,64 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         page_files = all_files[start_idx:]
 
-        # Use BudgetAccumulator to add files one by one
+        # Compute overhead for fixed response fields
+        base_overhead: dict[str, Any] = {
+            "files": [],
+            "total_additions": sum(f.additions for f in all_files),
+            "total_deletions": sum(f.deletions for f in all_files),
+            "files_changed": len(all_files),
+            "page_additions": 0,
+            "page_deletions": 0,
+            "page_files": 0,
+            "patch": "",
+            "summary": "999d files changed, +999999 -999999",  # worst-case summary
+            "pagination": {
+                "truncated": True,
+                "next_cursor": "99999",
+                "total_estimate": len(all_files),
+            },
+        }
+        overhead = measure_bytes(base_overhead) + 100  # safety margin
+
+        # Budget files + their patches TOGETHER
         acc = BudgetAccumulator()
+        acc.reserve(overhead)
+        files_in_page: list[dict[str, Any]] = []
+        patches_in_page: list[str] = []
+
         for f in page_files:
-            item = {
+            file_path = f.new_path or f.old_path
+            file_patch = file_patches.get(file_path, "")
+
+            file_item = {
                 "old_path": f.old_path,
                 "new_path": f.new_path,
                 "status": f.status,
                 "additions": f.additions,
                 "deletions": f.deletions,
             }
-            if not acc.try_add(item):
+
+            # Create combined item for budget measurement
+            # The patch is a string, so we measure it as part of a dict
+            combined_item = {
+                **file_item,
+                "_patch_size_proxy": file_patch,  # Include patch in measurement
+            }
+
+            if not acc.try_add(combined_item):
                 break
 
-        # Build result with paginated files
-        files_in_page = acc.items
+            files_in_page.append(file_item)
+            if file_patch:
+                patches_in_page.append(file_patch)
+
         has_more = len(files_in_page) < len(page_files)
         next_offset = start_idx + len(files_in_page)
 
-        # Extract patch sections for only the files we're returning
-        # Patches are delimited by 'diff --git' headers
-        page_paths = {f["new_path"] or f["old_path"] for f in files_in_page}
-        patch_lines: list[str] = []
-        current_file_patch: list[str] = []
-        current_file_path: str | None = None
+        # Combine patches for the page
+        page_patch = "".join(patches_in_page)
 
-        for line in full_patch.splitlines(keepends=True):
-            if line.startswith("diff --git "):
-                # Flush previous file's patch if it was in our page
-                if current_file_path and current_file_path in page_paths:
-                    patch_lines.extend(current_file_patch)
-                # Start new file
-                current_file_patch = [line]
-                # Extract path robustly: look for any page path in the header
-                # This handles both simple paths and quoted paths with spaces
-                current_file_path = None
-                for path in page_paths:
-                    # Check for exact path match in the header (a/path or b/path)
-                    # Use word boundaries to avoid substring false positives
-                    # e.g., "a/file.py" should NOT match "a/myfile.py"
-                    a_prefix = f"a/{path}"
-                    b_prefix = f"b/{path}"
-                    # Path must be followed by space, quote, or end of line
-                    for prefix in (a_prefix, b_prefix):
-                        idx = line.find(prefix)
-                        if idx != -1:
-                            end_idx = idx + len(prefix)
-                            # Check that path ends at a boundary (space, quote, or EOL)
-                            if end_idx >= len(line.rstrip()) or line[end_idx] in (" ", '"', "'"):
-                                current_file_path = path
-                                break
-                    if current_file_path:
-                        break
-            else:
-                current_file_patch.append(line)
-
-        # Flush last file
-        if current_file_path and current_file_path in page_paths:
-            patch_lines.extend(current_file_patch)
-
-        page_patch = "".join(patch_lines)
-
-        # Compute totals: overall for the entire diff, page for this page
+        # Compute totals
         overall_additions = sum(f.additions for f in all_files)
         overall_deletions = sum(f.deletions for f in all_files)
         page_additions = sum(f["additions"] for f in files_in_page)
@@ -373,44 +402,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 total_estimate=len(all_files),
             ),
         }
-
-        # If patch is still too large, truncate it with binary search
-        size = measure_bytes(result)
-        if size > RESPONSE_BUDGET_BYTES and page_patch:
-            truncation_notice = (
-                "\n\n[... PATCH TRUNCATED — content omitted due to size limit ...]\n"
-            )
-
-            base_result: dict[str, Any] = dict(result)
-            base_result["patch"] = ""
-            base_size = measure_bytes(base_result)
-
-            if base_size >= RESPONSE_BUDGET_BYTES:
-                # Even file metadata for this page exceeds budget.
-                # This shouldn't happen since we used BudgetAccumulator,
-                # but handle gracefully: return what we have without patch.
-                result["patch"] = ""
-                return result
-
-            # Binary search for longest patch prefix that fits
-            low, high = 0, len(page_patch)
-            best_patch: str | None = None
-
-            while low <= high:
-                mid = (low + high) // 2
-                candidate = page_patch[:mid] + truncation_notice
-                base_result["patch"] = candidate
-                if measure_bytes(base_result) <= RESPONSE_BUDGET_BYTES:
-                    best_patch = candidate
-                    low = mid + 1
-                else:
-                    high = mid - 1
-
-            result["patch"] = best_patch or ""
-            # Update pagination to indicate patch was truncated
-            result["pagination"]["truncated"] = True
-            if "patch_truncated" not in result:
-                result["patch_truncated"] = True
 
         return result
 
