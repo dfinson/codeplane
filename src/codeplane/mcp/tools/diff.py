@@ -32,7 +32,7 @@ from codeplane.index._internal.diff.sources import (
     snapshots_from_epoch,
     snapshots_from_index,
 )
-from codeplane.mcp.budget import BudgetAccumulator
+from codeplane.mcp.budget import BudgetAccumulator, measure_bytes
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -631,8 +631,32 @@ def _result_to_dict(
     all_structural = result.structural_changes
     all_non_structural = result.non_structural_changes
 
-    # Paginate structural_changes first
+    # Compute overhead for fixed response fields (summary, scope, agentic_hint, etc.)
+    # These are included in every page regardless of array item count.
+    base_response: dict[str, Any] = {
+        "summary": result.summary,
+        "breaking_summary": result.breaking_summary,
+        "files_analyzed": result.files_analyzed,
+        "base": result.base_description,
+        "target": result.target_description,
+        "structural_changes": [],
+        "non_structural_changes": [],
+        **(
+            {"scope": {k: v for k, v in asdict(result.scope).items() if v is not None}}
+            if result.scope
+            else {}
+        ),
+        "agentic_hint": agentic_hint,
+        "pagination": {
+            "total_structural": len(all_structural),
+            "total_non_structural": len(all_non_structural),
+        },
+    }
+    overhead = measure_bytes(base_response)
+
+    # Paginate structural_changes first, reserving space for overhead
     acc = BudgetAccumulator()
+    acc.reserve(overhead)
     structural_items: list[dict[str, Any]] = []
     structural_consumed = 0
 

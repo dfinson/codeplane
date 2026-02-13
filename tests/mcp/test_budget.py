@@ -233,6 +233,35 @@ class TestBudgetAccumulator:
         assert len(acc.items) == 1
         assert acc.items[0]["data"] == "x" * 100
 
+    # ---- reserve: overhead reservation ----
+
+    def test_reserve_reduces_available_budget(self) -> None:
+        """reserve() reduces the budget available for items."""
+        acc = BudgetAccumulator(budget=1000)
+        acc.reserve(500)
+        assert acc.remaining_bytes == 500
+        assert acc.used_bytes == 500
+
+    def test_reserve_before_items(self) -> None:
+        """Items added after reserve() use the reduced budget."""
+        item = {"x": 1}
+        size = measure_bytes(item)
+        acc = BudgetAccumulator(budget=500 + size * 2)  # space for 500 overhead + 2 items
+        acc.reserve(500)
+        assert acc.try_add(item) is True
+        assert acc.try_add(item) is True
+        assert acc.try_add(item) is False  # no more room
+        assert acc.count == 2
+
+    def test_reserve_can_exhaust_budget(self) -> None:
+        """Reserving entire budget exhausts accumulator."""
+        acc = BudgetAccumulator(budget=1000)
+        acc.reserve(1000)
+        assert acc.has_room is False
+        # No items can be added when budget is exhausted by reservation
+        # (first-item guarantee only applies when items list is empty AND has_room)
+        assert acc.try_add({"x": 1}) is False
+
 
 # =============================================================================
 # Tests for make_budget_pagination

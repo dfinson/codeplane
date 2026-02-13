@@ -26,6 +26,8 @@ class BudgetAccumulator:
     Usage::
 
         acc = BudgetAccumulator()
+        # Reserve space for fixed overhead (metadata, hints, etc.)
+        acc.reserve(overhead_bytes)
         for item in all_results:
             if not acc.try_add(item):
                 break  # budget exhausted
@@ -49,6 +51,17 @@ class BudgetAccumulator:
     # -----------------------------------------------------------------
     # Public API
     # -----------------------------------------------------------------
+
+    def reserve(self, overhead: int) -> None:
+        """Reserve *overhead* bytes from the budget for fixed fields.
+
+        Call this before adding items to ensure space is left for
+        response metadata (summary, hints, pagination, etc.) that
+        will be added after the accumulated items.
+        """
+        self._used += overhead
+        if self._used >= self._budget:
+            self._exhausted = True
 
     def try_add(self, item: dict[str, Any]) -> bool:
         """Attempt to add *item* to the accumulator.
