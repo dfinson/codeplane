@@ -648,6 +648,34 @@ class TreeSitterParser:
             return self._extract_js_imports(result.root_node, file_path)
         elif result.language == "csharp":
             return self._extract_csharp_imports(result.root_node, file_path)
+        elif result.language == "go":
+            return self._extract_go_imports(result.root_node, file_path)
+        elif result.language == "rust":
+            return self._extract_rust_imports(result.root_node, file_path)
+        elif result.language == "java":
+            return self._extract_java_imports(result.root_node, file_path)
+        elif result.language == "kotlin":
+            return self._extract_kotlin_imports(result.root_node, file_path)
+        elif result.language == "ruby":
+            return self._extract_ruby_imports(result.root_node, file_path)
+        elif result.language == "php":
+            return self._extract_php_imports(result.root_node, file_path)
+        elif result.language == "swift":
+            return self._extract_swift_imports(result.root_node, file_path)
+        elif result.language == "scala":
+            return self._extract_scala_imports(result.root_node, file_path)
+        elif result.language == "elixir":
+            return self._extract_elixir_imports(result.root_node, file_path)
+        elif result.language == "haskell":
+            return self._extract_haskell_imports(result.root_node, file_path)
+        elif result.language == "ocaml":
+            return self._extract_ocaml_imports(result.root_node, file_path)
+        elif result.language == "lua":
+            return self._extract_lua_imports(result.root_node, file_path)
+        elif result.language == "julia":
+            return self._extract_julia_imports(result.root_node, file_path)
+        elif result.language in ("c", "cpp"):
+            return self._extract_c_imports(result.root_node, file_path)
         else:
             return []
 
@@ -1086,6 +1114,974 @@ class TreeSitterParser:
                     )
 
         _walk_for_usings(root)
+        return imports
+
+    def _extract_go_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract import declarations from Go AST.
+
+        Handles three forms:
+        - ``import "fmt"`` -> single import
+        - ``import alias "pkg"`` -> aliased import
+        - ``import . "pkg"`` -> dot import (namespace-level, like Python's *)
+        """
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def process_import_spec(node: Any) -> None:
+            """Process a single import_spec node."""
+            path_node = None
+            alias_node = None
+            is_dot_import = False
+
+            for child in node.children:
+                if child.type == "interpreted_string_literal":
+                    path_node = child
+                elif child.type == "package_identifier":
+                    alias_node = child
+                elif child.type == "dot" or (child.text and child.text == b"."):
+                    is_dot_import = True
+                elif child.type == "blank_identifier":
+                    # import _ "pkg" - side-effect import, still record it
+                    alias_node = child
+
+            if path_node:
+                # Strip quotes from import path
+                path_text = path_node.text.decode("utf-8").strip('"') if path_node.text else ""
+                alias_text = None
+                if alias_node and alias_node.text:
+                    alias_text = alias_node.text.decode("utf-8")
+
+                # For dot imports, mark with "*" as imported_name like other star imports
+                imported_name = "*" if is_dot_import else path_text.split("/")[-1]
+
+                imports.append(
+                    SyntacticImport(
+                        import_uid=make_uid(path_text, node.start_point[0] + 1),
+                        imported_name=imported_name,
+                        alias=alias_text if not is_dot_import else None,
+                        source_literal=path_text,
+                        import_kind="go_import",
+                        start_line=node.start_point[0] + 1,
+                        start_col=node.start_point[1],
+                        end_line=node.end_point[0] + 1,
+                        end_col=node.end_point[1],
+                    )
+                )
+
+        def walk(node: Any) -> None:
+            if node.type == "import_declaration":
+                for child in node.children:
+                    if child.type == "import_spec":
+                        process_import_spec(child)
+                    elif child.type == "import_spec_list":
+                        for spec in child.children:
+                            if spec.type == "import_spec":
+                                process_import_spec(spec)
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return imports
+
+    def _extract_rust_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract use declarations from Rust AST.
+
+        Handles:
+        - ``use crate::module::Type;``
+        - ``use crate::module::*;`` -> glob import
+        - ``use X as Y;`` -> aliased import
+        - ``use crate::module::{A, B};`` -> grouped imports
+        """
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def extract_use_tree(node: Any, prefix: str = "") -> list[tuple[str, str | None, bool]]:
+            """Recursively extract (path, alias, is_glob) from use_tree nodes."""
+            results: list[tuple[str, str | None, bool]] = []
+
+            if node.type == "use_as_clause":
+                # use X as Y - structure: scoped_identifier, 'as', identifier
+                path_node = None
+                alias_node = None
+                saw_as = False
+                for child in node.children:
+                    if child.type == "as":
+                        saw_as = True
+                    elif child.type in (
+                        "scoped_identifier",
+                        "crate",
+                        "self",
+                        "super",
+                    ):
+                        path_node = child
+                    elif child.type == "identifier":
+                        if saw_as:
+                            # This is the alias (comes after 'as')
+                            alias_node = child
+                        elif path_node is None:
+                            # This is the path (simple identifier before 'as')
+                            path_node = child
+                if path_node:
+                    path = self._extract_rust_path(path_node)
+                    full_path = f"{prefix}::{path}" if prefix else path
+                    alias = (
+                        alias_node.text.decode("utf-8") if alias_node and alias_node.text else None
+                    )
+                    results.append((full_path, alias, False))
+
+            elif node.type == "use_wildcard":
+                # use module::*
+                for child in node.children:
+                    if child.type == "scoped_identifier":
+                        path = self._extract_rust_path(child)
+                        full_path = f"{prefix}::{path}" if prefix else path
+                        results.append((full_path, None, True))
+                if not results:
+                    # Just * at current level
+                    results.append((prefix, None, True))
+
+            elif node.type == "use_list":
+                # use module::{A, B}
+                for child in node.children:
+                    if child.type in (
+                        "use_as_clause",
+                        "use_wildcard",
+                        "use_list",
+                        "identifier",
+                        "self",
+                    ):
+                        sub_results = extract_use_tree(child, prefix)
+                        results.extend(sub_results)
+
+            elif node.type == "scoped_use_list":
+                # use module::{...}
+                scope_prefix = ""
+                use_list = None
+                for child in node.children:
+                    if child.type in ("scoped_identifier", "identifier", "crate", "self", "super"):
+                        scope_prefix = self._extract_rust_path(child)
+                    elif child.type == "use_list":
+                        use_list = child
+                if use_list:
+                    full_prefix = f"{prefix}::{scope_prefix}" if prefix else scope_prefix
+                    results.extend(extract_use_tree(use_list, full_prefix))
+
+            elif node.type in ("scoped_identifier", "identifier", "crate", "self", "super"):
+                path = self._extract_rust_path(node)
+                full_path = f"{prefix}::{path}" if prefix else path
+                results.append((full_path, None, False))
+
+            return results
+
+        def _extract_rust_path(node: Any) -> str:
+            """Extract full path from scoped_identifier or identifier."""
+            if node.type == "identifier":
+                text: str = node.text.decode("utf-8") if node.text else ""
+                return text
+            elif node.type in ("crate", "self", "super"):
+                text = node.text.decode("utf-8") if node.text else node.type
+                return str(text)
+            elif node.type == "scoped_identifier":
+                parts: list[str] = []
+                for child in node.children:
+                    if child.type in ("identifier", "crate", "self", "super", "scoped_identifier"):
+                        parts.append(_extract_rust_path(child))
+                return "::".join(p for p in parts if p)
+            return ""
+
+        # Store the helper as instance method for reuse
+        self._extract_rust_path = _extract_rust_path
+
+        def walk(node: Any) -> None:
+            if node.type == "use_declaration":
+                for child in node.children:
+                    if child.type in (
+                        "use_as_clause",
+                        "use_wildcard",
+                        "scoped_use_list",
+                        "scoped_identifier",
+                        "identifier",
+                        "use_list",
+                    ):
+                        results = extract_use_tree(child)
+                        for path, alias, is_glob in results:
+                            imported_name = "*" if is_glob else path.split("::")[-1]
+                            imports.append(
+                                SyntacticImport(
+                                    import_uid=make_uid(path, node.start_point[0] + 1),
+                                    imported_name=imported_name,
+                                    alias=alias,
+                                    source_literal=path,
+                                    import_kind="rust_use",
+                                    start_line=node.start_point[0] + 1,
+                                    start_col=node.start_point[1],
+                                    end_line=node.end_point[0] + 1,
+                                    end_col=node.end_point[1],
+                                )
+                            )
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return imports
+
+    def _extract_java_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract import declarations from Java AST.
+
+        Handles:
+        - ``import com.foo.Bar;``
+        - ``import static com.foo.Bar.method;``
+        - ``import com.foo.*;`` -> wildcard import
+        """
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def walk(node: Any) -> None:
+            if node.type == "import_declaration":
+                is_static = False
+                is_wildcard = False
+                path_parts: list[str] = []
+
+                for child in node.children:
+                    if child.type == "static":
+                        is_static = True
+                    elif child.type == "scoped_identifier":
+                        path_parts = self._extract_java_scoped_path(child)
+                    elif child.type == "identifier":
+                        path_parts = [child.text.decode("utf-8") if child.text else ""]
+                    elif child.type == "asterisk":
+                        is_wildcard = True
+
+                if path_parts:
+                    full_path = ".".join(path_parts)
+                    imported_name = "*" if is_wildcard else path_parts[-1]
+                    import_kind = "java_import_static" if is_static else "java_import"
+
+                    imports.append(
+                        SyntacticImport(
+                            import_uid=make_uid(full_path, node.start_point[0] + 1),
+                            imported_name=imported_name,
+                            alias=None,
+                            source_literal=full_path,
+                            import_kind=import_kind,
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_col=node.end_point[1],
+                        )
+                    )
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return imports
+
+    def _extract_java_scoped_path(self, node: Any) -> list[str]:
+        """Extract path parts from a Java scoped_identifier."""
+        if node.type == "identifier":
+            return [node.text.decode("utf-8") if node.text else ""]
+        parts: list[str] = []
+        for child in node.children:
+            if child.type in ("scoped_identifier", "identifier"):
+                parts.extend(self._extract_java_scoped_path(child))
+        return parts
+
+    def _extract_kotlin_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract import declarations from Kotlin AST.
+
+        Handles:
+        - ``import com.foo.Bar``
+        - ``import com.foo.Bar as Alias``
+        - ``import com.foo.*`` -> wildcard import
+        """
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def walk(node: Any) -> None:
+            # Kotlin tree-sitter uses "import" as the node type for import declarations
+            # Child structure: import (keyword) + qualified_identifier
+            if node.type == "import" and node.child_count > 0:
+                path_text = ""
+                alias_text: str | None = None
+                is_wildcard = False
+
+                for child in node.children:
+                    if child.type == "qualified_identifier":
+                        # Extract full qualified path from all identifiers
+                        parts: list[str] = []
+                        for qchild in child.children:
+                            if qchild.type == "identifier":
+                                parts.append(qchild.text.decode("utf-8") if qchild.text else "")
+                        path_text = ".".join(parts)
+                    elif child.type == "identifier":
+                        # Single identifier import
+                        path_text = child.text.decode("utf-8") if child.text else ""
+                    elif child.type == "import_alias":
+                        for alias_child in child.children:
+                            if alias_child.type == "simple_identifier":
+                                alias_text = (
+                                    alias_child.text.decode("utf-8") if alias_child.text else None
+                                )
+                    elif child.text == b"*":
+                        is_wildcard = True
+
+                if path_text:
+                    imported_name = "*" if is_wildcard else path_text.split(".")[-1]
+                    imports.append(
+                        SyntacticImport(
+                            import_uid=make_uid(path_text, node.start_point[0] + 1),
+                            imported_name=imported_name,
+                            alias=alias_text,
+                            source_literal=path_text,
+                            import_kind="kotlin_import",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_col=node.end_point[1],
+                        )
+                    )
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return imports
+
+    def _extract_kotlin_type_path(self, node: Any) -> str:
+        """Extract qualified path from Kotlin user_type node."""
+        parts: list[str] = []
+        for child in node.children:
+            if child.type == "simple_identifier":
+                parts.append(child.text.decode("utf-8") if child.text else "")
+            elif child.type == "user_type":
+                parts.append(self._extract_kotlin_type_path(child))
+        return ".".join(parts)
+
+    def _extract_ruby_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract require/require_relative calls from Ruby AST.
+
+        Handles:
+        - ``require 'foo'``
+        - ``require "foo"``
+        - ``require_relative 'foo'``
+        - ``require_relative "foo"``
+        """
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def walk(node: Any) -> None:
+            if node.type == "call":
+                method_node = node.child_by_field_name("method")
+                if method_node and method_node.text:
+                    method_name = method_node.text.decode("utf-8")
+                    if method_name in ("require", "require_relative"):
+                        args_node = node.child_by_field_name("arguments")
+                        if args_node:
+                            for arg in args_node.children:
+                                if arg.type == "string":
+                                    # Extract string content, stripping quotes
+                                    content = arg.text.decode("utf-8") if arg.text else ""
+                                    # Remove surrounding quotes
+                                    if (content.startswith("'") and content.endswith("'")) or (
+                                        content.startswith('"') and content.endswith('"')
+                                    ):
+                                        content = content[1:-1]
+
+                                    import_kind = (
+                                        "ruby_require_relative"
+                                        if method_name == "require_relative"
+                                        else "ruby_require"
+                                    )
+                                    imports.append(
+                                        SyntacticImport(
+                                            import_uid=make_uid(content, node.start_point[0] + 1),
+                                            imported_name=content.split("/")[-1],
+                                            alias=None,
+                                            source_literal=content,
+                                            import_kind=import_kind,
+                                            start_line=node.start_point[0] + 1,
+                                            start_col=node.start_point[1],
+                                            end_line=node.end_point[0] + 1,
+                                            end_col=node.end_point[1],
+                                        )
+                                    )
+                                    break
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return imports
+
+    def _extract_php_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract use declarations from PHP AST.
+
+        Handles:
+        - ``use Namespace\\Class;``
+        - ``use Namespace\\Class as Alias;``
+        - ``use function Namespace\func;``
+        - ``use const Namespace\\CONST;``
+        """
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def walk(node: Any) -> None:
+            if node.type == "namespace_use_declaration":
+                for child in node.children:
+                    if child.type == "namespace_use_clause":
+                        path_text = ""
+                        alias_text: str | None = None
+
+                        for sub in child.children:
+                            if sub.type == "qualified_name":
+                                path_text = self._extract_php_qualified_name(sub)
+                            elif sub.type == "namespace_aliasing_clause":
+                                for alias_child in sub.children:
+                                    if alias_child.type == "name":
+                                        alias_text = (
+                                            alias_child.text.decode("utf-8")
+                                            if alias_child.text
+                                            else None
+                                        )
+
+                        if path_text:
+                            imports.append(
+                                SyntacticImport(
+                                    import_uid=make_uid(path_text, node.start_point[0] + 1),
+                                    imported_name=path_text.split("\\")[-1],
+                                    alias=alias_text,
+                                    source_literal=path_text,
+                                    import_kind="php_use",
+                                    start_line=node.start_point[0] + 1,
+                                    start_col=node.start_point[1],
+                                    end_line=node.end_point[0] + 1,
+                                    end_col=node.end_point[1],
+                                )
+                            )
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return imports
+
+    def _extract_php_qualified_name(self, node: Any) -> str:
+        """Extract qualified name from PHP qualified_name node."""
+        if node.text:
+            text: str = node.text.decode("utf-8")
+            return text
+        parts: list[str] = []
+        for child in node.children:
+            if child.type == "name":
+                parts.append(child.text.decode("utf-8") if child.text else "")
+        return "\\".join(parts)
+
+    def _extract_swift_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract import declarations from Swift AST.
+
+        Handles:
+        - ``import Foundation``
+        - ``import struct Foundation.URL``
+        - ``import class UIKit.UIView``
+        """
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def walk(node: Any) -> None:
+            if node.type == "import_declaration":
+                module_parts: list[str] = []
+
+                for child in node.children:
+                    if child.type == "identifier":
+                        module_parts.append(child.text.decode("utf-8") if child.text else "")
+                    elif child.type == "import_path":
+                        for path_child in child.children:
+                            if path_child.type == "identifier":
+                                module_parts.append(
+                                    path_child.text.decode("utf-8") if path_child.text else ""
+                                )
+
+                if module_parts:
+                    full_path = ".".join(module_parts)
+                    imports.append(
+                        SyntacticImport(
+                            import_uid=make_uid(full_path, node.start_point[0] + 1),
+                            imported_name=module_parts[-1],
+                            alias=None,
+                            source_literal=full_path,
+                            import_kind="swift_import",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_col=node.end_point[1],
+                        )
+                    )
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return imports
+
+    def _extract_scala_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract import declarations from Scala AST.
+
+        Handles:
+        - ``import com.foo.Bar``
+        - ``import com.foo.{Bar, Baz}``
+        - ``import com.foo.{Bar => B}``
+        - ``import com.foo._`` -> wildcard import
+        """
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def walk(node: Any) -> None:
+            if node.type == "import_declaration":
+                # Extract import selectors
+                for child in node.children:
+                    if child.type == "import_selectors":
+                        # import com.foo.{Bar, Baz}
+                        base_path = self._extract_scala_base_path(node)
+                        for selector in child.children:
+                            if selector.type == "import_selector":
+                                name = ""
+                                alias: str | None = None
+                                for sel_child in selector.children:
+                                    if sel_child.type == "identifier":
+                                        if not name:
+                                            name = (
+                                                sel_child.text.decode("utf-8")
+                                                if sel_child.text
+                                                else ""
+                                            )
+                                        else:
+                                            alias = (
+                                                sel_child.text.decode("utf-8")
+                                                if sel_child.text
+                                                else None
+                                            )
+                                if name:
+                                    full_path = f"{base_path}.{name}" if base_path else name
+                                    imports.append(
+                                        SyntacticImport(
+                                            import_uid=make_uid(full_path, node.start_point[0] + 1),
+                                            imported_name=name,
+                                            alias=alias,
+                                            source_literal=full_path,
+                                            import_kind="scala_import",
+                                            start_line=node.start_point[0] + 1,
+                                            start_col=node.start_point[1],
+                                            end_line=node.end_point[0] + 1,
+                                            end_col=node.end_point[1],
+                                        )
+                                    )
+                            elif selector.type == "wildcard":
+                                full_path = base_path
+                                imports.append(
+                                    SyntacticImport(
+                                        import_uid=make_uid(
+                                            f"{full_path}.*", node.start_point[0] + 1
+                                        ),
+                                        imported_name="*",
+                                        alias=None,
+                                        source_literal=full_path,
+                                        import_kind="scala_import",
+                                        start_line=node.start_point[0] + 1,
+                                        start_col=node.start_point[1],
+                                        end_line=node.end_point[0] + 1,
+                                        end_col=node.end_point[1],
+                                    )
+                                )
+                    elif child.type in ("stable_identifier", "identifier"):
+                        # Simple import: import com.foo.Bar
+                        full_path = self._extract_scala_path(child)
+                        if full_path:
+                            is_wildcard = full_path.endswith("._")
+                            if is_wildcard:
+                                full_path = full_path[:-2]
+                            imports.append(
+                                SyntacticImport(
+                                    import_uid=make_uid(full_path, node.start_point[0] + 1),
+                                    imported_name="*" if is_wildcard else full_path.split(".")[-1],
+                                    alias=None,
+                                    source_literal=full_path,
+                                    import_kind="scala_import",
+                                    start_line=node.start_point[0] + 1,
+                                    start_col=node.start_point[1],
+                                    end_line=node.end_point[0] + 1,
+                                    end_col=node.end_point[1],
+                                )
+                            )
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return imports
+
+    def _extract_scala_path(self, node: Any) -> str:
+        """Extract qualified path from Scala stable_identifier or identifier."""
+        if node.type == "identifier":
+            return node.text.decode("utf-8") if node.text else ""
+        parts: list[str] = []
+        for child in node.children:
+            if child.type in ("stable_identifier", "identifier"):
+                parts.append(self._extract_scala_path(child))
+        return ".".join(p for p in parts if p)
+
+    def _extract_scala_base_path(self, node: Any) -> str:
+        """Extract base path before import selectors."""
+        for child in node.children:
+            if child.type in ("stable_identifier", "identifier"):
+                return self._extract_scala_path(child)
+        return ""
+
+    def _extract_elixir_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract import/alias/use declarations from Elixir AST.
+
+        Handles:
+        - ``import Module``
+        - ``alias Module``
+        - ``alias Module, as: Alias``
+        - ``use Module``
+        """
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def walk(node: Any) -> None:
+            if node.type == "call":
+                target = None
+                for child in node.children:
+                    if child.type == "identifier":
+                        target = child.text.decode("utf-8") if child.text else ""
+                        break
+                    elif child.type == "dot":
+                        # Module function call, not an import
+                        break
+
+                if target in ("import", "alias", "use", "require"):
+                    args_node = None
+                    for child in node.children:
+                        if child.type == "arguments":
+                            args_node = child
+                            break
+
+                    if args_node:
+                        module_name = ""
+                        alias_name: str | None = None
+
+                        for arg in args_node.children:
+                            if arg.type == "alias":
+                                # Module name like Enum, Map.Helpers
+                                module_name = arg.text.decode("utf-8") if arg.text else ""
+                            elif arg.type == "keywords":
+                                # Keyword arguments like as: Alias
+                                for kw in arg.children:
+                                    if kw.type == "pair":
+                                        key_node = kw.child_by_field_name("key")
+                                        val_node = kw.child_by_field_name("value")
+                                        if key_node and key_node.text == b"as" and val_node:
+                                            alias_name = (
+                                                val_node.text.decode("utf-8")
+                                                if val_node.text
+                                                else None
+                                            )
+
+                        if module_name:
+                            imports.append(
+                                SyntacticImport(
+                                    import_uid=make_uid(module_name, node.start_point[0] + 1),
+                                    imported_name=module_name.split(".")[-1],
+                                    alias=alias_name,
+                                    source_literal=module_name,
+                                    import_kind="elixir_import",
+                                    start_line=node.start_point[0] + 1,
+                                    start_col=node.start_point[1],
+                                    end_line=node.end_point[0] + 1,
+                                    end_col=node.end_point[1],
+                                )
+                            )
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return imports
+
+    def _extract_haskell_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract import declarations from Haskell AST.
+
+        Handles:
+        - ``import Module``
+        - ``import qualified Module as M``
+        - ``import Module (func1, func2)``
+        - ``import Module hiding (func)``
+        """
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def walk(node: Any) -> None:
+            if node.type == "import":
+                module_name = ""
+                alias_name: str | None = None
+                _ = False  # is_qualified - tracked but not used in output
+
+                for child in node.children:
+                    if child.type == "qualified":
+                        pass  # Qualified imports tracked via module_name
+                    elif child.type == "module" or child.type == "module_id":
+                        module_name = child.text.decode("utf-8") if child.text else ""
+                    elif child.type == "as":
+                        # Next sibling should be the alias
+                        pass
+                    elif child.type == "alias":
+                        alias_name = child.text.decode("utf-8") if child.text else None
+
+                if module_name:
+                    imports.append(
+                        SyntacticImport(
+                            import_uid=make_uid(module_name, node.start_point[0] + 1),
+                            imported_name=module_name.split(".")[-1],
+                            alias=alias_name,
+                            source_literal=module_name,
+                            import_kind="haskell_import",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_col=node.end_point[1],
+                        )
+                    )
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return imports
+
+    def _extract_ocaml_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract open declarations from OCaml AST.
+
+        Handles:
+        - ``open Module``
+        - ``open Module.SubModule``
+        """
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def walk(node: Any) -> None:
+            if node.type == "open_statement":
+                module_name = ""
+
+                for child in node.children:
+                    if (
+                        child.type in ("module_path", "extended_module_path", "constructor_path")
+                        or child.type == "constructor_name"
+                    ):
+                        module_name = child.text.decode("utf-8") if child.text else ""
+
+                if module_name:
+                    imports.append(
+                        SyntacticImport(
+                            import_uid=make_uid(module_name, node.start_point[0] + 1),
+                            imported_name=module_name.split(".")[-1],
+                            alias=None,
+                            source_literal=module_name,
+                            import_kind="ocaml_open",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_col=node.end_point[1],
+                        )
+                    )
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return imports
+
+    def _extract_lua_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract require() calls from Lua AST.
+
+        Handles:
+        - ``require("module")``
+        - ``require 'module'``
+        - ``local M = require("module")``
+        """
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def walk(node: Any) -> None:
+            if node.type == "function_call":
+                func_name = ""
+                module_name = ""
+
+                # Get function name
+                for child in node.children:
+                    if child.type == "identifier":
+                        func_name = child.text.decode("utf-8") if child.text else ""
+                        break
+
+                if func_name == "require":
+                    # Get argument
+                    for child in node.children:
+                        if child.type == "arguments":
+                            for arg in child.children:
+                                if arg.type == "string":
+                                    module_name = arg.text.decode("utf-8") if arg.text else ""
+                                    # Strip quotes
+                                    module_name = module_name.strip("'\"")
+                                    break
+                        elif child.type == "string":
+                            # require 'module' form (no parens)
+                            module_name = child.text.decode("utf-8") if child.text else ""
+                            module_name = module_name.strip("'\"")
+
+                    if module_name:
+                        imports.append(
+                            SyntacticImport(
+                                import_uid=make_uid(module_name, node.start_point[0] + 1),
+                                imported_name=module_name.split(".")[-1],
+                                alias=None,
+                                source_literal=module_name,
+                                import_kind="lua_require",
+                                start_line=node.start_point[0] + 1,
+                                start_col=node.start_point[1],
+                                end_line=node.end_point[0] + 1,
+                                end_col=node.end_point[1],
+                            )
+                        )
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return imports
+
+    def _extract_julia_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract using/import declarations from Julia AST.
+
+        Handles:
+        - ``using Module``
+        - ``using Module: func1, func2``
+        - ``import Module``
+        - ``import Module: func``
+        """
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def walk(node: Any) -> None:
+            if node.type in ("import_statement", "using_statement"):
+                for child in node.children:
+                    if child.type in ("identifier", "selected_import", "scoped_identifier"):
+                        module_name = child.text.decode("utf-8") if child.text else ""
+                        if module_name:
+                            imports.append(
+                                SyntacticImport(
+                                    import_uid=make_uid(module_name, node.start_point[0] + 1),
+                                    imported_name=module_name.split(".")[-1].split(":")[0],
+                                    alias=None,
+                                    source_literal=module_name.split(":")[0],
+                                    import_kind="julia_using",
+                                    start_line=node.start_point[0] + 1,
+                                    start_col=node.start_point[1],
+                                    end_line=node.end_point[0] + 1,
+                                    end_col=node.end_point[1],
+                                )
+                            )
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return imports
+
+    def _extract_c_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
+        """Extract #include directives from C/C++ AST.
+
+        Handles:
+        - ``#include <header>`` -> system include
+        - ``#include "header"`` -> local include
+        """
+        imports: list[SyntacticImport] = []
+
+        def make_uid(name: str, line: int) -> str:
+            raw = f"{file_path}:{line}:{name}"
+            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+        def walk(node: Any) -> None:
+            if node.type == "preproc_include":
+                header_name = ""
+
+                for child in node.children:
+                    if child.type == "string_literal":
+                        # "header.h"
+                        header_name = child.text.decode("utf-8") if child.text else ""
+                        header_name = header_name.strip('"')
+                    elif child.type == "system_lib_string":
+                        # <header.h>
+                        header_name = child.text.decode("utf-8") if child.text else ""
+                        header_name = header_name.strip("<>")
+
+                if header_name:
+                    imports.append(
+                        SyntacticImport(
+                            import_uid=make_uid(header_name, node.start_point[0] + 1),
+                            imported_name=header_name.split("/")[-1],
+                            alias=None,
+                            source_literal=header_name,
+                            import_kind="c_include",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_col=node.end_point[1],
+                        )
+                    )
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
         return imports
 
     def extract_csharp_namespace_types(self, root: Any) -> dict[str, list[str]]:

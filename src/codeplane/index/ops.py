@@ -50,11 +50,9 @@ from codeplane.index._internal.indexing import (
     FactQueries,
     LexicalIndex,
     StructuralIndexer,
-    resolve_namespace_refs,
     resolve_references,
-    resolve_same_namespace_refs,
-    resolve_star_import_refs,
     resolve_type_traced,
+    run_pass_1_5,
 )
 from codeplane.index._internal.parsing import TreeSitterParser
 from codeplane.index._internal.state import FileStateService
@@ -730,9 +728,7 @@ class IndexCoordinator:
 
                 # Pass 1.5 / 2 / 3: cross-file resolution (scoped to changed files)
                 if changed_file_ids:
-                    resolve_namespace_refs(self.db, None, file_ids=changed_file_ids)
-                    resolve_same_namespace_refs(self.db, None, file_ids=changed_file_ids)
-                    resolve_star_import_refs(self.db, None, file_ids=changed_file_ids)
+                    run_pass_1_5(self.db, None, file_ids=changed_file_ids)
                     resolve_references(self.db, file_ids=changed_file_ids)
                     resolve_type_traced(self.db, file_ids=changed_file_ids)
 
@@ -899,13 +895,11 @@ class IndexCoordinator:
             for ctx_id, paths in by_context.items():
                 self._structural.index_files(paths, context_id=ctx_id, file_id_map=file_id_map)
 
-            # Pass 1.5: DB-backed cross-file resolution
+            # Pass 1.5: DB-backed cross-file resolution (all languages)
             # Use unit_id=None to allow cross-context resolution, which is the
             # common case (shared libraries, common utilities, framework code).
             # Strict context isolation would break legitimate cross-project refs.
-            resolve_namespace_refs(self.db, None)
-            resolve_same_namespace_refs(self.db, None)
-            resolve_star_import_refs(self.db, None)
+            run_pass_1_5(self.db, None)
 
             # Resolve cross-file references (Pass 2 - follows ImportFact chains)
             resolve_references(self.db)
@@ -2367,11 +2361,9 @@ class IndexCoordinator:
                 # Commit all Tantivy changes in one batch (1 commit, not N)
                 self._lexical.commit_staged()
 
-                # Pass 1.5: DB-backed cross-file resolution
+                # Pass 1.5: DB-backed cross-file resolution (all languages)
                 on_progress(0, 1, files_by_ext, "resolving_cross_file")
-                resolve_namespace_refs(self.db, None)
-                resolve_same_namespace_refs(self.db, None)
-                resolve_star_import_refs(self.db, None)
+                run_pass_1_5(self.db, None)
 
                 # Pass 2: Resolve cross-file references
                 def pass2_progress(processed: int, total: int) -> None:
