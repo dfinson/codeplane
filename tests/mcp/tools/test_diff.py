@@ -11,6 +11,7 @@ from typing import Any
 
 from codeplane.index._internal.diff.models import (
     AnalysisScope,
+    FileChangeInfo,
     ImpactInfo,
     SemanticDiffResult,
     StructuralChange,
@@ -52,14 +53,28 @@ def _change(
     )
 
 
+def _file_change(
+    path: str = "data/test.json",
+    status: str = "modified",
+    category: str = "config",
+) -> FileChangeInfo:
+    return FileChangeInfo(
+        path=path,
+        status=status,
+        category=category,
+        language=None,
+    )
+
+
 def _result(
     changes: list[StructuralChange] | None = None,
+    non_structural: list[FileChangeInfo] | None = None,
     summary: str = "test",
     breaking: str | None = None,
 ) -> SemanticDiffResult:
     return SemanticDiffResult(
         structural_changes=changes or [],
-        non_structural_changes=[],
+        non_structural_changes=non_structural or [],
         summary=summary,
         breaking_summary=breaking,
         files_analyzed=1 if changes else 0,
@@ -154,7 +169,8 @@ class TestPagination:
     def test_empty_pagination_when_no_changes(self) -> None:
         d = _result_to_dict(_result())
         assert "next_cursor" not in d["pagination"]
-        assert d["pagination"].get("total") == 0
+        assert d["pagination"].get("total_structural") == 0
+        assert d["pagination"].get("total_non_structural") == 0
 
     def test_no_pagination_under_budget(self) -> None:
         changes = [_change(name=f"fn_{i}") for i in range(5)]
@@ -175,9 +191,9 @@ class TestPagination:
         assert len(d["structural_changes"]) < 10
         assert d["pagination"]["truncated"] is True
         assert "next_cursor" in d["pagination"]
-        # Cursor format: "<cache_id>:<offset>"
+        # Cursor format: "<cache_id>:<structural_offset>:<non_structural_offset>"
         assert d["pagination"]["next_cursor"].startswith("1:")
-        assert d["pagination"]["total"] == 10
+        assert d["pagination"]["total_structural"] == 10
 
     def test_cursor_continues_from_offset(self) -> None:
         changes = [_change(name=f"fn_{i}") for i in range(10)]
@@ -208,6 +224,82 @@ class TestPagination:
 
 
 # ============================================================================
+# Tests: Non-structural Changes Pagination
+# ============================================================================
+
+
+class TestNonStructuralPagination:
+    """Tests for non_structural_changes pagination in _result_to_dict."""
+
+    def test_non_structural_paginated_after_structural_complete(self, monkeypatch: Any) -> None:
+        """non_structural_changes only paginated when structural_changes is done."""
+
+        class _TinyBudget(BudgetAccumulator):
+            def __init__(self, budget: int = 2000) -> None:
+                super().__init__(budget=budget)
+
+        monkeypatch.setattr("codeplane.mcp.tools.diff.BudgetAccumulator", _TinyBudget)
+
+        # 3 structural changes (small) + 10 non_structural (should overflow)
+        structural = [_change(name=f"fn_{i}") for i in range(3)]
+        non_structural = [_file_change(f"data/file_{i}.json") for i in range(10)]
+
+        d = _result_to_dict(_result(structural, non_structural), cache_id=1)
+
+        # All structural should fit
+        assert len(d["structural_changes"]) == 3
+        # Some non_structural should be on this page
+        assert len(d["non_structural_changes"]) > 0
+        # If all non_structural fit, no cursor; if not, cursor present
+        total_non_structural = d["pagination"]["total_non_structural"]
+        assert total_non_structural == 10
+
+    def test_cursor_continues_non_structural(self, monkeypatch: Any) -> None:
+        """Pagination cursor allows continuing non_structural_changes."""
+
+        class _TinyBudget(BudgetAccumulator):
+            def __init__(self, budget: int = 500) -> None:
+                super().__init__(budget=budget)
+
+        monkeypatch.setattr("codeplane.mcp.tools.diff.BudgetAccumulator", _TinyBudget)
+
+        # No structural, all non_structural
+        non_structural = [_file_change(f"data/file_{i}.json") for i in range(20)]
+
+        # First page
+        d1 = _result_to_dict(_result([], non_structural), cache_id=1)
+        first_page_count = len(d1["non_structural_changes"])
+        assert first_page_count < 20  # Should overflow
+        assert d1["pagination"]["truncated"] is True
+
+        # Parse cursor: "cache_id:structural_offset:non_structural_offset"
+        cursor = d1["pagination"]["next_cursor"]
+        assert cursor is not None
+        parts = cursor.split(":")
+        assert len(parts) == 3
+
+        # Second page with offset
+        non_structural_offset = int(parts[2])
+        d2 = _result_to_dict(
+            _result([], non_structural),
+            cursor_offset=0,
+            non_structural_offset=non_structural_offset,
+            cache_id=1,
+        )
+        second_page_count = len(d2["non_structural_changes"])
+        assert d2["non_structural_changes"][0]["path"] == f"data/file_{first_page_count}.json"
+        assert second_page_count > 0
+
+    def test_empty_non_structural_no_extra_pagination(self) -> None:
+        """Empty non_structural_changes doesn't affect pagination."""
+        # No structural, no non_structural
+        d = _result_to_dict(_result())
+        assert d["pagination"]["total_structural"] == 0
+        assert d["pagination"]["total_non_structural"] == 0
+        assert "next_cursor" not in d["pagination"]
+
+
+# ============================================================================
 # Tests: Cursor Parsing
 # ============================================================================
 
@@ -215,26 +307,37 @@ class TestPagination:
 class TestParseCursor:
     """Tests for _parse_cursor."""
 
-    def test_none_returns_no_cache_zero_offset(self) -> None:
-        cache_id, offset = _parse_cursor(None)
+    def test_none_returns_no_cache_zero_offsets(self) -> None:
+        cache_id, structural_offset, non_structural_offset = _parse_cursor(None)
         assert cache_id is None
-        assert offset == 0
+        assert structural_offset == 0
+        assert non_structural_offset == 0
 
-    def test_valid_cache_cursor(self) -> None:
-        cache_id, offset = _parse_cursor("42:17")
+    def test_valid_three_part_cursor(self) -> None:
+        cache_id, structural_offset, non_structural_offset = _parse_cursor("42:17:5")
         assert cache_id == 42
-        assert offset == 17
+        assert structural_offset == 17
+        assert non_structural_offset == 5
+
+    def test_legacy_two_part_cursor(self) -> None:
+        """Legacy 2-part cursors assume structural offset only."""
+        cache_id, structural_offset, non_structural_offset = _parse_cursor("42:17")
+        assert cache_id == 42
+        assert structural_offset == 17
+        assert non_structural_offset == 0
 
     def test_legacy_plain_offset(self) -> None:
         """Legacy cursors (plain int) are treated as offset-only."""
-        cache_id, offset = _parse_cursor("5")
+        cache_id, structural_offset, non_structural_offset = _parse_cursor("5")
         assert cache_id is None
-        assert offset == 5
+        assert structural_offset == 5
+        assert non_structural_offset == 0
 
     def test_malformed_returns_defaults(self) -> None:
-        cache_id, offset = _parse_cursor("garbage")
+        cache_id, structural_offset, non_structural_offset = _parse_cursor("garbage")
         assert cache_id is None
-        assert offset == 0
+        assert structural_offset == 0
+        assert non_structural_offset == 0
 
 
 # ============================================================================
@@ -551,5 +654,6 @@ class TestPaginationTotal:
 
     def test_pagination_uses_total_not_total_estimate(self) -> None:
         d = _result_to_dict(_result([_change()]))
-        assert "total" in d["pagination"]
+        assert "total_structural" in d["pagination"]
+        assert "total_non_structural" in d["pagination"]
         assert "total_estimate" not in d["pagination"]

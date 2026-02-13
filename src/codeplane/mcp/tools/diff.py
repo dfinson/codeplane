@@ -123,15 +123,20 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         """
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
-        # Parse cursor: "<cache_id>:<offset>" or None
-        cache_id, offset = _parse_cursor(cursor)
+        # Parse cursor: "<cache_id>:<structural_offset>:<non_structural_offset>"
+        cache_id, structural_offset, non_structural_offset = _parse_cursor(cursor)
 
         # Try cache hit for paginated continuations
         result: SemanticDiffResult | None = None
         if cache_id is not None:
             result = _diff_cache.get(cache_id)
             if result is not None:
-                log.debug("diff_cache_hit", cache_id=cache_id, offset=offset)
+                log.debug(
+                    "diff_cache_hit",
+                    cache_id=cache_id,
+                    structural_offset=structural_offset,
+                    non_structural_offset=non_structural_offset,
+                )
 
         # Cache miss or first call — compute fresh
         if result is None:
@@ -142,28 +147,40 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             cache_id = _diff_cache.store(result)
             log.debug("diff_cache_store", cache_id=cache_id, changes=len(result.structural_changes))
 
-        return _result_to_dict(result, cursor_offset=offset, cache_id=cache_id)
+        return _result_to_dict(
+            result,
+            cursor_offset=structural_offset,
+            non_structural_offset=non_structural_offset,
+            cache_id=cache_id,
+        )
 
 
-def _parse_cursor(cursor: str | None) -> tuple[int | None, int]:
-    """Parse a pagination cursor into (cache_id, offset).
+def _parse_cursor(cursor: str | None) -> tuple[int | None, int, int]:
+    """Parse a pagination cursor into (cache_id, structural_offset, non_structural_offset).
 
-    Cursor format: ``"<cache_id>:<offset>"``.
-    Returns ``(None, 0)`` when *cursor* is ``None``.
+    Cursor format: ``"<cache_id>:<structural_offset>:<non_structural_offset>"``.
+    Legacy format: ``"<cache_id>:<offset>"`` (non_structural_offset defaults to 0).
+    Returns ``(None, 0, 0)`` when *cursor* is ``None``.
     """
     if cursor is None:
-        return None, 0
-    parts = cursor.split(":", 1)
-    if len(parts) == 2:
+        return None, 0, 0
+    parts = cursor.split(":")
+    if len(parts) == 3:
         try:
-            return int(parts[0]), int(parts[1])
+            return int(parts[0]), int(parts[1]), int(parts[2])
         except ValueError:
             pass
-    # Legacy / malformed — treat as plain offset for backwards compat
+    # Legacy 2-part format: "<cache_id>:<offset>" — assume structural only
+    if len(parts) == 2:
+        try:
+            return int(parts[0]), int(parts[1]), 0
+        except ValueError:
+            pass
+    # Malformed — treat as plain offset for backwards compat
     try:
-        return None, int(cursor)
+        return None, int(cursor), 0
     except ValueError:
-        return None, 0
+        return None, 0, 0
 
 
 def _run_git_diff(
@@ -531,9 +548,16 @@ def _result_to_dict(
     result: SemanticDiffResult,
     *,
     cursor_offset: int = 0,
+    non_structural_offset: int = 0,
     cache_id: int | None = None,
 ) -> dict[str, Any]:
-    """Convert SemanticDiffResult to a serializable dict with budget-based pagination."""
+    """Convert SemanticDiffResult to a serializable dict with budget-based pagination.
+
+    Pagination strategy:
+    1. First exhaust structural_changes using the byte budget
+    2. Then paginate non_structural_changes with remaining/full budget
+    3. Cursor format: "<cache_id>:<structural_offset>:<non_structural_offset>"
+    """
 
     def _change_to_dict(c: StructuralChange) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -604,23 +628,48 @@ def _result_to_dict(
     # Compute agentic_hint from ALL changes before pagination
     agentic_hint = _build_agentic_hint(result)
 
-    # Paginate structural_changes using byte-budget accumulator (~40 KB)
-    all_changes = result.structural_changes
-    offset = cursor_offset
+    all_structural = result.structural_changes
+    all_non_structural = result.non_structural_changes
 
+    # Paginate structural_changes first
     acc = BudgetAccumulator()
-    for c in all_changes[offset:]:
-        if not acc.try_add(_change_to_dict(c)):
+    structural_items: list[dict[str, Any]] = []
+    structural_consumed = 0
+
+    for c in all_structural[cursor_offset:]:
+        item = _change_to_dict(c)
+        if acc.try_add(item):
+            structural_items.append(item)
+            structural_consumed += 1
+        else:
             break
 
-    items_consumed = acc.count
-    has_more = offset + items_consumed < len(all_changes)
-    next_offset = offset + items_consumed
+    next_structural_offset = cursor_offset + structural_consumed
+    structural_complete = next_structural_offset >= len(all_structural)
 
-    # Build cursor: "<cache_id>:<offset>"
+    # If structural_changes is complete and we have budget left, paginate non_structural_changes
+    non_structural_items: list[dict[str, Any]] = []
+    non_structural_consumed = 0
+
+    if structural_complete and acc.has_room:
+        for f in all_non_structural[non_structural_offset:]:
+            item = asdict(f)
+            if acc.try_add(item):
+                non_structural_items.append(item)
+                non_structural_consumed += 1
+            else:
+                break
+
+    next_non_structural_offset = non_structural_offset + non_structural_consumed
+    non_structural_complete = next_non_structural_offset >= len(all_non_structural)
+
+    # Determine if there's more data to paginate
+    has_more = not (structural_complete and non_structural_complete)
+
+    # Build cursor: "<cache_id>:<structural_offset>:<non_structural_offset>"
     next_cursor: str | None = None
     if has_more and cache_id is not None:
-        next_cursor = f"{cache_id}:{next_offset}"
+        next_cursor = f"{cache_id}:{next_structural_offset}:{next_non_structural_offset}"
 
     return {
         "summary": result.summary,
@@ -628,8 +677,8 @@ def _result_to_dict(
         "files_analyzed": result.files_analyzed,
         "base": result.base_description,
         "target": result.target_description,
-        "structural_changes": acc.items,
-        "non_structural_changes": [asdict(f) for f in result.non_structural_changes],
+        "structural_changes": structural_items,
+        "non_structural_changes": non_structural_items,
         **(
             {"scope": {k: v for k, v in asdict(result.scope).items() if v is not None}}
             if result.scope
@@ -637,7 +686,8 @@ def _result_to_dict(
         ),
         "agentic_hint": agentic_hint,
         "pagination": {
-            "total": len(all_changes),
+            "total_structural": len(all_structural),
+            "total_non_structural": len(all_non_structural),
             **({"next_cursor": next_cursor, "truncated": True} if has_more and next_cursor else {}),
         },
     }
