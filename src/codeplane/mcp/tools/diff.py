@@ -509,57 +509,47 @@ def _annotate_change_previews(
 
 
 def _build_agentic_hint(result: SemanticDiffResult) -> str:
-    """Build priority-ordered action list for the agent."""
+    """Build compact action hint for the agent.
+
+    Returns counts-only summary. Full details are in structural_changes
+    and breaking_summary - no need to duplicate here.
+    """
     if not result.structural_changes:
-        return "No actionable changes detected."
+        return "No structural changes detected."
 
-    hints: list[str] = []
-
-    # Priority 1: Signature changes with references
-    for c in result.structural_changes:
-        if c.change == "signature_changed" and c.impact:
-            ref_count = c.impact.reference_count or 0
-            tiers = c.impact.ref_tiers
-            name = c.qualified_name or f"{c.name}()"
-            tier_detail = ""
-            if tiers and tiers.total > 0:
-                tier_detail = (
-                    f" (proven={tiers.proven}, strong={tiers.strong}, "
-                    f"anchored={tiers.anchored}, unknown={tiers.unknown})"
-                )
-            hints.append(
-                f"Signature of {name} changed — {ref_count} references{tier_detail} in "
-                f"{len(c.impact.referencing_files or [])} files may need updating."
-            )
-
-    # Priority 2: Removed symbols
-    for c in result.structural_changes:
-        if c.change == "removed":
-            hints.append(f"{c.name} was removed — check for broken references.")
-
-    # Priority 3: Body changes with risk assessment
+    # Count change types
+    sig_changes = sum(1 for c in result.structural_changes if c.change == "signature_changed")
+    removals = sum(1 for c in result.structural_changes if c.change == "removed")
     body_changes = [c for c in result.structural_changes if c.change == "body_changed"]
-    if body_changes:
-        high_risk = [c for c in body_changes if c.behavior_change_risk in ("high", "medium")]
-        if high_risk:
-            hints.append(
-                f"{len(body_changes)} function bodies changed "
-                f"({len(high_risk)} with elevated behavior-change risk) — review for correctness."
-            )
-        else:
-            hints.append(f"{len(body_changes)} function bodies changed — review for correctness.")
+    high_risk = sum(1 for c in body_changes if c.behavior_change_risk in ("high", "medium"))
+    additions = sum(1 for c in result.structural_changes if c.change == "added")
 
-    # Priority 4: Affected tests
+    # Count affected tests
     all_test_files: set[str] = set()
     for c in result.structural_changes:
         if c.impact and c.impact.affected_test_files:
             all_test_files.update(c.impact.affected_test_files)
-    if all_test_files:
-        hints.append(
-            "Affected test files:\n" + "\n".join(f"  - {f}" for f in sorted(all_test_files))
-        )
 
-    return "\n".join(hints)
+    # Build compact hint
+    parts: list[str] = []
+    if sig_changes:
+        parts.append(f"{sig_changes} signature changes")
+    if removals:
+        parts.append(f"{removals} removals")
+    if body_changes:
+        risk_note = f" ({high_risk} high-risk)" if high_risk else ""
+        parts.append(f"{len(body_changes)} body changes{risk_note}")
+    if additions:
+        parts.append(f"{additions} additions")
+
+    if not parts:
+        return "No actionable changes."
+
+    hint = ", ".join(parts) + "."
+    if all_test_files:
+        hint += f" Run {len(all_test_files)} affected test files."
+
+    return hint
 
 
 def _result_to_dict(

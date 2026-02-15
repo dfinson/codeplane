@@ -38,6 +38,7 @@ def _change(
     kind: str = "function",
     qualified_name: str | None = None,
     impact: ImpactInfo | None = None,
+    behavior_risk: str = "unknown",
 ) -> StructuralChange:
     return StructuralChange(
         path="src/a.py",
@@ -46,7 +47,7 @@ def _change(
         qualified_name=qualified_name,
         change=change,
         structural_severity=structural_severity,
-        behavior_change_risk="unknown",
+        behavior_change_risk=behavior_risk,
         risk_basis=None,
         old_sig="def old()",
         new_sig="def new()",
@@ -91,11 +92,15 @@ def _result(
 
 
 class TestAgenticHint:
-    """Tests for _build_agentic_hint."""
+    """Tests for _build_agentic_hint.
+
+    The hint is intentionally compact - just counts, no symbol names.
+    Full details are in structural_changes.
+    """
 
     def test_no_changes(self) -> None:
         hint = _build_agentic_hint(_result())
-        assert "No actionable changes" in hint
+        assert "No structural changes" in hint
 
     def test_signature_changed_with_refs(self) -> None:
         impact = ImpactInfo(
@@ -116,12 +121,11 @@ class TestAgenticHint:
                 ]
             )
         )
-        assert "Signature of Client.connect" in hint
-        assert "5 references" in hint
+        assert "1 signature changes" in hint
 
     def test_removed_hint(self) -> None:
         hint = _build_agentic_hint(_result([_change("removed", "breaking", "OldClass", "class")]))
-        assert "OldClass was removed" in hint
+        assert "1 removals" in hint
 
     def test_body_changed_hint(self) -> None:
         hint = _build_agentic_hint(
@@ -132,13 +136,23 @@ class TestAgenticHint:
                 ]
             )
         )
-        assert "2 function bodies changed" in hint
+        assert "2 body changes" in hint
 
     def test_affected_tests_hint(self) -> None:
         impact = ImpactInfo(affected_test_files=["tests/test_a.py"])
         hint = _build_agentic_hint(_result([_change("removed", "breaking", "foo", impact=impact)]))
-        assert "Affected test files:" in hint
-        assert "tests/test_a.py" in hint
+        assert "Run 1 affected test files" in hint
+
+    def test_high_risk_noted(self) -> None:
+        hint = _build_agentic_hint(
+            _result(
+                [
+                    _change("body_changed", "non_breaking", "foo", behavior_risk="high"),
+                    _change("body_changed", "non_breaking", "bar", behavior_risk="low"),
+                ]
+            )
+        )
+        assert "2 body changes (1 high-risk)" in hint
 
 
 # ============================================================================
@@ -220,7 +234,7 @@ class TestPagination:
         changes = [_change("body_changed", "non_breaking", f"fn_{i}") for i in range(10)]
         d = _result_to_dict(_result(changes))
         # Hint should mention all 10, not just the items on this page
-        assert "10 function bodies changed" in d["agentic_hint"]
+        assert "10 body changes" in d["agentic_hint"]
 
 
 # ============================================================================
