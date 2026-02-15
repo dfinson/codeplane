@@ -65,11 +65,18 @@ two-phase search pipeline compensate for coverage."""
 # ======================================================================# Response Budget
 # ======================================================================# Server-side byte budget for MCP tool responses. All paginated endpoints
 # share this single constant. Sits between the MCP fetch server default
-# (5 KB) and VS Code's terminal truncation ceiling (60 KB), giving ~33%
-# headroom for JSON overhead.  Tunable later if empirical data warrants it.
+# VS Code Copilot writes results to file at 8KB. We use 40KB as the budget
+# to avoid excessive pagination, but add agentic hints when over 8KB.
+# Agents can optionally request a 7.5KB cap for guaranteed inline display.
 
 RESPONSE_BUDGET_BYTES = 40_000
 """Per-response byte budget shared by all size-bounded endpoints."""
+
+INLINE_THRESHOLD_BYTES = 8_000
+"""VS Code writes responses over this size to file instead of inline."""
+
+INLINE_BUDGET_BYTES = 7_500
+"""Budget when agent requests inline_only=true for guaranteed inline display."""
 
 # ======================================================================# Internal Implementation Constants
 # ======================================================================# These are not exposed to users and are implementation details.

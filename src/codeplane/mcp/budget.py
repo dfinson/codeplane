@@ -17,7 +17,22 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from codeplane.config.constants import RESPONSE_BUDGET_BYTES
+from codeplane.config.constants import (
+    INLINE_BUDGET_BYTES,
+    INLINE_THRESHOLD_BYTES,
+    RESPONSE_BUDGET_BYTES,
+)
+
+
+def get_effective_budget(inline_only: bool = False) -> int:
+    """Return the budget to use based on inline_only preference.
+
+    Args:
+        inline_only: If True, use 7.5KB budget to guarantee VS Code
+            displays the response inline (not written to file).
+            If False (default), use 40KB budget.
+    """
+    return INLINE_BUDGET_BYTES if inline_only else RESPONSE_BUDGET_BYTES
 
 
 class BudgetAccumulator:
@@ -26,6 +41,8 @@ class BudgetAccumulator:
     Usage::
 
         acc = BudgetAccumulator()
+        # Reserve space for fixed overhead (metadata, hints, etc.)
+        acc.reserve(overhead_bytes)
         for item in all_results:
             if not acc.try_add(item):
                 break  # budget exhausted
@@ -50,24 +67,53 @@ class BudgetAccumulator:
     # Public API
     # -----------------------------------------------------------------
 
-    def try_add(self, item: dict[str, Any]) -> bool:
+    def reserve(self, overhead: int) -> None:
+        """Reserve *overhead* bytes from the budget for fixed fields.
+
+        Call this before adding items to ensure space is left for
+        response metadata (summary, hints, pagination, etc.) that
+        will be added after the accumulated items.
+        """
+        self._used += overhead
+        if self._used >= self._budget:
+            self._exhausted = True
+
+    def try_add(self, item: dict[str, Any], *, nested: bool = True) -> bool:
         """Attempt to add *item* to the accumulator.
 
         Returns ``True`` if the item fit within the remaining budget,
-        ``False`` if the budget is exhausted.  The first item is always
-        accepted regardless of size so that a single oversized result
-        still produces output rather than an empty page.
+        ``False`` if the budget is exhausted.  The first item is accepted
+        even if slightly over budget (up to 2x) so a single moderately
+        oversized result still produces output rather than an empty page.
+        Items over 2x budget are rejected even as the first item.
+
+        Args:
+            item: The item to add.
+            nested: If True (default), measure the item with nesting_depth=2
+                to account for extra indentation when embedded in an array
+                inside the response object.
         """
         if self._exhausted:
             return False
 
-        size = measure_bytes(item)
+        # Items in arrays like structural_changes are at depth 2:
+        # response object (0) -> array field (1) -> array item (2)
+        size = measure_bytes(item, nesting_depth=2 if nested else 0)
 
-        # Always accept the first item even if it exceeds the budget,
-        # so the caller never gets an empty page.
-        if self._items and self._used + size > self._budget:
-            self._exhausted = True
-            return False
+        # First item gets a 2x budget allowance (to avoid empty pages),
+        # but items over 2x budget are rejected even as first item
+        # to prevent massive blowouts (e.g., 44KB file on 7.5KB budget).
+        is_first = not self._items
+        over_budget = self._used + size > self._budget
+        massively_over = size > self._budget * 2
+
+        if over_budget:
+            if is_first and not massively_over:
+                # Accept slightly-over first item to avoid empty page
+                pass
+            else:
+                self._exhausted = True
+                return False
 
         self._items.append(item)
         self._used += size
@@ -109,15 +155,42 @@ class BudgetAccumulator:
 # -----------------------------------------------------------------
 
 
-def measure_bytes(item: dict[str, Any]) -> int:
-    """Return the UTF-8 byte size of *item* serialised as JSON.
+def measure_bytes(item: dict[str, Any], *, nesting_depth: int = 0) -> int:
+    """Return the UTF-8 byte size of *item* serialised as pretty-printed JSON.
 
-    Uses compact separators (',', ':') to approximate the tightest
-    reasonable on-wire encoding.  This is intentionally a slight
-    undercount relative to pretty-printed JSON, which adds safety
-    margin in the budget direction we want (we stop sooner).
+    Uses indent=2 to match VS Code's display format. This ensures our
+    budget calculations match what users actually see, preventing the
+    "Large tool result" warnings from VS Code.
+
+    Args:
+        item: The dict to measure.
+        nesting_depth: How many levels deep this item will be nested in the
+            final response. Each level adds 2 extra spaces per line.
+            For items in a top-level array, use nesting_depth=1.
+
+    Example:
+        measure_bytes({"x": 1})  # standalone object
+        measure_bytes({"x": 1}, nesting_depth=1)  # item in an array
     """
-    return len(json.dumps(item, separators=(",", ":")).encode("utf-8"))
+    base = json.dumps(item, indent=2)
+    if nesting_depth > 0:
+        # Add extra indentation to each line
+        extra_indent = "  " * nesting_depth
+        lines = base.split("\n")
+        indented = "\n".join(extra_indent + line for line in lines)
+        # Also add 2 bytes for array item separator (",\n")
+        return len(indented.encode("utf-8")) + 2
+    return len(base.encode("utf-8"))
+
+
+# Convenience function for measuring items inside arrays
+def measure_nested_item(item: dict[str, Any]) -> int:
+    """Measure an item that will be nested inside a top-level array.
+
+    Items in arrays like `structural_changes` get extra indentation
+    compared to standalone measurement. This function accounts for that.
+    """
+    return measure_bytes(item, nesting_depth=1)
 
 
 # Keep private alias for internal use
@@ -143,3 +216,37 @@ def make_budget_pagination(
     if has_more:
         result["truncated"] = True
     return result
+
+
+def maybe_add_large_response_hint(
+    response: dict[str, Any],
+    used_bytes: int,
+    *,
+    existing_hint: str | None = None,
+) -> None:
+    """Add agentic hint if response exceeds VS Code's inline threshold.
+
+    When responses exceed ~8KB, VS Code Copilot writes them to a file
+    instead of displaying inline. This hint informs the agent of this
+    behavior so it can adapt (e.g., use terminal tools to read the file).
+
+    Args:
+        response: The response dict to potentially add hint to.
+        used_bytes: Approximate byte size of the response.
+        existing_hint: Any existing agentic_hint to preserve/extend.
+    """
+    if used_bytes <= INLINE_THRESHOLD_BYTES:
+        return  # Under threshold, no hint needed
+
+    size_kb = round(used_bytes / 1024, 1)
+    large_hint = (
+        f"Response is ~{size_kb}KB (over 8KB). VS Code MAY have written this to a file. "
+        "If so, use terminal/native file tools to read it (not read_files, as the file "
+        "is outside the repo directory and hence CodePlane's index scope). "
+        "To guarantee inline display, re-request with inline_only=true for a 7.5KB cap."
+    )
+
+    if existing_hint:
+        response["agentic_hint"] = f"{existing_hint}\n\n{large_hint}"
+    else:
+        response["agentic_hint"] = large_hint
