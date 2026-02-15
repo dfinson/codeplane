@@ -32,7 +32,12 @@ from codeplane.index._internal.diff.sources import (
     snapshots_from_epoch,
     snapshots_from_index,
 )
-from codeplane.mcp.budget import BudgetAccumulator, measure_bytes
+from codeplane.mcp.budget import (
+    BudgetAccumulator,
+    get_effective_budget,
+    maybe_add_large_response_hint,
+    measure_bytes,
+)
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -110,6 +115,10 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         target: str | None = Field(None, description="Target ref (None = working tree)"),
         paths: list[str] | None = Field(None, description="Limit to specific paths"),
         cursor: str | None = Field(None, description="Pagination cursor"),
+        inline_only: bool = Field(
+            False,
+            description="If true, use 7.5KB budget for guaranteed inline display in VS Code",
+        ),
     ) -> dict[str, Any]:
         """Structural change summary from index facts.
 
@@ -152,6 +161,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             cursor_offset=structural_offset,
             non_structural_offset=non_structural_offset,
             cache_id=cache_id,
+            inline_only=inline_only,
         )
 
 
@@ -550,6 +560,7 @@ def _result_to_dict(
     cursor_offset: int = 0,
     non_structural_offset: int = 0,
     cache_id: int | None = None,
+    inline_only: bool = False,
 ) -> dict[str, Any]:
     """Convert SemanticDiffResult to a serializable dict with budget-based pagination.
 
@@ -662,7 +673,8 @@ def _result_to_dict(
     overhead += 20  # safety margin for array framing
 
     # Paginate structural_changes first, reserving space for overhead
-    acc = BudgetAccumulator()
+    effective_budget = get_effective_budget(inline_only)
+    acc = BudgetAccumulator(budget=effective_budget)
     acc.reserve(overhead)
     structural_items: list[dict[str, Any]] = []
     structural_consumed = 0
@@ -702,7 +714,7 @@ def _result_to_dict(
     if has_more and cache_id is not None:
         next_cursor = f"{cache_id}:{next_structural_offset}:{next_non_structural_offset}"
 
-    return {
+    response = {
         "summary": result.summary,
         "breaking_summary": result.breaking_summary,
         "files_analyzed": result.files_analyzed,
@@ -722,3 +734,8 @@ def _result_to_dict(
             **({"next_cursor": next_cursor, "truncated": True} if has_more and next_cursor else {}),
         },
     }
+
+    # Add large response hint if over VS Code's inline threshold
+    maybe_add_large_response_hint(response, acc.used_bytes, existing_hint=agentic_hint)
+
+    return response

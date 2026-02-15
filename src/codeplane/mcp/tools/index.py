@@ -14,7 +14,12 @@ from codeplane.config.constants import (
     SEARCH_MAX_LIMIT,
     SEARCH_SCOPE_FALLBACK_LINES_DEFAULT,
 )
-from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination, measure_bytes
+from codeplane.mcp.budget import (
+    BudgetAccumulator,
+    make_budget_pagination,
+    maybe_add_large_response_hint,
+    measure_bytes,
+)
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -457,6 +462,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         respect_gitignore: bool = Field(
             True, description="Honor .gitignore patterns (default: true)"
         ),
+        inline_only: bool = Field(
+            False,
+            description="If true, use 7.5KB budget for guaranteed inline display in VS Code",
+        ),
     ) -> dict[str, Any]:
         """Get repository mental model."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
@@ -551,6 +560,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             total_estimate=result.total_estimate,
         )
         output["summary"] = _summarize_map(file_count, sections, truncated)
+
+        # Add large response hint if over VS Code's inline threshold
+        response_size = measure_bytes(output)
+        maybe_add_large_response_hint(output, response_size)
+
         return output
 
     # Flatten schemas to remove $ref/$defs for Claude compatibility

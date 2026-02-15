@@ -168,8 +168,8 @@ class TestReadFilesBudgetPattern:
 
     def test_massive_file_rejected_even_as_first(self) -> None:
         """A file over 2x budget is rejected even as first item."""
-        acc = BudgetAccumulator()  # 7.5KB default, 2x = 15KB
-        huge = _make_file_result("src/massive.py", lines=5000)  # ~35KB
+        acc = BudgetAccumulator()  # 40KB default, 2x = 80KB
+        huge = _make_file_result("src/massive.py", lines=15000)  # ~100KB
         assert acc.try_add(huge) is False  # over 2x cap
         assert acc.count == 0
 
@@ -200,7 +200,7 @@ class TestGitLogBudgetPattern:
 
     def test_log_entries_accumulated(self) -> None:
         """Commit entries are accumulated correctly."""
-        acc = BudgetAccumulator(budget=50_000)  # explicit budget for test
+        acc = BudgetAccumulator()  # uses default 40KB budget
         commits = [_make_commit(f"{i:040d}", f"commit {i}") for i in range(50)]
         for c in commits:
             if not acc.try_add(c):
@@ -339,7 +339,7 @@ class TestGitBlameBudgetPattern:
 
     def test_blame_lines_accumulated(self) -> None:
         """Blame lines are accumulated within budget."""
-        acc = BudgetAccumulator(budget=50_000)  # explicit budget for test
+        acc = BudgetAccumulator()  # uses default 40KB budget
         lines = [_make_blame_line(i) for i in range(100)]
         for line in lines:
             if not acc.try_add(line):
@@ -438,8 +438,8 @@ class TestBudgetConstantIntegration:
     """Tests that RESPONSE_BUDGET_BYTES is used consistently."""
 
     def test_constant_value(self) -> None:
-        """RESPONSE_BUDGET_BYTES is 7.5KB to stay under VS Code's 8KB threshold."""
-        assert RESPONSE_BUDGET_BYTES == 7_500
+        """RESPONSE_BUDGET_BYTES is 40KB with 8KB inline threshold."""
+        assert RESPONSE_BUDGET_BYTES == 40_000
 
     def test_default_accumulator_uses_constant(self) -> None:
         """Default BudgetAccumulator uses RESPONSE_BUDGET_BYTES."""
@@ -455,11 +455,11 @@ class TestBudgetConstantIntegration:
         expected_approx = RESPONSE_BUDGET_BYTES // measure_bytes(item)
         assert abs(acc.count - expected_approx) <= 1
 
-    def test_budget_below_vscode_threshold(self) -> None:
-        """Budget stays below VS Code's 8KB write-to-file threshold."""
-        assert RESPONSE_BUDGET_BYTES < 8_000
-        # Safe margin: 7.5KB leaves 500 bytes headroom
-        assert RESPONSE_BUDGET_BYTES == 7_500
+    def test_budget_below_vscode_truncation(self) -> None:
+        """Budget stays below VS Code's 60KB truncation ceiling."""
+        assert RESPONSE_BUDGET_BYTES < 60_000
+        # Provides headroom for JSON overhead
+        assert RESPONSE_BUDGET_BYTES == 40_000
 
     def test_pagination_dict_is_json_serializable(self) -> None:
         """Pagination dicts can be JSON-serialized."""
