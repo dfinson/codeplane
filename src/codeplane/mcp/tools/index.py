@@ -84,6 +84,33 @@ def _serialize_tree(nodes: list[Any], *, include_line_counts: bool = True) -> li
     return result
 
 
+def _flatten_tree(nodes: list[Any], include_line_counts: bool = True) -> list[dict[str, Any]]:
+    """Flatten tree to individual path entries for inline_only pagination.
+
+    Unlike _serialize_tree which creates nested structures, this produces
+    a flat list of entries that can be paginated item-by-item within
+    the 7.5KB inline budget.
+    """
+    result: list[dict[str, Any]] = []
+
+    def _walk(nodes: list[Any]) -> None:
+        for node in nodes:
+            entry: dict[str, Any] = {
+                "path": node.path,
+                "is_dir": node.is_dir,
+            }
+            if node.is_dir:
+                entry["file_count"] = node.file_count
+            elif include_line_counts:
+                entry["line_count"] = node.line_count
+            result.append(entry)
+            if node.is_dir and node.children:
+                _walk(node.children)
+
+    _walk(nodes)
+    return result
+
+
 async def _get_file_path(app_ctx: "AppContext", file_id: int) -> str:
     """Look up file path from file_id."""
     from codeplane.index.models import File
@@ -577,12 +604,12 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             else:
                 budget_exhausted = True
 
-        # --- Structure tree (paginated by top-level entries) ---
+        # --- Structure tree (paginated) ---
         tree_items: list[dict[str, Any]] = []
         tree_consumed = 0
         total_tree_entries = 0
 
-        if result.structure:
+        if result.structure and not budget_exhausted:
             include_line_counts = verbosity == "full"
             sections_included.append("structure")
 
@@ -592,15 +619,15 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "root": result.structure.root,
                     "file_count": result.structure.file_count,
                 }
-            else:
-                # Full/standard: paginate tree entries
-                all_tree = result.structure.tree
-                total_tree_entries = len(all_tree)
+            elif inline_only:
+                # inline_only: flatten tree to individual path entries for pagination
+                # This avoids giant nested structures that can't fit in 7.5KB
+                all_flat = _flatten_tree(result.structure.tree, include_line_counts)
+                total_tree_entries = len(all_flat)
 
-                for node in all_tree[tree_offset:]:
-                    item = _serialize_single_tree_node(node, include_line_counts)
-                    if acc.try_add(item):
-                        tree_items.append(item)
+                for entry in all_flat[tree_offset:]:
+                    if acc.try_add(entry):
+                        tree_items.append(entry)
                         tree_consumed += 1
                     else:
                         budget_exhausted = True
@@ -608,14 +635,25 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
                 output["structure"] = {
                     "root": result.structure.root,
-                    "tree": tree_items,
+                    "entries": tree_items,  # flat list, not nested tree
+                    "file_count": result.structure.file_count,
+                }
+            else:
+                # Full/standard: nested tree structure
+                # For 40KB budget, serialize entire tree at once
+                tree_dict = _serialize_tree(
+                    result.structure.tree, include_line_counts=include_line_counts
+                )
+                output["structure"] = {
+                    "root": result.structure.root,
+                    "tree": tree_dict,
                     "file_count": result.structure.file_count,
                 }
                 if result.structure.contexts:
                     output["structure"]["contexts"] = result.structure.contexts
 
         next_tree_offset = tree_offset + tree_consumed
-        tree_complete = next_tree_offset >= total_tree_entries
+        tree_complete = not inline_only or next_tree_offset >= total_tree_entries
 
         # --- Entry points (paginated) ---
         ep_items: list[dict[str, Any]] = []
@@ -700,21 +738,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             except ValueError:
                 pass
         return 0, 0, 0
-
-    def _serialize_single_tree_node(node: Any, include_line_counts: bool) -> dict[str, Any]:
-        """Serialize a single tree node with its children (for budget accumulation)."""
-        item: dict[str, Any] = {
-            "path": node.path,
-            "is_dir": node.is_dir,
-        }
-        if node.is_dir:
-            item["file_count"] = node.file_count
-            item["children"] = _serialize_tree(
-                node.children, include_line_counts=include_line_counts
-            )
-        elif include_line_counts:
-            item["line_count"] = node.line_count
-        return item
 
     # Flatten schemas to remove $ref/$defs for Claude compatibility
     for tool in mcp._tool_manager._tools.values():
