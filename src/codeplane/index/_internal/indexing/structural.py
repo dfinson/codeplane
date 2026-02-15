@@ -747,8 +747,14 @@ class StructuralIndexer:
                     writer.insert_many(RefFact, [ref_dict])
                     result.refs_extracted += 1
 
-                # Insert ImportFacts
+                # Insert ImportFacts (deduplicate by import_uid to guard
+                # against extractors producing duplicates on the same line)
+                seen_import_uids: set[str] = set()
                 for import_dict in extraction.imports:
+                    uid = import_dict.get("import_uid", "")
+                    if uid in seen_import_uids:
+                        continue
+                    seen_import_uids.add(uid)
                     import_dict["file_id"] = file_id
                     # Remove internal tracking fields not in DB schema
                     import_dict.pop("_start_line", None)

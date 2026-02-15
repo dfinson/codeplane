@@ -1491,6 +1491,11 @@ class TreeSitterParser:
         - ``import com.foo.{Bar, Baz}``
         - ``import com.foo.{Bar => B}``
         - ``import com.foo._`` -> wildcard import
+        - ``import com.foo.Bar, com.baz.Qux`` -> comma-separated imports
+
+        The Scala tree-sitter grammar produces flat children for import_declaration:
+        ``import ident . ident . ident , ident . ident``
+        Commas separate independent import paths within one declaration.
         """
         imports: list[SyntacticImport] = []
 
@@ -1498,86 +1503,160 @@ class TreeSitterParser:
             raw = f"{file_path}:{line}:{name}"
             return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
-        def walk(node: Any) -> None:
-            if node.type == "import_declaration":
-                # Extract import selectors
-                for child in node.children:
-                    if child.type == "import_selectors":
-                        # import com.foo.{Bar, Baz}
-                        base_path = self._extract_scala_base_path(node)
-                        for selector in child.children:
-                            if selector.type == "import_selector":
-                                name = ""
-                                alias: str | None = None
-                                for sel_child in selector.children:
-                                    if sel_child.type == "identifier":
-                                        if not name:
-                                            name = (
-                                                sel_child.text.decode("utf-8")
-                                                if sel_child.text
-                                                else ""
-                                            )
-                                        else:
-                                            alias = (
-                                                sel_child.text.decode("utf-8")
-                                                if sel_child.text
-                                                else None
-                                            )
-                                if name:
-                                    full_path = f"{base_path}.{name}" if base_path else name
-                                    imports.append(
-                                        SyntacticImport(
-                                            import_uid=make_uid(full_path, node.start_point[0] + 1),
-                                            imported_name=name,
-                                            alias=alias,
-                                            source_literal=full_path,
-                                            import_kind="scala_import",
-                                            start_line=node.start_point[0] + 1,
-                                            start_col=node.start_point[1],
-                                            end_line=node.end_point[0] + 1,
-                                            end_col=node.end_point[1],
-                                        )
-                                    )
-                            elif selector.type == "wildcard":
-                                full_path = base_path
-                                imports.append(
-                                    SyntacticImport(
-                                        import_uid=make_uid(
-                                            f"{full_path}.*", node.start_point[0] + 1
-                                        ),
-                                        imported_name="*",
-                                        alias=None,
-                                        source_literal=full_path,
-                                        import_kind="scala_import",
-                                        start_line=node.start_point[0] + 1,
-                                        start_col=node.start_point[1],
-                                        end_line=node.end_point[0] + 1,
-                                        end_col=node.end_point[1],
-                                    )
-                                )
-                    elif child.type in ("stable_identifier", "identifier"):
-                        # Simple import: import com.foo.Bar
-                        full_path = self._extract_scala_path(child)
-                        if full_path:
-                            is_wildcard = full_path.endswith("._")
-                            if is_wildcard:
-                                full_path = full_path[:-2]
+        def _emit_import(
+            full_path: str,
+            is_wildcard: bool,
+            node: Any,
+        ) -> None:
+            """Create a SyntacticImport from an assembled dotted path."""
+            if is_wildcard:
+                imports.append(
+                    SyntacticImport(
+                        import_uid=make_uid(f"{full_path}.*", node.start_point[0] + 1),
+                        imported_name="*",
+                        alias=None,
+                        source_literal=full_path,
+                        import_kind="scala_import",
+                        start_line=node.start_point[0] + 1,
+                        start_col=node.start_point[1],
+                        end_line=node.end_point[0] + 1,
+                        end_col=node.end_point[1],
+                    )
+                )
+            else:
+                imports.append(
+                    SyntacticImport(
+                        import_uid=make_uid(full_path, node.start_point[0] + 1),
+                        imported_name=full_path.split(".")[-1],
+                        alias=None,
+                        source_literal=full_path,
+                        import_kind="scala_import",
+                        start_line=node.start_point[0] + 1,
+                        start_col=node.start_point[1],
+                        end_line=node.end_point[0] + 1,
+                        end_col=node.end_point[1],
+                    )
+                )
+
+        def _process_selectors(
+            base_path: str,
+            selectors_node: Any,
+            decl_node: Any,
+        ) -> None:
+            """Process namespace_selectors: import com.foo.{Bar, Baz => B}.
+
+            Grammar children of namespace_selectors:
+            - ``identifier`` for plain imports (e.g. Bar)
+            - ``arrow_renamed_identifier`` for renamed (e.g. Baz => B)
+            - ``namespace_wildcard`` for wildcard (e.g. _)
+            - ``{``, ``}``, ``,`` punctuation (skipped)
+            """
+            for selector in selectors_node.children:
+                if selector.type == "identifier":
+                    # Plain selector: import com.foo.{Bar}
+                    name = selector.text.decode("utf-8") if selector.text else ""
+                    if name:
+                        full_path = f"{base_path}.{name}" if base_path else name
+                        imports.append(
+                            SyntacticImport(
+                                import_uid=make_uid(full_path, decl_node.start_point[0] + 1),
+                                imported_name=name,
+                                alias=None,
+                                source_literal=full_path,
+                                import_kind="scala_import",
+                                start_line=decl_node.start_point[0] + 1,
+                                start_col=decl_node.start_point[1],
+                                end_line=decl_node.end_point[0] + 1,
+                                end_col=decl_node.end_point[1],
+                            )
+                        )
+                elif selector.type == "arrow_renamed_identifier":
+                    # Renamed selector: import com.foo.{Baz => B}
+                    idents = [c for c in selector.children if c.type == "identifier"]
+                    if idents:
+                        name = idents[0].text.decode("utf-8") if idents[0].text else ""
+                        alias = (
+                            idents[1].text.decode("utf-8")
+                            if len(idents) > 1 and idents[1].text
+                            else None
+                        )
+                        if name:
+                            full_path = f"{base_path}.{name}" if base_path else name
                             imports.append(
                                 SyntacticImport(
-                                    import_uid=make_uid(full_path, node.start_point[0] + 1),
-                                    imported_name="*" if is_wildcard else full_path.split(".")[-1],
-                                    alias=None,
+                                    import_uid=make_uid(full_path, decl_node.start_point[0] + 1),
+                                    imported_name=name,
+                                    alias=alias,
                                     source_literal=full_path,
                                     import_kind="scala_import",
-                                    start_line=node.start_point[0] + 1,
-                                    start_col=node.start_point[1],
-                                    end_line=node.end_point[0] + 1,
-                                    end_col=node.end_point[1],
+                                    start_line=decl_node.start_point[0] + 1,
+                                    start_col=decl_node.start_point[1],
+                                    end_line=decl_node.end_point[0] + 1,
+                                    end_col=decl_node.end_point[1],
                                 )
                             )
+                elif selector.type == "namespace_wildcard":
+                    _emit_import(base_path, is_wildcard=True, node=decl_node)
 
+        def _process_import_declaration(node: Any) -> None:
+            """Process one import_declaration with potentially comma-separated paths.
+
+            The grammar produces flat children:
+              import ident . ident . ident , ident . ident . namespace_wildcard
+            We split on commas to get independent import groups, then assemble
+            each group's identifiers into a dotted path.
+            """
+            # Split children into comma-separated groups (skip 'import' keyword)
+            groups: list[list[Any]] = []
+            current: list[Any] = []
             for child in node.children:
-                walk(child)
+                if child.type == "import":
+                    continue  # skip keyword
+                if child.type == ",":
+                    if current:
+                        groups.append(current)
+                    current = []
+                else:
+                    current.append(child)
+            if current:
+                groups.append(current)
+
+            # Process each comma-separated group
+            for group in groups:
+                # Check if the last element is namespace_selectors
+                if group and group[-1].type == "namespace_selectors":
+                    # import com.foo.{Bar, Baz}
+                    # Base path is all identifiers before the selectors
+                    parts = [
+                        c.text.decode("utf-8")
+                        for c in group[:-1]
+                        if c.type == "identifier" and c.text
+                    ]
+                    base_path = ".".join(parts)
+                    _process_selectors(base_path, group[-1], node)
+                elif group and group[-1].type == "namespace_wildcard":
+                    # import com.foo._
+                    parts = [
+                        c.text.decode("utf-8") for c in group if c.type == "identifier" and c.text
+                    ]
+                    full_path = ".".join(parts)
+                    if full_path:
+                        _emit_import(full_path, is_wildcard=True, node=node)
+                else:
+                    # import com.foo.Bar (simple dotted path)
+                    parts = [
+                        c.text.decode("utf-8") for c in group if c.type == "identifier" and c.text
+                    ]
+                    full_path = ".".join(parts)
+                    if full_path:
+                        _emit_import(full_path, is_wildcard=False, node=node)
+
+        def walk(node: Any) -> None:
+            if node.type == "import_declaration":
+                _process_import_declaration(node)
+            else:
+                for child in node.children:
+                    walk(child)
 
         walk(root)
         return imports
