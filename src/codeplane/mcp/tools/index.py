@@ -531,9 +531,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         sections_included: list[str] = []
         budget_exhausted = False
 
-        # --- Fixed/small sections (always fit) ---
-        if result.languages:
-            lang_list = [
+        # --- Fixed sections (track with accumulator) ---
+        # These used to be assumed "small" but dependencies.external_modules
+        # can be 2KB+ alone. Must track against budget.
+        if result.languages and not budget_exhausted:
+            lang_section = [
                 {
                     "language": lang.language,
                     "file_count": lang.file_count,
@@ -541,22 +543,39 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 }
                 for lang in result.languages
             ]
-            output["languages"] = lang_list
-            sections_included.append("languages")
+            section_size = measure_bytes({"languages": lang_section})
+            if acc.remaining_bytes >= section_size:
+                acc.reserve(section_size)
+                output["languages"] = lang_section
+                sections_included.append("languages")
+            else:
+                budget_exhausted = True
 
-        if result.dependencies:
-            output["dependencies"] = {
+        if result.dependencies and not budget_exhausted:
+            deps_section = {
                 "external_modules": result.dependencies.external_modules,
                 "import_count": result.dependencies.import_count,
             }
-            sections_included.append("dependencies")
+            section_size = measure_bytes({"dependencies": deps_section})
+            if acc.remaining_bytes >= section_size:
+                acc.reserve(section_size)
+                output["dependencies"] = deps_section
+                sections_included.append("dependencies")
+            else:
+                budget_exhausted = True
 
-        if result.test_layout:
-            output["test_layout"] = {
+        if result.test_layout and not budget_exhausted:
+            test_section = {
                 "test_files": result.test_layout.test_files,
                 "test_count": result.test_layout.test_count,
             }
-            sections_included.append("test_layout")
+            section_size = measure_bytes({"test_layout": test_section})
+            if acc.remaining_bytes >= section_size:
+                acc.reserve(section_size)
+                output["test_layout"] = test_section
+                sections_included.append("test_layout")
+            else:
+                budget_exhausted = True
 
         # --- Structure tree (paginated by top-level entries) ---
         tree_items: list[dict[str, Any]] = []
