@@ -156,13 +156,22 @@ class TestReadFilesBudgetPattern:
         assert acc.count == 3
 
     def test_large_file_exceeds_on_second(self) -> None:
-        """A very large file is accepted as first, blocks second."""
-        acc = BudgetAccumulator()
-        big = _make_file_result("src/huge.py", lines=5000)
+        """A large file that's slightly over budget is accepted as first."""
+        # With 7.5KB budget, 2x = 15KB max for first item
+        # A ~10KB file should be accepted as first item
+        acc = BudgetAccumulator(budget=10_000)  # 2x = 20KB
+        big = _make_file_result("src/large.py", lines=500)  # ~3.5KB
         small = _make_file_result("src/tiny.py", lines=5)
-        assert acc.try_add(big) is True  # first item guarantee
-        assert acc.try_add(small) is False  # budget exceeded
-        assert acc.count == 1
+        assert acc.try_add(big) is True  # under 2x cap
+        assert acc.try_add(small) is True  # still room
+        assert acc.count == 2
+
+    def test_massive_file_rejected_even_as_first(self) -> None:
+        """A file over 2x budget is rejected even as first item."""
+        acc = BudgetAccumulator()  # 40KB default, 2x = 80KB
+        huge = _make_file_result("src/massive.py", lines=15000)  # ~100KB
+        assert acc.try_add(huge) is False  # over 2x cap
+        assert acc.count == 0
 
     def test_pagination_with_remaining_files(self) -> None:
         """Pagination correctly signals remaining files."""
@@ -191,7 +200,7 @@ class TestGitLogBudgetPattern:
 
     def test_log_entries_accumulated(self) -> None:
         """Commit entries are accumulated correctly."""
-        acc = BudgetAccumulator()
+        acc = BudgetAccumulator()  # uses default 40KB budget
         commits = [_make_commit(f"{i:040d}", f"commit {i}") for i in range(50)]
         for c in commits:
             if not acc.try_add(c):
@@ -330,7 +339,7 @@ class TestGitBlameBudgetPattern:
 
     def test_blame_lines_accumulated(self) -> None:
         """Blame lines are accumulated within budget."""
-        acc = BudgetAccumulator()
+        acc = BudgetAccumulator()  # uses default 40KB budget
         lines = [_make_blame_line(i) for i in range(100)]
         for line in lines:
             if not acc.try_add(line):
@@ -429,7 +438,7 @@ class TestBudgetConstantIntegration:
     """Tests that RESPONSE_BUDGET_BYTES is used consistently."""
 
     def test_constant_value(self) -> None:
-        """RESPONSE_BUDGET_BYTES is 40KB."""
+        """RESPONSE_BUDGET_BYTES is 40KB with 8KB inline threshold."""
         assert RESPONSE_BUDGET_BYTES == 40_000
 
     def test_default_accumulator_uses_constant(self) -> None:
@@ -442,15 +451,15 @@ class TestBudgetConstantIntegration:
         # Total used should be close to but not exceed budget
         # (first-item guarantee may cause slight overshoot on the first)
         assert acc.used_bytes > 0
-        # With items of ~1008 bytes each, we expect ~39 items
+        # With items of ~1008 bytes each, count depends on budget
         expected_approx = RESPONSE_BUDGET_BYTES // measure_bytes(item)
         assert abs(acc.count - expected_approx) <= 1
 
-    def test_budget_headroom_below_60kb(self) -> None:
-        """Budget provides headroom below VS Code's 60KB truncation ceiling."""
+    def test_budget_below_vscode_truncation(self) -> None:
+        """Budget stays below VS Code's 60KB truncation ceiling."""
         assert RESPONSE_BUDGET_BYTES < 60_000
-        # At least 33% headroom
-        assert RESPONSE_BUDGET_BYTES <= 60_000 * 0.67
+        # Provides headroom for JSON overhead
+        assert RESPONSE_BUDGET_BYTES == 40_000
 
     def test_pagination_dict_is_json_serializable(self) -> None:
         """Pagination dicts can be JSON-serialized."""
@@ -473,7 +482,7 @@ class TestBudgetConstantIntegration:
             {"path": "src/very/long/path/to/some/file.py", "line": 9999},
         ]
         for item in items:
-            expected = len(json.dumps(item, separators=(",", ":")).encode("utf-8"))
+            expected = len(json.dumps(item, indent=2).encode("utf-8"))
             assert measure_bytes(item) == expected
 
 

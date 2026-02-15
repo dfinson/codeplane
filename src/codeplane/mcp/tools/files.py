@@ -8,7 +8,7 @@ from fastmcp.utilities.json_schema import dereference_refs
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from codeplane.config.constants import FILES_LIST_MAX
-from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination
+from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination, measure_bytes
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -142,12 +142,23 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         # Build a map from path to file result for efficient lookup
         file_by_path: dict[str, Any] = {f.path: f for f in result.files}
 
+        # Reserve overhead for fixed response fields
+        base_response = {
+            "files": [],
+            "pagination": {"truncated": False, "next_cursor": "x" * 40, "total_estimate": 99999},
+            "summary": "X" * 200,
+            "not_found": ["X" * 100] * 10,  # Worst case: 10 paths of ~100 chars
+            "not_found_count": 99999,
+        }
+        overhead = measure_bytes(base_response)
         acc = BudgetAccumulator()
+        acc.reserve(overhead)
         processed_targets = 0
         missing_paths: list[str] = []
         missing_count = 0  # Track total missing, not just capped list
 
         # Process targets in order, tracking both found and missing
+        oversized_files: list[dict[str, Any]] = []  # Files too large for budget
         for t in page_targets:
             if t.path in file_by_path:
                 f = file_by_path[t.path]
@@ -160,7 +171,21 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "metadata": f.metadata,
                 }
                 if not acc.try_add(item):
-                    # Budget exhausted, stop processing
+                    # Budget exhausted - check if this is an oversized first item
+                    if not acc.items:
+                        # First file was too large, track it for guidance
+                        oversized_files.append(
+                            {
+                                "path": f.path,
+                                "line_count": f.line_count,
+                                "estimated_lines_per_page": max(
+                                    1, (f.line_count * 7500) // (len(f.content) + 1)
+                                ),
+                            }
+                        )
+                        processed_targets += 1
+                        continue  # Try next file
+                    # Budget exhausted with items, stop processing
                     break
             else:
                 # Target not found - track it but don't count against budget
@@ -187,6 +212,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             if missing_count > len(missing_paths):
                 # Indicate there are more missing than listed
                 response["not_found_count"] = missing_count
+        if oversized_files:
+            response["oversized"] = oversized_files
+            lines_hint = oversized_files[0]["estimated_lines_per_page"]
+            response["agentic_hint"] = (
+                f"File(s) too large for single response. Use start_line/end_line "
+                f"to read in chunks of ~{lines_hint} lines."
+            )
         return response
 
     @mcp.tool

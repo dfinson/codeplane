@@ -73,7 +73,11 @@ class TestSerializeTree:
         assert result == []
 
     def test_file_node(self) -> None:
-        """File node serialized correctly."""
+        """File node serialized correctly.
+
+        Note: 'name' field was removed for token efficiency - agents can derive
+        it from path.split('/')[-1].
+        """
         node = MagicMock()
         node.name = "file.py"
         node.path = "src/file.py"
@@ -82,7 +86,8 @@ class TestSerializeTree:
 
         result = _serialize_tree([node])
         assert len(result) == 1
-        assert result[0]["name"] == "file.py"
+        assert "name" not in result[0]  # Removed for token efficiency
+        assert result[0]["path"] == "src/file.py"
         assert result[0]["is_dir"] is False
 
     def test_directory_node(self) -> None:

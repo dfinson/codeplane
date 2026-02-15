@@ -109,10 +109,14 @@ class TestSerializeTree:
         assert result == []
 
     def test_file_node(self) -> None:
-        """File node serialization."""
+        """File node serialization.
+
+        Note: 'name' field was removed for token efficiency - agents can derive
+        it from path.split('/')[-1].
+        """
         result = _serialize_tree([MockFileNode()])
         assert len(result) == 1
-        assert result[0]["name"] == "main.py"
+        assert "name" not in result[0]  # Intentionally removed for token efficiency
         assert result[0]["path"] == "src/main.py"
         assert result[0]["is_dir"] is False
         assert result[0]["line_count"] == 100
@@ -121,7 +125,7 @@ class TestSerializeTree:
         """Directory node serialization."""
         result = _serialize_tree([MockDirNode()])
         assert len(result) == 1
-        assert result[0]["name"] == "src"
+        assert "name" not in result[0]  # Intentionally removed for token efficiency
         assert result[0]["is_dir"] is True
         assert result[0]["file_count"] == 5
         assert result[0]["children"] == []
@@ -135,7 +139,7 @@ class TestSerializeTree:
         assert len(result) == 1
         assert result[0]["is_dir"] is True
         assert len(result[0]["children"]) == 1
-        assert result[0]["children"][0]["name"] == "main.py"
+        assert "name" not in result[0]["children"][0]  # Removed for token efficiency
 
 
 # =============================================================================
