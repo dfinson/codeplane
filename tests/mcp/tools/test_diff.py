@@ -182,12 +182,11 @@ class TestPagination:
         assert "truncated" not in d["pagination"]
 
     def test_pagination_triggers_over_budget(self, monkeypatch: Any) -> None:
-        # Swap in a tiny-budget accumulator so even small items overflow
-        class _TinyBudget(BudgetAccumulator):
-            def __init__(self, budget: int = 500) -> None:
-                super().__init__(budget=budget)
-
-        monkeypatch.setattr("codeplane.mcp.tools.diff.BudgetAccumulator", _TinyBudget)
+        # Use a small budget so items overflow (but large enough for overhead + some items)
+        monkeypatch.setattr(
+            "codeplane.mcp.tools.diff.get_effective_budget",
+            lambda inline_only=False: 1500,
+        )
         changes = [_change(name=f"fn_{i}") for i in range(10)]
         d = _result_to_dict(_result(changes), cache_id=1)
         assert len(d["structural_changes"]) < 10
@@ -213,12 +212,11 @@ class TestPagination:
 
     def test_agentic_hint_computed_from_all_changes(self, monkeypatch: Any) -> None:
         """agentic_hint reflects ALL changes, not just the paginated page."""
-
-        class _TinyBudget(BudgetAccumulator):
-            def __init__(self, budget: int = 500) -> None:
-                super().__init__(budget=budget)
-
-        monkeypatch.setattr("codeplane.mcp.tools.diff.BudgetAccumulator", _TinyBudget)
+        # Use a tiny budget so pagination triggers
+        monkeypatch.setattr(
+            "codeplane.mcp.tools.diff.get_effective_budget",
+            lambda inline_only=False: 500,
+        )
         changes = [_change("body_changed", "non_breaking", f"fn_{i}") for i in range(10)]
         d = _result_to_dict(_result(changes))
         # Hint should mention all 10, not just the items on this page
@@ -235,12 +233,11 @@ class TestNonStructuralPagination:
 
     def test_non_structural_paginated_after_structural_complete(self, monkeypatch: Any) -> None:
         """non_structural_changes only paginated when structural_changes is done."""
-
-        class _TinyBudget(BudgetAccumulator):
-            def __init__(self, budget: int = 2000) -> None:
-                super().__init__(budget=budget)
-
-        monkeypatch.setattr("codeplane.mcp.tools.diff.BudgetAccumulator", _TinyBudget)
+        # Use a small budget to trigger pagination
+        monkeypatch.setattr(
+            "codeplane.mcp.tools.diff.get_effective_budget",
+            lambda inline_only=False: 2000,
+        )
 
         # 3 structural changes (small) + 10 non_structural (should overflow)
         structural = [_change(name=f"fn_{i}") for i in range(3)]
@@ -258,12 +255,11 @@ class TestNonStructuralPagination:
 
     def test_cursor_continues_non_structural(self, monkeypatch: Any) -> None:
         """Pagination cursor allows continuing non_structural_changes."""
-
-        class _TinyBudget(BudgetAccumulator):
-            def __init__(self, budget: int = 500) -> None:
-                super().__init__(budget=budget)
-
-        monkeypatch.setattr("codeplane.mcp.tools.diff.BudgetAccumulator", _TinyBudget)
+        # Use a small budget so items overflow (but large enough for overhead)
+        monkeypatch.setattr(
+            "codeplane.mcp.tools.diff.get_effective_budget",
+            lambda inline_only=False: 1500,
+        )
 
         # No structural, all non_structural
         non_structural = [_file_change(f"data/file_{i}.json") for i in range(20)]
@@ -302,12 +298,11 @@ class TestNonStructuralPagination:
 
     def test_mixed_pagination_structural_then_non_structural(self, monkeypatch: Any) -> None:
         """Pagination flows from structural to non_structural across pages."""
-
-        class _TinyBudget(BudgetAccumulator):
-            def __init__(self, budget: int = 400) -> None:
-                super().__init__(budget=budget)
-
-        monkeypatch.setattr("codeplane.mcp.tools.diff.BudgetAccumulator", _TinyBudget)
+        # Use a small budget to trigger pagination (but large enough for overhead + some items)
+        monkeypatch.setattr(
+            "codeplane.mcp.tools.diff.get_effective_budget",
+            lambda inline_only=False: 1500,
+        )
 
         # 5 structural + 5 non_structural - should span multiple pages
         structural = [_change(name=f"fn_{i}") for i in range(5)]
@@ -735,20 +730,20 @@ class TestResponseSizeBudgetEnforcement:
     def test_paginated_page_under_budget(self, monkeypatch: Any) -> None:
         """Each paginated page stays under budget."""
         # Use a smaller budget to trigger pagination
-        TEST_BUDGET = 5000
+        TEST_BUDGET = 2000
+        monkeypatch.setattr(
+            "codeplane.mcp.tools.diff.get_effective_budget",
+            lambda inline_only=False: TEST_BUDGET,
+        )
 
-        class _SmallBudget(BudgetAccumulator):
-            def __init__(self, budget: int = TEST_BUDGET) -> None:
-                super().__init__(budget=budget)
-
-        monkeypatch.setattr("codeplane.mcp.tools.diff.BudgetAccumulator", _SmallBudget)
-
-        # Create enough changes to require pagination
-        changes = [_change(name=f"function_{i}_with_long_name") for i in range(50)]
+        # Create enough changes to require pagination with the smaller budget
+        changes = [_change(name=f"function_{i}_with_very_long_name_for_testing") for i in range(100)]
         d = _result_to_dict(_result(changes), cache_id=1)
 
         # Should be paginated
-        assert d["pagination"].get("truncated") is True
+        assert d["pagination"].get("truncated") is True, (
+            f"Expected pagination with {len(changes)} changes and {TEST_BUDGET} budget"
+        )
 
         # But the page should still be under the test budget
         response_bytes = len(json.dumps(d, indent=2).encode("utf-8"))

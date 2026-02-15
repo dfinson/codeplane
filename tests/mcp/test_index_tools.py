@@ -178,7 +178,11 @@ class TestSerializeTree:
         assert result == []
 
     def test_single_file(self) -> None:
-        """Single file node."""
+        """Single file node.
+
+        Note: 'name' field was removed for token efficiency - agents can derive
+        it from path.split('/')[-1].
+        """
         nodes = [
             MockTreeNode(
                 name="main.py",
@@ -189,7 +193,7 @@ class TestSerializeTree:
         ]
         result = _serialize_tree(nodes)
         assert len(result) == 1
-        assert result[0]["name"] == "main.py"
+        assert "name" not in result[0]  # Removed for token efficiency
         assert result[0]["path"] == "src/main.py"
         assert result[0]["is_dir"] is False
         assert result[0]["line_count"] == 100
@@ -206,7 +210,7 @@ class TestSerializeTree:
         ]
         result = _serialize_tree(nodes)
         assert len(result) == 1
-        assert result[0]["name"] == "src"
+        assert "name" not in result[0]  # Removed for token efficiency
         assert result[0]["is_dir"] is True
         assert result[0]["file_count"] == 10
         assert result[0]["children"] == []
@@ -232,7 +236,8 @@ class TestSerializeTree:
         assert len(result) == 1
         assert result[0]["children"] is not None
         assert len(result[0]["children"]) == 1
-        assert result[0]["children"][0]["name"] == "utils.py"
+        assert "name" not in result[0]["children"][0]  # Removed for token efficiency
+        assert result[0]["children"][0]["path"] == "src/utils.py"  # Verify path exists
 
     def test_multiple_levels(self) -> None:
         """Multiple nesting levels."""
@@ -266,11 +271,11 @@ class TestSerializeTree:
             )
         ]
         result = _serialize_tree(nodes)
-        # Traverse to deepest
-        assert result[0]["name"] == "a"
-        assert result[0]["children"][0]["name"] == "b"
-        assert result[0]["children"][0]["children"][0]["name"] == "c"
-        assert result[0]["children"][0]["children"][0]["children"][0]["name"] == "deep.py"
+        # Traverse to deepest - verify paths instead of names (name field removed)
+        assert result[0]["path"] == "a"
+        assert result[0]["children"][0]["path"] == "a/b"
+        assert result[0]["children"][0]["children"][0]["path"] == "a/b/c"
+        assert result[0]["children"][0]["children"][0]["children"][0]["path"] == "a/b/c/deep.py"
 
     def test_siblings(self) -> None:
         """Multiple siblings at same level."""
@@ -281,6 +286,7 @@ class TestSerializeTree:
         ]
         result = _serialize_tree(nodes)
         assert len(result) == 3
-        assert result[0]["name"] == "a.py"
-        assert result[1]["name"] == "b.py"
-        assert result[2]["name"] == "c.py"
+        # Verify paths instead of names (name field removed for token efficiency)
+        assert result[0]["path"] == "a.py"
+        assert result[1]["path"] == "b.py"
+        assert result[2]["path"] == "c.py"
