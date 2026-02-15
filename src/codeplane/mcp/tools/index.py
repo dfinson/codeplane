@@ -16,6 +16,7 @@ from codeplane.config.constants import (
 )
 from codeplane.mcp.budget import (
     BudgetAccumulator,
+    get_effective_budget,
     make_budget_pagination,
     maybe_add_large_response_hint,
     measure_bytes,
@@ -593,9 +594,26 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         )
         output["summary"] = _summarize_map(file_count, sections, truncated)
 
-        # Add large response hint if over VS Code's inline threshold
+        # Budget enforcement: When inline_only=true, enforce 7.5KB cap
+        # If response exceeds budget, mark as truncated and add guidance
+        effective_budget = get_effective_budget(inline_only)
         response_size = measure_bytes(output)
-        maybe_add_large_response_hint(output, response_size)
+
+        if inline_only and response_size > effective_budget:
+            # Response exceeds inline budget - indicate this clearly
+            output["pagination"]["truncated"] = True
+            output["pagination"]["budget_exceeded"] = True
+            size_kb = round(response_size / 1024, 1)
+            budget_kb = round(effective_budget / 1024, 1)
+            output["agentic_hint"] = (
+                f"Response is {size_kb}KB but inline_only=true requested {budget_kb}KB cap. "
+                "To fit within budget: reduce 'limit', use fewer 'include' sections, "
+                "or use verbosity='minimal'. Alternatively, set inline_only=false to "
+                "allow larger responses (VS Code may write to file)."
+            )
+        else:
+            # Standard hint for large responses (over 8KB)
+            maybe_add_large_response_hint(output, response_size)
 
         return output
 
