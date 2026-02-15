@@ -3,7 +3,7 @@
 Orchestrates the full pipeline: sources -> engine -> enrichment -> output.
 """
 
-from __future__ import annotations
+# Removed: from __future__ import annotations - breaks FastMCP+pydantic Literal resolution
 
 import contextlib
 import threading
@@ -105,7 +105,7 @@ class _DiffCache:
 _diff_cache = _DiffCache()
 
 
-def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
+def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     """Register semantic_diff MCP tool."""
 
     @mcp.tool
@@ -202,7 +202,7 @@ def _parse_cursor(cursor: str | None) -> tuple[int | None, int, int]:
 
 
 def _run_git_diff(
-    app_ctx: AppContext,
+    app_ctx: "AppContext",
     base: str,
     target: str | None,
     paths: list[str] | None,
@@ -330,7 +330,7 @@ def _parse_epoch_ref(ref: str) -> int:
 
 
 def _run_epoch_diff(
-    app_ctx: AppContext,
+    app_ctx: "AppContext",
     base: str,
     target: str | None,
     paths: list[str] | None,
