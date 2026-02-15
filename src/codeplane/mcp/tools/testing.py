@@ -7,6 +7,7 @@ Split into verb-first tools:
 - cancel_test_run: Abort a run
 """
 
+import secrets
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -19,6 +20,10 @@ if TYPE_CHECKING:
 
     from codeplane.mcp.context import AppContext
     from codeplane.testing.models import TestResult
+
+
+# Session key for broad-run confirmation tokens
+_BROAD_RUN_TOKEN_KEY = "__broad_run_confirmation_token__"
 
 
 # =============================================================================
@@ -572,25 +577,91 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             "Use map_repo to understand project structure and determine the appropriate "
             "source directory.",
         ),
+        confirm_broad_run: str | None = Field(
+            None,
+            description="Required when using target_filter without explicit targets. "
+            "Provide a reason (min 15 chars) explaining why a broad run is needed.",
+        ),
+        confirmation_token: str | None = Field(
+            None,
+            description="Token from initial blocked call. Required with confirm_broad_run.",
+        ),
     ) -> dict[str, Any]:
         """Execute tests.
 
         IMPORTANT: This tool runs ALL discovered targets unless you filter them.
 
+        Recommended workflow for efficiency:
+        1. discover_test_targets(affected_by=["changed_file.py"]) to get impact-filtered targets
+        2. run_test_targets(targets=[...]) with the returned target IDs
+
         Filtering options:
         - targets: Specific target_ids from discover_test_targets (recommended)
-        - target_filter: Substring match on target paths (e.g. 'test_foo' runs only test_foo.py)
+        - target_filter: Substring match on target paths (requires two-phase confirmation)
         - test_filter: Filter test NAMES within targets (does NOT reduce which targets run)
 
+        When using target_filter without explicit targets, a two-phase confirmation is required:
+        1. First call returns a token and blocks
+        2. Second call with confirm_broad_run (reason) + confirmation_token proceeds
+
         To run a single test file, use: targets=['test:path/to/test_file.py']
-        To run tests matching a path pattern, use: target_filter='test_excludes'
 
         Coverage:
-        When coverage=True, coverage_dir MUST be provided. Coverage artifacts will be written
-        to canonical paths within that directory. Use map_repo to understand your project
-        layout before enabling coverage.
+        When coverage=True, coverage_dir MUST be provided.
         """
-        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+        session = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        # Two-phase confirmation for broad runs (target_filter without explicit targets)
+        needs_confirmation = target_filter and not targets
+        if needs_confirmation:
+            stored_token = session.fingerprints.get(_BROAD_RUN_TOKEN_KEY)
+
+            # Phase 2: Validate token + reason and execute
+            if confirmation_token and confirm_broad_run:
+                if not stored_token:
+                    return {
+                        "action": "run",
+                        "run_status": {"status": "blocked", "run_id": ""},
+                        "error": "INVALID_CONFIRMATION",
+                        "message": "No pending broad run confirmation. Call without token first.",
+                    }
+                if confirmation_token != stored_token:
+                    return {
+                        "action": "run",
+                        "run_status": {"status": "blocked", "run_id": ""},
+                        "error": "TOKEN_MISMATCH",
+                        "message": "Confirmation token does not match. Request a new token.",
+                    }
+                if len(confirm_broad_run.strip()) < 15:
+                    return {
+                        "action": "run",
+                        "run_status": {"status": "blocked", "run_id": ""},
+                        "error": "REASON_TOO_SHORT",
+                        "message": "confirm_broad_run must be at least 15 characters.",
+                    }
+                # Valid - clear token and proceed
+                del session.fingerprints[_BROAD_RUN_TOKEN_KEY]
+
+            # Phase 1: Generate token and block
+            else:
+                token = secrets.token_urlsafe(16)
+                session.fingerprints[_BROAD_RUN_TOKEN_KEY] = token
+
+                return {
+                    "action": "run",
+                    "run_status": {"status": "blocked", "run_id": ""},
+                    "requires_confirmation": True,
+                    "confirmation_token": token,
+                    "target_filter": target_filter,
+                    "agentic_hint": (
+                        "BLOCKED: Using target_filter without explicit targets runs many tests. "
+                        "Preferred workflow: use discover_test_targets(affected_by=[...]) "
+                        "to get impact-filtered targets, then run_test_targets(targets=[...]). "
+                        "If a broad run is truly needed, retry with BOTH: "
+                        f"confirmation_token='{token}' AND confirm_broad_run='<reason min 15 chars>'."
+                    ),
+                    "summary": "BLOCKED: broad test run requires confirmation",
+                }
 
         # Validate coverage_dir is provided when coverage is requested
         if coverage and not coverage_dir:
