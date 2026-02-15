@@ -111,6 +111,272 @@ def _flatten_tree(nodes: list[Any], include_line_counts: bool = True) -> list[di
     return result
 
 
+# ---------------------------------------------------------------------------
+# Tiered Section Serializers (F+E Pattern)
+#
+# Each section has 3 tiers:
+#   - Tier 1 (summary): Just counts - always fits
+#   - Tier 2 (sample): Top N items - usually fits in 7.5KB
+#   - Tier 3 (full): Everything - may need pagination
+#
+# The map_repo handler tries Tier 3, falls back to 2, then 1.
+# ---------------------------------------------------------------------------
+
+# Tier constants
+_TIER_FULL = "full"
+_TIER_SAMPLE = "sample"
+_TIER_SUMMARY = "summary"
+
+# Sample sizes for Tier 2
+_STRUCTURE_TOP_DIRS = 10
+_DEPS_TOP_MODULES = 25
+_TESTS_TOP_FILES = 15
+_ENTRY_POINTS_SAMPLE = 10
+_PUBLIC_API_SAMPLE = 10
+
+
+def _serialize_structure_tiered(
+    structure: Any, tier: str, include_line_counts: bool = True
+) -> dict[str, Any]:
+    """Serialize structure section at specified tier."""
+    if tier == _TIER_SUMMARY:
+        # Tier 1: Just counts and top-level dir names
+        top_dirs = [n.path for n in structure.tree[:5] if n.is_dir]
+        return {
+            "tier": _TIER_SUMMARY,
+            "root": structure.root,
+            "file_count": structure.file_count,
+            "top_dirs": top_dirs,
+        }
+
+    if tier == _TIER_SAMPLE:
+        # Tier 2: Top N directories with their immediate file counts (depth 1)
+        top_entries = []
+        for node in structure.tree[:_STRUCTURE_TOP_DIRS]:
+            entry: dict[str, Any] = {"path": node.path, "is_dir": node.is_dir}
+            if node.is_dir:
+                entry["file_count"] = node.file_count
+            elif include_line_counts:
+                entry["line_count"] = node.line_count
+            top_entries.append(entry)
+        return {
+            "tier": _TIER_SAMPLE,
+            "root": structure.root,
+            "file_count": structure.file_count,
+            "entries": top_entries,
+            "entries_shown": len(top_entries),
+            "entries_total": len(structure.tree),
+        }
+
+    # Tier 3: Full nested tree
+    tree = _serialize_tree(structure.tree, include_line_counts=include_line_counts)
+    result: dict[str, Any] = {
+        "tier": _TIER_FULL,
+        "root": structure.root,
+        "file_count": structure.file_count,
+        "tree": tree,
+    }
+    if structure.contexts:
+        result["contexts"] = structure.contexts
+    return result
+
+
+def _serialize_dependencies_tiered(deps: Any, tier: str) -> dict[str, Any]:
+    """Serialize dependencies section at specified tier."""
+    all_modules = deps.external_modules
+
+    if tier == _TIER_SUMMARY:
+        return {
+            "tier": _TIER_SUMMARY,
+            "external_count": len(all_modules),
+            "import_count": deps.import_count,
+        }
+
+    if tier == _TIER_SAMPLE:
+        top = all_modules[:_DEPS_TOP_MODULES]
+        return {
+            "tier": _TIER_SAMPLE,
+            "top_modules": top,
+            "modules_shown": len(top),
+            "external_count": len(all_modules),
+            "import_count": deps.import_count,
+        }
+
+    # Tier 3: Full list
+    return {
+        "tier": _TIER_FULL,
+        "external_modules": all_modules,
+        "import_count": deps.import_count,
+    }
+
+
+def _serialize_test_layout_tiered(test_layout: Any, tier: str) -> dict[str, Any]:
+    """Serialize test_layout section at specified tier."""
+    all_files = test_layout.test_files
+
+    if tier == _TIER_SUMMARY:
+        # Extract unique test directories
+        test_dirs = sorted({f.rsplit("/", 1)[0] for f in all_files if "/" in f})
+        return {
+            "tier": _TIER_SUMMARY,
+            "test_count": test_layout.test_count,
+            "file_count": len(all_files),
+            "test_dirs": test_dirs[:10],
+        }
+
+    if tier == _TIER_SAMPLE:
+        top = all_files[:_TESTS_TOP_FILES]
+        return {
+            "tier": _TIER_SAMPLE,
+            "test_files": top,
+            "files_shown": len(top),
+            "file_count": len(all_files),
+            "test_count": test_layout.test_count,
+        }
+
+    # Tier 3: Full list
+    return {
+        "tier": _TIER_FULL,
+        "test_files": all_files,
+        "test_count": test_layout.test_count,
+    }
+
+
+def _serialize_entry_points_tiered(entry_points: list[Any], tier: str) -> dict[str, Any]:
+    """Serialize entry_points section at specified tier."""
+    if tier == _TIER_SUMMARY:
+        return {
+            "tier": _TIER_SUMMARY,
+            "count": len(entry_points),
+        }
+
+    def _ep_to_dict(ep: Any) -> dict[str, Any]:
+        return {
+            "path": ep.path,
+            "kind": ep.kind,
+            "name": ep.name,
+            "qualified_name": ep.qualified_name,
+        }
+
+    if tier == _TIER_SAMPLE:
+        top = [_ep_to_dict(ep) for ep in entry_points[:_ENTRY_POINTS_SAMPLE]]
+        return {
+            "tier": _TIER_SAMPLE,
+            "items": top,
+            "items_shown": len(top),
+            "count": len(entry_points),
+        }
+
+    # Tier 3: Full list
+    return {
+        "tier": _TIER_FULL,
+        "items": [_ep_to_dict(ep) for ep in entry_points],
+    }
+
+
+def _serialize_public_api_tiered(public_api: list[Any], tier: str) -> dict[str, Any]:
+    """Serialize public_api section at specified tier."""
+    if tier == _TIER_SUMMARY:
+        return {
+            "tier": _TIER_SUMMARY,
+            "count": len(public_api),
+        }
+
+    def _sym_to_dict(sym: Any) -> dict[str, Any]:
+        return {
+            "name": sym.name,
+            "def_uid": sym.def_uid,
+            "certainty": sym.certainty,
+            "evidence": sym.evidence,
+        }
+
+    if tier == _TIER_SAMPLE:
+        top = [_sym_to_dict(s) for s in public_api[:_PUBLIC_API_SAMPLE]]
+        return {
+            "tier": _TIER_SUMMARY,
+            "items": top,
+            "items_shown": len(top),
+            "count": len(public_api),
+        }
+
+    # Tier 3: Full list
+    return {
+        "tier": _TIER_FULL,
+        "items": [_sym_to_dict(s) for s in public_api],
+    }
+
+
+def _serialize_languages(languages: list[Any]) -> list[dict[str, Any]]:
+    """Serialize languages (always fits, no tiers needed)."""
+    return [
+        {
+            "language": lang.language,
+            "file_count": lang.file_count,
+            "percentage": lang.percentage,
+        }
+        for lang in languages
+    ]
+
+
+def _build_overview(result: Any) -> dict[str, Any]:
+    """Build the always-fits overview block with counts."""
+    overview: dict[str, Any] = {}
+
+    if result.structure:
+        overview["file_count"] = result.structure.file_count
+
+    if result.languages:
+        overview["languages"] = [
+            {"name": lang.language, "count": lang.file_count, "pct": lang.percentage}
+            for lang in result.languages
+        ]
+
+    if result.dependencies:
+        overview["dependency_count"] = len(result.dependencies.external_modules)
+        overview["import_count"] = result.dependencies.import_count
+
+    if result.test_layout:
+        overview["test_file_count"] = len(result.test_layout.test_files)
+        overview["test_count"] = result.test_layout.test_count
+
+    if result.entry_points:
+        overview["entry_point_count"] = len(result.entry_points)
+
+    if result.public_api:
+        overview["public_api_count"] = len(result.public_api)
+
+    return overview
+
+
+def _try_section_with_fallback(
+    section_name: str,
+    serializer: Any,
+    data: Any,
+    budget_remaining: int,
+    include_line_counts: bool = True,
+) -> tuple[dict[str, Any], str]:
+    """Try to serialize a section, falling back to lower tiers if needed.
+
+    Returns (serialized_section, tier_used).
+    """
+    tiers = [_TIER_FULL, _TIER_SAMPLE, _TIER_SUMMARY]
+
+    for tier in tiers:
+        if section_name == "structure":
+            section = serializer(data, tier, include_line_counts)
+        else:
+            section = serializer(data, tier)
+
+        size = measure_bytes(section)
+        if size <= budget_remaining:
+            return section, tier
+
+    # Even summary doesn't fit - return summary anyway (guaranteed small)
+    if section_name == "structure":
+        return serializer(data, _TIER_SUMMARY, include_line_counts), _TIER_SUMMARY
+    return serializer(data, _TIER_SUMMARY), _TIER_SUMMARY
+
+
 async def _get_file_path(app_ctx: "AppContext", file_id: int) -> str:
     """Look up file path from file_id."""
     from codeplane.index.models import File
@@ -511,17 +777,20 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             description="If true, use 7.5KB budget for guaranteed inline display in VS Code",
         ),
     ) -> dict[str, Any]:
-        """Get repository mental model with budget-based pagination.
+        """Get repository mental model with tiered budget-based output.
 
-        Uses BudgetAccumulator to enforce byte budget. When response exceeds
-        the effective budget (7.5KB for inline_only, 40KB otherwise), pagination
-        cursor is provided for continuation.
+        Uses progressive disclosure (F+E pattern):
+        - Overview block with counts always returned (guaranteed to fit)
+        - Each section tries full → sample → summary tiers based on budget
+        - Downgraded sections include expand cursors for drill-down
+
+        Cursor types:
+        - None: First page with overview + tiered sections
+        - "expand:<section>:<offset>": Drill into a specific section
         """
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
-        # Parse cursor: "<tree_offset>:<ep_offset>:<api_offset>"
-        tree_offset, ep_offset, api_offset = _parse_map_cursor(cursor)
-
+        # Fetch data from coordinator
         result = await app_ctx.coordinator.map_repo(
             include=include,
             depth=depth,
@@ -531,138 +800,283 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             respect_gitignore=respect_gitignore,
         )
 
-        # Compute overhead for fixed response fields
-        base_response: dict[str, Any] = {
-            "structure": {"root": "/" + "x" * 50, "file_count": 99999, "tree": []},
-            "languages": [],
-            "entry_points": [],
-            "dependencies": {},
-            "test_layout": {},
-            "public_api": [],
-            "pagination": {
-                "truncated": True,
-                "next_cursor": "99999:99999:99999",
-                "total_estimate": 99999,
-            },
-            "summary": "X" * 150,
-            "agentic_hint": "X" * 200,
-        }
-        overhead = measure_bytes(base_response)
-        overhead += 300  # Safety margin for JSON formatting variance
-
         effective_budget = get_effective_budget(inline_only)
-        acc = BudgetAccumulator(budget=effective_budget)
+        include_line_counts = verbosity == "full"
+
+        # Handle expand cursor for drill-down requests
+        if cursor and cursor.startswith("expand:"):
+            return await _handle_expand_cursor(
+                cursor, result, effective_budget, include_line_counts
+            )
+
+        # --- First page: Overview + tiered sections ---
+
+        # Compute overhead for fixed response fields
+        overhead_template: dict[str, Any] = {
+            "overview": {},
+            "sections": {},
+            "pagination": {"expandable": [], "cursors": {}},
+            "summary": "X" * 100,
+            "agentic_hint": "X" * 150,
+        }
+        overhead = measure_bytes(overhead_template) + 300  # safety margin
+
+        # Track budget usage
+        used_bytes = overhead
+        sections_output: dict[str, Any] = {}
+        downgraded: list[str] = []
+        expand_cursors: dict[str, str] = {}
+
+        # Build overview (always fits, ~500 bytes)
+        overview = _build_overview(result)
+        used_bytes += measure_bytes(overview)
+
+        # Allocate remaining budget across sections
+        remaining = effective_budget - used_bytes
+
+        # --- Languages (small, no tiering needed) ---
+        if result.languages:
+            lang_section = _serialize_languages(result.languages)
+            size = measure_bytes({"languages": lang_section})
+            if size <= remaining:
+                sections_output["languages"] = lang_section
+                remaining -= size
+
+        # --- Structure ---
+        if result.structure:
+            section, tier = _try_section_with_fallback(
+                "structure",
+                _serialize_structure_tiered,
+                result.structure,
+                remaining,
+                include_line_counts,
+            )
+            size = measure_bytes({"structure": section})
+            if size <= remaining:
+                sections_output["structure"] = section
+                remaining -= size
+                if tier != _TIER_FULL:
+                    downgraded.append("structure")
+                    expand_cursors["structure"] = "expand:structure:0"
+            else:
+                # Even summary didn't fit - add minimal
+                minimal = _serialize_structure_tiered(
+                    result.structure, _TIER_SUMMARY, include_line_counts
+                )
+                sections_output["structure"] = minimal
+                downgraded.append("structure")
+                expand_cursors["structure"] = "expand:structure:0"
+
+        # --- Dependencies ---
+        if result.dependencies:
+            section, tier = _try_section_with_fallback(
+                "dependencies",
+                _serialize_dependencies_tiered,
+                result.dependencies,
+                remaining,
+            )
+            size = measure_bytes({"dependencies": section})
+            if size <= remaining:
+                sections_output["dependencies"] = section
+                remaining -= size
+                if tier != _TIER_FULL:
+                    downgraded.append("dependencies")
+                    expand_cursors["dependencies"] = "expand:dependencies:0"
+            else:
+                minimal = _serialize_dependencies_tiered(result.dependencies, _TIER_SUMMARY)
+                sections_output["dependencies"] = minimal
+                downgraded.append("dependencies")
+                expand_cursors["dependencies"] = "expand:dependencies:0"
+
+        # --- Test Layout ---
+        if result.test_layout:
+            section, tier = _try_section_with_fallback(
+                "test_layout",
+                _serialize_test_layout_tiered,
+                result.test_layout,
+                remaining,
+            )
+            size = measure_bytes({"test_layout": section})
+            if size <= remaining:
+                sections_output["test_layout"] = section
+                remaining -= size
+                if tier != _TIER_FULL:
+                    downgraded.append("test_layout")
+                    expand_cursors["test_layout"] = "expand:test_layout:0"
+            else:
+                minimal = _serialize_test_layout_tiered(result.test_layout, _TIER_SUMMARY)
+                sections_output["test_layout"] = minimal
+                downgraded.append("test_layout")
+                expand_cursors["test_layout"] = "expand:test_layout:0"
+
+        # --- Entry Points ---
+        if result.entry_points:
+            section, tier = _try_section_with_fallback(
+                "entry_points",
+                _serialize_entry_points_tiered,
+                result.entry_points,
+                remaining,
+            )
+            size = measure_bytes({"entry_points": section})
+            if size <= remaining:
+                sections_output["entry_points"] = section
+                remaining -= size
+                if tier != _TIER_FULL:
+                    downgraded.append("entry_points")
+                    expand_cursors["entry_points"] = "expand:entry_points:0"
+            else:
+                minimal = _serialize_entry_points_tiered(result.entry_points, _TIER_SUMMARY)
+                sections_output["entry_points"] = minimal
+                downgraded.append("entry_points")
+                expand_cursors["entry_points"] = "expand:entry_points:0"
+
+        # --- Public API ---
+        if result.public_api:
+            section, tier = _try_section_with_fallback(
+                "public_api",
+                _serialize_public_api_tiered,
+                result.public_api,
+                remaining,
+            )
+            size = measure_bytes({"public_api": section})
+            if size <= remaining:
+                sections_output["public_api"] = section
+                remaining -= size
+                if tier != _TIER_FULL:
+                    downgraded.append("public_api")
+                    expand_cursors["public_api"] = "expand:public_api:0"
+            else:
+                minimal = _serialize_public_api_tiered(result.public_api, _TIER_SUMMARY)
+                sections_output["public_api"] = minimal
+                downgraded.append("public_api")
+                expand_cursors["public_api"] = "expand:public_api:0"
+
+        # --- Build output ---
+        output: dict[str, Any] = {
+            "overview": overview,
+            **sections_output,
+        }
+
+        # Build pagination
+        pagination: dict[str, Any] = {}
+        if downgraded:
+            pagination["expandable"] = downgraded
+            pagination["cursors"] = expand_cursors
+        output["pagination"] = pagination
+
+        # Summary
+        file_count = result.structure.file_count if result.structure else 0
+        section_names = list(sections_output.keys())
+        output["summary"] = _summarize_map(file_count, section_names, bool(downgraded))
+
+        # Agentic hint
+        if downgraded:
+            output["agentic_hint"] = (
+                f"Sections {', '.join(downgraded)} were summarized to fit budget. "
+                "Use pagination.cursors to expand specific sections for full detail."
+            )
+        else:
+            # Add large response hint if over inline threshold
+            total_size = effective_budget - remaining
+            maybe_add_large_response_hint(output, total_size)
+
+        return output
+
+    async def _handle_expand_cursor(
+        cursor: str,
+        result: Any,
+        budget: int,
+        include_line_counts: bool,
+    ) -> dict[str, Any]:
+        """Handle expand cursor for drilling into a specific section."""
+        # Parse: "expand:<section>:<offset>"
+        parts = cursor.split(":")
+        if len(parts) != 3:
+            return {"error": "Invalid cursor format", "cursor": cursor}
+
+        section = parts[1]
+        try:
+            offset = int(parts[2])
+        except ValueError:
+            return {"error": "Invalid cursor offset", "cursor": cursor}
+
+        # Reserve overhead
+        overhead = 500
+        acc = BudgetAccumulator(budget=budget)
         acc.reserve(overhead)
 
-        output: dict[str, Any] = {}
-        sections_included: list[str] = []
-        budget_exhausted = False
+        output: dict[str, Any] = {"section": section}
+        next_cursor: str | None = None
 
-        # --- Fixed sections (track with accumulator) ---
-        # These used to be assumed "small" but dependencies.external_modules
-        # can be 2KB+ alone. Must track against budget.
-        if result.languages and not budget_exhausted:
-            lang_section = [
-                {
-                    "language": lang.language,
-                    "file_count": lang.file_count,
-                    "percentage": lang.percentage,
-                }
-                for lang in result.languages
-            ]
-            section_size = measure_bytes({"languages": lang_section})
-            if acc.remaining_bytes >= section_size:
-                acc.reserve(section_size)
-                output["languages"] = lang_section
-                sections_included.append("languages")
-            else:
-                budget_exhausted = True
+        if section == "structure" and result.structure:
+            # Paginate flat tree entries
+            all_entries = _flatten_tree(result.structure.tree, include_line_counts)
+            items: list[dict[str, Any]] = []
+            consumed = 0
 
-        if result.dependencies and not budget_exhausted:
-            deps_section = {
-                "external_modules": result.dependencies.external_modules,
-                "import_count": result.dependencies.import_count,
-            }
-            section_size = measure_bytes({"dependencies": deps_section})
-            if acc.remaining_bytes >= section_size:
-                acc.reserve(section_size)
-                output["dependencies"] = deps_section
-                sections_included.append("dependencies")
-            else:
-                budget_exhausted = True
+            for entry in all_entries[offset:]:
+                if acc.try_add(entry):
+                    items.append(entry)
+                    consumed += 1
+                else:
+                    break
 
-        if result.test_layout and not budget_exhausted:
-            test_section = {
-                "test_files": result.test_layout.test_files,
-                "test_count": result.test_layout.test_count,
-            }
-            section_size = measure_bytes({"test_layout": test_section})
-            if acc.remaining_bytes >= section_size:
-                acc.reserve(section_size)
-                output["test_layout"] = test_section
-                sections_included.append("test_layout")
-            else:
-                budget_exhausted = True
+            output["entries"] = items
+            output["entries_shown"] = len(items)
+            output["entries_total"] = len(all_entries)
 
-        # --- Structure tree (paginated) ---
-        tree_items: list[dict[str, Any]] = []
-        tree_consumed = 0
-        total_tree_entries = 0
+            next_offset = offset + consumed
+            if next_offset < len(all_entries):
+                next_cursor = f"expand:structure:{next_offset}"
 
-        if result.structure and not budget_exhausted:
-            include_line_counts = verbosity == "full"
-            sections_included.append("structure")
+        elif section == "dependencies" and result.dependencies:
+            all_modules = result.dependencies.external_modules
+            items = []
+            consumed = 0
 
-            if verbosity == "minimal":
-                # Minimal: just counts, no tree - always fits
-                output["structure"] = {
-                    "root": result.structure.root,
-                    "file_count": result.structure.file_count,
-                }
-            elif inline_only:
-                # inline_only: flatten tree to individual path entries for pagination
-                # This avoids giant nested structures that can't fit in 7.5KB
-                all_flat = _flatten_tree(result.structure.tree, include_line_counts)
-                total_tree_entries = len(all_flat)
+            for mod in all_modules[offset:]:
+                item = {"module": mod}
+                if acc.try_add(item):
+                    items.append(mod)
+                    consumed += 1
+                else:
+                    break
 
-                for entry in all_flat[tree_offset:]:
-                    if acc.try_add(entry):
-                        tree_items.append(entry)
-                        tree_consumed += 1
-                    else:
-                        budget_exhausted = True
-                        break
+            output["external_modules"] = items
+            output["modules_shown"] = len(items)
+            output["modules_total"] = len(all_modules)
 
-                output["structure"] = {
-                    "root": result.structure.root,
-                    "entries": tree_items,  # flat list, not nested tree
-                    "file_count": result.structure.file_count,
-                }
-            else:
-                # Full/standard: nested tree structure
-                # For 40KB budget, serialize entire tree at once
-                tree_dict = _serialize_tree(
-                    result.structure.tree, include_line_counts=include_line_counts
-                )
-                output["structure"] = {
-                    "root": result.structure.root,
-                    "tree": tree_dict,
-                    "file_count": result.structure.file_count,
-                }
-                if result.structure.contexts:
-                    output["structure"]["contexts"] = result.structure.contexts
+            next_offset = offset + consumed
+            if next_offset < len(all_modules):
+                next_cursor = f"expand:dependencies:{next_offset}"
 
-        next_tree_offset = tree_offset + tree_consumed
-        tree_complete = not inline_only or next_tree_offset >= total_tree_entries
+        elif section == "test_layout" and result.test_layout:
+            all_files = result.test_layout.test_files
+            items = []
+            consumed = 0
 
-        # --- Entry points (paginated) ---
-        ep_items: list[dict[str, Any]] = []
-        ep_consumed = 0
-        total_eps = len(result.entry_points) if result.entry_points else 0
+            for f in all_files[offset:]:
+                item = {"path": f}
+                if acc.try_add(item):
+                    items.append(f)
+                    consumed += 1
+                else:
+                    break
 
-        if result.entry_points and tree_complete and not budget_exhausted:
-            sections_included.append("entry_points")
-            for ep in result.entry_points[ep_offset:]:
+            output["test_files"] = items
+            output["files_shown"] = len(items)
+            output["files_total"] = len(all_files)
+
+            next_offset = offset + consumed
+            if next_offset < len(all_files):
+                next_cursor = f"expand:test_layout:{next_offset}"
+
+        elif section == "entry_points" and result.entry_points:
+            all_eps = result.entry_points
+            items = []
+            consumed = 0
+
+            for ep in all_eps[offset:]:
                 item = {
                     "path": ep.path,
                     "kind": ep.kind,
@@ -670,24 +1084,25 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "qualified_name": ep.qualified_name,
                 }
                 if acc.try_add(item):
-                    ep_items.append(item)
-                    ep_consumed += 1
+                    items.append(item)
+                    consumed += 1
                 else:
-                    budget_exhausted = True
                     break
-            output["entry_points"] = ep_items
 
-        next_ep_offset = ep_offset + ep_consumed
-        ep_complete = next_ep_offset >= total_eps
+            output["items"] = items
+            output["items_shown"] = len(items)
+            output["items_total"] = len(all_eps)
 
-        # --- Public API (paginated) ---
-        api_items: list[dict[str, Any]] = []
-        api_consumed = 0
-        total_api = len(result.public_api) if result.public_api else 0
+            next_offset = offset + consumed
+            if next_offset < len(all_eps):
+                next_cursor = f"expand:entry_points:{next_offset}"
 
-        if result.public_api and tree_complete and ep_complete and not budget_exhausted:
-            sections_included.append("public_api")
-            for sym in result.public_api[api_offset:]:
+        elif section == "public_api" and result.public_api:
+            all_syms = result.public_api
+            items = []
+            consumed = 0
+
+            for sym in all_syms[offset:]:
                 item = {
                     "name": sym.name,
                     "def_uid": sym.def_uid,
@@ -695,35 +1110,26 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "evidence": sym.evidence,
                 }
                 if acc.try_add(item):
-                    api_items.append(item)
-                    api_consumed += 1
+                    items.append(item)
+                    consumed += 1
                 else:
-                    budget_exhausted = True
                     break
-            output["public_api"] = api_items
 
-        next_api_offset = api_offset + api_consumed
-        api_complete = next_api_offset >= total_api
+            output["items"] = items
+            output["items_shown"] = len(items)
+            output["items_total"] = len(all_syms)
 
-        # --- Determine pagination state ---
-        all_complete = tree_complete and ep_complete and api_complete
-        has_more = not all_complete or result.truncated
+            next_offset = offset + consumed
+            if next_offset < len(all_syms):
+                next_cursor = f"expand:public_api:{next_offset}"
 
-        # Build cursor for continuation
-        next_cursor: str | None = None
-        if not all_complete:
-            next_cursor = f"{next_tree_offset}:{next_ep_offset}:{next_api_offset}"
+        else:
+            return {"error": f"Unknown or empty section: {section}"}
 
-        file_count = result.structure.file_count if result.structure else 0
-        output["pagination"] = make_budget_pagination(
-            has_more=has_more,
-            next_cursor=next_cursor,
-            total_estimate=result.total_estimate,
-        )
-        output["summary"] = _summarize_map(file_count, sections_included, has_more)
-
-        # Add large response hint if over VS Code's inline threshold
-        maybe_add_large_response_hint(output, acc.used_bytes)
+        output["pagination"] = {
+            "next_cursor": next_cursor,
+            "complete": next_cursor is None,
+        }
 
         return output
 
