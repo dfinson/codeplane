@@ -1,37 +1,105 @@
 """Module path ↔ file path mapping utilities.
 
 Shared between the reference resolver and the import graph.
-Converts between dotted Python module paths (e.g. ``codeplane.refactor.ops``)
+Converts between dotted module paths (e.g. ``codeplane.refactor.ops``)
 and filesystem paths (e.g. ``src/codeplane/refactor/ops.py``).
+
+Supports all programming languages with import systems.
+Data/doc/config formats (markdown, json, yaml, etc.) are excluded
+since they cannot participate in import graphs.
 """
 
 from __future__ import annotations
 
+from codeplane.core.languages import ALL_LANGUAGES
+
+# Language names that have import systems (can be imported by other files).
+# Data/doc/config formats (markdown, json, yaml, toml, xml, html, css, etc.)
+# are intentionally excluded — they don't participate in import graphs.
+_IMPORTABLE_LANGUAGE_NAMES: frozenset[str] = frozenset(
+    {
+        "python",
+        "javascript",
+        "typescript",
+        "go",
+        "rust",
+        "java",
+        "kotlin",
+        "c_sharp",
+        "scala",
+        "php",
+        "ruby",
+        "c_cpp",
+        "swift",
+        "elixir",
+        "haskell",
+        "ocaml",
+        "lua",
+        "julia",
+        "erlang",
+        "shell",
+        "r",
+        "zig",
+        "nim",
+        "d",
+        "ada",
+        "fortran",
+        "pascal",
+        "gleam",
+        "vlang",
+        "odin",
+        "nix",
+        "reason",
+        "elm",
+    }
+)
+
+# Build extension set from importable languages only
+_KNOWN_SOURCE_EXTENSIONS: frozenset[str] = frozenset(
+    ext
+    for lang in ALL_LANGUAGES
+    if lang.name in _IMPORTABLE_LANGUAGE_NAMES
+    for ext in lang.extensions
+)
+
 
 def path_to_module(path: str) -> str | None:
-    """Convert a file path to a dotted Python module path.
+    """Convert a file path to a dotted module path.
+
+    Only resolves files with importable programming language extensions.
+    Data/doc formats (markdown, json, yaml, etc.) return None.
+    For Python, also handles ``__init__.py`` → package.
 
     Examples:
         >>> path_to_module("src/codeplane/refactor/ops.py")
         'src.codeplane.refactor.ops'
         >>> path_to_module("src/codeplane/__init__.py")
         'src.codeplane'
+        >>> path_to_module("src/utils/helper.ts")
+        'src.utils.helper'
         >>> path_to_module("README.md")
+        >>> path_to_module("Makefile")
     """
-    if not path.endswith(".py"):
+    # Find the extension
+    dot_pos = path.rfind(".")
+    if dot_pos < 0:
         return None
 
-    # Remove .py extension
-    module = path[:-3]
+    ext = path[dot_pos:]  # e.g. ".py", ".ts", ".go"
+    if ext not in _KNOWN_SOURCE_EXTENSIONS:
+        return None
 
-    # Handle __init__.py
-    if module.endswith("/__init__"):
-        module = module[:-9]
+    # Remove the extension
+    module = path[:dot_pos]
 
-    # Convert / to .
+    # Handle Python __init__.py → package
+    if ext == ".py" and module.endswith("/__init__"):
+        module = module[:-9]  # strip /__init__
+
+    # Convert path separators to dots
     module = module.replace("/", ".").replace("\\", ".")
 
-    # Remove leading . if any
+    # Remove leading dots
     module = module.lstrip(".")
 
     return module
