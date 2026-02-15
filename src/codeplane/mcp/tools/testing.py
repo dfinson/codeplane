@@ -646,6 +646,16 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         if needs_confirmation:
             stored_token = session.fingerprints.get(_BROAD_RUN_TOKEN_KEY)
 
+            # Check for partial confirmation (one param but not both)
+            if bool(confirmation_token) != bool(confirm_broad_run):
+                missing = "confirm_broad_run" if confirmation_token else "confirmation_token"
+                return {
+                    "action": "run",
+                    "run_status": {"status": "blocked", "run_id": ""},
+                    "error": "INCOMPLETE_CONFIRMATION",
+                    "message": f"Both confirmation_token AND confirm_broad_run are required. Missing: {missing}",
+                }
+
             # Phase 2: Validate token + reason and execute
             if confirmation_token and confirm_broad_run:
                 if not stored_token:

@@ -262,6 +262,90 @@ class TestBroadRunPhase2Validation:
 
         assert result["error"] == "REASON_TOO_SHORT"
 
+    @pytest.mark.asyncio
+    async def test_token_only_rejected(
+        self, mock_session: MagicMock, mock_session_manager: MagicMock
+    ) -> None:
+        """Providing token without reason is rejected."""
+        _ = mock_session  # Fixture dependency for mock_session_manager
+        from codeplane.mcp.tools.testing import register_tools
+
+        mcp = MagicMock()
+        tools: dict[str, Any] = {}
+        mcp.tool = lambda fn: tools.setdefault(fn.__name__, fn) or fn
+
+        app_ctx = MagicMock()
+        app_ctx.session_manager = mock_session_manager
+        app_ctx.test_ops = AsyncMock()
+
+        register_tools(mcp, app_ctx)
+        run_test_targets = tools["run_test_targets"]
+
+        ctx = MagicMock()
+        ctx.session_id = "test-session"
+
+        result = await run_test_targets(
+            ctx,
+            targets=None,
+            affected_by=None,
+            target_filter="tests/",
+            test_filter=None,
+            tags=None,
+            failed_only=False,
+            parallelism=None,
+            timeout_sec=None,
+            fail_fast=False,
+            coverage=False,
+            coverage_dir=None,
+            confirm_broad_run=None,
+            confirmation_token="some-token",
+        )
+
+        assert result["error"] == "INCOMPLETE_CONFIRMATION"
+        assert "confirm_broad_run" in result["message"]
+
+    @pytest.mark.asyncio
+    async def test_reason_only_rejected(
+        self, mock_session: MagicMock, mock_session_manager: MagicMock
+    ) -> None:
+        """Providing reason without token is rejected."""
+        _ = mock_session  # Fixture dependency for mock_session_manager
+        from codeplane.mcp.tools.testing import register_tools
+
+        mcp = MagicMock()
+        tools: dict[str, Any] = {}
+        mcp.tool = lambda fn: tools.setdefault(fn.__name__, fn) or fn
+
+        app_ctx = MagicMock()
+        app_ctx.session_manager = mock_session_manager
+        app_ctx.test_ops = AsyncMock()
+
+        register_tools(mcp, app_ctx)
+        run_test_targets = tools["run_test_targets"]
+
+        ctx = MagicMock()
+        ctx.session_id = "test-session"
+
+        result = await run_test_targets(
+            ctx,
+            targets=None,
+            affected_by=None,
+            target_filter="tests/",
+            test_filter=None,
+            tags=None,
+            failed_only=False,
+            parallelism=None,
+            timeout_sec=None,
+            fail_fast=False,
+            coverage=False,
+            coverage_dir=None,
+            confirm_broad_run="a valid reason here",
+            confirmation_token=None,
+        )
+
+        assert result["error"] == "INCOMPLETE_CONFIRMATION"
+        assert "confirmation_token" in result["message"]
+
 
 class TestBroadRunSuccessfulConfirmation:
     """Tests for successful broad run confirmation."""
