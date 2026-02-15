@@ -151,11 +151,26 @@ paths: list[str]           # REQUIRED for add/remove/discard (not for "all")
 **{tool_prefix}_run_test_targets**
 ```
 targets: list[str]         # optional - target_ids from discover_test_targets
-target_filter: str         # optional - substring match on target paths
+affected_by: list[str]     # optional - changed file paths for single-call impact testing
+target_filter: str         # optional - substring match (requires confirmation, see below)
 test_filter: str           # optional - filter test NAMES (pytest -k), does NOT filter targets
 coverage: bool             # default false
 coverage_dir: str          # REQUIRED when coverage=true
+confirm_broad_run: str     # required with target_filter alone (min 15 chars)
+confirmation_token: str    # required with target_filter alone (from initial blocked call)
 ```
+
+**RECOMMENDED: Single-call impact-aware testing:**
+```python
+run_test_targets(affected_by=["src/changed.py"])  # discovers + runs affected tests
+```
+
+**Broad test run confirmation:** Using `target_filter` without `targets` or `affected_by`
+requires two-phase confirmation:
+1. First call returns blocked + `confirmation_token`
+2. Retry with `confirmation_token` + `confirm_broad_run` (reason, min 15 chars)
+
+This prevents accidental full test suite runs.
 
 **{tool_prefix}_discover_test_targets**
 ```
