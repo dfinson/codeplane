@@ -10,7 +10,7 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import asdict
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import structlog
 from fastmcp import Context
@@ -115,6 +115,13 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         target: str | None = Field(None, description="Target ref (None = working tree)"),
         paths: list[str] | None = Field(None, description="Limit to specific paths"),
         cursor: str | None = Field(None, description="Pagination cursor"),
+        verbosity: Literal["full", "standard", "minimal"] = Field(
+            "full",
+            description=(
+                "Output detail level: full=everything, standard=omit change_preview, "
+                "minimal=just path/kind/name/change"
+            ),
+        ),
         inline_only: bool = Field(
             False,
             description="If true, use 7.5KB budget for guaranteed inline display in VS Code",
@@ -161,6 +168,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             cursor_offset=structural_offset,
             non_structural_offset=non_structural_offset,
             cache_id=cache_id,
+            verbosity=verbosity,
             inline_only=inline_only,
         )
 
@@ -560,6 +568,7 @@ def _result_to_dict(
     cursor_offset: int = 0,
     non_structural_offset: int = 0,
     cache_id: int | None = None,
+    verbosity: Literal["full", "standard", "minimal"] = "full",
     inline_only: bool = False,
 ) -> dict[str, Any]:
     """Convert SemanticDiffResult to a serializable dict with budget-based pagination.
@@ -568,9 +577,23 @@ def _result_to_dict(
     1. First exhaust structural_changes using the byte budget
     2. Then paginate non_structural_changes with remaining/full budget
     3. Cursor format: "<cache_id>:<structural_offset>:<non_structural_offset>"
+
+    Verbosity levels:
+    - full: Everything (default)
+    - standard: Omit change_preview
+    - minimal: Just path/kind/name/change (no impact, nested_changes, signatures, etc.)
     """
 
     def _change_to_dict(c: StructuralChange) -> dict[str, Any]:
+        # Minimal: just essential fields
+        if verbosity == "minimal":
+            return {
+                "path": c.path,
+                "kind": c.kind,
+                "name": c.name,
+                "change": c.change,
+            }
+
         d: dict[str, Any] = {
             "path": c.path,
             "kind": c.kind,
@@ -619,7 +642,8 @@ def _result_to_dict(
             d["lines_changed"] = c.lines_changed
         if c.delta_tags:
             d["delta_tags"] = c.delta_tags
-        if c.change_preview:
+        # Omit change_preview in standard mode (saves ~50% for body_changed)
+        if c.change_preview and verbosity == "full":
             d["change_preview"] = c.change_preview
         if c.impact:
             impact_d: dict[str, Any] = {}
@@ -642,6 +666,9 @@ def _result_to_dict(
     all_structural = result.structural_changes
     all_non_structural = result.non_structural_changes
 
+    # Only include scope on the first page (saves ~0.6% per continuation page)
+    is_first_page = cursor_offset == 0 and non_structural_offset == 0
+
     # Compute overhead for fixed response fields (summary, scope, agentic_hint, etc.)
     # These are included in every page regardless of array item count.
     # We use a worst-case pagination dict to ensure accurate overhead.
@@ -655,7 +682,7 @@ def _result_to_dict(
         "non_structural_changes": [],
         **(
             {"scope": {k: v for k, v in asdict(result.scope).items() if v is not None}}
-            if result.scope
+            if result.scope and is_first_page
             else {}
         ),
         "agentic_hint": agentic_hint,
@@ -668,9 +695,9 @@ def _result_to_dict(
         },
     }
     overhead = measure_bytes(base_response)
-    # Add buffer for array framing (empty [] becomes [\n...\n])
-    # Each array with items adds ~6 bytes framing vs empty
-    overhead += 20  # safety margin for array framing
+    # Add buffer for array framing and JSON formatting variance
+    # Empty [] becomes [\n...\n] with items, plus general measurement tolerance
+    overhead += 250  # safety margin for array framing + measurement variance
 
     # Paginate structural_changes first, reserving space for overhead
     effective_budget = get_effective_budget(inline_only)
@@ -724,7 +751,7 @@ def _result_to_dict(
         "non_structural_changes": non_structural_items,
         **(
             {"scope": {k: v for k, v in asdict(result.scope).items() if v is not None}}
-            if result.scope
+            if result.scope and is_first_page
             else {}
         ),
         "agentic_hint": agentic_hint,

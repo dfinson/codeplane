@@ -56,19 +56,28 @@ def _summarize_map(file_count: int, sections: list[str], truncated: bool) -> str
     return ", ".join(parts)
 
 
-def _serialize_tree(nodes: list[Any]) -> list[dict[str, Any]]:
-    """Recursively serialize directory tree nodes."""
+def _serialize_tree(nodes: list[Any], *, include_line_counts: bool = True) -> list[dict[str, Any]]:
+    """Recursively serialize directory tree nodes.
+
+    Note: 'name' field is omitted - agents can derive it from path.split('/')[-1].
+    This saves ~8% response size with minimal agentic impact.
+
+    Args:
+        nodes: The tree nodes to serialize.
+        include_line_counts: If False, omit line_count from file entries (standard mode).
+    """
     result: list[dict[str, Any]] = []
     for node in nodes:
         item: dict[str, Any] = {
-            "name": node.name,
             "path": node.path,
             "is_dir": node.is_dir,
         }
         if node.is_dir:
             item["file_count"] = node.file_count
-            item["children"] = _serialize_tree(node.children)
-        else:
+            item["children"] = _serialize_tree(
+                node.children, include_line_counts=include_line_counts
+            )
+        elif include_line_counts:
             item["line_count"] = node.line_count
         result.append(item)
     return result
@@ -462,6 +471,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         respect_gitignore: bool = Field(
             True, description="Honor .gitignore patterns (default: true)"
         ),
+        verbosity: Literal["full", "standard", "minimal"] = Field(
+            "full",
+            description=(
+                "Output detail level: full=tree with line counts, "
+                "standard=tree without line counts, minimal=counts only (no tree)"
+            ),
+        ),
         inline_only: bool = Field(
             False,
             description="If true, use 7.5KB budget for guaranteed inline display in VS Code",
@@ -483,12 +499,28 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         output: dict[str, Any] = {}
 
         if result.structure:
-            output["structure"] = {
-                "root": result.structure.root,
-                "tree": _serialize_tree(result.structure.tree),
-                "file_count": result.structure.file_count,
-                "contexts": result.structure.contexts,
-            }
+            # Verbosity levels for structure:
+            # - full: tree with line counts
+            # - standard: tree without line counts
+            # - minimal: counts only, no tree
+            if verbosity == "minimal":
+                structure_dict: dict[str, Any] = {
+                    "root": result.structure.root,
+                    "file_count": result.structure.file_count,
+                }
+            else:
+                include_line_counts = verbosity == "full"
+                structure_dict = {
+                    "root": result.structure.root,
+                    "tree": _serialize_tree(
+                        result.structure.tree, include_line_counts=include_line_counts
+                    ),
+                    "file_count": result.structure.file_count,
+                }
+            # Only include contexts if non-empty (saves bytes when empty)
+            if result.structure.contexts:
+                structure_dict["contexts"] = result.structure.contexts
+            output["structure"] = structure_dict
 
         if result.languages:
             output["languages"] = [
