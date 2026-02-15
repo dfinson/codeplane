@@ -790,7 +790,41 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         """
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
-        # Fetch data from coordinator
+        effective_budget = get_effective_budget(inline_only)
+        include_line_counts = verbosity == "full"
+
+        # Handle expand cursor for drill-down requests
+        if cursor and cursor.startswith("expand:"):
+            # Parse section from cursor to ensure it's included
+            cursor_parts = cursor.split(":")
+            if len(cursor_parts) >= 2:
+                expand_section = cursor_parts[1]
+                # Map cursor section names to include options
+                section_map = {
+                    "structure": "structure",
+                    "dependencies": "dependencies",
+                    "test_layout": "test_layout",
+                    "entry_points": "entry_points",
+                    "public_api": "public_api",
+                }
+                if expand_section in section_map:
+                    # Fetch only the target section
+                    expand_include = [section_map[expand_section]]
+                    result = await app_ctx.coordinator.map_repo(
+                        include=expand_include,  # type: ignore[arg-type]
+                        depth=depth,
+                        limit=limit,
+                        include_globs=include_globs,
+                        exclude_globs=exclude_globs,
+                        respect_gitignore=respect_gitignore,
+                    )
+                    return await _handle_expand_cursor(
+                        cursor, result, effective_budget, include_line_counts
+                    )
+            # Invalid expand cursor
+            return {"error": "Invalid expand cursor", "cursor": cursor}
+
+        # Fetch data from coordinator for first page
         result = await app_ctx.coordinator.map_repo(
             include=include,
             depth=depth,
@@ -799,15 +833,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             exclude_globs=exclude_globs,
             respect_gitignore=respect_gitignore,
         )
-
-        effective_budget = get_effective_budget(inline_only)
-        include_line_counts = verbosity == "full"
-
-        # Handle expand cursor for drill-down requests
-        if cursor and cursor.startswith("expand:"):
-            return await _handle_expand_cursor(
-                cursor, result, effective_budget, include_line_counts
-            )
 
         # --- First page: Overview + tiered sections ---
 
