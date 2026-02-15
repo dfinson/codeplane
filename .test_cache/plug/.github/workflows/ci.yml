@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    env:
+      MIX_ENV: test
+      PLUG_CRYPTO_2_0: "${{ matrix.PLUG_CRYPTO_2_0 }}"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Earliest-supported Elixir/Erlang pair.
+          - elixir: "1.15"
+            otp: "24"
+            PLUG_CRYPTO_2_0: "false"
+
+          # Latest-supported Elixir/Erlang pair.
+          - elixir: "1.19"
+            otp: "28"
+            lint: lint
+            PLUG_CRYPTO_2_0: "true"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Erlang and Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ matrix.elixir }}
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Ensure mix.lock is up to date
+        run: mix deps.get --check-locked
+        if: ${{ matrix.lint }}
+
+      - name: Ensure that files are formatted
+        run: mix format --check-formatted
+        if: ${{ matrix.lint }}
+
+      - name: Check for unused dependencies
+        run: mix deps.unlock --check-unused
+        if: ${{ matrix.lint }}
+
+      - name: Run tests
+        run: mix test

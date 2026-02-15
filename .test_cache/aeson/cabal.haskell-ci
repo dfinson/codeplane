@@ -1,0 +1,20 @@
+branches: master
+cabal-check: False
+docspec: True
+head-hackage: False
+
+-- due hermes-json depending on attoparsec-iso8601
+install-dependencies: False
+
+-- GADT docs
+haddock: >=8.6
+
+constraint-set ordered-keymap-on
+  constraints: aeson +ordered-keymap
+  tests:       True
+  run-tests:   True
+
+constraint-set ordered-keymap-off
+  constraints: aeson -ordered-keymap
+  tests:       True
+  run-tests:   True

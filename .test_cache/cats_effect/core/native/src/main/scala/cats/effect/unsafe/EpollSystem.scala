@@ -1,0 +1,477 @@
+/*
+ * Copyright 2020-2025 Typelevel
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package cats.effect
+package unsafe
+
+import cats.effect.std.Mutex
+import cats.effect.unsafe.metrics.PollerMetrics
+import cats.syntax.all._
+
+import org.typelevel.scalaccompat.annotation._
+
+import scala.collection.concurrent.TrieMap
+import scala.scalanative.annotation.alwaysinline
+import scala.scalanative.meta.LinktimeInfo
+import scala.scalanative.posix.errno._
+import scala.scalanative.posix.string._
+import scala.scalanative.posix.unistd
+import scala.scalanative.runtime.{Array => _, Throwable => _, _}
+import scala.scalanative.unsafe._
+import scala.scalanative.unsigned._
+
+import java.io.IOException
+
+object EpollSystem extends PollingSystem {
+
+  import epoll._
+  import epollImplicits._
+
+  private[this] final val MaxEvents = 64
+
+  type Api = FileDescriptorPoller
+
+  def close(): Unit = ()
+
+  def makeApi(ctx: PollingContext[Poller]): Api =
+    new FileDescriptorPollerImpl(ctx)
+
+  def makePoller(): Poller = {
+    val fd = epoll_create1(0)
+    if (fd == -1)
+      throw new IOException(fromCString(strerror(errno)))
+    new Poller(fd)
+  }
+
+  def closePoller(poller: Poller): Unit = poller.close()
+
+  def poll(poller: Poller, nanos: Long): PollResult =
+    poller.poll(nanos)
+
+  def processReadyEvents(poller: Poller): Boolean =
+    poller.processReadyEvents()
+
+  def needsPoll(poller: Poller): Boolean = poller.needsPoll()
+
+  def interrupt(targetThread: Thread, targetPoller: Poller): Unit = {
+    targetPoller.interrupt()
+  }
+
+  def metrics(poller: Poller): PollerMetrics = poller.metrics()
+
+  private final class FileDescriptorPollerImpl private[EpollSystem] (
+      ctx: PollingContext[Poller])
+      extends FileDescriptorPoller {
+
+    def registerFileDescriptor(
+        fd: Int,
+        reads: Boolean,
+        writes: Boolean
+    ): Resource[IO, FileDescriptorPollHandle] =
+      Resource {
+        (Mutex[IO], Mutex[IO]).flatMapN { (readMutex, writeMutex) =>
+          IO.async_[(PollHandle, IO[Unit])] { cb =>
+            ctx.accessPoller { epoll =>
+              val handle = new PollHandle(readMutex, writeMutex)
+              epoll.register(fd, reads, writes, handle, cb)
+            }
+          }
+        }
+      }
+
+  }
+
+  private final class PollHandle(
+      readMutex: Mutex[IO],
+      writeMutex: Mutex[IO]
+  ) extends FileDescriptorPollHandle {
+
+    @volatile private[this] var readReadyCounter = 0
+    @volatile private[this] var readCallback: Either[Throwable, Int] => Unit = null
+
+    @volatile private[this] var writeReadyCounter = 0
+    @volatile private[this] var writeCallback: Either[Throwable, Int] => Unit = null
+
+    def notify(events: Int): Unit = {
+      if ((events & EPOLLIN) != 0 || (events & EPOLLHUP) != 0) {
+        val counter = readReadyCounter + 1
+        readReadyCounter = counter
+        val cb = readCallback
+        readCallback = null
+        if (cb ne null) cb(Right(counter))
+      }
+      if ((events & EPOLLOUT) != 0) {
+        val counter = writeReadyCounter + 1
+        writeReadyCounter = counter
+        val cb = writeCallback
+        writeCallback = null
+        if (cb ne null) cb(Right(counter))
+      }
+    }
+
+    def pollReadRec[A, B](a: A)(f: A => IO[Either[A, B]]): IO[B] =
+      readMutex.lock.surround {
+        def go(a: A, before: Int): IO[B] =
+          f(a).flatMap {
+            case Left(a) =>
+              IO(readReadyCounter).flatMap { after =>
+                if (before != after)
+                  // there was a read-ready notification since we started, try again immediately
+                  go(a, after)
+                else
+                  IO.asyncCheckAttempt[Int] { cb =>
+                    IO {
+                      readCallback = cb
+                      // check again before we suspend
+                      val now = readReadyCounter
+                      if (now != before) {
+                        readCallback = null
+                        Right(now)
+                      } else Left(Some(IO(this.readCallback = null)))
+                    }
+                  }.flatMap(go(a, _))
+              }
+            case Right(b) => IO.pure(b)
+          }
+
+        IO(readReadyCounter).flatMap(go(a, _))
+      }
+
+    def pollWriteRec[A, B](a: A)(f: A => IO[Either[A, B]]): IO[B] =
+      writeMutex.lock.surround {
+        def go(a: A, before: Int): IO[B] =
+          f(a).flatMap {
+            case Left(a) =>
+              IO(writeReadyCounter).flatMap { after =>
+                if (before != after)
+                  // there was a write-ready notification since we started, try again immediately
+                  go(a, after)
+                else
+                  IO.asyncCheckAttempt[Int] { cb =>
+                    IO {
+                      writeCallback = cb
+                      // check again before we suspend
+                      val now = writeReadyCounter
+                      if (now != before) {
+                        writeCallback = null
+                        Right(now)
+                      } else Left(Some(IO(this.writeCallback = null)))
+                    }
+                  }.flatMap(go(a, _))
+              }
+            case Right(b) => IO.pure(b)
+          }
+
+        IO(writeReadyCounter).flatMap(go(a, _))
+      }
+
+  }
+
+  final class Poller private[EpollSystem] (epfd: Int) extends PollerMetrics {
+
+    private[this] var totalReadSubmitted = 0L
+    private[this] var totalReadSucceeded = 0L
+    private[this] var totalReadErrored = 0L
+    private[this] var totalReadCanceled = 0L
+    private[this] var readOutstanding = 0
+
+    private[this] var totalWriteSubmitted = 0L
+    private[this] var totalWriteSucceeded = 0L
+    private[this] var totalWriteErrored = 0L
+    private[this] var totalWriteCanceled = 0L
+    private[this] var writeOutstanding = 0
+
+    override def operationsOutstandingCount(): Int = readOutstanding + writeOutstanding
+    override def totalOperationsSubmittedCount(): Long =
+      totalReadSubmitted + totalWriteSubmitted
+    override def totalOperationsSucceededCount(): Long =
+      totalReadSucceeded + totalWriteSucceeded
+    override def totalOperationsErroredCount(): Long = totalReadErrored + totalWriteErrored
+    override def totalOperationsCanceledCount(): Long = totalReadCanceled + totalWriteCanceled
+    override def acceptOperationsOutstandingCount(): Int = 0
+    override def totalAcceptOperationsSubmittedCount(): Long = 0L
+    override def totalAcceptOperationsSucceededCount(): Long = 0L
+    override def totalAcceptOperationsErroredCount(): Long = 0L
+    override def totalAcceptOperationsCanceledCount(): Long = 0L
+    override def connectOperationsOutstandingCount(): Int = 0
+    override def totalConnectOperationsSubmittedCount(): Long = 0L
+    override def totalConnectOperationsSucceededCount(): Long = 0L
+    override def totalConnectOperationsErroredCount(): Long = 0L
+    override def totalConnectOperationsCanceledCount(): Long = 0L
+    override def readOperationsOutstandingCount(): Int = readOutstanding
+    override def totalReadOperationsSubmittedCount(): Long = totalReadSubmitted
+    override def totalReadOperationsSucceededCount(): Long = totalReadSucceeded
+    override def totalReadOperationsErroredCount(): Long = totalReadErrored
+    override def totalReadOperationsCanceledCount(): Long = totalReadCanceled
+    override def writeOperationsOutstandingCount(): Int = writeOutstanding
+    override def totalWriteOperationsSubmittedCount(): Long = totalWriteSubmitted
+    override def totalWriteOperationsSucceededCount(): Long = totalWriteSucceeded
+    override def totalWriteOperationsErroredCount(): Long = totalWriteErrored
+    override def totalWriteOperationsCanceledCount(): Long = totalWriteCanceled
+
+    override def toString: String = "Epoll"
+
+    private[EpollSystem] def metrics(): PollerMetrics = this
+
+    private[this] def incrementOperationCount(reads: Boolean, writes: Boolean): Unit = {
+      if (reads) {
+        totalReadSubmitted += 1
+        readOutstanding += 1
+      }
+      if (writes) {
+        totalWriteSubmitted += 1
+        writeOutstanding += 1
+      }
+    }
+
+    private[this] def handleOperationCompletion(
+        reads: Boolean,
+        writes: Boolean,
+        succeeded: Boolean): Unit = {
+      if (reads) {
+        readOutstanding -= 1
+        if (succeeded) totalReadSucceeded += 1 else totalReadErrored += 1
+      }
+
+      if (writes) {
+        writeOutstanding -= 1
+        if (succeeded) totalWriteSucceeded += 1 else totalWriteErrored += 1
+      }
+    }
+
+    private[this] def handleOperationCanceled(reads: Boolean, writes: Boolean): Unit = {
+      if (reads) {
+        readOutstanding -= 1
+        totalReadCanceled += 1
+      }
+
+      if (writes) {
+        writeOutstanding -= 1
+        totalWriteCanceled += 1
+      }
+    }
+
+    private[this] val handles: TrieMap[PollHandle, Unit] =
+      new TrieMap
+
+    private[this] val eventsArray = new Array[Byte](epoll_eventTag.size.toInt * MaxEvents)
+    @inline private[this] def events = eventsArray.atUnsafe(0).asInstanceOf[Ptr[epoll_event]]
+    private[this] var readyEventCount: Int = 0
+
+    private[this] val interruptFd: Int = {
+      val fd = eventfd.eventfd(0, eventfd.EFD_NONBLOCK | eventfd.EFD_CLOEXEC)
+      if (fd == -1) {
+        throw new IOException(fromCString(strerror(errno)))
+      }
+      val event = stackalloc[Byte](epoll_eventTag.size).asInstanceOf[Ptr[epoll_event]]
+      event.events = (EPOLLET | EPOLLIN).toUInt
+      event.data = null
+      if (epoll_ctl(epfd, EPOLL_CTL_ADD, fd, event) != 0) {
+        unistd.close(fd)
+        throw new IOException(fromCString(strerror(errno)))
+      }
+      fd
+    }
+
+    private[EpollSystem] def close(): Unit = {
+      try {
+        if (unistd.close(interruptFd) != 0)
+          throw new IOException(fromCString(strerror(errno)))
+      } finally {
+        if (unistd.close(epfd) != 0)
+          throw new IOException(fromCString(strerror(errno)))
+      }
+    }
+
+    private[EpollSystem] def poll(timeout: Long): PollResult = {
+
+      val timeoutMillis = if (timeout == -1) -1 else (timeout / 1000000).toInt
+      val rtn =
+        if (timeoutMillis == 0)
+          immediate.epoll_wait(epfd, events, MaxEvents, timeoutMillis)
+        else
+          awaiting.epoll_wait(epfd, events, MaxEvents, timeoutMillis)
+      if (rtn >= 0) {
+        readyEventCount = rtn
+        if (rtn > 0) {
+          if (rtn < MaxEvents) PollResult.Complete else PollResult.Incomplete
+        } else PollResult.Interrupted
+      } else if (errno == EINTR) { // spurious wake-up by signal
+        PollResult.Interrupted
+      } else {
+        throw new IOException(fromCString(strerror(errno)))
+      }
+    }
+
+    private[EpollSystem] def processReadyEvents(): Boolean = {
+      var fibersRescheduled = false
+      var i = 0
+      while (i < readyEventCount) {
+        val event = events + i.toLong
+        val handle = fromPtr(event.data)
+        if (handle ne null) {
+          val eventFlags = event.events.toInt
+
+          val succeded = eventFlags != 0
+          handleOperationCompletion(
+            reads = (eventFlags & EPOLLIN) != 0,
+            writes = (eventFlags & EPOLLOUT) != 0,
+            succeded)
+
+          handle.notify(eventFlags)
+          fibersRescheduled = true
+        } else {
+          val buf = stackalloc[ULong]()
+          if (unistd.read(interruptFd, buf, sizeof[ULong]) == -1) {
+            throw new IOException(fromCString(strerror(errno)))
+          }
+        }
+        i += 1
+      }
+      readyEventCount = 0
+      fibersRescheduled
+    }
+
+    private[EpollSystem] def needsPoll(): Boolean = !handles.isEmpty
+
+    private[EpollSystem] def interrupt(): Unit = {
+      val buf = stackalloc[ULong]()
+      buf(0) = 1.toULong
+      if (unistd.write(this.interruptFd, buf, sizeof[ULong]) == -1) {
+        throw new IOException(fromCString(strerror(errno)))
+      }
+    }
+
+    private[EpollSystem] def register(
+        fd: Int,
+        reads: Boolean,
+        writes: Boolean,
+        handle: PollHandle,
+        cb: Either[Throwable, (PollHandle, IO[Unit])] => Unit
+    ): Unit = {
+      val event = stackalloc[Byte](epoll_eventTag.size).asInstanceOf[Ptr[epoll_event]]
+      event.events =
+        (EPOLLET | (if (reads) EPOLLIN else 0) | (if (writes) EPOLLOUT else 0)).toUInt
+      event.data = toPtr(handle)
+
+      val result =
+        if (epoll_ctl(epfd, EPOLL_CTL_ADD, fd, event) != 0)
+          Left(new IOException(fromCString(strerror(errno))))
+        else {
+          handles.put(handle, ())
+          incrementOperationCount(reads, writes)
+          val remove = IO {
+            handles.remove(handle)
+            handleOperationCanceled(reads, writes)
+            if (epoll_ctl(epfd, EPOLL_CTL_DEL, fd, null) != 0)
+              throw new IOException(fromCString(strerror(errno)))
+          }
+          Right((handle, remove))
+        }
+
+      cb(result)
+    }
+
+    @alwaysinline private[this] def toPtr(handle: PollHandle): Ptr[Byte] =
+      fromRawPtr(Intrinsics.castObjectToRawPtr(handle))
+
+    @alwaysinline private[this] def fromPtr[A](ptr: Ptr[Byte]): PollHandle =
+      Intrinsics.castRawPtrToObject(toRawPtr(ptr)).asInstanceOf[PollHandle]
+  }
+
+  @nowarn212
+  @extern
+  private object epoll {
+
+    final val EPOLL_CTL_ADD = 1
+    final val EPOLL_CTL_DEL = 2
+    final val EPOLL_CTL_MOD = 3
+
+    final val EPOLLIN = 0x001
+    final val EPOLLOUT = 0x004
+    final val EPOLLONESHOT = 1 << 30
+    final val EPOLLET = 1 << 31
+    final val EPOLLHUP = 1 << 4
+
+    type epoll_event
+    type epoll_data_t = Ptr[Byte]
+
+    def epoll_create1(flags: Int): Int = extern
+
+    def epoll_ctl(epfd: Int, op: Int, fd: Int, event: Ptr[epoll_event]): Int = extern
+
+    @extern
+    object awaiting {
+      @blocking
+      def epoll_wait(epfd: Int, events: Ptr[epoll_event], maxevents: Int, timeout: Int): Int =
+        extern
+    }
+
+    @extern
+    object immediate {
+      def epoll_wait(epfd: Int, events: Ptr[epoll_event], maxevents: Int, timeout: Int): Int =
+        extern
+    }
+  }
+
+  private object epollImplicits {
+
+    implicit final class epoll_eventOps(epoll_event: Ptr[epoll_event]) {
+      def events: CUnsignedInt = !epoll_event.asInstanceOf[Ptr[CUnsignedInt]]
+      def events_=(events: CUnsignedInt): Unit =
+        !epoll_event.asInstanceOf[Ptr[CUnsignedInt]] = events
+
+      def data: epoll_data_t = {
+        val offset =
+          if (LinktimeInfo.target.arch == "x86_64")
+            sizeof[CUnsignedInt]
+          else
+            sizeof[Ptr[Byte]]
+        !(epoll_event.asInstanceOf[Ptr[Byte]] + offset).asInstanceOf[Ptr[epoll_data_t]]
+      }
+
+      def data_=(data: epoll_data_t): Unit = {
+        val offset =
+          if (LinktimeInfo.target.arch == "x86_64")
+            sizeof[CUnsignedInt]
+          else
+            sizeof[Ptr[Byte]]
+        !(epoll_event.asInstanceOf[Ptr[Byte]] + offset).asInstanceOf[Ptr[epoll_data_t]] = data
+      }
+    }
+
+    implicit val epoll_eventTag: Tag[epoll_event] =
+      if (LinktimeInfo.target.arch == "x86_64")
+        Tag
+          .materializeCArrayTag[Byte, Nat.Digit2[Nat._1, Nat._2]]
+          .asInstanceOf[Tag[epoll_event]]
+      else
+        Tag
+          .materializeCArrayTag[Byte, Nat.Digit2[Nat._1, Nat._6]]
+          .asInstanceOf[Tag[epoll_event]]
+  }
+
+  @nowarn212
+  @extern // eventfd.h
+  private object eventfd { // TODO: should this be in scala-native?
+
+    final val EFD_CLOEXEC = 0x80000 // TODO: this might be platform-dependent
+    final val EFD_NONBLOCK = 0x00800 // TODO: this might be platform-dependent
+
+    def eventfd(initval: Int, flags: Int): Int =
+      extern
+  }
+}
