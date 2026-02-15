@@ -436,6 +436,15 @@ class TreeSitterParser:
             except ImportError as err:
                 raise ValueError(f"Language not available: {lang_name}") from err
 
+        if lang_name == "ocaml":
+            try:
+                ocaml_module = importlib.import_module("tree_sitter_ocaml")
+                lang = tree_sitter.Language(ocaml_module.language_ocaml())
+                self._languages[lang_name] = lang
+                return lang
+            except ImportError as err:
+                raise ValueError(f"Language not available: {lang_name}") from err
+
         # Standard loading for other languages
         lang_module = self._load_language_module(lang_name)
         if lang_module is None:
