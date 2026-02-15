@@ -51,6 +51,67 @@ This repository uses CodePlane MCP. **You MUST use CodePlane tools instead of te
 
 Terminal fallback is permitted ONLY when no CodePlane tool exists for the operation.
 
+### What CodePlane Provides
+
+CodePlane maintains a **structural index** of your codebase — it tracks every
+definition (functions, classes, variables), every import relationship, and every
+reference. This enables capabilities that terminal commands cannot provide:
+
+- `search(mode="references")` finds all callers of a function via the index, not regex
+- `semantic_diff` classifies changes structurally and computes blast radius
+- `discover_test_targets(affected_by=[...])` traces the import graph to find affected tests
+- `refactor_rename` renames symbols by structural identity, not string matching
+- Agentic hints in responses give you index-derived next-step guidance
+
+Terminal commands (`grep`, `sed`, `git`) work on text. CodePlane works on **code structure**.
+Use structure when available — it's more precise and less error-prone.
+
+### First Steps When Starting a Task
+
+1. `describe` — get repo metadata, language, active branch, index status
+2. `map_repo(include=["structure", "dependencies", "test_layout"])` — understand repo shape
+3. `read_files` on relevant files — understand the code you'll modify
+4. After changes: `lint_check` → `discover_test_targets(affected_by=[...])` → `run_test_targets`
+5. `semantic_diff` — review structural impact before committing
+6. `git_stage_and_commit` — one-step commit with pre-commit hook handling
+
+### Common Workflows
+
+**Implement a feature:**
+1. `describe` → `map_repo` → `search(mode="definitions")` → `read_files`
+2. `write_files` to make changes
+3. `lint_check` → `discover_test_targets(affected_by=[...])` → `run_test_targets`
+4. `semantic_diff` to review blast radius → `git_stage_and_commit`
+
+**Rename a symbol safely:**
+1. `refactor_rename(symbol="OldName", new_name="NewName")` — get preview + refactor_id
+2. If `verification_required`: `refactor_inspect(refactor_id=...)` — review low-certainty matches
+3. `refactor_apply(refactor_id=...)` → `lint_check` → `run_test_targets`
+
+**Investigate a test failure:**
+1. `run_test_targets(target_filter="<failing_test>")` — reproduce
+2. `search(mode="definitions", query="<function>", context="function")` — read source
+3. Fix with `write_files` → `lint_check` → re-run test
+
+**Review changes before commit/PR:**
+1. `git_diff` — raw textual diff
+2. `semantic_diff` — structural changes with blast radius and agentic hints
+3. `discover_test_targets(affected_by=[...])` → `run_test_targets`
+
+### Search Strategy Guide
+
+| Task | Mode | Context | Why |
+|------|------|---------|-----|
+| Find where a function is defined | `definitions` | `function` | Returns the complete function body |
+| Find all callers of a function | `references` | `minimal` | You just need locations, not full code |
+| Find a string/pattern in code | `lexical` | `standard` | Full-text search with surrounding context |
+| Explore a symbol's shape | `symbol` | `class` | Returns enclosing class/module structure |
+| Large codebase grep (many results) | `lexical` | `none` | Minimize response size, paginate if needed |
+
+**`function`/`class` context** returns the enclosing scope body — this is *structural*
+context from the index, not just surrounding lines. It falls back to 25 lines if
+the index doesn't have scope info. This is CodePlane's key advantage over `grep`.
+
 ### Required Tool Mapping
 
 | Operation | REQUIRED Tool | FORBIDDEN Alternative |
@@ -70,6 +131,18 @@ Terminal fallback is permitted ONLY when no CodePlane tool exists for the operat
 | Semantic diff | `{tool_prefix}_semantic_diff` | Manual comparison of git diffs |
 
 ### Critical Parameter Reference
+
+**{tool_prefix}_describe**
+```
+action: "tool"|"error"|"capabilities"|"workflows"|"operations"  # REQUIRED
+name: str              # required when action="tool" - tool name to describe
+code: str              # required when action="error" - error code to look up
+path: str              # optional - filter operations by path
+limit: int             # default 50 - max operations to return
+```
+
+**Introspection tool.** Use to get tool docs, error explanations, list
+capabilities, view workflows, or debug recent operations.
 
 **{tool_prefix}_read_files**
 ```
@@ -120,6 +193,16 @@ include: list[str]         # optional - values: "structure", "languages", "entry
 depth: int                 # default 3
 ```
 
+**When to use each `include` option:**
+- `"structure"` — directory tree, file counts. Use for orientation in unfamiliar repos.
+- `"dependencies"` — package.json/pyproject.toml/requirements analysis. Use before adding deps.
+- `"test_layout"` — test directories, frameworks, config. Use before writing tests.
+- `"entry_points"` — main files, CLI entry points. Use to find where execution starts.
+- `"public_api"` — exported symbols across modules. Use when understanding module interfaces.
+- `"languages"` — language breakdown with line counts. Use to understand polyglot repos.
+
+Prefer targeted `include` lists over requesting everything — reduces response size.
+
 **{tool_prefix}_git_stage_and_commit**
 ```
 message: str               # REQUIRED
@@ -146,6 +229,46 @@ retried once.
 ```
 action: "add"|"remove"|"all"|"discard"  # REQUIRED
 paths: list[str]           # REQUIRED for add/remove/discard (not for "all")
+```
+
+**{tool_prefix}_git_status**
+```
+paths: list[str] | None    # optional - paths to check
+```
+
+**{tool_prefix}_git_diff**
+```
+base: str | None           # optional - base ref for comparison
+target: str | None         # optional - target ref for comparison
+staged: bool               # default false - show staged changes only
+cursor: str | None         # optional - pagination cursor
+```
+
+**{tool_prefix}_git_log**
+```
+ref: str                   # default "HEAD"
+limit: int                 # default 50
+since: str | None          # optional - show commits after date
+until: str | None          # optional - show commits before date
+paths: list[str] | None    # optional - filter by paths
+cursor: str | None         # optional - pagination cursor
+```
+
+**{tool_prefix}_git_push**
+```
+remote: str                # default "origin"
+force: bool                # default false
+```
+
+**{tool_prefix}_git_inspect**
+```
+action: "show"|"blame"     # REQUIRED
+ref: str                   # default "HEAD" - commit ref (for show)
+path: str | None           # required for blame
+start_line: int | None     # optional - for blame range
+end_line: int | None       # optional - for blame range
+cursor: str | None         # optional - pagination cursor
+limit: int                 # default 100 - max lines for blame
 ```
 
 **{tool_prefix}_run_test_targets**
@@ -179,9 +302,16 @@ affected_by: list[str]     # optional - changed file paths for impact-aware filt
 ```
 
 **Impact-aware test selection:** When `affected_by` is provided, uses the structural
-index import graph to return only tests that import the changed modules. Response
-includes `impact` object with confidence tier and match counts. If low-confidence
-matches exist, an `agentic_hint` directs you to `inspect_affected_tests` for review.
+index import graph to return only tests that import the changed modules. This can
+reduce test runtime from minutes to seconds while maintaining confidence. Response
+includes `impact` object with confidence tier and match counts.
+
+Check `impact.confidence`:
+- `complete` with all high-confidence: safe to run as-is
+- `partial` or low-confidence matches: use `inspect_affected_tests` to review uncertainty
+
+If low-confidence matches exist, an `agentic_hint` directs you to
+`inspect_affected_tests` for review.
 
 **{tool_prefix}_inspect_affected_tests**
 ```
@@ -192,19 +322,6 @@ changed_files: list[str]   # REQUIRED - changed file paths to analyze
 confidence levels, changed modules, coverage gaps, and agentic hints. Use this
 to review uncertain matches before deciding which tests to run.
 
-### Impact-Aware Test Workflow
-
-When you've made changes and need to run only affected tests:
-
-1. `discover_test_targets(affected_by=["path/to/changed.py", ...])` — get filtered targets
-2. Check `impact.confidence` in the response:
-   - `complete` with all high-confidence: safe to run as-is
-   - `partial` or low-confidence matches: use `inspect_affected_tests` to review
-3. `run_test_targets(targets=[...])` — run the selected subset
-
-Coverage is automatically scoped to relevant source directories when running
-impact-selected tests.
-
 **{tool_prefix}_semantic_diff**
 ```
 base: str                  # default "HEAD" - git ref or "epoch:N"
@@ -212,14 +329,33 @@ target: str | None         # default None (working tree) - git ref or "epoch:M"
 paths: list[str] | None    # optional - limit to specific file paths
 ```
 
-**Structural change summary from index facts.** Compares definitions between two
-states and classifies changes as added, removed, signature_changed, body_changed,
-or renamed. Includes blast-radius enrichment (reference counts, importing files,
-affected test files) and priority-ordered agentic hints.
+**Why use semantic_diff instead of git_diff:**
+- Classifies each change as `added`, `removed`, `signature_changed`, `body_changed`, or `renamed`
+- Enriches each change with **blast radius**: reference counts, importing files, affected test files
+- Returns `agentic_hint` with priority-ordered next steps (e.g., "3 test files import
+  this changed module — run them")
+- Epoch mode (`base="epoch:N"`, `target="epoch:M"`) compares arbitrary indexed states
 
-Modes:
-- Git mode (default): base/target are git refs
-- Epoch mode: base="epoch:N", target="epoch:M"
+**Always run semantic_diff before committing** to catch unintended impacts. If the
+blast radius includes test files, run those tests before committing.
+
+**{tool_prefix}_lint_check**
+```
+paths: list[str] | None    # optional - paths to lint (default: entire repo)
+tools: list[str] | None    # optional - specific tool IDs to run
+categories: list[str] | None  # optional - "linter", "formatter", "typechecker"
+dry_run: bool              # default false - when true, report without fixing
+```
+
+**Applies auto-fixes by default.** Set `dry_run=true` to only report issues.
+
+**{tool_prefix}_lint_tools**
+```
+language: str | None   # optional - filter by language (e.g., "python")
+category: str | None   # optional - filter: "linter", "formatter", "typechecker"
+```
+
+Lists available linters/formatters and their detection status.
 
 ### Refactor Tools Workflow
 
@@ -235,6 +371,7 @@ symbol: str                # REQUIRED - the symbol NAME only (e.g., "MyClass", "
                            # WRONG: "src/file.py:42:6" - do NOT use path:line:col format
 new_name: str              # REQUIRED - new name for the symbol
 include_comments: bool     # default true - also update comments/docs
+contexts: list[str] | None # optional - limit to specific contexts
 ```
 
 **Certainty levels:**
@@ -250,14 +387,80 @@ include_comments: bool     # default true - also update comments/docs
 - `verification_guidance`: Instructions for reviewing
 - `low_certainty_files`: Files needing inspection
 
-### Response Handling
+**{tool_prefix}_refactor_delete**
+```
+target: str                # REQUIRED - symbol name or file path to delete
+include_comments: bool     # default true - include comment references
+```
 
-CodePlane responses include structured metadata. You must inspect and act on:
-- `agentic_hint`: Direct instructions for your next action
+Returns preview with dependency analysis. Use to safely remove dead code —
+the preview shows what depends on the symbol before deletion.
+
+**{tool_prefix}_refactor_move**
+```
+from_path: str             # REQUIRED - source file path
+to_path: str               # REQUIRED - destination file path
+include_comments: bool     # default true - include comment references
+```
+
+Moves a file/module and updates all imports. Returns preview with `refactor_id`.
+
+**{tool_prefix}_refactor_inspect**
+```
+refactor_id: str           # REQUIRED - ID from rename/move/delete preview
+path: str                  # REQUIRED - file to inspect
+context_lines: int         # default 2 - lines of context around matches
+```
+
+Review low-certainty matches with surrounding context before applying.
+
+**{tool_prefix}_refactor_apply**
+```
+refactor_id: str           # REQUIRED - ID from preview to apply
+```
+
+**{tool_prefix}_refactor_cancel**
+```
+refactor_id: str           # REQUIRED - ID from preview to cancel
+```
+
+### CRITICAL: Follow Agentic Hints
+
+CodePlane responses may include `agentic_hint` — these are **direct instructions
+for your next action**, generated from structural analysis of the repo. They are
+NOT suggestions. Examples:
+
+- "3 test files depend on the changed module. Run: discover_test_targets(affected_by=[...])"
+- "Low-certainty matches found in 2 files. Call refactor_inspect(refactor_id=...) to review"
+- "Coverage gap: tests/unit/test_parser.py does not import the changed module"
+
+**Always read and execute agentic_hint instructions before proceeding to your next step.**
+
+Also check for:
 - `coverage_hint`: Guidance on test coverage expectations
 - `display_to_user`: Content that should be surfaced to the user
 
 Ignoring these hints degrades agent performance and may cause incorrect behavior.
+
+### Common Mistakes (Don't Do These)
+
+- **DON'T** use `refactor_rename` with file:line:col syntax — pass the symbol NAME only
+- **DON'T** use `search(mode="scope")` or `search(mode="text")` — valid modes are lexical|symbol|references|definitions
+- **DON'T** pass `max_results` to search — the parameter is `limit`
+- **DON'T** use `directory` in list_files — the parameter is `path`
+- **DON'T** skip `lint_check` after `write_files` — pre-commit hooks may fix formatting
+- **DON'T** run all tests when `affected_by` can narrow them down
+- **DON'T** use `git_commit` when `git_stage_and_commit` handles staging+hooks for you
+- **DON'T** ignore `agentic_hint` in responses — they contain critical next-step guidance
+
+### Token Efficiency
+
+- Use `context: "none"` or `"minimal"` for exploratory searches (just need locations)
+- Use `context: "function"` or `"class"` only when you need to read the actual code
+- Set lower `limit` values for broad searches; increase only if you didn't find what you need
+- Use `read_files` with `start_line`/`end_line` for targeted reads instead of reading whole files
+- Prefer `map_repo` with specific `include` options instead of requesting everything
+- Use `target_filter` on `run_test_targets` to run subsets instead of all tests
 
 ### Response Size Budget & Pagination
 
