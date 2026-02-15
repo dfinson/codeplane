@@ -527,6 +527,214 @@ class TreeSitterParser:
         else:
             return []
 
+    def extract_declared_module(
+        self, result: "ParseResult", file_path: str
+    ) -> str | None:
+        """Extract the language-level module/package/namespace declaration.
+
+        Returns the dotted module identity as written in source, or None
+        if the language doesn't use declarations or the file lacks one.
+
+        For Go, returns only the short package name (e.g. 'mypackage');
+        the full module path requires go.mod resolution done separately.
+        """
+        lang = result.language
+        root = result.root_node
+        if lang == "java":
+            return self._declared_module_java(root)
+        elif lang == "kotlin":
+            return self._declared_module_kotlin(root)
+        elif lang == "scala":
+            return self._declared_module_scala(root)
+        elif lang == "csharp":
+            return self._declared_module_csharp(root)
+        elif lang == "go":
+            return self._declared_module_go(root)
+        elif lang == "haskell":
+            return self._declared_module_haskell(root)
+        elif lang == "elixir":
+            return self._declared_module_elixir(root)
+        elif lang == "julia":
+            return self._declared_module_julia(root)
+        elif lang == "ruby":
+            return self._declared_module_ruby(root)
+        elif lang == "php":
+            return self._declared_module_php(root)
+        # Python, JS/TS, C/C++, Rust, Swift, Lua, OCaml: no declaration-based module
+        # Python: resolved via path_to_module() (filesystem = module path)
+        # JS/TS, C/C++: resolved via path-based resolution
+        # Rust: resolved via Cargo.toml + directory structure
+        # Swift, Lua, OCaml: unresolvable / not yet supported
+        return None
+
+    # ---- Package/module declaration extractors ----
+
+    def _declared_module_java(self, root: Any) -> str | None:
+        """Extract `package com.example.app;` → 'com.example.app'."""
+        for child in root.children:
+            if child.type == "package_declaration":
+                for sub in child.children:
+                    if sub.type == "scoped_identifier":
+                        parts = self._extract_java_scoped_path(sub)
+                        return ".".join(parts) if parts else None
+                    elif sub.type == "identifier":
+                        text = sub.text.decode("utf-8") if sub.text else None
+                        return text
+        return None
+
+    def _declared_module_kotlin(self, root: Any) -> str | None:
+        """Extract `package com.example.app` → 'com.example.app'."""
+        for child in root.children:
+            if child.type == "package_header":
+                for sub in child.children:
+                    if sub.type == "qualified_identifier":
+                        parts = [
+                            c.text.decode("utf-8")
+                            for c in sub.children
+                            if c.type == "identifier" and c.text
+                        ]
+                        return ".".join(parts) if parts else None
+        return None
+
+    def _declared_module_scala(self, root: Any) -> str | None:
+        """Extract `package cats.effect` → 'cats.effect'."""
+        for child in root.children:
+            if child.type == "package_clause":
+                for sub in child.children:
+                    if sub.type == "package_identifier":
+                        parts = [
+                            c.text.decode("utf-8")
+                            for c in sub.children
+                            if c.type == "identifier" and c.text
+                        ]
+                        return ".".join(parts) if parts else None
+        return None
+
+    def _declared_module_csharp(self, root: Any) -> str | None:
+        """Extract `namespace Foo.Bar { ... }` or `namespace Foo.Bar;`."""
+        for child in root.children:
+            if child.type in (
+                "namespace_declaration",
+                "file_scoped_namespace_declaration",
+            ):
+                for sub in child.children:
+                    if sub.type == "qualified_name":
+                        parts = [
+                            c.text.decode("utf-8")
+                            for c in sub.children
+                            if c.type == "identifier" and c.text
+                        ]
+                        return ".".join(parts) if parts else None
+                    elif sub.type == "identifier":
+                        text = sub.text.decode("utf-8") if sub.text else None
+                        return text
+        return None
+
+    def _declared_module_go(self, root: Any) -> str | None:
+        """Extract `package mypackage` → 'mypackage'.
+
+        Returns only the short name. Full module path (e.g.
+        'github.com/user/repo/pkg') requires go.mod resolution.
+        """
+        for child in root.children:
+            if child.type == "package_clause":
+                for sub in child.children:
+                    if sub.type == "package_identifier":
+                        return sub.text.decode("utf-8") if sub.text else None
+        return None
+
+    def _declared_module_haskell(self, root: Any) -> str | None:
+        """Extract `module Data.List.Utils where` → 'Data.List.Utils'."""
+        for child in root.children:
+            if child.type == "header":
+                for sub in child.children:
+                    if sub.type == "module" and sub.child_count > 0:
+                        # The module node contains module_id parts with dots
+                        parts = [
+                            c.text.decode("utf-8")
+                            for c in sub.children
+                            if c.type == "module_id" and c.text
+                        ]
+                        return ".".join(parts) if parts else None
+        return None
+
+    def _declared_module_elixir(self, root: Any) -> str | None:
+        """Extract `defmodule MyApp.Accounts do ... end` → 'MyApp.Accounts'."""
+
+        def _find_defmodule(node: Any) -> str | None:
+            if (
+                node.type == "call"
+                and node.child_count >= 2
+                and node.children[0].type == "identifier"
+                and node.children[0].text
+                and node.children[0].text.decode("utf-8") == "defmodule"
+            ):
+                # Second child is 'arguments' containing an 'alias' node
+                args = node.children[1]
+                if args.type == "arguments":
+                    for sub in args.children:
+                        if sub.type == "alias" and sub.text:
+                            return sub.text.decode("utf-8")
+                return None
+            for child in node.children:
+                result = _find_defmodule(child)
+                if result is not None:
+                    return result
+            return None
+
+        return _find_defmodule(root)
+
+    def _declared_module_julia(self, root: Any) -> str | None:
+        """Extract `module MyModule ... end` → 'MyModule'."""
+        for child in root.children:
+            if child.type == "module_definition":
+                for sub in child.children:
+                    if sub.type == "identifier" and sub.text:
+                        return sub.text.decode("utf-8")
+        return None
+
+    def _declared_module_ruby(self, root: Any) -> str | None:
+        """Extract nested `module A; module B; end; end` → 'A::B'.
+
+        Walks the module nesting chain and builds the full constant path.
+        """
+        parts: list[str] = []
+
+        def _walk_modules(node: Any) -> None:
+            if node.type == "module":
+                for sub in node.children:
+                    if sub.type == "constant" and sub.text:
+                        parts.append(sub.text.decode("utf-8"))
+                    elif sub.type == "scope_resolution" and sub.text:
+                        # e.g. `module A::B` in a single declaration
+                        parts.append(sub.text.decode("utf-8"))
+                    elif sub.type == "body_statement":
+                        # Check for nested modules
+                        for body_child in sub.children:
+                            if body_child.type == "module":
+                                _walk_modules(body_child)
+                                return  # Only follow the first nesting chain
+
+        _walk_modules(root.children[0] if root.children else root)
+        return "::.".join(parts).replace("::", ".") if parts else None
+
+    def _declared_module_php(self, root: Any) -> str | None:
+        r"""Extract `namespace App\Models;` → 'App.Models'.
+
+        Converts PHP backslash separators to dots for uniform matching.
+        """
+        for child in root.children:
+            if child.type == "namespace_definition":
+                for sub in child.children:
+                    if sub.type == "namespace_name":
+                        parts = [
+                            c.text.decode("utf-8")
+                            for c in sub.children
+                            if c.type == "name" and c.text
+                        ]
+                        return ".".join(parts) if parts else None
+        return None
+
     def extract_dynamic_accesses(self, result: ParseResult) -> list[DynamicAccess]:
         """Extract dynamic access patterns for telemetry.
 

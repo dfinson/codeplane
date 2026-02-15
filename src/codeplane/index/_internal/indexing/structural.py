@@ -117,6 +117,9 @@ class ExtractionResult:
     content_text: str | None = None
     # Symbol names extracted from tree-sitter parse (for Tantivy symbol field)
     symbol_names: list[str] = field(default_factory=list)
+    # Language-level module/package identity (e.g. 'cats.effect' from Scala
+    # `package cats.effect`). Extracted by tree-sitter or config-file parsers.
+    declared_module: str | None = None
 
 
 @dataclass
@@ -201,6 +204,9 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
 
         # Extract imports (for ImportFact)
         imports = parser.extract_imports(parse_result, file_path)
+
+        # Extract declared module/package/namespace identity
+        result.declared_module = parser.extract_declared_module(parse_result, file_path)
 
         # Extract dynamic accesses (for DynamicAccessSite)
         dynamics = parser.extract_dynamic_accesses(parse_result)
@@ -666,6 +672,16 @@ class StructuralIndexer:
         else:
             extractions = self._sequential_extract(file_paths, context_id)
 
+        # Augment declared_module for languages needing config file resolution
+        # (Go → go.mod, Rust → Cargo.toml). Tree-sitter gives Go only the
+        # short package name; the full import path needs go.mod context.
+        self._augment_declared_modules(extractions)
+
+        # Resolve import source_literal → target file path (all languages).
+        # Must run after _augment_declared_modules so Go/Rust declared_modules
+        # are fully resolved.  Populates import_dict["resolved_path"].
+        self._resolve_import_paths(extractions)
+
         # Pre-create all files BEFORE entering bulk_writer to avoid lock contention
         if file_id_map is None:
             file_id_map = {}
@@ -679,6 +695,7 @@ class StructuralIndexer:
                     extraction.line_count,
                     context_id,
                     language_family=extraction.language_family,
+                    declared_module=extraction.declared_module,
                 )
 
         with self.db.bulk_writer() as writer:
@@ -809,6 +826,75 @@ class StructuralIndexer:
         result.duration_ms = int((time.monotonic() - start) * 1000)
         return result
 
+    def _augment_declared_modules(self, extractions: list[ExtractionResult]) -> None:
+        """Post-process declared_module for languages needing config files.
+
+        Go files get only the short package name from tree-sitter (e.g.
+        ``mypackage``).  This method resolves the full import path using
+        ``go.mod`` (e.g. ``github.com/user/repo/pkg/mypackage``).
+
+        Rust files have no source-level package declaration.  The crate
+        name is read from ``Cargo.toml`` and combined with the directory
+        structure (e.g. ``my_crate::auth::token``).
+        """
+        from codeplane.index._internal.indexing.config_resolver import (
+            ConfigResolver,
+        )
+
+        # Collect all file paths for config discovery
+        all_paths = [e.file_path for e in extractions if not e.error]
+        resolver = ConfigResolver(str(self.repo_path), all_paths)
+
+        def _read_file(rel_path: str) -> str | None:
+            full = self.repo_path / rel_path
+            try:
+                return full.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                return None
+
+        for ex in extractions:
+            if ex.error or ex.skipped_no_grammar:
+                continue
+            lang = ex.language
+            if lang in ("go", "rust"):
+                resolved = resolver.resolve(
+                    ex.file_path, lang, ex.declared_module, read_file=_read_file
+                )
+                if resolved:
+                    ex.declared_module = resolved
+
+    def _resolve_import_paths(self, extractions: list[ExtractionResult]) -> None:
+        """Resolve every import's source_literal to a target file path.
+
+        Populates ``import_dict["resolved_path"]`` for each import in each
+        extraction.  Uses the ``ImportPathResolver`` which supports:
+
+        - Python: dotted module → file path via ``module_mapping``
+        - JS/TS: relative path resolution with extension probing
+        - C/C++: relative header resolution
+        - Declaration-based (Java, Kotlin, etc.): match against ``declared_module``
+        """
+        from codeplane.index._internal.indexing.config_resolver import (
+            ImportPathResolver,
+        )
+
+        valid = [e for e in extractions if not e.error and not e.skipped_no_grammar]
+        all_paths = [e.file_path for e in valid]
+        declared_modules: dict[str, str] = {}
+        for e in valid:
+            if e.declared_module:
+                declared_modules[e.file_path] = e.declared_module
+
+        resolver = ImportPathResolver(all_paths, declared_modules)
+
+        for ex in valid:
+            for imp in ex.imports:
+                source_literal = imp.get("source_literal")
+                import_kind = imp.get("import_kind", "")
+                resolved = resolver.resolve(source_literal, import_kind, ex.file_path)
+                if resolved:
+                    imp["resolved_path"] = resolved
+
     def _sequential_extract(self, file_paths: list[str], unit_id: int) -> list[ExtractionResult]:
         """Extract facts sequentially."""
         results = []
@@ -847,6 +933,7 @@ class StructuralIndexer:
         line_count: int,
         _context_id: int,
         language_family: str | None = None,
+        declared_module: str | None = None,
     ) -> int:
         """Ensure file exists in database and return its ID."""
         import time
@@ -858,6 +945,11 @@ class StructuralIndexer:
             existing = session.exec(stmt).first()
 
             if existing and existing.id is not None:
+                # Update declared_module if it changed
+                if existing.declared_module != declared_module:
+                    existing.declared_module = declared_module
+                    session.add(existing)
+                    session.commit()
                 return existing.id
 
             file = File(
@@ -865,6 +957,7 @@ class StructuralIndexer:
                 content_hash=content_hash,
                 line_count=line_count,
                 language_family=language_family,
+                declared_module=declared_module,
                 indexed_at=time.time(),  # Mark as indexed
             )
             session.add(file)

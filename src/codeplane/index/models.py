@@ -440,6 +440,15 @@ class File(SQLModel, table=True):
     line_count: int | None = None
     indexed_at: float | None = None
     last_indexed_epoch: int | None = Field(default=None, index=True)
+    declared_module: str | None = Field(
+        default=None,
+        index=True,
+        description="Language-level module/package identity extracted from source "
+        "(e.g. 'cats.effect' from Scala `package cats.effect`, "
+        "'Newtonsoft.Json' from C# `namespace Newtonsoft.Json`). "
+        "NULL for languages without declarations (JS/TS, C/C++) "
+        "or files missing declarations.",
+    )
 
     # Relationships
     defs: list["DefFact"] = Relationship(back_populates="file")
@@ -682,6 +691,14 @@ class ImportFact(SQLModel, table=True):
     imported_name: str = Field(index=True)  # Name being imported
     alias: str | None = None  # Local alias (NULL if none)
     source_literal: str | None = None  # Import source string literal (if extractable)
+    resolved_path: str | None = Field(
+        default=None,
+        index=True,
+        description="Repo-relative file path this import resolves to. "
+        "Populated at index time by resolving source_literal against "
+        "declared_module values (declaration-based languages) or file "
+        "paths (path-based languages like JS/TS, C/C++, Python).",
+    )
     import_kind: str  # python_import, python_from, js_import, etc.
     certainty: str = Field(default=Certainty.CERTAIN.value)
 

@@ -148,7 +148,9 @@ class TestAffectedTests:
 
     def test_unresolvable_file(self, graph: ImportGraph) -> None:
         result = graph.affected_tests(["README.md"])
-        assert result.confidence.tier == "partial"
+        # With resolved_path fallback, tier is "complete" even when module
+        # mapping fails — the file is still searchable via resolved_path.
+        assert result.confidence.tier == "complete"
         assert result.confidence.resolved_ratio == 0.0
         assert "README.md" in result.confidence.unresolved_files
 
