@@ -1430,10 +1430,10 @@ def _register_resolution_passes() -> None:
     """
     global _RESOLUTION_PASSES
     _RESOLUTION_PASSES = [
-        resolve_namespace_refs,       # C# namespace-using
+        resolve_namespace_refs,  # C# namespace-using
         resolve_same_namespace_refs,  # C# same/parent namespace visibility
-        resolve_star_import_refs,     # Python from X import *
-        resolve_go_dot_import_refs,   # Go import . "pkg"
+        resolve_star_import_refs,  # Python from X import *
+        resolve_go_dot_import_refs,  # Go import . "pkg"
         resolve_rust_glob_import_refs,  # Rust use module::*
         resolve_java_star_import_refs,  # Java import pkg.*
     ]
