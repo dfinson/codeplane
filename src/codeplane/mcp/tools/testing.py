@@ -555,6 +555,12 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             None,
             description="Target IDs from discover to run. Use discover_test_targets first to get IDs.",
         ),
+        affected_by: list[str] | None = Field(
+            None,
+            description="Changed file paths for impact-aware test selection. "
+            "Internally discovers affected tests and runs only those. "
+            "This is the recommended approach for efficient testing after code changes.",
+        ),
         target_filter: str | None = Field(
             None,
             description="Filter which TARGETS to run by path substring (e.g. 'test_excludes' runs "
@@ -579,7 +585,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ),
         confirm_broad_run: str | None = Field(
             None,
-            description="Required when using target_filter without explicit targets. "
+            description="Required when using target_filter without explicit targets or affected_by. "
             "Provide a reason (min 15 chars) explaining why a broad run is needed.",
         ),
         confirmation_token: str | None = Field(
@@ -589,20 +595,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     ) -> dict[str, Any]:
         """Execute tests.
 
-        IMPORTANT: This tool runs ALL discovered targets unless you filter them.
+        RECOMMENDED: Use affected_by for efficient impact-aware testing:
+        - run_test_targets(affected_by=["src/changed_file.py"])
 
-        Recommended workflow for efficiency:
-        1. discover_test_targets(affected_by=["changed_file.py"]) to get impact-filtered targets
-        2. run_test_targets(targets=[...]) with the returned target IDs
+        This automatically discovers and runs only tests affected by the changed files.
 
-        Filtering options:
-        - targets: Specific target_ids from discover_test_targets (recommended)
-        - target_filter: Substring match on target paths (requires two-phase confirmation)
-        - test_filter: Filter test NAMES within targets (does NOT reduce which targets run)
-
-        When using target_filter without explicit targets, a two-phase confirmation is required:
-        1. First call returns a token and blocks
-        2. Second call with confirm_broad_run (reason) + confirmation_token proceeds
+        Alternative workflows:
+        - targets: Explicit target IDs (from discover_test_targets)
+        - target_filter: Substring match (requires two-phase confirmation)
 
         To run a single test file, use: targets=['test:path/to/test_file.py']
 
@@ -611,8 +611,38 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         """
         session = app_ctx.session_manager.get_or_create(ctx.session_id)
 
-        # Two-phase confirmation for broad runs (target_filter without explicit targets)
-        needs_confirmation = target_filter and not targets
+        # If affected_by provided, discover affected tests first
+        effective_targets = targets
+        impact_info: dict[str, Any] | None = None
+        if affected_by:
+            discover_result = await app_ctx.test_ops.discover(paths=None)
+            all_targets = discover_result.targets or []
+
+            # Use import graph to filter to affected targets
+            graph_result = await app_ctx.coordinator.get_affected_test_targets(affected_by)
+            affected_paths = set(graph_result.test_files)
+            filtered = [t for t in all_targets if t.selector in affected_paths]
+            effective_targets = [t.target_id for t in filtered]
+
+            impact_info = {
+                "affected_by": affected_by,
+                "targets_discovered": len(effective_targets),
+                "confidence": graph_result.confidence.tier,
+            }
+            if not effective_targets:
+                return {
+                    "action": "run",
+                    "run_status": {"status": "completed", "run_id": ""},
+                    "impact": impact_info,
+                    "summary": "no affected tests found",
+                    "agentic_hint": (
+                        "No tests import the changed files. Either the changes are untested, "
+                        "or tests use dynamic imports not tracked by the index."
+                    ),
+                }
+
+        # Two-phase confirmation for broad runs (target_filter without targets or affected_by)
+        needs_confirmation = target_filter and not effective_targets and not affected_by
         if needs_confirmation:
             stored_token = session.fingerprints.get(_BROAD_RUN_TOKEN_KEY)
 
@@ -654,9 +684,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "confirmation_token": token,
                     "target_filter": target_filter,
                     "agentic_hint": (
-                        "BLOCKED: Using target_filter without explicit targets runs many tests. "
-                        "Preferred workflow: use discover_test_targets(affected_by=[...]) "
-                        "to get impact-filtered targets, then run_test_targets(targets=[...]). "
+                        "BLOCKED: Using target_filter without impact analysis runs many tests. "
+                        "Preferred: run_test_targets(affected_by=['changed_file.py']) for "
+                        "automatic impact-aware selection. "
                         "If a broad run is truly needed, retry with BOTH: "
                         f"confirmation_token='{token}' AND confirm_broad_run='<reason min 15 chars>'."
                     ),
@@ -676,8 +706,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             }
 
         result = await app_ctx.test_ops.run(
-            targets=targets,
-            target_filter=target_filter,
+            targets=effective_targets,
+            target_filter=target_filter if not affected_by else None,
             test_filter=test_filter,
             tags=tags,
             failed_only=failed_only,
@@ -687,7 +717,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             coverage=coverage,
             coverage_dir=coverage_dir,
         )
-        return _serialize_test_result(result, is_action=True)
+        serialized = _serialize_test_result(result, is_action=True)
+        if impact_info:
+            serialized["impact"] = impact_info
+        return serialized
 
     @mcp.tool
     async def get_test_run_status(
