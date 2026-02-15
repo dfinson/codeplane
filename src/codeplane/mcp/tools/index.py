@@ -484,8 +484,16 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             description="If true, use 7.5KB budget for guaranteed inline display in VS Code",
         ),
     ) -> dict[str, Any]:
-        """Get repository mental model."""
+        """Get repository mental model with budget-based pagination.
+
+        Uses BudgetAccumulator to enforce byte budget. When response exceeds
+        the effective budget (7.5KB for inline_only, 40KB otherwise), pagination
+        cursor is provided for continuation.
+        """
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        # Parse cursor: "<tree_offset>:<ep_offset>:<api_offset>"
+        tree_offset, ep_offset, api_offset = _parse_map_cursor(cursor)
 
         result = await app_ctx.coordinator.map_repo(
             include=include,
@@ -496,35 +504,36 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             respect_gitignore=respect_gitignore,
         )
 
-        # Convert dataclasses to dicts
+        # Compute overhead for fixed response fields
+        base_response: dict[str, Any] = {
+            "structure": {"root": "/" + "x" * 50, "file_count": 99999, "tree": []},
+            "languages": [],
+            "entry_points": [],
+            "dependencies": {},
+            "test_layout": {},
+            "public_api": [],
+            "pagination": {
+                "truncated": True,
+                "next_cursor": "99999:99999:99999",
+                "total_estimate": 99999,
+            },
+            "summary": "X" * 150,
+            "agentic_hint": "X" * 200,
+        }
+        overhead = measure_bytes(base_response)
+        overhead += 300  # Safety margin for JSON formatting variance
+
+        effective_budget = get_effective_budget(inline_only)
+        acc = BudgetAccumulator(budget=effective_budget)
+        acc.reserve(overhead)
+
         output: dict[str, Any] = {}
+        sections_included: list[str] = []
+        budget_exhausted = False
 
-        if result.structure:
-            # Verbosity levels for structure:
-            # - full: tree with line counts
-            # - standard: tree without line counts
-            # - minimal: counts only, no tree
-            if verbosity == "minimal":
-                structure_dict: dict[str, Any] = {
-                    "root": result.structure.root,
-                    "file_count": result.structure.file_count,
-                }
-            else:
-                include_line_counts = verbosity == "full"
-                structure_dict = {
-                    "root": result.structure.root,
-                    "tree": _serialize_tree(
-                        result.structure.tree, include_line_counts=include_line_counts
-                    ),
-                    "file_count": result.structure.file_count,
-                }
-            # Only include contexts if non-empty (saves bytes when empty)
-            if result.structure.contexts:
-                structure_dict["contexts"] = result.structure.contexts
-            output["structure"] = structure_dict
-
+        # --- Fixed/small sections (always fit) ---
         if result.languages:
-            output["languages"] = [
+            lang_list = [
                 {
                     "language": lang.language,
                     "file_count": lang.file_count,
@@ -532,90 +541,161 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 }
                 for lang in result.languages
             ]
-
-        if result.entry_points:
-            output["entry_points"] = [
-                {
-                    "path": ep.path,
-                    "kind": ep.kind,
-                    "name": ep.name,
-                    "qualified_name": ep.qualified_name,
-                }
-                for ep in result.entry_points
-            ]
+            output["languages"] = lang_list
+            sections_included.append("languages")
 
         if result.dependencies:
             output["dependencies"] = {
                 "external_modules": result.dependencies.external_modules,
                 "import_count": result.dependencies.import_count,
             }
+            sections_included.append("dependencies")
 
         if result.test_layout:
             output["test_layout"] = {
                 "test_files": result.test_layout.test_files,
                 "test_count": result.test_layout.test_count,
             }
+            sections_included.append("test_layout")
 
-        if result.public_api:
-            output["public_api"] = [
-                {
+        # --- Structure tree (paginated by top-level entries) ---
+        tree_items: list[dict[str, Any]] = []
+        tree_consumed = 0
+        total_tree_entries = 0
+
+        if result.structure:
+            include_line_counts = verbosity == "full"
+            sections_included.append("structure")
+
+            if verbosity == "minimal":
+                # Minimal: just counts, no tree - always fits
+                output["structure"] = {
+                    "root": result.structure.root,
+                    "file_count": result.structure.file_count,
+                }
+            else:
+                # Full/standard: paginate tree entries
+                all_tree = result.structure.tree
+                total_tree_entries = len(all_tree)
+
+                for node in all_tree[tree_offset:]:
+                    item = _serialize_single_tree_node(node, include_line_counts)
+                    if acc.try_add(item):
+                        tree_items.append(item)
+                        tree_consumed += 1
+                    else:
+                        budget_exhausted = True
+                        break
+
+                output["structure"] = {
+                    "root": result.structure.root,
+                    "tree": tree_items,
+                    "file_count": result.structure.file_count,
+                }
+                if result.structure.contexts:
+                    output["structure"]["contexts"] = result.structure.contexts
+
+        next_tree_offset = tree_offset + tree_consumed
+        tree_complete = next_tree_offset >= total_tree_entries
+
+        # --- Entry points (paginated) ---
+        ep_items: list[dict[str, Any]] = []
+        ep_consumed = 0
+        total_eps = len(result.entry_points) if result.entry_points else 0
+
+        if result.entry_points and tree_complete and not budget_exhausted:
+            sections_included.append("entry_points")
+            for ep in result.entry_points[ep_offset:]:
+                item = {
+                    "path": ep.path,
+                    "kind": ep.kind,
+                    "name": ep.name,
+                    "qualified_name": ep.qualified_name,
+                }
+                if acc.try_add(item):
+                    ep_items.append(item)
+                    ep_consumed += 1
+                else:
+                    budget_exhausted = True
+                    break
+            output["entry_points"] = ep_items
+
+        next_ep_offset = ep_offset + ep_consumed
+        ep_complete = next_ep_offset >= total_eps
+
+        # --- Public API (paginated) ---
+        api_items: list[dict[str, Any]] = []
+        api_consumed = 0
+        total_api = len(result.public_api) if result.public_api else 0
+
+        if result.public_api and tree_complete and ep_complete and not budget_exhausted:
+            sections_included.append("public_api")
+            for sym in result.public_api[api_offset:]:
+                item = {
                     "name": sym.name,
                     "def_uid": sym.def_uid,
                     "certainty": sym.certainty,
                     "evidence": sym.evidence,
                 }
-                for sym in result.public_api
-            ]
+                if acc.try_add(item):
+                    api_items.append(item)
+                    api_consumed += 1
+                else:
+                    budget_exhausted = True
+                    break
+            output["public_api"] = api_items
 
-        # Build sections list for summary
-        sections: list[str] = []
-        if result.structure:
-            sections.append("structure")
-        if result.languages:
-            sections.append("languages")
-        if result.entry_points:
-            sections.append("entry_points")
-        if result.dependencies:
-            sections.append("dependencies")
-        if result.test_layout:
-            sections.append("test_layout")
-        if result.public_api:
-            sections.append("public_api")
+        next_api_offset = api_offset + api_consumed
+        api_complete = next_api_offset >= total_api
+
+        # --- Determine pagination state ---
+        all_complete = tree_complete and ep_complete and api_complete
+        has_more = not all_complete or result.truncated
+
+        # Build cursor for continuation
+        next_cursor: str | None = None
+        if not all_complete:
+            next_cursor = f"{next_tree_offset}:{next_ep_offset}:{next_api_offset}"
 
         file_count = result.structure.file_count if result.structure else 0
-
-        # Add pagination and summary before measuring budget so the
-        # measurement reflects the full serialized response.
-        truncated = result.truncated
         output["pagination"] = make_budget_pagination(
-            has_more=truncated,
-            next_cursor=result.next_cursor,
+            has_more=has_more,
+            next_cursor=next_cursor,
             total_estimate=result.total_estimate,
         )
-        output["summary"] = _summarize_map(file_count, sections, truncated)
+        output["summary"] = _summarize_map(file_count, sections_included, has_more)
 
-        # Budget enforcement: When inline_only=true, enforce 7.5KB cap
-        # If response exceeds budget, mark as truncated and add guidance
-        effective_budget = get_effective_budget(inline_only)
-        response_size = measure_bytes(output)
-
-        if inline_only and response_size > effective_budget:
-            # Response exceeds inline budget - indicate this clearly
-            output["pagination"]["truncated"] = True
-            output["pagination"]["budget_exceeded"] = True
-            size_kb = round(response_size / 1024, 1)
-            budget_kb = round(effective_budget / 1024, 1)
-            output["agentic_hint"] = (
-                f"Response is {size_kb}KB but inline_only=true requested {budget_kb}KB cap. "
-                "To fit within budget: reduce 'limit', use fewer 'include' sections, "
-                "or use verbosity='minimal'. Alternatively, set inline_only=false to "
-                "allow larger responses (VS Code may write to file)."
-            )
-        else:
-            # Standard hint for large responses (over 8KB)
-            maybe_add_large_response_hint(output, response_size)
+        # Add large response hint if over VS Code's inline threshold
+        maybe_add_large_response_hint(output, acc.used_bytes)
 
         return output
+
+    def _parse_map_cursor(cursor: str | None) -> tuple[int, int, int]:
+        """Parse map_repo pagination cursor into (tree_offset, ep_offset, api_offset)."""
+        if cursor is None:
+            return 0, 0, 0
+        parts = cursor.split(":")
+        if len(parts) == 3:
+            try:
+                return int(parts[0]), int(parts[1]), int(parts[2])
+            except ValueError:
+                pass
+        return 0, 0, 0
+
+    def _serialize_single_tree_node(node: Any, include_line_counts: bool) -> dict[str, Any]:
+        """Serialize a single tree node with its children (for budget accumulation)."""
+        item: dict[str, Any] = {
+            "path": node.path,
+            "is_dir": node.is_dir,
+        }
+        if node.is_dir:
+            item["file_count"] = node.file_count
+            item["children"] = _serialize_tree(
+                node.children, include_line_counts=include_line_counts
+            )
+        elif include_line_counts:
+            item["line_count"] = node.line_count
+        return item
 
     # Flatten schemas to remove $ref/$defs for Claude compatibility
     for tool in mcp._tool_manager._tools.values():
