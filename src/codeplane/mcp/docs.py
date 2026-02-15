@@ -793,10 +793,6 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
                 "description": "Rename a function",
                 "params": {"symbol": "old_function_name", "new_name": "new_function_name"},
             },
-            {
-                "description": "Rename using file:line:col locator",
-                "params": {"symbol": "src/utils.py:42:5", "new_name": "better_name"},
-            },
         ],
     ),
     "refactor_move": ToolDocumentation(
