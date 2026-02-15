@@ -514,6 +514,61 @@ class TestIsTestFile:
         assert is_test_file("apps/backend/spec/models/user_spec.rb") is True
         assert is_test_file(Path("a") / "b" / "c" / "d" / "test_deep.py") is True
 
+    # -- Directory-convention test patterns (mocha, maven, etc.) --
+
+    def test_js_test_directory_convention(self) -> None:
+        """JS files in test/ directories are matched (mocha convention)."""
+        assert is_test_file("test/Route.js") is True
+        assert is_test_file("test/acceptance/auth.js") is True
+        assert is_test_file("mylib/test/utils.js") is True
+        assert is_test_file("mylib/test/nested/deep.js") is True
+
+    def test_js_dunder_tests_directory(self) -> None:
+        """JS/TS files in __tests__/ directories are matched (Jest convention)."""
+        assert is_test_file("src/__tests__/App.js") is True
+        assert is_test_file("src/__tests__/nested/Component.ts") is True
+
+    def test_jsx_tsx_test_patterns(self) -> None:
+        """JSX and TSX test/spec patterns are matched."""
+        assert is_test_file("Component.test.jsx") is True
+        assert is_test_file("Component.spec.tsx") is True
+        assert is_test_file("Component.test.tsx") is True
+        assert is_test_file("Component.spec.jsx") is True
+
+    def test_java_src_test_directory(self) -> None:
+        """Java files in src/test/ directories are matched (Maven/Gradle convention)."""
+        assert is_test_file("src/test/java/com/example/SomeHelper.java") is True
+        assert is_test_file("module/src/test/java/Util.java") is True
+        # But not src/main/
+        assert is_test_file("src/main/java/com/example/App.java") is False
+
+    def test_kotlin_src_test_directory(self) -> None:
+        """Kotlin files in src/test/ and src/*Test/ directories are matched."""
+        assert is_test_file("src/test/kotlin/com/example/HelperTest.kt") is True
+        assert is_test_file("module/src/test/kotlin/Util.kt") is True
+        # Multiplatform *Test directories (e.g. jvmTest, commonTest)
+        assert is_test_file("src/jvmTest/kotlin/SomeTest.kt") is True
+        assert is_test_file("module/src/commonTest/kotlin/Util.kt") is True
+        # But not src/main/ or src/commonMain/
+        assert is_test_file("src/main/kotlin/com/example/App.kt") is False
+        assert is_test_file("src/commonMain/kotlin/App.kt") is False
+
+    def test_scala_suite_and_src_test(self) -> None:
+        """Scala *Suite.scala and src/test/ patterns are matched."""
+        assert is_test_file("MemoizeSuite.scala") is True
+        assert is_test_file("src/test/scala/com/example/HelperSpec.scala") is True
+        assert is_test_file("module/src/test/scala/Util.scala") is True
+        # But not src/main/
+        assert is_test_file("src/main/scala/com/example/App.scala") is False
+
+    def test_directory_patterns_dont_false_positive(self) -> None:
+        """Source files near test directories are not matched."""
+        assert is_test_file("src/index.js") is False
+        assert is_test_file("lib/routes/index.js") is False
+        assert is_test_file("src/main/java/App.java") is False
+        assert is_test_file("src/commonMain/kotlin/App.kt") is False
+        assert is_test_file("src/main/scala/App.scala") is False
+
 
 class TestBuildIncludeSpecs:
     """Tests for build_include_specs function."""
