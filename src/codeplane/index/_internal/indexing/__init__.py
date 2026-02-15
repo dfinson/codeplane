@@ -11,10 +11,14 @@ from codeplane.index._internal.indexing.resolver import (
     CrossFileResolutionStats,
     ReferenceResolver,
     ResolutionStats,
+    resolve_go_dot_import_refs,
+    resolve_java_star_import_refs,
     resolve_namespace_refs,
     resolve_references,
+    resolve_rust_glob_import_refs,
     resolve_same_namespace_refs,
     resolve_star_import_refs,
+    run_pass_1_5,
 )
 from codeplane.index._internal.indexing.scope_resolver import (
     ScopeRegion,
@@ -54,6 +58,10 @@ __all__ = [
     "resolve_namespace_refs",
     "resolve_same_namespace_refs",
     "resolve_star_import_refs",
+    "resolve_go_dot_import_refs",
+    "resolve_rust_glob_import_refs",
+    "resolve_java_star_import_refs",
+    "run_pass_1_5",
     # Type-Traced Resolution (Pass 3)
     "TypeTracedResolver",
     "TypeTracedStats",

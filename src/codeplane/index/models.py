@@ -305,6 +305,24 @@ class ImportKind(StrEnum):
     RUST_USE = "rust_use"  # use foo::bar
     CSHARP_USING = "csharp_using"  # using Namespace;
     CSHARP_USING_STATIC = "csharp_using_static"  # using static Namespace.Type;
+    # Tier 1 languages - high impact
+    JAVA_IMPORT = "java_import"  # import com.foo.Bar;
+    JAVA_IMPORT_STATIC = "java_import_static"  # import static com.foo.Bar.baz;
+    # Tier 2 languages - commonly encountered
+    KOTLIN_IMPORT = "kotlin_import"  # import com.foo.Bar
+    RUBY_REQUIRE = "ruby_require"  # require 'foo'
+    RUBY_REQUIRE_RELATIVE = "ruby_require_relative"  # require_relative 'foo'
+    PHP_USE = "php_use"  # use Namespace\Class;
+    SWIFT_IMPORT = "swift_import"  # import Foundation
+    # Tier 3 languages - niche
+    SCALA_IMPORT = "scala_import"  # import com.foo.{Bar, Baz => B}
+    ELIXIR_IMPORT = "elixir_import"  # import Module / alias Module / use Module
+    HASKELL_IMPORT = "haskell_import"  # import Module
+    OCAML_OPEN = "ocaml_open"  # open Module
+    LUA_REQUIRE = "lua_require"  # require("module")
+    JULIA_USING = "julia_using"  # using Module / import Module
+    # Special - textual inclusion
+    C_INCLUDE = "c_include"  # #include <header> / #include "header"
 
 
 class ExportThunkMode(StrEnum):
