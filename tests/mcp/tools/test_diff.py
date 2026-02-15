@@ -18,7 +18,7 @@ from codeplane.index._internal.diff.models import (
     SemanticDiffResult,
     StructuralChange,
 )
-from codeplane.mcp.budget import BudgetAccumulator, measure_bytes
+from codeplane.mcp.budget import measure_bytes
 from codeplane.mcp.tools.diff import (
     _build_agentic_hint,
     _DiffCache,
@@ -199,7 +199,7 @@ class TestPagination:
         # Use a small budget so items overflow (but large enough for overhead + some items)
         monkeypatch.setattr(
             "codeplane.mcp.tools.diff.get_effective_budget",
-            lambda inline_only=False: 1500,
+            lambda _inline_only=False: 1500,
         )
         changes = [_change(name=f"fn_{i}") for i in range(10)]
         d = _result_to_dict(_result(changes), cache_id=1)
@@ -229,7 +229,7 @@ class TestPagination:
         # Use a tiny budget so pagination triggers
         monkeypatch.setattr(
             "codeplane.mcp.tools.diff.get_effective_budget",
-            lambda inline_only=False: 500,
+            lambda _inline_only=False: 500,
         )
         changes = [_change("body_changed", "non_breaking", f"fn_{i}") for i in range(10)]
         d = _result_to_dict(_result(changes))
@@ -250,7 +250,7 @@ class TestNonStructuralPagination:
         # Use a small budget to trigger pagination
         monkeypatch.setattr(
             "codeplane.mcp.tools.diff.get_effective_budget",
-            lambda inline_only=False: 2000,
+            lambda _inline_only=False: 2000,
         )
 
         # 3 structural changes (small) + 10 non_structural (should overflow)
@@ -272,7 +272,7 @@ class TestNonStructuralPagination:
         # Use a small budget so items overflow (but large enough for overhead)
         monkeypatch.setattr(
             "codeplane.mcp.tools.diff.get_effective_budget",
-            lambda inline_only=False: 1500,
+            lambda _inline_only=False: 1500,
         )
 
         # No structural, all non_structural
@@ -315,7 +315,7 @@ class TestNonStructuralPagination:
         # Use a small budget to trigger pagination (but large enough for overhead + some items)
         monkeypatch.setattr(
             "codeplane.mcp.tools.diff.get_effective_budget",
-            lambda inline_only=False: 1500,
+            lambda _inline_only=False: 1500,
         )
 
         # 5 structural + 5 non_structural - should span multiple pages
@@ -747,11 +747,13 @@ class TestResponseSizeBudgetEnforcement:
         TEST_BUDGET = 2000
         monkeypatch.setattr(
             "codeplane.mcp.tools.diff.get_effective_budget",
-            lambda inline_only=False: TEST_BUDGET,
+            lambda _inline_only=False: TEST_BUDGET,
         )
 
         # Create enough changes to require pagination with the smaller budget
-        changes = [_change(name=f"function_{i}_with_very_long_name_for_testing") for i in range(100)]
+        changes = [
+            _change(name=f"function_{i}_with_very_long_name_for_testing") for i in range(100)
+        ]
         d = _result_to_dict(_result(changes), cache_id=1)
 
         # Should be paginated

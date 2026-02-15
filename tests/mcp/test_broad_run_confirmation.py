@@ -88,6 +88,7 @@ class TestBroadRunPhase1Blocking:
         self, mock_session: MagicMock, mock_session_manager: MagicMock
     ) -> None:
         """Using target_filter alone returns a confirmation token."""
+        _ = mock_session  # Fixture dependency for mock_session_manager
         from codeplane.mcp.tools.testing import register_tools
 
         mcp = MagicMock()
@@ -361,6 +362,7 @@ class TestNoConfirmationRequired:
         self, mock_session: MagicMock, mock_session_manager: MagicMock, mock_test_ops: AsyncMock
     ) -> None:
         """Explicit targets don't require confirmation."""
+        _ = mock_session  # Fixture dependency for mock_session_manager
         from codeplane.mcp.tools.testing import register_tools
 
         mcp = MagicMock()
