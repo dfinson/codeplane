@@ -1,20 +1,19 @@
 """Unit tests for multi-language import extraction.
 
-Tests cover import extraction for all languages added in issue #135:
-- Go: import declarations, dot imports
-- Rust: use declarations, glob imports
+Tests cover import extraction for languages added in issue #135:
+- Go: import declarations, dot imports, aliased imports
+- Rust: use declarations, glob imports, aliased use
 - Java: import declarations, star imports, static imports
 - Kotlin: import declarations with aliases
 - Ruby: require/require_relative
 - PHP: use declarations
 - Swift: import declarations
 - Scala: import with selectors and wildcards
-- Elixir: import/alias/use
-- Haskell: import declarations
-- OCaml: open declarations
-- Lua: require calls
-- Julia: using/import
 - C/C++: #include directives
+- Lua: require calls
+
+Note: Import extraction is also implemented for Elixir, Haskell, OCaml, and Julia
+but tests for those languages are not yet included in this module.
 """
 
 from __future__ import annotations
@@ -297,6 +296,7 @@ use Illuminate\\Support\\Facades\\Log;
         imports = parser.extract_imports(result, str(file_path))
 
         # PHP parsing may vary - check basic extraction works
+        assert len(imports) > 0, "Expected at least one import to be extracted"
         assert all(i.import_kind == "php_use" for i in imports)
 
 

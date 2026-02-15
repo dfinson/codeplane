@@ -1137,7 +1137,7 @@ class TreeSitterParser:
             is_dot_import = False
 
             for child in node.children:
-                if child.type == "interpreted_string_literal":
+                if child.type == "interpreted_string_literal" or child.type == "raw_string_literal":
                     path_node = child
                 elif child.type == "package_identifier":
                     alias_node = child
@@ -1148,8 +1148,8 @@ class TreeSitterParser:
                     alias_node = child
 
             if path_node:
-                # Strip quotes from import path
-                path_text = path_node.text.decode("utf-8").strip('"') if path_node.text else ""
+                # Strip quotes (double or backtick) from import path
+                path_text = path_node.text.decode("utf-8").strip('"`') if path_node.text else ""
                 alias_text = None
                 if alias_node and alias_node.text:
                     alias_text = alias_node.text.decode("utf-8")

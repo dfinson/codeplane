@@ -1084,9 +1084,17 @@ def _find_go_package_file(
         import_path: Go import path like "github.com/foo/bar"
         pkg_to_file_id: Mapping from directory paths to file IDs
     """
-    # Try suffix matching - import path may not match repo structure exactly
+    # Try suffix matching on full path segments - import path may not match
+    # repo structure exactly, but we require whole-segment suffix matches to
+    # avoid accidental collisions on common leaf directory names (e.g. "util").
+    import_segments = [seg for seg in import_path.split("/") if seg]
     for pkg_path, fid in pkg_to_file_id.items():
-        if pkg_path.endswith(import_path) or import_path.endswith(pkg_path.split("/")[-1]):
+        pkg_segments = [seg for seg in pkg_path.split("/") if seg]
+        # Check if pkg_path is a suffix of import_path (segment-wise)
+        if (
+            len(pkg_segments) <= len(import_segments)
+            and import_segments[-len(pkg_segments) :] == pkg_segments
+        ):
             return fid
     return None
 
