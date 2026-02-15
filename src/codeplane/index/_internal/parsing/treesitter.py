@@ -585,6 +585,32 @@ class TreeSitterParser:
             symbols = self._extract_go_symbols(result.root_node)
         elif result.language == "rust":
             symbols = self._extract_rust_symbols(result.root_node)
+        elif result.language == "java":
+            symbols = self._extract_java_symbols(result.root_node)
+        elif result.language in ("c_sharp", "csharp"):
+            symbols = self._extract_csharp_symbols(result.root_node)
+        elif result.language == "kotlin":
+            symbols = self._extract_kotlin_symbols(result.root_node)
+        elif result.language == "scala":
+            symbols = self._extract_scala_symbols(result.root_node)
+        elif result.language == "php":
+            symbols = self._extract_php_symbols(result.root_node)
+        elif result.language == "ruby":
+            symbols = self._extract_ruby_symbols(result.root_node)
+        elif result.language in ("c", "cpp"):
+            symbols = self._extract_cpp_symbols(result.root_node)
+        elif result.language == "swift":
+            symbols = self._extract_swift_symbols(result.root_node)
+        elif result.language == "elixir":
+            symbols = self._extract_elixir_symbols(result.root_node)
+        elif result.language == "haskell":
+            symbols = self._extract_haskell_symbols(result.root_node)
+        elif result.language == "ocaml":
+            symbols = self._extract_ocaml_symbols(result.root_node)
+        elif result.language == "julia":
+            symbols = self._extract_julia_symbols(result.root_node)
+        elif result.language == "lua":
+            symbols = self._extract_lua_symbols(result.root_node)
         else:
             # Generic extraction via walking
             symbols = self._extract_generic_symbols(result.root_node, result.language)
@@ -2916,6 +2942,1511 @@ class TreeSitterParser:
                             end_column=node.end_point[1],
                         )
                     )
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return symbols
+
+    def _extract_java_symbols(self, root: Any) -> list[SyntacticSymbol]:
+        """Extract symbols from Java AST."""
+        symbols: list[SyntacticSymbol] = []
+
+        def walk(node: Any, parent_name: str | None = None) -> None:
+            if node.type == "class_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="class",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "method_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="method",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            elif node.type == "interface_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="interface",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "enum_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="enum",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type == "record_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="record",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type == "enum_constant":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="enum_constant",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            elif node.type == "constructor_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="constructor",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            for child in node.children:
+                walk(child, parent_name)
+
+        walk(root)
+        return symbols
+
+    def _extract_csharp_symbols(self, root: Any) -> list[SyntacticSymbol]:
+        """Extract symbols from C# AST."""
+        symbols: list[SyntacticSymbol] = []
+
+        def walk(node: Any, parent_name: str | None = None) -> None:
+            if node.type == "class_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="class",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "struct_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="struct",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "interface_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="interface",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "method_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="method",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            elif node.type == "property_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="property",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            elif node.type == "enum_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="enum",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type in ("record_declaration", "record_struct_declaration"):
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="record",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type == "namespace_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="namespace",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type == "delegate_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="delegate",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            for child in node.children:
+                walk(child, parent_name)
+
+        walk(root)
+        return symbols
+
+    def _extract_kotlin_symbols(self, root: Any) -> list[SyntacticSymbol]:
+        """Extract symbols from Kotlin AST."""
+        symbols: list[SyntacticSymbol] = []
+
+        def walk(node: Any, parent_name: str | None = None) -> None:
+            if node.type == "class_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="class",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "function_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    kind = "method" if parent_name else "function"
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind=kind,
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            elif node.type == "object_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="object",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "property_declaration":
+                # Extract val/var properties
+                for child in node.children:
+                    if child.type == "variable_declaration":
+                        vname = child.child_by_field_name("name")
+                        if vname:
+                            symbols.append(
+                                SyntacticSymbol(
+                                    name=vname.text.decode("utf-8"),
+                                    kind="property",
+                                    line=node.start_point[0] + 1,
+                                    column=node.start_point[1],
+                                    end_line=node.end_point[0] + 1,
+                                    end_column=node.end_point[1],
+                                    parent_name=parent_name,
+                                )
+                            )
+                            break
+
+            elif node.type == "enum_entry":
+                name_text = (
+                    node.text.decode("utf-8").split("(")[0].split("{")[0].strip().rstrip(",")
+                )
+                if name_text:
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name_text,
+                            kind="enum_constant",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            for child in node.children:
+                walk(child, parent_name)
+
+        walk(root)
+        return symbols
+
+    def _extract_scala_symbols(self, root: Any) -> list[SyntacticSymbol]:
+        """Extract symbols from Scala AST."""
+        symbols: list[SyntacticSymbol] = []
+
+        def walk(node: Any, parent_name: str | None = None) -> None:
+            if node.type == "class_definition":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="class",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "trait_definition":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="trait",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "object_definition":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="object",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "function_definition":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    kind = "method" if parent_name else "function"
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind=kind,
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            elif node.type == "val_definition":
+                name_node = node.child_by_field_name("pattern")
+                if name_node and name_node.type == "identifier":
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name_node.text.decode("utf-8"),
+                            kind="val",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            elif node.type == "function_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="method",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            for child in node.children:
+                walk(child, parent_name)
+
+        walk(root)
+        return symbols
+
+    def _extract_php_symbols(self, root: Any) -> list[SyntacticSymbol]:
+        """Extract symbols from PHP AST."""
+        symbols: list[SyntacticSymbol] = []
+
+        def walk(node: Any, parent_name: str | None = None) -> None:
+            if node.type == "class_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="class",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "interface_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="interface",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "trait_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="trait",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "enum_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="enum",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type == "method_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="method",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            elif node.type == "function_definition":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="function",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type == "namespace_definition":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="namespace",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type == "enum_case":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="enum_case",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            for child in node.children:
+                walk(child, parent_name)
+
+        walk(root)
+        return symbols
+
+    def _extract_ruby_symbols(self, root: Any) -> list[SyntacticSymbol]:
+        """Extract symbols from Ruby AST."""
+        symbols: list[SyntacticSymbol] = []
+
+        def walk(node: Any, parent_name: str | None = None) -> None:
+            if node.type == "class":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="class",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "module":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="module",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "method" or node.type == "singleton_method":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="method",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            for child in node.children:
+                walk(child, parent_name)
+
+        walk(root)
+        return symbols
+
+    def _extract_cpp_symbols(self, root: Any) -> list[SyntacticSymbol]:
+        """Extract symbols from C/C++ AST."""
+        symbols: list[SyntacticSymbol] = []
+
+        def _get_declarator_name(node: Any) -> str | None:
+            """Recursively find the identifier in a declarator chain."""
+            if node.type == "identifier":
+                return str(node.text.decode("utf-8"))
+            if node.type == "field_identifier":
+                return str(node.text.decode("utf-8"))
+            name_node = node.child_by_field_name("declarator")
+            if name_node:
+                return _get_declarator_name(name_node)
+            # For qualified identifiers like ns::Foo
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                return str(name_node.text.decode("utf-8"))
+            return None
+
+        def walk(node: Any, parent_name: str | None = None) -> None:
+            if node.type == "class_specifier":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="class",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "struct_specifier":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="struct",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "namespace_definition":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="namespace",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type == "function_definition":
+                declarator = node.child_by_field_name("declarator")
+                if declarator:
+                    name = _get_declarator_name(declarator)
+                    if name:
+                        kind = "method" if parent_name else "function"
+                        symbols.append(
+                            SyntacticSymbol(
+                                name=name,
+                                kind=kind,
+                                line=node.start_point[0] + 1,
+                                column=node.start_point[1],
+                                end_line=node.end_point[0] + 1,
+                                end_column=node.end_point[1],
+                                parent_name=parent_name,
+                            )
+                        )
+
+            elif node.type in ("declaration", "field_declaration"):
+                # Function declarations (not definitions), including class members
+                declarator = node.child_by_field_name("declarator")
+                if not declarator:
+                    # field_declaration may have function_declarator as direct child
+                    for child in node.children:
+                        if child.type == "function_declarator":
+                            declarator = child
+                            break
+                if declarator and declarator.type == "function_declarator":
+                    name = _get_declarator_name(declarator)
+                    if name:
+                        kind = "method" if parent_name else "function"
+                        symbols.append(
+                            SyntacticSymbol(
+                                name=name,
+                                kind=kind,
+                                line=node.start_point[0] + 1,
+                                column=node.start_point[1],
+                                end_line=node.end_point[0] + 1,
+                                end_column=node.end_point[1],
+                                parent_name=parent_name,
+                            )
+                        )
+
+            elif node.type == "enum_specifier":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="enum",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type == "template_declaration":
+                # Walk into the template to find the actual declaration
+                for child in node.children:
+                    if child.type in (
+                        "function_definition",
+                        "class_specifier",
+                        "struct_specifier",
+                        "declaration",
+                    ):
+                        walk(child, parent_name)
+                return
+
+            for child in node.children:
+                walk(child, parent_name)
+
+        walk(root)
+        return symbols
+
+    def _extract_swift_symbols(self, root: Any) -> list[SyntacticSymbol]:
+        """Extract symbols from Swift AST."""
+        symbols: list[SyntacticSymbol] = []
+
+        def walk(node: Any, parent_name: str | None = None) -> None:
+            if node.type == "class_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    # Detect if it's actually a struct or enum
+                    kind = "class"
+                    for child in node.children:
+                        if child.type == "struct":
+                            kind = "struct"
+                            break
+                        if child.type == "enum":
+                            kind = "enum"
+                            break
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind=kind,
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "protocol_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="protocol",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type == "function_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    kind = "method" if parent_name else "function"
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind=kind,
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            elif node.type == "protocol_function_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="method",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            elif node.type == "property_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="property",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            elif node.type == "enum_entry":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="enum_case",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            for child in node.children:
+                walk(child, parent_name)
+
+        walk(root)
+        return symbols
+
+    def _extract_elixir_symbols(self, root: Any) -> list[SyntacticSymbol]:
+        """Extract symbols from Elixir AST.
+
+        Elixir uses macros for all definitions, so everything appears as
+        ``call`` nodes. We match on the call target text (defmodule, def,
+        defp, defmacro, etc.) to identify definitions.
+        """
+        symbols: list[SyntacticSymbol] = []
+
+        def _get_call_target(node: Any) -> str | None:
+            """Get the name of the macro being called (def, defmodule, etc.)."""
+            if node.type != "call":
+                return None
+            for child in node.children:
+                if child.type == "identifier":
+                    return str(child.text.decode("utf-8"))
+                if child.type == "qualified_identifier":
+                    return str(child.text.decode("utf-8"))
+            return None
+
+        def _get_def_name(node: Any) -> str | None:
+            """Extract the function/macro name from a def/defp/defmacro call."""
+            args = node.child_by_field_name("arguments")
+            if args is None:
+                # Walk children looking for a call (name + args) or identifier
+                for child in node.children:
+                    if child.type == "arguments":
+                        args = child
+                        break
+            if args is None:
+                return None
+            for child in args.children:
+                if child.type == "call":
+                    # def foo(x) — the name is the call target
+                    for cc in child.children:
+                        if cc.type == "identifier":
+                            return str(cc.text.decode("utf-8"))
+                if child.type == "identifier":
+                    return str(child.text.decode("utf-8"))
+                if child.type == "binary_operator":
+                    # Pattern like: def foo(x), do: ...
+                    left = child.child_by_field_name("left")
+                    if left:
+                        if left.type == "call":
+                            for cc in left.children:
+                                if cc.type == "identifier":
+                                    return str(cc.text.decode("utf-8"))
+                        elif left.type == "identifier":
+                            return str(left.text.decode("utf-8"))
+            return None
+
+        def _get_module_name(node: Any) -> str | None:
+            """Extract module name from defmodule call."""
+            args = node.child_by_field_name("arguments")
+            if args is None:
+                for child in node.children:
+                    if child.type == "arguments":
+                        args = child
+                        break
+            if args is None:
+                return None
+            for child in args.children:
+                if child.type == "alias":
+                    return str(child.text.decode("utf-8"))
+                if child.type == "identifier":
+                    return str(child.text.decode("utf-8"))
+            return None
+
+        def walk(node: Any, parent_name: str | None = None) -> None:
+            target = _get_call_target(node)
+
+            if target == "defmodule":
+                name = _get_module_name(node)
+                if name:
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="module",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif target in ("def", "defp"):
+                name = _get_def_name(node)
+                if name:
+                    kind = "function" if target == "def" else "private_function"
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind=kind,
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            elif target in ("defmacro", "defmacrop"):
+                name = _get_def_name(node)
+                if name:
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="macro",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            for child in node.children:
+                walk(child, parent_name)
+
+        walk(root)
+        return symbols
+
+    def _extract_haskell_symbols(self, root: Any) -> list[SyntacticSymbol]:
+        """Extract symbols from Haskell AST."""
+        symbols: list[SyntacticSymbol] = []
+
+        def walk(node: Any) -> None:
+            if node.type == "function" and node.parent and node.parent.type == "declarations":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="function",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type == "signature":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="signature",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type == "class":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="class",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type == "data_type":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="data",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type == "newtype":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="newtype",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type == "type_alias":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="type",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type == "data_constructor":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="constructor",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            for child in node.children:
+                walk(child)
+
+        walk(root)
+        return symbols
+
+    def _extract_ocaml_symbols(self, root: Any) -> list[SyntacticSymbol]:
+        """Extract symbols from OCaml AST."""
+        symbols: list[SyntacticSymbol] = []
+
+        def _binding_name(binding_node: Any) -> str | None:
+            """Extract name from a let_binding or module_binding node."""
+            # let_binding: first value_name or value_pattern child
+            for child in binding_node.children:
+                if child.type == "value_name":
+                    # value_name may contain nested structure
+                    txt = child.text.decode("utf-8")
+                    # Remove operator parens like ( + )
+                    return str(txt.strip("() "))
+                if child.type == "value_pattern":
+                    return str(child.text.decode("utf-8"))
+                if child.type == "module_name":
+                    return str(child.text.decode("utf-8"))
+            return None
+
+        def walk(node: Any, parent_name: str | None = None) -> None:
+            if node.type == "module_definition":
+                # Module name is inside module_binding child
+                for child in node.children:
+                    if child.type == "module_binding":
+                        name = _binding_name(child)
+                        if name:
+                            symbols.append(
+                                SyntacticSymbol(
+                                    name=name,
+                                    kind="module",
+                                    line=node.start_point[0] + 1,
+                                    column=node.start_point[1],
+                                    end_line=node.end_point[0] + 1,
+                                    end_column=node.end_point[1],
+                                )
+                            )
+                            for c in node.children:
+                                walk(c, name)
+                            return
+
+            elif node.type == "value_definition":
+                # let binding — name is inside let_binding child
+                for child in node.children:
+                    if child.type == "let_binding":
+                        name = _binding_name(child)
+                        if name:
+                            symbols.append(
+                                SyntacticSymbol(
+                                    name=name,
+                                    kind="function",
+                                    line=node.start_point[0] + 1,
+                                    column=node.start_point[1],
+                                    end_line=node.end_point[0] + 1,
+                                    end_column=node.end_point[1],
+                                    parent_name=parent_name,
+                                )
+                            )
+
+            elif node.type == "type_definition":
+                for child in node.children:
+                    if child.type == "type_binding":
+                        name_node = child.child_by_field_name("name")
+                        if name_node:
+                            name = name_node.text.decode("utf-8")
+                        else:
+                            # Fallback: first type_constructor child
+                            name = None
+                            for cc in child.children:
+                                if cc.type == "type_constructor":
+                                    name = cc.text.decode("utf-8")
+                                    break
+                        if name:
+                            symbols.append(
+                                SyntacticSymbol(
+                                    name=name,
+                                    kind="type",
+                                    line=child.start_point[0] + 1,
+                                    column=child.start_point[1],
+                                    end_line=child.end_point[0] + 1,
+                                    end_column=child.end_point[1],
+                                    parent_name=parent_name,
+                                )
+                            )
+
+            for child in node.children:
+                walk(child, parent_name)
+
+        walk(root)
+        return symbols
+
+    def _extract_julia_symbols(self, root: Any) -> list[SyntacticSymbol]:
+        """Extract symbols from Julia AST."""
+        symbols: list[SyntacticSymbol] = []
+
+        def _type_head_name(node: Any) -> str | None:
+            """Extract type name from a type_head node."""
+            for child in node.children:
+                if child.type == "identifier":
+                    return str(child.text.decode("utf-8"))
+                if child.type == "curly_expression":
+                    # Parametric type: Foo{T}
+                    for cc in child.children:
+                        if cc.type == "identifier":
+                            return str(cc.text.decode("utf-8"))
+            return None
+
+        def _find_call_name(node: Any) -> str | None:
+            """Find identifier in a call_expression."""
+            for child in node.children:
+                if child.type == "identifier":
+                    return str(child.text.decode("utf-8"))
+            return None
+
+        def _extract_julia_func_name(func_node: Any) -> str | None:
+            """Extract function name from various Julia function AST shapes."""
+            for child in func_node.children:
+                if child.type == "signature":
+                    # signature may contain call_expression directly
+                    # or typed_expression wrapping call_expression
+                    for cc in child.children:
+                        if cc.type == "call_expression":
+                            return _find_call_name(cc)
+                        if cc.type == "typed_expression":
+                            for ccc in cc.children:
+                                if ccc.type == "call_expression":
+                                    return _find_call_name(ccc)
+                        if cc.type == "identifier":
+                            return str(cc.text.decode("utf-8"))
+                    return None
+                if child.type == "call_expression":
+                    return _find_call_name(child)
+                if child.type == "identifier":
+                    return str(child.text.decode("utf-8"))
+            return None
+
+        def walk(node: Any, parent_name: str | None = None) -> None:
+            if node.type == "module_definition":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="module",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+                    for child in node.children:
+                        walk(child, name)
+                    return
+
+            elif node.type in ("struct_definition", "mutable_struct"):
+                # Name is inside type_head child
+                for child in node.children:
+                    if child.type == "type_head":
+                        name = _type_head_name(child)
+                        if name:
+                            symbols.append(
+                                SyntacticSymbol(
+                                    name=name,
+                                    kind="struct",
+                                    line=node.start_point[0] + 1,
+                                    column=node.start_point[1],
+                                    end_line=node.end_point[0] + 1,
+                                    end_column=node.end_point[1],
+                                    parent_name=parent_name,
+                                )
+                            )
+                            break
+
+            elif node.type == "function_definition":
+                # Name is inside a call_expression or identifier
+                name = _extract_julia_func_name(node)
+                if name:
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="function",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            elif node.type == "assignment":
+                # Short-form function: f(x) = x + 1
+                for child in node.children:
+                    if child.type == "call_expression":
+                        for cc in child.children:
+                            if cc.type == "identifier":
+                                symbols.append(
+                                    SyntacticSymbol(
+                                        name=cc.text.decode("utf-8"),
+                                        kind="function",
+                                        line=node.start_point[0] + 1,
+                                        column=node.start_point[1],
+                                        end_line=node.end_point[0] + 1,
+                                        end_column=node.end_point[1],
+                                        parent_name=parent_name,
+                                    )
+                                )
+                                break
+                        break
+
+            elif node.type == "abstract_definition":
+                for child in node.children:
+                    if child.type == "type_head":
+                        name = _type_head_name(child)
+                        if name:
+                            symbols.append(
+                                SyntacticSymbol(
+                                    name=name,
+                                    kind="abstract_type",
+                                    line=node.start_point[0] + 1,
+                                    column=node.start_point[1],
+                                    end_line=node.end_point[0] + 1,
+                                    end_column=node.end_point[1],
+                                    parent_name=parent_name,
+                                )
+                            )
+                            break
+
+            elif node.type == "macro_definition":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name_node.text.decode("utf-8"),
+                            kind="macro",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                            parent_name=parent_name,
+                        )
+                    )
+
+            for child in node.children:
+                walk(child, parent_name)
+
+        walk(root)
+        return symbols
+
+    def _extract_lua_symbols(self, root: Any) -> list[SyntacticSymbol]:
+        """Extract symbols from Lua AST."""
+        symbols: list[SyntacticSymbol] = []
+
+        def walk(node: Any) -> None:
+            if node.type == "function_declaration":
+                name_node = node.child_by_field_name("name")
+                if name_node:
+                    name = name_node.text.decode("utf-8")
+                    symbols.append(
+                        SyntacticSymbol(
+                            name=name,
+                            kind="function",
+                            line=node.start_point[0] + 1,
+                            column=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_column=node.end_point[1],
+                        )
+                    )
+
+            elif node.type == "variable_declaration":
+                # local M = {} or local x = ...
+                assign = None
+                for child in node.children:
+                    if child.type == "assignment_statement":
+                        assign = child
+                        break
+                if assign:
+                    name_node = assign.child_by_field_name("name")
+                    if name_node:
+                        name = name_node.text.decode("utf-8")
+                        symbols.append(
+                            SyntacticSymbol(
+                                name=name,
+                                kind="variable",
+                                line=node.start_point[0] + 1,
+                                column=node.start_point[1],
+                                end_line=node.end_point[0] + 1,
+                                end_column=node.end_point[1],
+                            )
+                        )
 
             for child in node.children:
                 walk(child)
