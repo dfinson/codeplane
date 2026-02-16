@@ -671,19 +671,20 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 if parsed >= 0:
                     start_idx = parsed
 
+        # When files_only, a single file can produce many line-level results,
+        # so we fetch a larger batch to ensure enough unique files after dedup.
+        fetch_limit = limit * 10 if files_only else limit
+
         # Symbol search — uses dedicated search_symbols with SQLite + Tantivy fallback
         if mode == "symbol":
             search_response = await app_ctx.coordinator.search_symbols(
                 query,
                 filter_kinds=filter_kinds,
                 filter_paths=filter_paths,
-                limit=limit + 1,
+                limit=fetch_limit + 1,
                 offset=start_idx,
             )
         else:
-            # When files_only, a single file can produce many line-level results,
-            # so we fetch a larger batch to ensure enough unique files after dedup.
-            fetch_limit = limit * 10 if files_only else limit
             search_response = await app_ctx.coordinator.search(
                 query,
                 mode_map[mode],
@@ -696,7 +697,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         # Check if there are more results beyond this page
         all_results = search_response.results
-        fetch_limit = limit * 10 if files_only else limit
         has_more_results = len(all_results) > fetch_limit
         if has_more_results:
             all_results = all_results[:fetch_limit]

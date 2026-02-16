@@ -505,7 +505,10 @@ class LexicalIndex:
         self._ensure_initialized()
 
         path_query = f"path:{pattern}"
-        return self.search(path_query, limit, context_id, context_lines)
+        # Path searches match by file path, not content. Pass empty content_query
+        # so _extract_all_snippets returns a document-level match at line 1
+        # instead of trying (and failing) to match path terms in file content.
+        return self.search(path_query, limit, context_id, context_lines, content_query="")
 
     def _extract_search_terms(self, query: str) -> tuple[list[str], list[str]]:
         """Extract search terms from query, preserving quoted phrases.
@@ -597,19 +600,16 @@ class LexicalIndex:
         query: str,
         context_lines: int = 1,
     ) -> tuple[str, int]:
-        """Extract first snippet matching the query (legacy compatibility).
+        """Extract first snippet matching the query.
 
         Returns:
             Tuple of (snippet_text, line_number) where line_number is 1-indexed.
-            If no match found, returns (first lines, 1).
+            Returns empty snippet at line 1 when no content lines match.
         """
         matches = self._extract_all_snippets(content, query, context_lines)
         if matches:
             return matches[0]
-        # Fallback for legacy callers that expect a result
-        lines = content.split("\n")
-        snippet_size = 1 + 2 * context_lines
-        return ("\n".join(lines[:snippet_size]), 1)
+        return ("", 1)
 
     def clear(self) -> None:
         """Clear all documents from the index."""
