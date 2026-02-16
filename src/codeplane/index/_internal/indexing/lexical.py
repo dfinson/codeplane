@@ -367,13 +367,16 @@ class LexicalIndex:
                     escaped.append(ch)
             return "".join(escaped)
 
+        # Known field prefixes that Tantivy should interpret
+        _known_fields = frozenset(("content", "symbols", "path", "context_id"))
+
         parts: list[str] = []
         for token in tokens:
             if token.startswith('"') and token.endswith('"'):
                 parts.append(token)
             elif token.upper() in ("AND", "OR", "NOT"):
                 parts.append(token.upper())
-            elif ":" in token:
+            elif ":" in token and token.partition(":")[0] in _known_fields:
                 parts.append(token)
             else:
                 parts.append(_escape_token(token))
