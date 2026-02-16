@@ -431,6 +431,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         filter_kinds: list[str] | None = Field(None, description="Filter by symbol kinds"),
         limit: int = Field(default=20, le=SEARCH_MAX_LIMIT, description="Maximum results"),
         cursor: str | None = Field(None, description="Pagination cursor"),
+        files_only: bool = Field(
+            False,
+            description="Return one result per file (like rg -l). Includes match_count per file.",
+        ),
     ) -> dict[str, Any]:
         """Search code, symbols, or references.
 
@@ -659,6 +663,26 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         if has_more_results:
             all_results = all_results[:limit]
 
+        # files_only: deduplicate to one result per file with match_count
+        if files_only and mode in ("lexical", "symbol"):
+            from collections import OrderedDict
+
+            file_groups: OrderedDict[str, tuple[Any, int]] = OrderedDict()
+            for r in all_results:
+                if r.path not in file_groups:
+                    file_groups[r.path] = (r, 1)
+                else:
+                    first, count = file_groups[r.path]
+                    file_groups[r.path] = (first, count + 1)
+            all_results_deduped = []
+            match_counts: dict[str, int] = {}
+            for path, (r, count) in file_groups.items():
+                all_results_deduped.append(r)
+                match_counts[path] = count
+            all_results = all_results_deduped
+        else:
+            match_counts = {}
+
         # Build results with context handling, bounded by budget
         # Reserve overhead for fixed response fields
         base_response = {
@@ -680,6 +704,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "score": r.score,
                 "match_type": "fuzzy",
             }
+            if match_counts and r.path in match_counts:
+                result_item["match_count"] = match_counts[r.path]
 
             # Add content based on context mode
             if context != "none":

@@ -334,22 +334,25 @@ class TestExtractSearchTerms:
 
     def test_simple_term(self, lexical_index: LexicalIndex) -> None:
         """Should extract simple search terms."""
-        terms = lexical_index._extract_search_terms("hello")
+        phrases, terms = lexical_index._extract_search_terms("hello")
+        assert phrases == []
         assert terms == ["hello"]
 
     def test_multiple_terms(self, lexical_index: LexicalIndex) -> None:
         """Should extract multiple space-separated terms."""
-        terms = lexical_index._extract_search_terms("hello world")
+        phrases, terms = lexical_index._extract_search_terms("hello world")
+        assert phrases == []
         assert terms == ["hello", "world"]
 
     def test_field_prefix_extraction(self, lexical_index: LexicalIndex) -> None:
         """Should extract value from field:value syntax."""
-        terms = lexical_index._extract_search_terms("symbols:MyClass")
+        phrases, terms = lexical_index._extract_search_terms("symbols:MyClass")
+        assert phrases == []
         assert terms == ["myclass"]  # lowercased
 
     def test_removes_boolean_operators(self, lexical_index: LexicalIndex) -> None:
         """Should remove AND, OR, NOT operators."""
-        terms = lexical_index._extract_search_terms("foo AND bar OR baz NOT qux")
+        phrases, terms = lexical_index._extract_search_terms("foo AND bar OR baz NOT qux")
         assert "and" not in terms
         assert "or" not in terms
         assert "not" not in terms
@@ -357,13 +360,27 @@ class TestExtractSearchTerms:
         assert "bar" in terms
 
     def test_empty_query(self, lexical_index: LexicalIndex) -> None:
-        """Should return empty list for empty query."""
-        terms = lexical_index._extract_search_terms("")
+        """Should return empty lists for empty query."""
+        phrases, terms = lexical_index._extract_search_terms("")
+        assert phrases == []
         assert terms == []
 
     def test_only_operators(self, lexical_index: LexicalIndex) -> None:
         """Should return empty list when query has only operators."""
-        terms = lexical_index._extract_search_terms("AND OR NOT")
+        phrases, terms = lexical_index._extract_search_terms("AND OR NOT")
+        assert phrases == []
+        assert terms == []
+
+    def test_quoted_phrase(self, lexical_index: LexicalIndex) -> None:
+        """Should extract quoted strings as phrases."""
+        phrases, terms = lexical_index._extract_search_terms('"async def" handler')
+        assert phrases == ["async def"]
+        assert terms == ["handler"]
+
+    def test_multiple_phrases(self, lexical_index: LexicalIndex) -> None:
+        """Should extract multiple quoted phrases."""
+        phrases, terms = lexical_index._extract_search_terms('"foo bar" "baz qux"')
+        assert phrases == ["foo bar", "baz qux"]
         assert terms == []
 
 
@@ -693,3 +710,86 @@ class TestStagedCommitEquivalence:
 
         count = index.commit_staged()
         assert count == 0
+
+
+class TestPhraseMatching:
+    """Tests for phrase query matching (quoted strings)."""
+
+    def test_phrase_matches_exact(self, lexical_index: LexicalIndex) -> None:
+        """Quoted phrase should match only lines with the exact phrase."""
+        content = "async def hello():\n    pass\ndef world():\n    async_thing = 1"
+        lexical_index.add_file("phrase.py", content, context_id=1)
+        lexical_index.reload()
+
+        matches = lexical_index._extract_all_snippets(content, '"async def"', context_lines=0)
+        # Only line 1 has the exact phrase "async def"
+        assert len(matches) == 1
+        assert matches[0][1] == 1
+        assert "async def" in matches[0][0]
+
+    def test_phrase_does_not_match_partial(self, lexical_index: LexicalIndex) -> None:
+        """Quoted phrase should NOT match lines with only one word of the phrase."""
+        content = "def hello():\n    pass\nasync_thing = 1"
+        lexical_index.add_file("no_phrase.py", content, context_id=1)
+        lexical_index.reload()
+
+        matches = lexical_index._extract_all_snippets(content, '"async def"', context_lines=0)
+        # No line has the exact phrase "async def"
+        assert len(matches) == 1
+        assert matches[0][1] == 1  # Fallback to first line
+
+
+class TestAndSemantics:
+    """Tests for AND semantics on unquoted multi-term queries."""
+
+    def test_and_matches_all_terms(self, lexical_index: LexicalIndex) -> None:
+        """Unquoted multi-term query should match lines containing ALL terms."""
+        content = "foo bar baz\nfoo only\nbar only\nfoo and bar together"
+        lexical_index.add_file("and.py", content, context_id=1)
+        lexical_index.reload()
+
+        matches = lexical_index._extract_all_snippets(content, "foo bar", context_lines=0)
+        # Lines 1 and 4 contain both "foo" and "bar"
+        assert len(matches) == 2
+        assert matches[0][1] == 1
+        assert matches[1][1] == 4
+
+    def test_and_does_not_match_single_term(self, lexical_index: LexicalIndex) -> None:
+        """Unquoted multi-term query should NOT match lines with only one term."""
+        content = "foo only here\nbar only here\nsomething else"
+        lexical_index.add_file("and_no.py", content, context_id=1)
+        lexical_index.reload()
+
+        matches = lexical_index._extract_all_snippets(content, "foo bar", context_lines=0)
+        # No line has both terms; should fall back to first lines
+        assert len(matches) == 1
+        assert matches[0][1] == 1  # Fallback
+
+
+class TestDeterministicOrdering:
+    """Tests for deterministic (path, line_number) result ordering."""
+
+    def test_results_ordered_by_path_and_line(self, lexical_index: LexicalIndex) -> None:
+        """Search results should be ordered by (path, line_number)."""
+        # Add files in reverse alphabetical order
+        lexical_index.add_file("z_file.py", "target line 1\ntarget line 2", context_id=1)
+        lexical_index.add_file("a_file.py", "target here\nother\ntarget again", context_id=1)
+        lexical_index.add_file("m_file.py", "target middle", context_id=1)
+        lexical_index.reload()
+
+        results = lexical_index.search("target")
+        paths_and_lines = [(r.file_path, r.line) for r in results.results]
+
+        # Should be sorted by (path, line)
+        assert paths_and_lines == sorted(paths_and_lines)
+        # a_file.py should come first
+        assert results.results[0].file_path == "a_file.py"
+
+    def test_scores_are_constant(self, lexical_index: LexicalIndex) -> None:
+        """All search result scores should be 1.0 (no BM25 ranking)."""
+        lexical_index.add_file("s1.py", "term\nterm\nterm", context_id=1)
+        lexical_index.add_file("s2.py", "term", context_id=1)
+        lexical_index.reload()
+
+        results = lexical_index.search("term")
+        assert all(r.score == 1.0 for r in results.results)

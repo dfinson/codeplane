@@ -10,6 +10,7 @@ a fast Rust-based search engine. It supports:
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -334,6 +335,28 @@ class LexicalIndex:
                 escaped.append(char)
         return "".join(escaped)
 
+    def _build_tantivy_query(self, query: str) -> str:
+        """Build Tantivy query with AND semantics and phrase support.
+
+        - Quoted strings (e.g., ``"async def"``) become Tantivy phrase queries.
+        - Unquoted terms are joined with AND so all must appear.
+        - Field-prefixed terms (e.g., ``symbols:foo``) are passed through.
+        """
+        parts: list[str] = []
+        for token in re.findall(r'"[^"]+"|\\S+', query):
+            if token.startswith('"') and token.endswith('"'):
+                # Phrase query — pass through as-is (Tantivy handles it)
+                parts.append(token)
+            elif ":" in token:
+                # Field-prefixed term — pass through
+                parts.append(token)
+            elif token.upper() in ("AND", "OR", "NOT"):
+                # Boolean operator — pass through
+                parts.append(token)
+            else:
+                parts.append(token)
+        return " AND ".join(parts) if parts else query
+
     def search(
         self,
         query: str,
@@ -345,13 +368,16 @@ class LexicalIndex:
         Search the index.
 
         Args:
-            query: Search query (supports Tantivy query syntax)
+            query: Search query (supports Tantivy query syntax).
+                Quoted strings are treated as exact phrases.
+                Unquoted multi-term queries use AND semantics (all terms must appear).
             limit: Unused — all matches are returned; callers apply limits.
             context_id: Optional context to filter by
             context_lines: Lines of context before/after each match (default 1)
 
         Returns:
-            SearchResults with matching lines (one result per line occurrence).
+            SearchResults with matching lines (one result per line occurrence),
+            ordered by (path, line_number) for deterministic results.
             If query syntax is invalid, falls back to literal search
             and sets fallback_reason.
         """
@@ -361,8 +387,13 @@ class LexicalIndex:
         results = SearchResults()
         fallback_reason: str | None = None
 
-        # Build query
-        full_query = f"({query}) AND context_id:{context_id}" if context_id is not None else query
+        # Build query with AND semantics for unquoted multi-term queries
+        tantivy_query = self._build_tantivy_query(query)
+        full_query = (
+            f"({tantivy_query}) AND context_id:{context_id}"
+            if context_id is not None
+            else tantivy_query
+        )
 
         searcher = self._index.searcher()
 
@@ -389,28 +420,14 @@ class LexicalIndex:
                 results.fallback_reason = "query could not be parsed even after escaping"
                 return results
 
-        # Search - fetch matching documents (files) from Tantivy.
-        # Tantivy returns 1 doc per file; we expand each to N matching lines.
-        # The doc limit scales proportionally with repo size:
-        #   - Repos ≤ FLOOR files: search all docs (no cap)
-        #   - Repos > FLOOR files: cap at max(FLOOR, total // RATIO)
-        # This bounds memory (each doc loads full file content for snippet
-        # extraction) while ensuring small/medium repos are unaffected.
-        from codeplane.config.constants import (
-            TANTIVY_SEARCH_DOC_FLOOR,
-            TANTIVY_SEARCH_DOC_RATIO,
-        )
-
-        total_docs = searcher.num_docs
-        if total_docs <= TANTIVY_SEARCH_DOC_FLOOR:
-            doc_limit = total_docs
-        else:
-            doc_limit = max(TANTIVY_SEARCH_DOC_FLOOR, total_docs // TANTIVY_SEARCH_DOC_RATIO)
-
+        # Fetch ALL matching documents — no BM25 doc limit.
+        # Tantivy's value is the inverted index for fast token→file lookup;
+        # we ignore BM25 scores and use deterministic (path, line) ordering.
+        doc_limit = max(searcher.num_docs, 1)
         top_docs = searcher.search(parsed, limit=doc_limit).hits
         results.total_hits = len(top_docs)
 
-        for score, doc_addr in top_docs:
+        for _score, doc_addr in top_docs:
             doc = searcher.doc(doc_addr)
             file_path = doc.get_first("path") or ""
             content = doc.get_first("content") or ""
@@ -424,10 +441,13 @@ class LexicalIndex:
                         line=line_num,
                         column=0,
                         snippet=snippet,
-                        score=score,
+                        score=1.0,
                         context_id=ctx_id,
                     )
                 )
+
+        # Sort by (path, line_number) for deterministic ordering
+        results.results.sort(key=lambda r: (r.file_path, r.line))
 
         results.query_time_ms = int((time.monotonic() - start) * 1000)
         results.fallback_reason = fallback_reason
@@ -459,19 +479,35 @@ class LexicalIndex:
         path_query = f"path:{pattern}"
         return self.search(path_query, limit, context_id, context_lines)
 
-    def _extract_search_terms(self, query: str) -> list[str]:
-        """Extract actual search terms from query, removing field prefixes and operators."""
+    def _extract_search_terms(self, query: str) -> tuple[list[str], list[str]]:
+        """Extract search terms from query, preserving quoted phrases.
+
+        Returns:
+            Tuple of (phrases, terms) where:
+            - phrases: Exact multi-word phrases from quoted strings
+            - terms: Individual words (all must match — AND semantics)
+        """
+        phrases: list[str] = []
+        terms: list[str] = []
         query_lower = query.lower()
-        search_terms = []
-        for term in query_lower.split():
-            if ":" in term:
-                # Field-prefixed term - take the value part
-                _, value = term.split(":", 1)
+
+        # Extract quoted phrases first
+        for match in re.finditer(r'"([^"]+)"', query_lower):
+            phrases.append(match.group(1))
+
+        # Remove quoted phrases from query to extract remaining terms
+        remaining = re.sub(r'"[^"]+"', "", query_lower)
+
+        for token in remaining.split():
+            if ":" in token:
+                # Field-prefixed term — take the value part
+                _, value = token.split(":", 1)
                 if value:
-                    search_terms.append(value)
-            elif term not in ("and", "or", "not"):
-                search_terms.append(term)
-        return search_terms
+                    terms.append(value)
+            elif token not in ("and", "or", "not"):
+                terms.append(token)
+
+        return phrases, terms
 
     def _extract_all_snippets(
         self,
@@ -480,6 +516,9 @@ class LexicalIndex:
         context_lines: int = 1,
     ) -> list[tuple[str, int]]:
         """Extract snippets for ALL lines matching the query.
+
+        Uses AND semantics: all individual terms must appear in the line.
+        Quoted phrases must appear as exact substrings.
 
         Args:
             content: File content
@@ -491,25 +530,31 @@ class LexicalIndex:
             If no match found, returns [(first lines, 1)].
         """
         lines = content.split("\n")
-        search_terms = self._extract_search_terms(query)
+        phrases, terms = self._extract_search_terms(query)
 
-        if not search_terms:
+        if not phrases and not terms:
             # No valid search terms, return first lines
             snippet_size = 1 + 2 * context_lines
             return [("\n".join(lines[:snippet_size]), 1)]
 
-        # Find ALL lines matching any search term
+        # Find ALL lines where ALL terms AND ALL phrases match
         matches: list[tuple[str, int]] = []
         for i, line in enumerate(lines):
             line_lower = line.lower()
-            for term in search_terms:
-                if term in line_lower:
-                    # Build context snippet
-                    start = max(0, i - context_lines)
-                    end = min(len(lines), i + context_lines + 1)
-                    snippet = "\n".join(lines[start:end])
-                    matches.append((snippet, i + 1))  # 1-indexed
-                    break  # Don't double-count if multiple terms match same line
+
+            # All phrases must appear as exact substrings
+            if not all(phrase in line_lower for phrase in phrases):
+                continue
+
+            # All individual terms must appear (AND semantics)
+            if not all(term in line_lower for term in terms):
+                continue
+
+            # Build context snippet
+            start = max(0, i - context_lines)
+            end = min(len(lines), i + context_lines + 1)
+            snippet = "\n".join(lines[start:end])
+            matches.append((snippet, i + 1))  # 1-indexed
 
         if not matches:
             snippet_size = 1 + 2 * context_lines
