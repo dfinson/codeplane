@@ -558,11 +558,13 @@ class TreeSitterParser:
             return self._declared_module_ruby(root)
         elif lang == "php":
             return self._declared_module_php(root)
-        # Python, JS/TS, C/C++, Rust, Swift, Lua, OCaml: no declaration-based module
+        elif lang == "ocaml":
+            return self._declared_module_ocaml(file_path)
+        # Python, JS/TS, C/C++, Rust, Swift, Lua: no declaration-based module
         # Python: resolved via path_to_module() (filesystem = module path)
         # JS/TS, C/C++: resolved via path-based resolution
         # Rust: resolved via Cargo.toml + directory structure
-        # Swift, Lua, OCaml: unresolvable / not yet supported
+        # Swift, Lua: unresolvable / not yet supported
         return None
 
     # ---- Package/module declaration extractors ----
@@ -758,6 +760,25 @@ class TreeSitterParser:
                         ]
                         return ".".join(parts) if parts else None
         return None
+
+    @staticmethod
+    def _declared_module_ocaml(file_path: str) -> str | None:
+        """Derive OCaml module name from filename.
+
+        OCaml uses filename-based modules: each `.ml`/`.mli` file implicitly
+        defines a module with the stem name, first character capitalized.
+
+        Examples:
+            ``src/array.ml`` → ``Array``
+            ``src/array_intf.mli`` → ``Array_intf``
+        """
+        from pathlib import PurePosixPath
+
+        stem = PurePosixPath(file_path).stem
+        if not stem:
+            return None
+        # OCaml modules are the stem with first character capitalized
+        return stem[0].upper() + stem[1:]
 
     def extract_dynamic_accesses(self, result: ParseResult) -> list[DynamicAccess]:
         """Extract dynamic access patterns for telemetry.
@@ -2044,6 +2065,8 @@ class TreeSitterParser:
         Handles:
         - ``open Module``
         - ``open Module.SubModule``
+        - ``open! Module`` (shadow variant)
+        - ``include Module``
         """
         imports: list[SyntacticImport] = []
 
@@ -2052,7 +2075,9 @@ class TreeSitterParser:
             return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
         def walk(node: Any) -> None:
-            if node.type == "open_statement":
+            # tree-sitter-ocaml uses "open_module" (not "open_statement")
+            # and "include_module" for include directives
+            if node.type in ("open_module", "include_module"):
                 module_name = ""
 
                 for child in node.children:

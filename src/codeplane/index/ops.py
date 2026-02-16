@@ -2456,6 +2456,10 @@ class IndexCoordinator:
                 # Commit all Tantivy changes in one batch (1 commit, not N)
                 self._lexical.commit_staged()
 
+                # Re-resolve any import paths that couldn't resolve during
+                # batched indexing (e.g. batch 1 imports targeting batch 2 files).
+                self._structural.resolve_all_imports()
+
                 # Pass 1.5: DB-backed cross-file resolution (all languages)
                 on_progress(0, 1, files_by_ext, "resolving_cross_file")
                 run_pass_1_5(self.db, None)

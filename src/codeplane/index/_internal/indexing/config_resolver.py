@@ -318,27 +318,70 @@ class ImportPathResolver:
 
         # Dispatch by import_kind
         if import_kind in ("python_import", "python_from"):
-            return self._resolve_python(source_literal)
+            return self._resolve_python(source_literal, importer_path)
         elif import_kind in ("js_import", "js_require", "js_dynamic_import"):
             return self._resolve_js(source_literal, importer_path)
         elif import_kind == "c_include":
             return self._resolve_c(source_literal, importer_path)
+        elif import_kind == "lua_require":
+            return self._resolve_lua(source_literal, importer_path)
         else:
             # All other languages: declaration-based resolution
             return self._resolve_declaration_based(source_literal, import_kind, importer_path)
 
     # ----- Python -----
 
-    def _resolve_python(self, source_literal: str) -> str | None:
+    def _resolve_python(self, source_literal: str, importer_path: str) -> str | None:
         """Resolve Python dotted import to file path.
 
-        e.g. 'codeplane.refactor.ops' → 'src/codeplane/refactor/ops.py'
+        Handles both absolute imports (e.g. 'attr._make') and relative
+        imports (e.g. '._make', '..utils').  Relative imports start with
+        one or more dots; we resolve them against the importer's package.
         """
         from codeplane.index._internal.indexing.module_mapping import (
             module_to_candidate_paths,
+            path_to_module,
         )
 
-        for candidate in module_to_candidate_paths(source_literal):
+        resolved_literal = source_literal
+
+        # Handle relative imports: leading dots indicate parent packages
+        if source_literal.startswith("."):
+            importer_module = path_to_module(importer_path)
+            if importer_module:
+                # Count the dots to determine how many levels up
+                stripped = source_literal.lstrip(".")
+                dot_count = len(source_literal) - len(stripped)
+
+                # Split importer's module into parts.
+                # For __init__.py, path_to_module returns the package name
+                # (e.g. 'src.attr'), so the module IS the package.
+                # For regular files, we drop the last part to get the package.
+                parts = importer_module.split(".")
+                is_init = importer_path.endswith("__init__.py")
+                if is_init:
+                    package_parts = parts  # __init__.py IS the package
+                else:
+                    package_parts = parts[:-1]  # drop file module
+
+                # Go up (dot_count - 1) additional levels
+                levels_up = dot_count - 1
+                if levels_up > 0:
+                    package_parts = package_parts[:-levels_up] if levels_up < len(package_parts) else []
+
+                if package_parts:
+                    if stripped:
+                        resolved_literal = ".".join(package_parts) + "." + stripped
+                    else:
+                        resolved_literal = ".".join(package_parts)
+                elif stripped:
+                    resolved_literal = stripped
+                else:
+                    return None
+            else:
+                return None
+
+        for candidate in module_to_candidate_paths(resolved_literal):
             if candidate in self._python_module_to_path:
                 return self._python_module_to_path[candidate]
         return None
@@ -351,6 +394,7 @@ class ImportPathResolver:
         Handles:
         - Relative: './utils' → probe extensions + /index variants
         - Bare specifiers: 'react' → skip (external package)
+        - Extension remapping: './foo.js' → './foo.ts' (TypeScript convention)
         """
         if not source_literal.startswith("."):
             # Bare specifier (npm package) — cannot resolve to repo file
@@ -364,15 +408,54 @@ class ImportPathResolver:
         if resolved in self._all_paths:
             return resolved
 
-        # 2. Probe extensions
+        # 2. Extension remapping: TypeScript conventionally imports .ts files
+        #    with .js extension (e.g. import './foo.js' → file is ./foo.ts).
+        #    Strip known JS extensions and re-probe with all extensions.
+        stem = resolved
+        for js_ext in (".js", ".jsx", ".mjs"):
+            if resolved.endswith(js_ext):
+                stem = resolved[: -len(js_ext)]
+                break
+
+        # 3. Probe extensions (on extensionless or stripped stem)
         for ext in _JS_EXTENSIONS:
-            candidate = resolved + ext
+            candidate = stem + ext
             if candidate in self._all_paths:
                 return candidate
 
-        # 3. Probe as directory with index file
+        # 4. Probe as directory with index file
         for idx in _JS_INDEX_NAMES:
             candidate = resolved + idx
+            if candidate in self._all_paths:
+                return candidate
+
+        return None
+
+    # ----- Lua require() path resolution -----
+
+    def _resolve_lua(self, source_literal: str, importer_path: str) -> str | None:
+        """Resolve Lua require() module to file path.
+
+        Lua's require("foo.bar.baz") replaces dots with path separators
+        and searches package.path for a matching .lua file or init.lua.
+
+        Strategy:
+        1. Replace dots with '/' to get a relative path
+        2. Probe for path.lua and path/init.lua
+        3. Also probe under common source directories (src/, lib/)
+        """
+        # Convert dot-separated module name to path
+        rel_path = source_literal.replace(".", "/")
+
+        # Probe candidates: direct, then under common source directories
+        prefixes = ("", "src/", "lib/", "lua/")
+        for prefix in prefixes:
+            # Try as .lua file
+            candidate = prefix + rel_path + ".lua"
+            if candidate in self._all_paths:
+                return candidate
+            # Try as directory with init.lua
+            candidate = prefix + rel_path + "/init.lua"
             if candidate in self._all_paths:
                 return candidate
 
@@ -384,8 +467,9 @@ class ImportPathResolver:
         """Resolve C/C++ #include to file path.
 
         Handles:
-        - Quoted includes: "header.h" → resolve relative to importer
-        - System includes: <stdio.h> → skip (system header)
+        - Relative to importer directory
+        - Repo-root-relative
+        - Common include directories: include/, src/, third_party/
         """
         importer_dir = str(PurePosixPath(importer_path).parent)
         resolved = _normalize_path(importer_dir + "/" + source_literal)
@@ -397,6 +481,12 @@ class ImportPathResolver:
         # Try from repo root (for project-root-relative includes)
         if source_literal in self._all_paths:
             return source_literal
+
+        # Probe common include directories
+        for prefix in ("include", "src", "lib", "third_party"):
+            candidate = prefix + "/" + source_literal
+            if candidate in self._all_paths:
+                return candidate
 
         return None
 
