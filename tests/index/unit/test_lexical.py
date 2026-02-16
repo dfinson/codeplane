@@ -344,11 +344,11 @@ class TestExtractSearchTerms:
         assert phrases == []
         assert terms == ["hello", "world"]
 
-    def test_field_prefix_extraction(self, lexical_index: LexicalIndex) -> None:
-        """Should extract value from field:value syntax."""
+    def test_field_prefix_excluded(self, lexical_index: LexicalIndex) -> None:
+        """Should exclude field-prefixed terms (they match Tantivy fields, not content)."""
         phrases, terms = lexical_index._extract_search_terms("symbols:MyClass")
         assert phrases == []
-        assert terms == ["myclass"]  # lowercased
+        assert terms == []  # field-prefixed terms are excluded from content matching
 
     def test_removes_boolean_operators(self, lexical_index: LexicalIndex) -> None:
         """Should remove AND, OR, NOT operators."""
@@ -484,12 +484,11 @@ class TestExtractAllSnippets:
         assert "line 5" in snippet
         assert "line 6" in snippet
 
-    def test_no_match_returns_first_lines(self, lexical_index: LexicalIndex) -> None:
-        """Should return first lines when no match found."""
+    def test_no_match_returns_empty(self, lexical_index: LexicalIndex) -> None:
+        """Should return empty list when no match found."""
         content = "line 1\nline 2\nline 3\nline 4\nline 5"
         matches = lexical_index._extract_all_snippets(content, "nonexistent")
-        assert len(matches) == 1
-        assert matches[0][1] == 1  # line 1
+        assert len(matches) == 0
 
     def test_case_insensitive_matching(self, lexical_index: LexicalIndex) -> None:
         """Should match case-insensitively."""
@@ -785,9 +784,8 @@ class TestPhraseMatching:
         lexical_index.reload()
 
         matches = lexical_index._extract_all_snippets(content, '"async def"', context_lines=0)
-        # No line has the exact phrase "async def"
-        assert len(matches) == 1
-        assert matches[0][1] == 1  # Fallback to first line
+        # No line has the exact phrase "async def" — should return empty
+        assert len(matches) == 0
 
 
 class TestAndSemantics:
@@ -812,9 +810,8 @@ class TestAndSemantics:
         lexical_index.reload()
 
         matches = lexical_index._extract_all_snippets(content, "foo bar", context_lines=0)
-        # No line has both terms; should fall back to first lines
-        assert len(matches) == 1
-        assert matches[0][1] == 1  # Fallback
+        # No line has both terms — should return empty
+        assert len(matches) == 0
 
 
 class TestDeterministicOrdering:

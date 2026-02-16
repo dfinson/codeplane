@@ -646,11 +646,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 offset=start_idx,
             )
         else:
-            # Lexical search - fetch limit+1 to detect has_more
+            # When files_only, a single file can produce many line-level results,
+            # so we fetch a larger batch to ensure enough unique files after dedup.
+            fetch_limit = limit * 10 if files_only else limit
             search_response = await app_ctx.coordinator.search(
                 query,
                 mode_map[mode],
-                limit=limit + 1,
+                limit=fetch_limit + 1,
                 offset=start_idx,
                 context_lines=effective_lines if not is_structural else 1,
                 filter_languages=filter_languages,
@@ -659,9 +661,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         # Check if there are more results beyond this page
         all_results = search_response.results
-        has_more_results = len(all_results) > limit
+        fetch_limit = limit * 10 if files_only else limit
+        has_more_results = len(all_results) > fetch_limit
         if has_more_results:
-            all_results = all_results[:limit]
+            all_results = all_results[:fetch_limit]
 
         # Track how many raw (pre-dedup) results were consumed for cursor math
         raw_results_consumed = len(all_results)
@@ -680,9 +683,24 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             for path, (r, count) in file_groups.items():
                 all_results_deduped.append(r)
                 match_counts[path] = count
+
+            # Cap to requested limit; track raw results consumed up to that point
+            if len(all_results_deduped) > limit:
+                has_more_results = True
+                all_results_deduped = all_results_deduped[:limit]
+                # Recount raw results consumed: sum match_counts for kept files only
+                kept_paths = {r.path for r in all_results_deduped}
+                raw_results_consumed = sum(
+                    count for path, count in match_counts.items() if path in kept_paths
+                )
+                match_counts = {p: c for p, c in match_counts.items() if p in kept_paths}
             all_results = all_results_deduped
         else:
             match_counts = {}
+            # For non-files_only, apply original limit
+            if len(all_results) > limit:
+                has_more_results = True
+                all_results = all_results[:limit]
 
         # Build results with context handling, bounded by budget
         # Reserve overhead for fixed response fields

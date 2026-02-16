@@ -502,6 +502,10 @@ class LexicalIndex:
     def _extract_search_terms(self, query: str) -> tuple[list[str], list[str]]:
         """Extract search terms from query, preserving quoted phrases.
 
+        Only extracts terms that should be matched against line content.
+        Field-prefixed terms (e.g., ``path:foo``, ``symbols:bar``) are
+        excluded because they match Tantivy index fields, not file content.
+
         Returns:
             Tuple of (phrases, terms) where:
             - phrases: Exact multi-word phrases from quoted strings
@@ -520,10 +524,9 @@ class LexicalIndex:
 
         for token in remaining.split():
             if ":" in token:
-                # Field-prefixed term — take the value part
-                _, value = token.split(":", 1)
-                if value:
-                    terms.append(value)
+                # Field-prefixed term (path:, symbols:, context_id:) —
+                # these match Tantivy fields, not line content, so skip them.
+                continue
             elif token not in ("and", "or", "not"):
                 terms.append(token)
 
@@ -547,13 +550,15 @@ class LexicalIndex:
 
         Returns:
             List of (snippet_text, line_number) tuples where line_number is 1-indexed.
-            If no match found, returns [(first lines, 1)].
+            Returns empty list when no lines match (caller should skip the document).
         """
         lines = content.split("\n")
         phrases, terms = self._extract_search_terms(query)
 
         if not phrases and not terms:
-            # No valid search terms, return first lines
+            # No content-level search terms (e.g., field-only query like path:foo).
+            # Tantivy matched this document by a non-content field, so return
+            # a document-level match at line 1.
             snippet_size = 1 + 2 * context_lines
             return [("\n".join(lines[:snippet_size]), 1)]
 
@@ -576,10 +581,6 @@ class LexicalIndex:
             snippet = "\n".join(lines[start:end])
             matches.append((snippet, i + 1))  # 1-indexed
 
-        if not matches:
-            snippet_size = 1 + 2 * context_lines
-            return [("\n".join(lines[:snippet_size]), 1)]
-
         return matches
 
     def _extract_snippet(
@@ -595,7 +596,12 @@ class LexicalIndex:
             If no match found, returns (first lines, 1).
         """
         matches = self._extract_all_snippets(content, query, context_lines)
-        return matches[0]
+        if matches:
+            return matches[0]
+        # Fallback for legacy callers that expect a result
+        lines = content.split("\n")
+        snippet_size = 1 + 2 * context_lines
+        return ("\n".join(lines[:snippet_size]), 1)
 
     def clear(self) -> None:
         """Clear all documents from the index."""
