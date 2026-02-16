@@ -374,6 +374,8 @@ class LexicalIndex:
         limit: int = 20,  # noqa: ARG002 - kept for API compat; callers handle limiting
         context_id: int | None = None,
         context_lines: int = 1,
+        *,
+        content_query: str | None = None,
     ) -> SearchResults:
         """
         Search the index.
@@ -385,6 +387,9 @@ class LexicalIndex:
             limit: Unused — all matches are returned; callers apply limits.
             context_id: Optional context to filter by
             context_lines: Lines of context before/after each match (default 1)
+            content_query: Optional override for line-level content matching.
+                When set, _extract_all_snippets uses this instead of `query`.
+                Used by search_symbols to pass the original unprefixed terms.
 
         Returns:
             SearchResults with matching lines (one result per line occurrence),
@@ -445,7 +450,10 @@ class LexicalIndex:
             ctx_id = doc.get_first("context_id")
 
             # Extract ALL matching lines from this file
-            for snippet, line_num in self._extract_all_snippets(content, query, context_lines):
+            snippet_query = content_query if content_query is not None else query
+            for snippet, line_num in self._extract_all_snippets(
+                content, snippet_query, context_lines
+            ):
                 results.results.append(
                     SearchResult(
                         file_path=file_path,
@@ -484,7 +492,7 @@ class LexicalIndex:
             else:
                 prefixed.append(f"symbols:{t}")
         symbol_query = " ".join(prefixed)
-        return self.search(symbol_query, limit, context_id, context_lines)
+        return self.search(symbol_query, limit, context_id, context_lines, content_query=query)
 
     def search_path(
         self,

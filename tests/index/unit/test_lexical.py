@@ -510,6 +510,53 @@ class TestExtractAllSnippets:
         assert len(matches) == 1
         assert matches[0][1] == 3
 
+    def test_field_only_query_returns_doc_level_match(self, lexical_index: LexicalIndex) -> None:
+        """Field-only queries (e.g., path:foo) should return a document-level match at line 1."""
+        content = "line 1\nline 2\nline 3"
+        matches = lexical_index._extract_all_snippets(content, "path:some/file.py")
+        assert len(matches) == 1
+        assert matches[0][1] == 1  # document-level match at line 1
+
+    def test_field_prefixed_with_content_terms(self, lexical_index: LexicalIndex) -> None:
+        """Mixed field + content terms: only content terms used for line matching."""
+        content = "line 1\ntarget here\nline 3"
+        matches = lexical_index._extract_all_snippets(
+            content, "symbols:foo target", context_lines=0
+        )
+        # "symbols:foo" is skipped; "target" matches line 2
+        assert len(matches) == 1
+        assert matches[0][1] == 2
+
+
+class TestContentQueryOverride:
+    """Tests for the content_query parameter on search()."""
+
+    def test_content_query_overrides_snippet_extraction(self, lexical_index: LexicalIndex) -> None:
+        """content_query should be used for line matching instead of query."""
+        content = "class Foo:\n    pass\nclass Bar:\n    pass"
+        lexical_index.add_file("cq.py", content, context_id=1, symbols=["Foo", "Bar"])
+        lexical_index.reload()
+
+        # Tantivy query targets the symbols field, but content_query
+        # tells _extract_all_snippets to match against "Foo" in content.
+        results = lexical_index.search("symbols:Foo", content_query="Foo", context_lines=0)
+        assert len(results.results) >= 1
+        for r in results.results:
+            assert "Foo" in r.snippet
+
+    def test_without_content_query_field_only_returns_line_1(
+        self, lexical_index: LexicalIndex
+    ) -> None:
+        """Without content_query, field-only query should return doc-level match."""
+        content = "class Foo:\n    pass\nclass Bar:\n    pass"
+        lexical_index.add_file("cq2.py", content, context_id=1, symbols=["Foo", "Bar"])
+        lexical_index.reload()
+
+        results = lexical_index.search("symbols:Foo", context_lines=0)
+        # Field-only query: returns line 1 doc-level match
+        if results.results:
+            assert results.results[0].line == 1
+
 
 class TestSearchMultipleOccurrences:
     """Tests for search returning multiple results per file."""
@@ -886,3 +933,41 @@ class TestSearchSymbolsMultiTerm:
                 prefixed.append(f"symbols:{t}")
         result = " ".join(prefixed)
         assert result == "symbols:foo OR symbols:bar"
+
+    def test_multi_term_symbol_search_no_false_positives(self, lexical_index: LexicalIndex) -> None:
+        """Multi-term symbol search should not produce line-1 false positives.
+
+        Regression test: search_symbols prefixes terms with 'symbols:', causing
+        _extract_search_terms to return ([], []) and _extract_all_snippets to
+        fall back to a document-level match at line 1.  With content_query,
+        the original terms are used for content matching instead.
+        """
+        content = "class Foo:\n    pass\n\nclass Bar:\n    pass"
+        lexical_index.add_file("two_classes.py", content, context_id=1, symbols=["Foo", "Bar"])
+        lexical_index.reload()
+
+        results = lexical_index.search_symbols("Foo")
+        assert len(results.results) >= 1
+        # Every result must reference a line that actually contains "Foo"
+        for r in results.results:
+            assert "foo" in r.snippet.lower(), (
+                f"False positive at line {r.line}: snippet has no 'Foo'"
+            )
+
+    def test_symbol_search_multi_term_filters_content(self, lexical_index: LexicalIndex) -> None:
+        """Multi-term symbol search should only return lines containing all terms."""
+        content = "def search_result():\n    pass\ndef search_only():\n    pass"
+        lexical_index.add_file(
+            "fns.py",
+            content,
+            context_id=1,
+            symbols=["search_result", "search_only"],
+        )
+        lexical_index.reload()
+
+        results = lexical_index.search_symbols("search result")
+        for r in results.results:
+            snippet_lower = r.snippet.lower()
+            assert "search" in snippet_lower and "result" in snippet_lower, (
+                f"False positive at line {r.line}: snippet missing terms"
+            )
