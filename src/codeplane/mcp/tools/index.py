@@ -431,6 +431,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         filter_kinds: list[str] | None = Field(None, description="Filter by symbol kinds"),
         limit: int = Field(default=20, le=SEARCH_MAX_LIMIT, description="Maximum results"),
         cursor: str | None = Field(None, description="Pagination cursor"),
+        files_only: bool = Field(
+            False,
+            description="Return one result per file (like rg -l). Includes match_count per file.",
+        ),
     ) -> dict[str, Any]:
         """Search code, symbols, or references.
 
@@ -544,14 +548,15 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                         start_idx = parsed
 
             # Fetch refs with offset for pagination (fetch limit+1 to detect has_more)
+            ref_fetch_limit = limit * 10 if files_only else limit
             refs = await app_ctx.coordinator.get_references(
-                def_fact, _context_id=0, limit=limit + 1, offset=start_idx
+                def_fact, _context_id=0, limit=ref_fetch_limit + 1, offset=start_idx
             )
 
             # Check if there are more refs beyond this page
-            has_more_refs = len(refs) > limit
+            has_more_refs = len(refs) > ref_fetch_limit
             if has_more_refs:
-                refs = refs[:limit]
+                refs = refs[:ref_fetch_limit]
 
             # Reserve overhead for fixed response fields
             base_response = {
@@ -568,10 +573,39 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             acc = BudgetAccumulator()
             acc.reserve(overhead)
             ref_files: set[str] = set()
+            raw_refs_consumed = len(refs)
 
+            # Resolve paths for all refs upfront for dedup
+            ref_path_pairs: list[tuple[str, Any]] = []
             for ref in refs:
                 path = await _get_file_path(app_ctx, ref.file_id)
+                ref_path_pairs.append((path, ref))
 
+            # files_only dedup for references
+            if files_only:
+                ref_file_groups: dict[str, tuple[str, Any, int]] = {}
+                for path, ref in ref_path_pairs:
+                    if path not in ref_file_groups:
+                        ref_file_groups[path] = (path, ref, 1)
+                    else:
+                        p, r, c = ref_file_groups[path]
+                        ref_file_groups[path] = (p, r, c + 1)
+                ref_match_counts: dict[str, int] = {}
+                deduped_pairs: list[tuple[str, Any]] = []
+                for path, (p, ref, count) in ref_file_groups.items():
+                    deduped_pairs.append((p, ref))
+                    ref_match_counts[path] = count
+                if len(deduped_pairs) > limit:
+                    has_more_refs = True
+                    deduped_pairs = deduped_pairs[:limit]
+                    kept = {p for p, _ in deduped_pairs}
+                    raw_refs_consumed = sum(c for p, c in ref_match_counts.items() if p in kept)
+                    ref_match_counts = {p: c for p, c in ref_match_counts.items() if p in kept}
+                ref_path_pairs = deduped_pairs
+            else:
+                ref_match_counts = {}
+
+            for path, ref in ref_path_pairs:
                 result_item = {
                     "path": path,
                     "line": ref.start_line,
@@ -579,6 +613,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "score": 1.0 if ref.certainty == "CERTAIN" else 0.5,
                     "match_type": "exact" if ref.certainty == "CERTAIN" else "fuzzy",
                 }
+                if ref_match_counts and path in ref_match_counts:
+                    result_item["match_count"] = ref_match_counts[path]
 
                 # Add content based on context mode
                 if context != "none":
@@ -607,11 +643,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 ref_files.add(path)
 
             # Determine if there are more results
-            # has_more_refs = True if we fetched limit+1 rows
+            # has_more_refs = True if we fetched ref_fetch_limit+1 rows
             # budget_more = True if budget was exhausted before all refs in page
-            budget_more = not acc.has_room and len(refs) > acc.count
+            budget_more = not acc.has_room and len(ref_path_pairs) > acc.count
             has_more = has_more_refs or budget_more
-            next_offset = start_idx + acc.count
+            # If budget was exhausted, only count raw refs for files actually emitted.
+            if files_only and budget_more and ref_match_counts:
+                raw_refs_consumed = sum(c for p, c in ref_match_counts.items() if p in ref_files)
+            next_offset = start_idx + (raw_refs_consumed if files_only else acc.count)
             return {
                 "results": acc.items,
                 "pagination": make_budget_pagination(
@@ -632,21 +671,24 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 if parsed >= 0:
                     start_idx = parsed
 
+        # When files_only, a single file can produce many line-level results,
+        # so we fetch a larger batch to ensure enough unique files after dedup.
+        fetch_limit = limit * 10 if files_only else limit
+
         # Symbol search — uses dedicated search_symbols with SQLite + Tantivy fallback
         if mode == "symbol":
             search_response = await app_ctx.coordinator.search_symbols(
                 query,
                 filter_kinds=filter_kinds,
                 filter_paths=filter_paths,
-                limit=limit + 1,
+                limit=fetch_limit + 1,
                 offset=start_idx,
             )
         else:
-            # Lexical search - fetch limit+1 to detect has_more
             search_response = await app_ctx.coordinator.search(
                 query,
                 mode_map[mode],
-                limit=limit + 1,
+                limit=fetch_limit + 1,
                 offset=start_idx,
                 context_lines=effective_lines if not is_structural else 1,
                 filter_languages=filter_languages,
@@ -655,9 +697,60 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         # Check if there are more results beyond this page
         all_results = search_response.results
-        has_more_results = len(all_results) > limit
+        has_more_results = len(all_results) > fetch_limit
         if has_more_results:
-            all_results = all_results[:limit]
+            all_results = all_results[:fetch_limit]
+
+        # Track how many raw (pre-dedup) results were consumed for cursor math
+        raw_results_consumed = len(all_results)
+
+        # files_only: deduplicate to one result per file with match_count
+        if files_only and mode in ("lexical", "symbol", "references"):
+            file_groups: dict[str, tuple[Any, int]] = {}
+            for r in all_results:
+                if r.path not in file_groups:
+                    file_groups[r.path] = (r, 1)
+                else:
+                    first, count = file_groups[r.path]
+                    file_groups[r.path] = (first, count + 1)
+
+            # If the last raw result shares a path with an earlier result AND
+            # there are more results beyond this batch, the trailing file was
+            # only partially consumed.  Drop it from this page so it appears
+            # complete on the next page.
+            if has_more_results and all_results:
+                trailing_path = all_results[-1].path
+                if (
+                    trailing_path in file_groups
+                    and file_groups[trailing_path][1] > 0
+                    and len(file_groups) > 1
+                ):
+                    raw_results_consumed -= file_groups[trailing_path][1]
+                    del file_groups[trailing_path]
+
+            all_results_deduped = []
+            match_counts: dict[str, int] = {}
+            for path, (r, count) in file_groups.items():
+                all_results_deduped.append(r)
+                match_counts[path] = count
+
+            # Cap to requested limit; track raw results consumed up to that point
+            if len(all_results_deduped) > limit:
+                has_more_results = True
+                all_results_deduped = all_results_deduped[:limit]
+                # Recount raw results consumed: sum match_counts for kept files only
+                kept_paths = {r.path for r in all_results_deduped}
+                raw_results_consumed = sum(
+                    count for path, count in match_counts.items() if path in kept_paths
+                )
+                match_counts = {p: c for p, c in match_counts.items() if p in kept_paths}
+            all_results = all_results_deduped
+        else:
+            match_counts = {}
+            # For non-files_only, apply original limit
+            if len(all_results) > limit:
+                has_more_results = True
+                all_results = all_results[:limit]
 
         # Build results with context handling, bounded by budget
         # Reserve overhead for fixed response fields
@@ -680,6 +773,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "score": r.score,
                 "match_type": "fuzzy",
             }
+            if match_counts and r.path in match_counts:
+                result_item["match_count"] = match_counts[r.path]
 
             # Add content based on context mode
             if context != "none":
@@ -712,7 +807,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         # budget_more = True if budget was exhausted before all results in page
         budget_more = not acc.has_room and len(all_results) > acc.count
         has_more = has_more_results or budget_more
-        next_offset = start_idx + acc.count
+        # When files_only, cursor must skip all raw results consumed (pre-dedup),
+        # not just the deduplicated count, to avoid re-fetching the same rows.
+        # If budget was exhausted, only count raw results for files actually emitted.
+        if files_only and budget_more and match_counts:
+            raw_results_consumed = sum(
+                count for path, count in match_counts.items() if path in unique_files
+            )
+        next_offset = start_idx + (raw_results_consumed if files_only else acc.count)
 
         result: dict[str, Any] = {
             "results": acc.items,
