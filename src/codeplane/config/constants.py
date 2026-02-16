@@ -45,22 +45,6 @@ MOVE_LEXICAL_MAX = 200
 
 DIFF_CHANGES_MAX = 100
 """Maximum structural changes per page for semantic diff."""
-TANTIVY_SEARCH_DOC_FLOOR = 1000
-"""Baseline Tantivy document batch size for large repos.
-
-Repos with fewer than this many indexed files search all docs
-in a single pass. For larger repos, this value acts as a minimum
-target batch size, balancing startup overhead against per-query work."""
-
-TANTIVY_SEARCH_DOC_RATIO = 2
-"""Divisor controlling proportional Tantivy batch sizing on large repos.
-
-For repos exceeding TANTIVY_SEARCH_DOC_FLOOR files, the per-query
-doc target is max(FLOOR, total_docs // RATIO). With a ratio of 2,
-a single Tantivy query considers roughly half the repo's documents.
-This is a performance tradeoff — very large repos may not surface
-every match in a single pass, but downstream pagination and the
-two-phase search pipeline compensate for coverage."""
 
 # ======================================================================# Response Budget
 # ======================================================================# Server-side byte budget for MCP tool responses. All paginated endpoints

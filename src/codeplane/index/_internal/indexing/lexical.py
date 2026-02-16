@@ -10,6 +10,7 @@ a fast Rust-based search engine. It supports:
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -334,24 +335,84 @@ class LexicalIndex:
                 escaped.append(char)
         return "".join(escaped)
 
+    def _build_tantivy_query(self, query: str) -> str:
+        """Build Tantivy query with AND semantics and phrase support.
+
+        - Quoted strings (e.g., ``"async def"``) become Tantivy phrase queries.
+        - Unquoted terms are joined with AND so all must appear.
+        - Field-prefixed terms (e.g., ``symbols:foo``) are passed through.
+        - Boolean operators (AND, OR, NOT) are preserved as-is.
+        - Tantivy syntax characters in plain tokens are escaped.
+        """
+        tokens = re.findall(r'"[^"]+"|\S+', query)
+        if not tokens:
+            return query
+
+        has_explicit_ops = any(
+            t.upper() in ("AND", "OR", "NOT") for t in tokens if not t.startswith('"')
+        )
+
+        # Characters that are Tantivy query syntax operators
+        _syntax_chars = set(r'+-&|!(){}[]^~*?\\/"')
+
+        def _escape_token(token: str) -> str:
+            """Escape Tantivy syntax chars in a plain token."""
+            if not any(c in _syntax_chars for c in token):
+                return token
+            escaped: list[str] = []
+            for ch in token:
+                if ch in _syntax_chars:
+                    escaped.append(f"\\{ch}")
+                else:
+                    escaped.append(ch)
+            return "".join(escaped)
+
+        # Known field prefixes that Tantivy should interpret
+        _known_fields = frozenset(("content", "symbols", "path", "context_id"))
+
+        parts: list[str] = []
+        for token in tokens:
+            if token.startswith('"') and token.endswith('"'):
+                parts.append(token)
+            elif token.upper() in ("AND", "OR", "NOT"):
+                parts.append(token.upper())
+            elif ":" in token and token.partition(":")[0] in _known_fields:
+                parts.append(token)
+            else:
+                parts.append(_escape_token(token))
+
+        if has_explicit_ops:
+            # User provided explicit operators — preserve their structure
+            return " ".join(parts)
+        # No explicit operators — join with AND so all terms must match
+        return " AND ".join(parts)
+
     def search(
         self,
         query: str,
         limit: int = 20,  # noqa: ARG002 - kept for API compat; callers handle limiting
         context_id: int | None = None,
         context_lines: int = 1,
+        *,
+        content_query: str | None = None,
     ) -> SearchResults:
         """
         Search the index.
 
         Args:
-            query: Search query (supports Tantivy query syntax)
+            query: Search query (supports Tantivy query syntax).
+                Quoted strings are treated as exact phrases.
+                Unquoted multi-term queries use AND semantics (all terms must appear).
             limit: Unused — all matches are returned; callers apply limits.
             context_id: Optional context to filter by
             context_lines: Lines of context before/after each match (default 1)
+            content_query: Optional override for line-level content matching.
+                When set, _extract_all_snippets uses this instead of `query`.
+                Used by search_symbols to pass the original unprefixed terms.
 
         Returns:
-            SearchResults with matching lines (one result per line occurrence).
+            SearchResults with matching lines (one result per line occurrence),
+            ordered by (path, line_number) for deterministic results.
             If query syntax is invalid, falls back to literal search
             and sets fallback_reason.
         """
@@ -360,9 +421,15 @@ class LexicalIndex:
 
         results = SearchResults()
         fallback_reason: str | None = None
+        literal_fallback = False
 
-        # Build query
-        full_query = f"({query}) AND context_id:{context_id}" if context_id is not None else query
+        # Build query with AND semantics for unquoted multi-term queries
+        tantivy_query = self._build_tantivy_query(query)
+        full_query = (
+            f"({tantivy_query}) AND context_id:{context_id}"
+            if context_id is not None
+            else tantivy_query
+        )
 
         searcher = self._index.searcher()
 
@@ -389,45 +456,44 @@ class LexicalIndex:
                 results.fallback_reason = "query could not be parsed even after escaping"
                 return results
 
-        # Search - fetch matching documents (files) from Tantivy.
-        # Tantivy returns 1 doc per file; we expand each to N matching lines.
-        # The doc limit scales proportionally with repo size:
-        #   - Repos ≤ FLOOR files: search all docs (no cap)
-        #   - Repos > FLOOR files: cap at max(FLOOR, total // RATIO)
-        # This bounds memory (each doc loads full file content for snippet
-        # extraction) while ensuring small/medium repos are unaffected.
-        from codeplane.config.constants import (
-            TANTIVY_SEARCH_DOC_FLOOR,
-            TANTIVY_SEARCH_DOC_RATIO,
-        )
+            # Fallback succeeded — use the original raw query as a literal
+            # content query so _extract_search_terms treats every token
+            # as a plain content term (no operator/field interpretation).
+            if content_query is None:
+                content_query = query
+            literal_fallback = True
 
-        total_docs = searcher.num_docs
-        if total_docs <= TANTIVY_SEARCH_DOC_FLOOR:
-            doc_limit = total_docs
-        else:
-            doc_limit = max(TANTIVY_SEARCH_DOC_FLOOR, total_docs // TANTIVY_SEARCH_DOC_RATIO)
-
+        # Fetch ALL matching documents — no BM25 doc limit.
+        # Tantivy's value is the inverted index for fast token→file lookup;
+        # we ignore BM25 scores and use deterministic (path, line) ordering.
+        doc_limit = max(searcher.num_docs, 1)
         top_docs = searcher.search(parsed, limit=doc_limit).hits
         results.total_hits = len(top_docs)
 
-        for score, doc_addr in top_docs:
+        for _score, doc_addr in top_docs:
             doc = searcher.doc(doc_addr)
             file_path = doc.get_first("path") or ""
             content = doc.get_first("content") or ""
             ctx_id = doc.get_first("context_id")
 
             # Extract ALL matching lines from this file
-            for snippet, line_num in self._extract_all_snippets(content, query, context_lines):
+            snippet_query = content_query if content_query is not None else query
+            for snippet, line_num in self._extract_all_snippets(
+                content, snippet_query, context_lines, literal=literal_fallback
+            ):
                 results.results.append(
                     SearchResult(
                         file_path=file_path,
                         line=line_num,
                         column=0,
                         snippet=snippet,
-                        score=score,
+                        score=1.0,
                         context_id=ctx_id,
                     )
                 )
+
+        # Sort by (path, line_number) for deterministic ordering
+        results.results.sort(key=lambda r: (r.file_path, r.line))
 
         results.query_time_ms = int((time.monotonic() - start) * 1000)
         results.fallback_reason = fallback_reason
@@ -443,8 +509,17 @@ class LexicalIndex:
         """Search only in symbol names."""
         self._ensure_initialized()
 
-        symbol_query = f"symbols:{query}"
-        return self.search(symbol_query, limit, context_id, context_lines)
+        # Prefix each non-operator, non-phrase token with symbols: so
+        # _build_tantivy_query AND-joins them correctly as field queries.
+        tokens = re.findall(r'"[^"]+"|\S+', query)
+        prefixed = []
+        for t in tokens:
+            if t.startswith('"') or t.upper() in ("AND", "OR", "NOT") or ":" in t:
+                prefixed.append(t)
+            else:
+                prefixed.append(f"symbols:{t}")
+        symbol_query = " ".join(prefixed)
+        return self.search(symbol_query, limit, context_id, context_lines, content_query=query)
 
     def search_path(
         self,
@@ -457,63 +532,195 @@ class LexicalIndex:
         self._ensure_initialized()
 
         path_query = f"path:{pattern}"
-        return self.search(path_query, limit, context_id, context_lines)
+        # Path searches match by file path, not content. Pass empty content_query
+        # so _extract_all_snippets returns a document-level match at line 1
+        # instead of trying (and failing) to match path terms in file content.
+        return self.search(path_query, limit, context_id, context_lines, content_query="")
 
-    def _extract_search_terms(self, query: str) -> list[str]:
-        """Extract actual search terms from query, removing field prefixes and operators."""
+    def _extract_search_terms(
+        self, query: str, *, literal: bool = False
+    ) -> tuple[list[tuple[list[str], list[str]]], list[str], list[str]]:
+        """Extract search terms from query, preserving boolean structure.
+
+        Parses OR-groups, AND semantics within groups, NOT exclusions,
+        and quoted phrases.  Field-prefixed terms for non-content fields
+        (``path:``, ``symbols:``, ``context_id:``) are excluded;
+        ``content:`` values are extracted as content terms.
+
+        Args:
+            query: The search query string.
+            literal: When True, treat every whitespace-separated token as a
+                plain content term (AND'd together).  No operator, field, or
+                phrase interpretation.  Used for fallback/escaped queries.
+
+        Returns:
+            Tuple of ``(or_groups, negative_terms, negative_phrases)`` where:
+
+            - **or_groups**: list of ``(phrases, terms)`` tuples connected
+              by OR.  A line matches if ANY group matches.  Within a group
+              ALL phrases and ALL terms must appear (AND semantics).
+            - **negative_terms**: individual words that must NOT appear.
+            - **negative_phrases**: quoted phrases that must NOT appear.
+        """
         query_lower = query.lower()
-        search_terms = []
-        for term in query_lower.split():
-            if ":" in term:
-                # Field-prefixed term - take the value part
-                _, value = term.split(":", 1)
-                if value:
-                    search_terms.append(value)
-            elif term not in ("and", "or", "not"):
-                search_terms.append(term)
-        return search_terms
+
+        # Literal mode: treat every token as a plain content term
+        if literal:
+            terms = query_lower.split()
+            if terms:
+                return [([], terms)], [], []
+            return [], [], []
+
+        # Tokenise: preserve quoted phrases as single tokens
+        tokens = re.findall(r'"[^"]+"|\S+', query_lower)
+
+        # Split tokens into OR-separated groups, tracking NOT
+        or_groups: list[tuple[list[str], list[str]]] = []
+        negative_terms: list[str] = []
+        negative_phrases: list[str] = []
+
+        current_phrases: list[str] = []
+        current_terms: list[str] = []
+        negate_next = False
+
+        # Content-field prefixes whose values should be treated as content terms
+        _content_fields = frozenset(("content",))
+        # Non-content field prefixes to skip entirely
+        _skip_fields = frozenset(("path", "symbols", "context_id"))
+
+        for token in tokens:
+            upper = token.upper()
+
+            if upper == "OR":
+                # Flush current group
+                if current_phrases or current_terms:
+                    or_groups.append((current_phrases, current_terms))
+                    current_phrases = []
+                    current_terms = []
+                negate_next = False
+                continue
+
+            if upper == "AND":
+                # Implicit anyway — just skip
+                continue
+
+            if upper == "NOT":
+                negate_next = True
+                continue
+
+            # Quoted phrase
+            if token.startswith('"') and token.endswith('"') and len(token) > 2:
+                phrase = token[1:-1]
+                if negate_next:
+                    negative_phrases.append(phrase)
+                    negate_next = False
+                else:
+                    current_phrases.append(phrase)
+                continue
+
+            # Field-prefixed token
+            if ":" in token:
+                field, _, value = token.partition(":")
+                if field in _content_fields and value:
+                    # content:X — the value matches file content
+                    if negate_next:
+                        negative_terms.append(value)
+                    else:
+                        current_terms.append(value)
+                # Skip non-content fields (path:, symbols:, context_id:)
+                elif field in _skip_fields:
+                    pass
+                else:
+                    # Unknown field prefix — treat whole token as literal
+                    if negate_next:
+                        negative_terms.append(token)
+                    else:
+                        current_terms.append(token)
+                negate_next = False
+                continue
+
+            # Plain term
+            if negate_next:
+                negative_terms.append(token)
+                negate_next = False
+            else:
+                current_terms.append(token)
+
+        # Flush last group
+        if current_phrases or current_terms:
+            or_groups.append((current_phrases, current_terms))
+
+        return or_groups, negative_terms, negative_phrases
 
     def _extract_all_snippets(
         self,
         content: str,
         query: str,
         context_lines: int = 1,
+        *,
+        literal: bool = False,
     ) -> list[tuple[str, int]]:
         """Extract snippets for ALL lines matching the query.
+
+        Evaluates boolean structure: OR-groups are alternatives, NOT terms
+        are excluded, and terms within a group are AND'd.
 
         Args:
             content: File content
             query: Search query
             context_lines: Lines of context before and after match (default 1)
+            literal: Treat all tokens as plain literal terms (no operators)
 
         Returns:
             List of (snippet_text, line_number) tuples where line_number is 1-indexed.
-            If no match found, returns [(first lines, 1)].
+            Returns empty list when no lines match (caller should skip the document).
         """
         lines = content.split("\n")
-        search_terms = self._extract_search_terms(query)
+        or_groups, negative_terms, negative_phrases = self._extract_search_terms(
+            query, literal=literal
+        )
 
-        if not search_terms:
-            # No valid search terms, return first lines
+        if not or_groups and not negative_terms and not negative_phrases:
+            # No content-level search terms (e.g., field-only query like path:foo).
+            # Tantivy matched this document by a non-content field, so return
+            # a document-level match at line 1.
             snippet_size = 1 + 2 * context_lines
             return [("\n".join(lines[:snippet_size]), 1)]
 
-        # Find ALL lines matching any search term
+        # Find ALL lines matching the boolean structure
         matches: list[tuple[str, int]] = []
         for i, line in enumerate(lines):
             line_lower = line.lower()
-            for term in search_terms:
-                if term in line_lower:
-                    # Build context snippet
-                    start = max(0, i - context_lines)
-                    end = min(len(lines), i + context_lines + 1)
-                    snippet = "\n".join(lines[start:end])
-                    matches.append((snippet, i + 1))  # 1-indexed
-                    break  # Don't double-count if multiple terms match same line
 
-        if not matches:
-            snippet_size = 1 + 2 * context_lines
-            return [("\n".join(lines[:snippet_size]), 1)]
+            # Negative terms/phrases: skip line if any are present
+            if any(nt in line_lower for nt in negative_terms):
+                continue
+            if any(np in line_lower for np in negative_phrases):
+                continue
+
+            # OR-groups: line matches if ANY group matches.
+            # Within a group ALL phrases AND ALL terms must appear.
+            matched = False
+            if not or_groups:
+                # Only negative constraints and no positive terms —
+                # every line that survives the negative filter matches.
+                matched = True
+            else:
+                for phrases, terms in or_groups:
+                    if all(p in line_lower for p in phrases) and all(
+                        t in line_lower for t in terms
+                    ):
+                        matched = True
+                        break
+
+            if not matched:
+                continue
+
+            # Build context snippet
+            start = max(0, i - context_lines)
+            end = min(len(lines), i + context_lines + 1)
+            snippet = "\n".join(lines[start:end])
+            matches.append((snippet, i + 1))  # 1-indexed
 
         return matches
 
@@ -522,15 +729,19 @@ class LexicalIndex:
         content: str,
         query: str,
         context_lines: int = 1,
+        *,
+        literal: bool = False,
     ) -> tuple[str, int]:
-        """Extract first snippet matching the query (legacy compatibility).
+        """Extract first snippet matching the query.
 
         Returns:
             Tuple of (snippet_text, line_number) where line_number is 1-indexed.
-            If no match found, returns (first lines, 1).
+            Returns empty snippet at line 1 when no content lines match.
         """
-        matches = self._extract_all_snippets(content, query, context_lines)
-        return matches[0]
+        matches = self._extract_all_snippets(content, query, context_lines, literal=literal)
+        if matches:
+            return matches[0]
+        return ("", 1)
 
     def clear(self) -> None:
         """Clear all documents from the index."""

@@ -1427,7 +1427,7 @@ class IndexCoordinator:
                         line=hit.line,
                         column=hit.column,
                         snippet=hit.snippet,
-                        score=min(hit.score * 0.5, phase1_min - 0.01),
+                        score=phase1_min - 0.01,
                     )
                 )
                 if len(results) >= limit:
