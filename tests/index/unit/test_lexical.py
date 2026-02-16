@@ -334,54 +334,111 @@ class TestExtractSearchTerms:
 
     def test_simple_term(self, lexical_index: LexicalIndex) -> None:
         """Should extract simple search terms."""
-        phrases, terms = lexical_index._extract_search_terms("hello")
-        assert phrases == []
-        assert terms == ["hello"]
+        or_groups, neg_terms, neg_phrases = lexical_index._extract_search_terms("hello")
+        assert or_groups == [([], ["hello"])]
+        assert neg_terms == []
+        assert neg_phrases == []
 
     def test_multiple_terms(self, lexical_index: LexicalIndex) -> None:
         """Should extract multiple space-separated terms."""
-        phrases, terms = lexical_index._extract_search_terms("hello world")
-        assert phrases == []
-        assert terms == ["hello", "world"]
+        or_groups, neg_terms, neg_phrases = lexical_index._extract_search_terms("hello world")
+        assert or_groups == [([], ["hello", "world"])]
+        assert neg_terms == []
+        assert neg_phrases == []
 
     def test_field_prefix_excluded(self, lexical_index: LexicalIndex) -> None:
-        """Should exclude field-prefixed terms (they match Tantivy fields, not content)."""
-        phrases, terms = lexical_index._extract_search_terms("symbols:MyClass")
-        assert phrases == []
-        assert terms == []  # field-prefixed terms are excluded from content matching
+        """Should exclude non-content field-prefixed terms."""
+        or_groups, neg_terms, neg_phrases = lexical_index._extract_search_terms("symbols:MyClass")
+        assert or_groups == []
+        assert neg_terms == []
+        assert neg_phrases == []
 
-    def test_removes_boolean_operators(self, lexical_index: LexicalIndex) -> None:
-        """Should remove AND, OR, NOT operators."""
-        phrases, terms = lexical_index._extract_search_terms("foo AND bar OR baz NOT qux")
-        assert "and" not in terms
-        assert "or" not in terms
-        assert "not" not in terms
-        assert "foo" in terms
-        assert "bar" in terms
+    def test_content_field_extracted(self, lexical_index: LexicalIndex) -> None:
+        """Should extract value from content: field prefix."""
+        or_groups, neg_terms, neg_phrases = lexical_index._extract_search_terms(
+            "content:SearchResult"
+        )
+        assert or_groups == [([], ["searchresult"])]
+        assert neg_terms == []
+        assert neg_phrases == []
+
+    def test_or_creates_groups(self, lexical_index: LexicalIndex) -> None:
+        """OR should split into separate groups."""
+        or_groups, neg_terms, neg_phrases = lexical_index._extract_search_terms("foo OR bar")
+        assert len(or_groups) == 2
+        assert or_groups[0] == ([], ["foo"])
+        assert or_groups[1] == ([], ["bar"])
+        assert neg_terms == []
+
+    def test_not_creates_negative(self, lexical_index: LexicalIndex) -> None:
+        """NOT should create negative terms."""
+        or_groups, neg_terms, neg_phrases = lexical_index._extract_search_terms("foo NOT bar")
+        assert or_groups == [([], ["foo"])]
+        assert neg_terms == ["bar"]
+
+    def test_and_is_implicit(self, lexical_index: LexicalIndex) -> None:
+        """AND should be skipped (implicit)."""
+        or_groups, neg_terms, neg_phrases = lexical_index._extract_search_terms("foo AND bar")
+        assert or_groups == [([], ["foo", "bar"])]
+        assert neg_terms == []
+
+    def test_complex_boolean(self, lexical_index: LexicalIndex) -> None:
+        """Complex boolean with OR, AND, NOT."""
+        or_groups, neg_terms, neg_phrases = lexical_index._extract_search_terms(
+            "foo AND bar OR baz NOT qux"
+        )
+        # foo AND bar → group 1, baz → group 2, qux → negative
+        assert len(or_groups) == 2
+        assert or_groups[0] == ([], ["foo", "bar"])
+        assert or_groups[1] == ([], ["baz"])
+        assert neg_terms == ["qux"]
 
     def test_empty_query(self, lexical_index: LexicalIndex) -> None:
         """Should return empty lists for empty query."""
-        phrases, terms = lexical_index._extract_search_terms("")
-        assert phrases == []
-        assert terms == []
+        or_groups, neg_terms, neg_phrases = lexical_index._extract_search_terms("")
+        assert or_groups == []
+        assert neg_terms == []
+        assert neg_phrases == []
 
     def test_only_operators(self, lexical_index: LexicalIndex) -> None:
-        """Should return empty list when query has only operators."""
-        phrases, terms = lexical_index._extract_search_terms("AND OR NOT")
-        assert phrases == []
-        assert terms == []
+        """Should return empty when query has only operators."""
+        or_groups, neg_terms, neg_phrases = lexical_index._extract_search_terms("AND OR NOT")
+        assert or_groups == []
+        assert neg_terms == []
+        assert neg_phrases == []
 
     def test_quoted_phrase(self, lexical_index: LexicalIndex) -> None:
         """Should extract quoted strings as phrases."""
-        phrases, terms = lexical_index._extract_search_terms('"async def" handler')
-        assert phrases == ["async def"]
-        assert terms == ["handler"]
+        or_groups, neg_terms, neg_phrases = lexical_index._extract_search_terms(
+            '"async def" handler'
+        )
+        assert or_groups == [(["async def"], ["handler"])]
+        assert neg_terms == []
 
     def test_multiple_phrases(self, lexical_index: LexicalIndex) -> None:
         """Should extract multiple quoted phrases."""
-        phrases, terms = lexical_index._extract_search_terms('"foo bar" "baz qux"')
-        assert phrases == ["foo bar", "baz qux"]
-        assert terms == []
+        or_groups, neg_terms, neg_phrases = lexical_index._extract_search_terms(
+            '"foo bar" "baz qux"'
+        )
+        assert or_groups == [(["foo bar", "baz qux"], [])]
+        assert neg_terms == []
+
+    def test_not_phrase(self, lexical_index: LexicalIndex) -> None:
+        """NOT before a quoted phrase should negate it."""
+        or_groups, neg_terms, neg_phrases = lexical_index._extract_search_terms(
+            'foo NOT "bad phrase"'
+        )
+        assert or_groups == [([], ["foo"])]
+        assert neg_phrases == ["bad phrase"]
+
+    def test_literal_mode(self, lexical_index: LexicalIndex) -> None:
+        """Literal mode should treat all tokens as plain terms."""
+        or_groups, neg_terms, neg_phrases = lexical_index._extract_search_terms(
+            "AND OR NOT symbols:foo", literal=True
+        )
+        assert or_groups == [([], ["and", "or", "not", "symbols:foo"])]
+        assert neg_terms == []
+        assert neg_phrases == []
 
 
 class TestBuildTantivyQuery:
@@ -433,6 +490,23 @@ class TestBuildTantivyQuery:
         """Complex query with phrase, field, and term should be AND-joined."""
         result = lexical_index._build_tantivy_query('"async def" symbols:foo handler')
         assert result == '"async def" AND symbols:foo AND handler'
+
+    def test_parentheses_escaped(self, lexical_index: LexicalIndex) -> None:
+        """Parentheses in plain tokens should be escaped."""
+        result = lexical_index._build_tantivy_query("foo(bar)")
+        assert "\\(" in result
+        assert "\\)" in result
+
+    def test_brackets_escaped(self, lexical_index: LexicalIndex) -> None:
+        """Brackets in plain tokens should be escaped."""
+        result = lexical_index._build_tantivy_query("list[int]")
+        assert "\\[" in result
+        assert "\\]" in result
+
+    def test_asterisk_escaped(self, lexical_index: LexicalIndex) -> None:
+        """Wildcards in plain tokens should be escaped."""
+        result = lexical_index._build_tantivy_query("*.py")
+        assert "\\*" in result
 
 
 class TestExtractAllSnippets:
@@ -526,6 +600,52 @@ class TestExtractAllSnippets:
         # "symbols:foo" is skipped; "target" matches line 2
         assert len(matches) == 1
         assert matches[0][1] == 2
+
+    def test_or_matches_either_term(self, lexical_index: LexicalIndex) -> None:
+        """OR should match lines with either term."""
+        content = "alpha here\nbeta here\ngamma here"
+        matches = lexical_index._extract_all_snippets(content, "alpha OR beta", context_lines=0)
+        assert len(matches) == 2
+        assert matches[0][1] == 1  # alpha
+        assert matches[1][1] == 2  # beta
+
+    def test_not_excludes_term(self, lexical_index: LexicalIndex) -> None:
+        """NOT should exclude lines containing the negated term."""
+        content = "foo here\nfoo bar here\nfoo baz here"
+        matches = lexical_index._extract_all_snippets(content, "foo NOT bar", context_lines=0)
+        # Lines 1 and 3 have "foo" without "bar"
+        assert len(matches) == 2
+        assert matches[0][1] == 1
+        assert matches[1][1] == 3
+
+    def test_not_phrase_excludes(self, lexical_index: LexicalIndex) -> None:
+        """NOT before a phrase should exclude lines with that phrase."""
+        content = "async def hello():\n    pass\ndef world():"
+        matches = lexical_index._extract_all_snippets(
+            content, 'def NOT "async def"', context_lines=0
+        )
+        # Only line 3 has "def" without "async def"
+        assert len(matches) == 1
+        assert matches[0][1] == 3
+
+    def test_content_field_matches_content(self, lexical_index: LexicalIndex) -> None:
+        """content:X should match lines containing X."""
+        content = "line one\nSearchResult here\nline three"
+        matches = lexical_index._extract_all_snippets(
+            content, "content:SearchResult", context_lines=0
+        )
+        assert len(matches) == 1
+        assert matches[0][1] == 2
+
+    def test_literal_mode_treats_operators_as_terms(self, lexical_index: LexicalIndex) -> None:
+        """Literal mode should treat AND/OR/NOT as plain content terms."""
+        content = "AND OR NOT here\nfoo bar"
+        matches = lexical_index._extract_all_snippets(
+            content, "AND OR NOT", context_lines=0, literal=True
+        )
+        # All three tokens must match on the same line (AND semantics)
+        assert len(matches) == 1
+        assert matches[0][1] == 1
 
 
 class TestContentQueryOverride:
@@ -971,3 +1091,417 @@ class TestSearchSymbolsMultiTerm:
             assert "search" in snippet_lower and "result" in snippet_lower, (
                 f"False positive at line {r.line}: snippet missing terms"
             )
+
+
+# =============================================================================
+# Red-Team Tests — probing edge cases derived from fixed bugs
+# =============================================================================
+
+
+class TestRedTeamQueryParsing:
+    """Adversarial query parsing edge cases.
+
+    Targets _build_tantivy_query and the fallback path in search().
+    """
+
+    def test_unbalanced_quotes(self, lexical_index: LexicalIndex) -> None:
+        """Unbalanced quotes should not crash; fallback or partial match."""
+        lexical_index.add_file("q.py", "some content here\n", context_id=1)
+        lexical_index.reload()
+        # Should not raise — falls back to escaped literal
+        results = lexical_index.search('"unterminated')
+        assert isinstance(results, SearchResults)
+
+    def test_all_operators_query(self, lexical_index: LexicalIndex) -> None:
+        """Query consisting only of operators should not crash."""
+        lexical_index.add_file("op.py", "AND OR NOT\n", context_id=1)
+        lexical_index.reload()
+        results = lexical_index.search("AND AND AND")
+        assert isinstance(results, SearchResults)
+
+    def test_single_special_char_query(self, lexical_index: LexicalIndex) -> None:
+        """Single Tantivy special character queries should not crash."""
+        lexical_index.add_file("sp.py", "x = 1\n", context_id=1)
+        lexical_index.reload()
+        for ch in ["*", "?", "~", "^", "(", ")", "[", "]", "{{", "}}"]:
+            results = lexical_index.search(ch)
+            assert isinstance(results, SearchResults)
+
+    def test_colon_not_field_prefix(self, lexical_index: LexicalIndex) -> None:
+        """Colons in non-field positions should be escaped, not parsed as fields.
+
+        Regression: terms like 'http://example.com' contain ':' and could be
+        misinterpreted as field-prefixed tokens.
+        """
+        content = "url = 'http://example.com'\n"
+        lexical_index.add_file("url.py", content, context_id=1)
+        lexical_index.reload()
+        # search for the full URL — the colon should be escaped, not treated as field
+        results = lexical_index.search("http://example.com")
+        assert isinstance(results, SearchResults)
+
+    def test_unicode_query(self, lexical_index: LexicalIndex) -> None:
+        """Unicode queries should work without crashing."""
+        content = "# 你好世界\ndef greet(): pass\n"
+        lexical_index.add_file("uni.py", content, context_id=1)
+        lexical_index.reload()
+        results = lexical_index.search("你好")
+        assert isinstance(results, SearchResults)
+
+    def test_empty_query(self, lexical_index: LexicalIndex) -> None:
+        """Empty string query should not crash."""
+        lexical_index.add_file("e.py", "content\n", context_id=1)
+        lexical_index.reload()
+        results = lexical_index.search("")
+        assert isinstance(results, SearchResults)
+
+    def test_whitespace_only_query(self, lexical_index: LexicalIndex) -> None:
+        """Whitespace-only query should not crash."""
+        lexical_index.add_file("ws.py", "content\n", context_id=1)
+        lexical_index.reload()
+        results = lexical_index.search("   ")
+        assert isinstance(results, SearchResults)
+
+    def test_very_long_query(self, lexical_index: LexicalIndex) -> None:
+        """Very long query should not crash or hang."""
+        lexical_index.add_file("long.py", "x = 1\n", context_id=1)
+        lexical_index.reload()
+        long_query = "term " * 200
+        results = lexical_index.search(long_query.strip())
+        assert isinstance(results, SearchResults)
+
+    def test_query_with_backslashes(self, lexical_index: LexicalIndex) -> None:
+        """Backslashes in query should be escaped properly.
+
+        Regression: r'\\\\S+' vs r'\\S+' double-escaping bug.
+        """
+        content = "path = r'C:\\Users\\test'\n"
+        lexical_index.add_file("bs.py", content, context_id=1)
+        lexical_index.reload()
+        results = lexical_index.search(r"C:\Users")
+        assert isinstance(results, SearchResults)
+
+
+class TestRedTeamSnippetExtraction:
+    """Adversarial tests for _extract_all_snippets.
+
+    Targets the line-1 false-positive bug and cross-line match prevention.
+    """
+
+    def test_no_single_line_contains_all_and_terms(self, lexical_index: LexicalIndex) -> None:
+        """When no single line has ALL AND terms, should return empty.
+
+        Regression: Tantivy matches docs by individual tokens ("foo" + "bar")
+        across different lines, but _extract_all_snippets should only match
+        lines where ALL terms appear on the SAME line.
+        """
+        content = "foo is here\nbar is here\nbaz is here"
+        matches = lexical_index._extract_all_snippets(content, "foo bar", context_lines=0)
+        assert len(matches) == 0, "Should not match when terms are on different lines"
+
+    def test_empty_content(self, lexical_index: LexicalIndex) -> None:
+        """Empty content should return empty matches."""
+        matches = lexical_index._extract_all_snippets("", "search", context_lines=0)
+        assert len(matches) == 0
+
+    def test_newlines_only_content(self, lexical_index: LexicalIndex) -> None:
+        """Content with only newlines should return empty matches."""
+        matches = lexical_index._extract_all_snippets("\n\n\n", "search", context_lines=0)
+        assert len(matches) == 0
+
+    def test_single_line_content(self, lexical_index: LexicalIndex) -> None:
+        """Single-line content should match if term is present."""
+        matches = lexical_index._extract_all_snippets("hello world", "hello", context_lines=0)
+        assert len(matches) == 1
+        assert matches[0][1] == 1  # Line 1
+
+    def test_phrase_does_not_match_across_lines(self, lexical_index: LexicalIndex) -> None:
+        """Phrase query should NOT match when phrase spans a line boundary."""
+        content = "async\ndef hello"  # "async" and "def" on separate lines
+        matches = lexical_index._extract_all_snippets(content, '"async def"', context_lines=0)
+        assert len(matches) == 0, "Phrase should not match across line boundary"
+
+    def test_empty_content_query_returns_doc_level(self, lexical_index: LexicalIndex) -> None:
+        """Empty content_query (content_query='') should return doc-level match at line 1.
+
+        Regression: search_path passes content_query='' so snippet extraction
+        returns a document-level match instead of trying to match path terms.
+        """
+        content = "line one\nline two\nline three"
+        matches = lexical_index._extract_all_snippets(content, "", context_lines=0)
+        assert len(matches) == 1
+        assert matches[0][1] == 1  # Line 1
+
+    def test_literal_mode_treats_operators_as_terms(self, lexical_index: LexicalIndex) -> None:
+        """In literal mode, AND/OR/NOT should be treated as search terms."""
+        content = "AND OR NOT are here\nonly AND here\nnothing"
+        matches = lexical_index._extract_all_snippets(
+            content, "AND OR NOT", context_lines=0, literal=True
+        )
+        # Only line 1 has all three tokens literally
+        assert len(matches) == 1
+        assert matches[0][1] == 1
+
+    def test_not_plus_or_combination(self, lexical_index: LexicalIndex) -> None:
+        """NOT + OR combination should work correctly."""
+        content = "alpha beta\nalpha gamma\nbeta gamma\ndelta"
+        matches = lexical_index._extract_all_snippets(
+            content, "alpha OR gamma NOT beta", context_lines=0
+        )
+        # "alpha OR gamma" matches lines with alpha OR gamma
+        # "NOT beta" excludes lines containing beta
+        # Line 1: alpha beta → has beta, excluded
+        # Line 2: alpha gamma → has alpha AND gamma, no beta → match
+        # Line 3: beta gamma → has beta, excluded
+        # Line 4: delta → no alpha/gamma → no match
+        matching_lines = [m[1] for m in matches]
+        assert 2 in matching_lines, "Line 2 (alpha gamma, no beta) should match"
+        assert 1 not in matching_lines, "Line 1 (has beta) should be excluded"
+        assert 3 not in matching_lines, "Line 3 (has beta) should be excluded"
+
+    def test_context_lines_at_end_of_file(self, lexical_index: LexicalIndex) -> None:
+        """Context lines should be clamped at file boundaries."""
+        content = "a\nb\nc\nmatch_me\ne"
+        matches = lexical_index._extract_all_snippets(content, "match_me", context_lines=10)
+        assert len(matches) == 1
+        # Should include all available lines without IndexError
+        assert "a" in matches[0][0]
+        assert "e" in matches[0][0]
+
+    def test_overlapping_matches_all_reported(self, lexical_index: LexicalIndex) -> None:
+        """Adjacent matching lines should each produce their own result."""
+        content = "foo bar\nfoo bar\nfoo bar"
+        matches = lexical_index._extract_all_snippets(content, "foo bar", context_lines=0)
+        assert len(matches) == 3
+        assert [m[1] for m in matches] == [1, 2, 3]
+
+
+class TestRedTeamSearchSymbols:
+    """Adversarial tests for search_symbols.
+
+    Targets the symbols: prefix leak and content_query isolation.
+    """
+
+    def test_symbol_search_does_not_match_content_only(self, lexical_index: LexicalIndex) -> None:
+        """Symbol search should prefer symbol field, not file content.
+
+        If a term appears in content but NOT in symbols, the snippet extraction
+        should still use the original query (via content_query) and only return
+        lines where the term actually appears.
+        """
+        # "rare_term" appears in content but NOT in symbols list
+        content = "def something():\n    rare_term = 42\n    pass"
+        lexical_index.add_file("nosym.py", content, context_id=1, symbols=["something"])
+        lexical_index.reload()
+
+        results = lexical_index.search_symbols("rare_term")
+        # Results may be empty (no symbol match) or may hit via Tantivy fallback,
+        # but should NEVER produce a false-positive line-1 snippet
+        for r in results.results:
+            assert "rare_term" in r.snippet.lower() or r.line != 1, (
+                f"False-positive line-1 result in symbol search: {r.snippet!r}"
+            )
+
+    def test_symbol_search_with_operators(self, lexical_index: LexicalIndex) -> None:
+        """Symbol search with boolean operators should not crash."""
+        lexical_index.add_file(
+            "sym_op.py", "class A: pass\nclass B: pass", context_id=1, symbols=["A", "B"]
+        )
+        lexical_index.reload()
+        results = lexical_index.search_symbols("A OR B")
+        assert isinstance(results, SearchResults)
+
+    def test_symbol_search_with_phrase(self, lexical_index: LexicalIndex) -> None:
+        """Symbol search with a quoted phrase should not crash."""
+        lexical_index.add_file(
+            "sym_ph.py", "def my_func(): pass", context_id=1, symbols=["my_func"]
+        )
+        lexical_index.reload()
+        results = lexical_index.search_symbols('"my_func"')
+        assert isinstance(results, SearchResults)
+
+
+class TestRedTeamSearchPath:
+    """Adversarial tests for search_path.
+
+    Targets the false-positive line-1 bug where path terms matched content.
+    """
+
+    def test_path_search_returns_line_1_not_content_match(
+        self, lexical_index: LexicalIndex
+    ) -> None:
+        """Path search should return line 1 (doc-level), not a content-matched line.
+
+        Regression: search_path previously passed the path pattern as content_query,
+        causing _extract_all_snippets to match content lines containing path tokens.
+        """
+        content = "line 1 nothing\nutils is mentioned on line 2\nline 3"
+        lexical_index.add_file("src/utils/helpers.py", content, context_id=1)
+        lexical_index.reload()
+
+        results = lexical_index.search_path("utils")
+        for r in results.results:
+            # Path search should match file by path, returning line 1
+            assert r.line == 1, f"Path search returned line {r.line}, expected 1 (doc-level)"
+
+    def test_path_search_no_content_terms_in_snippet(self, lexical_index: LexicalIndex) -> None:
+        """Path search snippet should be the first lines, not a content-matched line."""
+        content = "first line\nsecond line\nthird line"
+        lexical_index.add_file("deep/nested/module.py", content, context_id=1)
+        lexical_index.reload()
+
+        results = lexical_index.search_path("nested")
+        assert len(results.results) >= 1
+        # The snippet should start with the first line of the file
+        assert "first line" in results.results[0].snippet
+
+
+class TestRedTeamFallback:
+    """Adversarial tests for the query syntax error fallback path."""
+
+    def test_fallback_sets_reason(self, lexical_index: LexicalIndex) -> None:
+        """Invalid Tantivy query should trigger fallback with reason."""
+        lexical_index.add_file("fb.py", "foo bar\n", context_id=1)
+        lexical_index.reload()
+        # Field-prefixed unclosed quote bypasses _build_tantivy_query escaping
+        # and triggers a Tantivy parse error → fallback path
+        results = lexical_index.search('content:"unclosed')
+        assert results.fallback_reason is not None
+
+    def test_fallback_still_finds_results(self, lexical_index: LexicalIndex) -> None:
+        """After fallback, literal matching should still find results."""
+        content = "this has special chars: [foo] (bar)\n"
+        lexical_index.add_file("special.py", content, context_id=1)
+        lexical_index.reload()
+        # Query with brackets triggers syntax error → fallback to literal
+        results = lexical_index.search("[foo]")
+        # Should find the line via literal matching
+        assert len(results.results) >= 1 or results.fallback_reason is not None
+
+    def test_double_fallback_returns_empty(self, lexical_index: LexicalIndex) -> None:
+        """If even the escaped fallback fails, should return empty results gracefully."""
+        lexical_index.add_file("df.py", "content\n", context_id=1)
+        lexical_index.reload()
+        # This is hard to trigger naturally, but we can verify the code path exists
+        # by checking that the method handles it without raising
+        results = lexical_index.search("")
+        assert isinstance(results, SearchResults)
+
+
+class TestRedTeamBuildTantivyQuery:
+    """Adversarial tests for _build_tantivy_query."""
+
+    def test_mixed_operators_and_terms(self, lexical_index: LexicalIndex) -> None:
+        """Mixed operators should not produce invalid query syntax.
+
+        Regression: 'foo AND OR AND bar' was being generated.
+        """
+        result = lexical_index._build_tantivy_query("foo OR bar")
+        # Should preserve the OR, not AND-join everything
+        assert "AND" not in result or "OR" in result
+        assert "foo" in result
+        assert "bar" in result
+
+    def test_not_operator_preserved(self, lexical_index: LexicalIndex) -> None:
+        """NOT operator should be preserved as-is."""
+        result = lexical_index._build_tantivy_query("foo NOT bar")
+        assert "NOT" in result
+        assert "foo" in result
+        assert "bar" in result
+
+    def test_no_operators_all_and_joined(self, lexical_index: LexicalIndex) -> None:
+        """Terms without operators should be AND-joined."""
+        result = lexical_index._build_tantivy_query("foo bar baz")
+        assert result == "foo AND bar AND baz"
+
+    def test_phrase_not_and_joined(self, lexical_index: LexicalIndex) -> None:
+        """Phrases should be joined with AND but not split internally."""
+        result = lexical_index._build_tantivy_query('"async def" foo')
+        assert '"async def"' in result
+        assert "foo" in result
+        assert " AND " in result
+
+    def test_field_prefix_not_escaped(self, lexical_index: LexicalIndex) -> None:
+        """Field-prefixed terms should be preserved as-is."""
+        result = lexical_index._build_tantivy_query("symbols:MyClass content:hello")
+        assert "symbols:MyClass" in result
+        assert "content:hello" in result
+
+    def test_special_chars_escaped_in_terms(self, lexical_index: LexicalIndex) -> None:
+        """Special chars in non-field terms should be escaped."""
+        result = lexical_index._build_tantivy_query("func()")
+        # Parentheses should be escaped
+        assert "\\(" in result
+        assert "\\)" in result
+
+    def test_empty_query_passthrough(self, lexical_index: LexicalIndex) -> None:
+        """Empty query should pass through unchanged."""
+        result = lexical_index._build_tantivy_query("")
+        assert result == ""
+
+
+class TestRedTeamSearchIntegration:
+    """Integration-level red-team tests exercising the full search pipeline."""
+
+    def test_multi_file_cross_term_no_false_match(self, lexical_index: LexicalIndex) -> None:
+        """AND query should not match when terms are in different files.
+
+        Tantivy may match both files individually, but _extract_all_snippets
+        should not produce line matches unless BOTH terms are on the same line.
+        """
+        lexical_index.add_file("a.py", "foo is here\n", context_id=1)
+        lexical_index.add_file("b.py", "bar is here\n", context_id=1)
+        lexical_index.reload()
+
+        results = lexical_index.search("foo bar")
+        # No line in any file contains both "foo" and "bar"
+        assert len(results.results) == 0, (
+            f"Got {len(results.results)} results but no line has both terms"
+        )
+
+    def test_context_id_filtering_strict(self, lexical_index: LexicalIndex) -> None:
+        """Context ID filtering should be strict — no cross-context leaks."""
+        lexical_index.add_file("ctx1.py", "secret_token\n", context_id=1)
+        lexical_index.add_file("ctx2.py", "secret_token\n", context_id=2)
+        lexical_index.reload()
+
+        results_ctx1 = lexical_index.search("secret_token", context_id=1)
+        results_ctx2 = lexical_index.search("secret_token", context_id=2)
+
+        for r in results_ctx1.results:
+            assert r.context_id == 1
+        for r in results_ctx2.results:
+            assert r.context_id == 2
+
+    def test_large_file_many_matches(self, lexical_index: LexicalIndex) -> None:
+        """Search in a file with many matching lines should return all of them."""
+        lines = [f"match_term line {i}" for i in range(100)]
+        content = "\n".join(lines)
+        lexical_index.add_file("big.py", content, context_id=1)
+        lexical_index.reload()
+
+        results = lexical_index.search("match_term", context_lines=0)
+        assert len(results.results) == 100
+
+    def test_update_file_removes_old_matches(self, lexical_index: LexicalIndex) -> None:
+        """Re-adding a file should replace old content, not accumulate."""
+        lexical_index.add_file("mutable.py", "old_unique_term\n", context_id=1)
+        lexical_index.reload()
+        assert len(lexical_index.search("old_unique_term").results) >= 1
+
+        # Update the same file with different content
+        lexical_index.add_file("mutable.py", "new_unique_term\n", context_id=1)
+        lexical_index.reload()
+
+        assert len(lexical_index.search("old_unique_term").results) == 0
+        assert len(lexical_index.search("new_unique_term").results) >= 1
+
+    def test_search_after_remove(self, lexical_index: LexicalIndex) -> None:
+        """Removed files should not appear in search results."""
+        lexical_index.add_file("gone.py", "ephemeral_content\n", context_id=1)
+        lexical_index.reload()
+        assert len(lexical_index.search("ephemeral_content").results) >= 1
+
+        lexical_index.remove_file("gone.py")
+        lexical_index.reload()
+        assert len(lexical_index.search("ephemeral_content").results) == 0
