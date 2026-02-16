@@ -663,6 +663,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         if has_more_results:
             all_results = all_results[:limit]
 
+        # Track how many raw (pre-dedup) results were consumed for cursor math
+        raw_results_consumed = len(all_results)
+
         # files_only: deduplicate to one result per file with match_count
         if files_only and mode in ("lexical", "symbol"):
             file_groups: dict[str, tuple[Any, int]] = {}
@@ -736,7 +739,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         # budget_more = True if budget was exhausted before all results in page
         budget_more = not acc.has_room and len(all_results) > acc.count
         has_more = has_more_results or budget_more
-        next_offset = start_idx + acc.count
+        # When files_only, cursor must skip all raw results consumed (pre-dedup),
+        # not just the deduplicated count, to avoid re-fetching the same rows.
+        next_offset = start_idx + (raw_results_consumed if files_only else acc.count)
 
         result: dict[str, Any] = {
             "results": acc.items,

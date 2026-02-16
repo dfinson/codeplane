@@ -474,7 +474,16 @@ class LexicalIndex:
         """Search only in symbol names."""
         self._ensure_initialized()
 
-        symbol_query = f"symbols:{query}"
+        # Prefix each non-operator, non-phrase token with symbols: so
+        # _build_tantivy_query AND-joins them correctly as field queries.
+        tokens = re.findall(r'"[^"]+"|\S+', query)
+        prefixed = []
+        for t in tokens:
+            if t.startswith('"') or t.upper() in ("AND", "OR", "NOT") or ":" in t:
+                prefixed.append(t)
+            else:
+                prefixed.append(f"symbols:{t}")
+        symbol_query = " ".join(prefixed)
         return self.search(symbol_query, limit, context_id, context_lines)
 
     def search_path(

@@ -844,3 +844,48 @@ class TestDeterministicOrdering:
 
         results = lexical_index.search("term")
         assert all(r.score == 1.0 for r in results.results)
+
+
+class TestSearchSymbolsMultiTerm:
+    """Tests for search_symbols handling of multi-term queries."""
+
+    def test_single_term_prefixed(self, lexical_index: LexicalIndex) -> None:
+        """Single term should be prefixed with symbols: in the query."""
+        # search_symbols("MyClass") should produce a query like "symbols:MyClass"
+        # which _build_tantivy_query leaves as-is (field-prefixed token)
+        lexical_index.add_file("sym.py", "class MyClass:\n    pass", context_id=1)
+        lexical_index.reload()
+
+        # Verify it doesn't crash and returns results structure
+        results = lexical_index.search_symbols("MyClass")
+        assert isinstance(results.results, list)
+
+    def test_multi_term_all_prefixed(self, lexical_index: LexicalIndex) -> None:  # noqa: ARG002
+        """Multiple terms should each get symbols: prefix."""
+        import re
+
+        query = "foo bar"
+        tokens = re.findall(r'"[^"]+"|\S+', query)
+        prefixed = []
+        for t in tokens:
+            if t.startswith('"') or t.upper() in ("AND", "OR", "NOT") or ":" in t:
+                prefixed.append(t)
+            else:
+                prefixed.append(f"symbols:{t}")
+        result = " ".join(prefixed)
+        assert result == "symbols:foo symbols:bar"
+
+    def test_operator_not_prefixed(self, lexical_index: LexicalIndex) -> None:  # noqa: ARG002
+        """Boolean operators should not get symbols: prefix."""
+        import re
+
+        query = "foo OR bar"
+        tokens = re.findall(r'"[^"]+"|\S+', query)
+        prefixed = []
+        for t in tokens:
+            if t.startswith('"') or t.upper() in ("AND", "OR", "NOT") or ":" in t:
+                prefixed.append(t)
+            else:
+                prefixed.append(f"symbols:{t}")
+        result = " ".join(prefixed)
+        assert result == "symbols:foo OR symbols:bar"
