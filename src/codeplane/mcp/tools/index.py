@@ -665,9 +665,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         # files_only: deduplicate to one result per file with match_count
         if files_only and mode in ("lexical", "symbol"):
-            from collections import OrderedDict
-
-            file_groups: OrderedDict[str, tuple[Any, int]] = OrderedDict()
+            file_groups: dict[str, tuple[Any, int]] = {}
             for r in all_results:
                 if r.path not in file_groups:
                     file_groups[r.path] = (r, 1)

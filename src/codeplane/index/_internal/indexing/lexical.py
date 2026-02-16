@@ -341,21 +341,32 @@ class LexicalIndex:
         - Quoted strings (e.g., ``"async def"``) become Tantivy phrase queries.
         - Unquoted terms are joined with AND so all must appear.
         - Field-prefixed terms (e.g., ``symbols:foo``) are passed through.
+        - Boolean operators (AND, OR, NOT) are preserved as-is.
         """
+        tokens = re.findall(r'"[^"]+"|\S+', query)
+        if not tokens:
+            return query
+
+        has_explicit_ops = any(
+            t.upper() in ("AND", "OR", "NOT") for t in tokens if not t.startswith('"')
+        )
+
         parts: list[str] = []
-        for token in re.findall(r'"[^"]+"|\\S+', query):
+        for token in tokens:
             if token.startswith('"') and token.endswith('"'):
-                # Phrase query — pass through as-is (Tantivy handles it)
-                parts.append(token)
-            elif ":" in token:
-                # Field-prefixed term — pass through
                 parts.append(token)
             elif token.upper() in ("AND", "OR", "NOT"):
-                # Boolean operator — pass through
+                parts.append(token.upper())
+            elif ":" in token:
                 parts.append(token)
             else:
                 parts.append(token)
-        return " AND ".join(parts) if parts else query
+
+        if has_explicit_ops:
+            # User provided explicit operators — preserve their structure
+            return " ".join(parts)
+        # No explicit operators — join with AND so all terms must match
+        return " AND ".join(parts)
 
     def search(
         self,

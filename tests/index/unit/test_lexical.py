@@ -384,6 +384,57 @@ class TestExtractSearchTerms:
         assert terms == []
 
 
+class TestBuildTantivyQuery:
+    """Tests for _build_tantivy_query method."""
+
+    def test_single_term_unchanged(self, lexical_index: LexicalIndex) -> None:
+        """Single term should pass through unchanged."""
+        assert lexical_index._build_tantivy_query("hello") == "hello"
+
+    def test_multi_term_and_joined(self, lexical_index: LexicalIndex) -> None:
+        """Multiple unquoted terms should be AND-joined."""
+        assert lexical_index._build_tantivy_query("foo bar baz") == "foo AND bar AND baz"
+
+    def test_phrase_preserved(self, lexical_index: LexicalIndex) -> None:
+        """Quoted phrases should be preserved as-is."""
+        result = lexical_index._build_tantivy_query('"async def" handler')
+        assert result == '"async def" AND handler'
+
+    def test_field_prefix_preserved(self, lexical_index: LexicalIndex) -> None:
+        """Field-prefixed terms should be preserved."""
+        result = lexical_index._build_tantivy_query("symbols:MyClass")
+        assert result == "symbols:MyClass"
+
+    def test_explicit_or_preserved(self, lexical_index: LexicalIndex) -> None:
+        """Explicit OR operator should be preserved, not AND-joined."""
+        result = lexical_index._build_tantivy_query("foo OR bar")
+        assert result == "foo OR bar"
+
+    def test_explicit_and_preserved(self, lexical_index: LexicalIndex) -> None:
+        """Explicit AND operator should be preserved."""
+        result = lexical_index._build_tantivy_query("foo AND bar")
+        assert result == "foo AND bar"
+
+    def test_explicit_not_preserved(self, lexical_index: LexicalIndex) -> None:
+        """Explicit NOT operator should be preserved."""
+        result = lexical_index._build_tantivy_query("foo NOT bar")
+        assert result == "foo NOT bar"
+
+    def test_mixed_operators(self, lexical_index: LexicalIndex) -> None:
+        """Mixed boolean operators should be preserved."""
+        result = lexical_index._build_tantivy_query("foo AND bar OR baz")
+        assert result == "foo AND bar OR baz"
+
+    def test_empty_query(self, lexical_index: LexicalIndex) -> None:
+        """Empty query should return empty string."""
+        assert lexical_index._build_tantivy_query("") == ""
+
+    def test_phrase_with_field_and_term(self, lexical_index: LexicalIndex) -> None:
+        """Complex query with phrase, field, and term should be AND-joined."""
+        result = lexical_index._build_tantivy_query('"async def" symbols:foo handler')
+        assert result == '"async def" AND symbols:foo AND handler'
+
+
 class TestExtractAllSnippets:
     """Tests for _extract_all_snippets method."""
 
