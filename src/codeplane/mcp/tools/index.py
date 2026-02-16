@@ -647,6 +647,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             # budget_more = True if budget was exhausted before all refs in page
             budget_more = not acc.has_room and len(ref_path_pairs) > acc.count
             has_more = has_more_refs or budget_more
+            # If budget was exhausted, only count raw refs for files actually emitted.
+            if files_only and budget_more and ref_match_counts:
+                raw_refs_consumed = sum(c for p, c in ref_match_counts.items() if p in ref_files)
             next_offset = start_idx + (raw_refs_consumed if files_only else acc.count)
             return {
                 "results": acc.items,
@@ -806,6 +809,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         has_more = has_more_results or budget_more
         # When files_only, cursor must skip all raw results consumed (pre-dedup),
         # not just the deduplicated count, to avoid re-fetching the same rows.
+        # If budget was exhausted, only count raw results for files actually emitted.
+        if files_only and budget_more and match_counts:
+            raw_results_consumed = sum(
+                count for path, count in match_counts.items() if path in unique_files
+            )
         next_offset = start_idx + (raw_results_consumed if files_only else acc.count)
 
         result: dict[str, Any] = {
