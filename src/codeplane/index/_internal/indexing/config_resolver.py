@@ -274,6 +274,16 @@ class ImportPathResolver:
         for fp, mod in declared_modules.items():
             self._module_to_paths.setdefault(mod, []).append(fp)
 
+        # Reverse mapping: file_path -> declared_module (for Rust self::/super::)
+        self._path_to_module: dict[str, str] = declared_modules
+
+        # Detect Rust crate prefix from declared_modules (first :: segment)
+        self._rust_crate_prefix: str | None = None
+        for mod in declared_modules.values():
+            if "::" in mod:
+                self._rust_crate_prefix = mod.split("::")[0]
+                break
+
         # Python: path_to_module output -> file_path
         from codeplane.index._internal.indexing.module_mapping import (
             path_to_module,
@@ -401,10 +411,14 @@ class ImportPathResolver:
         """Resolve declaration-based imports by matching against declared_module.
 
         Strategy:
-        1. Exact match: source_literal == declared_module
-        2. Prefix match: source_literal starts with declared_module + separator
+        1. Normalize Rust relative paths (crate::, super::, self::)
+        2. Exact match: source_literal == declared_module
+        3. Prefix match: source_literal starts with declared_module + separator
            (import of a symbol within a declared module)
-        3. For Ruby require_relative: resolve as relative path
+        4. For Ruby require_relative: resolve as relative path
+
+        When multiple files share a declared_module, disambiguate by matching
+        the remaining suffix of the source_literal against filename stems.
 
         The separator depends on the language:
         - Java/Kotlin/Scala/C#/PHP/Elixir/Haskell/Julia: '.'
@@ -416,10 +430,14 @@ class ImportPathResolver:
         if import_kind == "ruby_require_relative":
             return self._resolve_ruby_relative(source_literal, importer_path)
 
+        # Normalize Rust relative paths before resolution
+        if import_kind == "rust_use":
+            source_literal = self._normalize_rust_source(source_literal, importer_path)
+
         # Exact declared_module match
         if source_literal in self._module_to_paths:
             paths = self._module_to_paths[source_literal]
-            return paths[0] if paths else None
+            return self._pick_best_path(paths)
 
         # Determine separator for prefix matching
         sep = self._separator_for_kind(import_kind)
@@ -432,9 +450,74 @@ class ImportPathResolver:
             prefix = "::".join(parts[:i]) if sep == "::" else sep.join(parts[:i])
             if prefix in self._module_to_paths:
                 paths = self._module_to_paths[prefix]
-                return paths[0] if paths else None
+                suffix_parts = parts[i:]
+                return self._pick_best_path(paths, suffix_parts)
 
         return None
+
+    def _pick_best_path(
+        self,
+        paths: list[str],
+        suffix_parts: list[str] | None = None,
+    ) -> str | None:
+        """Pick the best file path from candidates.
+
+        When only one path exists, return it directly.
+        When multiple paths share a declared_module, disambiguate by matching
+        suffix_parts against filename stems and path components.
+        """
+        if not paths:
+            return None
+        if len(paths) == 1:
+            return paths[0]
+        if not suffix_parts:
+            return paths[0]
+
+        # Try matching the last suffix part against the filename stem
+        target = suffix_parts[-1].lower()
+        for p in paths:
+            stem = PurePosixPath(p).stem.lower()
+            if stem == target:
+                return p
+
+        # Try matching all suffix parts joined as a subpath
+        if len(suffix_parts) > 1:
+            sub = "/".join(s.lower() for s in suffix_parts)
+            for p in paths:
+                if sub in p.lower():
+                    return p
+
+        return paths[0]
+
+    def _normalize_rust_source(self, source_literal: str, importer_path: str) -> str:
+        """Normalize Rust relative paths to absolute crate-qualified paths.
+
+        - ``crate::module`` -> ``my_crate::module``
+        - ``self::item``    -> ``<current_module>::item``
+        - ``super::item``   -> ``<parent_module>::item``
+        """
+        if source_literal.startswith("crate::"):
+            if self._rust_crate_prefix:
+                return self._rust_crate_prefix + source_literal[5:]  # crate -> prefix
+            return source_literal
+
+        if source_literal.startswith("self::") or source_literal.startswith("super::"):
+            # Derive the importer's module from its declared_module or path
+            importer_mod = self._path_to_module.get(importer_path)
+            if not importer_mod:
+                return source_literal
+
+            current_parts = importer_mod.split("::")
+            if source_literal.startswith("self::"):
+                # self::X -> current_module::X
+                return "::".join(current_parts) + source_literal[4:]  # self -> current
+            else:
+                # super::X -> parent_module::X
+                if len(current_parts) > 1:
+                    return "::".join(current_parts[:-1]) + source_literal[5:]  # super -> parent
+                return source_literal
+
+        return source_literal
 
     def _resolve_ruby_relative(self, source_literal: str, importer_path: str) -> str | None:
         """Resolve Ruby require_relative as a path."""

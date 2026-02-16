@@ -216,11 +216,18 @@ class ImportGraph:
             like_prefixes: list[str] = []
             for mod in search_modules:
                 exact_or_parent.add(mod)  # exact match
-                like_prefixes.append(f"{mod}.")  # child match
+                # Detect separator from module format
+                if "::" in mod:
+                    sep = "::"
+                elif "/" in mod and "." not in mod:
+                    sep = "/"
+                else:
+                    sep = "."
+                like_prefixes.append(f"{mod}{sep}")  # child match
                 # Parent matches: all prefixes of this module
-                parts = mod.split(".")
+                parts = mod.split(sep)
                 for i in range(1, len(parts)):
-                    exact_or_parent.add(".".join(parts[:i]))
+                    exact_or_parent.add(sep.join(parts[:i]))
 
             match_conditions: list[ColumnElement[bool]] = [
                 col(ImportFact.source_literal).in_(list(exact_or_parent)),

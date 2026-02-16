@@ -527,9 +527,7 @@ class TreeSitterParser:
         else:
             return []
 
-    def extract_declared_module(
-        self, result: "ParseResult", file_path: str
-    ) -> str | None:
+    def extract_declared_module(self, result: ParseResult, file_path: str) -> str | None:
         """Extract the language-level module/package/namespace declaration.
 
         Returns the dotted module identity as written in source, or None
@@ -611,24 +609,50 @@ class TreeSitterParser:
         return None
 
     def _declared_module_csharp(self, root: Any) -> str | None:
-        """Extract `namespace Foo.Bar { ... }` or `namespace Foo.Bar;`."""
-        for child in root.children:
-            if child.type in (
-                "namespace_declaration",
-                "file_scoped_namespace_declaration",
-            ):
-                for sub in child.children:
-                    if sub.type == "qualified_name":
-                        parts = [
-                            c.text.decode("utf-8")
-                            for c in sub.children
-                            if c.type == "identifier" and c.text
-                        ]
-                        return ".".join(parts) if parts else None
-                    elif sub.type == "identifier":
-                        text = sub.text.decode("utf-8") if sub.text else None
-                        return text
-        return None
+        """Extract namespace from C# file, handling nesting.
+
+        Supports:
+        - ``namespace Foo.Bar { ... }``  (block-scoped)
+        - ``namespace Foo.Bar;``  (file-scoped, C# 10+)
+        - ``namespace A { namespace B { ... } }``  (nested, concatenated)
+
+        Uses ``node.text`` instead of filtering children because
+        tree-sitter-c-sharp's ``qualified_name`` is recursively nested
+        for 3+ segments (only the last segment is a direct ``identifier``
+        child; earlier segments are wrapped in a sub-``qualified_name``).
+        """
+        parts: list[str] = []
+        node: Any = root
+        while True:
+            found = False
+            for child in node.children:
+                if child.type in (
+                    "namespace_declaration",
+                    "file_scoped_namespace_declaration",
+                ):
+                    for sub in child.children:
+                        if (
+                            sub.type == "qualified_name"
+                            and sub.text
+                            or sub.type == "identifier"
+                            and sub.text
+                        ):
+                            parts.append(sub.text.decode("utf-8"))
+                            found = True
+                            break
+                    if found:
+                        # Look for nested namespace inside declaration_list
+                        for sub in child.children:
+                            if sub.type == "declaration_list":
+                                node = sub
+                                break
+                        else:
+                            # file-scoped namespace has no declaration_list
+                            break
+                    break
+            if not found:
+                break
+        return ".".join(parts) if parts else None
 
     def _declared_module_go(self, root: Any) -> str | None:
         """Extract `package mypackage` → 'mypackage'.
