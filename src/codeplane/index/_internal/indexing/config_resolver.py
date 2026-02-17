@@ -303,7 +303,7 @@ def build_js_package_exports(
     """
     result: dict[str, str] = {}
     for fp in file_paths:
-        if not PurePosixPath(fp).name == "package.json":
+        if PurePosixPath(fp).name != "package.json":
             continue
         text = read_file(fp)
         if not text:
@@ -515,10 +515,8 @@ class ImportPathResolver:
                 # For regular files, we drop the last part to get the package.
                 parts = importer_module.split(".")
                 is_init = importer_path.endswith("__init__.py")
-                if is_init:
-                    package_parts = parts  # __init__.py IS the package
-                else:
-                    package_parts = parts[:-1]  # drop file module
+                # __init__.py IS the package; regular files drop last part
+                package_parts = parts if is_init else parts[:-1]
 
                 # Go up (dot_count - 1) additional levels
                 levels_up = dot_count - 1
@@ -593,7 +591,7 @@ class ImportPathResolver:
 
     # ----- Lua require() path resolution -----
 
-    def _resolve_lua(self, source_literal: str, importer_path: str) -> str | None:
+    def _resolve_lua(self, source_literal: str, importer_path: str) -> str | None: # noqa: ARG002
         """Resolve Lua require() module to file path.
 
         Lua's require("foo.bar.baz") replaces dots with path separators

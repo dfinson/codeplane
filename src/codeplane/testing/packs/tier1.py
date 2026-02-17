@@ -599,21 +599,20 @@ class CargoNextestPack(RunnerPack):
                             )
                         )
                 # Root is also a package (has both [workspace] and [package])
-                if "[package]" in content:
-                    if (
-                        list(workspace_root.glob("src/**/*_test.rs"))
-                        or (workspace_root / "tests").exists()
-                    ):
-                        targets.append(
-                            TestTarget(
-                                target_id="test:.",
-                                selector=".",
-                                kind="package",
-                                language="rust",
-                                runner_pack_id=self.pack_id,
-                                workspace_root=str(workspace_root),
-                            )
+                if "[package]" in content and (
+                    list(workspace_root.glob("src/**/*_test.rs"))
+                    or (workspace_root / "tests").exists()
+                ):
+                    targets.append(
+                        TestTarget(
+                            target_id="test:.",
+                            selector=".",
+                            kind="package",
+                            language="rust",
+                            runner_pack_id=self.pack_id,
+                            workspace_root=str(workspace_root),
                         )
+                    )
             else:
                 # Single package
                 targets.append(
@@ -1412,7 +1411,7 @@ class MinitestPack(RunnerPack):
         self,
         target: TestTarget,
         *,
-        output_path: Path,
+        output_path: Path, # noqa: ARG002
         pattern: str | None = None,
         tags: list[str] | None = None,  # noqa: ARG002
         exec_ctx: RuntimeExecutionContext | None = None,

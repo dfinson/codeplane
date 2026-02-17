@@ -1010,7 +1010,7 @@ class StructuralIndexer:
                         File.id.in_(file_ids)  # type: ignore[union-attr]
                     )
                 ).all()
-                file_map = {fid: fp for fid, fp in file_rows}
+                file_map = dict(file_rows)
 
             for imp in unresolved:
                 importer_path = file_map.get(imp.file_id, "")

@@ -841,7 +841,7 @@ class MixTestPack(RunnerPack):
         self,
         target: TestTarget,
         *,
-        output_path: Path,
+        output_path: Path, # noqa: ARG002
         pattern: str | None = None,
         tags: list[str] | None = None,
         exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002
@@ -854,7 +854,7 @@ class MixTestPack(RunnerPack):
                 cmd.extend(["--only", tag])
         return cmd
 
-    def parse_output(self, output_path: Path, stdout: str) -> ParsedTestSuite:
+    def parse_output(self, output_path: Path, stdout: str) -> ParsedTestSuite: # noqa: ARG002
         # ExUnit prints results to stdout; parse from stdout lines
         suite = ParsedTestSuite(name="mix_test")
         for line in stdout.splitlines():
@@ -935,10 +935,10 @@ class CabalTestPack(RunnerPack):
 
     def build_command(
         self,
-        target: TestTarget,
+        target: TestTarget, # noqa: ARG002
         *,
-        output_path: Path,
-        pattern: str | None = None,
+        output_path: Path, # noqa: ARG002
+        pattern: str | None = None, # noqa: ARG002
         tags: list[str] | None = None,  # noqa: ARG002
         exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002
     ) -> list[str]:
@@ -1004,10 +1004,10 @@ class JuliaPkgTestPack(RunnerPack):
 
     def build_command(
         self,
-        target: TestTarget,
+        target: TestTarget, # noqa: ARG002
         *,
-        output_path: Path,
-        pattern: str | None = None,
+        output_path: Path, # noqa: ARG002
+        pattern: str | None = None, # noqa: ARG002
         tags: list[str] | None = None,  # noqa: ARG002
         exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002
     ) -> list[str]:
@@ -1081,10 +1081,10 @@ class DuneTestPack(RunnerPack):
 
     def build_command(
         self,
-        target: TestTarget,
+        target: TestTarget, # noqa: ARG002
         *,
-        output_path: Path,
-        pattern: str | None = None,
+        output_path: Path, # noqa: ARG002
+        pattern: str | None = None, # noqa: ARG002
         tags: list[str] | None = None,  # noqa: ARG002
         exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002
     ) -> list[str]:
