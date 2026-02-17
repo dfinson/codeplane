@@ -430,20 +430,19 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 }
             )
 
-            # Check duplicate full read
+            # Track and check duplicate full read (increment BEFORE check
+            # so the duplicate warning fires on the 2nd read, not the 3rd)
             if scope_id:
                 budget = _scope_manager.get_or_create(scope_id)
+                budget.increment_full_read(p, byte_count)
                 dup_warning = budget.check_duplicate_read(p)
                 if dup_warning:
                     warnings.append(dup_warning)
 
-        # Track scope usage
+        # Check scope budget
         scope_usage = None
         if scope_id:
             budget = _scope_manager.get_or_create(scope_id)
-            for p in [f["path"] for f in files_out]:
-                byte_size = next((f["byte_size"] for f in files_out if f["path"] == p), 0)
-                budget.increment_full_read(p, byte_size)
             exceeded = budget.check_budget("full_reads")
             if exceeded:
                 from codeplane.mcp.errors import BudgetExceededError

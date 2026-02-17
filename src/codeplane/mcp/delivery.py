@@ -374,25 +374,86 @@ def wrap_existing_response(
     resource_kind: str,
     scope_id: str | None = None,
     scope_usage: dict[str, Any] | None = None,
+    client_profile: ClientProfile | None = None,
+    inline_summary: str | None = None,
 ) -> dict[str, Any]:
     """Add delivery envelope fields to an existing handler response.
 
     For handlers that already manage their own pagination via BudgetAccumulator.
-    Adds delivery metadata without restructuring the response.
+    Routes oversized payloads through resource delivery when client supports it,
+    providing uniform overflow handling across all tools.
     """
+    profile = client_profile or PROFILES["default"]
+    inline_cap = profile.inline_cap_bytes
+
     payload_bytes = len(json.dumps(result, indent=2, default=str).encode("utf-8"))
     has_pagination = "pagination" in result
     is_truncated = has_pagination and result.get("pagination", {}).get("truncated", False)
 
-    result["resource_kind"] = resource_kind
-    result["delivery"] = "paged" if is_truncated else "inline"
-    result["inline_budget_bytes_used"] = payload_bytes
-    result["inline_budget_bytes_limit"] = INLINE_CAP_BYTES
+    fits_inline = payload_bytes <= inline_cap and not is_truncated
+
+    if fits_inline:
+        # Inline delivery
+        result["resource_kind"] = resource_kind
+        result["delivery"] = "inline"
+        result["inline_budget_bytes_used"] = payload_bytes
+        result["inline_budget_bytes_limit"] = inline_cap
+        if inline_summary:
+            result["inline_summary"] = inline_summary
+    elif _profile_supports_resources(profile):
+        # Resource delivery — store full result, return synopsis
+        effective_scope = scope_id or "default"
+        uri, meta = _resource_cache.store(result, resource_kind, effective_scope)
+        envelope: dict[str, Any] = {
+            "resource_kind": resource_kind,
+            "delivery": "resource",
+            "resource_uri": uri,
+            "resource_meta": meta.to_dict(),
+            "capability_used": "resources",
+        }
+        if inline_summary:
+            envelope["inline_summary"] = inline_summary
+        envelope["inline_budget_bytes_used"] = len(
+            json.dumps(envelope, indent=2, default=str).encode("utf-8")
+        )
+        envelope["inline_budget_bytes_limit"] = inline_cap
+        if scope_id:
+            envelope["scope_id"] = scope_id
+        if scope_usage:
+            envelope["scope_usage"] = scope_usage
+
+        log.debug(
+            "envelope_wrapped",
+            delivery="resource",
+            resource_kind=resource_kind,
+            payload_bytes=payload_bytes,
+            inline_cap=inline_cap,
+            scope_id=scope_id,
+        )
+        return envelope
+    else:
+        # Paged delivery (no resource support)
+        result["resource_kind"] = resource_kind
+        result["delivery"] = "paged"
+        result["inline_budget_bytes_used"] = payload_bytes
+        result["inline_budget_bytes_limit"] = inline_cap
+        result["capability_used"] = "pagination"
+        if inline_summary:
+            result["inline_summary"] = inline_summary
 
     if scope_id:
         result["scope_id"] = scope_id
     if scope_usage:
         result["scope_usage"] = scope_usage
+
+    log.debug(
+        "envelope_wrapped",
+        delivery=result["delivery"],
+        resource_kind=resource_kind,
+        payload_bytes=payload_bytes,
+        inline_cap=inline_cap,
+        scope_id=scope_id,
+    )
 
     return result
 

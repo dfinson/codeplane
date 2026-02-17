@@ -152,22 +152,22 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         commonly_followed_by=["git_stage", "git_commit"],
         behavior=BehaviorFlags(has_side_effects=True, atomic=True),
         possible_errors=[
-            "CONTENT_NOT_FOUND",
-            "MULTIPLE_MATCHES",
             "FILE_NOT_FOUND",
             "FILE_EXISTS",
             "HASH_MISMATCH",
         ],
         examples=[
             {
-                "description": "Replace content exactly",
+                "description": "Span-based update (replace lines 10-15)",
                 "params": {
                     "edits": [
                         {
                             "path": "src/foo.py",
                             "action": "update",
-                            "old_content": "def old_name():\n    pass",
-                            "new_content": "def new_name():\n    pass",
+                            "start_line": 10,
+                            "end_line": 15,
+                            "expected_file_sha256": "<sha256 from read_source>",
+                            "new_content": "def new_name():\n    pass\n",
                         }
                     ]
                 },
