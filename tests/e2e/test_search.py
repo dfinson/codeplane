@@ -55,6 +55,6 @@ def test_search(
         )
 
         if spec.must_find_file:
-            assert (
-                spec.must_find_file in text_content
-            ), f"Search for '{spec.query}' should find '{spec.must_find_file}'"
+            assert spec.must_find_file in text_content, (
+                f"Search for '{spec.query}' should find '{spec.must_find_file}'"
+            )

@@ -1193,8 +1193,8 @@ class TestIntegration:
             assert isinstance(result, list), f"{pack_id} returned non-list"
 
             # Should preserve at least the command name
-            assert len(result) >= len(cmd) or pack_id.startswith(
-                "elixir"
-            ), f"{pack_id} removed too many args"
+            assert len(result) >= len(cmd) or pack_id.startswith("elixir"), (
+                f"{pack_id} removed too many args"
+            )
 
         ctx.cleanup()

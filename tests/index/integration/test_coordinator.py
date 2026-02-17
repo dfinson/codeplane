@@ -158,20 +158,20 @@ class TestCoordinatorInitialization:
             assert "indexing" in phases_seen, f"Expected 'indexing' phase, got: {phases_seen}"
 
             # Old phase names must NOT appear
-            assert (
-                "lexical" not in phases_seen
-            ), "'lexical' phase should not exist in unified pipeline"
-            assert (
-                "structural" not in phases_seen
-            ), "'structural' phase should not exist in unified pipeline"
+            assert "lexical" not in phases_seen, (
+                "'lexical' phase should not exist in unified pipeline"
+            )
+            assert "structural" not in phases_seen, (
+                "'structural' phase should not exist in unified pipeline"
+            )
 
             # "indexing" should appear before any resolution phases
             indexing_idx = phases_seen.index("indexing")
             for resolution_phase in ["resolving_cross_file", "resolving_refs", "resolving_types"]:
                 if resolution_phase in phases_seen:
-                    assert (
-                        phases_seen.index(resolution_phase) > indexing_idx
-                    ), f"{resolution_phase} must come after 'indexing'"
+                    assert phases_seen.index(resolution_phase) > indexing_idx, (
+                        f"{resolution_phase} must come after 'indexing'"
+                    )
         finally:
             coordinator.close()
 
@@ -582,9 +582,9 @@ class TestCplignoreChangeHandling:
 
             # Now the generated file should be indexed
             gen_results = await coordinator.search("GENERATED_CONTENT")
-            assert (
-                len(gen_results.results) >= 1
-            ), "generated_code.py should be indexed after .cplignore change"
+            assert len(gen_results.results) >= 1, (
+                "generated_code.py should be indexed after .cplignore change"
+            )
         finally:
             coordinator.close()
 
@@ -619,9 +619,9 @@ class TestCplignoreChangeHandling:
 
             # Now temporary.py should NOT be indexed
             temp_results = await coordinator.search("TEMP_CODE")
-            assert (
-                len(temp_results.results) == 0
-            ), "temporary.py should be removed after .cplignore change"
+            assert len(temp_results.results) == 0, (
+                "temporary.py should be removed after .cplignore change"
+            )
         finally:
             coordinator.close()
 
@@ -854,9 +854,9 @@ func SearchHandler() string {
 
             # Should only return Python files
             for r in results.results:
-                assert r.path.endswith(
-                    ".py"
-                ), f"Got non-Python file {r.path} when filtering for python"
+                assert r.path.endswith(".py"), (
+                    f"Got non-Python file {r.path} when filtering for python"
+                )
 
             # Verify JavaScript has the content but wasn't returned
             all_results = await coordinator.search("helper")
@@ -1140,8 +1140,8 @@ class TestCoordinatorStaleTantivyRemoval:
                 ).first()
                 if file_row and file_row.id is not None:
                     defs = session.exec(sel(DefFact).where(DefFact.file_id == file_row.id)).all()
-                    assert (
-                        len(defs) == 0
-                    ), f"Expected 0 structural facts for failed file, got {len(defs)}"
+                    assert len(defs) == 0, (
+                        f"Expected 0 structural facts for failed file, got {len(defs)}"
+                    )
         finally:
             coordinator.close()

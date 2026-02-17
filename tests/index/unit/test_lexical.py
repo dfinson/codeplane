@@ -1070,9 +1070,9 @@ class TestSearchSymbolsMultiTerm:
         assert len(results.results) >= 1
         # Every result must reference a line that actually contains "Foo"
         for r in results.results:
-            assert (
-                "foo" in r.snippet.lower()
-            ), f"False positive at line {r.line}: snippet has no 'Foo'"
+            assert "foo" in r.snippet.lower(), (
+                f"False positive at line {r.line}: snippet has no 'Foo'"
+            )
 
     def test_symbol_search_multi_term_filters_content(self, lexical_index: LexicalIndex) -> None:
         """Multi-term symbol search should only return lines containing all terms."""
@@ -1088,9 +1088,9 @@ class TestSearchSymbolsMultiTerm:
         results = lexical_index.search_symbols("search result")
         for r in results.results:
             snippet_lower = r.snippet.lower()
-            assert (
-                "search" in snippet_lower and "result" in snippet_lower
-            ), f"False positive at line {r.line}: snippet missing terms"
+            assert "search" in snippet_lower and "result" in snippet_lower, (
+                f"False positive at line {r.line}: snippet missing terms"
+            )
 
 
 # =============================================================================
@@ -1298,9 +1298,9 @@ class TestRedTeamSearchSymbols:
         # Results may be empty (no symbol match) or may hit via Tantivy fallback,
         # but should NEVER produce a false-positive line-1 snippet
         for r in results.results:
-            assert (
-                "rare_term" in r.snippet.lower() or r.line != 1
-            ), f"False-positive line-1 result in symbol search: {r.snippet!r}"
+            assert "rare_term" in r.snippet.lower() or r.line != 1, (
+                f"False-positive line-1 result in symbol search: {r.snippet!r}"
+            )
 
     def test_symbol_search_with_operators(self, lexical_index: LexicalIndex) -> None:
         """Symbol search with boolean operators should not crash."""
@@ -1455,9 +1455,9 @@ class TestRedTeamSearchIntegration:
 
         results = lexical_index.search("foo bar")
         # No line in any file contains both "foo" and "bar"
-        assert (
-            len(results.results) == 0
-        ), f"Got {len(results.results)} results but no line has both terms"
+        assert len(results.results) == 0, (
+            f"Got {len(results.results)} results but no line has both terms"
+        )
 
     def test_context_id_filtering_strict(self, lexical_index: LexicalIndex) -> None:
         """Context ID filtering should be strict — no cross-context leaks."""

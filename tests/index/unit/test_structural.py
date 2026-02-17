@@ -606,9 +606,9 @@ namespace App {
                 select(DefFact).where(DefFact.name == "DefaultContractResolver")
             ).first()
             assert resolver_def is not None
-            assert all(
-                r.target_def_uid == resolver_def.def_uid for r in dcr_refs_after
-            ), "target_def_uid must link to the DefFact for rename discovery"
+            assert all(r.target_def_uid == resolver_def.def_uid for r in dcr_refs_after), (
+                "target_def_uid must link to the DefFact for rename discovery"
+            )
 
     def test_csharp_external_namespace_stays_unknown(self, db: Database, temp_dir: Path) -> None:
         """Refs to types from external namespaces (not in project) stay UNKNOWN."""
@@ -723,9 +723,9 @@ y = Utility()
             # target_def_uid must be set for rename to discover these refs
             helper_def = session.exec(select(DefFact).where(DefFact.name == "helper")).first()
             assert helper_def is not None
-            assert all(
-                r.target_def_uid == helper_def.def_uid for r in helper_refs_after
-            ), "target_def_uid must link to DefFact for rename discovery"
+            assert all(r.target_def_uid == helper_def.def_uid for r in helper_refs_after), (
+                "target_def_uid must link to DefFact for rename discovery"
+            )
 
             utility_refs_after = session.exec(
                 select(RefFact).where(
@@ -738,9 +738,9 @@ y = Utility()
 
             utility_def = session.exec(select(DefFact).where(DefFact.name == "Utility")).first()
             assert utility_def is not None
-            assert all(
-                r.target_def_uid == utility_def.def_uid for r in utility_refs_after
-            ), "target_def_uid must link to DefFact for rename discovery"
+            assert all(r.target_def_uid == utility_def.def_uid for r in utility_refs_after), (
+                "target_def_uid must link to DefFact for rename discovery"
+            )
 
     def test_python_star_import_external_stays_unknown(self, db: Database, temp_dir: Path) -> None:
         """Star imports from external modules should leave refs as UNKNOWN."""
@@ -842,9 +842,9 @@ namespace App {
                     )
                 ).all()
                 assert len(refs) >= 1, f"No refs found for {type_name}"
-                assert all(
-                    r.ref_tier == RefTier.STRONG.value for r in refs
-                ), f"{type_name} should be STRONG after DB-backed resolution"
+                assert all(r.ref_tier == RefTier.STRONG.value for r in refs), (
+                    f"{type_name} should be STRONG after DB-backed resolution"
+                )
 
     def test_csharp_namespace_on_def_facts(self, db: Database, temp_dir: Path) -> None:
         """C# extraction should populate namespace on DefFacts."""
@@ -952,9 +952,9 @@ namespace App {
                 select(DefFact).where(DefFact.name == "JsonSerializer")
             ).first()
             assert serializer_def is not None
-            assert all(
-                r.target_def_uid == serializer_def.def_uid for r in js_refs_after
-            ), "target_def_uid must link to DefFact for rename discovery"
+            assert all(r.target_def_uid == serializer_def.def_uid for r in js_refs_after), (
+                "target_def_uid must link to DefFact for rename discovery"
+            )
 
     def test_csharp_parent_namespace_upgrades_to_strong(self, db: Database, temp_dir: Path) -> None:
         """Types in a parent namespace should resolve without a using directive."""
@@ -1025,9 +1025,9 @@ namespace App {
                 select(DefFact).where(DefFact.name == "JsonSerializer")
             ).first()
             assert serializer_def is not None
-            assert all(
-                r.target_def_uid == serializer_def.def_uid for r in js_refs_after
-            ), "target_def_uid must link to DefFact for rename discovery"
+            assert all(r.target_def_uid == serializer_def.def_uid for r in js_refs_after), (
+                "target_def_uid must link to DefFact for rename discovery"
+            )
 
     def test_csharp_unrelated_namespace_stays_unknown(self, db: Database, temp_dir: Path) -> None:
         """Types in unrelated namespaces should NOT resolve via same-namespace."""
