@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from codeplane.mcp.delivery import ScopeBudget, ScopeManager
 
 # =============================================================================
@@ -196,3 +198,212 @@ class TestScopeUsageInEnvelope:
         b.increment_search(10)
         b.increment_search(20)
         assert b.search_calls == 2
+
+
+# =============================================================================
+# Budget Reset
+# =============================================================================
+class TestBudgetReset:
+    """Budget reset eligibility and request flow."""
+
+    def test_read_reset_after_mutation(self) -> None:
+        """Read budget resets after mutation + explicit request."""
+        b = ScopeBudget("test")
+        b.increment_read(5_000_000)
+        b.increment_read(5_000_001)  # exceed 10MB
+        assert b.check_budget("read_bytes") is not None
+        b.record_mutation()
+        result = b.request_reset(
+            "read",
+            "Re-reading all modules after significant refactoring changes",
+        )
+        assert result["reset"] is True
+        assert result["before"]["read_bytes_total"] == 10_000_001
+        assert result["after"]["read_bytes_total"] == 0
+        assert b.read_bytes_total == 0
+        assert b.check_budget("read_bytes") is None
+
+    def test_read_reset_not_eligible_without_mutation(self) -> None:
+        """Read reset fails without mutation and below ceiling."""
+        b = ScopeBudget("test")
+        b.increment_read(100)
+        with pytest.raises(ValueError, match="requires at least one mutation"):
+            b.request_reset(
+                "read",
+                "I need additional budget to continue reading more files",
+            )
+
+    def test_search_reset_requires_n_mutations(self) -> None:
+        """Search reset requires N mutations (default 3)."""
+        b = ScopeBudget("test")
+        for _ in range(201):
+            b.increment_search(1)
+        assert b.check_budget("search_calls") is not None
+        # 1 mutation - not enough
+        b.record_mutation()
+        with pytest.raises(ValueError, match="requires 3 mutations"):
+            b.request_reset(
+                "search",
+                "Need to search the codebase after first major refactor work",
+            )
+        # 2 mutations - still not enough
+        b.record_mutation()
+        with pytest.raises(ValueError, match="requires 3 mutations"):
+            b.request_reset(
+                "search",
+                "Need to search the codebase after completing second edits",
+            )
+        # 3 mutations - eligible
+        b.record_mutation()
+        result = b.request_reset(
+            "search",
+            "Refactored 3 times now, need fresh search budget to continue",
+        )
+        assert result["reset"] is True
+        assert b.search_calls == 0
+
+    def test_justification_too_short(self) -> None:
+        """Justification under 50 chars is rejected."""
+        b = ScopeBudget("test")
+        b.record_mutation()
+        with pytest.raises(ValueError, match="at least 50 characters"):
+            b.request_reset("read", "short")
+
+    def test_reset_consumes_eligibility(self) -> None:
+        """Resetting consumes eligibility - can't reset twice on same mutation."""
+        b = ScopeBudget("test")
+        b.record_mutation()
+        b.request_reset(
+            "read",
+            "First reset after edit, need to verify all updated files",
+        )
+        with pytest.raises(ValueError, match="requires at least one mutation"):
+            b.request_reset(
+                "read",
+                "Second reset same epoch, attempting without eligibility",
+            )
+
+    def test_total_resets_tracks_cumulative(self) -> None:
+        """total_resets increments and never resets."""
+        b = ScopeBudget("test")
+        b.record_mutation()
+        b.request_reset(
+            "read",
+            "First reset justification for post-mutation re-reading work",
+        )
+        assert b._total_resets == 1
+        b.record_mutation()
+        b.request_reset(
+            "read",
+            "Second reset justification after additional mutation changes",
+        )
+        assert b._total_resets == 2
+
+    def test_reset_log_records_entries(self) -> None:
+        """Reset log captures category, justification, and epoch."""
+        b = ScopeBudget("test")
+        b.record_mutation()
+        justification = "Reset after refactoring, I need a fresh read for analysis"
+        b.request_reset("read", justification)
+        assert len(b._reset_log) == 1
+        entry = b._reset_log[0]
+        assert entry["category"] == "read"
+        assert entry["justification"] == justification
+        assert entry["epoch"] == 1
+        assert entry["has_mutations"] is True
+
+    def test_usage_dict_shows_availability(self) -> None:
+        """to_usage_dict shows reset availability flags and epoch."""
+        b = ScopeBudget("test")
+        d = b.to_usage_dict()
+        assert "read_reset_available" not in d
+        assert d["mutation_epoch"] == 0
+        assert d["total_resets"] == 0
+        b.record_mutation()
+        d = b.to_usage_dict()
+        assert d["read_reset_available"] is True
+        assert d["mutation_epoch"] == 1
+
+    def test_no_mutation_ceiling_reset_read(self) -> None:
+        """Pure-read workflow: reset at ceiling with long justification."""
+        b = ScopeBudget("test", max_read_calls=5)
+        for _ in range(6):
+            b.increment_read(100)
+        assert b.check_budget("read_calls") is not None
+        # Justification >= 50 but < 250 fails for pure-read path
+        with pytest.raises(ValueError, match="at least 250 characters"):
+            b.request_reset(
+                "read",
+                "I need to continue my reading workflow for this review task",
+            )
+        # Long justification (>= 250 chars) succeeds
+        long_justification = (
+            "Performing a comprehensive code review of the entire "
+            "repository to identify security vulnerabilities and "
+            "architectural issues. Need additional read budget to "
+            "complete analysis of remaining modules and their "
+            "test coverage. This is a read-only audit workflow."
+        )
+        result = b.request_reset("read", long_justification)
+        assert result["reset"] is True
+        assert b.read_calls == 0
+
+    def test_no_mutation_ceiling_reset_search(self) -> None:
+        """Pure-read workflow: search reset at ceiling with 250+ chars."""
+        b = ScopeBudget("test", max_search_calls=5)
+        for _ in range(6):
+            b.increment_search(1)
+        assert b.check_budget("search_calls") is not None
+        long_justification = (
+            "Performing a comprehensive audit of the entire codebase "
+            "to catalog all API endpoints and their dependencies. "
+            "Need additional search budget to finish scanning the "
+            "remaining service layer modules and integration test "
+            "files. This is a read-only architecture review task."
+        )
+        result = b.request_reset("search", long_justification)
+        assert result["reset"] is True
+        assert b.search_calls == 0
+
+    def test_pure_read_usage_dict_shows_availability_at_ceiling(self) -> None:
+        """Usage dict shows reset availability for pure-read at ceiling."""
+        b = ScopeBudget("test", max_read_calls=5)
+        d = b.to_usage_dict()
+        assert "read_reset_available" not in d
+        # Exceed ceiling
+        for _ in range(6):
+            b.increment_read(100)
+        d = b.to_usage_dict()
+        assert d["read_reset_available"] is True
+
+    def test_invalid_category_rejected(self) -> None:
+        """Invalid category raises ValueError."""
+        b = ScopeBudget("test")
+        b.record_mutation()
+        with pytest.raises(ValueError, match="Invalid reset category"):
+            b.request_reset("write", "not a valid category")
+
+    def test_scope_manager_request_reset(self) -> None:
+        """ScopeManager.request_reset delegates to budget."""
+        mgr = ScopeManager()
+        b = mgr.get_or_create("s1")
+        b.increment_read(100)
+        b.record_mutation()
+        result = mgr.request_reset(
+            "s1",
+            "read",
+            "Reset via scope manager after recording mutation event now",
+        )
+        assert result["reset"] is True
+
+    def test_scope_manager_request_reset_unknown_scope(self) -> None:
+        """ScopeManager.request_reset raises for unknown scope."""
+        mgr = ScopeManager()
+        with pytest.raises(ValueError, match="No budget found"):
+            mgr.request_reset(
+                "unknown",
+                "read",
+                "Should fail because scope does not exist in the manager",
+            )
+        with pytest.raises(ValueError, match="No budget found"):
+            mgr.request_reset("unknown", "read", "should fail no scope")

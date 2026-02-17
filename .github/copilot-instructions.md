@@ -116,12 +116,15 @@ and safe refactoring that terminal commands cannot provide.
 
 Search = find. Read = retrieve. Full = gated.
 
+`read_source` accepts multiple `targets` in one call — batch reads of independent spans.
+Response includes `file_sha256` per file — save it for `write_files` span edits.
+
 ### First Steps When Starting a Task
 
 1. `describe` — get repo metadata, language, active branch, index status
 2. `map_repo(include=["structure", "dependencies", "test_layout"])` — understand repo shape
 3. `read_source` on relevant files — understand the code you'll modify
-4. After changes: `lint_check` → `discover_test_targets(affected_by=[...])` → `run_test_targets`
+4. After changes: `lint_check` → `run_test_targets(affected_by=["changed_file.py"])` for impact-aware testing
 5. `semantic_diff` — review structural impact before committing
 6. `git_stage_and_commit` — one-step commit with pre-commit hook handling
 
@@ -129,18 +132,18 @@ Search = find. Read = retrieve. Full = gated.
 
 | Operation | REQUIRED Tool | FORBIDDEN Alternative |
 |-----------|---------------|----------------------|
-| Read source | `mcp_codeplane-codeplane_copy3_read_source` | `cat`, `head`, `less`, `tail` |
-| Read full file | `mcp_codeplane-codeplane_copy3_read_file_full` | `cat`, `head`, bulk reads |
-| Write/edit files | `mcp_codeplane-codeplane_copy3_write_files` | `sed`, `echo >>`, `awk`, `tee` |
-| List directory | `mcp_codeplane-codeplane_copy3_list_files` | `ls`, `find`, `tree` |
-| Search code | `mcp_codeplane-codeplane_copy3_search` | `grep`, `rg`, `ag`, `ack` |
-| Repository overview | `mcp_codeplane-codeplane_copy3_map_repo` | Manual file traversal |
-| All git operations | `mcp_codeplane-codeplane_copy3_git_*` | Raw `git` commands |
-| Run linters | `mcp_codeplane-codeplane_copy3_lint_check` | `ruff`, `black`, `mypy` directly |
-| Discover tests | `mcp_codeplane-codeplane_copy3_discover_test_targets` | Manual test file search |
-| Run tests | `mcp_codeplane-codeplane_copy3_run_test_targets` | `pytest`, `jest` directly |
-| Rename symbols | `mcp_codeplane-codeplane_copy3_refactor_rename` | Find-and-replace, `sed` |
-| Semantic diff | `mcp_codeplane-codeplane_copy3_semantic_diff` | Manual comparison |
+| Read source | `mcp_codeplane-codeplane-_read_source` | `cat`, `head`, `less`, `tail` |
+| Read full file | `mcp_codeplane-codeplane-_read_file_full` | `cat`, `head`, bulk reads |
+| Write/edit files | `mcp_codeplane-codeplane-_write_files` | `sed`, `echo >>`, `awk`, `tee` |
+| List directory | `mcp_codeplane-codeplane-_list_files` | `ls`, `find`, `tree` |
+| Search code | `mcp_codeplane-codeplane-_search` | `grep`, `rg`, `ag`, `ack` |
+| Repository overview | `mcp_codeplane-codeplane-_map_repo` | Manual file traversal |
+| All git operations | `mcp_codeplane-codeplane-_git_*` | Raw `git` commands |
+| Run linters | `mcp_codeplane-codeplane-_lint_check` | `ruff`, `black`, `mypy` directly |
+| Discover tests | `mcp_codeplane-codeplane-_discover_test_targets` | Manual test file search |
+| Run tests | `mcp_codeplane-codeplane-_run_test_targets` | `pytest`, `jest` directly |
+| Rename symbols | `mcp_codeplane-codeplane-_refactor_rename` | Find-and-replace, `sed` |
+| Semantic diff | `mcp_codeplane-codeplane-_semantic_diff` | Manual comparison |
 
 ### Search Strategy Guide (enrichment, no source text)
 
@@ -163,6 +166,10 @@ Search NEVER returns source text. Use `read_source` with spans from search resul
 
 `write_files` supports span edits: provide `start_line`, `end_line`, `expected_file_sha256`
 (from `read_source`), and `new_content`. Server validates hash; mismatch → re-read.
+`edits` accepts multiple entries across different files — always batch independent edits
+into a single `write_files` call to minimize round-trips.
+For updates, you may also include `expected_content` — the server will fuzzy-match nearby
+lines if your line numbers are slightly off, auto-correcting within a few lines.
 
 ### CRITICAL: Follow Agentic Hints
 
@@ -179,4 +186,5 @@ Also check for: `coverage_hint`, `display_to_user`.
 - **DON'T** use `refactor_rename` with file:line:col — pass the symbol NAME only
 - **DON'T** skip `lint_check` after `write_files`
 - **DON'T** ignore `agentic_hint` in responses
+- **DON'T** use `target_filter` for post-change testing — use `affected_by` on `run_test_targets`
 <!-- /codeplane-instructions -->

@@ -65,12 +65,15 @@ and safe refactoring that terminal commands cannot provide.
 
 Search = find. Read = retrieve. Full = gated.
 
+`read_source` accepts multiple `targets` in one call — batch reads of independent spans.
+Response includes `file_sha256` per file — save it for `write_files` span edits.
+
 ### First Steps When Starting a Task
 
 1. `describe` — get repo metadata, language, active branch, index status
 2. `map_repo(include=["structure", "dependencies", "test_layout"])` — understand repo shape
 3. `read_source` on relevant files — understand the code you'll modify
-4. After changes: `lint_check` → `discover_test_targets(affected_by=[...])` → `run_test_targets`
+4. After changes: `lint_check` → `run_test_targets(affected_by=["changed_file.py"])` for impact-aware testing
 5. `semantic_diff` — review structural impact before committing
 6. `git_stage_and_commit` — one-step commit with pre-commit hook handling
 
@@ -112,6 +115,10 @@ Search NEVER returns source text. Use `read_source` with spans from search resul
 
 `write_files` supports span edits: provide `start_line`, `end_line`, `expected_file_sha256`
 (from `read_source`), and `new_content`. Server validates hash; mismatch → re-read.
+`edits` accepts multiple entries across different files — always batch independent edits
+into a single `write_files` call to minimize round-trips.
+For updates, you may also include `expected_content` — the server will fuzzy-match nearby
+lines if your line numbers are slightly off, auto-correcting within a few lines.
 
 ### CRITICAL: Follow Agentic Hints
 
@@ -128,6 +135,7 @@ Also check for: `coverage_hint`, `display_to_user`.
 - **DON'T** use `refactor_rename` with file:line:col — pass the symbol NAME only
 - **DON'T** skip `lint_check` after `write_files`
 - **DON'T** ignore `agentic_hint` in responses
+- **DON'T** use `target_filter` for post-change testing — use `affected_by` on `run_test_targets`
 <!-- /codeplane-instructions -->
 """
 

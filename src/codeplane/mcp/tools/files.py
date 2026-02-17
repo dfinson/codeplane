@@ -24,6 +24,7 @@ from codeplane.core.languages import EXTENSION_TO_NAME
 from codeplane.mcp.delivery import ScopeManager, build_envelope
 from codeplane.mcp.errors import (
     MCPError,
+    MCPErrorCode,
 )
 
 if TYPE_CHECKING:
@@ -516,7 +517,47 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             "summary": _summarize_list(result.path, result.total, result.truncated),
         }
 
-    # Flatten schemas to remove $ref/$defs for Claude compatibility
+    # -------------------------------------------------------------------------
+    # Budget reset tool
+    # -------------------------------------------------------------------------
+
+    @mcp.tool
+    async def reset_budget(
+        ctx: Context,
+        scope_id: str = Field(..., description="Scope ID for budget tracking"),
+        category: str = Field(
+            ...,
+            description="Budget category to reset: 'read' or 'search'",
+        ),
+        justification: str = Field(
+            ...,
+            description=(
+                "Why the reset is needed. Post-mutation: >= 50 chars. "
+                "No-mutation ceiling reset: >= 250 chars."
+            ),
+        ),
+    ) -> dict[str, Any]:
+        """Request a budget ceiling reset.
+
+        Read budgets become resettable after a mutation (write_files).
+        Search budgets become resettable every 3 mutations.
+        Pure-read workflows (no mutations) can request resets at ceiling
+        with a longer justification (>= 250 chars).
+        Returns before/after counter values and total reset count.
+        """
+        try:
+            result = _scope_manager.request_reset(scope_id, category, justification)
+        except ValueError as exc:
+            raise MCPError(
+                code=MCPErrorCode.BUDGET_EXCEEDED,
+                message=str(exc),
+                remediation=(
+                    "Ensure you have mutation eligibility or are at ceiling. "
+                    "Provide a justification of appropriate length."
+                ),
+            ) from exc
+        return result
+
     for tool in mcp._tool_manager._tools.values():
         tool.parameters = dereference_refs(tool.parameters)
 

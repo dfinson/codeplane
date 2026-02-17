@@ -414,10 +414,16 @@ class ScopeBudget:
     max_search_calls: int = 100
     max_search_hits_returned_total: int = 5000
     max_paged_continuations: int = 500
-
     # Duplicate read tracking
     _full_read_history: dict[str, int] = field(default_factory=dict)
     _mutation_epoch: int = field(default=0)
+
+    # Budget reset tracking
+    _read_reset_eligible_at_epoch: int = field(default=-1)
+    _search_reset_eligible_at_epoch: int = field(default=-1)
+    _total_resets: int = field(default=0)
+    _reset_log: list[dict[str, Any]] = field(default_factory=list)
+    mutations_for_search_reset: int = field(default=3)
 
     def touch(self) -> None:
         self.last_active = time.monotonic()
@@ -445,9 +451,118 @@ class ScopeBudget:
         self.touch()
 
     def record_mutation(self) -> None:
-        """Reset duplicate read tracking after a mutation."""
+        """Record a mutation and update budget reset eligibility.
+
+        - Read budget becomes eligible for reset immediately (next epoch)
+        - Search budget becomes eligible every N mutations
+        """
         self._mutation_epoch += 1
         self._full_read_history.clear()
+        # Read reset: eligible after any mutation
+        self._read_reset_eligible_at_epoch = self._mutation_epoch
+        # Search reset: eligible every N mutations
+        if self._mutation_epoch % self.mutations_for_search_reset == 0:
+            self._search_reset_eligible_at_epoch = self._mutation_epoch
+
+    def request_reset(self, category: str, justification: str) -> dict[str, Any]:
+        """Request a budget reset. Requires eligibility and justification.
+
+        Args:
+            category: 'read' or 'search'
+            justification: Why the reset is needed.
+                Post-mutation: max 50 chars.
+                No-mutation (ceiling reset): max 250 chars.
+
+        Returns:
+            Dict with reset result, counters before/after, and justification.
+
+        Raises:
+            ValueError: If category invalid, justification too short/long,
+                or reset not eligible.
+        """
+        if category not in ("read", "search"):
+            msg = f"Invalid reset category: {category!r}. Must be 'read' or 'search'."
+            raise ValueError(msg)
+
+        justification = justification.strip()
+        if len(justification) < 50:
+            msg = "Justification must be at least 50 characters."
+            raise ValueError(msg)
+
+        # Determine eligibility
+        has_mutations = self._mutation_epoch > 0
+        if category == "read":
+            eligible = self._read_reset_eligible_at_epoch == self._mutation_epoch
+            counters = ["read_bytes_total", "full_file_reads", "read_calls"]
+            check_keys = ["read_bytes", "full_reads", "read_calls"]
+            # No-mutation path: agent can request read reset at ceiling
+            if not eligible and not has_mutations:
+                at_ceiling = any(self.check_budget(c) is not None for c in check_keys)
+                if at_ceiling and len(justification) >= 250:
+                    eligible = True
+                elif at_ceiling:
+                    msg = (
+                        "No-mutation read reset requires justification "
+                        f"of at least 250 characters (got {len(justification)})."
+                    )
+                    raise ValueError(msg)
+        else:  # search
+            eligible = self._search_reset_eligible_at_epoch == self._mutation_epoch
+            counters = ["search_calls", "search_hits_returned_total", "paged_continuations"]
+            check_keys = ["search_calls", "search_hits", "paged_continuations"]
+            # No-mutation path for search
+            if not eligible and not has_mutations:
+                at_ceiling = any(self.check_budget(c) is not None for c in check_keys)
+                if at_ceiling and len(justification) >= 250:
+                    eligible = True
+                elif at_ceiling:
+                    msg = (
+                        "No-mutation search reset requires justification "
+                        f"of at least 250 characters (got {len(justification)})."
+                    )
+                    raise ValueError(msg)
+
+        if not eligible:
+            if category == "read":
+                msg = "Read budget reset requires at least one mutation since last reset."
+            else:
+                msg = (
+                    f"Search budget reset requires {self.mutations_for_search_reset} "
+                    f"mutations (current epoch: {self._mutation_epoch})."
+                )
+            raise ValueError(msg)
+
+        # Capture before state
+        before = {c: getattr(self, c) for c in counters}
+
+        # Reset counters
+        for c in counters:
+            setattr(self, c, 0)
+        if category == "read":
+            self._full_read_history.clear()
+            self._read_reset_eligible_at_epoch = -1
+        else:
+            self._search_reset_eligible_at_epoch = -1
+
+        self._total_resets += 1
+        self._reset_log.append(
+            {
+                "category": category,
+                "justification": justification,
+                "epoch": self._mutation_epoch,
+                "before": before,
+                "has_mutations": has_mutations,
+            }
+        )
+
+        return {
+            "reset": True,
+            "category": category,
+            "before": before,
+            "after": dict.fromkeys(counters, 0),
+            "total_resets": self._total_resets,
+            "epoch": self._mutation_epoch,
+        }
 
     def check_duplicate_read(self, path: str) -> dict[str, Any] | None:
         """Check for duplicate full read, return warning if detected."""
@@ -502,14 +617,32 @@ class ScopeBudget:
         return None
 
     def to_usage_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "read_bytes": self.read_bytes_total,
             "full_reads": self.full_file_reads,
             "read_calls": self.read_calls,
             "search_calls": self.search_calls,
             "search_hits": self.search_hits_returned_total,
             "paged_continuations": self.paged_continuations,
+            "mutation_epoch": self._mutation_epoch,
+            "total_resets": self._total_resets,
         }
+        # Mutation-path availability
+        read_available = self._read_reset_eligible_at_epoch == self._mutation_epoch
+        search_available = self._search_reset_eligible_at_epoch == self._mutation_epoch
+        # Pure-read path: available at ceiling when no mutations
+        if self._mutation_epoch == 0:
+            read_keys = ["read_bytes", "full_reads", "read_calls"]
+            search_keys = ["search_calls", "search_hits", "paged_continuations"]
+            if any(self.check_budget(c) is not None for c in read_keys):
+                read_available = True
+            if any(self.check_budget(c) is not None for c in search_keys):
+                search_available = True
+        if read_available:
+            result["read_reset_available"] = True
+        if search_available:
+            result["search_reset_available"] = True
+        return result
 
     def is_expired(self, ttl_seconds: float = 3600.0) -> bool:
         return (time.monotonic() - self.last_active) > ttl_seconds
@@ -550,11 +683,20 @@ class ScopeManager:
             return None
 
     def record_mutation(self, scope_id: str) -> None:
-        """Record a mutation event for duplicate read tracking."""
+        """Record a mutation event and update reset eligibility."""
         with self._lock:
             budget = self._scopes.get(scope_id)
             if budget:
                 budget.record_mutation()
+
+    def request_reset(self, scope_id: str, category: str, justification: str) -> dict[str, Any]:
+        """Request a budget reset for a scope. Thread-safe."""
+        with self._lock:
+            budget = self._scopes.get(scope_id)
+            if not budget:
+                msg = f"No budget found for scope '{scope_id}'."
+                raise ValueError(msg)
+            return budget.request_reset(category, justification)
 
     def cleanup_expired(self) -> int:
         with self._lock:

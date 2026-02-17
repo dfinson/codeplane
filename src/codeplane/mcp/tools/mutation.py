@@ -51,6 +51,14 @@ class EditParam(BaseModel):
     new_content: str | None = Field(
         None, description="Replacement content for the span (required for update)"
     )
+    expected_content: str | None = Field(
+        None,
+        description=(
+            "Expected content at the span location (optional). "
+            "If provided and line numbers are slightly off, the server will "
+            "fuzzy-match nearby lines and auto-correct within a few lines."
+        ),
+    )
 
     @model_validator(mode="after")
     def _validate_action_fields(self) -> "EditParam":
@@ -75,6 +83,64 @@ class EditParam(BaseModel):
                 msg = f"end_line ({self.end_line}) must be >= start_line ({self.start_line})"
                 raise ValueError(msg)
         return self
+
+
+# =============================================================================
+# Fuzzy Span Matching
+# =============================================================================
+
+_FUZZY_SEARCH_WINDOW = 5  # Max lines to search in each direction
+
+
+def _fuzzy_match_span(
+    lines: list[str],
+    start: int,
+    end: int,
+    expected_content: str,
+) -> tuple[int, int, bool]:
+    """Try to find expected_content near the given span, auto-correcting line numbers.
+
+    Args:
+        lines: All file lines (with line endings).
+        start: 0-indexed start line.
+        end: 0-indexed exclusive end line (like slice notation).
+        expected_content: The content the agent expects at [start:end].
+
+    Returns:
+        (corrected_start, corrected_end, was_corrected) tuple.
+        If no match found nearby, returns original values with was_corrected=False.
+    """
+    expected_lines = expected_content.splitlines(keepends=True)
+    # Normalize: ensure trailing newline for comparison
+    if expected_lines and not expected_lines[-1].endswith("\n"):
+        expected_lines[-1] += "\n"
+    search_len = len(expected_lines)
+
+    # First check: does expected_content match at the given position?
+    actual_at_span = lines[start:end]
+    if _lines_match(actual_at_span, expected_lines):
+        return start, end, False  # Already correct
+
+    # Search nearby positions
+    for offset in range(1, _FUZZY_SEARCH_WINDOW + 1):
+        for direction in (-1, 1):
+            candidate_start = start + (offset * direction)
+            candidate_end = candidate_start + search_len
+            if candidate_start < 0 or candidate_end > len(lines):
+                continue
+            candidate = lines[candidate_start:candidate_end]
+            if _lines_match(candidate, expected_lines):
+                return candidate_start, candidate_end, True
+
+    # No match found — return original (hash will catch if wrong)
+    return start, end, False
+
+
+def _lines_match(actual: list[str], expected: list[str]) -> bool:
+    """Compare lines with whitespace-normalized matching."""
+    if len(actual) != len(expected):
+        return False
+    return all(a.rstrip() == e.rstrip() for a, e in zip(actual, expected, strict=True))
 
 
 # =============================================================================
@@ -235,10 +301,28 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 lines = content.splitlines(keepends=True)
 
                 # Apply in descending order to preserve line numbers
-                # Apply in descending order to preserve line numbers
+                corrections: list[dict[str, Any]] = []
                 for e in sorted(path_edits, key=lambda x: -(x.start_line or 0)):
                     start = (e.start_line or 1) - 1  # 1-indexed to 0-indexed
                     end = e.end_line or len(lines)  # 1-indexed inclusive
+
+                    # Fuzzy match: auto-correct line numbers if expected_content provided
+                    if e.expected_content is not None:
+                        new_start, new_end, was_corrected = _fuzzy_match_span(
+                            lines, start, end, e.expected_content
+                        )
+                        if was_corrected:
+                            corrections.append(
+                                {
+                                    "original": {
+                                        "start_line": e.start_line,
+                                        "end_line": e.end_line,
+                                    },
+                                    "corrected": {"start_line": new_start + 1, "end_line": new_end},
+                                }
+                            )
+                            start = new_start
+                            end = new_end
                     # Reject spans that start past end of file
                     if start >= len(lines):
                         raise InvalidRangeError(
@@ -270,6 +354,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "insertions": insertions,
                     "deletions": deletions,
                 }
+                if corrections:
+                    result_entry["line_corrections"] = corrections
                 # Build verification context so agents can confirm
                 # edits landed correctly without a separate read_source call.
                 _CONTEXT_LINES = 3
