@@ -690,9 +690,9 @@ class TestTypeMemberExtraction:
 
         # Verify member kind if specified
         if member_kind:
-            assert any(m.member_kind == member_kind for m in matching), (
-                f"Expected member kind '{member_kind}'. Got: {[m.member_kind for m in matching]}"
-            )
+            assert any(
+                m.member_kind == member_kind for m in matching
+            ), f"Expected member kind '{member_kind}'. Got: {[m.member_kind for m in matching]}"
 
 
 # =============================================================================

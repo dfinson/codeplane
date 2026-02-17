@@ -452,9 +452,9 @@ class TestCrossPlatformPathNormalization:
 
         for candidate in nested_candidates:
             # root_path must use forward slashes, not backslashes
-            assert "\\" not in candidate.root_path, (
-                f"root_path contains backslash: {candidate.root_path}"
-            )
+            assert (
+                "\\" not in candidate.root_path
+            ), f"root_path contains backslash: {candidate.root_path}"
             # Should contain forward slash for nested path
             assert "/" in candidate.root_path or candidate.root_path == "packages"
 

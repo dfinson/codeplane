@@ -195,6 +195,6 @@ class TestCoverageEmitterSignatures:
 
         cls = getattr(coverage, emitter_class)
         sig = inspect.signature(cls.modify_command)
-        assert "source_dirs" in sig.parameters, (
-            f"{emitter_class}.modify_command missing source_dirs parameter"
-        )
+        assert (
+            "source_dirs" in sig.parameters
+        ), f"{emitter_class}.modify_command missing source_dirs parameter"

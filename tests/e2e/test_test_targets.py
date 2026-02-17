@@ -52,6 +52,6 @@ def test_discover_test_targets(
     if test_spec.targets_min is not None and test_spec.targets_min > 0:
         # Count non-empty lines as proxy for target count
         target_lines = [line for line in text_content.split("\n") if line.strip()]
-        assert len(target_lines) >= test_spec.targets_min, (
-            f"Expected at least {test_spec.targets_min} test targets, got {len(target_lines)}"
-        )
+        assert (
+            len(target_lines) >= test_spec.targets_min
+        ), f"Expected at least {test_spec.targets_min} test targets, got {len(target_lines)}"

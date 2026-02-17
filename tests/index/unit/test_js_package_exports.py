@@ -10,6 +10,7 @@ Covers:
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 from codeplane.index._internal.indexing.config_resolver import (
     ImportPathResolver,
@@ -106,7 +107,7 @@ class TestBuildJsPackageExports:
     """Tests for building bare specifier -> file path map."""
 
     @staticmethod
-    def _make_reader(file_contents: dict[str, str]):
+    def _make_reader(file_contents: dict[str, str]) -> Callable[[str], str | None]:
         def read_file(path: str) -> str | None:
             return file_contents.get(path)
 

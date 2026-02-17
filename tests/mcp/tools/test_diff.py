@@ -737,9 +737,9 @@ class TestResponseSizeBudgetEnforcement:
 
         # Serialize with indent=2 like VS Code does
         response_bytes = len(json.dumps(d, indent=2).encode("utf-8"))
-        assert response_bytes <= RESPONSE_BUDGET_BYTES, (
-            f"Response {response_bytes} bytes exceeds budget {RESPONSE_BUDGET_BYTES}"
-        )
+        assert (
+            response_bytes <= RESPONSE_BUDGET_BYTES
+        ), f"Response {response_bytes} bytes exceeds budget {RESPONSE_BUDGET_BYTES}"
 
     def test_paginated_page_under_budget(self, monkeypatch: Any) -> None:
         """Each paginated page stays under budget."""
@@ -757,15 +757,15 @@ class TestResponseSizeBudgetEnforcement:
         d = _result_to_dict(_result(changes), cache_id=1)
 
         # Should be paginated
-        assert d["pagination"].get("truncated") is True, (
-            f"Expected pagination with {len(changes)} changes and {TEST_BUDGET} budget"
-        )
+        assert (
+            d["pagination"].get("truncated") is True
+        ), f"Expected pagination with {len(changes)} changes and {TEST_BUDGET} budget"
 
         # But the page should still be under the test budget
         response_bytes = len(json.dumps(d, indent=2).encode("utf-8"))
-        assert response_bytes <= TEST_BUDGET, (
-            f"Paginated response {response_bytes} bytes exceeds budget {TEST_BUDGET}"
-        )
+        assert (
+            response_bytes <= TEST_BUDGET
+        ), f"Paginated response {response_bytes} bytes exceeds budget {TEST_BUDGET}"
 
     def test_measure_bytes_matches_indent2_serialization(self) -> None:
         """measure_bytes() uses indent=2 to match VS Code display format."""
@@ -805,9 +805,9 @@ class TestResponseSizeBudgetEnforcement:
 
         # The difference is just array brackets and commas, should be small
         # Allow up to 100 bytes for framing overhead
-        assert abs(total_actual - total_measured) < 100, (
-            f"Overhead calculation off: measured {total_measured}, actual {total_actual}"
-        )
+        assert (
+            abs(total_actual - total_measured) < 100
+        ), f"Overhead calculation off: measured {total_measured}, actual {total_actual}"
 
     def test_large_result_requires_pagination(self) -> None:
         """Large results trigger pagination to stay under budget."""
@@ -835,16 +835,16 @@ class TestResponseSizeBudgetEnforcement:
 
         # Page must be under budget
         response_bytes = len(json.dumps(d, indent=2).encode("utf-8"))
-        assert response_bytes <= RESPONSE_BUDGET_BYTES, (
-            f"Large result page {response_bytes} bytes exceeds budget {RESPONSE_BUDGET_BYTES}"
-        )
+        assert (
+            response_bytes <= RESPONSE_BUDGET_BYTES
+        ), f"Large result page {response_bytes} bytes exceeds budget {RESPONSE_BUDGET_BYTES}"
 
         # Items should be fewer than total
         items_on_page = len(d["structural_changes"])
         total_items = d["pagination"]["total_structural"]
-        assert items_on_page < total_items, (
-            f"Expected fewer items ({items_on_page}) than total ({total_items})"
-        )
+        assert (
+            items_on_page < total_items
+        ), f"Expected fewer items ({items_on_page}) than total ({total_items})"
 
     def test_all_pages_under_budget(self) -> None:
         """Verify every page of a paginated response stays under budget."""
@@ -877,9 +877,9 @@ class TestResponseSizeBudgetEnforcement:
 
             # Every page must be under budget
             response_bytes = len(json.dumps(d, indent=2).encode("utf-8"))
-            assert response_bytes <= RESPONSE_BUDGET_BYTES, (
-                f"Page {pages_seen + 1}: {response_bytes} bytes exceeds budget {RESPONSE_BUDGET_BYTES}"
-            )
+            assert (
+                response_bytes <= RESPONSE_BUDGET_BYTES
+            ), f"Page {pages_seen + 1}: {response_bytes} bytes exceeds budget {RESPONSE_BUDGET_BYTES}"
 
             pages_seen += 1
 

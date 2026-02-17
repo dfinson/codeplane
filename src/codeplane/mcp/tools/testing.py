@@ -159,21 +159,18 @@ def _summarize_run(result: "TestResult") -> str:
             parts = [f"{p.cases.passed} passed"]
             if p.cases.failed:
                 parts.append(f"{p.cases.failed} failed")
-            return (
-                f"running: {p.targets.completed}/{p.targets.total} targets "
-                f"({', '.join(parts)})"
-            )
+            return f"running: {p.targets.completed}/{p.targets.total} targets ({', '.join(parts)})"
         elif status.status == "cancelled":
             return "cancelled"
         elif status.status == "failed":
             return "run failed"
         # Other statuses
-        parts: list[str] = [status.status]
+        status_parts: list[str] = [status.status]
         if p.cases.total > 0:
-            parts.append(f"{p.cases.passed}/{p.cases.total} passed")
+            status_parts.append(f"{p.cases.passed}/{p.cases.total} passed")
             if p.cases.failed:
-                parts.append(f"{p.cases.failed} failed")
-        return ", ".join(parts)
+                status_parts.append(f"{p.cases.failed} failed")
+        return ", ".join(status_parts)
 
     return status.status
 

@@ -166,30 +166,30 @@ class TestSchemaValidation:
     def test_actual_schema_matches_expected_ref_facts(self, db: Database) -> None:
         """ref_facts table has all columns referenced in resolver SQL."""
         actual = self._introspect_columns(db, "ref_facts")
-        assert self._REF_FACTS_COLUMNS.issubset(actual), (
-            f"Missing columns in ref_facts: {self._REF_FACTS_COLUMNS - actual}"
-        )
+        assert self._REF_FACTS_COLUMNS.issubset(
+            actual
+        ), f"Missing columns in ref_facts: {self._REF_FACTS_COLUMNS - actual}"
 
     def test_actual_schema_matches_expected_def_facts(self, db: Database) -> None:
         """def_facts table has all columns referenced in resolver SQL."""
         actual = self._introspect_columns(db, "def_facts")
-        assert self._DEF_FACTS_COLUMNS.issubset(actual), (
-            f"Missing columns in def_facts: {self._DEF_FACTS_COLUMNS - actual}"
-        )
+        assert self._DEF_FACTS_COLUMNS.issubset(
+            actual
+        ), f"Missing columns in def_facts: {self._DEF_FACTS_COLUMNS - actual}"
 
     def test_actual_schema_matches_expected_import_facts(self, db: Database) -> None:
         """import_facts table has all columns referenced in resolver SQL."""
         actual = self._introspect_columns(db, "import_facts")
-        assert self._IMPORT_FACTS_COLUMNS.issubset(actual), (
-            f"Missing columns in import_facts: {self._IMPORT_FACTS_COLUMNS - actual}"
-        )
+        assert self._IMPORT_FACTS_COLUMNS.issubset(
+            actual
+        ), f"Missing columns in import_facts: {self._IMPORT_FACTS_COLUMNS - actual}"
 
     def test_actual_schema_matches_expected_files(self, db: Database) -> None:
         """files table has all columns referenced in resolver SQL."""
         actual = self._introspect_columns(db, "files")
-        assert self._FILES_COLUMNS.issubset(actual), (
-            f"Missing columns in files: {self._FILES_COLUMNS - actual}"
-        )
+        assert self._FILES_COLUMNS.issubset(
+            actual
+        ), f"Missing columns in files: {self._FILES_COLUMNS - actual}"
 
     def test_type_kind_filter_contains_record(self) -> None:
         """_TYPE_KIND_FILTER includes 'record' for C# record types."""
@@ -676,9 +676,9 @@ class TestRootFallbackContextDefault:
             assert specific_def.unit_id == specific_id
 
             assert root_def is not None
-            assert root_def.unit_id == root_id, (
-                f"Expected unit_id={root_id} (root fallback), got {root_def.unit_id}"
-            )
+            assert (
+                root_def.unit_id == root_id
+            ), f"Expected unit_id={root_id} (root fallback), got {root_def.unit_id}"
 
     def test_pass15_resolvers_with_root_fallback_context(
         self, db: Database, temp_dir: Path
@@ -848,9 +848,9 @@ namespace Acme.Services {
                 )
             ).first()
             assert ctx1_user_def is not None
-            assert all(r.target_def_uid == ctx1_user_def.def_uid for r in user_refs), (
-                "target_def_uid must point to ctx1's User def, not ctx2's"
-            )
+            assert all(
+                r.target_def_uid == ctx1_user_def.def_uid for r in user_refs
+            ), "target_def_uid must point to ctx1's User def, not ctx2's"
 
     def test_same_namespace_refs_isolated_by_unit_id(self, db: Database, temp_dir: Path) -> None:
         """resolve_same_namespace_refs with unit_id only matches defs in the same unit."""
@@ -924,9 +924,9 @@ namespace Acme.Services {
                 )
             ).first()
             assert ctx1_def is not None
-            assert all(r.target_def_uid == ctx1_def.def_uid for r in js_refs), (
-                "target_def_uid must point to ctx1's def, not ctx2's"
-            )
+            assert all(
+                r.target_def_uid == ctx1_def.def_uid for r in js_refs
+            ), "target_def_uid must point to ctx1's def, not ctx2's"
 
     def test_star_import_refs_isolated_by_unit_id(self, db: Database, temp_dir: Path) -> None:
         """resolve_star_import_refs with unit_id only processes imports in the same unit."""

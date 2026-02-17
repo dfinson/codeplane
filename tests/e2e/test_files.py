@@ -57,13 +57,13 @@ def test_list_files(
         file_count = len(file_lines)
 
         if files_section.indexed_min is not None:
-            assert file_count >= files_section.indexed_min, (
-                f"Expected at least {files_section.indexed_min} files, got {file_count}"
-            )
+            assert (
+                file_count >= files_section.indexed_min
+            ), f"Expected at least {files_section.indexed_min} files, got {file_count}"
         if files_section.indexed_max is not None:
-            assert file_count <= files_section.indexed_max, (
-                f"Expected at most {files_section.indexed_max} files, got {file_count}"
-            )
+            assert (
+                file_count <= files_section.indexed_max
+            ), f"Expected at most {files_section.indexed_max} files, got {file_count}"
 
 
 @pytest.mark.e2e
