@@ -139,12 +139,13 @@ class TestAffectedTests:
 
     def test_package_init_matches_as_parent(self, graph: ImportGraph) -> None:
         result = graph.affected_tests(["src/mylib/__init__.py"])
-        # __init__.py maps to module "src.mylib"/"mylib" which is parent of mylib.core etc.
-        # So it correctly matches all tests that import mylib.* submodules
+        # __init__.py maps to module "mylib" - tests importing mylib.* are affected
+        # because __init__.py runs on any submodule import
         assert len(result.matches) > 0
-        # All matches should be low confidence (parent/child prefix)
+        # Child imports (mylib.core, mylib.utils) are high confidence
+        # because changes to __init__.py affect all submodule imports
         for m in result.matches:
-            assert m.confidence == "low"
+            assert m.confidence == "high"
 
     def test_unresolvable_file(self, graph: ImportGraph) -> None:
         result = graph.affected_tests(["README.md"])
