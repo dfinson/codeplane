@@ -907,6 +907,7 @@ class StructuralIndexer:
 
         from codeplane.index._internal.indexing.config_resolver import (
             ImportPathResolver,
+            build_js_package_exports,
         )
         from codeplane.index.models import File
 
@@ -929,7 +930,19 @@ class StructuralIndexer:
             if e.declared_module:
                 declared_modules[e.file_path] = e.declared_module
 
-        resolver = ImportPathResolver(list(all_paths_set), declared_modules)
+        all_paths_list = list(all_paths_set)
+
+        # Build JS/TS package.json exports map for bare specifier resolution
+        def _read_file(rel_path: str) -> str | None:
+            full = self.repo_path / rel_path
+            try:
+                return full.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                return None
+
+        js_exports = build_js_package_exports(all_paths_list, _read_file)
+
+        resolver = ImportPathResolver(all_paths_list, declared_modules, js_exports)
 
         for ex in valid:
             for imp in ex.imports:
@@ -952,6 +965,7 @@ class StructuralIndexer:
 
         from codeplane.index._internal.indexing.config_resolver import (
             ImportPathResolver,
+            build_js_package_exports,
         )
         from codeplane.index.models import File, ImportFact
 
@@ -965,7 +979,17 @@ class StructuralIndexer:
                 if dm:
                     declared_modules[path] = dm
 
-        resolver = ImportPathResolver(all_paths, declared_modules)
+        # Build JS/TS package.json exports map for bare specifier resolution
+        def _read_file(rel_path: str) -> str | None:
+            full = self.repo_path / rel_path
+            try:
+                return full.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                return None
+
+        js_exports = build_js_package_exports(all_paths, _read_file)
+
+        resolver = ImportPathResolver(all_paths, declared_modules, js_exports)
 
         # Find all unresolved imports and try to resolve them
         newly_resolved = 0

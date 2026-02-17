@@ -29,6 +29,7 @@ All resolution runs at **index time** and the result is stored in
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections.abc import Callable
@@ -155,13 +156,15 @@ def resolve_rust_module(
 class ConfigResolver:
     """Caches parsed config files for a repo and resolves module identities.
 
-    Used during indexing to augment ``declared_module`` for Go and Rust files.
+    Used during indexing to augment ``declared_module`` for Go and Rust files,
+    and to build JS/TS package.json export maps.
     """
 
     def __init__(self, repo_root: str, file_paths: list[str]) -> None:
         self._repo_root = repo_root
         self._go_mods: dict[str, str] | None = None
         self._cargo_tomls: dict[str, str] | None = None
+        self._js_exports: dict[str, str] | None = None
         self._file_paths = file_paths
 
     def _discover_go_mods(self, read_file: _ReadFileFn) -> dict[str, str]:
@@ -234,6 +237,155 @@ class ConfigResolver:
                 return resolve_rust_module(file_path, cfg_path, crate_name)
         return None
 
+    def resolve_js_exports(
+        self, read_file: _ReadFileFn,
+    ) -> dict[str, str]:
+        """Build JS/TS bare-specifier → file-path map from package.json exports.
+
+        Cached after first call.
+        """
+        if self._js_exports is not None:
+            return self._js_exports
+        self._js_exports = build_js_package_exports(
+            self._file_paths, read_file,
+        )
+        return self._js_exports
+
+
+# ---------------------------------------------------------------------------
+# JS/TS: package.json exports resolution
+# ---------------------------------------------------------------------------
+
+
+def _parse_export_target(value: object) -> str | None:
+    """Extract the source file path from a package.json exports value.
+
+    Handles:
+    - String: ``"./src/index.ts"``
+    - Conditional object: ``{"@zod/source": "./src/index.ts", "import": ...}``
+      Prefers ``@*/source`` > ``types`` > ``import`` > ``require`` > ``default``
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        # Prefer source-level exports (e.g. @zod/source), then types, then
+        # runtime exports.  Source exports point to .ts files which is what
+        # we want for structural indexing.
+        for key in list(value.keys()):
+            if key.endswith("/source") or key.startswith("@") and "source" in key:
+                v = value[key]
+                if isinstance(v, str):
+                    return v
+        for key in ("types", "import", "require", "default"):
+            v = value.get(key)
+            if isinstance(v, str):
+                return v
+    return None
+
+
+def build_js_package_exports(
+    file_paths: list[str],
+    read_file: Callable[[str], str | None],
+) -> dict[str, str]:
+    """Build a bare-specifier → repo-relative file path map from package.json exports.
+
+    Scans all ``package.json`` files in the repo with ``name`` and ``exports``
+    fields.  For each export entry, maps ``<name>/<subpath>`` to the resolved
+    repo-relative file path.
+
+    Example::
+
+        # packages/zod/package.json: name="zod", exports: {"./v4": {"import": "./src/v4/index.ts"}}
+        # → {"zod/v4": "packages/zod/src/v4/index.ts"}
+
+    Returns:
+        Dict mapping bare import specifiers to repo-relative file paths.
+    """
+    result: dict[str, str] = {}
+    for fp in file_paths:
+        if not PurePosixPath(fp).name == "package.json":
+            continue
+        text = read_file(fp)
+        if not text:
+            continue
+        try:
+            pkg = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        name = pkg.get("name")
+        exports = pkg.get("exports")
+        if not isinstance(name, str) or not isinstance(exports, dict):
+            continue
+
+        pkg_dir = str(PurePosixPath(fp).parent)
+        if pkg_dir == ".":
+            pkg_dir = ""
+
+        for subpath, value in exports.items():
+            # Skip wildcard exports like "./v4/locales/*" for now
+            if "*" in subpath:
+                continue
+            # Skip non-source exports like "./package.json"
+            target = _parse_export_target(value)
+            if not target or not isinstance(target, str):
+                continue
+            # Must be a relative path
+            if not target.startswith("."):
+                continue
+
+            # Build the bare specifier: name + subpath (strip leading ".")
+            if subpath == ".":
+                specifier = name
+            elif subpath.startswith("./"):
+                specifier = name + "/" + subpath[2:]
+            else:
+                specifier = name + "/" + subpath
+
+            # Resolve target relative to package directory
+            if pkg_dir:
+                resolved = _normalize_path(pkg_dir + "/" + target[2:])
+            else:
+                resolved = _normalize_path(target[2:] if target.startswith("./") else target)
+
+            # Resolve .js → .ts remapping (source files are usually .ts)
+            actual = _resolve_export_target(resolved, set(file_paths))
+            if actual:
+                result[specifier] = actual
+                logger.debug("package.json export: %s -> %s", specifier, actual)
+
+    return result
+
+
+def _resolve_export_target(target: str, all_paths: set[str]) -> str | None:
+    """Resolve a package.json export target to an actual file path.
+
+    Handles .js → .ts remapping and extension probing.
+    """
+    # Exact match
+    if target in all_paths:
+        return target
+
+    # .js → .ts remapping (TypeScript convention)
+    for js_ext, ts_ext in ((".js", ".ts"), (".jsx", ".tsx"), (".mjs", ".mts")):
+        if target.endswith(js_ext):
+            ts_target = target[: -len(js_ext)] + ts_ext
+            if ts_target in all_paths:
+                return ts_target
+
+    # Extension probing for extensionless targets
+    for ext in (".ts", ".tsx", ".js", ".jsx", ".mjs", ".mts"):
+        candidate = target + ext
+        if candidate in all_paths:
+            return candidate
+
+    # Index file probing
+    for ext in (".ts", ".tsx", ".js", ".jsx"):
+        candidate = target + "/index" + ext
+        if candidate in all_paths:
+            return candidate
+
+    return None
+
 
 # ---------------------------------------------------------------------------
 # Import path resolver — resolves source_literal → file path
@@ -265,9 +417,13 @@ class ImportPathResolver:
         self,
         all_file_paths: list[str],
         declared_modules: dict[str, str],  # file_path -> declared_module
+        js_package_exports: dict[str, str] | None = None,  # specifier -> file_path
     ) -> None:
         # Set of all known file paths for existence checks
         self._all_paths: set[str] = set(all_file_paths)
+
+        # JS/TS bare specifier -> file path (from package.json exports)
+        self._js_package_exports: dict[str, str] = js_package_exports or {}
 
         # declared_module -> list of file_paths (multiple files can share a module)
         self._module_to_paths: dict[str, list[str]] = {}
@@ -393,11 +549,15 @@ class ImportPathResolver:
 
         Handles:
         - Relative: './utils' → probe extensions + /index variants
-        - Bare specifiers: 'react' → skip (external package)
+        - Bare specifiers with package.json exports: 'zod/v4' → mapped file
+        - Bare specifiers (npm external): 'react' → skip
         - Extension remapping: './foo.js' → './foo.ts' (TypeScript convention)
         """
         if not source_literal.startswith("."):
-            # Bare specifier (npm package) — cannot resolve to repo file
+            # Bare specifier — check package.json exports first
+            if source_literal in self._js_package_exports:
+                return self._js_package_exports[source_literal]
+            # External package — cannot resolve to repo file
             return None
 
         importer_dir = str(PurePosixPath(importer_path).parent)
@@ -524,6 +684,10 @@ class ImportPathResolver:
         if import_kind == "rust_use":
             source_literal = self._normalize_rust_source(source_literal, importer_path)
 
+        # Normalize PHP backslash separators to dots for declared_module matching
+        if import_kind == "php_use":
+            source_literal = source_literal.replace("\\", ".")
+
         # Exact declared_module match
         if source_literal in self._module_to_paths:
             paths = self._module_to_paths[source_literal]
@@ -552,14 +716,13 @@ class ImportPathResolver:
     ) -> str | None:
         """Pick the best file path from candidates.
 
-        When only one path exists, return it directly.
-        When multiple paths share a declared_module, disambiguate by matching
-        suffix_parts against filename stems and path components.
+        When no suffix_parts are given (exact module match), return the
+        first candidate.  When suffix_parts ARE given, require a stem or
+        subpath match — returning None if no match is found so that the
+        post-batch resolve_all_imports pass can retry with the full DB.
         """
         if not paths:
             return None
-        if len(paths) == 1:
-            return paths[0]
         if not suffix_parts:
             return paths[0]
 
@@ -577,7 +740,10 @@ class ImportPathResolver:
                 if sub in p.lower():
                     return p
 
-        return paths[0]
+        # No stem/subpath match found — return None rather than a random
+        # file.  During batch indexing the target file may not yet be known;
+        # returning None lets resolve_all_imports fix it in the post pass.
+        return None
 
     def _normalize_rust_source(self, source_literal: str, importer_path: str) -> str:
         """Normalize Rust relative paths to absolute crate-qualified paths.

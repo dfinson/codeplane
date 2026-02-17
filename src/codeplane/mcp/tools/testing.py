@@ -483,7 +483,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             if graph_result.low_confidence_tests:
                 low_confidence_hint = (
                     f"{len(graph_result.low_confidence_tests)} test(s) matched with low "
-                    "confidence (parent/child module prefix). Use inspect_affected_tests "
+                    "confidence (parent module prefix only). Use inspect_affected_tests "
                     "to review uncertain matches before deciding whether to include them."
                 )
 
@@ -578,7 +578,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         if graph_result.low_confidence_tests:
             output["agentic_hint"] = (
                 f"{len(graph_result.low_confidence_tests)} match(es) are low-confidence "
-                "(parent/child module prefix only). Review the 'matches' list and "
+                "(parent module prefix only). Review the 'matches' list and "
                 "decide whether to include these tests or run only high-confidence ones."
             )
         elif graph_result.confidence.tier == "partial":

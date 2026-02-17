@@ -8,6 +8,10 @@ This module registers runner packs for:
 - Bash (bats)
 - PowerShell (Pester)
 - Lua (busted)
+- Elixir (mix test)
+- Haskell (cabal test)
+- Julia (Pkg.test)
+- OCaml (dune test)
 """
 
 from __future__ import annotations
@@ -773,3 +777,325 @@ class BustedPack(RunnerPack):
         if output_path.exists():
             return parse_junit_xml(output_path.read_text())
         return ParsedTestSuite(name="busted", errors=1)
+
+
+# =============================================================================
+# Elixir - Mix Test (ExUnit)
+# =============================================================================
+
+
+@runner_registry.register
+class MixTestPack(RunnerPack):
+    """Elixir ExUnit runner (mix test)."""
+
+    pack_id = "elixir.mix_test"
+    language = "elixir"
+    runner_name = "mix_test"
+    markers = [
+        MarkerRule("mix.exs", confidence="high"),
+    ]
+    output_strategy = OutputStrategy(format="junit_xml", file_based=True, file_pattern="_build/test/lib/**/test-junit-report.xml")
+    capabilities = RunnerCapabilities(
+        supported_kinds=["file"],
+        supports_pattern_filter=True,
+        supports_tag_filter=True,  # Via --only
+        supports_parallel=False,
+        supports_junit_output=True,
+    )
+
+    def detect(self, workspace_root: Path) -> float:
+        if (workspace_root / "mix.exs").exists():
+            # Check it's not a Phoenix umbrella or deps-only project
+            mix_exs = workspace_root / "mix.exs"
+            try:
+                content = mix_exs.read_text()
+                if "def project" in content:
+                    return 1.0
+            except Exception:
+                pass
+            return 0.9
+        return 0.0
+
+    async def discover(self, workspace_root: Path) -> list[TestTarget]:
+        targets: list[TestTarget] = []
+        test_dir = workspace_root / "test"
+        if not test_dir.is_dir():
+            return targets
+        for path in test_dir.rglob("*_test.exs"):
+            if _is_prunable_path(path, workspace_root):
+                continue
+            rel = str(path.relative_to(workspace_root))
+            targets.append(
+                TestTarget(
+                    target_id=f"test:{rel}",
+                    selector=rel,
+                    kind="file",
+                    language="elixir",
+                    runner_pack_id=self.pack_id,
+                    workspace_root=str(workspace_root),
+                )
+            )
+        return targets
+
+    def build_command(
+        self,
+        target: TestTarget,
+        *,
+        output_path: Path,
+        pattern: str | None = None,
+        tags: list[str] | None = None,
+        exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002
+    ) -> list[str]:
+        cmd = ["mix", "test", target.selector]
+        if pattern:
+            cmd.extend(["--only", f"test:{pattern}"])
+        if tags:
+            for tag in tags:
+                cmd.extend(["--only", tag])
+        return cmd
+
+    def parse_output(self, output_path: Path, stdout: str) -> ParsedTestSuite:
+        # ExUnit prints results to stdout; parse from stdout lines
+        suite = ParsedTestSuite(name="mix_test")
+        for line in stdout.splitlines():
+            line = line.strip()
+            # ExUnit format: "  1) test description (Module)\n     test/path:line"
+            if line.startswith("0 failures"):
+                break
+            # Count pass/fail from summary line: "X tests, Y failures"
+            if "tests," in line and "failure" in line:
+                parts = line.split(",")
+                for part in parts:
+                    part = part.strip()
+                    if part.endswith("tests"):
+                        try:
+                            total = int(part.split()[0])
+                            suite.tests = total
+                        except (ValueError, IndexError):
+                            pass
+                    elif "failure" in part:
+                        try:
+                            failures = int(part.split()[0])
+                            suite.failures = failures
+                        except (ValueError, IndexError):
+                            pass
+        return suite
+
+
+# =============================================================================
+# Haskell - Cabal Test
+# =============================================================================
+
+
+@runner_registry.register
+class CabalTestPack(RunnerPack):
+    """Haskell cabal test runner."""
+
+    pack_id = "haskell.cabal_test"
+    language = "haskell"
+    runner_name = "cabal_test"
+    markers = [
+        MarkerRule("*.cabal", confidence="high"),
+    ]
+    output_strategy = OutputStrategy(format="text", file_based=False)
+    capabilities = RunnerCapabilities(
+        supported_kinds=["project"],
+        supports_pattern_filter=False,
+        supports_tag_filter=False,
+        supports_parallel=False,
+        supports_junit_output=False,
+    )
+
+    def detect(self, workspace_root: Path) -> float:
+        cabal_files = list(workspace_root.glob("*.cabal"))
+        if cabal_files:
+            # Check for test-suite stanza
+            for cf in cabal_files:
+                try:
+                    content = cf.read_text()
+                    if "test-suite" in content.lower():
+                        return 1.0
+                except Exception:
+                    pass
+            return 0.5  # Cabal file exists but no test-suite stanza
+        return 0.0
+
+    async def discover(self, workspace_root: Path) -> list[TestTarget]:
+        # Project-level target for cabal test
+        return [
+            TestTarget(
+                target_id="test:.",
+                selector=".",
+                kind="project",
+                language="haskell",
+                runner_pack_id=self.pack_id,
+                workspace_root=str(workspace_root),
+            )
+        ]
+
+    def build_command(
+        self,
+        target: TestTarget,
+        *,
+        output_path: Path,
+        pattern: str | None = None,
+        tags: list[str] | None = None,  # noqa: ARG002
+        exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002
+    ) -> list[str]:
+        return ["cabal", "test", "--test-show-details=streaming"]
+
+    def parse_output(self, output_path: Path, stdout: str) -> ParsedTestSuite:  # noqa: ARG002
+        suite = ParsedTestSuite(name="cabal_test")
+        for line in stdout.splitlines():
+            if "test suites passed" in line.lower() or "tests passed" in line.lower():
+                suite.tests = 1
+                suite.failures = 0
+            elif "test suites failed" in line.lower() or "tests failed" in line.lower():
+                suite.tests = 1
+                suite.failures = 1
+        return suite
+
+
+# =============================================================================
+# Julia - Pkg.test (Julia standard package testing)
+# =============================================================================
+
+
+@runner_registry.register
+class JuliaPkgTestPack(RunnerPack):
+    """Julia Pkg.test() runner."""
+
+    pack_id = "julia.pkg_test"
+    language = "julia"
+    runner_name = "pkg_test"
+    markers = [
+        MarkerRule("Project.toml", confidence="high"),
+    ]
+    output_strategy = OutputStrategy(format="text", file_based=False)
+    capabilities = RunnerCapabilities(
+        supported_kinds=["project"],
+        supports_pattern_filter=False,
+        supports_tag_filter=False,
+        supports_parallel=False,
+        supports_junit_output=False,
+    )
+
+    def detect(self, workspace_root: Path) -> float:
+        project_toml = workspace_root / "Project.toml"
+        if project_toml.exists():
+            test_dir = workspace_root / "test"
+            if test_dir.is_dir() and (test_dir / "runtests.jl").exists():
+                return 1.0
+            return 0.5
+        return 0.0
+
+    async def discover(self, workspace_root: Path) -> list[TestTarget]:
+        # Project-level target
+        return [
+            TestTarget(
+                target_id="test:.",
+                selector=".",
+                kind="project",
+                language="julia",
+                runner_pack_id=self.pack_id,
+                workspace_root=str(workspace_root),
+            )
+        ]
+
+    def build_command(
+        self,
+        target: TestTarget,
+        *,
+        output_path: Path,
+        pattern: str | None = None,
+        tags: list[str] | None = None,  # noqa: ARG002
+        exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002
+    ) -> list[str]:
+        return ["julia", "--project=.", "-e", "using Pkg; Pkg.test()"]
+
+    def parse_output(self, output_path: Path, stdout: str) -> ParsedTestSuite:  # noqa: ARG002
+        suite = ParsedTestSuite(name="pkg_test")
+        for line in stdout.splitlines():
+            if "testing" in line.lower() and "passed" in line.lower():
+                suite.tests = 1
+                suite.failures = 0
+            elif "test summary" in line.lower() and "fail" in line.lower():
+                suite.tests = 1
+                suite.failures = 1
+        return suite
+
+
+# =============================================================================
+# OCaml - Dune Test
+# =============================================================================
+
+
+@runner_registry.register
+class DuneTestPack(RunnerPack):
+    """OCaml Dune test runner."""
+
+    pack_id = "ocaml.dune_test"
+    language = "ocaml"
+    runner_name = "dune_test"
+    markers = [
+        MarkerRule("dune-project", confidence="high"),
+    ]
+    output_strategy = OutputStrategy(format="text", file_based=False)
+    capabilities = RunnerCapabilities(
+        supported_kinds=["project"],
+        supports_pattern_filter=False,
+        supports_tag_filter=False,
+        supports_parallel=True,
+        supports_junit_output=False,
+    )
+
+    def detect(self, workspace_root: Path) -> float:
+        if (workspace_root / "dune-project").exists():
+            # Check for test directory or inline_tests
+            test_dir = workspace_root / "test"
+            if test_dir.is_dir():
+                return 1.0
+            # Check for inline_tests in dune files
+            for dune_file in workspace_root.rglob("dune"):
+                try:
+                    content = dune_file.read_text()
+                    if "inline_tests" in content or "(test" in content:
+                        return 0.9
+                except Exception:
+                    pass
+            return 0.5
+        return 0.0
+
+    async def discover(self, workspace_root: Path) -> list[TestTarget]:
+        # Project-level target for dune test
+        return [
+            TestTarget(
+                target_id="test:.",
+                selector=".",
+                kind="project",
+                language="ocaml",
+                runner_pack_id=self.pack_id,
+                workspace_root=str(workspace_root),
+            )
+        ]
+
+    def build_command(
+        self,
+        target: TestTarget,
+        *,
+        output_path: Path,
+        pattern: str | None = None,
+        tags: list[str] | None = None,  # noqa: ARG002
+        exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002
+    ) -> list[str]:
+        return ["dune", "test"]
+
+    def parse_output(self, output_path: Path, stdout: str) -> ParsedTestSuite:  # noqa: ARG002
+        suite = ParsedTestSuite(name="dune_test")
+        # Dune outputs "PASS" or "FAIL" lines
+        pass_count = stdout.lower().count("pass")
+        fail_count = stdout.lower().count("fail")
+        if pass_count > 0 or fail_count > 0:
+            suite.tests = pass_count + fail_count
+            suite.failures = fail_count
+        return suite
