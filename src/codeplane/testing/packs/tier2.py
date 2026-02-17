@@ -1093,10 +1093,13 @@ class DuneTestPack(RunnerPack):
         return ["dune", "test"]
 
     def parse_output(self, output_path: Path, stdout: str) -> ParsedTestSuite:  # noqa: ARG002
+        import re
+
         suite = ParsedTestSuite(name="dune_test")
-        # Dune outputs "PASS" or "FAIL" lines
-        pass_count = stdout.lower().count("pass")
-        fail_count = stdout.lower().count("fail")
+        # Dune outputs "PASS" or "FAIL" as whole words in test output.
+        # Use word-boundary regex to avoid matching substrings like "passed", "password".
+        pass_count = len(re.findall(r"\bPASS\b", stdout, re.IGNORECASE))
+        fail_count = len(re.findall(r"\bFAIL\b", stdout, re.IGNORECASE))
         if pass_count > 0 or fail_count > 0:
             suite.total = pass_count + fail_count
             suite.failed = fail_count
