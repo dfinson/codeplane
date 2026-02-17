@@ -592,6 +592,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             None,
             description="Token from initial blocked call. Required with confirm_broad_run.",
         ),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Execute tests.
 
@@ -730,7 +731,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         serialized = _serialize_test_result(result, is_action=True)
         if impact_info:
             serialized["impact"] = impact_info
-        return serialized
+
+        from codeplane.mcp.delivery import wrap_existing_response
+
+        return wrap_existing_response(serialized, resource_kind="test_output", scope_id=scope_id)
 
     @mcp.tool
     async def get_test_run_status(

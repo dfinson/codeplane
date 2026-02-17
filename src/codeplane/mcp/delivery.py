@@ -189,7 +189,7 @@ class ResourceCache:
         content_type: str = "application/json",
     ) -> tuple[str, ResourceMeta]:
         """Store a payload and return (resource_uri, meta)."""
-        if isinstance(payload, (dict, list)):
+        if isinstance(payload, dict | list):
             raw = json.dumps(payload, indent=2).encode("utf-8")
         elif isinstance(payload, str):
             raw = payload.encode("utf-8")
@@ -366,6 +366,35 @@ def _profile_supports_resources(profile: ClientProfile) -> bool:
     if profile.supports_resources is None:
         return False
     return profile.supports_resources
+
+
+def wrap_existing_response(
+    result: dict[str, Any],
+    *,
+    resource_kind: str,
+    scope_id: str | None = None,
+    scope_usage: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Add delivery envelope fields to an existing handler response.
+
+    For handlers that already manage their own pagination via BudgetAccumulator.
+    Adds delivery metadata without restructuring the response.
+    """
+    payload_bytes = len(json.dumps(result, indent=2, default=str).encode("utf-8"))
+    has_pagination = "pagination" in result
+    is_truncated = has_pagination and result.get("pagination", {}).get("truncated", False)
+
+    result["resource_kind"] = resource_kind
+    result["delivery"] = "paged" if is_truncated else "inline"
+    result["inline_budget_bytes_used"] = payload_bytes
+    result["inline_budget_bytes_limit"] = INLINE_CAP_BYTES
+
+    if scope_id:
+        result["scope_id"] = scope_id
+    if scope_usage:
+        result["scope_usage"] = scope_usage
+
+    return result
 
 
 # =============================================================================

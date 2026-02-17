@@ -121,6 +121,18 @@ def create_mcp_server(context: "AppContext") -> "FastMCP":
     testing.register_tools(mcp, context)
     introspection.register_tools(mcp, context)
 
+    # Register resource template for delivery envelope cache
+    from codeplane.mcp.delivery import get_resource_cache
+
+    @mcp.resource("codeplane://{scope_id}/cache/{kind}/{resource_id}")
+    def read_cached_resource(scope_id: str, kind: str, resource_id: str) -> bytes:  # noqa: ARG001
+        """Retrieve a cached resource payload by URI."""
+        cache = get_resource_cache()
+        data = cache.get(resource_id)
+        if data is None:
+            raise ValueError(f"Resource {resource_id} not found or expired")
+        return data
+
     tool_count = len(mcp._tool_manager._tools)
     log.info("mcp_server_created", tool_count=tool_count)
 

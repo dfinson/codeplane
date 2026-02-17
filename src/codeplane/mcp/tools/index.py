@@ -830,7 +830,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         if search_response.fallback_reason:
             result["fallback_reason"] = search_response.fallback_reason
 
-        return result
+        from codeplane.mcp.delivery import wrap_existing_response
+
+        return wrap_existing_response(result, resource_kind="search_hits", scope_id=scope_id)
 
     @mcp.tool
     async def map_repo(
@@ -872,6 +874,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             False,
             description="If true, use 7.5KB budget for guaranteed inline display in VS Code",
         ),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Get repository mental model with tiered budget-based output.
 
@@ -1099,7 +1102,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         else:
             pass  # Delivery envelope handles overflow
 
-        return output
+        output["preset_used"] = "synopsis" if include is None else "custom"
+
+        from codeplane.mcp.delivery import wrap_existing_response
+
+        return wrap_existing_response(output, resource_kind="repo_map", scope_id=scope_id)
 
     async def _handle_expand_cursor(
         cursor: str,

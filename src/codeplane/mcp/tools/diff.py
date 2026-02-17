@@ -125,6 +125,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             False,
             description="If true, use 7.5KB budget for guaranteed inline display in VS Code",
         ),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Structural change summary from index facts.
 
@@ -162,7 +163,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             cache_id = _diff_cache.store(result)
             log.debug("diff_cache_store", cache_id=cache_id, changes=len(result.structural_changes))
 
-        return _result_to_dict(
+        from codeplane.mcp.delivery import wrap_existing_response
+
+        result_dict = _result_to_dict(
             result,
             cursor_offset=structural_offset,
             non_structural_offset=non_structural_offset,
@@ -170,6 +173,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             verbosity=verbosity,
             inline_only=inline_only,
         )
+        return wrap_existing_response(result_dict, resource_kind="semantic_diff", scope_id=scope_id)
 
 
 def _parse_cursor(cursor: str | None) -> tuple[int | None, int, int]:

@@ -14,6 +14,7 @@ from codeplane.config.constants import GIT_BLAME_MAX, GIT_LOG_MAX
 from codeplane.git._internal.hooks import run_hook
 from codeplane.git.errors import EmptyCommitMessageError, PathsNotFoundError
 from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination, measure_bytes
+from codeplane.mcp.delivery import wrap_existing_response
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -260,6 +261,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         target: str | None = Field(None, description="Target ref for comparison"),
         staged: bool = Field(False, description="Show staged changes only"),
         cursor: str | None = Field(None, description="Pagination cursor (file index)"),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Get diff between refs or working tree."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
@@ -400,7 +402,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             ),
         }
 
-        return result
+        return wrap_existing_response(result, resource_kind="diff", scope_id=scope_id)
 
     @mcp.tool
     async def git_commit(
@@ -509,6 +511,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         since: str | None = Field(None, description="Show commits after date"),
         until: str | None = Field(None, description="Show commits before date"),
         paths: list[str] | None = Field(None, description="Filter by paths"),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Get commit history."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
@@ -558,11 +561,12 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             next_cursor=acc.items[-1]["sha"] if acc.items and budget_more else None,
         )
 
-        return {
+        result = {
             "results": acc.items,
             "pagination": pagination,
             "summary": _summarize_log(acc.count, budget_more),
         }
+        return wrap_existing_response(result, resource_kind="log", scope_id=scope_id)
 
     @mcp.tool
     async def git_push(
@@ -891,15 +895,16 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         end_line: int | None = Field(None, description="End line (for blame)"),
         cursor: str | None = Field(None, description="Pagination cursor"),
         limit: int = Field(default=100, le=GIT_BLAME_MAX, description="Maximum lines to return"),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Inspect commits or blame."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
         if action == "show":
-            commit = app_ctx.git_ops.show(ref=ref)
-            result = asdict(commit)
-            result["summary"] = f"{commit.sha[:7]}: {commit.message.split(chr(10))[0][:50]}"
-            return result
+            commit_obj = app_ctx.git_ops.show(ref=ref)
+            result = asdict(commit_obj)
+            result["summary"] = f"{commit_obj.sha[:7]}: {commit_obj.message.split(chr(10))[0][:50]}"
+            return wrap_existing_response(result, resource_kind="blame", scope_id=scope_id)
 
         elif action == "blame":
             if not path:
@@ -955,12 +960,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
             from codeplane.core.formatting import compress_path
 
-            return {
+            result = {
                 "results": acc.items,
                 "pagination": pagination,
                 **blame_dict,
                 "summary": f"{acc.count} lines from {compress_path(path, 35)}",
             }
+            return wrap_existing_response(result, resource_kind="blame", scope_id=scope_id)
 
         raise ValueError(f"Unknown action: {action}")
 

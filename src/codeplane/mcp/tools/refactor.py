@@ -98,7 +98,20 @@ def _serialize_refactor_result(result: "RefactorResult") -> dict[str, Any]:
         # Add verification fields if present
         if result.preview.verification_required:
             preview_dict["verification_required"] = True
-            preview_dict["low_certainty_files"] = result.preview.low_certainty_files
+            # Convert low_certainty_files to low_certainty_matches with span info
+            low_matches = []
+            for fe in result.preview.edits:
+                for h in fe.hunks:
+                    if h.certainty == "low":
+                        low_matches.append(
+                            {
+                                "path": fe.path,
+                                "span": {"start_line": h.line, "end_line": h.line},
+                                "certainty": h.certainty,
+                                "match_text": h.old[:80] if h.old else "",
+                            }
+                        )
+            preview_dict["low_certainty_matches"] = low_matches
             preview_dict["verification_guidance"] = result.preview.verification_guidance
         output["preview"] = preview_dict
 
@@ -112,7 +125,9 @@ def _serialize_refactor_result(result: "RefactorResult") -> dict[str, Any]:
     if result.warning:
         output["warning"] = result.warning
 
-    return output
+    from codeplane.mcp.delivery import wrap_existing_response
+
+    return wrap_existing_response(output, resource_kind="refactor_preview")
 
 
 # =============================================================================

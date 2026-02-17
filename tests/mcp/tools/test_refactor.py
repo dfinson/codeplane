@@ -186,11 +186,21 @@ class TestSerializeRefactorResult:
         preview.medium_certainty_count = 0
         preview.low_certainty_count = 2
         preview.verification_required = True
-        preview.low_certainty_files = ["a.py", "b.py"]
         preview.verification_guidance = "Review these files carefully"
-        preview.edits = []
+        # Create a low-certainty hunk so low_certainty_matches is populated
+        low_hunk = MagicMock()
+        low_hunk.old = "old_text"
+        low_hunk.new = "new_text"
+        low_hunk.line = 10
+        low_hunk.certainty = "low"
+        file_edit = MagicMock()
+        file_edit.path = "a.py"
+        file_edit.hunks = [low_hunk]
+        preview.edits = [file_edit]
         result.preview = preview
 
         output = _serialize_refactor_result(result)
         assert output["preview"]["verification_required"] is True
-        assert "a.py" in output["preview"]["low_certainty_files"]
+        assert len(output["preview"]["low_certainty_matches"]) == 1
+        assert output["preview"]["low_certainty_matches"][0]["path"] == "a.py"
+        assert output["preview"]["low_certainty_matches"][0]["certainty"] == "low"
