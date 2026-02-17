@@ -22,7 +22,6 @@ from codeplane.config.constants import (
 )
 from codeplane.mcp.delivery import ScopeManager, build_envelope
 from codeplane.mcp.errors import (
-    ConfirmationRequiredError,
     MCPError,
 )
 
@@ -199,11 +198,16 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 # Generate token and block
                 token = secrets.token_hex(16)
                 session.fingerprints[_READ_CONFIRM_TOKEN_KEY] = token
-                raise ConfirmationRequiredError(
-                    reason=f"Read exceeds caps: {'; '.join(cap_reasons)}",
-                    token=token,
-                    details={"cap_violations": cap_reasons},
-                )
+                return {
+                    "status": "blocked",
+                    "confirmation_token": token,
+                    "reason": f"Read exceeds caps: {'; '.join(cap_reasons)}",
+                    "cap_violations": cap_reasons,
+                    "agentic_hint": (
+                        f"To proceed, retry with confirmation_token='{token}' "
+                        f"AND confirm_reason='<reason min 15 chars>'."
+                    ),
+                }
 
         # Process targets
 
@@ -374,11 +378,16 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             else:
                 token = secrets.token_hex(16)
                 session.fingerprints[_READ_CONFIRM_TOKEN_KEY] = token
-                raise ConfirmationRequiredError(
-                    reason=f"Full read of {len(large_files)} large file(s): {', '.join(large_files[:5])}",
-                    token=token,
-                    details={"large_files": large_files},
-                )
+                return {
+                    "status": "blocked",
+                    "confirmation_token": token,
+                    "reason": f"Full read of {len(large_files)} large file(s): {', '.join(large_files[:5])}",
+                    "large_files": large_files,
+                    "agentic_hint": (
+                        f"To proceed, retry with confirmation_token='{token}' "
+                        f"AND confirm_reason='<reason min 15 chars>'."
+                    ),
+                }
 
         # Read files
         files_out: list[dict[str, Any]] = []
