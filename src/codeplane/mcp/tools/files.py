@@ -549,18 +549,26 @@ async def _resolve_structural_target(
         return None
 
     if target.unit == "signature":
-        # Return just the signature line
+        # Return the function/class signature (may span multiple lines)
         full_path = app_ctx.repo_root / target.path
         if not full_path.is_file():
             return None
         content = full_path.read_text(encoding="utf-8", errors="replace")
         lines = content.splitlines(keepends=True)
-        start = def_fact.start_line
-        sig_end = start  # Default: single line
-        # Try to find the end of the signature (e.g., up to the colon for Python)
-        if start <= len(lines):
-            sig_end = start
-        return "".join(lines[start - 1 : sig_end]), start, sig_end
+        start = def_fact.start_line  # 1-indexed
+        if start < 1 or start > len(lines):
+            return None
+        sig_start_idx = start - 1  # 0-indexed
+        sig_end = start  # 1-indexed inclusive, default: single line
+        # Scan forward to find the end of the signature.
+        # For Python, the header ends with a colon; cap the lookahead.
+        max_lookahead_idx = min(len(lines), sig_start_idx + 25)
+        for idx in range(sig_start_idx, max_lookahead_idx):
+            stripped = lines[idx].strip()
+            sig_end = idx + 1  # 1-indexed
+            if stripped.endswith(":"):
+                break
+        return "".join(lines[sig_start_idx:sig_end]), start, sig_end
 
     if target.unit == "docstring":
         # Return docstring if present
