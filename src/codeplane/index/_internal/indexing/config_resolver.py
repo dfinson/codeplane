@@ -804,10 +804,15 @@ class ImportPathResolver:
 def _normalize_path(path: str) -> str:
     """Normalize a relative path (resolve . and ..).
 
+    This function is designed for paths within a repository. Leading ".."
+    segments that would escape the repo root are silently dropped.
+
     >>> _normalize_path('src/utils/../models/user')
     'src/models/user'
     >>> _normalize_path('src/./utils')
     'src/utils'
+    >>> _normalize_path('../../outside')  # Drops leading ..
+    'outside'
     """
     parts: list[str] = []
     for segment in path.replace("\\", "/").split("/"):
