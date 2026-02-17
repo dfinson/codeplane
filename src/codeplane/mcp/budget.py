@@ -18,8 +18,7 @@ import json
 from typing import Any
 
 from codeplane.config.constants import (
-    INLINE_BUDGET_BYTES,
-    INLINE_THRESHOLD_BYTES,
+    INLINE_CAP_BYTES,
     RESPONSE_BUDGET_BYTES,
 )
 
@@ -32,7 +31,7 @@ def get_effective_budget(inline_only: bool = False) -> int:
             displays the response inline (not written to file).
             If False (default), use 40KB budget.
     """
-    return INLINE_BUDGET_BYTES if inline_only else RESPONSE_BUDGET_BYTES
+    return INLINE_CAP_BYTES if inline_only else RESPONSE_BUDGET_BYTES
 
 
 class BudgetAccumulator:
@@ -218,35 +217,4 @@ def make_budget_pagination(
     return result
 
 
-def maybe_add_large_response_hint(
-    response: dict[str, Any],
-    used_bytes: int,
-    *,
-    existing_hint: str | None = None,
-) -> None:
-    """Add agentic hint if response exceeds VS Code's inline threshold.
-
-    When responses exceed ~8KB, VS Code Copilot writes them to a file
-    instead of displaying inline. This hint informs the agent of this
-    behavior so it can adapt (e.g., use terminal tools to read the file).
-
-    Args:
-        response: The response dict to potentially add hint to.
-        used_bytes: Approximate byte size of the response.
-        existing_hint: Any existing agentic_hint to preserve/extend.
-    """
-    if used_bytes <= INLINE_THRESHOLD_BYTES:
-        return  # Under threshold, no hint needed
-
-    size_kb = round(used_bytes / 1024, 1)
-    large_hint = (
-        f"Response is ~{size_kb}KB (over 8KB). VS Code MAY have written this to a file. "
-        "If so, use terminal/native file tools to read it (not read_files, as the file "
-        "is outside the repo directory and hence CodePlane's index scope). "
-        "To guarantee inline display, re-request with inline_only=true for a 7.5KB cap."
-    )
-
-    if existing_hint:
-        response["agentic_hint"] = f"{existing_hint}\n\n{large_hint}"
-    else:
-        response["agentic_hint"] = large_hint
+# maybe_add_large_response_hint removed — replaced by delivery envelope

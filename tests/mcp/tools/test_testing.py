@@ -223,7 +223,7 @@ class TestBuildLogsHint:
         hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "running")
         assert hint is not None
         assert ".codeplane/artifacts/tests/abc123" in hint
-        assert "read_files" in hint
+        assert "read_source" in hint
 
     def test_running_status_with_targets(self) -> None:
         """Should show actual target file names for running tests."""
@@ -238,7 +238,7 @@ class TestBuildLogsHint:
         assert "test_tests_test_foo.py.stdout.txt" in hint
         assert "test_tests_test_bar.py.stdout.txt" in hint
         assert "<target_id>" not in hint
-        assert "read_files" in hint
+        assert "read_source" in hint
 
     def test_completed_status_without_targets(self) -> None:
         """Should show generic hint for completed tests without target info."""
@@ -246,7 +246,7 @@ class TestBuildLogsHint:
         assert hint is not None
         assert ".codeplane/artifacts/tests/abc123" in hint
         assert "result.json" in hint
-        assert "read_files" in hint
+        assert "read_source" in hint
 
     def test_completed_status_with_targets(self) -> None:
         """Should show actual target file names for completed tests."""
@@ -259,7 +259,7 @@ class TestBuildLogsHint:
         assert "test_tests_test_foo.py.stdout.txt" in hint
         assert "<target_id>" not in hint
         assert "result.json" in hint
-        assert "read_files" in hint
+        assert "read_source" in hint
 
     def test_failed_status(self) -> None:
         """Should show hint for failed tests."""

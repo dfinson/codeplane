@@ -35,7 +35,6 @@ from codeplane.index._internal.diff.sources import (
 from codeplane.mcp.budget import (
     BudgetAccumulator,
     get_effective_budget,
-    maybe_add_large_response_hint,
     measure_bytes,
 )
 
@@ -751,8 +750,5 @@ def _result_to_dict(
             **({"next_cursor": next_cursor, "truncated": True} if has_more and next_cursor else {}),
         },
     }
-
-    # Add large response hint if over VS Code's inline threshold
-    maybe_add_large_response_hint(response, acc.used_bytes, existing_hint=agentic_hint)
 
     return response

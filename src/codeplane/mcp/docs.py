@@ -96,8 +96,8 @@ class ToolDocumentation:
 
 
 TOOL_DOCS: dict[str, ToolDocumentation] = {
-    "read_files": ToolDocumentation(
-        name="read_files",
+    "read_source": ToolDocumentation(
+        name="read_source",
         description="Read file contents with optional line ranges.",
         category=ToolCategory.FILES,
         when_to_use=[
@@ -148,7 +148,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         hints_before="Read the target file first to ensure you have current content.",
         hints_after="Consider git_stage if you want to commit the change.",
         alternatives=["refactor_rename (for symbol renames)"],
-        commonly_preceded_by=["read_files"],
+        commonly_preceded_by=["read_source"],
         commonly_followed_by=["git_stage", "git_commit"],
         behavior=BehaviorFlags(has_side_effects=True, atomic=True),
         possible_errors=[
@@ -188,10 +188,10 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             "Already familiar with the codebase structure",
         ],
         hints_before=None,
-        hints_after="Use read_files to dive into specific files of interest.",
+        hints_after="Use read_source to dive into specific files of interest.",
         alternatives=["search"],
         commonly_preceded_by=[],
-        commonly_followed_by=["read_files", "search"],
+        commonly_followed_by=["read_source", "search"],
         behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
         possible_errors=[],
         examples=[
@@ -212,13 +212,13 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             "Getting edit-ready code snippets with context=function/class",
         ],
         when_not_to_use=[
-            "When you know the exact file - use read_files",
+            "When you know the exact file - use read_source",
         ],
         hints_before=None,
-        hints_after="Use context='function' or 'class' for edit-ready results. Use context='rich' for 20 lines. Only use read_files if you need more context than search provides.",
+        hints_after="Use context='function' or 'class' for edit-ready results. Use context='rich' for 20 lines. Only use read_source if you need more context than search provides.",
         alternatives=["map_repo (for structure overview)"],
         commonly_preceded_by=["map_repo"],
-        commonly_followed_by=["write_files", "read_files"],
+        commonly_followed_by=["write_files", "read_source"],
         behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
         possible_errors=[],
         examples=[
@@ -232,11 +232,11 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             },
             {
                 "description": "Search with enclosing function body (edit-ready)",
-                "params": {"query": "handle_request", "context": "function"},
+                "params": {"query": "handle_request", "enrichment": "function"},
             },
             {
                 "description": "Search with enclosing class body",
-                "params": {"query": "UserService", "mode": "symbol", "context": "class"},
+                "params": {"query": "UserService", "mode": "symbol", "enrichment": "class"},
             },
         ],
     ),
@@ -325,14 +325,14 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             "Checking if a path exists",
         ],
         when_not_to_use=[
-            "When you need file contents - use read_files",
+            "When you need file contents - use read_source",
             "When you need repository overview - use map_repo",
         ],
         hints_before=None,
-        hints_after="Use read_files to examine specific files of interest.",
+        hints_after="Use read_source to examine specific files of interest.",
         alternatives=["map_repo (for tree structure)"],
         commonly_preceded_by=["map_repo"],
-        commonly_followed_by=["read_files"],
+        commonly_followed_by=["read_source"],
         behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
         possible_errors=["FILE_NOT_FOUND"],
         examples=[
@@ -666,7 +666,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         hints_before=None,
         hints_after=None,
         commonly_preceded_by=["git_log"],
-        commonly_followed_by=["read_files"],
+        commonly_followed_by=["read_source"],
         behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
         possible_errors=["REF_NOT_FOUND", "FILE_NOT_FOUND"],
         examples=[
@@ -1154,12 +1154,12 @@ def get_common_workflows() -> list[dict[str, Any]]:
         {
             "name": "exploration",
             "description": "Understanding a codebase",
-            "tools": ["map_repo", "search", "read_files"],
+            "tools": ["map_repo", "search", "read_source"],
         },
         {
             "name": "modification",
             "description": "Making code changes",
-            "tools": ["read_files", "write_files", "git_stage_and_commit"],
+            "tools": ["read_source", "write_files", "git_stage_and_commit"],
         },
         {
             "name": "refactoring",

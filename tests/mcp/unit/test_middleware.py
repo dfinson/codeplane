@@ -419,10 +419,10 @@ class TestToolMiddleware:
         formatted = middleware._format_tool_summary("write_files", result)
         assert formatted == "5 files updated"
 
-    def test_format_tool_summary_read_files(self, middleware):
-        """Test read_files-specific formatting."""
+    def test_format_tool_summary_read_source(self, middleware):
+        """Test read_source-specific formatting."""
         result = {"files": [{"path": "a.py"}, {"path": "b.py"}]}
-        formatted = middleware._format_tool_summary("read_files", result)
+        formatted = middleware._format_tool_summary("read_source", result)
         assert formatted == "2 files read"
 
     def test_format_tool_summary_list_files(self, middleware):

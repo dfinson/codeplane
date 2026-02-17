@@ -47,6 +47,15 @@ class MCPErrorCode(StrEnum):
     IO_ERROR = "IO_ERROR"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
+    # Delivery envelope errors
+    BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
+    SCOPE_EXPIRED = "SCOPE_EXPIRED"
+    SPAN_OVERLAP = "SPAN_OVERLAP"
+    FILE_HASH_MISMATCH = "FILE_HASH_MISMATCH"
+    CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
+    DUPLICATE_FULL_READ = "DUPLICATE_FULL_READ"
+    RESOURCE_EVICTED = "RESOURCE_EVICTED"
+
 
 @dataclass
 class ErrorResponse:
@@ -208,6 +217,59 @@ class CursorStaleError(MCPError):
             ),
             cursor_epoch=cursor_epoch,
             current_epoch=current_epoch,
+        )
+
+
+class BudgetExceededError(MCPError):
+    """Raised when a scope budget is exceeded."""
+
+    def __init__(self, scope_id: str, counter: str, hint: str) -> None:
+        super().__init__(
+            code=MCPErrorCode.BUDGET_EXCEEDED,
+            message=f"Scope budget exceeded for '{counter}' in scope '{scope_id}'",
+            remediation=hint,
+            scope_id=scope_id,
+            counter=counter,
+        )
+
+
+class SpanOverlapError(MCPError):
+    """Raised when span-based edits have overlapping ranges."""
+
+    def __init__(self, path: str, conflicts: list[dict[str, Any]]) -> None:
+        super().__init__(
+            code=MCPErrorCode.SPAN_OVERLAP,
+            message=f"Overlapping span edits in {path}",
+            remediation="Ensure all span edits are non-overlapping. Combine overlapping spans into a single edit.",
+            path=path,
+            conflicts=conflicts,
+        )
+
+
+class FileHashMismatchError(MCPError):
+    """Raised when file SHA256 doesn't match expected for span edits."""
+
+    def __init__(self, path: str, expected: str, actual: str) -> None:
+        super().__init__(
+            code=MCPErrorCode.FILE_HASH_MISMATCH,
+            message=f"File {path} was modified since last read (hash mismatch)",
+            remediation="Re-read the file with read_source to get the current file_sha256, then retry.",
+            path=path,
+            expected_file_sha256=expected,
+            current_file_sha256=actual,
+        )
+
+
+class ConfirmationRequiredError(MCPError):
+    """Raised when a two-phase confirmation is required."""
+
+    def __init__(self, reason: str, token: str, details: dict[str, Any] | None = None) -> None:
+        super().__init__(
+            code=MCPErrorCode.CONFIRMATION_REQUIRED,
+            message=reason,
+            remediation="Retry with confirmation_token and confirm_reason parameters.",
+            confirmation_token=token,
+            **(details or {}),
         )
 
 
@@ -384,6 +446,72 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
             "Call the same tool again WITHOUT a cursor parameter",
             "This ensures consistent, up-to-date results",
             "Consider completing pagination quickly to avoid this issue",
+        ],
+    ),
+    MCPErrorCode.BUDGET_EXCEEDED.value: ErrorDocumentation(
+        code=MCPErrorCode.BUDGET_EXCEEDED,
+        category="system",
+        description="A scope budget counter was exceeded.",
+        causes=[
+            "Too many reads, searches, or full file accesses in one scope",
+        ],
+        remediation=[
+            "Use more targeted queries to reduce resource usage",
+            "Use read_source with spans instead of read_file_full",
+            "Start a new scope if the current one is exhausted",
+        ],
+    ),
+    MCPErrorCode.SPAN_OVERLAP.value: ErrorDocumentation(
+        code=MCPErrorCode.SPAN_OVERLAP,
+        category="validation",
+        description="Span-based edits have overlapping line ranges in the same file.",
+        causes=[
+            "Two or more edits in the same file have overlapping start_line/end_line ranges",
+        ],
+        remediation=[
+            "Combine overlapping spans into a single edit",
+            "Ensure all edits to the same file have non-overlapping line ranges",
+        ],
+    ),
+    MCPErrorCode.FILE_HASH_MISMATCH.value: ErrorDocumentation(
+        code=MCPErrorCode.FILE_HASH_MISMATCH,
+        category="state",
+        description="File was modified since last read (SHA256 mismatch).",
+        causes=[
+            "Another process modified the file",
+            "A previous write_files call changed the file",
+            "Auto-formatter or pre-commit hook modified the file",
+        ],
+        remediation=[
+            "Re-read the file with read_source to get current file_sha256",
+            "Retry the span edit with the updated hash",
+        ],
+    ),
+    MCPErrorCode.CONFIRMATION_REQUIRED.value: ErrorDocumentation(
+        code=MCPErrorCode.CONFIRMATION_REQUIRED,
+        category="validation",
+        description="Operation requires two-phase confirmation.",
+        causes=[
+            "Reading more than 500 lines in a single span",
+            "Reading a large file with read_file_full",
+            "Exceeding per-call target limits",
+        ],
+        remediation=[
+            "Retry with confirmation_token and confirm_reason from the error response",
+            "Or reduce the request scope to avoid confirmation",
+        ],
+    ),
+    MCPErrorCode.RESOURCE_EVICTED.value: ErrorDocumentation(
+        code=MCPErrorCode.RESOURCE_EVICTED,
+        category="system",
+        description="Resource was evicted from cache before TTL expired.",
+        causes=[
+            "Cache capacity exceeded, oldest entries evicted",
+            "Resource TTL expired",
+        ],
+        remediation=[
+            "Re-request the original tool call to regenerate the resource",
+            "Consider fetching resources promptly after receiving URIs",
         ],
     ),
 }

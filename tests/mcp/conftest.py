@@ -111,7 +111,7 @@ def mock_coordinator() -> MagicMock:
 def mock_file_ops() -> MagicMock:
     """Create a mock FileOps."""
     mock = MagicMock()
-    mock.read_files.return_value = MagicMock(files=[])
+    mock.read_source.return_value = MagicMock(files=[])
     mock.list_files.return_value = MagicMock(
         path="",
         entries=[],

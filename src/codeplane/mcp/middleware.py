@@ -443,7 +443,7 @@ class ToolMiddleware(Middleware):
             files_changed = delta.get("files_changed", 0)
             return f"{files_changed} files updated"
 
-        if tool_name == "read_files":
+        if tool_name in ("read_source", "read_file_full"):
             files = data.get("files", [])
             return f"{len(files)} files read"
 

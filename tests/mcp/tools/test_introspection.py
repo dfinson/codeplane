@@ -59,7 +59,7 @@ class TestDeriveFeatures:
 
     def test_file_tools(self) -> None:
         """File tools add file_ops feature."""
-        features = _derive_features(["read_files", "list_files", "write_files"])
+        features = _derive_features(["read_source", "list_files", "write_files"])
         assert "file_ops" in features
 
     def test_describe_tool(self) -> None:
@@ -75,7 +75,7 @@ class TestDeriveFeatures:
             "test",
             "lint",
             "search",
-            "read_files",
+            "read_source",
             "describe",
         ]
         features = _derive_features(tools)

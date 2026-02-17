@@ -10,15 +10,12 @@ from pydantic import Field
 from codeplane.config.constants import (
     MAP_DEPTH_MAX,
     MAP_LIMIT_MAX,
-    SEARCH_CONTEXT_LINES_MAX,
     SEARCH_MAX_LIMIT,
-    SEARCH_SCOPE_FALLBACK_LINES_DEFAULT,
 )
 from codeplane.mcp.budget import (
     BudgetAccumulator,
     get_effective_budget,
     make_budget_pagination,
-    maybe_add_large_response_hint,
     measure_bytes,
 )
 
@@ -394,14 +391,6 @@ async def _get_file_path(app_ctx: "AppContext", file_id: int) -> str:
 def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     """Register index tools with FastMCP server."""
 
-    # Context preset line counts
-    CONTEXT_PRESETS = {
-        "none": 0,
-        "minimal": 1,
-        "standard": 5,
-        "rich": 20,
-    }
-
     @mcp.tool
     async def search(
         ctx: Context,
@@ -409,21 +398,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         mode: Literal["lexical", "symbol", "references", "definitions"] = Field(
             "lexical", description="Search mode"
         ),
-        context: Literal["none", "minimal", "standard", "rich", "function", "class"] = Field(
-            "standard",
+        enrichment: Literal["none", "minimal", "standard", "function", "class"] = Field(
+            "none",
             description=(
-                "Context mode: 'none' (path+line only), 'minimal' (1 line), "
-                "'standard' (5 lines), 'rich' (20 lines), "
-                "'function' (enclosing function body), 'class' (enclosing class body)"
-            ),
-        ),
-        context_lines: int | None = Field(
-            None,
-            ge=0,
-            le=SEARCH_CONTEXT_LINES_MAX,
-            description=(
-                "Override context lines for line-based modes; "
-                "fallback lines for structural modes (function/class)"
+                "Enrichment level for metadata (NEVER returns source text): "
+                "'none' (span+kind+symbol_id only), 'minimal' (+enclosing scope name, signature), "
+                "'standard' (+docstring flag, param names, return type), "
+                "'function' (+enclosing function span), 'class' (+full class span)"
             ),
         ),
         filter_paths: list[str] | None = Field(None, description="Filter by paths"),
@@ -435,34 +416,25 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             False,
             description="Return one result per file (like rg -l). Includes match_count per file.",
         ),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
-        """Search code, symbols, or references.
+        """Search code, symbols, or references. Returns spans + metadata, NEVER source text.
 
-        Context modes control how much content is returned around each match:
-        - 'none': Path and line only, no content (for counting/listing)
-        - 'minimal': 1 line of context (for quick location)
-        - 'standard': 5 lines of context (default, for understanding)
-        - 'rich': 20 lines of context (edit-ready, line-based)
-        - 'function': Enclosing function body (edit-ready, structural)
-        - 'class': Enclosing class body (broad context, structural)
+        Use read_source to retrieve actual content for spans returned by search.
 
-        Structural modes ('function', 'class') use the indexed scope facts to return
-        complete function or class bodies. If scope resolution fails (e.g., unsupported
-        language), they fall back to context_lines (default 25).
+        Enrichment controls metadata richness (not source text):
+        - 'none': span + kind + symbol_id only (default)
+        - 'minimal': + enclosing scope name, signature metadata
+        - 'standard': + docstring presence flag, parameter names, return type hint
+        - 'function': + enclosing function span, enclosing class span
+        - 'class': + full class span (all member spans)
         """
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
-        from codeplane.index._internal.indexing import resolve_scope_region_for_path
         from codeplane.index.ops import SearchMode
 
-        # Determine effective context lines
-        is_structural = context in ("function", "class")
-        if context_lines is not None:
-            effective_lines = context_lines
-        elif is_structural:
-            effective_lines = SEARCH_SCOPE_FALLBACK_LINES_DEFAULT
-        else:
-            effective_lines = CONTEXT_PRESETS.get(context, 5)
+        is_structural = enrichment in ("function", "class")
+        effective_lines = 1  # We only need line info for span resolution
 
         # Map mode to SearchMode
         mode_map = {
@@ -473,7 +445,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         }
 
         if mode == "definitions":
-            # Use get_def for definition search
             def_fact = await app_ctx.coordinator.get_def(query, context_id=None)
             if def_fact is None:
                 return {
@@ -485,41 +456,53 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
             file_path = await _get_file_path(app_ctx, def_fact.file_id)
 
-            # Build result with context handling
             result_item: dict[str, Any] = {
+                "hit_id": f"def:{file_path}:{def_fact.start_line}",
                 "path": file_path,
-                "line": def_fact.start_line,
-                "column": def_fact.start_col,
-                "score": 1.0,
-                "match_type": "exact",
-                "symbol": {
+                "span": {
+                    "start_line": def_fact.start_line,
+                    "start_col": def_fact.start_col,
+                    "end_line": def_fact.end_line or def_fact.start_line,
+                    "end_col": def_fact.end_col or 0,
+                },
+                "kind": "def",
+                "symbol_id": def_fact.qualified_name or def_fact.name,
+                "preview_line": def_fact.display_name or def_fact.name,
+            }
+
+            # Enrichment metadata (no source text)
+            if enrichment != "none":
+                result_item["symbol"] = {
                     "name": def_fact.name,
                     "kind": def_fact.kind,
                     "qualified_name": def_fact.qualified_name,
-                },
-            }
+                }
+            if enrichment in ("standard", "function", "class"):
+                result_item["has_docstring"] = False  # Not tracked in index
+                if def_fact.signature_hash:
+                    result_item["signature_hash"] = def_fact.signature_hash
+            if is_structural:
+                from typing import Literal as _Lit
 
-            # Add content based on context mode
-            if context != "none":
-                if is_structural:
-                    with app_ctx.coordinator.db.session() as session:
-                        scope_region, content = resolve_scope_region_for_path(
-                            session,
-                            app_ctx.coordinator.repo_root,
-                            file_path,
-                            def_fact.start_line,
-                            preference="function" if context == "function" else "class",
-                            fallback_lines=effective_lines,
-                        )
-                    result_item["content"] = content
-                    result_item["content_range"] = {
-                        "start": scope_region.start_line,
-                        "end": scope_region.end_line,
-                    }
-                    result_item["context_resolved"] = scope_region.kind
-                else:
-                    result_item["snippet"] = def_fact.display_name or def_fact.name
-                    result_item["context_resolved"] = "lines"
+                from codeplane.index._internal.indexing import resolve_scope_region_for_path
+
+                scope_pref: _Lit["function", "class", "block"] = (
+                    "function" if enrichment == "function" else "class"
+                )
+                with app_ctx.coordinator.db.session() as session:
+                    scope_region, _ = resolve_scope_region_for_path(
+                        session,
+                        app_ctx.coordinator.repo_root,
+                        file_path,
+                        def_fact.start_line,
+                        preference=scope_pref,
+                        fallback_lines=25,
+                    )
+                result_item["enclosing_span"] = {
+                    "start_line": scope_region.start_line,
+                    "end_line": scope_region.end_line,
+                    "kind": scope_region.kind,
+                }
 
             return {
                 "results": [result_item],
@@ -607,36 +590,39 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
             for path, ref in ref_path_pairs:
                 result_item = {
+                    "hit_id": f"ref:{path}:{ref.start_line}:{ref.start_col}",
                     "path": path,
-                    "line": ref.start_line,
-                    "column": ref.start_col,
-                    "score": 1.0 if ref.certainty == "CERTAIN" else 0.5,
-                    "match_type": "exact" if ref.certainty == "CERTAIN" else "fuzzy",
+                    "span": {
+                        "start_line": ref.start_line,
+                        "start_col": ref.start_col,
+                        "end_line": ref.end_line or ref.start_line,
+                        "end_col": ref.end_col or 0,
+                    },
+                    "kind": "ref",
+                    "symbol_id": ref.target_name if hasattr(ref, "target_name") else None,
+                    "preview_line": ref.token_text[:120] if ref.token_text else None,
                 }
                 if ref_match_counts and path in ref_match_counts:
                     result_item["match_count"] = ref_match_counts[path]
 
-                # Add content based on context mode
-                if context != "none":
-                    if is_structural:
-                        with app_ctx.coordinator.db.session() as session:
-                            scope_region, content = resolve_scope_region_for_path(
-                                session,
-                                app_ctx.coordinator.repo_root,
-                                path,
-                                ref.start_line,
-                                preference="function" if context == "function" else "class",
-                                fallback_lines=effective_lines,
-                            )
-                        result_item["content"] = content
-                        result_item["content_range"] = {
-                            "start": scope_region.start_line,
-                            "end": scope_region.end_line,
-                        }
-                        result_item["context_resolved"] = scope_region.kind
-                    else:
-                        result_item["snippet"] = ref.token_text
-                        result_item["context_resolved"] = "lines"
+                # Enrichment metadata (no source text)
+                if enrichment != "none" and enrichment in ("function", "class"):
+                    from codeplane.index._internal.indexing import resolve_scope_region_for_path
+
+                    with app_ctx.coordinator.db.session() as session:
+                        scope_region, _ = resolve_scope_region_for_path(
+                            session,
+                            app_ctx.coordinator.repo_root,
+                            path,
+                            ref.start_line,
+                            preference="function" if enrichment == "function" else "class",
+                            fallback_lines=25,
+                        )
+                    result_item["enclosing_span"] = {
+                        "start_line": scope_region.start_line,
+                        "end_line": scope_region.end_line,
+                        "kind": scope_region.kind,
+                    }
 
                 if not acc.try_add(result_item):
                     break
@@ -752,14 +738,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 has_more_results = True
                 all_results = all_results[:limit]
 
-        # Build results with context handling, bounded by budget
+        # Build results as spans + metadata (no source text)
         # Reserve overhead for fixed response fields
         base_response = {
             "results": [],
             "pagination": {"truncated": False, "next_cursor": "x" * 40, "total_estimate": 99999},
             "query_time_ms": 99999,
             "summary": "X" * 200,
-            "agentic_hint": "X" * 200,
         }
         overhead = measure_bytes(base_response)
         acc = BudgetAccumulator()
@@ -767,36 +752,45 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         unique_files: set[str] = set()
         for r in all_results:
             result_item = {
+                "hit_id": f"{mode}:{r.path}:{r.line}:{r.column}",
                 "path": r.path,
-                "line": r.line,
-                "column": r.column,
-                "score": r.score,
-                "match_type": "fuzzy",
+                "span": {
+                    "start_line": r.line,
+                    "start_col": r.column,
+                    "end_line": r.line,
+                    "end_col": 0,
+                },
+                "kind": "def" if mode == "symbol" else "lexical",
+                "symbol_id": getattr(r, "qualified_name", None) or getattr(r, "name", None),
+                "preview_line": (r.snippet or "")[:120] if r.snippet else None,
             }
             if match_counts and r.path in match_counts:
                 result_item["match_count"] = match_counts[r.path]
 
-            # Add content based on context mode
-            if context != "none":
-                if is_structural:
-                    with app_ctx.coordinator.db.session() as session:
-                        scope_region, content = resolve_scope_region_for_path(
-                            session,
-                            app_ctx.coordinator.repo_root,
-                            r.path,
-                            r.line,
-                            preference="function" if context == "function" else "class",
-                            fallback_lines=effective_lines,
-                        )
-                    result_item["content"] = content
-                    result_item["content_range"] = {
-                        "start": scope_region.start_line,
-                        "end": scope_region.end_line,
-                    }
-                    result_item["context_resolved"] = scope_region.kind
-                else:
-                    result_item["snippet"] = r.snippet
-                    result_item["context_resolved"] = "lines"
+            # Enrichment metadata (no source text)
+            if enrichment != "none" and hasattr(r, "name") and r.name:
+                result_item["symbol"] = {
+                    "name": r.name,
+                    "kind": getattr(r, "kind", None),
+                    "qualified_name": getattr(r, "qualified_name", None),
+                }
+            if is_structural:
+                from codeplane.index._internal.indexing import resolve_scope_region_for_path
+
+                with app_ctx.coordinator.db.session() as session:
+                    scope_region, _ = resolve_scope_region_for_path(
+                        session,
+                        app_ctx.coordinator.repo_root,
+                        r.path,
+                        r.line,
+                        preference="function" if enrichment == "function" else "class",
+                        fallback_lines=25,
+                    )
+                result_item["enclosing_span"] = {
+                    "start_line": scope_region.start_line,
+                    "end_line": scope_region.end_line,
+                    "kind": scope_region.kind,
+                }
 
             if not acc.try_add(result_item):
                 break
@@ -1103,9 +1097,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "Use pagination.cursors to expand specific sections for full detail."
             )
         else:
-            # Add large response hint if over inline threshold
-            total_size = effective_budget - remaining
-            maybe_add_large_response_hint(output, total_size)
+            pass  # Delivery envelope handles overflow
 
         return output
 

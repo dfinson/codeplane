@@ -44,6 +44,6 @@ class TestCreateMcpServer:
         """Has core tools registered."""
         mcp = create_mcp_server(mock_context)
         tool_names = set(mcp._tool_manager._tools.keys())
-        assert "read_files" in tool_names
+        assert "read_source" in tool_names
         assert "search" in tool_names
         assert "git_status" in tool_names

@@ -56,11 +56,29 @@ DIFF_CHANGES_MAX = 100
 RESPONSE_BUDGET_BYTES = 40_000
 """Per-response byte budget shared by all size-bounded endpoints."""
 
-INLINE_THRESHOLD_BYTES = 8_000
-"""VS Code writes responses over this size to file instead of inline."""
+INLINE_CAP_BYTES = 7_500
+"""Default inline cap for delivery envelope. Fits within VS Code's inline display."""
 
-INLINE_BUDGET_BYTES = 7_500
-"""Budget when agent requests inline_only=true for guaranteed inline display."""
+# ======================================================================# Delivery Envelope Constants
+# ======================================================================
+
+MAX_SPAN_LINES = 500
+"""Maximum lines per span in read_source."""
+
+MAX_INLINE_BYTES_PER_CALL = 20_000
+"""Maximum total inline bytes per read_source call."""
+
+MAX_TARGETS_PER_CALL = 20
+"""Maximum targets per read_source call."""
+
+SMALL_FILE_THRESHOLD = 1_000
+"""Files under this byte count skip two-phase confirmation in read_file_full."""
+
+RESOURCE_CACHE_TTL = 120.0
+"""TTL in seconds for resource cache entries."""
+
+RESOURCE_CACHE_MAX = 16
+"""Maximum entries in resource cache."""
 
 # ======================================================================# Internal Implementation Constants
 # ======================================================================# These are not exposed to users and are implementation details.

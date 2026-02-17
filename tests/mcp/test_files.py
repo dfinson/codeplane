@@ -1,7 +1,7 @@
-"""Tests for MCP files tools (read_files, list_files).
+"""Tests for MCP files tools (read_source, read_file_full, list_files).
 
 Tests the actual exports:
-- FileTarget model
+- SpanTarget model
 - _summarize_read() helper
 - _summarize_list() helper
 
@@ -12,55 +12,41 @@ import pytest
 from pydantic import ValidationError
 
 from codeplane.mcp.tools.files import (
-    FileTarget,
+    SpanTarget,
     _summarize_list,
     _summarize_read,
 )
 
 
-class TestFileTarget:
-    """Tests for FileTarget model."""
+class TestSpanTarget:
+    """Tests for SpanTarget model."""
 
     def test_valid_target(self) -> None:
         """Valid target with path and range."""
-        t = FileTarget(path="file.py", start_line=1, end_line=10)
+        t = SpanTarget(path="file.py", start_line=1, end_line=10)
         assert t.path == "file.py"
         assert t.start_line == 1
         assert t.end_line == 10
 
-    def test_target_path_only(self) -> None:
-        """Target with path only (no range)."""
-        t = FileTarget(path="file.py")
-        assert t.path == "file.py"
-        assert t.start_line is None
-        assert t.end_line is None
-
     def test_start_line_must_be_positive(self) -> None:
         """start_line must be > 0."""
         with pytest.raises(ValidationError):
-            FileTarget(path="a.py", start_line=0, end_line=10)
+            SpanTarget(path="a.py", start_line=0, end_line=10)
 
     def test_end_line_must_be_positive(self) -> None:
         """end_line must be > 0."""
         with pytest.raises(ValidationError):
-            FileTarget(path="a.py", start_line=1, end_line=0)
+            SpanTarget(path="a.py", start_line=1, end_line=0)
 
     def test_end_before_start_fails(self) -> None:
         """end_line must be >= start_line."""
         with pytest.raises(ValidationError):
-            FileTarget(path="a.py", start_line=10, end_line=5)
+            SpanTarget(path="a.py", start_line=10, end_line=5)
 
     def test_equal_start_end_allowed(self) -> None:
         """Single line range is allowed."""
-        t = FileTarget(path="a.py", start_line=5, end_line=5)
+        t = SpanTarget(path="a.py", start_line=5, end_line=5)
         assert t.start_line == t.end_line == 5
-
-    def test_partial_range_rejected(self) -> None:
-        """Must set both start_line and end_line or neither."""
-        with pytest.raises(ValidationError):
-            FileTarget(path="a.py", start_line=1)
-        with pytest.raises(ValidationError):
-            FileTarget(path="a.py", end_line=10)
 
 
 class TestSummarizeRead:

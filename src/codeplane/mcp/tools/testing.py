@@ -163,11 +163,11 @@ def _build_logs_hint(
                 + "\n".join(file_examples)
                 + "\n"
                 "Each target also produces .stderr.txt (if any) and .xml (JUnit results).\n"
-                "Use read_files to inspect logs for completed targets."
+                "Use read_source to inspect logs for completed targets."
             )
         return (
             f"Test output is being written to: {artifact_dir}/\n"
-            "Use read_files to inspect logs for completed targets."
+            "Use read_source to inspect logs for completed targets."
         )
     elif status_str in ("completed", "failed", "cancelled"):
         if file_examples:
@@ -175,12 +175,12 @@ def _build_logs_hint(
                 f"Test logs available at: {artifact_dir}/\n" + "\n".join(file_examples) + "\n"
                 "Each target also produces .stderr.txt (if any) and .xml (JUnit results).\n"
                 "  - result.json: final run summary\n"
-                "Use read_files to inspect specific test output."
+                "Use read_source to inspect specific test output."
             )
         return (
             f"Test logs available at: {artifact_dir}/\n"
             "  - result.json: final run summary\n"
-            "Use read_files to inspect specific test output."
+            "Use read_source to inspect specific test output."
         )
     return None
 
