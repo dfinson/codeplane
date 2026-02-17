@@ -27,6 +27,54 @@ _BROAD_RUN_TOKEN_KEY = "__broad_run_confirmation_token__"
 
 
 # =============================================================================
+# Target Matching Helpers
+# =============================================================================
+
+
+def _normalize_selector(selector: str) -> str:
+    """Normalize target selector for path matching.
+
+    Handles Go package selectors (./path), wildcard selectors (./...),
+    and project root selectors (.).
+    """
+    if selector in (".", "./..."):
+        return ""
+    if selector.startswith("./"):
+        return selector[2:]
+    return selector
+
+
+def _target_matches_affected_files(
+    target: Any,
+    affected_paths: set[str],
+    repo_root: Path,
+) -> bool:
+    """Check if a test target's scope contains any affected test file.
+
+    For 'file' targets (e.g., Python pytest), this is an exact path match.
+    For 'package' targets (e.g., Go packages), checks if any affected file
+    is within the package directory.
+    For 'project' targets (e.g., Maven modules, Gradle), checks if any affected
+    file is within the project root scope.
+    """
+    ws = Path(target.workspace_root)
+    sel = _normalize_selector(target.selector)
+    scope_abs = ws / sel if sel else ws
+
+    try:
+        scope_rel = str(scope_abs.relative_to(repo_root))
+    except ValueError:
+        # Target workspace outside repo root, fall back to exact selector match
+        return target.selector in affected_paths
+
+    if scope_rel == ".":
+        # Scope is the entire repo — all files match
+        return bool(affected_paths)
+
+    return any(p == scope_rel or p.startswith(scope_rel + "/") for p in affected_paths)
+
+
+# =============================================================================
 # Summary Helpers
 # =============================================================================
 
@@ -108,18 +156,21 @@ def _summarize_run(result: "TestResult") -> str:
                 )
             return f"{p.cases.passed} passed ({status.duration_seconds:.1f}s)"
         elif status.status == "running":
-            return f"running: {p.cases.passed}/{p.cases.total} passed"
+            parts = [f"{p.cases.passed} passed"]
+            if p.cases.failed:
+                parts.append(f"{p.cases.failed} failed")
+            return f"running: {p.targets.completed}/{p.targets.total} targets ({', '.join(parts)})"
         elif status.status == "cancelled":
             return "cancelled"
         elif status.status == "failed":
             return "run failed"
         # Other statuses
-        parts: list[str] = [status.status]
+        status_parts: list[str] = [status.status]
         if p.cases.total > 0:
-            parts.append(f"{p.cases.passed}/{p.cases.total} passed")
+            status_parts.append(f"{p.cases.passed}/{p.cases.total} passed")
             if p.cases.failed:
-                parts.append(f"{p.cases.failed} failed")
-        return ", ".join(parts)
+                status_parts.append(f"{p.cases.failed} failed")
+        return ", ".join(status_parts)
 
     return status.status
 
@@ -415,7 +466,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         if affected_by and targets:
             graph_result = await app_ctx.coordinator.get_affected_test_targets(affected_by)
             affected_paths = set(graph_result.test_files)
-            targets = [t for t in targets if t.selector in affected_paths]
+            targets = [
+                t
+                for t in targets
+                if _target_matches_affected_files(t, affected_paths, app_ctx.repo_root)
+            ]
 
             impact_info = {
                 "confidence": graph_result.confidence.tier,
@@ -431,7 +486,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             if graph_result.low_confidence_tests:
                 low_confidence_hint = (
                     f"{len(graph_result.low_confidence_tests)} test(s) matched with low "
-                    "confidence (parent/child module prefix). Use inspect_affected_tests "
+                    "confidence (parent module prefix only). Use inspect_affected_tests "
                     "to review uncertain matches before deciding whether to include them."
                 )
 
@@ -526,7 +581,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         if graph_result.low_confidence_tests:
             output["agentic_hint"] = (
                 f"{len(graph_result.low_confidence_tests)} match(es) are low-confidence "
-                "(parent/child module prefix only). Review the 'matches' list and "
+                "(parent module prefix only). Review the 'matches' list and "
                 "decide whether to include these tests or run only high-confidence ones."
             )
         elif graph_result.confidence.tier == "partial":
@@ -621,7 +676,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             # Use import graph to filter to affected targets
             graph_result = await app_ctx.coordinator.get_affected_test_targets(affected_by)
             affected_paths = set(graph_result.test_files)
-            filtered = [t for t in all_targets if t.selector in affected_paths]
+            filtered = [
+                t
+                for t in all_targets
+                if _target_matches_affected_files(t, affected_paths, app_ctx.repo_root)
+            ]
             effective_targets = [t.target_id for t in filtered]
 
             impact_info = {

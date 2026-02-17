@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Literal
 
 from sqlmodel import col, func, select
 
+from codeplane.core.languages import is_test_file
 from codeplane.index._internal.ignore import matches_glob
 from codeplane.index.models import (
     Context,
@@ -414,18 +415,13 @@ class RepoMapper:
         filtered_files: list[tuple[str, str | None, int | None]],
     ) -> TestLayout:
         """Analyze test files from pre-filtered file data."""
-        test_patterns = ("test_", "_test.py", "tests/", "test/")
-
         test_files: list[str] = []
         for path, _, _ in filtered_files:
-            path_lower = path.lower()
-            if any(pattern in path_lower for pattern in test_patterns):
+            if is_test_file(path):
                 test_files.append(path)
-                if len(test_files) >= limit:
-                    break
 
         return TestLayout(
-            test_files=sorted(test_files),
+            test_files=sorted(test_files[:limit]),
             test_count=len(test_files),
         )
 

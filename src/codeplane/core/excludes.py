@@ -128,7 +128,9 @@ DEFAULT_PRUNABLE_DIRS: frozenset[str] = frozenset(
         # -------------------------------------------------------------------------
         "bin",  # .NET build output
         "obj",  # .NET intermediate
-        "packages",  # NuGet packages (older style)
+        # NOTE: packages/ removed — it conflicts with JS/TS monorepo workspaces
+        # (npm/pnpm/yarn workspaces commonly use packages/). Modern .NET uses
+        # global NuGet cache; legacy NuGet packages/ is handled by .gitignore.
         # -------------------------------------------------------------------------
         # iOS/macOS ecosystem
         # Note: macOS is case-insensitive, but we use lowercase for consistency.
@@ -274,7 +276,8 @@ _esy/
 .m2/
 
 # .NET
-packages/
+# NOTE: packages/ not excluded — conflicts with JS/TS monorepo workspaces.
+# Legacy NuGet packages/ is typically in .gitignore.
 
 # iOS/macOS
 pods/

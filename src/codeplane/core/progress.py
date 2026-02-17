@@ -355,6 +355,7 @@ class PhaseBox:
         """Update the live display."""
         if self._live:
             self._live.update(self._render())
+            self._live.refresh()
 
     def add_progress(self, description: str, total: int) -> TaskID:
         """Add a progress bar and return its task ID."""
@@ -446,6 +447,7 @@ class PhaseBox:
         if self._live:
             # Final render before closing
             self._live.update(self._render())
+            self._live.refresh()
             self._live.__exit__(exc_type, exc_val, exc_tb)
         _suppress_console_logs.active = False
 

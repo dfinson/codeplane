@@ -872,6 +872,7 @@ def initialize_repo(
                 # Update indexing phase box
                 pct = int(indexed / total * 100) if total > 0 else 0
                 indexing_phase._progress.update(indexing_task_id, completed=pct)  # type: ignore[union-attr]
+                indexing_phase._update()
 
                 if files_by_ext:
                     table = _make_init_extension_table(files_by_ext)
@@ -909,12 +910,14 @@ def initialize_repo(
                             )
                         pct = int(indexed / total * 100) if total > 0 else 0
                         resolution_phase._progress.update(refs_task_id, completed=pct)  # type: ignore[union-attr]
+                        resolution_phase._update()
 
                 elif progress_phase == "resolving_types" and resolution_phase is not None:
                     if types_task_id is None:
                         types_task_id = resolution_phase.add_progress("Resolving types", total=100)
                     pct = int(indexed / total * 100) if total > 0 else 0
                     resolution_phase._progress.update(types_task_id, completed=pct)  # type: ignore[union-attr]
+                    resolution_phase._update()
 
         loop = asyncio.new_event_loop()
         try:

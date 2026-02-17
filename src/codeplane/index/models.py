@@ -305,6 +305,24 @@ class ImportKind(StrEnum):
     RUST_USE = "rust_use"  # use foo::bar
     CSHARP_USING = "csharp_using"  # using Namespace;
     CSHARP_USING_STATIC = "csharp_using_static"  # using static Namespace.Type;
+    # Tier 1 languages - high impact
+    JAVA_IMPORT = "java_import"  # import com.foo.Bar;
+    JAVA_IMPORT_STATIC = "java_import_static"  # import static com.foo.Bar.baz;
+    # Tier 2 languages - commonly encountered
+    KOTLIN_IMPORT = "kotlin_import"  # import com.foo.Bar
+    RUBY_REQUIRE = "ruby_require"  # require 'foo'
+    RUBY_REQUIRE_RELATIVE = "ruby_require_relative"  # require_relative 'foo'
+    PHP_USE = "php_use"  # use Namespace\Class;
+    SWIFT_IMPORT = "swift_import"  # import Foundation
+    # Tier 3 languages - niche
+    SCALA_IMPORT = "scala_import"  # import com.foo.{Bar, Baz => B}
+    ELIXIR_IMPORT = "elixir_import"  # import Module / alias Module / use Module
+    HASKELL_IMPORT = "haskell_import"  # import Module
+    OCAML_OPEN = "ocaml_open"  # open Module
+    LUA_REQUIRE = "lua_require"  # require("module")
+    JULIA_USING = "julia_using"  # using Module / import Module
+    # Special - textual inclusion
+    C_INCLUDE = "c_include"  # #include <header> / #include "header"
 
 
 class ExportThunkMode(StrEnum):
@@ -422,6 +440,15 @@ class File(SQLModel, table=True):
     line_count: int | None = None
     indexed_at: float | None = None
     last_indexed_epoch: int | None = Field(default=None, index=True)
+    declared_module: str | None = Field(
+        default=None,
+        index=True,
+        description="Language-level module/package identity extracted from source "
+        "(e.g. 'cats.effect' from Scala `package cats.effect`, "
+        "'Newtonsoft.Json' from C# `namespace Newtonsoft.Json`). "
+        "NULL for languages without declarations (JS/TS, C/C++) "
+        "or files missing declarations.",
+    )
 
     # Relationships
     defs: list["DefFact"] = Relationship(back_populates="file")
@@ -664,6 +691,14 @@ class ImportFact(SQLModel, table=True):
     imported_name: str = Field(index=True)  # Name being imported
     alias: str | None = None  # Local alias (NULL if none)
     source_literal: str | None = None  # Import source string literal (if extractable)
+    resolved_path: str | None = Field(
+        default=None,
+        index=True,
+        description="Repo-relative file path this import resolves to. "
+        "Populated at index time by resolving source_literal against "
+        "declared_module values (declaration-based languages) or file "
+        "paths (path-based languages like JS/TS, C/C++, Python).",
+    )
     import_kind: str  # python_import, python_from, js_import, etc.
     certainty: str = Field(default=Certainty.CERTAIN.value)
 
