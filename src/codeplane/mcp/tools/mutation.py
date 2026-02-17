@@ -267,8 +267,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     deletions=deletions,
                 )
                 # Trigger reindex
-                if not dry_run and app_ctx.mutation_ops._on_mutation:
-                    app_ctx.mutation_ops._on_mutation([Path(path)])
+                if not dry_run:
+                    app_ctx.mutation_ops.notify_mutation([Path(path)])
 
         # --- Process creates and deletes via mutation_ops ---
         if creates or deletes:

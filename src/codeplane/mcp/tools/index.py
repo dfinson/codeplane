@@ -290,7 +290,7 @@ def _serialize_public_api_tiered(public_api: list[Any], tier: str) -> dict[str, 
     if tier == _TIER_SAMPLE:
         top = [_sym_to_dict(s) for s in public_api[:_PUBLIC_API_SAMPLE]]
         return {
-            "tier": _TIER_SUMMARY,
+            "tier": _TIER_SAMPLE,
             "items": top,
             "items_shown": len(top),
             "count": len(public_api),
@@ -1296,18 +1296,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         }
 
         return output
-
-    def _parse_map_cursor(cursor: str | None) -> tuple[int, int, int]:
-        """Parse map_repo pagination cursor into (tree_offset, ep_offset, api_offset)."""
-        if cursor is None:
-            return 0, 0, 0
-        parts = cursor.split(":")
-        if len(parts) == 3:
-            try:
-                return int(parts[0]), int(parts[1]), int(parts[2])
-            except ValueError:
-                pass
-        return 0, 0, 0
 
     # Flatten schemas to remove $ref/$defs for Claude compatibility
     for tool in mcp._tool_manager._tools.values():

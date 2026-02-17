@@ -243,10 +243,10 @@ class TestToolMiddleware:
 
         async def call_next(_ctx):  # noqa: ARG001
             raise MCPError(
-                code=MCPErrorCode.CONTENT_NOT_FOUND,
-                message="Content not found",
+                code=MCPErrorCode.INVALID_RANGE,
+                message="Invalid range",
                 path="src/file.py",
-                remediation="Check the old_content matches exactly.",
+                remediation="Check the line range is within file bounds.",
             )
 
         with patch("codeplane.core.progress.get_console", return_value=mock_console):
@@ -254,7 +254,7 @@ class TestToolMiddleware:
 
         content = result.structured_content
         assert content is not None
-        assert content["error"]["code"] == "CONTENT_NOT_FOUND"
+        assert content["error"]["code"] == "INVALID_RANGE"
 
     # =========================================================================
     # Internal Error Tests

@@ -4,7 +4,7 @@ Provides:
 - DeliveryEnvelope: uniform response shape for all endpoints
 - ResourceCache: disk-backed cache for resource-mode payloads
 - ClientProfile: static client capability profiles
-- build_envelope: decide inline/resource/paged delivery
+- build_envelope: decide inline/resource delivery
 - resolve_profile: select client profile from connection info
 """
 

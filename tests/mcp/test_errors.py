@@ -2,7 +2,6 @@
 
 from codeplane.mcp.errors import (
     ERROR_CATALOG,
-    ContentNotFoundError,
     DryRunExpiredError,
     DryRunRequiredError,
     ErrorResponse,
@@ -11,7 +10,6 @@ from codeplane.mcp.errors import (
     InvalidRangeError,
     MCPError,
     MCPErrorCode,
-    MultipleMatchesError,
     get_error_documentation,
 )
 
@@ -33,8 +31,6 @@ class TestMCPErrorCode:
 
     def test_mutation_codes_exist(self) -> None:
         """Mutation-related error codes are defined."""
-        assert hasattr(MCPErrorCode, "CONTENT_NOT_FOUND")
-        assert hasattr(MCPErrorCode, "MULTIPLE_MATCHES")
         assert hasattr(MCPErrorCode, "HASH_MISMATCH")
 
     def test_range_code_exists(self) -> None:
@@ -133,41 +129,6 @@ class TestMCPError:
         assert resp.message == "No access"
 
 
-class TestContentNotFoundError:
-    """Tests for ContentNotFoundError."""
-
-    def test_creates_with_correct_code(self) -> None:
-        """Uses CONTENT_NOT_FOUND error code."""
-        err = ContentNotFoundError("test.py", "needle")
-        assert err.code == MCPErrorCode.CONTENT_NOT_FOUND
-
-    def test_message_format(self) -> None:
-        """Message includes path."""
-        err = ContentNotFoundError("src/main.py", "def missing_func")
-        assert "src/main.py" in err.message
-
-    def test_has_remediation(self) -> None:
-        """Error has remediation hint."""
-        err = ContentNotFoundError("file.py", "old text")
-        assert err.remediation is not None
-        assert len(err.remediation) > 0
-
-
-class TestMultipleMatchesError:
-    """Tests for MultipleMatchesError."""
-
-    def test_creates_with_correct_code(self) -> None:
-        """Uses MULTIPLE_MATCHES error code."""
-        err = MultipleMatchesError("test.py", count=3, lines=[10, 20, 30])
-        assert err.code == MCPErrorCode.MULTIPLE_MATCHES
-
-    def test_context_contain_counts(self) -> None:
-        """Context includes match count and lines."""
-        err = MultipleMatchesError("f.py", count=10, lines=[1, 2, 3])
-        assert err.context.get("match_count") == 10
-        assert err.context.get("match_lines") == [1, 2, 3]
-
-
 class TestInvalidRangeError:
     """Tests for InvalidRangeError."""
 
@@ -244,10 +205,10 @@ class TestErrorDocumentation:
 
     def test_get_error_documentation_found(self) -> None:
         """Returns documentation for known error code."""
-        doc = get_error_documentation(MCPErrorCode.CONTENT_NOT_FOUND.value)
+        doc = get_error_documentation(MCPErrorCode.HASH_MISMATCH.value)
         assert doc is not None
-        assert doc.code == MCPErrorCode.CONTENT_NOT_FOUND
-        assert doc.category == "validation"
+        assert doc.code == MCPErrorCode.HASH_MISMATCH
+        assert doc.category == "state"
         assert len(doc.causes) > 0
         assert len(doc.remediation) > 0
 
@@ -258,9 +219,8 @@ class TestErrorDocumentation:
 
     def test_catalog_has_common_errors(self) -> None:
         """Catalog includes common error types."""
-        assert MCPErrorCode.CONTENT_NOT_FOUND.value in ERROR_CATALOG
-        assert MCPErrorCode.MULTIPLE_MATCHES.value in ERROR_CATALOG
         assert MCPErrorCode.HASH_MISMATCH.value in ERROR_CATALOG
         assert MCPErrorCode.INVALID_RANGE.value in ERROR_CATALOG
         assert MCPErrorCode.FILE_NOT_FOUND.value in ERROR_CATALOG
+        assert MCPErrorCode.HOOK_FAILED.value in ERROR_CATALOG
         assert MCPErrorCode.HOOK_FAILED.value in ERROR_CATALOG

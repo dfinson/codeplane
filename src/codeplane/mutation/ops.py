@@ -88,6 +88,11 @@ class MutationOps:
         self._repo_root = repo_root
         self._on_mutation = on_mutation
 
+    def notify_mutation(self, paths: list[Path]) -> None:
+        """Notify that files were mutated, triggering reindex if configured."""
+        if self._on_mutation:
+            self._on_mutation(paths)
+
     def write_files(
         self,
         edits: list[Edit],

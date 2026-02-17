@@ -20,6 +20,7 @@ from codeplane.config.constants import (
     MAX_TARGETS_PER_CALL,
     SMALL_FILE_THRESHOLD,
 )
+from codeplane.core.languages import EXTENSION_TO_NAME
 from codeplane.mcp.delivery import ScopeManager, build_envelope
 from codeplane.mcp.errors import (
     MCPError,
@@ -237,12 +238,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             end_idx = min(len(lines), t.end_line)
             span_content = "".join(lines[start_idx:end_idx])
             line_count = end_idx - start_idx
-            line_count = end_idx - start_idx
 
             file_sha = _compute_file_sha256(full_path)
             total_bytes += len(span_content.encode("utf-8"))
 
-            from codeplane.core.languages import EXTENSION_TO_NAME
+            lang = EXTENSION_TO_NAME.get(full_path.suffix.lower(), "unknown")
 
             lang = EXTENSION_TO_NAME.get(full_path.suffix.lower(), "unknown")
 
@@ -288,8 +288,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
             content, start_line, end_line = resolved
             total_bytes += len(content.encode("utf-8"))
-
-            from codeplane.core.languages import EXTENSION_TO_NAME
 
             lang = EXTENSION_TO_NAME.get(full_path.suffix.lower(), "unknown")
 
@@ -413,8 +411,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             file_sha = _compute_file_sha256(full_path)
             byte_count = len(content.encode("utf-8"))
             total_bytes += byte_count
-
-            from codeplane.core.languages import EXTENSION_TO_NAME
 
             lang = EXTENSION_TO_NAME.get(full_path.suffix.lower(), "unknown")
             line_count = content.count("\n") + (1 if content and not content.endswith("\n") else 0)

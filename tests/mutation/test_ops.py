@@ -393,8 +393,7 @@ class TestMutationOpsCallback:
     def test_callback_receives_multiple_paths(self, tmp_path: Path) -> None:
         """on_mutation callback receives all changed paths."""
         callback = MagicMock()
-        ops = MutationOps(tmp_path)
-        ops._on_mutation = callback
+        ops = MutationOps(tmp_path, on_mutation=callback)
 
         (tmp_path / "existing.py").write_text("x")
 

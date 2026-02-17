@@ -15,8 +15,6 @@ class MCPErrorCode(StrEnum):
     """Machine-readable error codes for MCP tool failures."""
 
     # Validation errors - agent should fix input
-    CONTENT_NOT_FOUND = "CONTENT_NOT_FOUND"
-    MULTIPLE_MATCHES = "MULTIPLE_MATCHES"
     ANCHOR_NOT_FOUND = "ANCHOR_NOT_FOUND"
     ANCHOR_AMBIGUOUS = "ANCHOR_AMBIGUOUS"
     INVALID_RANGE = "INVALID_RANGE"
@@ -110,33 +108,6 @@ class MCPError(Exception):
 # =============================================================================
 # Specific Error Classes
 # =============================================================================
-
-
-class ContentNotFoundError(MCPError):
-    """Raised when old_content is not found in file."""
-
-    def __init__(self, path: str, snippet: str | None = None) -> None:
-        super().__init__(
-            code=MCPErrorCode.CONTENT_NOT_FOUND,
-            message=f"Content not found in {path}",
-            remediation="Re-read the file to get current content. Ensure exact whitespace match.",
-            path=path,
-            snippet_preview=snippet[:100] if snippet else None,
-        )
-
-
-class MultipleMatchesError(MCPError):
-    """Raised when old_content matches multiple locations."""
-
-    def __init__(self, path: str, count: int, lines: list[int]) -> None:
-        super().__init__(
-            code=MCPErrorCode.MULTIPLE_MATCHES,
-            message=f"Content found {count} times in {path}, expected 1",
-            remediation="Add more context lines to old_content to make it unique, or set expected_occurrences.",
-            path=path,
-            match_count=count,
-            match_lines=lines[:10],  # Limit to first 10
-        )
 
 
 class InvalidRangeError(MCPError):
@@ -313,36 +284,6 @@ class ErrorDocumentation:
 
 
 ERROR_CATALOG: dict[str, ErrorDocumentation] = {
-    MCPErrorCode.CONTENT_NOT_FOUND.value: ErrorDocumentation(
-        code=MCPErrorCode.CONTENT_NOT_FOUND,
-        category="validation",
-        description="The specified old_content was not found in the file.",
-        causes=[
-            "File was modified since you last read it",
-            "Whitespace mismatch (trailing spaces, tabs vs spaces)",
-            "Line ending mismatch (CRLF vs LF)",
-            "Content exists but with different indentation",
-        ],
-        remediation=[
-            "Re-read the file with read_files to get current content",
-            "Copy exact content including all whitespace",
-            "Check for invisible characters or encoding issues",
-        ],
-    ),
-    MCPErrorCode.MULTIPLE_MATCHES.value: ErrorDocumentation(
-        code=MCPErrorCode.MULTIPLE_MATCHES,
-        category="validation",
-        description="The old_content matched multiple locations in the file.",
-        causes=[
-            "Content is not unique (common pattern like 'return None')",
-            "Insufficient context lines provided",
-        ],
-        remediation=[
-            "Add more surrounding lines to old_content to make it unique",
-            "Set expected_occurrences if you want to replace all matches",
-            "Use line numbers from the error response to identify which match you want",
-        ],
-    ),
     MCPErrorCode.HASH_MISMATCH.value: ErrorDocumentation(
         code=MCPErrorCode.HASH_MISMATCH,
         category="state",
