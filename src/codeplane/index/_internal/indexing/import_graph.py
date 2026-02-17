@@ -329,10 +329,7 @@ class ImportGraph:
         # name corresponds to the directory under Sources/ in SwiftPM layout.
         # If a changed .swift source file is under Sources/<Module>/, any test
         # file that imports that module name is affected.
-        swift_changed = [
-            f for f in changed_files
-            if f.endswith(".swift") and not is_test_file(f)
-        ]
+        swift_changed = [f for f in changed_files if f.endswith(".swift") and not is_test_file(f)]
         if swift_changed and self._test_file_paths:
             # Extract module names from changed file paths
             swift_modules: set[str] = set()
@@ -374,16 +371,12 @@ class ImportGraph:
             #   parent package that may or may not include the changed code.
             unique_mods = sorted(set(src_mods))
             is_direct = (
-                any(m in search_modules for m in unique_mods)
-                or test_path in resolved_path_tests
+                any(m in search_modules for m in unique_mods) or test_path in resolved_path_tests
             )
             is_child = not is_direct and any(
-                any(m.startswith(prefix) for prefix in like_prefixes)
-                for m in unique_mods
+                any(m.startswith(prefix) for prefix in like_prefixes) for m in unique_mods
             )
-            confidence: Literal["high", "low"] = (
-                "high" if is_direct or is_child else "low"
-            )
+            confidence: Literal["high", "low"] = "high" if is_direct or is_child else "low"
             if is_direct:
                 reason = f"directly imports {', '.join(unique_mods)}"
             elif is_child:

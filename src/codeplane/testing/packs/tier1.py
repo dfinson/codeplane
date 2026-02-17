@@ -1345,7 +1345,9 @@ class MinitestPack(RunnerPack):
         MarkerRule("Gemfile", content_match="minitest", confidence="medium"),
         MarkerRule("test/test_helper.rb", confidence="high"),
     ]
-    output_strategy = OutputStrategy(format="junit_xml", file_based=True, file_pattern="minitest.xml")
+    output_strategy = OutputStrategy(
+        format="junit_xml", file_based=True, file_pattern="minitest.xml"
+    )
     capabilities = RunnerCapabilities(
         supported_kinds=["file"],
         supports_pattern_filter=True,
@@ -1411,7 +1413,7 @@ class MinitestPack(RunnerPack):
         self,
         target: TestTarget,
         *,
-        output_path: Path, # noqa: ARG002
+        output_path: Path,  # noqa: ARG002
         pattern: str | None = None,
         tags: list[str] | None = None,  # noqa: ARG002
         exec_ctx: RuntimeExecutionContext | None = None,

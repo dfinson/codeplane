@@ -794,7 +794,9 @@ class MixTestPack(RunnerPack):
     markers = [
         MarkerRule("mix.exs", confidence="high"),
     ]
-    output_strategy = OutputStrategy(format="junit_xml", file_based=True, file_pattern="_build/test/lib/**/test-junit-report.xml")
+    output_strategy = OutputStrategy(
+        format="junit_xml", file_based=True, file_pattern="_build/test/lib/**/test-junit-report.xml"
+    )
     capabilities = RunnerCapabilities(
         supported_kinds=["file"],
         supports_pattern_filter=True,
@@ -841,7 +843,7 @@ class MixTestPack(RunnerPack):
         self,
         target: TestTarget,
         *,
-        output_path: Path, # noqa: ARG002
+        output_path: Path,  # noqa: ARG002
         pattern: str | None = None,
         tags: list[str] | None = None,
         exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002
@@ -854,7 +856,7 @@ class MixTestPack(RunnerPack):
                 cmd.extend(["--only", tag])
         return cmd
 
-    def parse_output(self, output_path: Path, stdout: str) -> ParsedTestSuite: # noqa: ARG002
+    def parse_output(self, output_path: Path, stdout: str) -> ParsedTestSuite:  # noqa: ARG002
         # ExUnit prints results to stdout; parse from stdout lines
         suite = ParsedTestSuite(name="mix_test")
         for line in stdout.splitlines():
@@ -935,10 +937,10 @@ class CabalTestPack(RunnerPack):
 
     def build_command(
         self,
-        target: TestTarget, # noqa: ARG002
+        target: TestTarget,  # noqa: ARG002
         *,
-        output_path: Path, # noqa: ARG002
-        pattern: str | None = None, # noqa: ARG002
+        output_path: Path,  # noqa: ARG002
+        pattern: str | None = None,  # noqa: ARG002
         tags: list[str] | None = None,  # noqa: ARG002
         exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002
     ) -> list[str]:
@@ -1004,10 +1006,10 @@ class JuliaPkgTestPack(RunnerPack):
 
     def build_command(
         self,
-        target: TestTarget, # noqa: ARG002
+        target: TestTarget,  # noqa: ARG002
         *,
-        output_path: Path, # noqa: ARG002
-        pattern: str | None = None, # noqa: ARG002
+        output_path: Path,  # noqa: ARG002
+        pattern: str | None = None,  # noqa: ARG002
         tags: list[str] | None = None,  # noqa: ARG002
         exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002
     ) -> list[str]:
@@ -1081,10 +1083,10 @@ class DuneTestPack(RunnerPack):
 
     def build_command(
         self,
-        target: TestTarget, # noqa: ARG002
+        target: TestTarget,  # noqa: ARG002
         *,
-        output_path: Path, # noqa: ARG002
-        pattern: str | None = None, # noqa: ARG002
+        output_path: Path,  # noqa: ARG002
+        pattern: str | None = None,  # noqa: ARG002
         tags: list[str] | None = None,  # noqa: ARG002
         exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002
     ) -> list[str]:

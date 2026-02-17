@@ -238,7 +238,8 @@ class ConfigResolver:
         return None
 
     def resolve_js_exports(
-        self, read_file: _ReadFileFn,
+        self,
+        read_file: _ReadFileFn,
     ) -> dict[str, str]:
         """Build JS/TS bare-specifier → file-path map from package.json exports.
 
@@ -247,7 +248,8 @@ class ConfigResolver:
         if self._js_exports is not None:
             return self._js_exports
         self._js_exports = build_js_package_exports(
-            self._file_paths, read_file,
+            self._file_paths,
+            read_file,
         )
         return self._js_exports
 
@@ -521,7 +523,9 @@ class ImportPathResolver:
                 # Go up (dot_count - 1) additional levels
                 levels_up = dot_count - 1
                 if levels_up > 0:
-                    package_parts = package_parts[:-levels_up] if levels_up < len(package_parts) else []
+                    package_parts = (
+                        package_parts[:-levels_up] if levels_up < len(package_parts) else []
+                    )
 
                 if package_parts:
                     if stripped:
@@ -591,7 +595,7 @@ class ImportPathResolver:
 
     # ----- Lua require() path resolution -----
 
-    def _resolve_lua(self, source_literal: str, importer_path: str) -> str | None: # noqa: ARG002
+    def _resolve_lua(self, source_literal: str, importer_path: str) -> str | None:  # noqa: ARG002
         """Resolve Lua require() module to file path.
 
         Lua's require("foo.bar.baz") replaces dots with path separators

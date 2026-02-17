@@ -265,7 +265,14 @@ ALL_LANGUAGES: tuple[Language, ...] = (
         markers_workspace=(),
         markers_package=("cmakelists.txt", "meson.build", "compile_commands.json"),
         grammar="cpp",  # C++ grammar handles both C and C++
-        test_patterns=("test_*.cpp", "*_test.cpp", "test_*.c", "*_test.c", "tests/*.cpp", "tests/*.c"),
+        test_patterns=(
+            "test_*.cpp",
+            "*_test.cpp",
+            "test_*.c",
+            "*_test.c",
+            "tests/*.cpp",
+            "tests/*.c",
+        ),
         priority=60,
     ),
     # =========================================================================
