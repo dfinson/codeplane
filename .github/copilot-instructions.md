@@ -95,6 +95,27 @@ If you believe a hard reset is needed:
 
 Violating this rule destroys work irreversibly and may affect parallel agent workflows.
 
+---
+
+## Intentional Design Decisions (DO NOT FLAG AS BUGS)
+
+The following patterns are **intentional architecture**, not bugs. Do not suggest "fixes" for these.
+
+### Cross-Unit Reference Resolution in Import Resolvers
+
+Import resolution functions (`resolve_rust_glob_import_refs`, `resolve_go_dot_import_refs`, `resolve_java_star_import_refs`, etc.) intentionally join `def_facts` **WITHOUT** filtering by `unit_id`. This is correct because:
+
+1. **Imports cross unit boundaries by definition** — when you `import X from Y`, you're referencing definitions from a different module/unit
+2. **`ref_facts` are scoped to the current unit** — the reference originates in unit A
+3. **`def_facts` must be global** — the definition being imported lives in unit B
+4. Filtering `def_facts` by the same `unit_id` as `ref_facts` would **break all cross-module imports**
+
+This is NOT "cross-unit pollution" — it is the fundamental mechanism by which imports resolve to their targets across module boundaries.
+
+**DO NOT suggest adding `unit_id` filters to `def_facts` joins in resolver functions.**
+
+---
+
 <!-- codeplane-instructions -->
 ## CodePlane MCP: Mandatory Tool Selection
 
