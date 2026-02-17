@@ -208,18 +208,18 @@ def _parse_cursor(cursor: str | None) -> tuple[int | None, int, int]:
     parts = cursor.split(":")
     if len(parts) == 3:
         try:
-            return int(parts[0]), int(parts[1]), int(parts[2])
+            return int(parts[0]), max(0, int(parts[1])), max(0, int(parts[2]))
         except ValueError:
             pass
     # Legacy 2-part format: "<cache_id>:<offset>" — assume structural only
     if len(parts) == 2:
         try:
-            return int(parts[0]), int(parts[1]), 0
+            return int(parts[0]), max(0, int(parts[1])), 0
         except ValueError:
             pass
     # Malformed — treat as plain offset for backwards compat
     try:
-        return None, int(cursor), 0
+        return None, max(0, int(cursor)), 0
     except ValueError:
         return None, 0, 0
 
@@ -330,26 +330,30 @@ def _run_git_diff(
 
 
 def _parse_epoch_ref(ref: str) -> int:
-    """Parse an epoch reference like 'epoch:3' into an integer.
+    """Parse an epoch reference like 'epoch:3' into a non-negative integer.
 
-    Only numeric epoch IDs are supported (e.g. epoch:1, epoch:42).
+    Only non-negative numeric epoch IDs are supported (e.g. epoch:0, epoch:1, epoch:42).
     Named aliases like 'epoch:previous' are not implemented.
 
     Raises:
-        ValueError: If the epoch value is not a valid integer.
+        ValueError: If the epoch value is not a valid non-negative integer.
     """
     parts = ref.split(":", 1)
     if len(parts) != 2 or parts[0] != "epoch":
         msg = f"Invalid epoch reference: {ref!r}. Expected format: epoch:<int>"
         raise ValueError(msg)
     try:
-        return int(parts[1])
+        value = int(parts[1])
     except ValueError:
         msg = (
             f"Invalid epoch value: {parts[1]!r}. "
             f"Only numeric epoch IDs are supported (e.g. epoch:1, epoch:42)."
         )
         raise ValueError(msg) from None
+    if value < 0:
+        msg = f"Epoch ID must be non-negative, got {value}."
+        raise ValueError(msg)
+    return value
 
 
 def _run_epoch_diff(

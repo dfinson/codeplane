@@ -74,7 +74,7 @@ class TestSearchDeliveryEnvelope:
     def test_scope_usage_added_when_provided(self) -> None:
         """scope_usage dict appears in envelope."""
         result = self._make_search_result()
-        usage = {"search_calls": 1, "search_hits_returned_total": 3}
+        usage = {"search_calls": 1, "search_hits": 3}
         wrapped = wrap_existing_response(
             result,
             resource_kind="search_hits",
@@ -152,12 +152,12 @@ class TestSearchScopeBudget:
         assert b2.search_hits_returned_total == 5
 
     def test_to_usage_dict_includes_search_fields(self) -> None:
-        """to_usage_dict includes search_calls and search_hits_returned_total."""
+        """to_usage_dict includes search_calls and search_hits."""
         budget = ScopeBudget("test")
         budget.increment_search(hits=3)
         usage = budget.to_usage_dict()
         assert usage["search_calls"] == 1
-        assert usage["search_hits_returned_total"] == 3
+        assert usage["search_hits"] == 3
 
 
 # =============================================================================

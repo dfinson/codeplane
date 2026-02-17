@@ -189,7 +189,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 # Sort by start_line and check for overlaps
                 sorted_edits = sorted(path_edits, key=lambda x: x.start_line or 0)
                 for i in range(len(sorted_edits) - 1):
-                    if (sorted_edits[i].end_line or 0) >= (sorted_edits[i + 1].start_line or 0):
+                    # Use inf for None end_line to match apply logic (None = EOF)
+                    raw_end = sorted_edits[i].end_line
+                    end_i: float = raw_end if raw_end is not None else float("inf")
+                    start_j = sorted_edits[i + 1].start_line or 0
+                    if end_i >= start_j:
                         raise SpanOverlapError(
                             path=path,
                             conflicts=[

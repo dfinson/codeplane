@@ -840,10 +840,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             budget = _scope_manager.get_or_create(scope_id)
             budget.increment_search(acc.count)
             exceeded = budget.check_budget("search_calls")
+            exceeded_counter = "search_calls"
+            if not exceeded:
+                exceeded = budget.check_budget("search_hits")
+                exceeded_counter = "search_hits"
             if exceeded:
                 from codeplane.mcp.errors import BudgetExceededError
 
-                raise BudgetExceededError(scope_id, "search_calls", exceeded)
+                raise BudgetExceededError(scope_id, exceeded_counter, exceeded)
             scope_usage = budget.to_usage_dict()
 
         return wrap_existing_response(

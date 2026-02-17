@@ -308,10 +308,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             budget = _scope_manager.get_or_create(scope_id)
             budget.increment_read(total_bytes)
             exceeded = budget.check_budget("read_bytes")
+            exceeded_counter = "read_bytes"
+            if not exceeded:
+                exceeded = budget.check_budget("read_calls")
+                exceeded_counter = "read_calls"
             if exceeded:
                 from codeplane.mcp.errors import BudgetExceededError
 
-                raise BudgetExceededError(scope_id, "read_bytes", exceeded)
+                raise BudgetExceededError(scope_id, exceeded_counter, exceeded)
             scope_usage = budget.to_usage_dict()
 
         summary = _summarize_read(files_out, len(not_found))

@@ -244,13 +244,18 @@ class FileHashMismatchError(MCPError):
 class ConfirmationRequiredError(MCPError):
     """Raised when a two-phase confirmation is required."""
 
+    _RESERVED_KEYS = frozenset({"code", "message", "remediation", "path", "confirmation_token"})
+
     def __init__(self, reason: str, token: str, details: dict[str, Any] | None = None) -> None:
+        safe_details = (
+            {k: v for k, v in details.items() if k not in self._RESERVED_KEYS} if details else {}
+        )
         super().__init__(
             code=MCPErrorCode.CONFIRMATION_REQUIRED,
             message=reason,
             remediation="Retry with confirmation_token and confirm_reason parameters.",
             confirmation_token=token,
-            **(details or {}),
+            **safe_details,
         )
 
 

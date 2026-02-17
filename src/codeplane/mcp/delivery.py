@@ -507,7 +507,7 @@ class ScopeBudget:
             "full_reads": self.full_file_reads,
             "read_calls": self.read_calls,
             "search_calls": self.search_calls,
-            "search_hits_returned_total": self.search_hits_returned_total,
+            "search_hits": self.search_hits_returned_total,
             "paged_continuations": self.paged_continuations,
         }
 

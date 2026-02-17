@@ -226,7 +226,7 @@ class TestScopeBudget:
         budget.increment_search(10)
         usage = budget.to_usage_dict()
         assert usage["search_calls"] == 1
-        assert usage["search_hits_returned_total"] == 10
+        assert usage["search_hits"] == 10
 
     def test_multiple_scopes_independent(self) -> None:
         """Two scope_ids track independently."""
