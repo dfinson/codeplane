@@ -1,27 +1,56 @@
 """Tests for span-based edit mode in write_files.
 
 Covers:
+- EditParam validation (required fields per action)
 - Basic span edit with correct file_sha256
 - Hash mismatch detection
 - Multi-edit non-overlapping and overlapping scenarios
 - Descending line order application
-- Coexistence with old_content edits
 """
 
 from __future__ import annotations
 
 import hashlib
 
+import pytest
+from pydantic import ValidationError
+
 from codeplane.mcp.tools.mutation import EditParam
 
 
-class TestEditParam:
-    """Tests for EditParam model with span edit fields."""
+class TestEditParamValidation:
+    """Tests for EditParam model validation."""
 
-    def test_span_edit_fields(self) -> None:
-        """EditParam accepts span edit fields."""
+    def test_create_requires_content(self) -> None:
+        """Create action requires content field."""
+        with pytest.raises(ValidationError, match="content"):
+            EditParam(path="f.py", action="create")
+
+    def test_create_valid(self) -> None:
+        """Create with content is valid."""
+        e = EditParam(path="f.py", action="create", content="hello\n")
+        assert e.content == "hello\n"
+
+    def test_update_requires_span_fields(self) -> None:
+        """Update requires start_line, end_line, expected_file_sha256, new_content."""
+        with pytest.raises(ValidationError, match="start_line"):
+            EditParam(path="f.py", action="update")
+
+    def test_update_missing_hash(self) -> None:
+        """Update without expected_file_sha256 raises."""
+        with pytest.raises(ValidationError, match="expected_file_sha256"):
+            EditParam(
+                path="f.py",
+                action="update",
+                start_line=1,
+                end_line=5,
+                new_content="new",
+            )
+
+    def test_update_valid(self) -> None:
+        """Update with all span fields is valid."""
         e = EditParam(
-            path="file.py",
+            path="f.py",
             action="update",
             start_line=5,
             end_line=10,
@@ -33,30 +62,27 @@ class TestEditParam:
         assert e.expected_file_sha256 == "abc123"
         assert e.new_content == "new code\n"
 
-    def test_regular_edit_fields(self) -> None:
-        """EditParam still works for regular (old_content) edits."""
-        e = EditParam(
-            path="file.py",
-            action="update",
-            old_content="old text",
-            new_content="new text",
-        )
-        assert e.old_content == "old text"
-        assert e.start_line is None
-        assert e.expected_file_sha256 is None
+    def test_update_end_before_start(self) -> None:
+        """end_line < start_line raises."""
+        with pytest.raises(ValidationError, match="end_line"):
+            EditParam(
+                path="f.py",
+                action="update",
+                start_line=10,
+                end_line=5,
+                expected_file_sha256="h",
+                new_content="x",
+            )
 
-    def test_span_edit_is_span_type(self) -> None:
-        """Span edits are identified by having start_line, end_line, and expected_file_sha256."""
-        e = EditParam(
-            path="file.py",
-            action="update",
-            start_line=1,
-            end_line=5,
-            expected_file_sha256="hash",
-            new_content="new",
-        )
-        is_span = e.action == "update" and e.start_line is not None and e.end_line is not None
-        assert is_span
+    def test_delete_valid(self) -> None:
+        """Delete only needs path."""
+        e = EditParam(path="f.py", action="delete")
+        assert e.action == "delete"
+
+    def test_extra_fields_rejected(self) -> None:
+        """Extra fields raise due to ConfigDict(extra='forbid')."""
+        with pytest.raises(ValidationError):
+            EditParam(path="f.py", action="delete", bogus="x")
 
 
 class TestSpanEditValidation:
@@ -153,6 +179,5 @@ class TestSpanEditValidation:
                 new_content="a",
             ),
         ]
-        # Descending order by start_line
         desc = sorted(edits, key=lambda x: -(x.start_line or 0))
         assert (desc[0].start_line or 0) > (desc[1].start_line or 0)

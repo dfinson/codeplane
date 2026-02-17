@@ -402,7 +402,26 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             ),
         }
 
-        return wrap_existing_response(result, resource_kind="diff", scope_id=scope_id)
+        # Track scope usage
+        scope_usage = None
+        if scope_id:
+            from codeplane.mcp.tools.files import _scope_manager
+
+            budget = _scope_manager.get_or_create(scope_id)
+            budget.increment_paged()
+            exceeded = budget.check_budget("paged_continuations")
+            if exceeded:
+                from codeplane.mcp.errors import BudgetExceededError
+
+                raise BudgetExceededError(scope_id, "paged_continuations", exceeded)
+            scope_usage = budget.to_usage_dict()
+
+        return wrap_existing_response(
+            result,
+            resource_kind="diff",
+            scope_id=scope_id,
+            scope_usage=scope_usage,
+        )
 
     @mcp.tool
     async def git_commit(
@@ -566,7 +585,26 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             "pagination": pagination,
             "summary": _summarize_log(acc.count, budget_more),
         }
-        return wrap_existing_response(result, resource_kind="log", scope_id=scope_id)
+        # Track scope usage
+        scope_usage = None
+        if scope_id:
+            from codeplane.mcp.tools.files import _scope_manager
+
+            budget = _scope_manager.get_or_create(scope_id)
+            budget.increment_paged()
+            exceeded = budget.check_budget("paged_continuations")
+            if exceeded:
+                from codeplane.mcp.errors import BudgetExceededError
+
+                raise BudgetExceededError(scope_id, "paged_continuations", exceeded)
+            scope_usage = budget.to_usage_dict()
+
+        return wrap_existing_response(
+            result,
+            resource_kind="log",
+            scope_id=scope_id,
+            scope_usage=scope_usage,
+        )
 
     @mcp.tool
     async def git_push(
@@ -602,11 +640,19 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ctx: Context,
         ref: str = Field(..., description="Reference to checkout"),
         create: bool = Field(False, description="Create new branch"),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Checkout a ref."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
         app_ctx.git_ops.checkout(ref, create=create)
+
+        # Reset scope budget duplicate tracking after mutation
+        if scope_id:
+            from codeplane.mcp.tools.files import _scope_manager
+
+            _scope_manager.record_mutation(scope_id)
+
         action = "created and checked out" if create else "checked out"
         return {
             "checked_out": ref,
@@ -638,6 +684,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             None,
             description="Required for hard reset. Obtain from initial call without token.",
         ),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Reset HEAD to a ref.
 
@@ -707,6 +754,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         # Execute the reset (soft/mixed immediately, hard after confirmation)
         app_ctx.git_ops.reset(ref, mode=mode)
+
+        # Reset scope budget duplicate tracking after mutation
+        if scope_id:
+            from codeplane.mcp.tools.files import _scope_manager
+
+            _scope_manager.record_mutation(scope_id)
+
         ref_display = ref[:12] if len(ref) > 12 else ref
         return {
             "reset_to": ref,
@@ -904,7 +958,27 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             commit_obj = app_ctx.git_ops.show(ref=ref)
             result = asdict(commit_obj)
             result["summary"] = f"{commit_obj.sha[:7]}: {commit_obj.message.split(chr(10))[0][:50]}"
-            return wrap_existing_response(result, resource_kind="blame", scope_id=scope_id)
+
+            # Track scope usage
+            scope_usage = None
+            if scope_id:
+                from codeplane.mcp.tools.files import _scope_manager
+
+                budget = _scope_manager.get_or_create(scope_id)
+                budget.increment_read(measure_bytes(result))
+                exceeded = budget.check_budget("read_bytes")
+                if exceeded:
+                    from codeplane.mcp.errors import BudgetExceededError
+
+                    raise BudgetExceededError(scope_id, "read_bytes", exceeded)
+                scope_usage = budget.to_usage_dict()
+
+            return wrap_existing_response(
+                result,
+                resource_kind="commit",
+                scope_id=scope_id,
+                scope_usage=scope_usage,
+            )
 
         elif action == "blame":
             if not path:
@@ -966,7 +1040,27 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 **blame_dict,
                 "summary": f"{acc.count} lines from {compress_path(path, 35)}",
             }
-            return wrap_existing_response(result, resource_kind="blame", scope_id=scope_id)
+
+            # Track scope usage
+            scope_usage = None
+            if scope_id:
+                from codeplane.mcp.tools.files import _scope_manager
+
+                budget = _scope_manager.get_or_create(scope_id)
+                budget.increment_read(measure_bytes(result))
+                exceeded = budget.check_budget("read_bytes")
+                if exceeded:
+                    from codeplane.mcp.errors import BudgetExceededError
+
+                    raise BudgetExceededError(scope_id, "read_bytes", exceeded)
+                scope_usage = budget.to_usage_dict()
+
+            return wrap_existing_response(
+                result,
+                resource_kind="blame",
+                scope_id=scope_id,
+                scope_usage=scope_usage,
+            )
 
         raise ValueError(f"Unknown action: {action}")
 

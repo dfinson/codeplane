@@ -28,14 +28,18 @@ class TestEditParam:
         assert edit.action == "create"
 
     def test_update_action(self) -> None:
-        """Update action with old_content/new_content."""
+        """Update action with span fields."""
         edit = EditParam(
             path="file.py",
             action="update",
-            old_content="old",
+            start_line=1,
+            end_line=5,
+            expected_file_sha256="a" * 64,
             new_content="new",
         )
         assert edit.action == "update"
+        assert edit.start_line == 1
+        assert edit.end_line == 5
 
     def test_delete_action(self) -> None:
         """Delete action only needs path."""
@@ -47,10 +51,10 @@ class TestEditParam:
         with pytest.raises(ValidationError):
             EditParam(path="file.py", action="rename")
 
-    def test_expected_occurrences_default(self) -> None:
-        """expected_occurrences defaults to 1."""
-        edit = EditParam(path="f.py", action="update", old_content="a", new_content="b")
-        assert edit.expected_occurrences == 1
+    def test_update_requires_span_fields(self) -> None:
+        """Update without span fields is rejected."""
+        with pytest.raises(ValidationError):
+            EditParam(path="f.py", action="update", new_content="b")
 
 
 class TestSummarizeWrite:

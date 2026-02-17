@@ -173,7 +173,27 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             verbosity=verbosity,
             inline_only=inline_only,
         )
-        return wrap_existing_response(result_dict, resource_kind="semantic_diff", scope_id=scope_id)
+
+        # Track scope usage
+        scope_usage = None
+        if scope_id:
+            from codeplane.mcp.tools.files import _scope_manager
+
+            budget = _scope_manager.get_or_create(scope_id)
+            budget.increment_paged()
+            exceeded = budget.check_budget("paged_continuations")
+            if exceeded:
+                from codeplane.mcp.errors import BudgetExceededError
+
+                raise BudgetExceededError(scope_id, "paged_continuations", exceeded)
+            scope_usage = budget.to_usage_dict()
+
+        return wrap_existing_response(
+            result_dict,
+            resource_kind="semantic_diff",
+            scope_id=scope_id,
+            scope_usage=scope_usage,
+        )
 
 
 def _parse_cursor(cursor: str | None) -> tuple[int | None, int, int]:

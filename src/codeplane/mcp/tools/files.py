@@ -231,9 +231,12 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
             content = full_path.read_text(encoding="utf-8", errors="replace")
             lines = content.splitlines(keepends=True)
+            # start_line/end_line are 1-based inclusive. Convert to 0-based
+            # Python slice: [start-1 : end] gives inclusive range.
             start_idx = max(0, t.start_line - 1)
             end_idx = min(len(lines), t.end_line)
             span_content = "".join(lines[start_idx:end_idx])
+            line_count = end_idx - start_idx
             line_count = end_idx - start_idx
 
             file_sha = _compute_file_sha256(full_path)
@@ -572,13 +575,13 @@ async def _resolve_structural_target(
         content = full_path.read_text(encoding="utf-8", errors="replace")
         lines = content.splitlines(keepends=True)
         # Simple heuristic: lines immediately after definition that are docstrings
-        start = def_fact.start_line
+        start = def_fact.start_line  # 1-indexed
         if start < len(lines):
-            # Check next line for docstring marker
-            idx = start  # 0-indexed = start_line (1-indexed)
+            # start is 1-indexed, so lines[start] is the line after the def.
+            idx = start
             while idx < len(lines) and idx < start + 5:
                 line = lines[idx].strip()
-                if line.startswith(('"""', "'''", '"""', "'''")):
+                if line.startswith(('"""', "'''")):
                     doc_start = idx + 1
                     doc_end = doc_start
                     while doc_end < len(lines):

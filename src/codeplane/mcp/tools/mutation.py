@@ -1,16 +1,16 @@
 """Mutation MCP tools - write_files handler."""
 
+import hashlib
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
 from fastmcp.utilities.json_schema import dereference_refs
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from codeplane.mcp.errors import (
-    ContentNotFoundError,
     MCPError,
     MCPErrorCode,
-    MultipleMatchesError,
 )
 from codeplane.mcp.ledger import get_ledger
 
@@ -21,15 +21,17 @@ if TYPE_CHECKING:
 
 
 # =============================================================================
-# Parameter Models (nested types only)
+# Parameter Models
 # =============================================================================
 
 
 class EditParam(BaseModel):
     """A single file edit.
 
-    For updates, use old_content/new_content for safe content-addressed replacement,
-    or start_line/end_line/expected_file_sha256 for span-based replacement.
+    For create: provide content (full file body).
+    For update: provide start_line, end_line, expected_file_sha256, and new_content
+                (span-based replacement only).
+    For delete: no extra fields needed.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -37,22 +39,42 @@ class EditParam(BaseModel):
     path: str = Field(..., description="File path relative to repo root")
     action: Literal["create", "update", "delete"]
 
-    # Full content replacement (create, or update without exact matching)
-    content: str | None = Field(
-        None, description="Full file content for create or full replacement"
-    )
+    # create: full file content
+    content: str | None = Field(None, description="Full file content (required for create)")
 
-    # Exact mode (update only) - content-addressed replacement
-    old_content: str | None = Field(None, description="Exact content to find and replace")
-    new_content: str | None = Field(None, description="Content to replace old_content with")
-    expected_occurrences: int = Field(1, ge=1, description="Expected number of old_content matches")
-
-    # Span mode (update only) - line-range replacement with hash verification
-    start_line: int | None = Field(None, gt=0, description="Start line for span edit (1-indexed)")
-    end_line: int | None = Field(None, gt=0, description="End line for span edit (1-indexed)")
+    # update: span-based replacement (all three required for updates)
+    start_line: int | None = Field(None, gt=0, description="Start line (1-indexed, inclusive)")
+    end_line: int | None = Field(None, gt=0, description="End line (1-indexed, inclusive)")
     expected_file_sha256: str | None = Field(
-        None, description="SHA256 of whole file from read_source response"
+        None, description="SHA256 of whole file from read_source (required for update)"
     )
+    new_content: str | None = Field(
+        None, description="Replacement content for the span (required for update)"
+    )
+
+    @model_validator(mode="after")
+    def _validate_action_fields(self) -> "EditParam":
+        if self.action == "create":
+            if self.content is None:
+                msg = "content is required for action='create'"
+                raise ValueError(msg)
+        elif self.action == "update":
+            missing = []
+            if self.start_line is None:
+                missing.append("start_line")
+            if self.end_line is None:
+                missing.append("end_line")
+            if self.expected_file_sha256 is None:
+                missing.append("expected_file_sha256")
+            if self.new_content is None:
+                missing.append("new_content")
+            if missing:
+                msg = f"update requires: {', '.join(missing)}"
+                raise ValueError(msg)
+            if (self.end_line or 0) < (self.start_line or 0):
+                msg = f"end_line ({self.end_line}) must be >= start_line ({self.start_line})"
+                raise ValueError(msg)
+        return self
 
 
 # =============================================================================
@@ -60,7 +82,7 @@ class EditParam(BaseModel):
 # =============================================================================
 
 
-def _summarize_write(delta_files: list[Any], dry_run: bool) -> str:
+def _summarize_write(delta_files: list[dict[str, Any]], dry_run: bool) -> str:
     """Generate summary for write_files."""
     from codeplane.core.formatting import compress_path, format_path_list
 
@@ -68,21 +90,17 @@ def _summarize_write(delta_files: list[Any], dry_run: bool) -> str:
     if not delta_files:
         return f"{prefix}no changes"
 
-    # Count by action
     actions: dict[str, int] = {}
     for f in delta_files:
-        action = f.action if hasattr(f, "action") else f.get("action", "updated")
+        action = f.get("action", "updated")
         actions[action] = actions.get(action, 0) + 1
 
-    # Single file: show compressed path and action
     if len(delta_files) == 1:
-        f = delta_files[0]
-        path = compress_path(f.path if hasattr(f, "path") else f.get("path", ""), 35)
-        action = f.action if hasattr(f, "action") else f.get("action", "updated")
+        path = compress_path(delta_files[0].get("path", ""), 35)
+        action = delta_files[0].get("action", "updated")
         return f"{prefix}{action} {path}"
 
-    # Multiple files: show counts by action with compressed paths
-    paths = [f.path if hasattr(f, "path") else f.get("path", "") for f in delta_files]
+    paths = [f.get("path", "") for f in delta_files]
     compressed_paths = [compress_path(p, 20) for p in paths]
     path_list = format_path_list(compressed_paths, max_total=35, compress=False)
 
@@ -97,15 +115,14 @@ def _summarize_write(delta_files: list[Any], dry_run: bool) -> str:
     return f"{prefix}{', '.join(parts)} ({path_list})"
 
 
-def _display_write(files: list[Any], dry_run: bool) -> str:
+def _display_write(files: list[dict[str, Any]], dry_run: bool) -> str:
     """Human-friendly message for write_files action."""
     if not files:
         return "No changes applied." if not dry_run else "Dry run: no changes would be applied."
 
     actions = {"created": 0, "updated": 0, "deleted": 0}
     for f in files:
-        action = f.action if hasattr(f, "action") else f.get("action", "updated")
-        actions[action] = actions.get(action, 0) + 1
+        actions[f.get("action", "updated")] = actions.get(f.get("action", "updated"), 0) + 1
 
     parts = []
     if actions.get("created"):
@@ -116,8 +133,7 @@ def _display_write(files: list[Any], dry_run: bool) -> str:
         parts.append(f"{actions['deleted']} deleted")
 
     prefix = "Dry run: would have " if dry_run else ""
-    suffix = " files." if dry_run else " files."
-    return f"{prefix}{', '.join(parts)}{suffix}"
+    return f"{prefix}{', '.join(parts)} files."
 
 
 # =============================================================================
@@ -133,48 +149,41 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ctx: Context,
         edits: list[EditParam] = Field(..., description="List of file edits to apply atomically"),
         dry_run: bool = Field(False, description="Preview changes without applying"),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Create, update, or delete files atomically.
 
-        For updates, provide old_content and new_content. The tool will:
-        1. Find old_content in the file (must match exactly)
-        2. Verify it appears expected_occurrences times (default 1)
-        3. Replace with new_content
+        For updates: span-based only. Provide start_line, end_line,
+        expected_file_sha256 (from read_source), and new_content.
+        The file hash is verified before applying to prevent stale edits.
 
-        Returns structured error if:
-        - CONTENT_NOT_FOUND: old_content doesn't exist in file
-        - MULTIPLE_MATCHES: old_content found more times than expected
+        For creates: provide content (full file body).
+        For deletes: only path is needed.
         """
-        session = app_ctx.session_manager.get_or_create(ctx.session_id)
-
-        import hashlib
-
         from codeplane.files.ops import validate_path_in_repo
         from codeplane.mcp.errors import FileHashMismatchError, SpanOverlapError
         from codeplane.mutation.ops import Edit
 
+        session = app_ctx.session_manager.get_or_create(ctx.session_id)
         ledger = get_ledger()
 
-        # Separate span edits from regular edits
-        span_edits = [
-            e
-            for e in edits
-            if e.action == "update" and e.start_line is not None and e.end_line is not None
-        ]
-        regular_edits = [e for e in edits if e not in span_edits]
+        # Separate by action type
+        updates = [e for e in edits if e.action == "update"]
+        creates = [e for e in edits if e.action == "create"]
+        deletes = [e for e in edits if e.action == "delete"]
 
-        # Process span edits first
-        span_results: list[dict[str, Any]] = []
-        if span_edits:
-            # Group by path and check for overlaps
+        file_results: list[dict[str, Any]] = []
+
+        # --- Process span-based updates ---
+        if updates:
+            # Group by path
             by_path: dict[str, list[EditParam]] = {}
-            for e in span_edits:
+            for e in updates:
                 by_path.setdefault(e.path, []).append(e)
 
             for path, path_edits in by_path.items():
-                # Sort by start_line
-                sorted_edits = sorted(path_edits, key=lambda x: (x.start_line or 0))
-                # Check overlaps
+                # Sort by start_line and check for overlaps
+                sorted_edits = sorted(path_edits, key=lambda x: x.start_line or 0)
                 for i in range(len(sorted_edits) - 1):
                     if (sorted_edits[i].end_line or 0) >= (sorted_edits[i + 1].start_line or 0):
                         raise SpanOverlapError(
@@ -193,8 +202,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                             ],
                         )
 
-            # Apply span edits (descending line order per file)
-            for path, path_edits in by_path.items():
+                # Validate path
                 try:
                     full_path = validate_path_in_repo(app_ctx.repo_root, path)
                 except Exception as exc:
@@ -217,10 +225,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                         )
 
                 lines = content.splitlines(keepends=True)
+
                 # Apply in descending order to preserve line numbers
                 for e in sorted(path_edits, key=lambda x: -(x.start_line or 0)):
-                    start = (e.start_line or 1) - 1
-                    end = e.end_line or len(lines)
+                    start = (e.start_line or 1) - 1  # 1-indexed to 0-indexed
+                    end = e.end_line or len(lines)  # 1-indexed inclusive
                     new_lines = (e.new_content or "").splitlines(keepends=True)
                     if new_lines and not new_lines[-1].endswith("\n"):
                         new_lines[-1] += "\n"
@@ -231,46 +240,67 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     full_path.write_text(new_content, encoding="utf-8")
 
                 new_sha = hashlib.sha256(new_content.encode("utf-8")).hexdigest()
-                old_lines = content.count("\n")
-                new_lines_count = new_content.count("\n")
-                span_results.append(
-                    {
-                        "path": path,
-                        "action": "updated",
-                        "old_hash": actual_sha[:8],
-                        "new_hash": new_sha[:8],
-                        "insertions": max(0, new_lines_count - old_lines),
-                        "deletions": max(0, old_lines - new_lines_count),
-                    }
-                )
+                old_line_count = content.count("\n")
+                new_line_count = new_content.count("\n")
+                insertions = max(0, new_line_count - old_line_count)
+                deletions = max(0, old_line_count - new_line_count)
 
+                result_entry = {
+                    "path": path,
+                    "action": "updated",
+                    "old_hash": actual_sha[:8],
+                    "new_hash": new_sha[:8],
+                    "file_sha256": new_sha,
+                    "insertions": insertions,
+                    "deletions": deletions,
+                }
+                file_results.append(result_entry)
+
+                ledger.log_operation(
+                    tool="write_files",
+                    success=True,
+                    path=path,
+                    action="updated",
+                    before_hash=actual_sha[:8],
+                    after_hash=new_sha[:8],
+                    insertions=insertions,
+                    deletions=deletions,
+                )
                 # Trigger reindex
-                if not dry_run:
-                    from pathlib import Path
+                if not dry_run and app_ctx.mutation_ops._on_mutation:
+                    app_ctx.mutation_ops._on_mutation([Path(path)])
 
-                    if app_ctx.mutation_ops._on_mutation:
-                        app_ctx.mutation_ops._on_mutation([Path(path)])
-
-        # Process regular edits via existing path
-        edit_list = []
-        for e in regular_edits:
-            edit_list.append(
-                Edit(
-                    path=e.path,
-                    action=e.action,
-                    content=e.content,
-                    old_content=e.old_content,
-                    new_content=e.new_content,
-                    expected_occurrences=e.expected_occurrences,
+        # --- Process creates and deletes via mutation_ops ---
+        if creates or deletes:
+            edit_list = []
+            for e in creates:
+                edit_list.append(
+                    Edit(
+                        path=e.path,
+                        action="create",
+                        content=e.content,
+                    )
                 )
-            )
+            for e in deletes:
+                edit_list.append(
+                    Edit(
+                        path=e.path,
+                        action="delete",
+                    )
+                )
 
-        try:
-            if edit_list:
+            try:
                 result = app_ctx.mutation_ops.write_files(edit_list, dry_run=dry_run)
-
-                # Log successful operation
                 for file_delta in result.delta.files:
+                    entry = {
+                        "path": file_delta.path,
+                        "action": file_delta.action,
+                        "old_hash": file_delta.old_hash,
+                        "new_hash": file_delta.new_hash,
+                        "insertions": file_delta.insertions,
+                        "deletions": file_delta.deletions,
+                    }
+                    file_results.append(entry)
                     ledger.log_operation(
                         tool="write_files",
                         success=True,
@@ -282,153 +312,56 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                         deletions=file_delta.deletions,
                         session_id=session.session_id,
                     )
-
-                all_files = list(result.delta.files)
-            else:
-                result = None
-                all_files = []
-
-            # Merge span results
-            if span_edits:
-                for sr in span_results:
-                    ledger.log_operation(
-                        tool="write_files",
-                        success=True,
-                        path=str(sr["path"]),
-                        action=str(sr["action"]),
-                        before_hash=str(sr["old_hash"]),
-                        after_hash=str(sr["new_hash"]),
-                        insertions=int(sr["insertions"]),
-                        deletions=int(sr["deletions"]),
-                        session_id=session.session_id,
-                    )
-
-            total_insertions = sum(f.insertions for f in all_files) + sum(
-                int(sr["insertions"]) for sr in span_results
-            )
-            total_deletions = sum(f.deletions for f in all_files) + sum(
-                int(sr["deletions"]) for sr in span_results
-            )
-
-            file_dicts = [
-                {
-                    "path": f.path,
-                    "action": f.action,
-                    "old_hash": f.old_hash,
-                    "new_hash": f.new_hash,
-                    "insertions": f.insertions,
-                    "deletions": f.deletions,
-                }
-                for f in all_files
-            ] + [
-                {
-                    "path": sr["path"],
-                    "action": sr["action"],
-                    "old_hash": sr["old_hash"],
-                    "new_hash": sr["new_hash"],
-                    "insertions": sr["insertions"],
-                    "deletions": sr["deletions"],
-                }
-                for sr in span_results
-            ]
-
-            response = {
-                "applied": not dry_run,
-                "dry_run": dry_run,
-                "delta": {
-                    "mutation_id": result.delta.mutation_id if result else "span_only",
-                    "files_changed": len(file_dicts),
-                    "insertions": total_insertions,
-                    "deletions": total_deletions,
-                    "stats_are_estimates": True,
-                    "files": file_dicts,
-                },
-                "summary": _summarize_write(file_dicts, dry_run),
-                "display_to_user": _display_write(file_dicts, dry_run),
-            }
-
-            # Add dry run info if present
-            if result and result.dry_run_info:
-                response["dry_run_info"] = {
-                    "content_hash": result.dry_run_info.content_hash,
-                }
-
-            return response
-
-        except Exception as e:
-            # Convert mutation errors to MCPError
-            from codeplane.mutation.ops import ContentNotFoundError as OpsContentNotFound
-            from codeplane.mutation.ops import MultipleMatchesError as OpsMultipleMatches
-
-            # Log failed operation
-            error_code = None
-            error_path = None
-
-            if isinstance(e, OpsContentNotFound):
-                error_code = MCPErrorCode.CONTENT_NOT_FOUND.value
-                error_path = e.path
+            except FileNotFoundError as exc:
                 ledger.log_operation(
                     tool="write_files",
                     success=False,
-                    error_code=error_code,
-                    error_message=str(e),
-                    path=error_path,
-                    session_id=session.session_id,
-                )
-                raise ContentNotFoundError(e.path, e.snippet) from e
-
-            elif isinstance(e, OpsMultipleMatches):
-                error_code = MCPErrorCode.MULTIPLE_MATCHES.value
-                error_path = e.path
-                ledger.log_operation(
-                    tool="write_files",
-                    success=False,
-                    error_code=error_code,
-                    error_message=str(e),
-                    path=error_path,
-                    session_id=session.session_id,
-                )
-                raise MultipleMatchesError(e.path, e.count, e.lines) from e
-
-            elif isinstance(e, FileNotFoundError):
-                error_code = MCPErrorCode.FILE_NOT_FOUND.value
-                ledger.log_operation(
-                    tool="write_files",
-                    success=False,
-                    error_code=error_code,
-                    error_message=str(e),
+                    error_code=MCPErrorCode.FILE_NOT_FOUND.value,
+                    error_message=str(exc),
                     session_id=session.session_id,
                 )
                 raise MCPError(
                     code=MCPErrorCode.FILE_NOT_FOUND,
-                    message=str(e),
-                    remediation="Check the file path. Use index.map to see available files.",
-                ) from e
-
-            elif isinstance(e, FileExistsError):
-                error_code = MCPErrorCode.FILE_EXISTS.value
+                    message=str(exc),
+                    remediation="Check the file path. Use list_files to see available files.",
+                ) from exc
+            except FileExistsError as exc:
                 ledger.log_operation(
                     tool="write_files",
                     success=False,
-                    error_code=error_code,
-                    error_message=str(e),
+                    error_code=MCPErrorCode.FILE_EXISTS.value,
+                    error_message=str(exc),
                     session_id=session.session_id,
                 )
                 raise MCPError(
                     code=MCPErrorCode.FILE_EXISTS,
-                    message=str(e),
+                    message=str(exc),
                     remediation="Use action='update' instead of 'create' for existing files.",
-                ) from e
+                ) from exc
 
-            # Re-raise unknown errors
-            ledger.log_operation(
-                tool="files.edit",
-                success=False,
-                error_code=MCPErrorCode.INTERNAL_ERROR.value,
-                error_message=str(e),
-                session_id=session.session_id,
-            )
-            raise
+        # --- Wire scope budget mutation reset ---
+        if scope_id and not dry_run:
+            from codeplane.mcp.tools.files import _scope_manager
+
+            _scope_manager.record_mutation(scope_id)
+
+        total_insertions = sum(f.get("insertions", 0) for f in file_results)
+        total_deletions = sum(f.get("deletions", 0) for f in file_results)
+
+        response: dict[str, Any] = {
+            "applied": not dry_run,
+            "dry_run": dry_run,
+            "delta": {
+                "files_changed": len(file_results),
+                "insertions": total_insertions,
+                "deletions": total_deletions,
+                "files": file_results,
+            },
+            "summary": _summarize_write(file_results, dry_run),
+            "display_to_user": _display_write(file_results, dry_run),
+        }
+
+        return response
 
     # Flatten schemas to remove $ref/$defs for Claude compatibility
     for tool in mcp._tool_manager._tools.values():

@@ -832,7 +832,26 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         from codeplane.mcp.delivery import wrap_existing_response
 
-        return wrap_existing_response(result, resource_kind="search_hits", scope_id=scope_id)
+        # Track scope usage
+        scope_usage = None
+        if scope_id:
+            from codeplane.mcp.tools.files import _scope_manager
+
+            budget = _scope_manager.get_or_create(scope_id)
+            budget.increment_search(acc.count)
+            exceeded = budget.check_budget("search_calls")
+            if exceeded:
+                from codeplane.mcp.errors import BudgetExceededError
+
+                raise BudgetExceededError(scope_id, "search_calls", exceeded)
+            scope_usage = budget.to_usage_dict()
+
+        return wrap_existing_response(
+            result,
+            resource_kind="search_hits",
+            scope_id=scope_id,
+            scope_usage=scope_usage,
+        )
 
     @mcp.tool
     async def map_repo(
@@ -1106,7 +1125,26 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         from codeplane.mcp.delivery import wrap_existing_response
 
-        return wrap_existing_response(output, resource_kind="repo_map", scope_id=scope_id)
+        # Track scope usage
+        scope_usage = None
+        if scope_id:
+            from codeplane.mcp.tools.files import _scope_manager
+
+            budget = _scope_manager.get_or_create(scope_id)
+            budget.increment_paged()
+            exceeded = budget.check_budget("paged_continuations")
+            if exceeded:
+                from codeplane.mcp.errors import BudgetExceededError
+
+                raise BudgetExceededError(scope_id, "paged_continuations", exceeded)
+            scope_usage = budget.to_usage_dict()
+
+        return wrap_existing_response(
+            output,
+            resource_kind="repo_map",
+            scope_id=scope_id,
+            scope_usage=scope_usage,
+        )
 
     async def _handle_expand_cursor(
         cursor: str,
