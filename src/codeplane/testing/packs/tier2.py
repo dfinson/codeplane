@@ -897,7 +897,7 @@ class CabalTestPack(RunnerPack):
     markers = [
         MarkerRule("*.cabal", confidence="high"),
     ]
-    output_strategy = OutputStrategy(format="text", file_based=False)
+    output_strategy = OutputStrategy(format="coarse", file_based=False)
     capabilities = RunnerCapabilities(
         supported_kinds=["project"],
         supports_pattern_filter=False,
@@ -971,7 +971,7 @@ class JuliaPkgTestPack(RunnerPack):
     markers = [
         MarkerRule("Project.toml", confidence="high"),
     ]
-    output_strategy = OutputStrategy(format="text", file_based=False)
+    output_strategy = OutputStrategy(format="coarse", file_based=False)
     capabilities = RunnerCapabilities(
         supported_kinds=["project"],
         supports_pattern_filter=False,
@@ -1040,7 +1040,7 @@ class DuneTestPack(RunnerPack):
     markers = [
         MarkerRule("dune-project", confidence="high"),
     ]
-    output_strategy = OutputStrategy(format="text", file_based=False)
+    output_strategy = OutputStrategy(format="coarse", file_based=False)
     capabilities = RunnerCapabilities(
         supported_kinds=["project"],
         supports_pattern_filter=False,
