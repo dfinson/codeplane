@@ -161,7 +161,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         For deletes: only path is needed.
         """
         from codeplane.files.ops import validate_path_in_repo
-        from codeplane.mcp.errors import FileHashMismatchError, SpanOverlapError
+        from codeplane.mcp.errors import (
+            FileHashMismatchError,
+            InvalidRangeError,
+            SpanOverlapError,
+        )
         from codeplane.mutation.ops import Edit
 
         session = app_ctx.session_manager.get_or_create(ctx.session_id)
@@ -227,14 +231,22 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 lines = content.splitlines(keepends=True)
 
                 # Apply in descending order to preserve line numbers
+                # Apply in descending order to preserve line numbers
                 for e in sorted(path_edits, key=lambda x: -(x.start_line or 0)):
                     start = (e.start_line or 1) - 1  # 1-indexed to 0-indexed
                     end = e.end_line or len(lines)  # 1-indexed inclusive
+                    # Reject spans that start past end of file
+                    if start >= len(lines):
+                        raise InvalidRangeError(
+                            path=path,
+                            start=e.start_line or 1,
+                            end=e.end_line or len(lines),
+                            line_count=len(lines),
+                        )
                     new_lines = (e.new_content or "").splitlines(keepends=True)
                     if new_lines and not new_lines[-1].endswith("\n"):
                         new_lines[-1] += "\n"
                     lines[start:end] = new_lines
-
                 new_content = "".join(lines)
                 if not dry_run:
                     full_path.write_text(new_content, encoding="utf-8")

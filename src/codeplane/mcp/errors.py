@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from fastmcp.exceptions import ToolError
+
 
 class MCPErrorCode(StrEnum):
     """Machine-readable error codes for MCP tool failures."""
@@ -76,7 +78,15 @@ class ErrorResponse:
         }
 
 
-class MCPError(Exception):
+class MCPError(ToolError):
+    """Base exception for MCP tool errors with structured response.
+
+    Extends FastMCP's ToolError so that FastMCP's tool_manager passes it
+    through (``except FastMCPError: raise``) instead of wrapping it in a
+    generic ToolError.  Our ToolMiddleware then catches it as MCPError
+    and returns the structured error code.
+    """
+
     """Base exception for MCP tool errors with structured response."""
 
     def __init__(

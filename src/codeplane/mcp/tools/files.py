@@ -237,12 +237,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             start_idx = max(0, t.start_line - 1)
             end_idx = min(len(lines), t.end_line)
             span_content = "".join(lines[start_idx:end_idx])
-            line_count = end_idx - start_idx
+            line_count = max(0, end_idx - start_idx)
 
             file_sha = _compute_file_sha256(full_path)
             total_bytes += len(span_content.encode("utf-8"))
-
-            lang = EXTENSION_TO_NAME.get(full_path.suffix.lower(), "unknown")
 
             lang = EXTENSION_TO_NAME.get(full_path.suffix.lower(), "unknown")
 
@@ -544,10 +542,21 @@ async def _resolve_structural_target(
         file_path = file_rec.path
 
     # Verify it's the right file
-    if file_path != target.path:
+    # Verify it's the right file (normalise both to repo-relative)
+    def _rel(p: str) -> str:
+        from pathlib import Path
+
+        pp = Path(p)
+        if pp.is_absolute():
+            try:
+                return str(pp.relative_to(app_ctx.repo_root))
+            except ValueError:
+                return p
+        return p
+
+    if _rel(file_path) != _rel(target.path):
         # Symbol found but in different file
         return None
-
     if target.unit == "signature":
         # Return the function/class signature (may span multiple lines)
         full_path = app_ctx.repo_root / target.path
@@ -577,30 +586,44 @@ async def _resolve_structural_target(
             return None
         content = full_path.read_text(encoding="utf-8", errors="replace")
         lines = content.splitlines(keepends=True)
-        # Simple heuristic: lines immediately after definition that are docstrings
+
+        # First, find the end of the signature (colon-terminated line)
         start = def_fact.start_line  # 1-indexed
-        if start < len(lines):
-            # start is 1-indexed, so lines[start] is the line after the def.
-            idx = start
-            while idx < len(lines) and idx < start + 5:
-                line = lines[idx].strip()
-                if line.startswith(('"""', "'''")):
-                    doc_start = idx + 1
-                    doc_end = doc_start
+        if start < 1 or start > len(lines):
+            return None
+        sig_end_idx = start - 1  # 0-indexed, default: same as start
+        max_sig = min(len(lines), start - 1 + 25)
+        for i in range(start - 1, max_sig):
+            if lines[i].strip().endswith(":"):
+                sig_end_idx = i
+                break
+
+        # Search for docstring in lines following the signature
+        search_start = sig_end_idx + 1  # 0-indexed
+        search_limit = min(len(lines), search_start + 5)
+        for idx in range(search_start, search_limit):
+            stripped = lines[idx].strip()
+            for quote in ('"""', "'''"):
+                if stripped.startswith(quote):
+                    # Single-line docstring: opening and closing on same line
+                    if stripped.endswith(quote) and len(stripped) > len(quote):
+                        return lines[idx], idx + 1, idx + 1
+                    # Multi-line docstring: scan for closing quote
+                    doc_end = idx + 1
                     while doc_end < len(lines):
-                        if lines[doc_end].strip().endswith(('"""', "'''")):
+                        if lines[doc_end].strip().endswith(quote):
                             return (
-                                "".join(lines[doc_start - 1 : doc_end + 1]),
-                                doc_start,
+                                "".join(lines[idx : doc_end + 1]),
+                                idx + 1,
                                 doc_end + 1,
                             )
                         doc_end += 1
-                    return "".join(lines[doc_start - 1 : doc_end]), doc_start, doc_end
-                elif line and not line.startswith("#"):
-                    break
-                idx += 1
+                    # Unterminated docstring — return what we found
+                    return "".join(lines[idx:doc_end]), idx + 1, doc_end
+            # Skip blank lines and comments between signature and docstring
+            if stripped and not stripped.startswith("#"):
+                break  # Non-docstring content reached
         return None
-
     # function or class unit — use scope resolution
     pref: Literal["function", "class"] = "function" if target.unit == "function" else "class"
     with app_ctx.coordinator.db.session() as session:
