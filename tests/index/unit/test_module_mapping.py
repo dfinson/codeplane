@@ -34,9 +34,13 @@ class TestPathToModule:
             ("foo.py", "foo"),
             ("src/codeplane/__init__.py", "src.codeplane"),
             ("a/b/__init__.py", "a.b"),
-            # Non-Python files return None
+            # Non-Python files with known source extensions get module keys
+            ("src/utils/helper.ts", "src.utils.helper"),
+            ("lib/core.rs", "lib.core"),
+            # Data/doc/config format extensions return None
             ("README.md", None),
             ("data/config.json", None),
+            # Unknown extensions and empty strings return None
             ("", None),
         ],
     )
@@ -95,7 +99,7 @@ class TestBuildAndResolve:
         assert "src.codeplane.refactor.ops" in sample_index
         assert "src.codeplane" in sample_index
         assert "tests.test_ops" in sample_index
-        # Non-Python files are excluded
+        # Data/doc format files (e.g. .md) are NOT indexed
         assert "README" not in sample_index
 
     def test_resolve_direct(self, sample_index: dict[str, str]) -> None:

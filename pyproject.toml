@@ -70,6 +70,20 @@ dev = [
     "tree-sitter-yaml>=0.6.0",
     "tree-sitter-rust>=0.23.0",
     "tree-sitter-c-sharp>=0.23.0",
+    # Multilang import extraction support
+    "tree-sitter-java>=0.23.0",
+    "tree-sitter-kotlin>=1.0.0",
+    "tree-sitter-scala>=0.23.0",
+    "tree-sitter-ruby>=0.23.0",
+    "tree-sitter-php>=0.23.0",
+    "tree-sitter-swift>=0.0.1",
+    "tree-sitter-elixir>=0.3.0",
+    "tree-sitter-haskell>=0.23.0",
+    "tree-sitter-ocaml>=0.23.0",
+    "tree-sitter-lua>=0.2.0",
+    "tree-sitter-julia>=0.23.0",
+    "tree-sitter-c>=0.23.0",
+    "tree-sitter-cpp>=0.23.0",
 ]
 
 [project.scripts]

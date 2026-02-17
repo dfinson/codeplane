@@ -186,6 +186,9 @@ cython_debug/
 #  you could uncomment the following to ignore the entire vscode folder
 # .vscode/
 
+# Test cache (cloned repos for cross-lang validation)
+.test_cache/
+
 # Ruff stuff:
 .ruff_cache/
 

@@ -333,7 +333,7 @@ def _build_overview(result: Any) -> dict[str, Any]:
         overview["import_count"] = result.dependencies.import_count
 
     if result.test_layout:
-        overview["test_file_count"] = len(result.test_layout.test_files)
+        overview["test_file_count"] = result.test_layout.test_count
         overview["test_count"] = result.test_layout.test_count
 
     if result.entry_points:

@@ -142,34 +142,46 @@ class ImportGraph:
         self._ensure_caches()
         assert self._module_index is not None
 
-        # Step 1: Convert changed file paths to module names
+        # Step 1: Convert changed file paths to module names.
+        # Strategy:
+        #   a) Look up declared_module in the File table (covers Java, Kotlin,
+        #      Scala, C#, Go, Haskell, Elixir, Julia, Ruby, PHP).
+        #   b) Fall back to path_to_module() for Python (filesystem = module).
+        #   c) Files that resolve via neither path land in unresolved.
         changed_modules: list[str] = []
         unresolved: list[str] = []
-        for fp in changed_files:
-            mod = path_to_module(fp)
-            if mod:
-                changed_modules.append(mod)
-            else:
-                unresolved.append(fp)
 
-        if not changed_modules:
-            # Empty input or all non-Python files
-            early_tier: Literal["complete", "partial"] = (
-                "complete" if not changed_files else "partial"
+        # Batch-fetch declared_module for all changed files
+        declared_map: dict[str, str] = {}
+        if changed_files:
+            decl_stmt = select(File.path, File.declared_module).where(
+                col(File.path).in_(changed_files),
+                File.declared_module != None,  # noqa: E711
             )
-            reasoning = (
-                "no files provided"
-                if not changed_files
-                else "No changed files could be mapped to module names"
-            )
+            for path, decl in self._session.exec(decl_stmt).all():
+                if decl:
+                    declared_map[path] = decl
+
+        for fp in changed_files:
+            if fp in declared_map:
+                changed_modules.append(declared_map[fp])
+            else:
+                # Fall back to path_to_module (works for Python)
+                mod = path_to_module(fp)
+                if mod:
+                    changed_modules.append(mod)
+                else:
+                    unresolved.append(fp)
+
+        if not changed_files:
             return ImportGraphResult(
                 matches=[],
                 confidence=ImpactConfidence(
-                    tier=early_tier,
-                    resolved_ratio=0.0 if changed_files else 1.0,
-                    unresolved_files=unresolved,
+                    tier="complete",
+                    resolved_ratio=1.0,
+                    unresolved_files=[],
                     null_source_count=0,
-                    reasoning=reasoning,
+                    reasoning="no files provided",
                 ),
                 changed_modules=[],
             )
@@ -185,40 +197,54 @@ class ImportGraph:
 
         assert self._test_file_paths is not None
 
-        # Step 3: Build SQL conditions for module matching.
-        # Three match types pushed into the query:
-        #   a) Exact: source_literal == search_mod
-        #   b) Parent: source_literal is a parent prefix of search_mod
-        #      (test imports a parent package that re-exports from the changed module)
-        #   c) Child: source_literal starts with search_mod + "."
-        #      (test imports a submodule of the changed module)
-        #
-        # For (a) and (b), pre-compute all exact + parent module names into an IN set.
-        # For (c), use SQL LIKE per search module.
-        exact_or_parent: set[str] = set()
+        matched_rows: list[tuple[str, str | None]] = []
+        null_in_tests = 0
+        # like_prefixes tracks child module patterns (e.g. "kotlinx.serialization.json.")
+        # used both for the SQL query and for confidence determination in Step 5.
         like_prefixes: list[str] = []
-        for mod in search_modules:
-            exact_or_parent.add(mod)  # exact match
-            like_prefixes.append(f"{mod}.")  # child match
-            # Parent matches: all prefixes of this module
-            parts = mod.split(".")
-            for i in range(1, len(parts)):
-                exact_or_parent.add(".".join(parts[:i]))
 
-        match_conditions: list[ColumnElement[bool]] = [
-            col(ImportFact.source_literal).in_(list(exact_or_parent)),
-        ]
-        for prefix in like_prefixes:
-            match_conditions.append(col(ImportFact.source_literal).startswith(prefix))
+        # Step 3: Module-name-based matching (Python, declaration-based langs)
+        # Only runs if we have module names to search for.
+        if changed_modules:
+            # Three match types pushed into the query:
+            #   a) Exact: source_literal == search_mod
+            #   b) Parent: source_literal is a parent prefix of search_mod
+            #      (test imports a parent package that re-exports from the changed module)
+            #   c) Child: source_literal starts with search_mod + "."
+            #      (test imports a submodule of the changed module)
+            #
+            # For (a) and (b), pre-compute all exact + parent module names into an IN set.
+            # For (c), use SQL LIKE per search module.
+            exact_or_parent: set[str] = set()
+            for mod in search_modules:
+                exact_or_parent.add(mod)  # exact match
+                # Detect separator from module format
+                if "::" in mod:
+                    sep = "::"
+                elif "/" in mod and "." not in mod:
+                    sep = "/"
+                else:
+                    sep = "."
+                like_prefixes.append(f"{mod}{sep}")  # child match
+                # Parent matches: all prefixes of this module
+                parts = mod.split(sep)
+                for i in range(1, len(parts)):
+                    exact_or_parent.add(sep.join(parts[:i]))
 
-        # Single query: only test files, only matching modules
-        stmt = (
-            select(File.path, ImportFact.source_literal)
-            .join(ImportFact, ImportFact.file_id == File.id)  # type: ignore[arg-type]
-            .where(col(File.path).in_(self._test_file_paths))
-            .where(or_(*match_conditions))
-        )
-        matched_rows = list(self._session.exec(stmt).all())
+            match_conditions: list[ColumnElement[bool]] = [
+                col(ImportFact.source_literal).in_(list(exact_or_parent)),
+            ]
+            for prefix in like_prefixes:
+                match_conditions.append(col(ImportFact.source_literal).startswith(prefix))
+
+            # Single query: only test files, only matching modules
+            stmt = (
+                select(File.path, ImportFact.source_literal)
+                .join(ImportFact, ImportFact.file_id == File.id)  # type: ignore[arg-type]
+                .where(col(File.path).in_(self._test_file_paths))
+                .where(or_(*match_conditions))
+            )
+            matched_rows = list(self._session.exec(stmt).all())
 
         # Count NULL source_literals in test files for confidence.
         # Use DISTINCT to count unique test files, not duplicate rows.
@@ -230,6 +256,105 @@ class ImportGraph:
         )
         null_in_tests = len(set(self._session.exec(null_stmt).all()))
 
+        # Step 3b: Transitive resolved_path-based matching.
+        # Walk the import graph outward from changed files. A test file
+        # that imports a barrel (re-export) file which in turn imports the
+        # changed file should still be matched.  We do BFS up to a
+        # reasonable depth to avoid runaway traversal.
+        _MAX_HOPS = 5
+        frontier: set[str] = set(changed_files)
+        visited: set[str] = set(frontier)
+        all_rp_rows: list[tuple[str, str | None]] = []
+
+        for _hop in range(_MAX_HOPS):
+            if not frontier:
+                break
+            rp_stmt = (
+                select(File.path, ImportFact.source_literal)
+                .join(ImportFact, ImportFact.file_id == File.id)  # type: ignore[arg-type]
+                .where(col(ImportFact.resolved_path).in_(list(frontier)))
+            )
+            rp_rows = list(self._session.exec(rp_stmt).all())
+            if not rp_rows:
+                break
+
+            next_frontier: set[str] = set()
+            for importer_path, src_literal in rp_rows:
+                if importer_path in self._test_file_paths:
+                    # This is a test file — record the match
+                    all_rp_rows.append((importer_path, src_literal))
+                elif importer_path not in visited:
+                    # Non-test file that imports something in our frontier —
+                    # it might be a barrel/re-export, so keep tracing
+                    next_frontier.add(importer_path)
+                    # Also record it as a potential source_literal match
+                    # (needed for non-test importers that get traced through)
+
+            visited.update(next_frontier)
+            frontier = next_frontier
+
+        # Track test files matched via resolved_path — these are deterministic
+        # file-path matches and should always be high confidence.
+        resolved_path_tests: set[str] = set()
+        if all_rp_rows:
+            for test_path, _sl in all_rp_rows:
+                resolved_path_tests.add(test_path)
+            matched_rows.extend(all_rp_rows)
+
+        # Step 3c: Same-directory affinity for Go.
+        # Go test files (*_test.go) in the same directory as a changed .go
+        # file are part of the same package — they compile together and test
+        # the source without explicit imports.  The import graph has no edge
+        # linking them, so we match by directory proximity.
+        go_changed = [f for f in changed_files if f.endswith(".go") and not is_test_file(f)]
+        if go_changed and self._test_file_paths:
+            go_test_by_dir: dict[str, list[str]] = {}
+            for tp in self._test_file_paths:
+                if tp.endswith(".go"):
+                    d = tp.rsplit("/", 1)[0] if "/" in tp else "."
+                    go_test_by_dir.setdefault(d, []).append(tp)
+
+            already_matched = {row[0] for row in matched_rows}
+            for cf in go_changed:
+                d = cf.rsplit("/", 1)[0] if "/" in cf else "."
+                mod = declared_map.get(cf) or path_to_module(cf) or cf
+                for tp in go_test_by_dir.get(d, []):
+                    if tp not in already_matched:
+                        matched_rows.append((tp, mod))
+                        resolved_path_tests.add(tp)  # high confidence
+                        already_matched.add(tp)
+
+        # Step 3d: Swift module affinity.
+        # Swift uses module-level imports ("import Algorithms").  The module
+        # name corresponds to the directory under Sources/ in SwiftPM layout.
+        # If a changed .swift source file is under Sources/<Module>/, any test
+        # file that imports that module name is affected.
+        swift_changed = [f for f in changed_files if f.endswith(".swift") and not is_test_file(f)]
+        if swift_changed and self._test_file_paths:
+            # Extract module names from changed file paths
+            swift_modules: set[str] = set()
+            for cf in swift_changed:
+                # SwiftPM layout: Sources/<ModuleName>/...
+                parts = cf.split("/")
+                if len(parts) >= 3 and parts[0].lower() == "sources":
+                    swift_modules.add(parts[1])
+
+            if swift_modules:
+                # Find test files that import any of these modules
+                swift_test_stmt = (
+                    select(File.path, ImportFact.source_literal)
+                    .join(ImportFact, ImportFact.file_id == File.id)  # type: ignore[arg-type]
+                    .where(col(File.path).in_(self._test_file_paths))
+                    .where(col(ImportFact.source_literal).in_(list(swift_modules)))
+                )
+                swift_rows = list(self._session.exec(swift_test_stmt).all())
+                already_matched = {row[0] for row in matched_rows}
+                for test_path, src_literal in swift_rows:
+                    if test_path not in already_matched:
+                        matched_rows.append((test_path, src_literal))
+                        resolved_path_tests.add(test_path)  # high confidence
+                        already_matched.add(test_path)
+
         # Step 4: Group matches by test file
         matches_by_file: dict[str, list[str]] = {}
         for file_path, source_literal in matched_rows:
@@ -239,16 +364,25 @@ class ImportGraph:
         # Step 5: Build results with confidence
         matches: list[ImpactMatch] = []
         for test_path, src_mods in sorted(matches_by_file.items()):
-            # High confidence: direct source_literal match
-            # Low confidence: only parent/child prefix match (less certain)
+            # High confidence: exact module match, child module match
+            #   (imports something FROM the changed module), resolved_path
+            #   match, or Go same-directory.
+            # Low confidence: only parent prefix match — test imports a
+            #   parent package that may or may not include the changed code.
             unique_mods = sorted(set(src_mods))
-            has_exact = any(m in search_modules for m in unique_mods)
-            confidence: Literal["high", "low"] = "high" if has_exact else "low"
-            reason = (
-                f"directly imports {', '.join(unique_mods)}"
-                if has_exact
-                else f"imports parent/child module {', '.join(unique_mods)}"
+            is_direct = (
+                any(m in search_modules for m in unique_mods) or test_path in resolved_path_tests
             )
+            is_child = not is_direct and any(
+                any(m.startswith(prefix) for prefix in like_prefixes) for m in unique_mods
+            )
+            confidence: Literal["high", "low"] = "high" if is_direct or is_child else "low"
+            if is_direct:
+                reason = f"directly imports {', '.join(unique_mods)}"
+            elif is_child:
+                reason = f"imports child of changed module: {', '.join(unique_mods)}"
+            else:
+                reason = f"imports parent module {', '.join(unique_mods)}"
             matches.append(
                 ImpactMatch(
                     test_file=test_path,
@@ -258,14 +392,21 @@ class ImportGraph:
                 )
             )
 
-        resolved_ratio = len(changed_modules) / len(changed_files) if changed_files else 1.0
-        tier: Literal["complete", "partial"] = (
-            "complete" if (resolved_ratio == 1.0 and null_in_tests == 0) else "partial"
-        )
+        # Confidence: resolved_path covers ALL changed files regardless of
+        # whether they have a declared_module or Python path_to_module mapping.
+        # So module-name "unresolved" files are still searchable via
+        # resolved_path — the only true gap is null source_literals in tests.
+        resolved_ratio = (len(changed_modules) / len(changed_files)) if changed_files else 1.0
+        # Tier is "complete" when all match paths are covered; resolved_path
+        # query covers files that have no module name, so they're not truly
+        # unresolved for matching purposes.
+        tier: Literal["complete", "partial"] = "complete" if null_in_tests == 0 else "partial"
 
         reason_parts: list[str] = []
         if unresolved:
-            reason_parts.append(f"{len(unresolved)} files could not be mapped to modules")
+            reason_parts.append(
+                f"{len(unresolved)} files have no module name (still matched via resolved_path)"
+            )
         if null_in_tests:
             reason_parts.append(f"{null_in_tests} test imports have no source_literal")
         reasoning = (

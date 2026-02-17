@@ -159,14 +159,9 @@ jobs:
       - name: Run integration tests
         run: pytest -m "integration" -v --tb=short --junitxml=junit-integration.xml -o junit_family=legacy
 
-      - name: Upload test results to Codecov
-        if: ${{ !cancelled() }}
-        uses: codecov/codecov-action@v5
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: junit-integration.xml
-          report_type: test_results
-          fail_ci_if_error: false
+      # Note: Integration test results NOT uploaded to Codecov Test Analytics
+      # because they contain intentional failures from nested pytest runs
+      # (e.g., tests that verify CodePlane handles test failures correctly)
 
   # E2E tests - disabled pending fix: https://github.com/dfinson/codeplane/issues/130
   # e2e-test:

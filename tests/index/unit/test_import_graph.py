@@ -139,16 +139,19 @@ class TestAffectedTests:
 
     def test_package_init_matches_as_parent(self, graph: ImportGraph) -> None:
         result = graph.affected_tests(["src/mylib/__init__.py"])
-        # __init__.py maps to module "src.mylib"/"mylib" which is parent of mylib.core etc.
-        # So it correctly matches all tests that import mylib.* submodules
+        # __init__.py maps to module "mylib" - tests importing mylib.* are affected
+        # because __init__.py runs on any submodule import
         assert len(result.matches) > 0
-        # All matches should be low confidence (parent/child prefix)
+        # Child imports (mylib.core, mylib.utils) are high confidence
+        # because changes to __init__.py affect all submodule imports
         for m in result.matches:
-            assert m.confidence == "low"
+            assert m.confidence == "high"
 
     def test_unresolvable_file(self, graph: ImportGraph) -> None:
         result = graph.affected_tests(["README.md"])
-        assert result.confidence.tier == "partial"
+        # With resolved_path fallback, tier is "complete" even when module
+        # mapping fails — the file is still searchable via resolved_path.
+        assert result.confidence.tier == "complete"
         assert result.confidence.resolved_ratio == 0.0
         assert "README.md" in result.confidence.unresolved_files
 
@@ -299,3 +302,57 @@ class TestUncoveredModules:
         for g in gaps:
             assert isinstance(g, CoverageGap)
             # file_path may or may not be resolved, but should be present for indexed files
+
+
+# ---------------------------------------------------------------------------
+# affected_tests — Go same-directory affinity
+# ---------------------------------------------------------------------------
+
+
+class TestAffectedTestsGoPackageAffinity:
+    """Go test files in the same directory share a package and need no import."""
+
+    @pytest.fixture
+    def graph(self, db: Database) -> Generator[ImportGraph, None, None]:
+        _seed_data(
+            db,
+            files=[
+                "list/list.go",
+                "list/rank.go",
+                "list/list_test.go",
+                "list/rank_test.go",
+                "textinput/textinput.go",
+                "textinput/textinput_test.go",
+            ],
+            imports=[
+                # Cross-package import only — no same-package imports exist in Go
+                ("list/list_test.go", "github.com/charmbracelet/bubbles/textinput"),
+            ],
+        )
+        with db.session() as session:
+            yield ImportGraph(session)
+
+    def test_same_dir_finds_all_tests(self, graph: ImportGraph) -> None:
+        """Changing list.go finds both test files in the same directory."""
+        result = graph.affected_tests(["list/list.go"])
+        test_files = sorted(result.test_files)
+        assert "list/list_test.go" in test_files
+        assert "list/rank_test.go" in test_files
+
+    def test_same_dir_excludes_other_packages(self, graph: ImportGraph) -> None:
+        """Changing list.go does NOT match textinput_test.go (different dir)."""
+        result = graph.affected_tests(["list/list.go"])
+        assert "textinput/textinput_test.go" not in result.test_files
+
+    def test_same_dir_high_confidence(self, graph: ImportGraph) -> None:
+        """Same-directory Go matches are high confidence."""
+        result = graph.affected_tests(["list/list.go"])
+        for m in result.matches:
+            if m.test_file.startswith("list/"):
+                assert m.confidence == "high"
+
+    def test_non_go_files_skip_affinity(self, graph: ImportGraph) -> None:
+        """Non-.go files do not trigger same-directory affinity."""
+        result = graph.affected_tests(["README.md"])
+        # No Go affinity match — only import-based matching applies
+        assert len(result.matches) == 0

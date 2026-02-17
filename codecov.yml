@@ -22,3 +22,10 @@ ignore:
 test_analytics:
   ignore:
     - "tests/testing/fixtures/**"  # Fixture XML files, not real test results
+  flake_detection:
+    # Exclude intentionally failing test fixtures from flake detection
+    ignore_tests:
+      - "suite1.TestClass::test_c"  # JUnit XML fixture
+      - "suite2.TestOther::test_y"  # JUnit XML fixture
+      - "suite2.TestOther::test_z"  # JUnit XML fixture
+      - "tests.test_example::test_failing"  # JUnit XML fixture

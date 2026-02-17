@@ -598,6 +598,21 @@ class CargoNextestPack(RunnerPack):
                                 workspace_root=str(workspace_root),
                             )
                         )
+                # Root is also a package (has both [workspace] and [package])
+                if "[package]" in content and (
+                    list(workspace_root.glob("src/**/*_test.rs"))
+                    or (workspace_root / "tests").exists()
+                ):
+                    targets.append(
+                        TestTarget(
+                            target_id="test:.",
+                            selector=".",
+                            kind="package",
+                            language="rust",
+                            runner_pack_id=self.pack_id,
+                            workspace_root=str(workspace_root),
+                        )
+                    )
             else:
                 # Single package
                 targets.append(
@@ -1316,6 +1331,112 @@ class RSpecPack(RunnerPack):
         if output_path.exists():
             return parse_junit_xml(output_path.read_text())
         return ParsedTestSuite(name="rspec", errors=1)
+
+
+@runner_registry.register
+class MinitestPack(RunnerPack):
+    """Ruby Minitest runner."""
+
+    pack_id = "ruby.minitest"
+    language = "ruby"
+    runner_name = "minitest"
+    markers = [
+        MarkerRule("Rakefile", content_match="Rake::TestTask", confidence="high"),
+        MarkerRule("Gemfile", content_match="minitest", confidence="medium"),
+        MarkerRule("test/test_helper.rb", confidence="high"),
+    ]
+    output_strategy = OutputStrategy(
+        format="junit_xml", file_based=True, file_pattern="minitest.xml"
+    )
+    capabilities = RunnerCapabilities(
+        supported_kinds=["file"],
+        supports_pattern_filter=True,
+        supports_tag_filter=False,
+        supports_parallel=False,
+        supports_junit_output=True,  # Via minitest-reporters
+    )
+
+    def detect(self, workspace_root: Path) -> float:
+        # High confidence: Rakefile with Rake::TestTask
+        rakefile = workspace_root / "Rakefile"
+        if rakefile.exists():
+            try:
+                content = rakefile.read_text()
+                if "Rake::TestTask" in content:
+                    return 0.9
+            except Exception:
+                pass
+        # Medium confidence: test_helper.rb exists
+        if (workspace_root / "test" / "test_helper.rb").exists():
+            return 0.7
+        # Medium: Gemfile mentions minitest
+        gemfile = workspace_root / "Gemfile"
+        if gemfile.exists():
+            try:
+                if "minitest" in gemfile.read_text():
+                    return 0.6
+            except Exception:
+                pass
+        # Low: test/ directory with *_test.rb or spec_*.rb files
+        test_dir = workspace_root / "test"
+        if test_dir.is_dir():
+            for p in test_dir.iterdir():
+                if p.suffix == ".rb" and (p.stem.endswith("_test") or p.stem.startswith("spec_")):
+                    return 0.5
+        return 0.0
+
+    async def discover(self, workspace_root: Path) -> list[TestTarget]:
+        targets: list[TestTarget] = []
+        test_dir = workspace_root / "test"
+        if not test_dir.is_dir():
+            return targets
+
+        for path in test_dir.rglob("*.rb"):
+            if _is_prunable_path(path, workspace_root):
+                continue
+            stem = path.stem
+            if stem.endswith("_test") or stem.startswith("spec_"):
+                rel = str(path.relative_to(workspace_root))
+                targets.append(
+                    TestTarget(
+                        target_id=f"test:{rel}",
+                        selector=rel,
+                        kind="file",
+                        language="ruby",
+                        runner_pack_id=self.pack_id,
+                        workspace_root=str(workspace_root),
+                    )
+                )
+        return targets
+
+    def build_command(
+        self,
+        target: TestTarget,
+        *,
+        output_path: Path,  # noqa: ARG002
+        pattern: str | None = None,
+        tags: list[str] | None = None,  # noqa: ARG002
+        exec_ctx: RuntimeExecutionContext | None = None,
+    ) -> list[str]:
+        if exec_ctx:
+            tool_config = exec_ctx.get_test_runner(self.pack_id)
+            if tool_config and tool_config.available:
+                cmd = [tool_config.executable] + list(tool_config.base_args)
+            else:
+                cmd = ["bundle", "exec", "ruby"]
+        else:
+            cmd = ["bundle", "exec", "ruby"]
+        cmd.append(target.selector)
+        if pattern:
+            cmd.extend(["-n", pattern])
+        return cmd
+
+    def parse_output(self, output_path: Path, stdout: str) -> ParsedTestSuite:  # noqa: ARG002
+        from codeplane.testing.parsers import parse_junit_xml
+
+        if output_path.exists():
+            return parse_junit_xml(output_path.read_text())
+        return ParsedTestSuite(name="minitest", errors=1)
 
 
 # =============================================================================

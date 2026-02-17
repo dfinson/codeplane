@@ -112,7 +112,28 @@ ALL_LANGUAGES: tuple[Language, ...] = (
         markers_workspace=("pnpm-workspace.yaml", "lerna.json", "nx.json", "turbo.json"),
         markers_package=("package.json", "deno.json", "tsconfig.json"),
         grammar="typescript",  # TypeScript grammar handles JS/TS/JSX/TSX
-        test_patterns=("*.test.js", "*.test.ts", "*.spec.js", "*.spec.ts"),
+        test_patterns=(
+            "*.test.js",
+            "*.test.ts",
+            "*.spec.js",
+            "*.spec.ts",
+            "*.test.jsx",
+            "*.test.tsx",
+            "*.spec.jsx",
+            "*.spec.tsx",
+            # Directory-based conventions (mocha, etc.)
+            # fnmatch * matches across /, so test/*.js covers nested too.
+            # Both prefixed (*/test/) and bare (test/) variants are needed
+            # because fnmatch requires matching the entire string.
+            "test/*.js",
+            "*/test/*.js",
+            "test/*.ts",
+            "*/test/*.ts",
+            "__tests__/*.js",
+            "*/__tests__/*.js",
+            "__tests__/*.ts",
+            "*/__tests__/*.ts",
+        ),
         priority=80,
     ),
     Language(
@@ -133,6 +154,7 @@ ALL_LANGUAGES: tuple[Language, ...] = (
         markers_workspace=(),
         markers_package=("cargo.toml",),
         grammar="rust",
+        test_patterns=("test_*.rs", "*_test.rs", "tests/*.rs"),
         priority=80,
     ),
     # =========================================================================
@@ -145,7 +167,13 @@ ALL_LANGUAGES: tuple[Language, ...] = (
         markers_workspace=("settings.gradle", "settings.gradle.kts"),
         markers_package=("pom.xml", "build.gradle", "build.gradle.kts"),
         grammar="java",
-        test_patterns=("*Test.java", "Test*.java"),
+        test_patterns=(
+            "*Test.java",
+            "Test*.java",
+            # Maven/Gradle convention: anything under src/test/
+            "src/test/*.java",
+            "*/src/test/*.java",
+        ),
         priority=80,
     ),
     Language(
@@ -155,7 +183,15 @@ ALL_LANGUAGES: tuple[Language, ...] = (
         markers_workspace=("settings.gradle.kts",),
         markers_package=("build.gradle.kts",),
         grammar="kotlin",
-        test_patterns=("*Test.kt", "Test*.kt"),
+        test_patterns=(
+            "*Test.kt",
+            "Test*.kt",
+            # Gradle convention: anything under src/test/ or src/*Test/
+            "src/test/*.kt",
+            "*/src/test/*.kt",
+            "src/*Test/*.kt",
+            "*/src/*Test/*.kt",
+        ),
         priority=75,
     ),
     Language(
@@ -165,7 +201,14 @@ ALL_LANGUAGES: tuple[Language, ...] = (
         markers_workspace=(),
         markers_package=("build.sbt",),
         grammar="scala",
-        test_patterns=("*Spec.scala", "*Test.scala"),
+        test_patterns=(
+            "*Spec.scala",
+            "*Test.scala",
+            "*Suite.scala",
+            # SBT convention: anything under src/test/
+            "src/test/*.scala",
+            "*/src/test/*.scala",
+        ),
         priority=75,
     ),
     Language(
@@ -222,6 +265,14 @@ ALL_LANGUAGES: tuple[Language, ...] = (
         markers_workspace=(),
         markers_package=("cmakelists.txt", "meson.build", "compile_commands.json"),
         grammar="cpp",  # C++ grammar handles both C and C++
+        test_patterns=(
+            "test_*.cpp",
+            "*_test.cpp",
+            "test_*.c",
+            "*_test.c",
+            "tests/*.cpp",
+            "tests/*.c",
+        ),
         priority=60,
     ),
     # =========================================================================
@@ -260,7 +311,7 @@ ALL_LANGUAGES: tuple[Language, ...] = (
         markers_workspace=("gemfile.lock",),
         markers_package=("gemfile",),
         grammar="ruby",
-        test_patterns=("*_spec.rb", "*_test.rb"),
+        test_patterns=("*_spec.rb", "*_test.rb", "spec_*.rb"),
         priority=70,
     ),
     Language(
@@ -312,6 +363,7 @@ ALL_LANGUAGES: tuple[Language, ...] = (
         markers_workspace=(),
         markers_package=("stack.yaml", "package.yaml"),
         grammar="haskell",
+        test_patterns=("*Spec.hs", "*Test.hs", "test/*.hs", "tests/*.hs"),
         priority=70,
     ),
     Language(
@@ -321,6 +373,7 @@ ALL_LANGUAGES: tuple[Language, ...] = (
         markers_workspace=(),
         markers_package=("dune-project", "dune"),
         grammar="ocaml",
+        test_patterns=("test_*.ml", "*_test.ml", "test/*.ml", "tests/*.ml"),
         priority=70,
     ),
     Language(
@@ -391,6 +444,7 @@ ALL_LANGUAGES: tuple[Language, ...] = (
         markers_workspace=(),
         markers_package=(),
         grammar="lua",
+        test_patterns=("*_spec.lua", "*_test.lua", "spec/*.lua", "tests/*.lua", "test/*.lua"),
         priority=60,
     ),
     Language(
@@ -419,6 +473,7 @@ ALL_LANGUAGES: tuple[Language, ...] = (
         markers_workspace=(),
         markers_package=("project.toml",),
         grammar="julia",
+        test_patterns=("runtests.jl", "test_*.jl", "*_test.jl", "test/*.jl", "tests/*.jl"),
         priority=70,
     ),
     # =========================================================================
