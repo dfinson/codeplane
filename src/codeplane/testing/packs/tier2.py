@@ -864,12 +864,13 @@ class MixTestPack(RunnerPack):
             # ExUnit format: "  1) test description (Module)\n     test/path:line"
             if line.startswith("0 failures"):
                 break
-            # Count pass/fail from summary line: "X tests, Y failures"
-            if "tests," in line and "failure" in line:
+            # Count pass/fail from summary line: "X tests, Y failures" or "1 test, 0 failures"
+            if "test" in line and "failure" in line:
                 parts = line.split(",")
                 for part in parts:
                     part = part.strip()
-                    if part.endswith("tests"):
+                    # Match both "tests" and "test" (singular)
+                    if part.endswith("tests") or part.endswith("test"):
                         try:
                             total = int(part.split()[0])
                             suite.total = total
