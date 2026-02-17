@@ -126,11 +126,11 @@ def create_mcp_server(context: "AppContext") -> "FastMCP":
 
     @mcp.resource("codeplane://{scope_id}/cache/{kind}/{resource_id}")
     def read_cached_resource(scope_id: str, kind: str, resource_id: str) -> bytes:  # noqa: ARG001
-        """Retrieve a cached resource payload by URI."""
+        """Retrieve a cached resource payload from disk."""
         cache = get_resource_cache()
-        data = cache.get(resource_id)
+        data = cache.get(resource_id, kind=kind)
         if data is None:
-            raise ValueError(f"Resource {resource_id} not found or expired")
+            raise ValueError(f"Resource {resource_id} not found")
         return data
 
     tool_count = len(mcp._tool_manager._tools)

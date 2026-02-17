@@ -1,17 +1,21 @@
 """Tests for MCP delivery envelope, resource cache, and client profiles.
 
 Covers:
-- ResourceCache: store, retrieve, TTL/LRU eviction, thread safety
+- ResourceCache: disk-backed store/retrieve
 - ClientProfile + resolve_profile: profile selection logic
-- build_envelope: inline/resource/paged decisions
+- build_envelope: inline/resource delivery decisions
 """
 
 from __future__ import annotations
 
 import hashlib
-import threading
-import time
+import json
+from collections.abc import Generator
+from pathlib import Path
 
+import pytest
+
+import codeplane.mcp.delivery as _delivery_mod
 from codeplane.mcp.delivery import (
     ClientProfile,
     ResourceCache,
@@ -23,90 +27,88 @@ from codeplane.mcp.delivery import (
 
 
 class TestResourceCache:
-    """Tests for ResourceCache."""
+    """Tests for disk-backed ResourceCache."""
+
+    @pytest.fixture(autouse=True)
+    def _setup_cache_dir(self, tmp_path: Path) -> Generator[None, None, None]:
+        """Point _cache_dir at a temp directory for each test."""
+        old = _delivery_mod._cache_dir
+        _delivery_mod._cache_dir = tmp_path / ".codeplane" / "cache"
+        yield
+        _delivery_mod._cache_dir = old
 
     def test_store_and_retrieve(self) -> None:
-        """Store payload, get by id, verify content matches."""
-        cache = ResourceCache(max_entries=10, ttl_seconds=60.0)
+        """Store payload, get by id and kind, verify content matches."""
+        cache = ResourceCache()
         uri, meta = cache.store(b"hello world", "source", "scope1")
         rid = uri.split("/")[-1]
-        result = cache.get(rid)
+        result = cache.get(rid, kind="source")
         assert result is not None
         assert result == b"hello world"
 
     def test_sha256_computed_at_store(self) -> None:
         """Verify sha256 in resource_meta matches hashlib of stored content."""
-        cache = ResourceCache(max_entries=10, ttl_seconds=60.0)
+        cache = ResourceCache()
         payload = b"test payload data"
         uri, meta = cache.store(payload, "source", "scope1")
         expected_sha = hashlib.sha256(payload).hexdigest()
         assert meta.sha256 == expected_sha
 
     def test_immutability(self) -> None:
-        """Store, retrieve, verify identical bytes."""
-        cache = ResourceCache(max_entries=10, ttl_seconds=60.0)
+        """Store, retrieve twice, verify identical bytes."""
+        cache = ResourceCache()
         payload = b"immutable data 12345"
         uri, meta = cache.store(payload, "source", "scope1")
         rid = uri.split("/")[-1]
-        r1 = cache.get(rid)
-        r2 = cache.get(rid)
+        r1 = cache.get(rid, kind="source")
+        r2 = cache.get(rid, kind="source")
         assert r1 == r2 == payload
 
-    def test_ttl_eviction(self) -> None:
-        """Store with short TTL, sleep, verify get returns None."""
-        cache = ResourceCache(max_entries=10, ttl_seconds=0.1)
-        uri, meta = cache.store(b"ephemeral", "source", "scope1")
+    def test_get_without_kind_scans_dirs(self) -> None:
+        """Fallback scan finds resource without explicit kind."""
+        cache = ResourceCache()
+        uri, _ = cache.store(b"findme", "source", "s1")
         rid = uri.split("/")[-1]
-        time.sleep(0.2)
-        result = cache.get(rid)
-        assert result is None
+        result = cache.get(rid)  # no kind
+        assert result == b"findme"
 
-    def test_lru_eviction(self) -> None:
-        """Store max+1 entries, verify oldest evicted."""
-        cache = ResourceCache(max_entries=2, ttl_seconds=60.0)
-        uri1, _ = cache.store(b"first", "source", "s1")
-        cache.store(b"second", "source", "s2")
-        cache.store(b"third", "source", "s3")
-        rid1 = uri1.split("/")[-1]
-        assert cache.get(rid1) is None
-
-    def test_thread_safety(self) -> None:
-        """Concurrent store/get from multiple threads, no crashes."""
-        cache = ResourceCache(max_entries=100, ttl_seconds=60.0)
-        errors: list[str] = []
-
-        def worker(i: int) -> None:
-            try:
-                uri, _ = cache.store(f"data-{i}".encode(), "source", f"scope-{i}")
-                rid = uri.split("/")[-1]
-                result = cache.get(rid)
-                if result is None:
-                    errors.append(f"Worker {i}: get returned None")
-            except Exception as e:
-                errors.append(f"Worker {i}: {e}")
-
-        threads = [threading.Thread(target=worker, args=(i,)) for i in range(20)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        assert not errors, f"Thread errors: {errors}"
+    def test_get_missing_returns_none(self) -> None:
+        """Non-existent resource returns None."""
+        cache = ResourceCache()
+        assert cache.get("nonexistent", kind="source") is None
 
     def test_scope_id_in_uri(self) -> None:
         """Verify URI format is codeplane://{scope_id}/cache/{kind}/{id}."""
-        cache = ResourceCache(max_entries=10, ttl_seconds=60.0)
+        cache = ResourceCache()
         uri, _ = cache.store(b"data", "source", "my-scope-123")
         assert uri.startswith("codeplane://my-scope-123/cache/source/")
 
     def test_meta_byte_size(self) -> None:
         """Verify byte_size in meta matches payload size."""
-        cache = ResourceCache(max_entries=10, ttl_seconds=60.0)
+        cache = ResourceCache()
         payload = b"exactly 25 bytes of data!"
         _, meta = cache.store(payload, "source", "s1")
         assert meta.byte_size == len(payload)
 
+    def test_dict_payload_stored_compact(self) -> None:
+        """Dict payloads are serialized as compact JSON on disk."""
+        cache = ResourceCache()
+        payload = {"key": "value", "nested": [1, 2, 3]}
+        uri, _ = cache.store(payload, "test", "s1")
+        rid = uri.split("/")[-1]
+        raw = cache.get(rid, kind="test")
+        assert raw is not None
+        # Compact = no spaces after separators
+        text = raw.decode("utf-8")
+        assert " " not in text
+        assert json.loads(text) == payload
 
-class TestClientProfile:
+    def test_no_cache_dir_returns_none(self) -> None:
+        """When _cache_dir is None, get returns None."""
+        _delivery_mod._cache_dir = None
+        cache = ResourceCache()
+        assert cache.get("anything") is None
+
     """Tests for ClientProfile and resolve_profile."""
 
     def test_default_profile(self) -> None:
@@ -118,69 +120,52 @@ class TestClientProfile:
         """clientInfo.name='copilot_coding_agent' -> correct profile."""
         profile = resolve_profile({"name": "copilot_coding_agent"}, None)
         assert profile.name == "copilot_coding_agent"
-        assert profile.supports_resources is False
 
-    def test_capabilities_resources_true(self) -> None:
-        """Unknown name + resources=true -> supports_resources=true."""
+    def test_unknown_name_falls_to_default(self) -> None:
+        """Unknown name -> default profile."""
+        profile = resolve_profile({"name": "unknown_client"}, None)
+        assert profile.name == "default"
+
+    def test_config_override(self) -> None:
+        """Explicit config override takes priority."""
         profile = resolve_profile(
-            {"name": "unknown_client"},
-            {"resources": True},
+            {"name": "Visual Studio Code"},
+            None,
+            config_override="copilot_coding_agent",
         )
-        assert profile.supports_resources is True
-
-    def test_capabilities_resources_false(self) -> None:
-        """Unknown name + resources=false -> supports_resources=false."""
-        profile = resolve_profile(
-            {"name": "unknown_client"},
-            {"resources": False},
-        )
-        assert profile.supports_resources is False
-
-    def test_auto_resolution(self) -> None:
-        """Default profile with resources capability resolves auto correctly."""
-        profile = resolve_profile(None, {"resources": True})
-        assert profile.supports_resources is True
+        assert profile.name == "copilot_coding_agent"
 
 
 class TestBuildEnvelope:
     """Tests for build_envelope."""
 
-    def _profile(self, supports_resources: bool = False) -> ClientProfile:
-        return ClientProfile(
-            name="test",
-            supports_resources=supports_resources,
-            inline_cap_bytes=7500,
-            prefer_delivery="paged",
-        )
+    @pytest.fixture(autouse=True)
+    def _setup_cache_dir(self, tmp_path: Path) -> Generator[None, None, None]:
+        """Point disk cache at tmp for resource delivery tests."""
+        old = _delivery_mod._cache_dir
+        _delivery_mod._cache_dir = tmp_path / ".codeplane" / "cache"
+        _delivery_mod._cache_dir.mkdir(parents=True, exist_ok=True)
+        yield
+        _delivery_mod._cache_dir = old
+
+    def _profile(self, inline_cap: int = 7500) -> ClientProfile:
+        return ClientProfile(name="test", inline_cap_bytes=inline_cap)
 
     def test_small_payload_inline(self) -> None:
-        """1KB payload -> delivery='inline', no resource_uri."""
+        """Small payload -> delivery='inline', no resource_uri."""
         payload = {"data": "x" * 500}
         env = build_envelope(payload, resource_kind="source", client_profile=self._profile())
         assert env["delivery"] == "inline"
         assert "resource_uri" not in env
 
-    def test_large_payload_paged(self) -> None:
-        """Large payload + no resources -> delivery='paged'."""
-        payload = {"data": "x" * 20000}
-        env = build_envelope(
-            payload,
-            resource_kind="source",
-            client_profile=self._profile(supports_resources=False),
-        )
-        assert env["delivery"] in ("inline", "paged")
-
     def test_large_payload_resource(self) -> None:
-        """Large payload + resources supported -> delivery='resource'."""
-        profile = ClientProfile(
-            name="test",
-            supports_resources=True,
-            inline_cap_bytes=7500,
-            prefer_delivery="resource",
-        )
+        """Large payload -> delivery='resource', written to disk."""
         payload = {"data": "x" * 20000}
-        env = build_envelope(payload, resource_kind="source", client_profile=profile)
-        assert env["delivery"] in ("inline", "resource")
+        env = build_envelope(payload, resource_kind="source", client_profile=self._profile())
+        assert env["delivery"] == "resource"
+        assert "resource_uri" in env
+        assert "agentic_hint" in env
+        assert "cat" in env["agentic_hint"] or "type" in env["agentic_hint"]
 
     def test_inline_budget_fields(self) -> None:
         """Verify inline_budget_bytes_used and _limit present."""

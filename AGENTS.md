@@ -36,18 +36,18 @@ Search = find. Read = retrieve. Full = gated.
 
 | Operation | REQUIRED Tool | FORBIDDEN Alternative |
 |-----------|---------------|----------------------|
-| Read source | `mcp_codeplane-codeplane_read_source` | `cat`, `head`, `less`, `tail` |
-| Read full file | `mcp_codeplane-codeplane_read_file_full` | `cat`, `head`, bulk reads |
-| Write/edit files | `mcp_codeplane-codeplane_write_files` | `sed`, `echo >>`, `awk`, `tee` |
-| List directory | `mcp_codeplane-codeplane_list_files` | `ls`, `find`, `tree` |
-| Search code | `mcp_codeplane-codeplane_search` | `grep`, `rg`, `ag`, `ack` |
-| Repository overview | `mcp_codeplane-codeplane_map_repo` | Manual file traversal |
-| All git operations | `mcp_codeplane-codeplane_git_*` | Raw `git` commands |
-| Run linters | `mcp_codeplane-codeplane_lint_check` | `ruff`, `black`, `mypy` directly |
-| Discover tests | `mcp_codeplane-codeplane_discover_test_targets` | Manual test file search |
-| Run tests | `mcp_codeplane-codeplane_run_test_targets` | `pytest`, `jest` directly |
-| Rename symbols | `mcp_codeplane-codeplane_refactor_rename` | Find-and-replace, `sed` |
-| Semantic diff | `mcp_codeplane-codeplane_semantic_diff` | Manual comparison |
+| Read source | `mcp_codeplane-codeplane_copy3_read_source` | `cat`, `head`, `less`, `tail` |
+| Read full file | `mcp_codeplane-codeplane_copy3_read_file_full` | `cat`, `head`, bulk reads |
+| Write/edit files | `mcp_codeplane-codeplane_copy3_write_files` | `sed`, `echo >>`, `awk`, `tee` |
+| List directory | `mcp_codeplane-codeplane_copy3_list_files` | `ls`, `find`, `tree` |
+| Search code | `mcp_codeplane-codeplane_copy3_search` | `grep`, `rg`, `ag`, `ack` |
+| Repository overview | `mcp_codeplane-codeplane_copy3_map_repo` | Manual file traversal |
+| All git operations | `mcp_codeplane-codeplane_copy3_git_*` | Raw `git` commands |
+| Run linters | `mcp_codeplane-codeplane_copy3_lint_check` | `ruff`, `black`, `mypy` directly |
+| Discover tests | `mcp_codeplane-codeplane_copy3_discover_test_targets` | Manual test file search |
+| Run tests | `mcp_codeplane-codeplane_copy3_run_test_targets` | `pytest`, `jest` directly |
+| Rename symbols | `mcp_codeplane-codeplane_copy3_refactor_rename` | Find-and-replace, `sed` |
+| Semantic diff | `mcp_codeplane-codeplane_copy3_semantic_diff` | Manual comparison |
 
 ### Search Strategy Guide (enrichment, no source text)
 

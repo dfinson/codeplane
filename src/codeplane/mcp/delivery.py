@@ -2,34 +2,70 @@
 
 Provides:
 - DeliveryEnvelope: uniform response shape for all endpoints
-- ResourceCache: LRU cache with TTL for resource-mode payloads
+- ResourceCache: disk-backed cache for resource-mode payloads
 - ClientProfile: static client capability profiles
 - build_envelope: decide inline/resource/paged delivery
 - resolve_profile: select client profile from connection info
-
-Design modeled on _DiffCache in diff.py (LRU OrderedDict, thread-safe, TTL).
 """
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
+import os
+import sys
 import threading
 import time
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import structlog
 
-from codeplane.config.constants import (
-    INLINE_CAP_BYTES,
-    RESOURCE_CACHE_MAX,
-    RESOURCE_CACHE_TTL,
-)
+from codeplane.config.constants import INLINE_CAP_BYTES
+from codeplane.config.user_config import DEFAULT_PORT
 
 log = structlog.get_logger(__name__)
+
+# Server port for resource fetch hints (set during startup, fallback to default)
+_server_port: int = DEFAULT_PORT
+
+# Cache directory for disk-persisted resources (set during startup)
+_cache_dir: Path | None = None
+
+
+def set_server_port(port: int) -> None:
+    """Set the server port for resource fetch hints."""
+    global _server_port  # noqa: PLW0603
+    _server_port = port
+
+
+def set_cache_dir(repo_root: Path) -> None:
+    """Set and create the disk cache directory for resource payloads.
+
+    Wipes any previous cache — cached resources are only valid for the
+    current server session (random UUIDs, not persisted).
+    """
+    import shutil
+
+    global _cache_dir  # noqa: PLW0603
+    _cache_dir = repo_root / ".codeplane" / "cache"
+    if _cache_dir.exists():
+        shutil.rmtree(_cache_dir)
+    _cache_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _build_fetch_hint(resource_id: str, byte_size: int, kind: str) -> str:
+    """Build an agentic hint with a file read command for a cached resource."""
+    rel_path = f".codeplane/cache/{kind}/{resource_id}.json"
+    if sys.platform == "win32":
+        cmd = f"type {rel_path.replace('/', os.sep)}"
+    else:
+        cmd = f"cat {rel_path}"
+    return f"Full result ({byte_size:,} bytes) cached to disk. Retrieve with: {cmd}"
 
 
 # =============================================================================
@@ -42,51 +78,30 @@ class ClientProfile:
     """Static client capability profile."""
 
     name: str
-    supports_resources: bool | None  # None = auto-detect from capabilities
     inline_cap_bytes: int = INLINE_CAP_BYTES
-    prefer_delivery: str = "resource"  # "resource" | "paged"
 
 
 PROFILES: dict[str, ClientProfile] = {
-    "default": ClientProfile(
-        name="default",
-        supports_resources=None,  # auto from capabilities
-        inline_cap_bytes=INLINE_CAP_BYTES,
-        prefer_delivery="resource",
-    ),
-    "copilot_coding_agent": ClientProfile(
-        name="copilot_coding_agent",
-        supports_resources=False,
-        inline_cap_bytes=INLINE_CAP_BYTES,
-        prefer_delivery="paged",
-    ),
-    "vscode_chat": ClientProfile(
-        name="vscode_chat",
-        supports_resources=True,
-        inline_cap_bytes=INLINE_CAP_BYTES,
-        prefer_delivery="resource",
-    ),
+    "default": ClientProfile(name="default"),
+    "copilot_coding_agent": ClientProfile(name="copilot_coding_agent"),
+    "vscode_chat": ClientProfile(name="vscode_chat"),
+    "Visual Studio Code": ClientProfile(name="Visual Studio Code"),
 }
 
 
 def resolve_profile(
     client_info: dict[str, Any] | None = None,
-    capabilities: dict[str, Any] | None = None,
+    capabilities: dict[str, Any] | None = None,  # noqa: ARG001
     config_override: str | None = None,
 ) -> ClientProfile:
     """Resolve client profile from connection info.
 
-    Priority: explicit config override > clientInfo.name > capabilities.resources > default.
+    Priority: explicit config override > clientInfo.name > default.
     """
     # 1. Explicit override
     if config_override and config_override in PROFILES:
         profile = PROFILES[config_override]
-        log.debug(
-            "profile_resolved",
-            source="config_override",
-            profile=profile.name,
-            supports_resources=profile.supports_resources,
-        )
+        log.debug("profile_resolved", source="config_override", profile=profile.name)
         return profile
 
     # 2. clientInfo.name match
@@ -94,42 +109,33 @@ def resolve_profile(
         name = client_info.get("name", "")
         if name in PROFILES:
             profile = PROFILES[name]
-            log.debug(
-                "profile_resolved",
-                source="client_name",
-                profile=profile.name,
-                supports_resources=profile.supports_resources,
-            )
+            log.debug("profile_resolved", source="client_name", profile=profile.name)
             return profile
 
-    # 3. Auto-detect from capabilities
-    default = PROFILES["default"]
-    has_resources = False
-    if capabilities and capabilities.get("resources"):
-        has_resources = True
-
-    resolved_supports = (
-        default.supports_resources if default.supports_resources is not None else has_resources
-    )
-
-    profile = ClientProfile(
-        name="default",
-        supports_resources=resolved_supports,
-        inline_cap_bytes=default.inline_cap_bytes,
-        prefer_delivery=default.prefer_delivery,
-    )
-    log.debug(
-        "profile_resolved",
-        source="auto",
-        profile=profile.name,
-        supports_resources=profile.supports_resources,
-        prefer_delivery=profile.prefer_delivery,
-    )
+    # 3. Default
+    profile = PROFILES["default"]
+    log.debug("profile_resolved", source="default", profile=profile.name)
     return profile
 
 
+# Per-request client profile (set by middleware, read by envelope builders)
+_current_profile: contextvars.ContextVar[ClientProfile | None] = contextvars.ContextVar(
+    "_current_profile", default=None
+)
+
+
+def set_current_profile(profile: ClientProfile) -> None:
+    """Set the resolved client profile for the current request context."""
+    _current_profile.set(profile)
+
+
+def get_current_profile() -> ClientProfile:
+    """Get the resolved client profile for the current request, or default."""
+    return _current_profile.get() or PROFILES["default"]
+
+
 # =============================================================================
-# Resource Cache
+# Resource Cache (disk-backed, no in-memory state)
 # =============================================================================
 
 
@@ -140,46 +146,21 @@ class ResourceMeta:
     byte_size: int
     sha256: str
     content_type: str
-    expires_at: float
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "byte_size": self.byte_size,
             "sha256": self.sha256,
             "content_type": self.content_type,
-            "expires_at": self.expires_at,
         }
 
 
-class _CacheEntry:
-    """A cached resource payload with metadata."""
-
-    __slots__ = ("payload", "meta", "created_at")
-
-    def __init__(self, payload: bytes, meta: ResourceMeta) -> None:
-        self.payload = payload
-        self.meta = meta
-        self.created_at = time.monotonic()
-
-    def is_expired(self) -> bool:
-        return time.monotonic() > self.meta.expires_at
-
-
 class ResourceCache:
-    """Thread-safe LRU cache for resource payloads.
+    """Disk-backed resource cache.
 
-    Modeled on _DiffCache in diff.py.
+    All payloads are written as compact JSON to _cache_dir/{kind}/{id}.json.
+    No in-memory state, no TTL, no LRU — the filesystem IS the cache.
     """
-
-    def __init__(
-        self,
-        max_entries: int = RESOURCE_CACHE_MAX,
-        ttl_seconds: float = RESOURCE_CACHE_TTL,
-    ) -> None:
-        self._entries: OrderedDict[str, _CacheEntry] = OrderedDict()
-        self._lock = threading.Lock()
-        self._max = max_entries
-        self._ttl = ttl_seconds
 
     def store(
         self,
@@ -188,35 +169,33 @@ class ResourceCache:
         scope_id: str,
         content_type: str = "application/json",
     ) -> tuple[str, ResourceMeta]:
-        """Store a payload and return (resource_uri, meta)."""
+        """Serialize payload to disk and return (resource_uri, meta)."""
         if isinstance(payload, dict | list):
-            raw = json.dumps(payload, indent=2).encode("utf-8")
+            raw = json.dumps(payload, separators=(",", ":"), sort_keys=False).encode("utf-8")
         elif isinstance(payload, str):
             raw = payload.encode("utf-8")
         elif isinstance(payload, bytes):
             raw = payload
         else:
-            raw = json.dumps(payload, indent=2, default=str).encode("utf-8")
+            raw = json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
 
         sha = hashlib.sha256(raw).hexdigest()
         resource_id = uuid.uuid4().hex[:12]
         uri = f"codeplane://{scope_id}/cache/{kind}/{resource_id}"
-        expires_at = time.monotonic() + self._ttl
 
         meta = ResourceMeta(
             byte_size=len(raw),
             sha256=sha,
             content_type=content_type,
-            expires_at=expires_at,
         )
 
-        entry = _CacheEntry(raw, meta)
-
-        with self._lock:
-            self._entries[resource_id] = entry
-            # Evict oldest if over capacity
-            while len(self._entries) > self._max:
-                self._entries.popitem(last=False)
+        if _cache_dir is None:
+            log.warning("resource_cache_no_dir", resource_id=resource_id)
+        else:
+            kind_dir = _cache_dir / kind
+            kind_dir.mkdir(parents=True, exist_ok=True)
+            disk_path = kind_dir / f"{resource_id}.json"
+            disk_path.write_bytes(raw)
 
         log.debug(
             "resource_cached",
@@ -225,37 +204,27 @@ class ResourceCache:
             scope_id=scope_id,
             byte_size=len(raw),
         )
+
         return uri, meta
 
-    def get(self, resource_id: str) -> bytes | None:
-        """Retrieve cached payload (returns None if expired or missing)."""
-        with self._lock:
-            entry = self._entries.get(resource_id)
-            if entry is None:
-                return None
-            if entry.is_expired():
-                self._entries.pop(resource_id, None)
-                return None
-            # Move to end (LRU)
-            self._entries.move_to_end(resource_id)
-            return entry.payload
+    def get(self, resource_id: str, kind: str | None = None) -> bytes | None:
+        """Read a cached resource from disk.
 
-    def get_meta(self, resource_id: str) -> ResourceMeta | None:
-        """Get metadata for a cached resource."""
-        with self._lock:
-            entry = self._entries.get(resource_id)
-            if entry is None or entry.is_expired():
-                return None
-            return entry.meta
-
-    def clear(self) -> None:
-        with self._lock:
-            self._entries.clear()
-
-    @property
-    def size(self) -> int:
-        with self._lock:
-            return len(self._entries)
+        If kind is provided, looks directly in _cache_dir/{kind}/{id}.json.
+        Otherwise scans all kind subdirectories (slower fallback).
+        """
+        if _cache_dir is None:
+            return None
+        if kind:
+            path = _cache_dir / kind / f"{resource_id}.json"
+            return path.read_bytes() if path.exists() else None
+        # Fallback: scan all subdirectories
+        for kind_dir in _cache_dir.iterdir():
+            if kind_dir.is_dir():
+                path = kind_dir / f"{resource_id}.json"
+                if path.exists():
+                    return path.read_bytes()
+        return None
 
 
 # Global resource cache instance
@@ -280,18 +249,14 @@ def build_envelope(
     scope_id: str | None = None,
     scope_usage: dict[str, Any] | None = None,
     inline_summary: str | None = None,
-    pagination_cursor: str | None = None,
-    has_more: bool = False,
-    total_estimate: int | None = None,
 ) -> dict[str, Any]:
     """Build a delivery envelope around a payload.
 
     Rules:
     - Payload fits inline -> delivery="inline"
-    - Doesn't fit + resources supported -> delivery="resource", synopsis only
-    - Doesn't fit + no resources -> delivery="paged" with cursor
+    - Doesn't fit -> delivery="resource", full payload written to disk
     """
-    profile = client_profile or PROFILES["default"]
+    profile = client_profile or get_current_profile()
     inline_cap = profile.inline_cap_bytes
 
     # Measure payload size
@@ -302,9 +267,7 @@ def build_envelope(
         "resource_kind": resource_kind,
     }
 
-    fits_inline = payload_bytes <= inline_cap
-
-    if fits_inline and not has_more:
+    if payload_bytes <= inline_cap:
         # Inline delivery
         envelope["delivery"] = "inline"
         envelope.update(payload)
@@ -312,36 +275,21 @@ def build_envelope(
         envelope["inline_budget_bytes_limit"] = inline_cap
         if inline_summary:
             envelope["inline_summary"] = inline_summary
-    elif not fits_inline and _profile_supports_resources(profile):
-        # Resource delivery
+    else:
+        # Resource delivery — write full payload to disk
         effective_scope = scope_id or "default"
         uri, meta = _resource_cache.store(payload, resource_kind, effective_scope)
         envelope["delivery"] = "resource"
         envelope["resource_uri"] = uri
         envelope["resource_meta"] = meta.to_dict()
-        envelope["capability_used"] = "resources"
-        # Synopsis only — no partial page, no cursor
         if inline_summary:
             envelope["inline_summary"] = inline_summary
         envelope["inline_budget_bytes_used"] = len(
             json.dumps(envelope, indent=2, default=str).encode("utf-8")
         )
         envelope["inline_budget_bytes_limit"] = inline_cap
-    else:
-        # Paged delivery
-        envelope["delivery"] = "paged"
-        envelope.update(payload)
-        envelope["inline_budget_bytes_used"] = payload_bytes
-        envelope["inline_budget_bytes_limit"] = inline_cap
-        envelope["capability_used"] = "pagination"
-        if inline_summary:
-            envelope["inline_summary"] = inline_summary
-        pagination: dict[str, Any] = {"truncated": has_more}
-        if has_more and pagination_cursor:
-            pagination["next_cursor"] = pagination_cursor
-        if total_estimate is not None:
-            pagination["total_estimate"] = total_estimate
-        envelope["pagination"] = pagination
+        resource_id = uri.rsplit("/", 1)[-1]
+        envelope["agentic_hint"] = _build_fetch_hint(resource_id, meta.byte_size, resource_kind)
 
     # Echo scope
     if scope_id:
@@ -361,13 +309,6 @@ def build_envelope(
     return envelope
 
 
-def _profile_supports_resources(profile: ClientProfile) -> bool:
-    """Check if profile supports resources."""
-    if profile.supports_resources is None:
-        return False
-    return profile.supports_resources
-
-
 def wrap_existing_response(
     result: dict[str, Any],
     *,
@@ -380,19 +321,14 @@ def wrap_existing_response(
     """Add delivery envelope fields to an existing handler response.
 
     For handlers that already manage their own pagination via BudgetAccumulator.
-    Routes oversized payloads through resource delivery when client supports it,
-    providing uniform overflow handling across all tools.
+    Routes oversized payloads to disk via resource delivery.
     """
-    profile = client_profile or PROFILES["default"]
+    profile = client_profile or get_current_profile()
     inline_cap = profile.inline_cap_bytes
 
     payload_bytes = len(json.dumps(result, indent=2, default=str).encode("utf-8"))
-    has_pagination = "pagination" in result
-    is_truncated = has_pagination and result.get("pagination", {}).get("truncated", False)
 
-    fits_inline = payload_bytes <= inline_cap and not is_truncated
-
-    if fits_inline:
+    if payload_bytes <= inline_cap:
         # Inline delivery
         result["resource_kind"] = resource_kind
         result["delivery"] = "inline"
@@ -400,8 +336,8 @@ def wrap_existing_response(
         result["inline_budget_bytes_limit"] = inline_cap
         if inline_summary:
             result["inline_summary"] = inline_summary
-    elif _profile_supports_resources(profile):
-        # Resource delivery — store full result, return synopsis
+    else:
+        # Resource delivery — store full result on disk, return synopsis
         effective_scope = scope_id or "default"
         uri, meta = _resource_cache.store(result, resource_kind, effective_scope)
         envelope: dict[str, Any] = {
@@ -409,7 +345,6 @@ def wrap_existing_response(
             "delivery": "resource",
             "resource_uri": uri,
             "resource_meta": meta.to_dict(),
-            "capability_used": "resources",
         }
         if inline_summary:
             envelope["inline_summary"] = inline_summary
@@ -421,6 +356,8 @@ def wrap_existing_response(
             envelope["scope_id"] = scope_id
         if scope_usage:
             envelope["scope_usage"] = scope_usage
+        resource_id = uri.rsplit("/", 1)[-1]
+        envelope["agentic_hint"] = _build_fetch_hint(resource_id, meta.byte_size, resource_kind)
 
         log.debug(
             "envelope_wrapped",
@@ -431,15 +368,6 @@ def wrap_existing_response(
             scope_id=scope_id,
         )
         return envelope
-    else:
-        # Paged delivery (no resource support)
-        result["resource_kind"] = resource_kind
-        result["delivery"] = "paged"
-        result["inline_budget_bytes_used"] = payload_bytes
-        result["inline_budget_bytes_limit"] = inline_cap
-        result["capability_used"] = "pagination"
-        if inline_summary:
-            result["inline_summary"] = inline_summary
 
     if scope_id:
         result["scope_id"] = scope_id

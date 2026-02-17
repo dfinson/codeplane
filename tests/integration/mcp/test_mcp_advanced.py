@@ -79,8 +79,7 @@ class TestGitAfterMutation:
                 Edit(
                     path="src/main.py",
                     action="update",
-                    old_content="Entry point.",
-                    new_content="Entry point. (modified)",
+                    content="Entry point. (modified)",
                 )
             ]
         )

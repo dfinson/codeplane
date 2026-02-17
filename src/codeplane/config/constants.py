@@ -74,12 +74,6 @@ MAX_TARGETS_PER_CALL = 20
 SMALL_FILE_THRESHOLD = 1_000
 """Files under this byte count skip two-phase confirmation in read_file_full."""
 
-RESOURCE_CACHE_TTL = 120.0
-"""TTL in seconds for resource cache entries."""
-
-RESOURCE_CACHE_MAX = 16
-"""Maximum entries in resource cache."""
-
 # ======================================================================# Internal Implementation Constants
 # ======================================================================# These are not exposed to users and are implementation details.
 

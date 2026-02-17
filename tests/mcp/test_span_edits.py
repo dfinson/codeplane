@@ -121,7 +121,7 @@ class TestSpanEditValidation:
                 new_content="b",
             ),
         ]
-        sorted_edits = sorted(edits, key=lambda x: (x.start_line or 0))
+        sorted_edits = sorted(edits, key=lambda x: x.start_line or 0)
         overlaps = []
         for i in range(len(sorted_edits) - 1):
             cur = sorted_edits[i]
@@ -150,7 +150,7 @@ class TestSpanEditValidation:
                 new_content="b",
             ),
         ]
-        sorted_edits = sorted(edits, key=lambda x: (x.start_line or 0))
+        sorted_edits = sorted(edits, key=lambda x: x.start_line or 0)
         overlaps = []
         for i in range(len(sorted_edits) - 1):
             cur = sorted_edits[i]

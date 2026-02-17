@@ -207,7 +207,7 @@ class TestMCPMutationIntegration:
         assert "def new_func" in (integration_repo / "src" / "new_module.py").read_text()
 
     def test_atomic_edit_updates_file(self, integration_repo: Path) -> None:
-        """MCP write_files updates existing files with content-addressed edits."""
+        """MCP write_files updates existing files."""
         mutation_ops = MutationOps(integration_repo)
 
         result = mutation_ops.write_files(
@@ -215,8 +215,7 @@ class TestMCPMutationIntegration:
                 Edit(
                     path="src/main.py",
                     action="update",
-                    old_content="def greet(name: str) -> str:",
-                    new_content='def greet(name: str, greeting: str = "Hello") -> str:',
+                    content='def greet(name: str, greeting: str = "Hello") -> str:\n    pass\n',
                 )
             ],
         )
@@ -236,8 +235,7 @@ class TestMCPMutationIntegration:
                 Edit(
                     path="src/main.py",
                     action="update",
-                    old_content="def greet",
-                    new_content="def say_hello",
+                    content="def say_hello():\n    pass\n",
                 )
             ],
             dry_run=True,
@@ -269,21 +267,3 @@ class TestMCPMutationIntegration:
 
         assert result.applied
         assert not to_delete.exists()
-
-    def test_atomic_edit_content_not_found_error(self, integration_repo: Path) -> None:
-        """MCP write_files raises error when old_content not found."""
-        from codeplane.mutation.ops import ContentNotFoundError
-
-        mutation_ops = MutationOps(integration_repo)
-
-        with pytest.raises(ContentNotFoundError):
-            mutation_ops.write_files(
-                edits=[
-                    Edit(
-                        path="src/main.py",
-                        action="update",
-                        old_content="THIS CONTENT DOES NOT EXIST",
-                        new_content="replacement",
-                    )
-                ],
-            )

@@ -66,6 +66,8 @@ class ToolMiddleware(Middleware):
             full_session_id = context.fastmcp_context.session_id or "unknown"
             session_id = full_session_id[:8]  # Truncate for display
 
+            # Resolve client profile from session and set for envelope builders
+            self._resolve_and_set_profile(context.fastmcp_context)
         # Extract key params for logging (avoid logging huge content)
         log_params = self._extract_log_params(tool_name, arguments)
 
@@ -306,6 +308,43 @@ class ToolMiddleware(Middleware):
         except Exception:
             # Don't let schema extraction failure break error handling
             return None
+
+    def _resolve_and_set_profile(self, fastmcp_ctx: Any) -> None:
+        """Resolve client profile from session and set on context var.
+
+        Extracts clientInfo from the MCP session's initialization params
+        and resolves the appropriate delivery profile.
+        """
+        from codeplane.mcp.delivery import resolve_profile, set_current_profile
+
+        try:
+            session = fastmcp_ctx.session
+            client_params = getattr(session, "client_params", None)
+            if client_params is None:
+                return
+
+            client_info = getattr(client_params, "clientInfo", None)
+            client_info_dict = None
+            if client_info is not None:
+                client_info_dict = {
+                    "name": getattr(client_info, "name", ""),
+                    "version": getattr(client_info, "version", ""),
+                }
+
+            capabilities = getattr(client_params, "capabilities", None)
+            caps_dict = None
+            if capabilities is not None:
+                caps_dict = (
+                    capabilities.model_dump(exclude_none=True)
+                    if hasattr(capabilities, "model_dump")
+                    else {}
+                )
+
+            profile = resolve_profile(client_info=client_info_dict, capabilities=caps_dict)
+            set_current_profile(profile)
+        except Exception:
+            # Profile resolution is best-effort; don't break tool calls
+            log.debug("profile_resolution_failed", exc_info=True)
 
     def _extract_log_params(self, _tool_name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Extract relevant parameters for logging.

@@ -89,12 +89,13 @@ class TestSearchDeliveryEnvelope:
         wrapped = wrap_existing_response(result, resource_kind="search_hits")
         assert "scope_usage" not in wrapped
 
-    def test_paged_delivery_when_truncated(self) -> None:
-        """delivery='paged' when pagination indicates truncation."""
+    def test_truncated_result_preserves_pagination_inline(self) -> None:
+        """Truncated pagination metadata is preserved in inline delivery."""
         result = self._make_search_result()
         result["pagination"] = {"truncated": True, "next_cursor": "10"}
         wrapped = wrap_existing_response(result, resource_kind="search_hits")
-        assert wrapped["delivery"] == "paged"
+        assert wrapped["delivery"] == "inline"
+        assert wrapped["pagination"] == {"truncated": True, "next_cursor": "10"}
 
 
 # =============================================================================
