@@ -374,6 +374,38 @@ def parse_gofmt(stdout: str, stderr: str) -> ParseResult:  # noqa: ARG001
     return ParseResult.ok(diagnostics)
 
 
+def parse_ruff_format(stdout: str, stderr: str) -> ParseResult:  # noqa: ARG001
+    """Parse ruff format output.
+
+    Fix mode (``ruff format``) prints a summary line like
+    ``1 file reformatted, 2 files left unchanged.`` -- no per-file paths.
+
+    Check mode (``ruff format --check --diff``) prints
+    ``Would reformat: <path>`` lines plus a summary.
+    """
+    diagnostics: list[Diagnostic] = []
+    for line in stdout.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        # Check mode: "Would reformat: src/foo.py"
+        m = re.match(r"Would reformat:\s*(.+)", line)
+        if m:
+            diagnostics.append(
+                Diagnostic(
+                    path=m.group(1).strip(),
+                    line=1,
+                    severity=Severity.WARNING,
+                    message="File needs formatting",
+                    source="ruff-format",
+                )
+            )
+            continue
+        # Fix mode summary: "1 file reformatted, 2 files left unchanged."
+        # or diff output lines (--- / +++ / @@ / context) -- skip all of these
+    return ParseResult.ok(diagnostics)
+
+
 # =============================================================================
 # Rust Parsers
 # =============================================================================

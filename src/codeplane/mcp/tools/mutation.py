@@ -266,6 +266,34 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "insertions": insertions,
                     "deletions": deletions,
                 }
+                # Build verification context so agents can confirm
+                # edits landed correctly without a separate read_source call.
+                _CONTEXT_LINES = 3
+                ascending = sorted(path_edits, key=lambda x: x.start_line or 0)
+                shift = 0
+                snippets: list[str] = []
+                for e in ascending:
+                    orig_start = (e.start_line or 1) - 1
+                    orig_end = e.end_line or old_line_count
+                    orig_span = orig_end - orig_start
+                    new_edit_lines = (e.new_content or "").splitlines(keepends=True)
+                    if new_edit_lines and not new_edit_lines[-1].endswith("\n"):
+                        new_edit_lines[-1] += "\n"
+                    new_span = len(new_edit_lines)
+                    final_start = orig_start + shift
+                    final_end = final_start + new_span
+                    ctx_start = max(0, final_start - _CONTEXT_LINES)
+                    ctx_end = min(len(lines), final_end + _CONTEXT_LINES)
+                    numbered = [
+                        f"{ctx_start + i + 1:>4}| {lines[ctx_start + i]}"
+                        for i in range(ctx_end - ctx_start)
+                    ]
+                    snippets.append("".join(numbered))
+                    shift += new_span - orig_span
+                result_entry["verification_context"] = (
+                    "\n  ...\n".join(snippets) if len(snippets) > 1 else snippets[0]
+                )
+
                 file_results.append(result_entry)
 
                 ledger.log_operation(
