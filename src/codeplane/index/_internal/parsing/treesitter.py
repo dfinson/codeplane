@@ -700,7 +700,7 @@ class TreeSitterParser:
                 if args.type == "arguments":
                     for sub in args.children:
                         if sub.type == "alias" and sub.text:
-                            return sub.text.decode("utf-8")
+                            return str(sub.text.decode("utf-8"))
                 return None
             for child in node.children:
                 result = _find_defmodule(child)
@@ -716,7 +716,7 @@ class TreeSitterParser:
             if child.type == "module_definition":
                 for sub in child.children:
                     if sub.type == "identifier" and sub.text:
-                        return sub.text.decode("utf-8")
+                        return str(sub.text.decode("utf-8"))
         return None
 
     def _declared_module_ruby(self, root: Any) -> str | None:

@@ -870,13 +870,13 @@ class MixTestPack(RunnerPack):
                     if part.endswith("tests"):
                         try:
                             total = int(part.split()[0])
-                            suite.tests = total
+                            suite.total = total
                         except (ValueError, IndexError):
                             pass
                     elif "failure" in part:
                         try:
                             failures = int(part.split()[0])
-                            suite.failures = failures
+                            suite.failed = failures
                         except (ValueError, IndexError):
                             pass
         return suite
@@ -948,11 +948,11 @@ class CabalTestPack(RunnerPack):
         suite = ParsedTestSuite(name="cabal_test")
         for line in stdout.splitlines():
             if "test suites passed" in line.lower() or "tests passed" in line.lower():
-                suite.tests = 1
-                suite.failures = 0
+                suite.total = 1
+                suite.failed = 0
             elif "test suites failed" in line.lower() or "tests failed" in line.lower():
-                suite.tests = 1
-                suite.failures = 1
+                suite.total = 1
+                suite.failed = 1
         return suite
 
 
@@ -1017,11 +1017,11 @@ class JuliaPkgTestPack(RunnerPack):
         suite = ParsedTestSuite(name="pkg_test")
         for line in stdout.splitlines():
             if "testing" in line.lower() and "passed" in line.lower():
-                suite.tests = 1
-                suite.failures = 0
+                suite.total = 1
+                suite.failed = 0
             elif "test summary" in line.lower() and "fail" in line.lower():
-                suite.tests = 1
-                suite.failures = 1
+                suite.total = 1
+                suite.failed = 1
         return suite
 
 
@@ -1096,6 +1096,6 @@ class DuneTestPack(RunnerPack):
         pass_count = stdout.lower().count("pass")
         fail_count = stdout.lower().count("fail")
         if pass_count > 0 or fail_count > 0:
-            suite.tests = pass_count + fail_count
-            suite.failures = fail_count
+            suite.total = pass_count + fail_count
+            suite.failed = fail_count
         return suite
