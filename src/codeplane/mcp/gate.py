@@ -639,6 +639,103 @@ def _check_full_file_creep(window: deque[CallRecord]) -> PatternMatch | None:
     )
 
 
+_BYPASS_WORKFLOW: dict[str, str] = {
+    "for_editing": "Use write_source with span edits — NOT sed, awk, echo, or tee",
+    "for_searching": "Use search(mode='lexical') — NOT grep, rg, or ag",
+    "for_reading": "Use read_source with multiple targets — NOT cat, head, or tail",
+    "for_git": "Use git_stage_and_commit, git_status, etc. — NOT raw git commands",
+}
+
+
+def _check_terminal_bypass_commit(window: deque[CallRecord]) -> PatternMatch | None:
+    """Detect git commit with no prior MCP writes in the window.
+
+    If the agent is committing changes but never used write_source or
+    refactor_apply, it likely edited files via terminal (sed/awk/echo).
+    """
+    git_commits = [
+        r
+        for r in window
+        if r.tool_name
+        in (
+            "git_stage_and_commit",
+            "git_stage",
+            "git_commit",
+        )
+    ]
+    if not git_commits:
+        return None
+
+    write_ops = [r for r in window if r.category in ("write", "refactor")]
+    if write_ops:
+        return None  # Agent used MCP to edit — no bypass detected
+
+    return PatternMatch(
+        pattern_name="terminal_bypass_commit",
+        severity="warn",
+        cause="tool_bypass",
+        message=(
+            "You are committing changes but made no edits through CodePlane tools. "
+            "All file modifications MUST go through write_source or refactor_* tools. "
+            "Terminal commands (sed, awk, echo >>) are FORBIDDEN for editing."
+        ),
+        reason_prompt=(
+            "Explain why you edited files outside of CodePlane MCP tools. "
+            "If you used sed, awk, echo, or any terminal command to modify files, "
+            "revert those changes and redo them through write_source."
+        ),
+        suggested_workflow=_BYPASS_WORKFLOW,
+    )
+
+
+def _check_phantom_read(window: deque[CallRecord]) -> PatternMatch | None:
+    """Detect search followed by write with no read in between.
+
+    If the agent searched for code then jumped straight to editing without
+    reading via read_source/read_file_full, it likely used cat/head/grep
+    in the terminal to read the actual source content.
+    """
+    # Find the most recent write_source/refactor_apply
+    last_write_idx = None
+    for i in range(len(window) - 1, -1, -1):
+        if window[i].category in ("write", "refactor"):
+            last_write_idx = i
+            break
+
+    if last_write_idx is None:
+        return None
+
+    # Look for any search before this write
+    has_search_before = any(window[i].category == "search" for i in range(last_write_idx))
+    if not has_search_before:
+        return None  # No search → write sequence to flag
+
+    # Check for reads between the first search and the write
+    has_read_between = any(
+        window[i].category in ("read", "read_full") for i in range(last_write_idx)
+    )
+    if has_read_between:
+        return None  # Agent properly read via MCP before writing
+
+    return PatternMatch(
+        pattern_name="phantom_read",
+        severity="warn",
+        cause="tool_bypass",
+        message=(
+            "You searched for code then wrote edits without reading through "
+            "read_source first. search never returns source text — you need "
+            "read_source to get file content, expected_content, and file_sha256. "
+            "If you read files via cat/head/grep, that is FORBIDDEN."
+        ),
+        reason_prompt=(
+            "How did you obtain the source content for your edit? "
+            "read_source was never called between your search and write. "
+            "Use read_source to get expected_content and file_sha256 before editing."
+        ),
+        suggested_workflow=_BYPASS_WORKFLOW,
+    )
+
+
 # Pattern checks in severity order (break before warn)
 _PATTERN_CHECKS = [
     _check_pure_search_chain,  # break
@@ -647,6 +744,8 @@ _PATTERN_CHECKS = [
     _check_search_read_loop,  # warn
     _check_zero_result_searches,  # warn
     _check_full_file_creep,  # warn
+    _check_terminal_bypass_commit,  # warn
+    _check_phantom_read,  # warn
 ]
 
 
