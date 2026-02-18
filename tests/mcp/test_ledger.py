@@ -28,7 +28,7 @@ class TestOperationRecord:
         record = OperationRecord(
             op_id="abc123",
             timestamp=1234567890.0,
-            tool="write_files",
+            tool="write_source",
             success=True,
             path="test.py",
             action="update",
@@ -45,7 +45,7 @@ class TestOperationRecord:
         record = OperationRecord(
             op_id="def456",
             timestamp=1234567890.0,
-            tool="write_files",
+            tool="write_source",
             success=False,
             error_code="FILE_NOT_FOUND",
             error_message="File does not exist",
@@ -154,13 +154,13 @@ class TestOperationLedgerLogOperation:
         """Log a successful operation."""
         ledger = OperationLedger()
         record = ledger.log_operation(
-            "write_files",
+            "write_source",
             success=True,
             path="test.py",
             action="update",
         )
 
-        assert record.tool == "write_files"
+        assert record.tool == "write_source"
         assert record.success is True
         assert record.path == "test.py"
         assert len(record.op_id) == 12
@@ -169,7 +169,7 @@ class TestOperationLedgerLogOperation:
         """Log a failed operation."""
         ledger = OperationLedger()
         record = ledger.log_operation(
-            "write_files",
+            "write_source",
             success=False,
             error_code="CONTENT_NOT_FOUND",
             error_message="Content not found in file",
@@ -182,7 +182,7 @@ class TestOperationLedgerLogOperation:
         """Log operation with insertions/deletions creates diff summary."""
         ledger = OperationLedger()
         record = ledger.log_operation(
-            "write_files",
+            "write_source",
             success=True,
             insertions=10,
             deletions=5,
@@ -194,7 +194,7 @@ class TestOperationLedgerLogOperation:
         """Log operation with before/after hashes."""
         ledger = OperationLedger()
         record = ledger.log_operation(
-            "write_files",
+            "write_source",
             success=True,
             before_hash="before123",
             after_hash="after456",
@@ -207,7 +207,7 @@ class TestOperationLedgerLogOperation:
         """Log operation with session and dry run linkage."""
         ledger = OperationLedger()
         record = ledger.log_operation(
-            "write_files",
+            "write_source",
             success=True,
             session_id="sess_001",
             dry_run_id="dry_001",

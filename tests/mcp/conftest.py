@@ -125,7 +125,7 @@ def mock_file_ops() -> MagicMock:
 def mock_mutation_ops() -> MagicMock:
     """Create a mock MutationOps."""
     mock = MagicMock()
-    mock.write_files.return_value = MagicMock(
+    mock.write_source.return_value = MagicMock(
         applied=True,
         dry_run=False,
         delta=MagicMock(

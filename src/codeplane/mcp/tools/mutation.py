@@ -1,4 +1,4 @@
-"""Mutation MCP tools - write_files handler."""
+"""Mutation MCP tools - write_source handler."""
 
 import hashlib
 from pathlib import Path
@@ -149,7 +149,7 @@ def _lines_match(actual: list[str], expected: list[str]) -> bool:
 
 
 def _summarize_write(delta_files: list[dict[str, Any]], dry_run: bool) -> str:
-    """Generate summary for write_files."""
+    """Generate summary for write_source."""
     from codeplane.core.formatting import compress_path, format_path_list
 
     prefix = "(dry-run) " if dry_run else ""
@@ -182,7 +182,7 @@ def _summarize_write(delta_files: list[dict[str, Any]], dry_run: bool) -> str:
 
 
 def _display_write(files: list[dict[str, Any]], dry_run: bool) -> str:
-    """Human-friendly message for write_files action."""
+    """Human-friendly message for write_source action."""
     if not files:
         return "No changes applied." if not dry_run else "Dry run: no changes would be applied."
 
@@ -211,7 +211,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     """Register mutation tools with FastMCP server."""
 
     @mcp.tool
-    async def write_files(
+    async def write_source(
         ctx: Context,
         edits: list[EditParam] = Field(..., description="List of file edits to apply atomically"),
         dry_run: bool = Field(False, description="Preview changes without applying"),
@@ -387,7 +387,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 file_results.append(result_entry)
 
                 ledger.log_operation(
-                    tool="write_files",
+                    tool="write_source",
                     success=True,
                     path=path,
                     action="updated",
@@ -420,7 +420,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 )
 
             try:
-                result = app_ctx.mutation_ops.write_files(edit_list, dry_run=dry_run)
+                result = app_ctx.mutation_ops.write_source(edit_list, dry_run=dry_run)
                 for file_delta in result.delta.files:
                     entry = {
                         "path": file_delta.path,
@@ -432,7 +432,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     }
                     file_results.append(entry)
                     ledger.log_operation(
-                        tool="write_files",
+                        tool="write_source",
                         success=True,
                         path=file_delta.path,
                         action=file_delta.action,
@@ -444,7 +444,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     )
             except FileNotFoundError as exc:
                 ledger.log_operation(
-                    tool="write_files",
+                    tool="write_source",
                     success=False,
                     error_code=MCPErrorCode.FILE_NOT_FOUND.value,
                     error_message=str(exc),
@@ -457,7 +457,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 ) from exc
             except FileExistsError as exc:
                 ledger.log_operation(
-                    tool="write_files",
+                    tool="write_source",
                     success=False,
                     error_code=MCPErrorCode.FILE_EXISTS.value,
                     error_message=str(exc),

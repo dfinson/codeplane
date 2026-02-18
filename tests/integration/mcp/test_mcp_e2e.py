@@ -189,10 +189,10 @@ class TestMCPMutationIntegration:
     """Integration tests for MCP mutation operations."""
 
     def test_atomic_edit_creates_file(self, integration_repo: Path) -> None:
-        """MCP write_files creates new files."""
+        """MCP write_source creates new files."""
         mutation_ops = MutationOps(integration_repo)
 
-        result = mutation_ops.write_files(
+        result = mutation_ops.write_source(
             edits=[
                 Edit(
                     path="src/new_module.py",
@@ -207,10 +207,10 @@ class TestMCPMutationIntegration:
         assert "def new_func" in (integration_repo / "src" / "new_module.py").read_text()
 
     def test_atomic_edit_updates_file(self, integration_repo: Path) -> None:
-        """MCP write_files updates existing files."""
+        """MCP write_source updates existing files."""
         mutation_ops = MutationOps(integration_repo)
 
-        result = mutation_ops.write_files(
+        result = mutation_ops.write_source(
             edits=[
                 Edit(
                     path="src/main.py",
@@ -225,12 +225,12 @@ class TestMCPMutationIntegration:
         assert 'greeting: str = "Hello"' in updated
 
     def test_atomic_edit_dry_run(self, integration_repo: Path) -> None:
-        """MCP write_files dry_run doesn't modify files."""
+        """MCP write_source dry_run doesn't modify files."""
         mutation_ops = MutationOps(integration_repo)
 
         original = (integration_repo / "src" / "main.py").read_text()
 
-        result = mutation_ops.write_files(
+        result = mutation_ops.write_source(
             edits=[
                 Edit(
                     path="src/main.py",
@@ -248,7 +248,7 @@ class TestMCPMutationIntegration:
         assert result.dry_run
 
     def test_atomic_edit_delete(self, integration_repo: Path) -> None:
-        """MCP write_files can delete files."""
+        """MCP write_source can delete files."""
         # First create a file to delete
         to_delete = integration_repo / "src" / "to_delete.py"
         to_delete.write_text("# Delete me\n")
@@ -256,7 +256,7 @@ class TestMCPMutationIntegration:
 
         mutation_ops = MutationOps(integration_repo)
 
-        result = mutation_ops.write_files(
+        result = mutation_ops.write_source(
             edits=[
                 Edit(
                     path="src/to_delete.py",

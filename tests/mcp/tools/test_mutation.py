@@ -1,4 +1,4 @@
-"""Tests for MCP mutation tools (write_files).
+"""Tests for MCP mutation tools (write_source).
 
 Verifies EditParam model and summary helpers.
 """

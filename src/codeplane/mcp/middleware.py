@@ -428,7 +428,7 @@ class ToolMiddleware(Middleware):
         # Tool-specific summaries
         if tool_name == "search" and "results" in result:
             summary["matches"] = len(result.get("results", []))
-        elif tool_name == "write_files" and "delta" in result:
+        elif tool_name == "write_source" and "delta" in result:
             delta = result["delta"]
             summary["files_changed"] = delta.get("files_changed", 0)
         elif tool_name in ("run_test_targets", "get_test_run_status") and "run_status" in result:
@@ -477,7 +477,7 @@ class ToolMiddleware(Middleware):
             results = data.get("results", [])
             return f"{len(results)} results"
 
-        if tool_name == "write_files":
+        if tool_name == "write_source":
             delta = data.get("delta", {})
             files_changed = delta.get("files_changed", 0)
             return f"{files_changed} files updated"

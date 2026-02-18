@@ -1,4 +1,4 @@
-"""Tests for mutation operations - write_files tool.
+"""Tests for mutation operations - write_source tool.
 
 Covers:
 - Create/update/delete operations
@@ -182,7 +182,7 @@ class TestMutationOpsCreate:
         """Create a new file."""
         ops = MutationOps(tmp_path)
         content = "print('hello')\n"
-        result = ops.write_files([Edit(path="new.py", action="create", content=content)])
+        result = ops.write_source([Edit(path="new.py", action="create", content=content)])
 
         assert result.applied is True
         assert result.dry_run is False
@@ -192,7 +192,7 @@ class TestMutationOpsCreate:
     def test_create_file_in_nested_directory(self, tmp_path: Path) -> None:
         """Create file creates parent directories."""
         ops = MutationOps(tmp_path)
-        result = ops.write_files([Edit(path="a/b/c/deep.py", action="create", content="# deep")])
+        result = ops.write_source([Edit(path="a/b/c/deep.py", action="create", content="# deep")])
 
         assert result.applied is True
         assert (tmp_path / "a/b/c/deep.py").exists()
@@ -203,14 +203,14 @@ class TestMutationOpsCreate:
         ops = MutationOps(tmp_path)
 
         with pytest.raises(FileExistsError) as exc_info:
-            ops.write_files([Edit(path="existing.py", action="create", content="new")])
+            ops.write_source([Edit(path="existing.py", action="create", content="new")])
 
         assert "existing.py" in str(exc_info.value)
 
     def test_create_empty_file(self, tmp_path: Path) -> None:
         """Create with empty content."""
         ops = MutationOps(tmp_path)
-        result = ops.write_files([Edit(path="empty.py", action="create")])
+        result = ops.write_source([Edit(path="empty.py", action="create")])
 
         assert (tmp_path / "empty.py").read_text() == ""
         assert result.delta.files[0].insertions == 1  # Empty file = 1 line
@@ -219,7 +219,7 @@ class TestMutationOpsCreate:
         """Create produces correct delta."""
         ops = MutationOps(tmp_path)
         content = "line1\nline2\nline3"
-        result = ops.write_files([Edit(path="test.py", action="create", content=content)])
+        result = ops.write_source([Edit(path="test.py", action="create", content=content)])
 
         delta = result.delta.files[0]
         assert delta.path == "test.py"
@@ -239,7 +239,7 @@ class TestMutationOpsDelete:
         test_file.write_text("# will be deleted")
 
         ops = MutationOps(tmp_path)
-        result = ops.write_files([Edit(path="to_delete.py", action="delete")])
+        result = ops.write_source([Edit(path="to_delete.py", action="delete")])
 
         assert result.applied is True
         assert not test_file.exists()
@@ -249,7 +249,7 @@ class TestMutationOpsDelete:
         ops = MutationOps(tmp_path)
 
         with pytest.raises(FileNotFoundError) as exc_info:
-            ops.write_files([Edit(path="ghost.py", action="delete")])
+            ops.write_source([Edit(path="ghost.py", action="delete")])
 
         assert "ghost.py" in str(exc_info.value)
 
@@ -259,7 +259,7 @@ class TestMutationOpsDelete:
         test_file.write_text("line1\nline2\nline3\nline4")
 
         ops = MutationOps(tmp_path)
-        result = ops.write_files([Edit(path="del.py", action="delete")])
+        result = ops.write_source([Edit(path="del.py", action="delete")])
 
         delta = result.delta.files[0]
         assert delta.action == "deleted"
@@ -278,7 +278,7 @@ class TestMutationOpsUpdateFullContent:
         test_file.write_text("old content")
 
         ops = MutationOps(tmp_path)
-        result = ops.write_files([Edit(path="test.py", action="update", content="new content")])
+        result = ops.write_source([Edit(path="test.py", action="update", content="new content")])
 
         assert test_file.read_text() == "new content"
         assert result.applied is True
@@ -288,7 +288,7 @@ class TestMutationOpsUpdateFullContent:
         ops = MutationOps(tmp_path)
 
         with pytest.raises(FileNotFoundError) as exc_info:
-            ops.write_files([Edit(path="missing.py", action="update", content="x")])
+            ops.write_source([Edit(path="missing.py", action="update", content="x")])
 
         assert "missing.py" in str(exc_info.value)
 
@@ -298,7 +298,7 @@ class TestMutationOpsUpdateFullContent:
         test_file.write_text("a\nb")
 
         ops = MutationOps(tmp_path)
-        result = ops.write_files([Edit(path="test.py", action="update", content="x\ny\nz")])
+        result = ops.write_source([Edit(path="test.py", action="update", content="x\ny\nz")])
 
         delta = result.delta.files[0]
         assert delta.action == "updated"
@@ -315,7 +315,7 @@ class TestMutationOpsDryRun:
     def test_dry_run_does_not_create(self, tmp_path: Path) -> None:
         """Dry run doesn't create file."""
         ops = MutationOps(tmp_path)
-        result = ops.write_files(
+        result = ops.write_source(
             [Edit(path="new.py", action="create", content="x")],
             dry_run=True,
         )
@@ -330,7 +330,7 @@ class TestMutationOpsDryRun:
         test_file.write_text("keep me")
 
         ops = MutationOps(tmp_path)
-        result = ops.write_files(
+        result = ops.write_source(
             [Edit(path="keep.py", action="delete")],
             dry_run=True,
         )
@@ -344,7 +344,7 @@ class TestMutationOpsDryRun:
         test_file.write_text("original")
 
         ops = MutationOps(tmp_path)
-        ops.write_files(
+        ops.write_source(
             [Edit(path="test.py", action="update", content="modified")],
             dry_run=True,
         )
@@ -354,7 +354,7 @@ class TestMutationOpsDryRun:
     def test_dry_run_returns_delta(self, tmp_path: Path) -> None:
         """Dry run still computes delta."""
         ops = MutationOps(tmp_path)
-        result = ops.write_files(
+        result = ops.write_source(
             [Edit(path="new.py", action="create", content="a\nb\nc")],
             dry_run=True,
         )
@@ -371,7 +371,7 @@ class TestMutationOpsCallback:
         callback = MagicMock()
         ops = MutationOps(tmp_path, on_mutation=callback)
 
-        ops.write_files([Edit(path="new.py", action="create", content="x")])
+        ops.write_source([Edit(path="new.py", action="create", content="x")])
 
         callback.assert_called_once()
         paths = callback.call_args[0][0]
@@ -383,7 +383,7 @@ class TestMutationOpsCallback:
         callback = MagicMock()
         ops = MutationOps(tmp_path, on_mutation=callback)
 
-        ops.write_files(
+        ops.write_source(
             [Edit(path="new.py", action="create", content="x")],
             dry_run=True,
         )
@@ -397,7 +397,7 @@ class TestMutationOpsCallback:
 
         (tmp_path / "existing.py").write_text("x")
 
-        ops.write_files(
+        ops.write_source(
             [
                 Edit(path="a.py", action="create", content="a"),
                 Edit(path="b.py", action="create", content="b"),
@@ -412,7 +412,7 @@ class TestMutationOpsCallback:
     def test_no_callback_if_not_set(self, tmp_path: Path) -> None:
         """Works without callback."""
         ops = MutationOps(tmp_path)  # No callback
-        result = ops.write_files([Edit(path="test.py", action="create", content="x")])
+        result = ops.write_source([Edit(path="test.py", action="create", content="x")])
         assert result.applied is True
 
 
@@ -422,7 +422,7 @@ class TestMutationOpsMultipleEdits:
     def test_multiple_creates(self, tmp_path: Path) -> None:
         """Multiple create operations."""
         ops = MutationOps(tmp_path)
-        result = ops.write_files(
+        result = ops.write_source(
             [
                 Edit(path="a.py", action="create", content="# a"),
                 Edit(path="b.py", action="create", content="# b"),
@@ -441,7 +441,7 @@ class TestMutationOpsMultipleEdits:
         (tmp_path / "delete_me.py").write_text("bye")
 
         ops = MutationOps(tmp_path)
-        result = ops.write_files(
+        result = ops.write_source(
             [
                 Edit(path="new.py", action="create", content="created"),
                 Edit(path="update_me.py", action="update", content="updated"),
@@ -461,7 +461,7 @@ class TestMutationOpsMultipleEdits:
         ops = MutationOps(tmp_path)
 
         with pytest.raises(FileNotFoundError):
-            ops.write_files(
+            ops.write_source(
                 [
                     Edit(path="good.py", action="update", content="y"),
                     Edit(path="missing.py", action="update", content="z"),  # Should fail
@@ -477,7 +477,7 @@ class TestMutationOpsMultipleEdits:
         (tmp_path / "b.py").write_text("x")  # 1 line
 
         ops = MutationOps(tmp_path)
-        result = ops.write_files(
+        result = ops.write_source(
             [
                 Edit(path="new.py", action="create", content="a\nb\nc\nd\ne"),  # +5 lines
                 Edit(path="a.py", action="delete"),  # -3 lines
@@ -496,14 +496,14 @@ class TestMutationOpsMutationId:
     def test_mutation_id_is_8_chars(self, tmp_path: Path) -> None:
         """Mutation ID is 8 character UUID prefix."""
         ops = MutationOps(tmp_path)
-        result = ops.write_files([Edit(path="test.py", action="create", content="x")])
+        result = ops.write_source([Edit(path="test.py", action="create", content="x")])
         assert len(result.delta.mutation_id) == 8
 
     def test_mutation_ids_are_unique(self, tmp_path: Path) -> None:
         """Each mutation gets unique ID."""
         ops = MutationOps(tmp_path)
 
-        result1 = ops.write_files([Edit(path="a.py", action="create", content="a")])
-        result2 = ops.write_files([Edit(path="b.py", action="create", content="b")])
+        result1 = ops.write_source([Edit(path="a.py", action="create", content="a")])
+        result2 = ops.write_source([Edit(path="b.py", action="create", content="b")])
 
         assert result1.delta.mutation_id != result2.delta.mutation_id

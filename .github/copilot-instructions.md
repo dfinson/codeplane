@@ -117,7 +117,7 @@ and safe refactoring that terminal commands cannot provide.
 Search = find. Read = retrieve. Full = gated.
 
 `read_source` accepts multiple `targets` in one call — batch reads of independent spans.
-Response includes `file_sha256` per file — save it for `write_files` span edits.
+Response includes `file_sha256` per file — save it for `write_source` span edits.
 
 ### First Steps When Starting a Task
 
@@ -164,10 +164,10 @@ Search NEVER returns source text. Use `read_source` with spans from search resul
 
 ### Span-Based Edits
 
-`write_files` supports span edits: provide `start_line`, `end_line`, `expected_file_sha256`
+`write_source` supports span edits: provide `start_line`, `end_line`, `expected_file_sha256`
 (from `read_source`), and `new_content`. Server validates hash; mismatch → re-read.
 `edits` accepts multiple entries across different files — always batch independent edits
-into a single `write_files` call to minimize round-trips.
+into a single `write_source` call to minimize round-trips.
 For updates, you may also include `expected_content` — the server will fuzzy-match nearby
 lines if your line numbers are slightly off, auto-correcting within a few lines.
 
@@ -184,7 +184,7 @@ Also check for: `coverage_hint`, `display_to_user`.
 - **DON'T** pass `context:` to search — the parameter is `enrichment`
 - **DON'T** use `read_files` — it's replaced by `read_source` and `read_file_full`
 - **DON'T** use `refactor_rename` with file:line:col — pass the symbol NAME only
-- **DON'T** skip `lint_check` after `write_files`
+- **DON'T** skip `lint_check` after `write_source`
 - **DON'T** ignore `agentic_hint` in responses
 - **DON'T** use `target_filter` for post-change testing — use `affected_by` on `run_test_targets`
 <!-- /codeplane-instructions -->

@@ -1,4 +1,4 @@
-"""Tests for span-based edit mode in write_files.
+"""Tests for span-based edit mode in write_source.
 
 Covers:
 - EditParam validation (required fields per action)

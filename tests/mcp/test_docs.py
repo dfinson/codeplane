@@ -147,7 +147,7 @@ class TestToolDocs:
 
     def test_contains_core_tools(self) -> None:
         """Contains documentation for core tools."""
-        expected = ["read_source", "write_files", "map_repo", "search"]
+        expected = ["read_source", "write_source", "map_repo", "search"]
         for tool in expected:
             assert tool in TOOL_DOCS, f"Missing doc for {tool}"
 

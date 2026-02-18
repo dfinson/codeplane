@@ -539,7 +539,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     ) -> dict[str, Any]:
         """Request a budget ceiling reset.
 
-        Read budgets become resettable after a mutation (write_files).
+        Read budgets become resettable after a mutation (write_source).
         Search budgets become resettable every 3 mutations.
         Pure-read workflows (no mutations) can request resets at ceiling
         with a longer justification (>= 250 chars).

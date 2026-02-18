@@ -1,7 +1,7 @@
-"""Mutation operations - write_files tool implementation.
+"""Mutation operations - write_source tool implementation.
 
 Atomic file edits with structured delta response.
-Per SPEC.md §23.7 write_files tool specification.
+Per SPEC.md §23.7 write_source tool specification.
 
 Triggers reindex after mutation via callback.
 """
@@ -55,7 +55,7 @@ class MutationDelta:
 
 @dataclass
 class MutationResult:
-    """Result of write_files operation."""
+    """Result of write_source operation."""
 
     applied: bool
     dry_run: bool
@@ -66,7 +66,7 @@ class MutationResult:
 
 
 class MutationOps:
-    """Mutation operations for the write_files tool.
+    """Mutation operations for the write_source tool.
 
     Handles atomic file edits with rollback support.
     Triggers reindex callback after successful mutation.
@@ -93,7 +93,7 @@ class MutationOps:
         if self._on_mutation:
             self._on_mutation(paths)
 
-    def write_files(
+    def write_source(
         self,
         edits: list[Edit],
         *,

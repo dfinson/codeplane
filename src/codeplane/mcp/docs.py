@@ -114,7 +114,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         hints_after=None,
         alternatives=["search"],
         commonly_preceded_by=["map_repo", "search"],
-        commonly_followed_by=["write_files"],
+        commonly_followed_by=["write_source"],
         behavior=BehaviorFlags(idempotent=True, has_side_effects=False, atomic=True),
         possible_errors=["FILE_NOT_FOUND", "ENCODING_ERROR", "INVALID_RANGE"],
         examples=[
@@ -131,8 +131,8 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             },
         ],
     ),
-    "write_files": ToolDocumentation(
-        name="write_files",
+    "write_source": ToolDocumentation(
+        name="write_source",
         description="Atomic file edits with structured delta response.",
         category=ToolCategory.MUTATION,
         when_to_use=[
@@ -218,7 +218,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         hints_after="Use context='function' or 'class' for edit-ready results. Use context='rich' for 20 lines. Only use read_source if you need more context than search provides.",
         alternatives=["map_repo (for structure overview)"],
         commonly_preceded_by=["map_repo"],
-        commonly_followed_by=["write_files", "read_source"],
+        commonly_followed_by=["write_source", "read_source"],
         behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
         possible_errors=[],
         examples=[
@@ -268,7 +268,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         hints_before="Prefer git_stage_and_commit for most workflows. Use git_commit only when you need granular staging control.",
         hints_after="Use git_push to share the commit.",
         alternatives=["git_stage_and_commit (preferred for most workflows)"],
-        commonly_preceded_by=["git_stage", "write_files"],
+        commonly_preceded_by=["git_stage", "write_source"],
         commonly_followed_by=["git_push"],
         behavior=BehaviorFlags(has_side_effects=True, atomic=True),
         possible_errors=["DIRTY_WORKING_TREE", "HOOK_FAILED", "HOOK_FAILED_AFTER_RETRY"],
@@ -289,7 +289,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         hints_before="Use git_status to verify which files will be staged.",
         hints_after="Use git_push to share the commit.",
         alternatives=["git_stage + git_commit (for granular staging control)"],
-        commonly_preceded_by=["write_files", "lint_check"],
+        commonly_preceded_by=["write_source", "lint_check"],
         commonly_followed_by=["git_push"],
         behavior=BehaviorFlags(has_side_effects=True, atomic=True),
         possible_errors=["HOOK_FAILED", "HOOK_FAILED_AFTER_RETRY"],
@@ -307,7 +307,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             "Standard commit workflow — prefer git_stage_and_commit",
         ],
         alternatives=["git_stage_and_commit (preferred for stage + commit workflow)"],
-        commonly_preceded_by=["write_files"],
+        commonly_preceded_by=["write_source"],
         commonly_followed_by=["git_commit"],
         behavior=BehaviorFlags(has_side_effects=True),
         possible_errors=["FILE_NOT_FOUND"],
@@ -779,7 +779,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             "Ensuring all references (imports, usages, comments) are updated",
         ],
         when_not_to_use=[
-            "Simple find/replace in one file - use write_files",
+            "Simple find/replace in one file - use write_source",
             "File renames - use refactor_move",
         ],
         hints_before="Ensure the codebase is indexed. For unique identifiers (MyClassName), low-certainty matches are usually safe. For common words (data, result), inspect before applying.",
@@ -833,7 +833,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         hints_before=None,
         hints_after="Review references in the preview before manual cleanup.",
         commonly_preceded_by=["search"],
-        commonly_followed_by=["write_files"],
+        commonly_followed_by=["write_source"],
         behavior=BehaviorFlags(has_side_effects=False),
         possible_errors=[],
         examples=[
@@ -856,7 +856,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             "For high-certainty matches (definitions proven by index)",
         ],
         hints_before="Run refactor_rename/move/delete first. Check low_certainty_files in response to know which files need inspection.",
-        hints_after="If matches look correct, use refactor_apply. If false positives found, use refactor_cancel and handle manually with write_files.",
+        hints_after="If matches look correct, use refactor_apply. If false positives found, use refactor_cancel and handle manually with write_source.",
         commonly_preceded_by=["refactor_rename", "refactor_move"],
         commonly_followed_by=["refactor_apply", "refactor_cancel"],
         behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
@@ -908,7 +908,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         ],
         when_not_to_use=[],
         hints_before=None,
-        hints_after="If false positives exist, use write_files to make changes manually.",
+        hints_after="If false positives exist, use write_source to make changes manually.",
         commonly_preceded_by=["refactor_inspect"],
         commonly_followed_by=[],
         behavior=BehaviorFlags(has_side_effects=True),
@@ -937,7 +937,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         ],
         hints_before=None,
         hints_after="Fix reported issues before committing.",
-        commonly_preceded_by=["write_files"],
+        commonly_preceded_by=["write_source"],
         commonly_followed_by=["run_test_targets", "git_commit"],
         behavior=BehaviorFlags(has_side_effects=True),
         possible_errors=[],
@@ -1113,7 +1113,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         examples=[
             {
                 "description": "Get tool documentation",
-                "params": {"action": "tool", "name": "write_files"},
+                "params": {"action": "tool", "name": "write_source"},
             },
             {
                 "description": "Understand an error code",
@@ -1159,7 +1159,7 @@ def get_common_workflows() -> list[dict[str, Any]]:
         {
             "name": "modification",
             "description": "Making code changes",
-            "tools": ["read_source", "write_files", "git_stage_and_commit"],
+            "tools": ["read_source", "write_source", "git_stage_and_commit"],
         },
         {
             "name": "refactoring",

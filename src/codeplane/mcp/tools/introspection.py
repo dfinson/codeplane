@@ -44,7 +44,7 @@ def _derive_features(tool_names: list[str]) -> list[str]:
             features.add("linting")
         elif name in ("search", "map_repo"):
             features.add("indexing")
-        elif name in ("read_source", "list_files", "write_files"):
+        elif name in ("read_source", "list_files", "write_source"):
             features.add("file_ops")
         elif name == "describe":
             features.add("introspection")
@@ -192,7 +192,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 {
                     "name": "fix_and_commit",
                     "description": "Edit files, lint, test, and commit",
-                    "steps": ["write_files", "lint", "test", "git_commit"],
+                    "steps": ["write_source", "lint", "test", "git_commit"],
                 },
             ]
             return {
@@ -228,6 +228,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             }
 
         return {"error": f"unknown action: {action}", "summary": "error: unknown action"}
+
 
     # Flatten schemas to remove $ref/$defs for Claude compatibility
     for tool in mcp._tool_manager._tools.values():

@@ -1,4 +1,4 @@
-"""Tests for MCP mutation tool (write_files).
+"""Tests for MCP mutation tool (write_source).
 
 Tests the actual exports:
 - EditParam model
