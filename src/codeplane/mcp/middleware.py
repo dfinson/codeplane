@@ -359,6 +359,22 @@ class ToolMiddleware(Middleware):
             except Exception:
                 pass
 
+        # 3. Evaluate patterns BEFORE recording (recording may clear the window)
+        #    Inject bypass hints into result for write/git calls that
+        #    won't pass through search/read handlers where evaluate() runs.
+        pattern_match = session.pattern_detector.evaluate()
+        if pattern_match and pattern_match.severity == "warn" and isinstance(result, dict):
+            if "agentic_hint" not in result:
+                result["agentic_hint"] = (
+                    f"PATTERN: {pattern_match.pattern_name} - {pattern_match.message}\n\n"
+                    f"{pattern_match.reason_prompt}"
+                )
+            result["detected_pattern"] = pattern_match.pattern_name
+            result["pattern_cause"] = pattern_match.cause
+            if pattern_match.suggested_workflow:
+                result["suggested_workflow"] = pattern_match.suggested_workflow
+
+        # 4. Record call in pattern detector (may clear window for action categories)
         session.pattern_detector.record(
             tool_name=short_name,
             files=files,
