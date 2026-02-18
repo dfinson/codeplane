@@ -217,6 +217,41 @@ def budget_reset_gate(has_mutations: bool) -> GateSpec:
     )
 
 
+BROAD_FILTER_TEST_GATE = GateSpec(
+    kind="broad_test_run",
+    reason_min_chars=50,
+    reason_prompt=(
+        "You ran scoped tests recently. Why do you also need a filtered broad run? "
+        "What specific test targets can't be reached via affected_by?"
+    ),
+    expires_calls=3,
+    message=(
+        "Broad test run via target_filter requires justification. "
+        "Prefer run_test_targets(affected_by=[...]) for impact-aware selection."
+    ),
+)
+
+FULL_SUITE_TEST_GATE = GateSpec(
+    kind="full_test_suite",
+    reason_min_chars=250,
+    reason_prompt=(
+        "Why were impacted tests insufficient? What specific failures or coverage gaps "
+        "require the full suite? List the symptoms that led you here and confirm "
+        "you understand this will run all tests in the repository."
+    ),
+    expires_calls=3,
+    message=(
+        "Full test suite run is extremely expensive. You must explain why "
+        "scoped testing (affected_by) was insufficient."
+    ),
+)
+
+
+def has_recent_scoped_test(window: deque[CallRecord]) -> bool:
+    """Check if a successful scoped test run exists in the window."""
+    return any(r.category == "test_scoped" for r in window)
+
+
 # =============================================================================
 # Call Pattern Detector
 # =============================================================================
@@ -322,9 +357,16 @@ class CallPatternDetector:
         tool_name: str,
         files: list[str] | None = None,
         hit_count: int = 0,
+        category_override: str | None = None,
     ) -> None:
-        """Record a tool call into the window."""
-        category = categorize_tool(tool_name)
+        """Record a tool call into the window.
+
+        Args:
+            category_override: Force a specific category instead of auto-detecting.
+                Used by test handler to record ``test_scoped`` which must persist
+                in the window as evidence for the broad-test prerequisite.
+        """
+        category = category_override or categorize_tool(tool_name)
         self._window.append(
             CallRecord(
                 category=category,
@@ -335,7 +377,8 @@ class CallPatternDetector:
             )
         )
         # Action calls clear the window (agent made progress)
-        if category in ACTION_CATEGORIES:
+        # test_scoped is exempt — it must persist as prerequisite evidence
+        if category in ACTION_CATEGORIES and category != "test_scoped":
             self._window.clear()
 
     def evaluate(self) -> PatternMatch | None:
