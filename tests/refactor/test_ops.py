@@ -403,6 +403,7 @@ class TestRefactorMoveImportVariants:
                 result.one_or_none.return_value = mock_consumer_file
                 result.all.return_value = []
             return result
+
         mock_session.exec.side_effect = mock_exec_side_effect
         mock_coordinator.db.session.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_coordinator.db.session.return_value.__exit__ = MagicMock(return_value=False)
