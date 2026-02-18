@@ -67,6 +67,27 @@ def _patch_fastmcp_docket() -> None:
         log.debug("fastmcp_docket_disabled")
 
 
+def _enrich_tool_descriptions(mcp: "FastMCP") -> None:
+    """Enrich tool descriptions with inline examples from TOOL_DOCS.
+
+    Called after all tools are registered. Modifies each tool's description
+    to include examples, making them visible in ListTools responses without
+    requiring a separate describe() call.
+    """
+    from codeplane.mcp.docs import build_tool_description
+
+    enriched_count = 0
+    for name, tool in mcp._tool_manager._tools.items():
+        original_desc = tool.description or ""
+        enriched_desc = build_tool_description(name, original_desc)
+        if enriched_desc != original_desc:
+            tool.description = enriched_desc
+            enriched_count += 1
+
+    if enriched_count > 0:
+        log.debug("tool_descriptions_enriched", count=enriched_count)
+
+
 def create_mcp_server(context: "AppContext") -> "FastMCP":
     """Create FastMCP server with all tools wired to context.
 
@@ -120,6 +141,9 @@ def create_mcp_server(context: "AppContext") -> "FastMCP":
     refactor.register_tools(mcp, context)
     testing.register_tools(mcp, context)
     introspection.register_tools(mcp, context)
+
+    # Enrich tool descriptions with inline examples from TOOL_DOCS
+    _enrich_tool_descriptions(mcp)
 
     tool_count = len(mcp._tool_manager._tools)
     log.info("mcp_server_created", tool_count=tool_count)

@@ -253,6 +253,12 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         when_not_to_use=[],
         behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
         possible_errors=[],
+        examples=[
+            {
+                "description": "Check repository status",
+                "params": {},
+            },
+        ],
     ),
     "git_commit": ToolDocumentation(
         name="git_commit",
@@ -273,6 +279,12 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         commonly_followed_by=["git_push"],
         behavior=BehaviorFlags(has_side_effects=True, atomic=True),
         possible_errors=["DIRTY_WORKING_TREE", "HOOK_FAILED", "HOOK_FAILED_AFTER_RETRY"],
+        examples=[
+            {
+                "description": "Commit staged changes",
+                "params": {"message": "feat: add new feature"},
+            },
+        ],
     ),
     "git_stage_and_commit": ToolDocumentation(
         name="git_stage_and_commit",
@@ -294,6 +306,16 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         commonly_followed_by=["git_push"],
         behavior=BehaviorFlags(has_side_effects=True, atomic=True),
         possible_errors=["HOOK_FAILED", "HOOK_FAILED_AFTER_RETRY"],
+        examples=[
+            {
+                "description": "Stage and commit specific files",
+                "params": {"paths": ["src/foo.py", "src/bar.py"], "message": "feat: add feature"},
+            },
+            {
+                "description": "Stage all modified files and commit",
+                "params": {"paths": ["."], "message": "chore: update files"},
+            },
+        ],
     ),
     "git_stage": ToolDocumentation(
         name="git_stage",
@@ -312,6 +334,20 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         commonly_followed_by=["git_commit"],
         behavior=BehaviorFlags(has_side_effects=True),
         possible_errors=["FILE_NOT_FOUND"],
+        examples=[
+            {
+                "description": "Stage specific files",
+                "params": {"add": ["src/foo.py", "src/bar.py"]},
+            },
+            {
+                "description": "Stage all changes",
+                "params": {"add": ["."]},
+            },
+            {
+                "description": "Unstage files",
+                "params": {"remove": ["src/foo.py"]},
+            },
+        ],
     ),
     # =========================================================================
     # Files Tools
@@ -1173,3 +1209,32 @@ def get_common_workflows() -> list[dict[str, Any]]:
             "tools": ["git_status", "git_diff", "git_log"],
         },
     ]
+
+
+def build_tool_description(tool_name: str, base_description: str) -> str:
+    """Build enriched tool description with inline examples.
+
+    Appends examples from TOOL_DOCS to the base description for inclusion
+    in the MCP ListTools response. This makes examples visible to agents
+    without requiring a separate describe() call.
+
+    Args:
+        tool_name: Name of the tool (key in TOOL_DOCS)
+        base_description: The tool's base docstring description
+
+    Returns:
+        Description with appended examples, or base_description if no examples.
+    """
+    import json
+
+    doc = TOOL_DOCS.get(tool_name)
+    if not doc or not doc.examples:
+        return base_description
+
+    lines = [base_description.rstrip(), "", "Examples:"]
+    for ex in doc.examples:
+        # Format: description → JSON params
+        params_str = json.dumps(ex["params"], separators=(", ", ": "))
+        lines.append(f"  {ex['description']}: {tool_name}({params_str})")
+
+    return "\n".join(lines)
