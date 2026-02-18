@@ -632,7 +632,15 @@ def build_envelope(
             envelope["inline_summary"] = inline_summary
     else:
         # Try cursor pagination first for supported kinds
-        paginated = _try_paginate(payload, resource_kind, inline_cap, inline_summary)
+        # Subtract post-overhead (scope_id/scope_usage added after pagination)
+        post_overhead = 0
+        if scope_id:
+            post_overhead += len(json.dumps({"scope_id": scope_id}, indent=2).encode("utf-8"))
+        if scope_usage:
+            post_overhead += len(json.dumps({"scope_usage": scope_usage}, indent=2).encode("utf-8"))
+        paginated = _try_paginate(
+            payload, resource_kind, inline_cap - post_overhead, inline_summary
+        )
         if paginated is not None:
             if scope_id:
                 paginated["scope_id"] = scope_id
@@ -705,7 +713,13 @@ def wrap_existing_response(
             result["inline_summary"] = inline_summary
     else:
         # Try cursor pagination first for supported kinds
-        paginated = _try_paginate(result, resource_kind, inline_cap, inline_summary)
+        # Subtract post-overhead (scope_id/scope_usage added after pagination)
+        post_overhead = 0
+        if scope_id:
+            post_overhead += len(json.dumps({"scope_id": scope_id}, indent=2).encode("utf-8"))
+        if scope_usage:
+            post_overhead += len(json.dumps({"scope_usage": scope_usage}, indent=2).encode("utf-8"))
+        paginated = _try_paginate(result, resource_kind, inline_cap - post_overhead, inline_summary)
         if paginated is not None:
             if scope_id:
                 paginated["scope_id"] = scope_id
