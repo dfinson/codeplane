@@ -413,7 +413,16 @@ class TestRefactorMoveImportVariants:
         assert result.status == "previewed"
         assert result.preview is not None
         # The fix should result in finding the import and creating edits
-        # (or at least files_affected > 0 if imports were found)
+        assert result.preview.files_affected > 0, "Expected to find files with imports"
+        assert len(result.preview.edits) > 0, "Expected to generate edit hunks"
+        # Verify the edit has the correct old/new values
+        found_edit = False
+        for file_edit in result.preview.edits:
+            for hunk in file_edit.hunks:
+                if "mypackage.target" in hunk.old and "mypackage.new_target" in hunk.new:
+                    found_edit = True
+                    break
+        assert found_edit, "Expected edit to replace mypackage.target with mypackage.new_target"
 
     async def test_move_matches_all_python_variants(
         self, temp_repo: Path, mock_coordinator: MagicMock
@@ -482,6 +491,27 @@ class TestRefactorMoveImportVariants:
         mock_coordinator.db.session.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_coordinator.db.session.return_value.__exit__ = MagicMock(return_value=False)
 
+        # Create the Go file that imports the module
+        pkg_dir = temp_repo / "pkg"
+        pkg_dir.mkdir(parents=True, exist_ok=True)
+        (pkg_dir / "main.go").write_text(
+            'package main\n\nimport "github.com/org/repo/pkg/server"\n'
+        )
+        (pkg_dir / "server").mkdir(exist_ok=True)
+        (pkg_dir / "server" / "handler.go").write_text("package server\n")
+
         result = await ops.move("pkg/server/handler.go", "pkg/api/handler.go")
 
         assert result.status == "previewed"
+        assert result.preview is not None
+        # Verify edits were found for the Go import
+        assert result.preview.files_affected > 0, "Expected Go import to be found"
+        # Verify the declared_module-based replacement
+        found_go_edit = False
+        for file_edit in result.preview.edits:
+            for hunk in file_edit.hunks:
+                # Should replace pkg/server with pkg/api in the module path
+                if "pkg/server" in hunk.old and "pkg/api" in hunk.new:
+                    found_go_edit = True
+                    break
+        assert found_go_edit, "Expected edit for Go module path"

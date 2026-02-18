@@ -618,11 +618,13 @@ class RefactorOps:
         Returns:
             RefactorResult with preview. Call apply() to execute.
         """
-        from sqlmodel import or_, select
+        from sqlmodel import select
 
         from codeplane.index._internal.indexing.module_mapping import (
             file_to_import_candidates,
             file_to_import_sql_patterns,
+            get_module_separator,
+            infer_target_declared_module,
         )
         from codeplane.index.models import File, ImportFact
 
@@ -645,12 +647,12 @@ class RefactorOps:
 
         # Generate import candidates for both source and target paths
         from_candidates = file_to_import_candidates(from_path, language_family, declared_module)
-        to_candidates = file_to_import_candidates(
-            to_path,
-            language_family,
-            None,  # declared_module would be different for target
-        )
 
+        # For declaration-based languages, infer the target declared_module
+        to_declared_module = infer_target_declared_module(
+            from_path, to_path, declared_module, language_family
+        )
+        to_candidates = file_to_import_candidates(to_path, language_family, to_declared_module)
         # Build mapping from old import string to new import string
         # The first candidate is the "canonical" form
         to_canonical = to_candidates[0] if to_candidates else self._path_to_module(to_path)
@@ -676,12 +678,12 @@ class RefactorOps:
         )
 
         # Also match bare name for Python "import foo" style
+        sep = get_module_separator(language_family)
         bare_names: list[str] = []
         for candidate in from_candidates:
-            bare = candidate.split(".")[-1] if "." in candidate else candidate
+            bare = candidate.rsplit(sep, 1)[-1] if sep in candidate else candidate
             if bare and bare not in bare_names:
                 bare_names.append(bare)
-
         with self._coordinator.db.session() as session:
             from sqlmodel import col, or_, select
 
@@ -728,7 +730,7 @@ class RefactorOps:
                         else:
                             # Check prefix match (submodule import)
                             for from_c, to_c in replacement_map.items():
-                                if imp.source_literal.startswith(from_c + "."):
+                                if imp.source_literal.startswith(from_c + sep):
                                     old_value = imp.source_literal
                                     new_value = imp.source_literal.replace(from_c, to_c, 1)
                                     break
@@ -741,7 +743,9 @@ class RefactorOps:
                         elif imp.imported_name in bare_names:
                             # Bare import like "import helper"
                             to_bare = (
-                                to_canonical.split(".")[-1] if "." in to_canonical else to_canonical
+                                to_canonical.rsplit(sep, 1)[-1]
+                                if sep in to_canonical
+                                else to_canonical
                             )
                             old_value = imp.imported_name
                             new_value = to_bare
@@ -776,7 +780,13 @@ class RefactorOps:
 
         # Lexical fallback: search for module path strings in all files
         await self._add_move_lexical_fallback(
-            from_candidates, to_canonical, from_path, to_path, seen_locations, edits_by_file
+            from_candidates,
+            to_canonical,
+            replacement_map,
+            from_path,
+            to_path,
+            seen_locations,
+            edits_by_file,
         )
 
         # Scan comments if requested
@@ -785,12 +795,11 @@ class RefactorOps:
             # Check for path mentions in comments
             patterns_to_search = [(from_path, to_path)]
             for fc in from_candidates:
-                patterns_to_search.append((fc, to_canonical))
+                patterns_to_search.append((fc, replacement_map.get(fc, to_canonical)))
             for pattern, replacement in patterns_to_search:
                 await self._add_comment_occurrences(
                     pattern, replacement, affected_files, edits_by_file
                 )
-
         # Build preview
         preview = self._build_preview(edits_by_file)
         self._pending[refactor_id] = preview
@@ -805,6 +814,7 @@ class RefactorOps:
         self,
         from_candidates: list[str],
         to_canonical: str,
+        replacement_map: dict[str, str],
         from_path: str,
         to_path: str,
         seen_locations: set[tuple[str, int]],
@@ -818,8 +828,8 @@ class RefactorOps:
         # Build search patterns: all from_candidates + file paths
         search_pairs: list[tuple[str, str]] = [(from_path, to_path)]
         for fc in from_candidates:
-            search_pairs.append((fc, to_canonical))
-
+            # Use replacement_map to preserve prefix structure (e.g. src. prefix)
+            search_pairs.append((fc, replacement_map.get(fc, to_canonical)))
         for old_val, new_val in search_pairs:
             # Search for the value (index will find files containing it)
             search_response = await self._coordinator.search(f'"{old_val}"', limit=200)
@@ -952,7 +962,7 @@ class RefactorOps:
 
         Supports all languages via language-aware import variant generation.
         """
-        from sqlmodel import or_, select
+        from sqlmodel import select
 
         from codeplane.index._internal.indexing.module_mapping import (
             file_to_import_candidates,

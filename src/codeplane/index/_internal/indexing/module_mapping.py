@@ -63,6 +63,23 @@ _KNOWN_SOURCE_EXTENSIONS: frozenset[str] = frozenset(
 )
 
 
+def get_module_separator(language_family: str | None) -> str:
+    """Return the module path separator for a language family.
+
+    Args:
+        language_family: Language family name (e.g. "python", "go", "rust")
+
+    Returns:
+        Separator string: "." for Python/Java/etc, "/" for Go/JS/TS, "::" for Rust
+    """
+    if language_family == "rust":
+        return "::"
+    if language_family in ("go", "javascript", "typescript"):
+        return "/"
+    # Python, Java, Kotlin, Scala, C#, Lua, and default
+    return "."
+
+
 def path_to_module(path: str) -> str | None:
     """Convert a file path to a dotted module path.
 
@@ -260,3 +277,74 @@ def file_to_import_sql_patterns(
         prefix_patterns.append(f"{candidate}{sep}")
 
     return exact_matches, prefix_patterns
+
+
+def infer_target_declared_module(
+    from_path: str,
+    to_path: str,
+    from_declared_module: str | None,
+    language_family: str | None = None,
+) -> str | None:
+    """Infer the target declared_module when moving a file.
+
+    For declaration-based languages (Go, Rust, Java, etc.), the import path
+    is based on the declared module. When moving files, we need to transform
+    the old declared_module to reflect the new location.
+
+    Args:
+        from_path: Original file path (e.g. "pkg/util/helper.go")
+        to_path: Target file path (e.g. "pkg/newutil/helper.go")
+        from_declared_module: declared_module from source File record
+        language_family: Language family
+
+    Returns:
+        Inferred declared_module for target, or None if can't be inferred.
+
+    Examples:
+        >>> infer_target_declared_module(
+        ...     "pkg/util/helper.go", "pkg/newutil/helper.go",
+        ...     "github.com/user/repo/pkg/util", "go"
+        ... )
+        'github.com/user/repo/pkg/newutil'
+    """
+    if not from_declared_module:
+        return None
+
+    from pathlib import Path
+
+    # Get directory parts
+    from_dir = str(Path(from_path).parent)
+    to_dir = str(Path(to_path).parent)
+
+    if from_dir == to_dir:
+        # Same directory, declared_module stays the same
+        return from_declared_module
+
+    # For Go: module ends with path-like suffix matching from_dir
+    # e.g. "github.com/user/repo/pkg/util" ends with "pkg/util"
+    if language_family == "go":
+        # Try to find and replace the path suffix
+        from_dir_normalized = from_dir.replace("\\", "/")
+        to_dir_normalized = to_dir.replace("\\", "/")
+        if from_declared_module.endswith(from_dir_normalized):
+            base = from_declared_module[: -len(from_dir_normalized)]
+            return base + to_dir_normalized
+
+    # For Rust: module path uses :: separator
+    # e.g. "crate::util::helper" → "crate::newutil::helper"
+    if language_family == "rust":
+        from_parts = from_dir.replace("/", "::").replace("\\", "::")
+        to_parts = to_dir.replace("/", "::").replace("\\", "::")
+        if from_parts in from_declared_module:
+            return from_declared_module.replace(from_parts, to_parts, 1)
+
+    # For Java/Kotlin/Scala: package path uses . separator
+    # e.g. "com.example.util" → "com.example.newutil"
+    if language_family in ("java", "kotlin", "scala", "c_sharp"):
+        from_pkg = from_dir.replace("/", ".").replace("\\", ".")
+        to_pkg = to_dir.replace("/", ".").replace("\\", ".")
+        if from_pkg in from_declared_module:
+            return from_declared_module.replace(from_pkg, to_pkg, 1)
+
+    # Fallback: can't infer
+    return from_declared_module
