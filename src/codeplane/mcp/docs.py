@@ -119,14 +119,16 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         possible_errors=["FILE_NOT_FOUND", "ENCODING_ERROR", "INVALID_RANGE"],
         examples=[
             {
-                "description": "Read a single file",
-                "params": {"paths": ["src/main.py"]},
+                "description": "Read specific lines (10-50)",
+                "params": {"targets": [{"path": "src/main.py", "start_line": 10, "end_line": 50}]},
             },
             {
-                "description": "Read lines 10-50 of a file",
+                "description": "Read multiple spans in one call",
                 "params": {
-                    "paths": ["src/main.py"],
-                    "targets": [{"path": "src/main.py", "start_line": 10, "end_line": 50}],
+                    "targets": [
+                        {"path": "src/foo.py", "start_line": 1, "end_line": 30},
+                        {"path": "src/bar.py", "start_line": 100, "end_line": 150},
+                    ]
                 },
             },
         ],
@@ -146,11 +148,10 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             "When you haven't read the file recently",
         ],
         hints_before="Read the target file first to ensure you have current content.",
-        hints_after="Consider git_stage if you want to commit the change.",
+        hints_after="Use git_stage_and_commit to commit the change.",
         alternatives=["refactor_rename (for symbol renames)"],
         commonly_preceded_by=["read_source"],
-        commonly_followed_by=["git_stage", "git_commit"],
-        behavior=BehaviorFlags(has_side_effects=True, atomic=True),
+        commonly_followed_by=["git_stage_and_commit"],
         possible_errors=[
             "FILE_NOT_FOUND",
             "FILE_EXISTS",
