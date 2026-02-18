@@ -49,7 +49,7 @@ def git_stage_and_commit_tool(
 
     # Retrieve the registered tool function
     tool = mcp._tool_manager._tools["git_stage_and_commit"]
-    return tool.fn
+    return tool.fn  # type: ignore[attr-defined]
 
 
 @pytest.fixture

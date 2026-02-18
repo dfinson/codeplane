@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import contextvars
 import json
-import os
-import sys
 import threading
 import time
 import uuid
@@ -415,106 +413,160 @@ def _build_fetch_hint(
     kind: str,
     payload: Any = None,
 ) -> str:
-    """Build a concise agentic hint with real data from the payload.
+    """Build a concise agentic hint for disk-cached results.
 
-    No placeholder commands. No grep '<filename>'. Only actionable info:
-    - Byte size + disk path
-    - Extracted structural summary (counts, names, actual data)
-    - OS-appropriate retrieval command
+    Provides:
+    1. Structural summary (counts, names, real data from the payload)
+    2. Tailored jq extraction commands with the real file path baked in
+
+    Only non-paginated resource kinds hit disk: semantic_diff, diff,
+    test_output, refactor_preview, log, commit, blame, repo_map.
+    source and search_hits are paginated inline and never reach here.
     """
     rel_path = f".codeplane/cache/{kind}/{resource_id}.json"
-    cmd = f"type {rel_path.replace('/', os.sep)}" if sys.platform == "win32" else f"cat {rel_path}"
-    header = f"Full result ({byte_size:,} bytes) cached to disk. Retrieve with: {cmd}"
+    header = f"Full result ({byte_size:,} bytes) cached at {rel_path}"
 
     if not isinstance(payload, dict):
         return header
 
-    detail = _extract_summary(kind, payload)
-    if detail:
-        return f"{header}\n{detail}"
-    return header
+    summary, commands = _extract_summary_and_commands(kind, payload, rel_path)
+    parts = [header]
+    if summary:
+        parts.append(summary)
+    if commands:
+        parts.append("Extraction commands:")
+        parts.extend(f"  {cmd}" for cmd in commands)
+    return "\n".join(parts)
 
 
-def _extract_summary(kind: str, payload: dict[str, Any]) -> str:
-    """Extract a compact, actionable summary from a payload.
+def _extract_summary_and_commands(
+    kind: str,
+    payload: dict[str, Any],
+    path: str,
+) -> tuple[str, list[str]]:
+    """Extract structural summary + tailored jq commands for a disk-cached payload.
 
-    Returns real data — file paths, change counts, commit SHAs — not placeholders.
+    Returns (summary_line, [jq_commands]) — both derived from actual payload data.
+    Commands use the real cache file path, not placeholders.
     """
-    if kind == "source":
-        files = payload.get("files", [])
-        if not files:
-            return ""
-        parts = []
-        for f in files:
-            fp = f.get("path", "?")
-            r = f.get("range")
-            lc = f.get("line_count", "?")
-            parts.append(f"  {fp} L{r[0]}-L{r[1]} ({lc} lines)" if r and len(r) == 2 else f"  {fp}")
-        return f"{len(files)} file(s):\n" + "\n".join(parts)
-
-    if kind == "search_hits":
-        results = payload.get("results", [])
-        by_file: dict[str, int] = {}
-        for r in results:
-            p = r.get("path", "?")
-            by_file[p] = by_file.get(p, 0) + 1
-        dist = ", ".join(f"{p} ({c})" for p, c in list(by_file.items())[:5])
-        more = f" +{len(by_file) - 5} more" if len(by_file) > 5 else ""
-        return f"{len(results)} hit(s) across {len(by_file)} file(s): {dist}{more}"
-
     if kind == "semantic_diff":
-        changes = payload.get("structural_changes", payload.get("changes", []))
-        summary = payload.get("summary", "")
-        if summary:
-            return str(summary)
+        # Detect which key holds the changes array
+        changes_key = "structural_changes" if "structural_changes" in payload else "changes"
+        changes = payload.get(changes_key, [])
         ct: dict[str, int] = {}
         for c in changes:
             t = c.get("change", c.get("change_type", "?"))
             ct[t] = ct.get(t, 0) + 1
-        return f"{len(changes)} change(s): " + ", ".join(f"{v} {k}" for k, v in ct.items())
+        summary = payload.get("summary", "")
+        if not summary:
+            summary = f"{len(changes)} change(s): " + ", ".join(f"{v} {k}" for k, v in ct.items())
+        cmds = [
+            f"jq '.{changes_key} | length' {path}",
+            f"jq '[.{changes_key}[] | .change // .change_type] | group_by(.) | map({{type: .[0], count: length}})' {path}",
+        ]
+        # Add targeted filter commands for each change type present
+        for change_type in ct:
+            cmds.append(
+                f"jq '[.{changes_key}[] | select((.change // .change_type) == \"{change_type}\")] | map({{name: .name, path: .path}})' {path}"
+            )
+        return str(summary), cmds
 
     if kind == "diff":
-        diff_text = payload.get("diff", payload.get("diff_text", ""))
+        diff_key = "diff" if "diff" in payload else "diff_text"
+        diff_text = payload.get(diff_key, "")
         if isinstance(diff_text, str):
             n = diff_text.count("diff --git")
-            return f"{n} file(s) changed" if n else ""
-        return ""
+            files_changed = f"{n} file(s) changed" if n else ""
+        else:
+            files_changed = ""
+        cmds = [
+            f"jq -r '.{diff_key}' {path}",
+            f"jq -r '.{diff_key}' {path} | head -100",
+        ]
+        return files_changed, cmds
 
     if kind == "test_output":
-        p, f_count = payload.get("passed", 0), payload.get("failed", 0)
-        return f"{p} passed, {f_count} failed, {payload.get('total', p + f_count)} total"
+        p = payload.get("passed", 0)
+        f_count = payload.get("failed", 0)
+        total = payload.get("total", p + f_count)
+        summary = f"{p} passed, {f_count} failed, {total} total"
+        cmds = []
+        if f_count > 0:
+            # Detect the key that holds individual test results
+            results_key = next(
+                (k for k in ("results", "tests", "test_results") if k in payload),
+                None,
+            )
+            if results_key:
+                cmds.append(
+                    f'jq \'[.{results_key}[] | select(.status == "failed" or .result == "failed")] | map({{name: .name, message: .message}})\' {path}'
+                )
+            cmds.append(f"jq '.stderr // .output // .summary' {path}")
+        else:
+            cmds.append(f"jq '{{passed, failed, total}}' {path}")
+        return summary, cmds
 
     if kind == "refactor_preview":
         matches = payload.get("matches", [])
         af = len({m.get("path", "") for m in matches})
-        return f"{len(matches)} match(es) across {af} file(s)"
+        summary = f"{len(matches)} match(es) across {af} file(s)"
+        cmds = [
+            f"jq '[.matches[] | {{path: .path, line: .line, certainty: .certainty}}]' {path}",
+        ]
+        low = [m for m in matches if m.get("certainty") in ("low", "medium")]
+        if low:
+            cmds.append(
+                f'jq \'[.matches[] | select(.certainty == "low" or .certainty == "medium")] | map({{path: .path, line: .line, text: .text}})\' {path}'
+            )
+        return summary, cmds
 
     if kind == "log":
         results = payload.get("results", [])
         if not results:
-            return "0 commits"
+            return "0 commits", []
         first = results[0]
         sha = first.get("short_sha", first.get("sha", "?")[:7])
         msg = (first.get("message", "") or "")[:60]
-        return f"{len(results)} commit(s), latest: {sha} {msg}"
+        summary = f"{len(results)} commit(s), latest: {sha} {msg}"
+        cmds = [
+            f"jq '[.results[] | {{sha: (.short_sha // .sha[:7]), message: .message[:60]}}]' {path}",
+            f"jq '[.results[] | .short_sha // .sha[:7]]' {path}",
+        ]
+        return summary, cmds
 
     if kind == "commit":
         sha = payload.get("short_sha", payload.get("sha", "?")[:7])
         msg = (payload.get("message", "") or "")[:80]
-        return f"Commit {sha}: {msg}"
+        summary = f"Commit {sha}: {msg}"
+        cmds = [
+            f"jq '{{sha: (.short_sha // .sha), message, author, date}}' {path}",
+        ]
+        if "files" in payload or "changed_files" in payload:
+            fk = "files" if "files" in payload else "changed_files"
+            cmds.append(f"jq '[.{fk}[] | .path // .filename]' {path}")
+        return summary, cmds
 
     if kind == "blame":
         results = payload.get("results", [])
         bp = payload.get("path", "")
-        authors = len({r.get("author", "") for r in results})
-        return f"Blame {bp}: {len(results)} hunk(s), {authors} author(s)"
+        authors = {r.get("author", "") for r in results} - {""}
+        summary = f"Blame {bp}: {len(results)} hunk(s), {len(authors)} author(s)"
+        cmds = [
+            f"jq '[.results[] | {{author, lines: (.end_line - .start_line + 1), sha: (.short_sha // .sha[:7])}}]' {path}",
+            f"jq '[.results[] | .author] | group_by(.) | map({{author: .[0], hunks: length}}) | sort_by(-.hunks)' {path}",
+        ]
+        return summary, cmds
 
     if kind == "repo_map":
         skip = {"summary", "resource_kind", "delivery"}
         sections = [k for k in payload if k not in skip]
-        return f"Sections: {', '.join(sections)}" if sections else ""
+        summary = f"Sections: {', '.join(sections)}" if sections else ""
+        cmds = [f"jq 'keys' {path}"]
+        for section in sections[:4]:
+            cmds.append(f"jq '.{section}' {path}")
+        return summary, cmds
 
-    return ""
+    return "", []
 
 
 # =============================================================================

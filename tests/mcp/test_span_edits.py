@@ -83,7 +83,7 @@ class TestEditParamValidation:
     def test_extra_fields_rejected(self) -> None:
         """Extra fields raise due to ConfigDict(extra='forbid')."""
         with pytest.raises(ValidationError):
-            EditParam(path="f.py", action="delete", bogus="x")
+            EditParam(path="f.py", action="delete", bogus="x")  # type: ignore[call-arg]
 
 
 class TestSpanEditValidation:

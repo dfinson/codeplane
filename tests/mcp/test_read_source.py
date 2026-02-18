@@ -56,7 +56,7 @@ class TestStructuralTarget:
     def test_all_units(self) -> None:
         """All valid units accepted."""
         for unit in ("function", "class", "signature", "docstring"):
-            t = StructuralTarget(path="a.py", symbol_id="sym", unit=unit)  # type: ignore[arg-type]
+            t = StructuralTarget(path="a.py", symbol_id="sym", unit=unit)
             assert t.unit == unit
 
 

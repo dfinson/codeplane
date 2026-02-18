@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -132,7 +133,7 @@ class TestBuildEnvelope:
         assert env["delivery"] == "resource"
         assert "resource_uri" not in env
         assert "agentic_hint" in env
-        assert "cat" in env["agentic_hint"] or "type" in env["agentic_hint"]
+        assert "cached at" in env["agentic_hint"]
 
     def test_inline_budget_fields(self) -> None:
         """Verify inline_budget_bytes_used and _limit present."""
@@ -228,51 +229,27 @@ class TestScopeBudget:
 
 
 class TestFetchHints:
-    """Tests for disk-cache fetch hints and _extract_summary."""
+    """Tests for disk-cache fetch hints with jq extraction commands.
 
-    def test_source_hint_lists_files(self) -> None:
-        """Source hint includes file paths and line ranges."""
-        from codeplane.mcp.delivery import _build_fetch_hint
+    Only non-paginated resource kinds hit disk: semantic_diff, diff,
+    test_output, refactor_preview, log, commit, blame, repo_map.
+    source and search_hits are paginated inline — no hint tests for those.
+    """
 
-        payload = {
-            "files": [
-                {"path": "src/a.py", "range": [1, 50], "line_count": 50, "content": "..."},
-                {"path": "src/b.py", "range": [10, 30], "line_count": 21, "content": "..."},
-            ],
-            "summary": "2 files",
-        }
-        hint = _build_fetch_hint("abc123", 5000, "source", payload)
-        assert "2 file(s)" in hint
-        assert "src/a.py" in hint
-        assert "src/b.py" in hint
-        assert "cached to disk" in hint
-
-    def test_search_hits_hint_counts(self) -> None:
-        """Search hits hint reports result and file counts."""
-        from codeplane.mcp.delivery import _build_fetch_hint
-
-        payload = {
-            "results": [
-                {"path": "a.py", "span": {}},
-                {"path": "a.py", "span": {}},
-                {"path": "b.py", "span": {}},
-            ],
-            "summary": "3 results",
-        }
-        hint = _build_fetch_hint("abc123", 3000, "search_hits", payload)
-        assert "3 hit(s) across 2 file(s)" in hint
-
-    def test_diff_hint_counts_files(self) -> None:
-        """Diff hint counts files from diff --git markers."""
+    def test_diff_hint_has_jq_commands(self) -> None:
+        """Diff hint includes file count summary and jq extraction."""
         from codeplane.mcp.delivery import _build_fetch_hint
 
         diff_text = "diff --git a/x.py b/x.py\n+hello\ndiff --git a/y.py b/y.py\n-bye"
         payload = {"diff": diff_text}
         hint = _build_fetch_hint("abc123", 2000, "diff", payload)
         assert "2 file(s) changed" in hint
+        assert "cached at" in hint
+        assert "jq -r '.diff'" in hint
+        assert ".codeplane/cache/diff/abc123.json" in hint
 
-    def test_log_hint_shows_latest(self) -> None:
-        """Log hint includes latest commit info."""
+    def test_log_hint_has_jq_commands(self) -> None:
+        """Log hint includes commit summary and jq extraction."""
         from codeplane.mcp.delivery import _build_fetch_hint
 
         payload = {
@@ -280,133 +257,174 @@ class TestFetchHints:
                 {"short_sha": "abc1234", "message": "fix bug", "sha": "abc1234full"},
                 {"short_sha": "def5678", "message": "add feature", "sha": "def5678full"},
             ],
-            "summary": "2 commits",
         }
         hint = _build_fetch_hint("abc123", 4000, "log", payload)
         assert "2 commit(s)" in hint
         assert "abc1234" in hint
-        assert "fix bug" in hint
+        assert "jq" in hint
+        assert ".codeplane/cache/log/abc123.json" in hint
 
-    def test_blame_hint_shows_authors(self) -> None:
-        """Blame hint reports hunk and author counts."""
+    def test_blame_hint_has_jq_commands(self) -> None:
+        """Blame hint includes author summary and jq for hunk details."""
         from codeplane.mcp.delivery import _build_fetch_hint
 
         payload = {
             "path": "src/foo.py",
             "results": [
-                {"author": "alice", "commit_sha": "aaa", "start_line": 1, "line_count": 10},
-                {"author": "bob", "commit_sha": "bbb", "start_line": 11, "line_count": 5},
+                {"author": "alice", "commit_sha": "aaa", "start_line": 1, "end_line": 10},
+                {"author": "bob", "commit_sha": "bbb", "start_line": 11, "end_line": 15},
             ],
         }
         hint = _build_fetch_hint("abc123", 3000, "blame", payload)
         assert "2 hunk(s)" in hint
         assert "2 author(s)" in hint
         assert "src/foo.py" in hint
+        assert "jq" in hint
+        assert "group_by" in hint  # author aggregation command
 
-    def test_test_output_hint_shows_summary(self) -> None:
-        """Test output hint shows pass/fail counts."""
+    def test_test_output_hint_failures_jq(self) -> None:
+        """Test output hint with failures includes jq to extract failed tests."""
         from codeplane.mcp.delivery import _build_fetch_hint
 
-        payload = {"passed": 10, "failed": 2, "total": 12}
+        payload = {
+            "passed": 10,
+            "failed": 2,
+            "total": 12,
+            "results": [
+                {"name": "test_a", "status": "passed"},
+                {"name": "test_b", "status": "failed", "message": "assertion error"},
+            ],
+        }
         hint = _build_fetch_hint("abc123", 5000, "test_output", payload)
         assert "10 passed" in hint
         assert "2 failed" in hint
+        assert "jq" in hint
+        assert "failed" in hint
+
+    def test_test_output_hint_all_pass(self) -> None:
+        """Test output with 0 failures gives simple summary jq."""
+        from codeplane.mcp.delivery import _build_fetch_hint
+
+        payload = {"passed": 10, "failed": 0, "total": 10}
+        hint = _build_fetch_hint("abc123", 2000, "test_output", payload)
+        assert "10 passed" in hint
+        assert "0 failed" in hint
+        assert "jq" in hint
 
     def test_semantic_diff_hint_with_summary(self) -> None:
-        """Semantic diff hint uses summary field if present."""
+        """Semantic diff hint uses summary field and adds per-type jq filters."""
         from codeplane.mcp.delivery import _build_fetch_hint
 
         payload = {
             "structural_changes": [
-                {"change": "added", "name": "foo"},
-                {"change": "added", "name": "bar"},
-                {"change": "removed", "name": "baz"},
+                {"change": "added", "name": "foo", "path": "a.py"},
+                {"change": "added", "name": "bar", "path": "a.py"},
+                {"change": "removed", "name": "baz", "path": "b.py"},
             ],
             "summary": "2 added, 1 removed",
         }
         hint = _build_fetch_hint("abc123", 4000, "semantic_diff", payload)
         assert "2 added, 1 removed" in hint
+        # Should have jq filter commands for each change type
+        assert '"added"' in hint
+        assert '"removed"' in hint
+        assert "jq" in hint
 
     def test_semantic_diff_hint_without_summary(self) -> None:
-        """Semantic diff hint tallies change types when no summary."""
+        """Semantic diff hint tallies change types and builds jq filters."""
         from codeplane.mcp.delivery import _build_fetch_hint
 
         payload = {
             "structural_changes": [
-                {"change": "added", "name": "foo"},
-                {"change": "removed", "name": "bar"},
+                {"change": "added", "name": "foo", "path": "a.py"},
+                {"change": "removed", "name": "bar", "path": "b.py"},
             ],
         }
         hint = _build_fetch_hint("abc123", 4000, "semantic_diff", payload)
         assert "2 change(s)" in hint
         assert "1 added" in hint
         assert "1 removed" in hint
+        assert "jq" in hint
+        assert ".structural_changes" in hint
 
-    def test_fallback_hint_for_unknown_kind(self) -> None:
-        """Unknown kind gets a generic cat/type hint."""
-        from codeplane.mcp.delivery import _build_fetch_hint
-
-        hint = _build_fetch_hint("abc123", 1000, "unknown_kind", {"data": "x"})
-        assert "cached to disk" in hint
-        assert "cat" in hint or "type" in hint
-
-    def test_hint_without_payload_falls_back(self) -> None:
-        """No payload -> generic fallback hint."""
-        from codeplane.mcp.delivery import _build_fetch_hint
-
-        hint = _build_fetch_hint("abc123", 1000, "source")
-        assert "cached to disk" in hint
-        assert "cat" in hint or "type" in hint
-
-    def test_os_agnostic_cat_command(self) -> None:
-        """Fetch hint uses cat on unix and type on windows."""
-        import sys
-
-        from codeplane.mcp.delivery import _build_fetch_hint
-
-        hint = _build_fetch_hint("abc123", 1000, "source")
-        if sys.platform == "win32":
-            assert "type" in hint
-        else:
-            assert "cat" in hint
-
-    def test_repo_map_hint_lists_sections(self) -> None:
-        """Repo map hint lists top-level sections."""
+    def test_semantic_diff_detects_changes_key(self) -> None:
+        """Semantic diff uses 'changes' key when 'structural_changes' absent."""
         from codeplane.mcp.delivery import _build_fetch_hint
 
         payload = {
-            "structure": {"tree": []},
-            "dependencies": [],
-            "test_layout": {},
-            "summary": "repo map",
+            "changes": [
+                {"change_type": "body_changed", "name": "foo", "path": "a.py"},
+            ],
         }
-        hint = _build_fetch_hint("abc123", 6000, "repo_map", payload)
-        assert "structure" in hint
-        assert "dependencies" in hint
-        assert "test_layout" in hint
+        hint = _build_fetch_hint("abc123", 4000, "semantic_diff", payload)
+        assert ".changes" in hint
+        assert "body_changed" in hint
 
-    def test_commit_hint_shows_sha_and_message(self) -> None:
-        """Commit hint shows sha and message."""
-        from codeplane.mcp.delivery import _build_fetch_hint
-
-        payload = {"short_sha": "abc1234", "message": "fix important bug", "sha": "abc1234full"}
-        hint = _build_fetch_hint("abc123", 3000, "commit", payload)
-        assert "abc1234" in hint
-        assert "fix important bug" in hint
-
-    def test_refactor_preview_hint_counts_matches(self) -> None:
-        """Refactor preview hint shows match and file counts."""
+    def test_refactor_preview_hint(self) -> None:
+        """Refactor preview shows match count and jq listing."""
         from codeplane.mcp.delivery import _build_fetch_hint
 
         payload = {
             "matches": [
-                {"path": "a.py", "line": 10},
-                {"path": "a.py", "line": 20},
-                {"path": "b.py", "line": 5},
+                {"path": "a.py", "line": 10, "certainty": "high", "text": "foo"},
+                {"path": "b.py", "line": 20, "certainty": "low", "text": "foo"},
             ],
         }
-        hint = _build_fetch_hint("abc123", 4000, "refactor_preview", payload)
-        assert "3 match(es) across 2 file(s)" in hint
+        hint = _build_fetch_hint("abc123", 3000, "refactor_preview", payload)
+        assert "2 match(es) across 2 file(s)" in hint
+        assert "jq" in hint
+        # Low-certainty match triggers additional filter
+        assert "low" in hint or "medium" in hint
+
+    def test_commit_hint(self) -> None:
+        """Commit hint shows sha/message and jq for details."""
+        from codeplane.mcp.delivery import _build_fetch_hint
+
+        payload = {
+            "short_sha": "abc1234",
+            "message": "fix regression",
+            "author": "alice",
+            "files": [{"path": "src/x.py"}, {"path": "src/y.py"}],
+        }
+        hint = _build_fetch_hint("abc123", 2000, "commit", payload)
+        assert "abc1234" in hint
+        assert "fix regression" in hint
+        assert "jq" in hint
+        assert ".files" in hint  # command to list changed files
+
+    def test_repo_map_hint(self) -> None:
+        """Repo map hint lists sections and jq to explore each."""
+        from codeplane.mcp.delivery import _build_fetch_hint
+
+        payload: dict[str, Any] = {
+            "structure": {"files": []},
+            "dependencies": {"packages": []},
+            "test_layout": {"suites": []},
+        }
+        hint = _build_fetch_hint("abc123", 5000, "repo_map", payload)
+        assert "structure" in hint
+        assert "dependencies" in hint
+        assert "jq" in hint
+
+    def test_unknown_kind_no_commands(self) -> None:
+        """Unknown kind gets path and size but no extraction commands."""
+        from codeplane.mcp.delivery import _build_fetch_hint
+
+        hint = _build_fetch_hint("abc123", 1000, "unknown_kind", {"data": "x"})
+        assert "cached at" in hint
+        assert "1,000 bytes" in hint
+        # No cat, no type, no jq — just the header
+        assert "cat" not in hint
+        assert "type" not in hint
+        assert "jq" not in hint
+
+    def test_hint_without_payload(self) -> None:
+        """No payload -> header only, no commands."""
+        from codeplane.mcp.delivery import _build_fetch_hint
+
+        hint = _build_fetch_hint("abc123", 1000, "semantic_diff")
+        assert "cached at" in hint
+        assert "jq" not in hint
 
 
 class TestCursorPagination:
