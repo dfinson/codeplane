@@ -281,33 +281,41 @@ TOOL_CATEGORIES: dict[str, str] = {
     "inspect_affected_tests": "meta",
 }
 
-# Git tools are all "git" category
-_GIT_TOOL_NAMES = [
+# Read-only git tools — information gathering, do NOT clear pattern window
+_GIT_READ_TOOLS = [
     "git_status",
     "git_diff",
-    "git_commit",
-    "git_stage_and_commit",
     "git_log",
-    "git_push",
-    "git_pull",
-    "git_checkout",
-    "git_merge",
-    "git_reset",
-    "git_stage",
     "git_branch",
     "git_remote",
-    "git_stash",
-    "git_rebase",
     "git_inspect",
     "git_history",
     "git_submodule",
     "git_worktree",
 ]
-for _name in _GIT_TOOL_NAMES:
+for _name in _GIT_READ_TOOLS:
+    TOOL_CATEGORIES[_name] = "git_read"
+
+# Mutating git tools — actual progress, clear pattern window
+_GIT_WRITE_TOOLS = [
+    "git_commit",
+    "git_stage_and_commit",
+    "git_stage",
+    "git_push",
+    "git_pull",
+    "git_checkout",
+    "git_merge",
+    "git_reset",
+    "git_stash",
+    "git_rebase",
+]
+for _name in _GIT_WRITE_TOOLS:
     TOOL_CATEGORIES[_name] = "git"
 
-# Categories that represent "action" (clear pattern window)
-ACTION_CATEGORIES = frozenset({"write", "refactor", "lint", "test", "git", "diff"})
+# Categories that represent "action" (clear pattern window).
+# Note: "git_read" and "diff" are NOT action categories — they are
+# information gathering and should not reset bypass detection windows.
+ACTION_CATEGORIES = frozenset({"write", "refactor", "lint", "test", "git"})
 
 
 def categorize_tool(tool_name: str) -> str:
