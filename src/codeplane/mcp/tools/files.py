@@ -389,7 +389,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "large_files": large_files,
                     "agentic_hint": (
                         f"To proceed, retry with confirmation_token='{token}' "
-                        f"AND confirm_reason='<reason min 15 chars>'."
+                        f"AND confirm_reason='<reason min 15 chars>'.\n"
+                        "BEFORE confirming, consider: do you actually need the full file? "
+                        "search(mode=references) + read_source on the spans is usually sufficient. "
+                        "Only confirm if you truly need the entire file content."
                     ),
                 }
 

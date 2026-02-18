@@ -59,6 +59,12 @@ STOP before using `write_source` for multi-file changes:
 - Moving a file? → `refactor_move` (NOT write_source + delete)
 - Deleting a symbol or file? → `refactor_delete`
 
+### Before You Read: Decision Gate
+
+STOP before using `read_file_full`:
+- Need to find call sites or consumers? → `search(mode=references)` + `read_source`
+- Need to understand a specific function? → `search(mode=definitions)` + `read_source`
+- Need the ENTIRE file content with no alternative? → ONLY then `read_file_full`
 
 | Task | Mode | Enrichment | Why |
 |------|------|------------|-----|
