@@ -159,9 +159,7 @@ class TestGitInspectBlameHandler:
         )
         mock_context.git_ops.blame.return_value = mock_blame
 
-        result = await git_inspect_tool(
-            mock_ctx, action="blame", path="src/test.py", limit=100
-        )
+        result = await git_inspect_tool(mock_ctx, action="blame", path="src/test.py", limit=100)
         # Results should contain the hunks, not be empty
         assert len(result["results"]) == 2
         assert result["results"][0]["commit_sha"] == "abc123def"
