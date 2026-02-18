@@ -49,14 +49,13 @@ DIFF_CHANGES_MAX = 100
 # ======================================================================# Response Budget
 # ======================================================================# Server-side byte budget for MCP tool responses. All paginated endpoints
 # share this single constant. Sits between the MCP fetch server default
-# VS Code Copilot writes results to file at 8KB. We use 40KB as the budget
+# VS Code Copilot writes results to file at ~8KB. We use 40KB as the budget
 # to avoid excessive pagination, but add agentic hints when over 8KB.
-# Agents can optionally request a 7.5KB cap for guaranteed inline display.
-
+# Agents can optionally request an 8KB cap for guaranteed inline display.
 RESPONSE_BUDGET_BYTES = 40_000
 """Per-response byte budget shared by all size-bounded endpoints."""
 
-INLINE_CAP_BYTES = 7_500
+INLINE_CAP_BYTES = 8_000
 """Default inline cap for delivery envelope. Fits within VS Code's inline display."""
 
 # ======================================================================# Delivery Envelope Constants

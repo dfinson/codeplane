@@ -148,7 +148,7 @@ class TestBuildEnvelope:
         yield
         _delivery_mod._cache_dir = old
 
-    def _profile(self, inline_cap: int = 7500) -> ClientProfile:
+    def _profile(self, inline_cap: int = 8000) -> ClientProfile:
         return ClientProfile(name="test", inline_cap_bytes=inline_cap)
 
     def test_small_payload_inline(self) -> None:
