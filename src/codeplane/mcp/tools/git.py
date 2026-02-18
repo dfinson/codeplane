@@ -1,6 +1,7 @@
 """Git MCP tools - consolidated git_* handlers."""
 
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -27,6 +28,17 @@ if TYPE_CHECKING:
 
 # Fingerprint key for tracking hard reset confirmation tokens
 _HARD_RESET_TOKEN_KEY = "pending_hard_reset_token"
+
+
+def _serialize_datetimes(obj: Any) -> Any:
+    """Recursively convert datetime objects to ISO-8601 strings."""
+    if isinstance(obj, dict):
+        return {k: _serialize_datetimes(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_serialize_datetimes(v) for v in obj]
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    return obj
 
 
 # =============================================================================
@@ -811,7 +823,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         if action == "show":
             commit_obj = app_ctx.git_ops.show(ref=ref)
-            result = asdict(commit_obj)
+            result = _serialize_datetimes(asdict(commit_obj))
             result["summary"] = f"{commit_obj.sha[:7]}: {commit_obj.message.split(chr(10))[0][:50]}"
 
             # Track scope usage
@@ -843,7 +855,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 min_line=start_line,
                 max_line=end_line,
             )
-            blame_dict = asdict(blame)
+            blame_dict = _serialize_datetimes(asdict(blame))
             lines = blame_dict.pop("lines", [])
             page = lines[:limit]
 
