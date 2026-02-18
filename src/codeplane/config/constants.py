@@ -6,10 +6,9 @@ These are protocol constraints, API stability limits, and implementation details
 For configurable values, see models.py (TimeoutsConfig, LimitsConfig, etc.).
 """
 
-# ======================================================================# MCP Tool Pagination Maximums
+# ======================================================================# MCP Tool Limits
 # ======================================================================# These are hard caps for API stability and security. Users can configure
 # defaults below these, but cannot exceed them.
-
 SEARCH_MAX_LIMIT = 100
 """Maximum results for index search queries."""
 
@@ -46,14 +45,9 @@ MOVE_LEXICAL_MAX = 200
 DIFF_CHANGES_MAX = 100
 """Maximum structural changes per page for semantic diff."""
 
-# ======================================================================# Response Budget
-# ======================================================================# Server-side byte budget for MCP tool responses. All paginated endpoints
-# share this single constant. Sits between the MCP fetch server default
-# VS Code Copilot writes results to file at ~8KB. We use 40KB as the budget
-# to avoid excessive pagination, but add agentic hints when over 8KB.
-# Agents can optionally request an 8KB cap for guaranteed inline display.
-RESPONSE_BUDGET_BYTES = 40_000
-"""Per-response byte budget shared by all size-bounded endpoints."""
+# ======================================================================
+# Delivery Envelope
+# ======================================================================
 
 INLINE_CAP_BYTES = 8_000
 """Default inline cap for delivery envelope. Fits within VS Code's inline display."""

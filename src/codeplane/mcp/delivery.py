@@ -320,7 +320,6 @@ def wrap_existing_response(
 ) -> dict[str, Any]:
     """Add delivery envelope fields to an existing handler response.
 
-    For handlers that already manage their own pagination via BudgetAccumulator.
     Routes oversized payloads to disk via resource delivery.
     """
     profile = client_profile or get_current_profile()

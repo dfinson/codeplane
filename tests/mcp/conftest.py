@@ -98,9 +98,6 @@ def mock_coordinator() -> MagicMock:
             dependencies=None,
             test_layout=None,
             public_api=[],
-            truncated=False,
-            next_cursor=None,
-            total_estimate=None,
         )
     )
     mock.db = MagicMock()

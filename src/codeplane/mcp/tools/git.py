@@ -1,6 +1,5 @@
 """Git MCP tools - consolidated git_* handlers."""
 
-import contextlib
 import secrets
 from dataclasses import asdict
 from pathlib import Path
@@ -13,7 +12,7 @@ from pydantic import Field
 from codeplane.config.constants import GIT_BLAME_MAX, GIT_LOG_MAX
 from codeplane.git._internal.hooks import run_hook
 from codeplane.git.errors import EmptyCommitMessageError, PathsNotFoundError
-from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination, measure_bytes
+from codeplane.mcp.budget import measure_bytes
 from codeplane.mcp.delivery import wrap_existing_response
 
 if TYPE_CHECKING:
@@ -260,7 +259,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         base: str | None = Field(None, description="Base ref for comparison"),
         target: str | None = Field(None, description="Target ref for comparison"),
         staged: bool = Field(False, description="Show staged changes only"),
-        cursor: str | None = Field(None, description="Pagination cursor (file index)"),
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Get diff between refs or working tree."""
@@ -274,131 +272,35 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         )
 
         all_files = list(diff.files)
-        full_patch = diff.patch or ""
 
-        # Parse the full patch into per-file sections FIRST
-        # This allows us to budget files + their patches together
-        file_patches: dict[str, str] = {}
-        current_file_path: str | None = None
-        current_file_lines: list[str] = []
+        # Build file list
+        files_out: list[dict[str, Any]] = []
+        for f in all_files:
+            files_out.append(
+                {
+                    "old_path": f.old_path,
+                    "new_path": f.new_path,
+                    "status": f.status,
+                    "additions": f.additions,
+                    "deletions": f.deletions,
+                }
+            )
 
-        for line in full_patch.splitlines(keepends=True):
-            if line.startswith("diff --git "):
-                # Flush previous file's patch
-                if current_file_path:
-                    file_patches[current_file_path] = "".join(current_file_lines)
-                # Start new file - extract path from header
-                current_file_lines = [line]
-                current_file_path = None
-                # Extract both a/ and b/ paths from the header
-                # Format: "diff --git a/path b/path\n"
-                parts = line.strip().split()
-                if len(parts) >= 4:
-                    # Try b/ path first (for modified/added), then a/ (for deleted)
-                    for p in (parts[3], parts[2]):
-                        if p.startswith("b/") or p.startswith("a/"):
-                            current_file_path = p[2:]
-                            break
-            else:
-                current_file_lines.append(line)
-
-        # Flush last file
-        if current_file_path:
-            file_patches[current_file_path] = "".join(current_file_lines)
-
-        # Apply cursor: skip files already returned
-        start_idx = 0
-        if cursor:
-            with contextlib.suppress(ValueError):
-                parsed = int(cursor)
-                if parsed >= 0:
-                    start_idx = parsed
-
-        page_files = all_files[start_idx:]
-
-        # Compute overhead for fixed response fields
-        base_overhead: dict[str, Any] = {
-            "files": [],
-            "total_additions": sum(f.additions for f in all_files),
-            "total_deletions": sum(f.deletions for f in all_files),
-            "files_changed": len(all_files),
-            "page_additions": 0,
-            "page_deletions": 0,
-            "page_files": 0,
-            "patch": "",
-            "summary": "999d files changed, +999999 -999999",  # worst-case summary
-            "pagination": {
-                "truncated": True,
-                "next_cursor": "99999",
-                "total_estimate": len(all_files),
-            },
-        }
-        overhead = measure_bytes(base_overhead) + 100  # safety margin
-
-        # Budget files + their patches TOGETHER
-        acc = BudgetAccumulator()
-        acc.reserve(overhead)
-        files_in_page: list[dict[str, Any]] = []
-        patches_in_page: list[str] = []
-
-        for f in page_files:
-            file_path = f.new_path or f.old_path or ""
-            file_patch = file_patches.get(file_path, "")
-
-            file_item = {
-                "old_path": f.old_path,
-                "new_path": f.new_path,
-                "status": f.status,
-                "additions": f.additions,
-                "deletions": f.deletions,
-            }
-
-            # Create combined item for budget measurement
-            # The patch is a string, so we measure it as part of a dict
-            combined_item = {
-                **file_item,
-                "_patch_size_proxy": file_patch,  # Include patch in measurement
-            }
-
-            if not acc.try_add(combined_item):
-                break
-
-            files_in_page.append(file_item)
-            if file_patch:
-                patches_in_page.append(file_patch)
-
-        has_more = len(files_in_page) < len(page_files)
-        next_offset = start_idx + len(files_in_page)
-
-        # Combine patches for the page
-        page_patch = "".join(patches_in_page)
-
-        # Compute totals
-        overall_additions = sum(f.additions for f in all_files)
-        overall_deletions = sum(f.deletions for f in all_files)
-        page_additions = sum(f["additions"] for f in files_in_page)
-        page_deletions = sum(f["deletions"] for f in files_in_page)
+        total_additions = sum(f.additions for f in all_files)
+        total_deletions = sum(f.deletions for f in all_files)
 
         result: dict[str, Any] = {
-            "files": files_in_page,
-            "total_additions": overall_additions,
-            "total_deletions": overall_deletions,
+            "files": files_out,
+            "total_additions": total_additions,
+            "total_deletions": total_deletions,
             "files_changed": len(all_files),
-            "page_additions": page_additions,
-            "page_deletions": page_deletions,
-            "page_files": len(files_in_page),
-            "patch": page_patch,
+            "patch": diff.patch or "",
             "summary": _summarize_diff(
-                len(files_in_page),
-                page_additions,
-                page_deletions,
+                len(all_files),
+                total_additions,
+                total_deletions,
                 staged,
                 total_files=len(all_files),
-            ),
-            "pagination": make_budget_pagination(
-                has_more=has_more,
-                next_cursor=str(next_offset) if has_more else None,
-                total_estimate=len(all_files),
             ),
         }
 
@@ -408,12 +310,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             from codeplane.mcp.tools.files import _scope_manager
 
             budget = _scope_manager.get_or_create(scope_id)
-            budget.increment_paged()
-            exceeded = budget.check_budget("paged_continuations")
-            if exceeded:
-                from codeplane.mcp.errors import BudgetExceededError
-
-                raise BudgetExceededError(scope_id, "paged_continuations", exceeded)
             scope_usage = budget.to_usage_dict()
 
         return wrap_existing_response(
@@ -526,7 +422,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ctx: Context,
         ref: str = Field("HEAD", description="Starting reference"),
         limit: int = Field(default=50, le=GIT_LOG_MAX, description="Maximum commits to return"),
-        cursor: str | None = Field(None, description="Pagination cursor"),
         since: str | None = Field(None, description="Show commits after date"),
         until: str | None = Field(None, description="Show commits before date"),
         paths: list[str] | None = Field(None, description="Filter by paths"),
@@ -535,55 +430,26 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         """Get commit history."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
-        # When cursor is provided, it's a commit SHA — start walking from
-        # that commit and skip it (it was the last item of the prior page).
-        effective_ref = cursor if cursor else ref
-        skip_first = cursor is not None
-
         commits = app_ctx.git_ops.log(
-            ref=effective_ref,
-            limit=limit + 1 + (1 if skip_first else 0),
+            ref=ref,
+            limit=limit,
             since=since,
             until=until,
             paths=paths,
         )
 
-        if skip_first and commits:
-            commits = commits[1:]
-
-        has_more = len(commits) > limit
-        if has_more:
-            commits = commits[:limit]
-
-        # Reserve overhead for fixed response fields
-        base_response = {
-            "results": [],
-            "pagination": {"truncated": False, "next_cursor": "x" * 40, "total_estimate": 99999},
-            "summary": "X" * 200,
-        }
-        overhead = measure_bytes(base_response)
-        acc = BudgetAccumulator()
-        acc.reserve(overhead)
+        items: list[dict[str, Any]] = []
         for c in commits:
             d = asdict(c)
             # Convert datetime fields to ISO strings for JSON serialization
             for sig_key in ("author", "committer"):
                 if sig_key in d and "time" in d[sig_key]:
                     d[sig_key]["time"] = d[sig_key]["time"].isoformat()
-            if not acc.try_add(d):
-                break
-
-        budget_more = has_more or (not acc.has_room and len(commits) > acc.count)
-
-        pagination = make_budget_pagination(
-            has_more=budget_more,
-            next_cursor=acc.items[-1]["sha"] if acc.items and budget_more else None,
-        )
+            items.append(d)
 
         result = {
-            "results": acc.items,
-            "pagination": pagination,
-            "summary": _summarize_log(acc.count, budget_more),
+            "results": items,
+            "summary": _summarize_log(len(items), False),
         }
         # Track scope usage
         scope_usage = None
@@ -591,12 +457,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             from codeplane.mcp.tools.files import _scope_manager
 
             budget = _scope_manager.get_or_create(scope_id)
-            budget.increment_paged()
-            exceeded = budget.check_budget("paged_continuations")
-            if exceeded:
-                from codeplane.mcp.errors import BudgetExceededError
-
-                raise BudgetExceededError(scope_id, "paged_continuations", exceeded)
             scope_usage = budget.to_usage_dict()
 
         return wrap_existing_response(
@@ -947,7 +807,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         path: str | None = Field(None, description="File path (required for blame)"),
         start_line: int | None = Field(None, description="Start line (for blame)"),
         end_line: int | None = Field(None, description="End line (for blame)"),
-        cursor: str | None = Field(None, description="Pagination cursor"),
         limit: int = Field(default=100, le=GIT_BLAME_MAX, description="Maximum lines to return"),
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
@@ -990,55 +849,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             )
             blame_dict = asdict(blame)
             lines = blame_dict.pop("lines", [])
-
-            start_idx = 0
-            if cursor:
-                with contextlib.suppress(ValueError):
-                    parsed = int(cursor)
-                    if parsed >= 0:
-                        start_idx = parsed
-
-            end_idx = start_idx + limit
-            candidate_page = lines[start_idx:end_idx]
-
-            # Apply budget to blame lines
-            # Reserve overhead for fixed response fields (blame_dict has path, newest_sha, oldest_sha)
-            base_response = {
-                "results": [],
-                "pagination": {
-                    "truncated": False,
-                    "next_cursor": "x" * 40,
-                    "total_estimate": 99999,
-                },
-                "path": "X" * 200,
-                "newest_sha": "x" * 40,
-                "oldest_sha": "x" * 40,
-                "summary": "X" * 200,
-            }
-            overhead = measure_bytes(base_response)
-            acc = BudgetAccumulator()
-            acc.reserve(overhead)
-            for line in candidate_page:
-                if not acc.try_add(line):
-                    break
-
-            count_more = len(lines) - start_idx - acc.count
-            has_more = count_more > 0
-
-            next_cursor_val = str(start_idx + acc.count) if has_more else None
-            pagination = make_budget_pagination(
-                has_more=has_more,
-                next_cursor=next_cursor_val,
-                total_estimate=len(lines) if has_more else None,
-            )
+            page = lines[:limit]
 
             from codeplane.core.formatting import compress_path
 
             result = {
-                "results": acc.items,
-                "pagination": pagination,
+                "results": page,
                 **blame_dict,
-                "summary": f"{acc.count} lines from {compress_path(path, 35)}",
+                "summary": f"{len(page)} lines from {compress_path(path, 35)}",
             }
 
             # Track scope usage
