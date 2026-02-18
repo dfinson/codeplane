@@ -379,7 +379,9 @@ class CallPatternDetector:
         # Action calls clear the window (agent made progress)
         # test_scoped is exempt — it must persist as prerequisite evidence
         if category in ACTION_CATEGORIES and category != "test_scoped":
+            scoped = [r for r in self._window if r.category == "test_scoped"]
             self._window.clear()
+            self._window.extend(scoped)
 
     def evaluate(self) -> PatternMatch | None:
         """Evaluate the current window against known anti-patterns.
