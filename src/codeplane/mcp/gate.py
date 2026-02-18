@@ -684,47 +684,6 @@ _BYPASS_WORKFLOW: dict[str, str] = {
 }
 
 
-def _check_terminal_bypass_commit(window: deque[CallRecord]) -> PatternMatch | None:
-    """Detect git commit with no prior MCP writes in the window.
-
-    If the agent is committing changes but never used write_source or
-    refactor_apply, it likely edited files via terminal (sed/awk/echo).
-    """
-    git_commits = [
-        r
-        for r in window
-        if r.tool_name
-        in (
-            "git_stage_and_commit",
-            "git_stage",
-            "git_commit",
-        )
-    ]
-    if not git_commits:
-        return None
-
-    write_ops = [r for r in window if r.category in ("write", "refactor")]
-    if write_ops:
-        return None  # Agent used MCP to edit — no bypass detected
-
-    return PatternMatch(
-        pattern_name="terminal_bypass_commit",
-        severity="warn",
-        cause="tool_bypass",
-        message=(
-            "You are committing changes but made no edits through CodePlane tools. "
-            "All file modifications MUST go through write_source or refactor_* tools. "
-            "Terminal commands (sed, awk, echo >>) are FORBIDDEN for editing."
-        ),
-        reason_prompt=(
-            "Explain why you edited files outside of CodePlane MCP tools. "
-            "If you used sed, awk, echo, or any terminal command to modify files, "
-            "revert those changes and redo them through write_source."
-        ),
-        suggested_workflow=_BYPASS_WORKFLOW,
-    )
-
-
 def _check_phantom_read(window: deque[CallRecord]) -> PatternMatch | None:
     """Detect search followed by write with no read in between.
 
@@ -780,7 +739,6 @@ def _check_phantom_read(window: deque[CallRecord]) -> PatternMatch | None:
 _PATTERN_CHECKS = [
     _check_pure_search_chain,  # break
     _check_read_spiral,  # break
-    _check_terminal_bypass_commit,  # warn (bypass)
     _check_phantom_read,  # warn (bypass)
     _check_scatter_read,  # warn
     _check_search_read_loop,  # warn

@@ -20,7 +20,6 @@ from codeplane.mcp.gate import (
     _check_read_spiral,
     _check_scatter_read,
     _check_search_read_loop,
-    _check_terminal_bypass_commit,
     _check_zero_result_searches,
 )
 
@@ -162,82 +161,6 @@ class TestReadSpiral:
         records = [_rec("read", "read_source", files=["f.py"]) for _ in range(6)]
         records += [_rec("search", "search") for _ in range(4)]
         assert _check_read_spiral(_window(*records)) is None
-
-
-# =========================================================================
-# _check_terminal_bypass_commit
-# =========================================================================
-
-
-class TestTerminalBypassCommit:
-    """Git commit with no prior write_source in window triggers warn."""
-
-    def test_commit_no_writes_triggers(self) -> None:
-        """Commit without any write/refactor calls triggers."""
-        records = [
-            _rec("search", "search"),
-            _rec("meta", "describe"),
-            _rec("search", "search"),
-            _rec("meta", "list_files"),
-            _rec("git", "git_stage_and_commit"),
-        ]
-        match = _check_terminal_bypass_commit(_window(*records))
-        assert match is not None
-        assert match.pattern_name == "terminal_bypass_commit"
-        assert match.severity == "warn"
-        assert match.cause == "tool_bypass"
-
-    def test_commit_with_write_no_trigger(self) -> None:
-        """Commit after write_source does not trigger."""
-        records = [
-            _rec("search", "search"),
-            _rec("read", "read_source"),
-            _rec("write", "write_source"),
-            _rec("git", "git_stage_and_commit"),
-        ]
-        assert _check_terminal_bypass_commit(_window(*records)) is None
-
-    def test_commit_with_refactor_no_trigger(self) -> None:
-        """Commit after refactor_apply does not trigger."""
-        records = [
-            _rec("meta", "describe"),
-            _rec("refactor", "refactor_apply"),
-            _rec("git", "git_stage_and_commit"),
-        ]
-        assert _check_terminal_bypass_commit(_window(*records)) is None
-
-    def test_no_commit_no_trigger(self) -> None:
-        """No git commit calls means no trigger."""
-        records = [
-            _rec("search", "search"),
-            _rec("read", "read_source"),
-            _rec("meta", "describe"),
-        ]
-        assert _check_terminal_bypass_commit(_window(*records)) is None
-
-    def test_git_stage_alone_triggers(self) -> None:
-        """git_stage without writes also triggers."""
-        records = [
-            _rec("search", "search"),
-            _rec("meta", "describe"),
-            _rec("meta", "list_files"),
-            _rec("meta", "describe"),
-            _rec("git", "git_stage"),
-        ]
-        match = _check_terminal_bypass_commit(_window(*records))
-        assert match is not None
-
-    def test_git_commit_alone_triggers(self) -> None:
-        """git_commit (separate from stage) without writes triggers."""
-        records = [
-            _rec("meta", "describe"),
-            _rec("meta", "list_files"),
-            _rec("meta", "describe"),
-            _rec("meta", "describe"),
-            _rec("git", "git_commit"),
-        ]
-        match = _check_terminal_bypass_commit(_window(*records))
-        assert match is not None
 
 
 # =========================================================================
@@ -541,14 +464,6 @@ class TestPatternMatchStructure:
             lambda: _window(*[_rec("search", "search") for _ in range(10)]),
             # read_spiral
             lambda: _window(*[_rec("read", "read_source", files=["f.py"]) for _ in range(8)]),
-            # terminal_bypass_commit
-            lambda: _window(
-                _rec("meta", "describe"),
-                _rec("meta", "list_files"),
-                _rec("meta", "describe"),
-                _rec("meta", "describe"),
-                _rec("git", "git_stage_and_commit"),
-            ),
             # phantom_read
             lambda: _window(
                 _rec("search", "search"),
@@ -573,7 +488,6 @@ class TestPatternMatchStructure:
         ids=[
             "pure_search_chain",
             "read_spiral",
-            "terminal_bypass_commit",
             "phantom_read",
             "scatter_read",
             "zero_result_searches",

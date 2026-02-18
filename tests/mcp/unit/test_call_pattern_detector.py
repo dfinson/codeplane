@@ -230,19 +230,18 @@ class TestEvaluate:
         assert match.pattern_name == "pure_search_chain"
 
     def test_bypass_priority_over_general_warn(self) -> None:
-        """Bypass warn patterns take priority over general warn patterns."""
+        """Bypass warn patterns (phantom_read) take priority over general warn."""
         det = CallPatternDetector()
-        # Build a window with many zero-result searches AND a terminal bypass
+        # Build a window with zero-result searches AND a phantom_read bypass
         det.record("search", hit_count=0)
         det.record("search", hit_count=0)
         det.record("search", hit_count=0)
         det.record("meta", category_override="meta")
         det.record("describe")
-        # Now check: if we evaluate with current_tool=git_stage_and_commit,
-        # terminal_bypass_commit should fire (bypass) over zero_result_searches (general)
-        match = det.evaluate(current_tool="git_stage_and_commit")
-        if match is not None and match.pattern_name == "terminal_bypass_commit":
-            # If both could trigger, bypass should win
+        # Now evaluate with write_source — phantom_read (bypass) should fire
+        # over zero_result_searches (general warn) since bypass comes first
+        match = det.evaluate(current_tool="write_source")
+        if match is not None and match.pattern_name == "phantom_read":
             assert match.cause == "tool_bypass"
 
 
@@ -263,16 +262,16 @@ class TestEvaluateCurrentTool:
     def test_current_tool_visible_to_patterns(self) -> None:
         """current_tool record IS visible to pattern checks during evaluation."""
         det = CallPatternDetector()
-        # Set up: searches + meta, no writes
+        # Set up: searches + meta, no reads or writes
         det.record("search")
         det.record("meta")
         det.record("search")
         det.record("meta")
-        # 4 entries. With current_tool=git_stage_and_commit, total = 5
-        # terminal_bypass_commit should detect git commit with no writes
-        match = det.evaluate(current_tool="git_stage_and_commit")
+        # 4 entries. With current_tool=write_source, total = 5
+        # phantom_read should detect search → write with no read
+        match = det.evaluate(current_tool="write_source")
         assert match is not None
-        assert match.pattern_name == "terminal_bypass_commit"
+        assert match.pattern_name == "phantom_read"
 
     def test_current_tool_removed_on_exception(self) -> None:
         """current_tool is popped even if pattern check raises."""
