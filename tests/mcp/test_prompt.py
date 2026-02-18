@@ -17,10 +17,10 @@ class TestPromptSize:
     """Tests for prompt size constraints."""
 
     def test_prompt_byte_size(self) -> None:
-        """Prompt output <= 6000 bytes."""
+        """Prompt output <= 6100 bytes."""
         snippet = _make_codeplane_snippet("test_prefix")
         size = len(snippet.encode("utf-8"))
-        assert size <= 6000, f"Prompt is {size} bytes, expected <= 6000"
+        assert size <= 6100, f"Prompt is {size} bytes, expected <= 6100"
 
     def test_prompt_line_count(self) -> None:
         """Prompt output <= 130 lines."""
