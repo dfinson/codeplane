@@ -331,7 +331,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     @mcp.tool
     async def search(
         ctx: Context,
-        query: str = Field(..., description="Search query"),
+        query: str | None = Field(
+            None, description="Search query (required unless resuming a cursor)"
+        ),
         mode: Literal["lexical", "symbol", "references", "definitions"] = Field(
             "lexical", description="Search mode"
         ),
@@ -387,6 +389,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "message": "Cursor not found or expired. Re-issue the original search.",
                 }
             return page
+
+        # query is required for non-cursor calls
+        if not query:
+            return {
+                "error": "missing_query",
+                "message": "'query' is required when not resuming a cursor.",
+            }
 
         session = app_ctx.session_manager.get_or_create(ctx.session_id)
 

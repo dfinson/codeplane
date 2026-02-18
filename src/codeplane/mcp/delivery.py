@@ -75,6 +75,7 @@ class PendingCursor:
     items_key: str  # 'files' or 'results' — the key in the payload
     extra_fields: dict[str, Any]  # non-paginated fields to echo in every page
     page_index: int  # next item index to return
+    item_line_offset: int  # line offset within current item for content splitting
     created_at: float
     inline_cap: int
 
@@ -161,12 +162,9 @@ def _fit_items(
     return max(1, count)
 
 
-def _build_page(
-    cursor: PendingCursor,
-) -> dict[str, Any]:
-    """Build one page from a cursor, advancing the page_index."""
-    # Estimate envelope overhead (non-item fields)
-    overhead = len(
+def _envelope_overhead(cursor: PendingCursor) -> int:
+    """Estimate byte overhead of envelope fields (excluding items)."""
+    return len(
         json.dumps(
             {
                 "resource_kind": cursor.resource_kind,
@@ -180,9 +178,110 @@ def _build_page(
         ).encode("utf-8")
     )
 
-    count = _fit_items(cursor.items, cursor.page_index, cursor.inline_cap, overhead)
-    page_items = cursor.items[cursor.page_index : cursor.page_index + count]
-    cursor.page_index += count
+
+def _split_content_item(
+    item: dict[str, Any],
+    line_offset: int,
+    budget_bytes: int,
+) -> tuple[dict[str, Any], int, bool]:
+    """Split an oversized item's ``content`` field to fit within *budget_bytes*.
+
+    Returns ``(partial_item, new_line_offset, item_complete)``.
+    """
+    content: str = item.get("content", "")
+    lines = content.split("\n")
+    total_lines = len(lines)
+
+    remaining_lines = lines[line_offset:]
+
+    # Build a template to estimate per-item overhead (everything except content)
+    template = {k: v for k, v in item.items() if k != "content"}
+    template["content"] = ""
+    template["content_truncated"] = True
+    template["content_lines_delivered"] = 0
+    template["content_lines_total"] = total_lines
+    item_overhead = len(json.dumps(template, indent=2).encode("utf-8"))
+    available = max(budget_bytes - item_overhead, 0)
+
+    # Pack as many lines as fit
+    chunk: list[str] = []
+    chunk_bytes = 0
+    for line in remaining_lines:
+        lb = len((line + "\n").encode("utf-8"))
+        if chunk and chunk_bytes + lb > available:
+            break
+        chunk.append(line)
+        chunk_bytes += lb
+    # Always include at least 1 line
+    if not chunk and remaining_lines:
+        chunk = [remaining_lines[0]]
+
+    new_offset = line_offset + len(chunk)
+    item_complete = new_offset >= total_lines
+
+    partial: dict[str, Any] = dict(item)
+    partial["content"] = "\n".join(chunk)
+    partial["line_count"] = len(chunk)
+
+    # Adjust range to reflect delivered lines
+    if "range" in partial:
+        orig_start: int = partial["range"][0]
+        partial["range"] = [orig_start + line_offset, orig_start + new_offset - 1]
+
+    if not item_complete:
+        partial["content_truncated"] = True
+        partial["content_lines_delivered"] = len(chunk)
+        partial["content_lines_total"] = total_lines
+        partial["content_offset"] = line_offset
+
+    return partial, new_offset, item_complete
+
+
+def _build_page(
+    cursor: PendingCursor,
+) -> dict[str, Any]:
+    """Build one page from a cursor, advancing the page_index.
+
+    Handles two cases:
+    1. Normal: pack as many whole items as fit.
+    2. Oversized: a single item's content exceeds the inline cap —
+       split its ``content`` field across pages by line.
+    """
+    overhead = _envelope_overhead(cursor)
+    budget = cursor.inline_cap - overhead
+
+    # --- Determine if we're mid-item (content-split in progress) ---
+    if cursor.item_line_offset > 0:
+        # Continue splitting current item
+        item = cursor.items[cursor.page_index]
+        partial, new_offset, item_complete = _split_content_item(
+            item, cursor.item_line_offset, budget
+        )
+        page_items = [partial]
+        if item_complete:
+            cursor.item_line_offset = 0
+            cursor.page_index += 1
+        else:
+            cursor.item_line_offset = new_offset
+    else:
+        count = _fit_items(cursor.items, cursor.page_index, cursor.inline_cap, overhead)
+        page_items = cursor.items[cursor.page_index : cursor.page_index + count]
+
+        # Check if the single item exceeds budget — need content splitting
+        if count == 1:
+            item_bytes = len(json.dumps(page_items[0], indent=2).encode("utf-8"))
+            if item_bytes > budget and "content" in page_items[0]:
+                partial, new_offset, item_complete = _split_content_item(page_items[0], 0, budget)
+                page_items = [partial]
+                if item_complete:
+                    cursor.page_index += 1
+                else:
+                    cursor.item_line_offset = new_offset
+                    # page_index stays (still on this item)
+            else:
+                cursor.page_index += count
+        else:
+            cursor.page_index += count
 
     has_more = cursor.has_more
     remaining = len(cursor.items) - cursor.page_index
@@ -231,14 +330,15 @@ def _try_paginate(
     """If this kind supports pagination and the payload overflows, start a cursor.
 
     Returns the first page envelope, or None if pagination doesn't apply.
+    Handles single oversized items via content-level splitting.
     """
     items_key = _PAGINATED_KINDS.get(resource_kind)
     if items_key is None:
         return None
 
     items = payload.get(items_key)
-    if not isinstance(items, list) or len(items) <= 1:
-        return None  # 0 or 1 item — can't paginate further
+    if not isinstance(items, list) or len(items) == 0:
+        return None
 
     cursor_id = uuid.uuid4().hex[:12]
     extra = {k: v for k, v in payload.items() if k != items_key}
@@ -252,6 +352,7 @@ def _try_paginate(
         items_key=items_key,
         extra_fields=extra,
         page_index=0,
+        item_line_offset=0,
         created_at=time.monotonic(),
         inline_cap=inline_cap,
     )

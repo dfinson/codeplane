@@ -444,14 +444,28 @@ class TestCursorPagination:
         result = _try_paginate({"diff": "hello"}, "diff", 8000)
         assert result is None
 
-    def test_try_paginate_single_item(self) -> None:
-        """Single-item list cannot be paginated further."""
-        from codeplane.mcp.delivery import _try_paginate
+    def test_try_paginate_single_item_content_split(self) -> None:
+        """Single oversized item gets content-split across pages, not rejected."""
+        from codeplane.mcp.delivery import _CURSOR_STORE, _try_paginate
 
+        # Single file with ~10KB content (exceeds 8KB cap)
+        big_content = "\n".join(f"line {i}: {'x' * 80}" for i in range(120))
         result = _try_paginate(
-            {"files": [{"path": "a.py", "content": "x" * 10000}]}, "source", 8000
+            {"files": [{"path": "a.py", "content": big_content, "line_count": 120}]},
+            "source",
+            4000,
         )
-        assert result is None
+        assert result is not None
+        assert result["has_more"] is True
+        assert "cursor" in result
+        # Content should be truncated (not the full 120 lines)
+        delivered = result["files"][0]
+        assert delivered.get("content_truncated") is True
+        assert delivered["content_lines_delivered"] < 120
+        assert delivered["content_lines_total"] == 120
+
+        # Clean up
+        _CURSOR_STORE.pop(result["cursor"], None)
 
     def test_try_paginate_returns_first_page(self) -> None:
         """Multiple items that overflow get paginated; first page returned."""
@@ -555,7 +569,12 @@ class TestCursorPagination:
         from codeplane.mcp.delivery import _CURSOR_STORE, _try_paginate
 
         items = [
-            {"hit_id": f"h{i}", "path": f"file{i}.py", "span": {"start_line": 1, "end_line": 50}, "extra": "x" * 500}
+            {
+                "hit_id": f"h{i}",
+                "path": f"file{i}.py",
+                "span": {"start_line": 1, "end_line": 50},
+                "extra": "x" * 500,
+            }
             for i in range(10)
         ]
         payload = {"results": items, "query_time_ms": 5, "summary": "10 hits"}
@@ -591,3 +610,135 @@ class TestCursorPagination:
         from codeplane.mcp.delivery import _CURSOR_STORE
 
         _CURSOR_STORE.pop(result["cursor"], None)
+
+    def test_split_content_item_basic(self) -> None:
+        """_split_content_item splits oversized content by lines."""
+        from codeplane.mcp.delivery import _split_content_item
+
+        content = "\n".join(f"line {i}" for i in range(100))
+        item = {"path": "big.py", "content": content, "line_count": 100}
+
+        partial, new_offset, complete = _split_content_item(item, 0, 200)
+        assert not complete
+        assert new_offset > 0
+        assert new_offset < 100
+        assert partial["content_truncated"] is True
+        assert partial["content_lines_total"] == 100
+        assert partial["content_lines_delivered"] == new_offset
+        assert partial["content_offset"] == 0
+
+    def test_split_content_item_resume_offset(self) -> None:
+        """Resuming from a line offset delivers subsequent lines."""
+        from codeplane.mcp.delivery import _split_content_item
+
+        content = "\n".join(f"line {i}" for i in range(50))
+        item = {"path": "big.py", "content": content, "line_count": 50}
+
+        # First chunk
+        _, offset1, _ = _split_content_item(item, 0, 300)
+        # Second chunk from offset
+        partial2, offset2, _ = _split_content_item(item, offset1, 300)
+        assert partial2["content_offset"] == offset1
+        assert offset2 > offset1
+        # Content starts with the right line
+        assert partial2["content"].startswith(f"line {offset1}")
+
+    def test_split_content_item_completes(self) -> None:
+        """When budget is large enough for remaining lines, item_complete is True."""
+        from codeplane.mcp.delivery import _split_content_item
+
+        content = "\n".join(f"line {i}" for i in range(5))
+        item = {"path": "small.py", "content": content, "line_count": 5}
+
+        partial, new_offset, complete = _split_content_item(item, 0, 10_000)
+        assert complete
+        assert new_offset == 5
+        assert "content_truncated" not in partial
+
+    def test_split_content_item_adjusts_range(self) -> None:
+        """Range field is adjusted to reflect the delivered chunk."""
+        from codeplane.mcp.delivery import _split_content_item
+
+        content = "\n".join(f"line {i}" for i in range(100))
+        item = {"path": "big.py", "content": content, "line_count": 100, "range": [50, 149]}
+
+        partial, new_offset, _ = _split_content_item(item, 0, 200)
+        assert partial["range"][0] == 50  # original start
+        assert partial["range"][1] == 50 + new_offset - 1
+
+        # Resume from offset
+        partial2, _, _ = _split_content_item(item, new_offset, 200)
+        assert partial2["range"][0] == 50 + new_offset
+
+    def test_oversized_single_file_full_pagination(self) -> None:
+        """A single oversized file gets content-split across multiple cursor pages."""
+        from codeplane.mcp.delivery import _CURSOR_STORE, _try_paginate, resume_cursor
+
+        big_content = "\n".join(f"line {i}: {'x' * 80}" for i in range(200))
+        payload = {"files": [{"path": "huge.py", "content": big_content, "line_count": 200}]}
+        page1 = _try_paginate(payload, "source", 4000)
+        assert page1 is not None
+        assert page1["has_more"] is True
+        assert page1["files"][0].get("content_truncated") is True
+
+        # Collect all lines across pages
+        all_lines: list[str] = []
+        all_lines.extend(page1["files"][0]["content"].split("\n"))
+        cursor_id = page1["cursor"]
+
+        pages = 1
+        while True:
+            page = resume_cursor(cursor_id)
+            assert page is not None
+            pages += 1
+            all_lines.extend(page["files"][0]["content"].split("\n"))
+            if not page.get("has_more"):
+                break
+            cursor_id = page["cursor"]
+
+        assert pages > 2  # should take multiple pages
+        # All original lines should be recovered
+        assert len(all_lines) == 200
+        assert all_lines[0] == "line 0: " + "x" * 80
+        assert all_lines[-1] == "line 199: " + "x" * 80
+        # Cursor should be cleaned up
+        assert cursor_id not in _CURSOR_STORE
+
+    def test_multi_item_with_oversized_first(self) -> None:
+        """Multiple items where the first is oversized: splits first, then delivers rest."""
+        from codeplane.mcp.delivery import _CURSOR_STORE, _try_paginate, resume_cursor
+
+        big = {
+            "path": "big.py",
+            "content": "\n".join(f"line {i}: {'x' * 80}" for i in range(100)),
+            "line_count": 100,
+        }
+        small = {"path": "small.py", "content": "hello", "line_count": 1}
+        payload = {"files": [big, small]}
+        page1 = _try_paginate(payload, "source", 4000)
+        assert page1 is not None
+        assert page1["has_more"] is True
+
+        # Drain all pages
+        big_lines: list[str] = []
+        small_content = None
+        cursor_id = page1["cursor"]
+        current = page1
+
+        while True:
+            for f in current["files"]:
+                if f["path"] == "big.py":
+                    big_lines.extend(f["content"].split("\n"))
+                elif f["path"] == "small.py":
+                    small_content = f["content"]
+            if not current.get("has_more"):
+                break
+            next_page = resume_cursor(cursor_id)
+            assert next_page is not None
+            current = next_page
+            assert current is not None
+            cursor_id = current.get("cursor", cursor_id)
+
+        assert len(big_lines) == 100
+        assert small_content == "hello"
+        assert cursor_id not in _CURSOR_STORE
