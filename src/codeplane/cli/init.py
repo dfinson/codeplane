@@ -78,6 +78,10 @@ Response includes `file_sha256` per file — save it for `write_source` span edi
 6. `semantic_diff` — review structural impact before committing
 7. `git_stage_and_commit` — one-step commit with pre-commit hook handling
 
+**Testing rule**: NEVER run the full test suite or use `pytest` directly.
+Always use `run_test_targets(affected_by=[...])` with the files you changed.
+This runs only the tests impacted by your changes — fast, targeted, sufficient.
+
 ### Required Tool Mapping
 
 | Operation | REQUIRED Tool | FORBIDDEN Alternative |
