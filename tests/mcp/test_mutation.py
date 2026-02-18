@@ -36,6 +36,7 @@ class TestEditParam:
             end_line=5,
             expected_file_sha256="a" * 64,
             new_content="new",
+            expected_content="old",
         )
         assert edit.action == "update"
         assert edit.start_line == 1

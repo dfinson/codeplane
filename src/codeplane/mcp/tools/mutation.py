@@ -54,9 +54,9 @@ class EditParam(BaseModel):
     expected_content: str | None = Field(
         None,
         description=(
-            "Expected content at the span location (optional). "
-            "If provided and line numbers are slightly off, the server will "
-            "fuzzy-match nearby lines and auto-correct within a few lines."
+            "Expected content at the span location (required for update). "
+            "The server fuzzy-matches nearby lines if your line numbers are "
+            "slightly off, auto-correcting within a few lines."
         ),
     )
 
@@ -76,6 +76,8 @@ class EditParam(BaseModel):
                 missing.append("expected_file_sha256")
             if self.new_content is None:
                 missing.append("new_content")
+            if self.expected_content is None:
+                missing.append("expected_content")
             if missing:
                 msg = f"update requires: {', '.join(missing)}"
                 raise ValueError(msg)

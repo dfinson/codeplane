@@ -56,8 +56,8 @@ class TestEditParamValidation:
             end_line=10,
             expected_file_sha256="abc123",
             new_content="new code\n",
+            expected_content="old code\n",
         )
-        assert e.start_line == 5
         assert e.end_line == 10
         assert e.expected_file_sha256 == "abc123"
         assert e.new_content == "new code\n"
@@ -72,6 +72,7 @@ class TestEditParamValidation:
                 end_line=5,
                 expected_file_sha256="h",
                 new_content="x",
+                expected_content="y",
             )
 
     def test_delete_valid(self) -> None:
@@ -111,6 +112,7 @@ class TestSpanEditValidation:
                 end_line=10,
                 expected_file_sha256="h",
                 new_content="a",
+                expected_content="x",
             ),
             EditParam(
                 path="f.py",
@@ -119,6 +121,7 @@ class TestSpanEditValidation:
                 end_line=15,
                 expected_file_sha256="h",
                 new_content="b",
+                expected_content="y",
             ),
         ]
         sorted_edits = sorted(edits, key=lambda x: x.start_line or 0)
@@ -140,6 +143,7 @@ class TestSpanEditValidation:
                 end_line=5,
                 expected_file_sha256="h",
                 new_content="a",
+                expected_content="x",
             ),
             EditParam(
                 path="f.py",
@@ -148,6 +152,7 @@ class TestSpanEditValidation:
                 end_line=15,
                 expected_file_sha256="h",
                 new_content="b",
+                expected_content="y",
             ),
         ]
         sorted_edits = sorted(edits, key=lambda x: x.start_line or 0)
@@ -169,6 +174,7 @@ class TestSpanEditValidation:
                 end_line=25,
                 expected_file_sha256="h",
                 new_content="b",
+                expected_content="y",
             ),
             EditParam(
                 path="f.py",
@@ -177,6 +183,7 @@ class TestSpanEditValidation:
                 end_line=10,
                 expected_file_sha256="h",
                 new_content="a",
+                expected_content="x",
             ),
         ]
         desc = sorted(edits, key=lambda x: -(x.start_line or 0))
@@ -279,14 +286,14 @@ class TestFuzzySpanMatching:
         )
         assert e.expected_content == "old stuff"
 
-    def test_edit_param_expected_content_optional(self) -> None:
-        """EditParam works without expected_content."""
-        e = EditParam(
-            path="f.py",
-            action="update",
-            start_line=1,
-            end_line=5,
-            expected_file_sha256="abc123",
-            new_content="new stuff",
-        )
-        assert e.expected_content is None
+    def test_edit_param_expected_content_required(self) -> None:
+        """EditParam update requires expected_content."""
+        with pytest.raises(ValidationError, match="expected_content"):
+            EditParam(
+                path="f.py",
+                action="update",
+                start_line=1,
+                end_line=5,
+                expected_file_sha256="abc123",
+                new_content="new stuff",
+            )

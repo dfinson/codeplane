@@ -129,8 +129,9 @@ Search NEVER returns source text. Use `read_source` with spans from search resul
 (from `read_source`), and `new_content`. Server validates hash; mismatch → re-read.
 `edits` accepts multiple entries across different files — always batch independent edits
 into a single `write_source` call to minimize round-trips.
-For updates, you may also include `expected_content` — the server will fuzzy-match nearby
-lines if your line numbers are slightly off, auto-correcting within a few lines.
+For updates, always include `expected_content` (the old text at the span) — the server
+fuzzy-matches nearby lines if your line numbers are slightly off, auto-correcting
+within a few lines. This is required.
 
 ### CRITICAL: Follow Agentic Hints
 
