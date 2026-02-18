@@ -756,16 +756,19 @@ def _check_phantom_read(window: deque[CallRecord]) -> PatternMatch | None:
     )
 
 
-# Pattern checks in severity order (break before warn)
+# Pattern checks in priority order:
+# 1. Break patterns (block immediately)
+# 2. Bypass patterns (terminal command detection — more critical than efficiency)
+# 3. General warn patterns (workflow efficiency hints)
 _PATTERN_CHECKS = [
     _check_pure_search_chain,  # break
     _check_read_spiral,  # break
+    _check_terminal_bypass_commit,  # warn (bypass)
+    _check_phantom_read,  # warn (bypass)
     _check_scatter_read,  # warn
     _check_search_read_loop,  # warn
     _check_zero_result_searches,  # warn
     _check_full_file_creep,  # warn
-    _check_terminal_bypass_commit,  # warn
-    _check_phantom_read,  # warn
 ]
 
 
