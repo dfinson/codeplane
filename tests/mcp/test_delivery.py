@@ -8,7 +8,6 @@ Covers:
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Generator
 from pathlib import Path
@@ -37,79 +36,46 @@ class TestResourceCache:
         yield
         _delivery_mod._cache_dir = old
 
-    def test_store_and_retrieve(self) -> None:
-        """Store payload, get by id and kind, verify content matches."""
+    def test_store_writes_to_disk(self) -> None:
+        """Store payload, verify file exists on disk with correct content."""
         cache = ResourceCache()
-        uri, meta = cache.store(b"hello world", "source", "scope1")
-        rid = uri.split("/")[-1]
-        result = cache.get(rid, kind="source")
-        assert result is not None
-        assert result == b"hello world"
-
-    def test_sha256_computed_at_store(self) -> None:
-        """Verify sha256 in resource_meta matches hashlib of stored content."""
-        cache = ResourceCache()
-        payload = b"test payload data"
-        uri, meta = cache.store(payload, "source", "scope1")
-        expected_sha = hashlib.sha256(payload).hexdigest()
-        assert meta.sha256 == expected_sha
+        resource_id, byte_size = cache.store(b"hello world", "source")
+        assert _delivery_mod._cache_dir is not None
+        disk_path = _delivery_mod._cache_dir / "source" / f"{resource_id}.json"
+        assert disk_path.exists()
+        assert disk_path.read_bytes() == b"hello world"
+        assert byte_size == len(b"hello world")
 
     def test_immutability(self) -> None:
-        """Store, retrieve twice, verify identical bytes."""
+        """Store, read twice from disk, verify identical bytes."""
         cache = ResourceCache()
         payload = b"immutable data 12345"
-        uri, meta = cache.store(payload, "source", "scope1")
-        rid = uri.split("/")[-1]
-        r1 = cache.get(rid, kind="source")
-        r2 = cache.get(rid, kind="source")
+        resource_id, _ = cache.store(payload, "source")
+        assert _delivery_mod._cache_dir is not None
+        disk_path = _delivery_mod._cache_dir / "source" / f"{resource_id}.json"
+        r1 = disk_path.read_bytes()
+        r2 = disk_path.read_bytes()
         assert r1 == r2 == payload
 
-    def test_get_without_kind_scans_dirs(self) -> None:
-        """Fallback scan finds resource without explicit kind."""
-        cache = ResourceCache()
-        uri, _ = cache.store(b"findme", "source", "s1")
-        rid = uri.split("/")[-1]
-        result = cache.get(rid)  # no kind
-        assert result == b"findme"
-
-    def test_get_missing_returns_none(self) -> None:
-        """Non-existent resource returns None."""
-        cache = ResourceCache()
-        assert cache.get("nonexistent", kind="source") is None
-
-    def test_scope_id_in_uri(self) -> None:
-        """Verify URI format is codeplane://{scope_id}/cache/{kind}/{id}."""
-        cache = ResourceCache()
-        uri, _ = cache.store(b"data", "source", "my-scope-123")
-        assert uri.startswith("codeplane://my-scope-123/cache/source/")
-
-    def test_meta_byte_size(self) -> None:
-        """Verify byte_size in meta matches payload size."""
+    def test_byte_size_returned(self) -> None:
+        """Verify byte_size matches payload size."""
         cache = ResourceCache()
         payload = b"exactly 25 bytes of data!"
-        _, meta = cache.store(payload, "source", "s1")
-        assert meta.byte_size == len(payload)
+        _, byte_size = cache.store(payload, "source")
+        assert byte_size == len(payload)
 
     def test_dict_payload_stored_compact(self) -> None:
         """Dict payloads are serialized as compact JSON on disk."""
         cache = ResourceCache()
         payload = {"key": "value", "nested": [1, 2, 3]}
-        uri, _ = cache.store(payload, "test", "s1")
-        rid = uri.split("/")[-1]
-        raw = cache.get(rid, kind="test")
-        assert raw is not None
+        resource_id, _ = cache.store(payload, "test")
+        assert _delivery_mod._cache_dir is not None
+        disk_path = _delivery_mod._cache_dir / "test" / f"{resource_id}.json"
+        raw = disk_path.read_bytes()
         # Compact = no spaces after separators
         text = raw.decode("utf-8")
         assert " " not in text
         assert json.loads(text) == payload
-
-    def test_no_cache_dir_returns_none(self) -> None:
-        """When _cache_dir is None, get returns None."""
-        _delivery_mod._cache_dir = None
-        cache = ResourceCache()
-        assert cache.get("anything") is None
-
-    """Tests for ClientProfile and resolve_profile."""
 
     def test_default_profile(self) -> None:
         """No clientInfo -> default profile."""
@@ -163,7 +129,7 @@ class TestBuildEnvelope:
         payload = {"data": "x" * 20000}
         env = build_envelope(payload, resource_kind="source", client_profile=self._profile())
         assert env["delivery"] == "resource"
-        assert "resource_uri" in env
+        assert "resource_uri" not in env
         assert "agentic_hint" in env
         assert "cat" in env["agentic_hint"] or "type" in env["agentic_hint"]
 

@@ -11,7 +11,6 @@ Provides:
 from __future__ import annotations
 
 import contextvars
-import hashlib
 import json
 import os
 import sys
@@ -27,6 +26,7 @@ import structlog
 
 from codeplane.config.constants import INLINE_CAP_BYTES
 from codeplane.config.user_config import DEFAULT_PORT
+from codeplane.mcp.gate import CallPatternDetector
 
 log = structlog.get_logger(__name__)
 
@@ -139,22 +139,6 @@ def get_current_profile() -> ClientProfile:
 # =============================================================================
 
 
-@dataclass
-class ResourceMeta:
-    """Metadata for a cached resource."""
-
-    byte_size: int
-    sha256: str
-    content_type: str
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "byte_size": self.byte_size,
-            "sha256": self.sha256,
-            "content_type": self.content_type,
-        }
-
-
 class ResourceCache:
     """Disk-backed resource cache.
 
@@ -166,10 +150,8 @@ class ResourceCache:
         self,
         payload: Any,
         kind: str,
-        scope_id: str,
-        content_type: str = "application/json",
-    ) -> tuple[str, ResourceMeta]:
-        """Serialize payload to disk and return (resource_uri, meta)."""
+    ) -> tuple[str, int]:
+        """Serialize payload to disk and return (resource_id, byte_size)."""
         if isinstance(payload, dict | list):
             raw = json.dumps(payload, separators=(",", ":"), sort_keys=False).encode("utf-8")
         elif isinstance(payload, str):
@@ -179,15 +161,7 @@ class ResourceCache:
         else:
             raw = json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
 
-        sha = hashlib.sha256(raw).hexdigest()
         resource_id = uuid.uuid4().hex[:12]
-        uri = f"codeplane://{scope_id}/cache/{kind}/{resource_id}"
-
-        meta = ResourceMeta(
-            byte_size=len(raw),
-            sha256=sha,
-            content_type=content_type,
-        )
 
         if _cache_dir is None:
             log.warning("resource_cache_no_dir", resource_id=resource_id)
@@ -201,39 +175,14 @@ class ResourceCache:
             "resource_cached",
             resource_id=resource_id,
             kind=kind,
-            scope_id=scope_id,
             byte_size=len(raw),
         )
 
-        return uri, meta
-
-    def get(self, resource_id: str, kind: str | None = None) -> bytes | None:
-        """Read a cached resource from disk.
-
-        If kind is provided, looks directly in _cache_dir/{kind}/{id}.json.
-        Otherwise scans all kind subdirectories (slower fallback).
-        """
-        if _cache_dir is None:
-            return None
-        if kind:
-            path = _cache_dir / kind / f"{resource_id}.json"
-            return path.read_bytes() if path.exists() else None
-        # Fallback: scan all subdirectories
-        for kind_dir in _cache_dir.iterdir():
-            if kind_dir.is_dir():
-                path = kind_dir / f"{resource_id}.json"
-                if path.exists():
-                    return path.read_bytes()
-        return None
+        return resource_id, len(raw)
 
 
 # Global resource cache instance
 _resource_cache = ResourceCache()
-
-
-def get_resource_cache() -> ResourceCache:
-    """Get the global resource cache."""
-    return _resource_cache
 
 
 # =============================================================================
@@ -277,19 +226,15 @@ def build_envelope(
             envelope["inline_summary"] = inline_summary
     else:
         # Resource delivery — write full payload to disk
-        effective_scope = scope_id or "default"
-        uri, meta = _resource_cache.store(payload, resource_kind, effective_scope)
+        resource_id, byte_size = _resource_cache.store(payload, resource_kind)
         envelope["delivery"] = "resource"
-        envelope["resource_uri"] = uri
-        envelope["resource_meta"] = meta.to_dict()
         if inline_summary:
             envelope["inline_summary"] = inline_summary
         envelope["inline_budget_bytes_used"] = len(
             json.dumps(envelope, indent=2, default=str).encode("utf-8")
         )
         envelope["inline_budget_bytes_limit"] = inline_cap
-        resource_id = uri.rsplit("/", 1)[-1]
-        envelope["agentic_hint"] = _build_fetch_hint(resource_id, meta.byte_size, resource_kind)
+        envelope["agentic_hint"] = _build_fetch_hint(resource_id, byte_size, resource_kind)
 
     # Echo scope
     if scope_id:
@@ -337,13 +282,10 @@ def wrap_existing_response(
             result["inline_summary"] = inline_summary
     else:
         # Resource delivery — store full result on disk, return synopsis
-        effective_scope = scope_id or "default"
-        uri, meta = _resource_cache.store(result, resource_kind, effective_scope)
+        resource_id, byte_size = _resource_cache.store(result, resource_kind)
         envelope: dict[str, Any] = {
             "resource_kind": resource_kind,
             "delivery": "resource",
-            "resource_uri": uri,
-            "resource_meta": meta.to_dict(),
         }
         if inline_summary:
             envelope["inline_summary"] = inline_summary
@@ -355,8 +297,7 @@ def wrap_existing_response(
             envelope["scope_id"] = scope_id
         if scope_usage:
             envelope["scope_usage"] = scope_usage
-        resource_id = uri.rsplit("/", 1)[-1]
-        envelope["agentic_hint"] = _build_fetch_hint(resource_id, meta.byte_size, resource_kind)
+        envelope["agentic_hint"] = _build_fetch_hint(resource_id, byte_size, resource_kind)
 
         log.debug(
             "envelope_wrapped",
@@ -423,6 +364,9 @@ class ScopeBudget:
     _total_resets: int = field(default=0)
     _reset_log: list[dict[str, Any]] = field(default_factory=list)
     mutations_for_search_reset: int = field(default=3)
+
+    # Call pattern detector
+    pattern_detector: CallPatternDetector = field(default_factory=CallPatternDetector)
 
     def touch(self) -> None:
         self.last_active = time.monotonic()
