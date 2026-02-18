@@ -103,8 +103,15 @@ action**, not suggestions. Always read and execute them before proceeding.
 
 Also check for: `coverage_hint`, `display_to_user`.
 
+### Unknown Parameters
+
+If you are unsure of a tool's parameters, call `describe(action='tool', name='<tool>')`
+before guessing. Validation errors also include this hint, but calling `describe` proactively
+avoids wasted round-trips.
+
 ### Common Mistakes (Don't Do These)
 
+- **DON'T** guess tool parameter names — use `describe(action='tool', name='...')` first
 - **DON'T** use `search` expecting source text — it returns spans only
 - **DON'T** pass `context:` to search — the parameter is `enrichment`
 - **DON'T** use `read_files` — it's replaced by `read_source` and `read_file_full`
