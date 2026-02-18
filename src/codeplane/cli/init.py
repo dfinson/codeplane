@@ -83,7 +83,7 @@ Response includes `file_sha256` per file — save it for `write_source` span edi
 |-----------|---------------|----------------------|
 | Read source | `{tool_prefix}_read_source` | `cat`, `head`, `less`, `tail` |
 | Read full file | `{tool_prefix}_read_file_full` | `cat`, `head`, bulk reads |
-| Write/edit files | `{tool_prefix}_write_files` | `sed`, `echo >>`, `awk`, `tee` |
+| Write/edit files | `{tool_prefix}_write_source` | `sed`, `echo >>`, `awk`, `tee` |
 | List directory | `{tool_prefix}_list_files` | `ls`, `find`, `tree` |
 | Search code | `{tool_prefix}_search` | `grep`, `rg`, `ag`, `ack` |
 | Repository overview | `{tool_prefix}_map_repo` | Manual file traversal |
@@ -91,10 +91,16 @@ Response includes `file_sha256` per file — save it for `write_source` span edi
 | Run linters | `{tool_prefix}_lint_check` | `ruff`, `black`, `mypy` directly |
 | Discover tests | `{tool_prefix}_discover_test_targets` | Manual test file search |
 | Run tests | `{tool_prefix}_run_test_targets` | `pytest`, `jest` directly |
-| Rename symbols | `{tool_prefix}_refactor_rename` | Find-and-replace, `sed` |
+| Rename across files | `{tool_prefix}_refactor_rename` | Find-and-replace, `sed` |
 | Semantic diff | `{tool_prefix}_semantic_diff` | Manual comparison |
 
-### Search Strategy Guide (enrichment, no source text)
+### Before You Edit: Decision Gate
+
+STOP before using `write_source` for multi-file changes:
+- Changing a name across files? → `refactor_rename` (NOT write_source + search)
+- Moving a file? → `refactor_move` (NOT write_source + delete)
+- Deleting a symbol or file? → `refactor_delete`
+
 
 | Task | Mode | Enrichment | Why |
 |------|------|------------|-----|

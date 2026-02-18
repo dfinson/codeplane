@@ -132,20 +132,26 @@ Response includes `file_sha256` per file — save it for `write_source` span edi
 
 | Operation | REQUIRED Tool | FORBIDDEN Alternative |
 |-----------|---------------|----------------------|
-| Read source | `mcp_codeplane-codeplane-_read_source` | `cat`, `head`, `less`, `tail` |
-| Read full file | `mcp_codeplane-codeplane-_read_file_full` | `cat`, `head`, bulk reads |
-| Write/edit files | `mcp_codeplane-codeplane-_write_files` | `sed`, `echo >>`, `awk`, `tee` |
-| List directory | `mcp_codeplane-codeplane-_list_files` | `ls`, `find`, `tree` |
-| Search code | `mcp_codeplane-codeplane-_search` | `grep`, `rg`, `ag`, `ack` |
-| Repository overview | `mcp_codeplane-codeplane-_map_repo` | Manual file traversal |
-| All git operations | `mcp_codeplane-codeplane-_git_*` | Raw `git` commands |
-| Run linters | `mcp_codeplane-codeplane-_lint_check` | `ruff`, `black`, `mypy` directly |
-| Discover tests | `mcp_codeplane-codeplane-_discover_test_targets` | Manual test file search |
-| Run tests | `mcp_codeplane-codeplane-_run_test_targets` | `pytest`, `jest` directly |
-| Rename symbols | `mcp_codeplane-codeplane-_refactor_rename` | Find-and-replace, `sed` |
-| Semantic diff | `mcp_codeplane-codeplane-_semantic_diff` | Manual comparison |
+| Read source | `mcp_codeplane-codeplane_copy3_read_source` | `cat`, `head`, `less`, `tail` |
+| Read full file | `mcp_codeplane-codeplane_copy3_read_file_full` | `cat`, `head`, bulk reads |
+| Write/edit files | `mcp_codeplane-codeplane_copy3_write_source` | `sed`, `echo >>`, `awk`, `tee` |
+| List directory | `mcp_codeplane-codeplane_copy3_list_files` | `ls`, `find`, `tree` |
+| Search code | `mcp_codeplane-codeplane_copy3_search` | `grep`, `rg`, `ag`, `ack` |
+| Repository overview | `mcp_codeplane-codeplane_copy3_map_repo` | Manual file traversal |
+| All git operations | `mcp_codeplane-codeplane_copy3_git_*` | Raw `git` commands |
+| Run linters | `mcp_codeplane-codeplane_copy3_lint_check` | `ruff`, `black`, `mypy` directly |
+| Discover tests | `mcp_codeplane-codeplane_copy3_discover_test_targets` | Manual test file search |
+| Run tests | `mcp_codeplane-codeplane_copy3_run_test_targets` | `pytest`, `jest` directly |
+| Rename across files | `mcp_codeplane-codeplane_copy3_refactor_rename` | Find-and-replace, `sed` |
+| Semantic diff | `mcp_codeplane-codeplane_copy3_semantic_diff` | Manual comparison |
 
-### Search Strategy Guide (enrichment, no source text)
+### Before You Edit: Decision Gate
+
+STOP before using `write_source` for multi-file changes:
+- Changing a name across files? → `refactor_rename` (NOT write_source + search)
+- Moving a file? → `refactor_move` (NOT write_source + delete)
+- Deleting a symbol or file? → `refactor_delete`
+
 
 | Task | Mode | Enrichment | Why |
 |------|------|------------|-----|

@@ -219,6 +219,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     ) -> dict[str, Any]:
         """Create, update, or delete files atomically.
 
+        For cross-file renames, use refactor_rename instead.
+
         For updates: span-based only. Provide start_line, end_line,
         expected_file_sha256 (from read_source), and new_content.
         The file hash is verified before applying to prevent stale edits.
