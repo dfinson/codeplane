@@ -353,6 +353,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             description="Return one result per file (like rg -l). Includes match_count per file.",
         ),
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
+        confirmation_token: str | None = Field(
+            None, description="Token from a previous pattern-break gate."
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Reason for continuing past a pattern-break gate (min chars per gate spec).",
+        ),
     ) -> dict[str, Any]:
         """Search code, symbols, or references. Returns spans + metadata, NEVER source text.
 
@@ -373,13 +380,32 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         pattern_match = session.pattern_detector.evaluate()
         pattern_extras: dict[str, Any] = {}
         if pattern_match and pattern_match.severity == "break":
-            # Issue gate — agent must justify continuing
             gate_spec = build_pattern_gate_spec(pattern_match)
-            gate_block = session.gate_manager.issue(gate_spec)
-            pattern_extras = {
-                "gate": gate_block,
-                **build_pattern_hint(pattern_match),
-            }
+            # If agent provided a valid gate token, validate and proceed
+            if confirmation_token:
+                gate_reason_str = gate_reason if isinstance(gate_reason, str) else ""
+                gate_result = session.gate_manager.validate(confirmation_token, gate_reason_str)
+                if not gate_result.ok:
+                    # Re-issue the gate — token was invalid
+                    gate_block = session.gate_manager.issue(gate_spec)
+                    return {
+                        "status": "blocked",
+                        "error": {
+                            "code": "GATE_VALIDATION_FAILED",
+                            "message": gate_result.error,
+                        },
+                        "gate": gate_block,
+                        **build_pattern_hint(pattern_match),
+                    }
+                # Token valid — proceed with search (pattern_extras stays empty)
+            else:
+                # No token — block and return gate
+                gate_block = session.gate_manager.issue(gate_spec)
+                return {
+                    "status": "blocked",
+                    "gate": gate_block,
+                    **build_pattern_hint(pattern_match),
+                }
         elif pattern_match and pattern_match.severity == "warn":
             pattern_extras = build_pattern_hint(pattern_match)
         from codeplane.index.ops import SearchMode

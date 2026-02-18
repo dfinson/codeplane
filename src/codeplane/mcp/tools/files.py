@@ -168,11 +168,31 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         pattern_extras: dict[str, Any] = {}
         if pattern_match and pattern_match.severity == "break":
             gate_spec = build_pattern_gate_spec(pattern_match)
-            gate_block = session.gate_manager.issue(gate_spec)
-            pattern_extras = {
-                "gate": gate_block,
-                **build_pattern_hint(pattern_match),
-            }
+            # If agent provided a valid gate token, validate and proceed
+            if confirmation_token:
+                reason_str = confirm_reason if isinstance(confirm_reason, str) else ""
+                gate_result = session.gate_manager.validate(confirmation_token, reason_str)
+                if not gate_result.ok:
+                    # Re-issue the gate — token was invalid
+                    gate_block = session.gate_manager.issue(gate_spec)
+                    return {
+                        "status": "blocked",
+                        "error": {
+                            "code": "GATE_VALIDATION_FAILED",
+                            "message": gate_result.error,
+                        },
+                        "gate": gate_block,
+                        **build_pattern_hint(pattern_match),
+                    }
+                # Token valid — proceed (pattern_extras stays empty)
+            else:
+                # No token — block and return gate
+                gate_block = session.gate_manager.issue(gate_spec)
+                return {
+                    "status": "blocked",
+                    "gate": gate_block,
+                    **build_pattern_hint(pattern_match),
+                }
         elif pattern_match and pattern_match.severity == "warn":
             pattern_extras = build_pattern_hint(pattern_match)
 
