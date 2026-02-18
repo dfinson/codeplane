@@ -228,7 +228,7 @@ class TestScopeBudget:
 
 
 class TestFetchHints:
-    """Tests for OS-agnostic fetch hints and per-kind hint builders."""
+    """Tests for disk-cache fetch hints and _extract_summary."""
 
     def test_source_hint_lists_files(self) -> None:
         """Source hint includes file paths and line ranges."""
@@ -236,15 +236,15 @@ class TestFetchHints:
 
         payload = {
             "files": [
-                {"path": "src/a.py", "range": [1, 50], "content": "..."},
-                {"path": "src/b.py", "range": [10, 30], "content": "..."},
+                {"path": "src/a.py", "range": [1, 50], "line_count": 50, "content": "..."},
+                {"path": "src/b.py", "range": [10, 30], "line_count": 21, "content": "..."},
             ],
             "summary": "2 files",
         }
         hint = _build_fetch_hint("abc123", 5000, "source", payload)
-        assert "Contains 2 file(s)" in hint
-        assert "src/a.py (L1-L50)" in hint
-        assert "src/b.py (L10-L30)" in hint
+        assert "2 file(s)" in hint
+        assert "src/a.py" in hint
+        assert "src/b.py" in hint
         assert "cached to disk" in hint
 
     def test_search_hits_hint_counts(self) -> None:
@@ -260,7 +260,7 @@ class TestFetchHints:
             "summary": "3 results",
         }
         hint = _build_fetch_hint("abc123", 3000, "search_hits", payload)
-        assert "3 result(s) across 2 file(s)" in hint
+        assert "3 hit(s) across 2 file(s)" in hint
 
     def test_diff_hint_counts_files(self) -> None:
         """Diff hint counts files from diff --git markers."""
@@ -311,22 +311,35 @@ class TestFetchHints:
         hint = _build_fetch_hint("abc123", 5000, "test_output", payload)
         assert "10 passed" in hint
         assert "2 failed" in hint
-        assert "FAILED" in hint  # grep hint for failures
 
-    def test_semantic_diff_hint_counts_changes(self) -> None:
-        """Semantic diff hint summarizes change types."""
+    def test_semantic_diff_hint_with_summary(self) -> None:
+        """Semantic diff hint uses summary field if present."""
         from codeplane.mcp.delivery import _build_fetch_hint
 
         payload = {
-            "changes": [
-                {"change_type": "added"},
-                {"change_type": "added"},
-                {"change_type": "removed"},
+            "structural_changes": [
+                {"change": "added", "name": "foo"},
+                {"change": "added", "name": "bar"},
+                {"change": "removed", "name": "baz"},
+            ],
+            "summary": "2 added, 1 removed",
+        }
+        hint = _build_fetch_hint("abc123", 4000, "semantic_diff", payload)
+        assert "2 added, 1 removed" in hint
+
+    def test_semantic_diff_hint_without_summary(self) -> None:
+        """Semantic diff hint tallies change types when no summary."""
+        from codeplane.mcp.delivery import _build_fetch_hint
+
+        payload = {
+            "structural_changes": [
+                {"change": "added", "name": "foo"},
+                {"change": "removed", "name": "bar"},
             ],
         }
         hint = _build_fetch_hint("abc123", 4000, "semantic_diff", payload)
-        assert "3 structural change(s)" in hint
-        assert "2 added" in hint
+        assert "2 change(s)" in hint
+        assert "1 added" in hint
         assert "1 removed" in hint
 
     def test_fallback_hint_for_unknown_kind(self) -> None:
@@ -335,7 +348,6 @@ class TestFetchHints:
 
         hint = _build_fetch_hint("abc123", 1000, "unknown_kind", {"data": "x"})
         assert "cached to disk" in hint
-        # Should contain a read command (cat on unix, type on windows)
         assert "cat" in hint or "type" in hint
 
     def test_hint_without_payload_falls_back(self) -> None:
@@ -346,21 +358,17 @@ class TestFetchHints:
         assert "cached to disk" in hint
         assert "cat" in hint or "type" in hint
 
-    def test_nav_commands_os_agnostic(self) -> None:
-        """Navigation commands adapt to the current platform."""
+    def test_os_agnostic_cat_command(self) -> None:
+        """Fetch hint uses cat on unix and type on windows."""
         import sys
 
-        from codeplane.mcp.delivery import _nav_cmd_cat, _nav_cmd_grep
+        from codeplane.mcp.delivery import _build_fetch_hint
 
-        cat_cmd = _nav_cmd_cat("some/path.json")
-        grep_cmd = _nav_cmd_grep("pattern", "some/path.json")
+        hint = _build_fetch_hint("abc123", 1000, "source")
         if sys.platform == "win32":
-            assert "type" in cat_cmd
-            assert "findstr" in grep_cmd
-            assert "\\" in cat_cmd  # Windows path separators
+            assert "type" in hint
         else:
-            assert "cat" in cat_cmd
-            assert "grep" in grep_cmd
+            assert "cat" in hint
 
     def test_repo_map_hint_lists_sections(self) -> None:
         """Repo map hint lists top-level sections."""
@@ -399,3 +407,187 @@ class TestFetchHints:
         }
         hint = _build_fetch_hint("abc123", 4000, "refactor_preview", payload)
         assert "3 match(es) across 2 file(s)" in hint
+
+
+class TestCursorPagination:
+    """Tests for cursor-based pagination of oversized responses."""
+
+    def test_fit_items_all_fit(self) -> None:
+        """When all items fit, return count of all items."""
+        from codeplane.mcp.delivery import _fit_items
+
+        items = [{"path": "a.py"}, {"path": "b.py"}]
+        count = _fit_items(items, 0, 10_000, 200)
+        assert count == 2
+
+    def test_fit_items_partial(self) -> None:
+        """When only some items fit, return partial count."""
+        from codeplane.mcp.delivery import _fit_items
+
+        # Each item ~20 bytes JSON. Cap = 60 with 10 overhead => 50 available => fits ~2
+        items = [{"k": "x"} for _ in range(5)]
+        count = _fit_items(items, 0, 60, 10)
+        assert 1 <= count < 5
+
+    def test_fit_items_minimum_one(self) -> None:
+        """Even an oversized single item returns count=1."""
+        from codeplane.mcp.delivery import _fit_items
+
+        items = [{"content": "x" * 5000}]
+        count = _fit_items(items, 0, 100, 50)
+        assert count == 1
+
+    def test_try_paginate_non_paginated_kind(self) -> None:
+        """Non-paginated kinds return None."""
+        from codeplane.mcp.delivery import _try_paginate
+
+        result = _try_paginate({"diff": "hello"}, "diff", 8000)
+        assert result is None
+
+    def test_try_paginate_single_item(self) -> None:
+        """Single-item list cannot be paginated further."""
+        from codeplane.mcp.delivery import _try_paginate
+
+        result = _try_paginate(
+            {"files": [{"path": "a.py", "content": "x" * 10000}]}, "source", 8000
+        )
+        assert result is None
+
+    def test_try_paginate_returns_first_page(self) -> None:
+        """Multiple items that overflow get paginated; first page returned."""
+        from codeplane.mcp.delivery import _CURSOR_STORE, _try_paginate
+
+        items = [{"path": f"file{i}.py", "content": "x" * 3000} for i in range(5)]
+        payload = {"files": items, "summary": "5 files"}
+        page = _try_paginate(payload, "source", 8000, "5 files")
+
+        assert page is not None
+        assert page["resource_kind"] == "source"
+        assert page["delivery"] == "inline"
+        assert "files" in page
+        assert len(page["files"]) < 5  # not all items fit
+        assert page["has_more"] is True
+        assert "cursor" in page
+        assert page["page_info"]["total"] == 5
+
+        # Clean up cursor store
+        cursor_id = page["cursor"]
+        _CURSOR_STORE.pop(cursor_id, None)
+
+    def test_resume_cursor_returns_next_page(self) -> None:
+        """Resuming a cursor returns the next page of items."""
+        from codeplane.mcp.delivery import _CURSOR_STORE, _try_paginate, resume_cursor
+
+        items = [{"path": f"file{i}.py", "content": "x" * 3000} for i in range(5)]
+        payload = {"files": items, "summary": "5 files"}
+        page1 = _try_paginate(payload, "source", 8000)
+        assert page1 is not None
+        assert page1["has_more"] is True
+
+        page2 = resume_cursor(page1["cursor"])
+        assert page2 is not None
+        assert "files" in page2
+        assert page2["page_info"]["total"] == 5
+        first_page_count = page1["page_info"]["returned"]
+        assert (
+            page2["page_info"]["remaining"] == 5 - first_page_count - page2["page_info"]["returned"]
+        )
+
+        # Clean up
+        if "cursor" in page2:
+            _CURSOR_STORE.pop(page2["cursor"], None)
+
+    def test_cursor_expiry(self) -> None:
+        """Expired cursor returns None."""
+        import time as _time
+
+        from codeplane.mcp.delivery import _CURSOR_STORE, _try_paginate, resume_cursor
+
+        items = [{"path": f"file{i}.py", "content": "x" * 3000} for i in range(5)]
+        page1 = _try_paginate({"files": items}, "source", 8000)
+        assert page1 is not None
+
+        # Force expiry by backdating
+        cursor_id = page1["cursor"]
+        _CURSOR_STORE[cursor_id].created_at = _time.monotonic() - 600
+
+        page2 = resume_cursor(cursor_id)
+        assert page2 is None
+
+    def test_final_page_removes_cursor(self) -> None:
+        """When the last page is returned, cursor is removed from store."""
+        from codeplane.mcp.delivery import _CURSOR_STORE, _try_paginate, resume_cursor
+
+        # 2 items, cap so small only 1 fits per page
+        items = [{"path": "a.py", "content": "x" * 4000}, {"path": "b.py", "content": "y" * 4000}]
+        page1 = _try_paginate({"files": items}, "source", 5000)
+        assert page1 is not None
+        assert page1["has_more"] is True
+        cursor_id = page1["cursor"]
+
+        page2 = resume_cursor(cursor_id)
+        assert page2 is not None
+        assert page2["has_more"] is False
+        assert "cursor" not in page2
+        assert cursor_id not in _CURSOR_STORE
+
+    def test_extra_fields_echoed_every_page(self) -> None:
+        """Non-paginated fields (summary etc.) appear in every page."""
+        from codeplane.mcp.delivery import _CURSOR_STORE, _try_paginate, resume_cursor
+
+        items = [{"path": f"f{i}.py", "content": "x" * 4000} for i in range(3)]
+        payload = {"files": items, "summary": "3 files", "not_found": ["missing.py"]}
+        page1 = _try_paginate(payload, "source", 5000, "3 files")
+        assert page1 is not None
+        assert page1.get("not_found") == ["missing.py"]
+        assert page1.get("inline_summary") == "3 files"
+
+        if page1.get("has_more"):
+            page2 = resume_cursor(page1["cursor"])
+            assert page2 is not None
+            assert page2.get("not_found") == ["missing.py"]
+            # Clean up
+            if "cursor" in page2:
+                _CURSOR_STORE.pop(page2["cursor"], None)
+
+    def test_search_hits_paginated(self) -> None:
+        """Search results (search_hits kind) are also paginated."""
+        from codeplane.mcp.delivery import _CURSOR_STORE, _try_paginate
+
+        items = [
+            {"hit_id": f"h{i}", "path": f"file{i}.py", "span": {"start_line": 1, "end_line": 50}, "extra": "x" * 500}
+            for i in range(10)
+        ]
+        payload = {"results": items, "query_time_ms": 5, "summary": "10 hits"}
+        page = _try_paginate(payload, "search_hits", 2000)
+
+        assert page is not None
+        assert "results" in page
+        assert len(page["results"]) < 10
+        assert page["has_more"] is True
+        assert page["page_info"]["total"] == 10
+
+        # Clean up
+        _CURSOR_STORE.pop(page["cursor"], None)
+
+    def test_build_envelope_paginates_before_disk(self) -> None:
+        """build_envelope tries pagination before falling back to disk."""
+        # A source payload with many files that exceeds inline cap
+        items = [
+            {"path": f"f{i}.py", "content": "x" * 2000, "range": [1, 50], "line_count": 50}
+            for i in range(10)
+        ]
+        payload = {"files": items, "summary": "10 files"}
+        result = build_envelope(payload, resource_kind="source", inline_summary="10 files")
+
+        # Should get paginated delivery, not resource
+        assert result["delivery"] == "inline"
+        assert "cursor" in result
+        assert result["has_more"] is True
+        assert "files" in result
+        assert len(result["files"]) < 10
+
+        # Clean up
+        from codeplane.mcp.delivery import _CURSOR_STORE
+
+        _CURSOR_STORE.pop(result["cursor"], None)

@@ -360,6 +360,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             None,
             description="Reason for continuing past a pattern-break gate (min chars per gate spec).",
         ),
+        cursor: str | None = Field(
+            None,
+            description="Cursor token from a previous paginated response. Pass to retrieve the next page.",
+        ),
     ) -> dict[str, Any]:
         """Search code, symbols, or references. Returns spans + metadata, NEVER source text.
 
@@ -372,6 +376,18 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         - 'function': + enclosing function span, enclosing class span
         - 'class': + full class span (all member spans)
         """
+        # Resume paginated cursor if provided
+        if cursor:
+            from codeplane.mcp.delivery import resume_cursor
+
+            page = resume_cursor(cursor)
+            if page is None:
+                return {
+                    "error": "cursor_expired",
+                    "message": "Cursor not found or expired. Re-issue the original search.",
+                }
+            return page
+
         session = app_ctx.session_manager.get_or_create(ctx.session_id)
 
         # Evaluate pattern detector before executing search
@@ -466,9 +482,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 scope_pref: _Lit["function", "class", "block"] = (
                     "function" if enrichment == "function" else "class"
                 )
-                with app_ctx.coordinator.db.session() as session:
+                with app_ctx.coordinator.db.session() as db_session:
                     scope_region, _ = resolve_scope_region_for_path(
-                        session,
+                        db_session,
                         app_ctx.coordinator.repo_root,
                         file_path,
                         def_fact.start_line,
@@ -554,9 +570,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 if enrichment != "none" and enrichment in ("function", "class"):
                     from codeplane.index._internal.indexing import resolve_scope_region_for_path
 
-                    with app_ctx.coordinator.db.session() as session:
+                    with app_ctx.coordinator.db.session() as db_session:
                         scope_region, _ = resolve_scope_region_for_path(
-                            session,
+                            db_session,
                             app_ctx.coordinator.repo_root,
                             path,
                             ref.start_line,
@@ -660,9 +676,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             if is_structural:
                 from codeplane.index._internal.indexing import resolve_scope_region_for_path
 
-                with app_ctx.coordinator.db.session() as session:
+                with app_ctx.coordinator.db.session() as db_session:
                     scope_region, _ = resolve_scope_region_for_path(
-                        session,
+                        db_session,
                         app_ctx.coordinator.repo_root,
                         r.path,
                         r.line,

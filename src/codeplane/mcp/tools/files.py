@@ -20,7 +20,7 @@ from codeplane.config.constants import (
     SMALL_FILE_THRESHOLD,
 )
 from codeplane.core.languages import EXTENSION_TO_NAME
-from codeplane.mcp.delivery import ScopeManager, build_envelope
+from codeplane.mcp.delivery import ScopeManager, build_envelope, resume_cursor
 from codeplane.mcp.errors import (
     MCPError,
     MCPErrorCode,
@@ -150,6 +150,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         confirmation_token: str | None = Field(
             None, description="Token from a previous blocked call."
         ),
+        cursor: str | None = Field(
+            None,
+            description="Cursor token from a previous paginated response. Pass to retrieve the next page.",
+        ),
     ) -> dict[str, Any]:
         """Bounded semantic retrieval of source code.
 
@@ -161,6 +165,16 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         Hard caps enforced: max 500 lines/span, 20KB total, 20 targets/call.
         Exceeding caps requires two-phase confirmation.
         """
+        # Resume paginated cursor if provided
+        if cursor:
+            page = resume_cursor(cursor)
+            if page is None:
+                return {
+                    "error": "cursor_expired",
+                    "message": "Cursor not found or expired. Re-issue the original read.",
+                }
+            return page
+
         session = app_ctx.session_manager.get_or_create(ctx.session_id)
 
         # Evaluate pattern detector before executing read
@@ -392,6 +406,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         confirmation_token: str | None = Field(
             None, description="Token from a previous blocked call."
         ),
+        cursor: str | None = Field(
+            None,
+            description="Cursor token from a previous paginated response. Pass to retrieve the next page.",
+        ),
     ) -> dict[str, Any]:
         """Gated bulk file access with two-phase confirmation.
 
@@ -399,6 +417,16 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         Returns not_found list for missing paths.
         Default delivery=resource when supported, paged otherwise, inline only for tiny files.
         """
+        # Resume paginated cursor if provided
+        if cursor:
+            page = resume_cursor(cursor)
+            if page is None:
+                return {
+                    "error": "cursor_expired",
+                    "message": "Cursor not found or expired. Re-issue the original read.",
+                }
+            return page
+
         session = app_ctx.session_manager.get_or_create(ctx.session_id)
 
         from codeplane.files.ops import validate_path_in_repo

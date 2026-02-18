@@ -58,204 +58,211 @@ def set_cache_dir(repo_root: Path) -> None:
 
 
 # =============================================================================
-# OS-Agnostic Navigation Commands
+# Cursor Store — server-side pagination state
 # =============================================================================
 
-
-def _nav_cmd_cat(rel_path: str) -> str:
-    """Return OS-appropriate command to print a file."""
-    if sys.platform == "win32":
-        return f"type {rel_path.replace('/', os.sep)}"
-    return f"cat {rel_path}"
+_CURSOR_TTL_SECONDS = 300  # 5 minutes
+_CURSOR_MAX_ENTRIES = 50
 
 
-def _nav_cmd_grep(pattern: str, rel_path: str) -> str:
-    """Return OS-appropriate command to search within a file."""
-    if sys.platform == "win32":
-        return f'findstr "{pattern}" {rel_path.replace("/", os.sep)}'
-    return f"grep '{pattern}' {rel_path}"
+@dataclass
+class PendingCursor:
+    """Server-side state for a paginated response."""
+
+    cursor_id: str
+    resource_kind: str
+    items: list[dict[str, Any]]  # all items (files for source, results for search)
+    items_key: str  # 'files' or 'results' — the key in the payload
+    extra_fields: dict[str, Any]  # non-paginated fields to echo in every page
+    page_index: int  # next item index to return
+    created_at: float
+    inline_cap: int
+
+    @property
+    def expired(self) -> bool:
+        return (time.monotonic() - self.created_at) > _CURSOR_TTL_SECONDS
+
+    @property
+    def has_more(self) -> bool:
+        return self.page_index < len(self.items)
 
 
-def _nav_cmd_head(rel_path: str, n: int) -> str:
-    """Return OS-appropriate command to print first N lines."""
-    if sys.platform == "win32":
-        win_path = rel_path.replace("/", os.sep)
-        return f'powershell -c "Get-Content {win_path} -Head {n}"'
-    return f"head -n {n} {rel_path}"
+# OrderedDict for LRU eviction
+_CURSOR_STORE: OrderedDict[str, PendingCursor] = OrderedDict()
+_cursor_lock = threading.Lock()
 
 
-def _nav_cmd_line_range(rel_path: str, start: int, end: int) -> str:
-    """Return OS-appropriate command to print a line range."""
-    if sys.platform == "win32":
-        win_path = rel_path.replace("/", os.sep)
-        count = end - start + 1
-        skip = start - 1
-        return f'powershell -c "Get-Content {win_path} | Select-Object -Skip {skip} -First {count}"'
-    return f"sed -n '{start},{end}p' {rel_path}"
+def _evict_cursors() -> None:
+    """Remove expired cursors and enforce max entries. Caller holds lock."""
+    now = time.monotonic()
+    expired = [k for k, v in _CURSOR_STORE.items() if (now - v.created_at) > _CURSOR_TTL_SECONDS]
+    for k in expired:
+        del _CURSOR_STORE[k]
+    while len(_CURSOR_STORE) > _CURSOR_MAX_ENTRIES:
+        _CURSOR_STORE.popitem(last=False)
+
+
+def _store_cursor(cursor: PendingCursor) -> None:
+    """Store a cursor, evicting stale entries first."""
+    with _cursor_lock:
+        _evict_cursors()
+        _CURSOR_STORE[cursor.cursor_id] = cursor
+
+
+def _get_cursor(cursor_id: str) -> PendingCursor | None:
+    """Retrieve and validate a cursor. Returns None if expired/missing."""
+    with _cursor_lock:
+        cursor = _CURSOR_STORE.get(cursor_id)
+        if cursor is None or cursor.expired:
+            if cursor is not None:
+                del _CURSOR_STORE[cursor_id]
+            return None
+        # Move to end (LRU)
+        _CURSOR_STORE.move_to_end(cursor_id)
+        return cursor
+
+
+def _remove_cursor(cursor_id: str) -> None:
+    """Remove a cursor after final page."""
+    with _cursor_lock:
+        _CURSOR_STORE.pop(cursor_id, None)
 
 
 # =============================================================================
-# Per-Kind Hint Builders
+# Paginated Envelope Builder
 # =============================================================================
 
-
-def _hint_source(payload: dict[str, Any], rel_path: str) -> str:
-    """Build navigation hint for source-kind resources."""
-    files = payload.get("files", [])
-    if not files:
-        return f"Retrieve with: {_nav_cmd_cat(rel_path)}"
-    parts: list[str] = []
-    for f in files:
-        fp = f.get("path", "?")
-        r = f.get("range")
-        if r and len(r) == 2:
-            parts.append(f"  {fp} (L{r[0]}-L{r[1]})")
-        else:
-            parts.append(f"  {fp}")
-    file_list = "\n".join(parts)
-    lines = [
-        f"Contains {len(files)} file(s):",
-        file_list,
-        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
-    ]
-    if len(files) > 1:
-        lines.append(f"Search for a file: {_nav_cmd_grep('<filename>', rel_path)}")
-    return "\n".join(lines)
-
-
-def _hint_search_hits(payload: dict[str, Any], rel_path: str) -> str:
-    """Build navigation hint for search_hits-kind resources."""
-    results = payload.get("results", [])
-    unique_files = len({r.get("path", "") for r in results})
-    lines = [
-        f"{len(results)} result(s) across {unique_files} file(s).",
-        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
-        f"Filter by path: {_nav_cmd_grep('<path_fragment>', rel_path)}",
-    ]
-    return "\n".join(lines)
-
-
-def _hint_repo_map(payload: dict[str, Any], rel_path: str) -> str:
-    """Build navigation hint for repo_map-kind resources."""
-    skip_keys = {"summary", "resource_kind", "delivery"}
-    sections = [k for k in payload if k not in skip_keys]
-    lines = [
-        f"Sections: {', '.join(sections) if sections else 'unknown'}",
-        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
-    ]
-    if sections:
-        lines.append(f"Search for a section: {_nav_cmd_grep(sections[0], rel_path)}")
-    return "\n".join(lines)
-
-
-def _hint_semantic_diff(payload: dict[str, Any], rel_path: str) -> str:
-    """Build navigation hint for semantic_diff-kind resources."""
-    changes = payload.get("changes", [])
-    change_types: dict[str, int] = {}
-    for c in changes:
-        ct = c.get("change_type", "unknown")
-        change_types[ct] = change_types.get(ct, 0) + 1
-    summary_parts = [f"{v} {k}" for k, v in change_types.items()]
-    lines = [
-        f"{len(changes)} structural change(s): {', '.join(summary_parts) if summary_parts else 'unknown'}",
-        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
-        f"Filter by type: {_nav_cmd_grep('<change_type>', rel_path)}",
-    ]
-    return "\n".join(lines)
-
-
-def _hint_diff(payload: dict[str, Any], rel_path: str) -> str:
-    """Build navigation hint for diff-kind resources."""
-    diff_text = payload.get("diff", payload.get("diff_text", ""))
-    file_count = diff_text.count("diff --git") if isinstance(diff_text, str) else 0
-    lines = [
-        f"Unified diff ({file_count} file(s) changed)." if file_count else "Unified diff.",
-        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
-    ]
-    if file_count > 1:
-        lines.append(f"Find a file's diff: {_nav_cmd_grep('diff --git.*<filename>', rel_path)}")
-    return "\n".join(lines)
-
-
-def _hint_test_output(payload: dict[str, Any], rel_path: str) -> str:
-    """Build navigation hint for test_output-kind resources."""
-    passed = payload.get("passed", 0)
-    failed = payload.get("failed", 0)
-    total = payload.get("total", passed + failed)
-    lines = [
-        f"Test results: {passed} passed, {failed} failed, {total} total.",
-        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
-    ]
-    if failed:
-        lines.append(f"Jump to failures: {_nav_cmd_grep('FAILED', rel_path)}")
-    return "\n".join(lines)
-
-
-def _hint_refactor_preview(payload: dict[str, Any], rel_path: str) -> str:
-    """Build navigation hint for refactor_preview-kind resources."""
-    matches = payload.get("matches", [])
-    affected_files = len({m.get("path", "") for m in matches})
-    lines = [
-        f"{len(matches)} match(es) across {affected_files} file(s).",
-        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
-        f"Filter by file: {_nav_cmd_grep('<filename>', rel_path)}",
-    ]
-    return "\n".join(lines)
-
-
-def _hint_log(payload: dict[str, Any], rel_path: str) -> str:
-    """Build navigation hint for log-kind (git log) resources."""
-    results = payload.get("results", [])
-    lines = [
-        f"{len(results)} commit(s).",
-        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
-        f"Search by message: {_nav_cmd_grep('<keyword>', rel_path)}",
-    ]
-    if results:
-        first = results[0]
-        sha = first.get("short_sha", first.get("sha", "?")[:7])
-        msg = (first.get("message", "") or "")[:60]
-        lines.insert(1, f"Latest: {sha} {msg}")
-    return "\n".join(lines)
-
-
-def _hint_commit(payload: dict[str, Any], rel_path: str) -> str:
-    """Build navigation hint for commit-kind (git inspect show) resources."""
-    sha = payload.get("short_sha", payload.get("sha", "?")[:7])
-    msg = (payload.get("message", "") or "")[:80]
-    lines = [
-        f"Commit {sha}: {msg}",
-        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
-    ]
-    return "\n".join(lines)
-
-
-def _hint_blame(payload: dict[str, Any], rel_path: str) -> str:
-    """Build navigation hint for blame-kind resources."""
-    results = payload.get("results", [])
-    blame_path = payload.get("path", "")
-    unique_authors = len({r.get("author", "") for r in results}) if results else 0
-    lines = [
-        f"Blame for {blame_path}: {len(results)} hunk(s), {unique_authors} author(s).",
-        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
-    ]
-    if unique_authors > 1:
-        lines.append(f"Filter by author: {_nav_cmd_grep('<author_name>', rel_path)}")
-    return "\n".join(lines)
-
-
-_HINT_BUILDERS: dict[str, Any] = {
-    "source": _hint_source,
-    "search_hits": _hint_search_hits,
-    "repo_map": _hint_repo_map,
-    "semantic_diff": _hint_semantic_diff,
-    "diff": _hint_diff,
-    "test_output": _hint_test_output,
-    "refactor_preview": _hint_refactor_preview,
-    "log": _hint_log,
-    "commit": _hint_commit,
-    "blame": _hint_blame,
+# Kinds that support cursor pagination (list-of-items payloads)
+_PAGINATED_KINDS: dict[str, str] = {
+    "source": "files",
+    "search_hits": "results",
 }
+
+
+def _fit_items(
+    items: list[dict[str, Any]],
+    start: int,
+    cap_bytes: int,
+    overhead_bytes: int,
+) -> int:
+    """Return how many items from items[start:] fit within cap_bytes - overhead_bytes.
+
+    Always returns at least 1 (a single item is never split).
+    """
+    available = cap_bytes - overhead_bytes
+    total = 0
+    count = 0
+    for i in range(start, len(items)):
+        item_size = len(json.dumps(items[i], indent=2).encode("utf-8"))
+        if count > 0 and total + item_size > available:
+            break
+        total += item_size
+        count += 1
+    return max(1, count)
+
+
+def _build_page(
+    cursor: PendingCursor,
+) -> dict[str, Any]:
+    """Build one page from a cursor, advancing the page_index."""
+    # Estimate envelope overhead (non-item fields)
+    overhead = len(
+        json.dumps(
+            {
+                "resource_kind": cursor.resource_kind,
+                "delivery": "inline",
+                "cursor": cursor.cursor_id,
+                "has_more": True,
+                "page_info": {"returned": 0, "remaining": 0, "total": 0},
+                **{k: v for k, v in cursor.extra_fields.items() if k != cursor.items_key},
+            },
+            indent=2,
+        ).encode("utf-8")
+    )
+
+    count = _fit_items(cursor.items, cursor.page_index, cursor.inline_cap, overhead)
+    page_items = cursor.items[cursor.page_index : cursor.page_index + count]
+    cursor.page_index += count
+
+    has_more = cursor.has_more
+    remaining = len(cursor.items) - cursor.page_index
+
+    envelope: dict[str, Any] = {
+        "resource_kind": cursor.resource_kind,
+        "delivery": "inline",
+        cursor.items_key: page_items,
+    }
+
+    # Echo extra fields (summary, not_found, etc.) in every page
+    for k, v in cursor.extra_fields.items():
+        if k != cursor.items_key:
+            envelope[k] = v
+
+    envelope["page_info"] = {
+        "returned": len(page_items),
+        "remaining": remaining,
+        "total": len(cursor.items),
+    }
+
+    if has_more:
+        envelope["cursor"] = cursor.cursor_id
+        envelope["has_more"] = True
+    else:
+        envelope["has_more"] = False
+        _remove_cursor(cursor.cursor_id)
+
+    return envelope
+
+
+def resume_cursor(cursor_id: str) -> dict[str, Any] | None:
+    """Resume a paginated response. Returns next page or None if cursor expired/invalid."""
+    cursor = _get_cursor(cursor_id)
+    if cursor is None:
+        return None
+    return _build_page(cursor)
+
+
+def _try_paginate(
+    payload: dict[str, Any],
+    resource_kind: str,
+    inline_cap: int,
+    inline_summary: str | None = None,
+) -> dict[str, Any] | None:
+    """If this kind supports pagination and the payload overflows, start a cursor.
+
+    Returns the first page envelope, or None if pagination doesn't apply.
+    """
+    items_key = _PAGINATED_KINDS.get(resource_kind)
+    if items_key is None:
+        return None
+
+    items = payload.get(items_key)
+    if not isinstance(items, list) or len(items) <= 1:
+        return None  # 0 or 1 item — can't paginate further
+
+    cursor_id = uuid.uuid4().hex[:12]
+    extra = {k: v for k, v in payload.items() if k != items_key}
+    if inline_summary:
+        extra["inline_summary"] = inline_summary
+
+    cursor = PendingCursor(
+        cursor_id=cursor_id,
+        resource_kind=resource_kind,
+        items=items,
+        items_key=items_key,
+        extra_fields=extra,
+        page_index=0,
+        created_at=time.monotonic(),
+        inline_cap=inline_cap,
+    )
+
+    _store_cursor(cursor)
+    return _build_page(cursor)
+
+
+# =============================================================================
+# Disk-Cache Fetch Hints (for non-paginated overflow)
+# =============================================================================
 
 
 def _build_fetch_hint(
@@ -264,18 +271,106 @@ def _build_fetch_hint(
     kind: str,
     payload: Any = None,
 ) -> str:
-    """Build an agentic hint with structural summary and OS-agnostic navigation."""
+    """Build a concise agentic hint with real data from the payload.
+
+    No placeholder commands. No grep '<filename>'. Only actionable info:
+    - Byte size + disk path
+    - Extracted structural summary (counts, names, actual data)
+    - OS-appropriate retrieval command
+    """
     rel_path = f".codeplane/cache/{kind}/{resource_id}.json"
-    header = f"Full result ({byte_size:,} bytes) cached to disk."
+    cmd = f"type {rel_path.replace('/', os.sep)}" if sys.platform == "win32" else f"cat {rel_path}"
+    header = f"Full result ({byte_size:,} bytes) cached to disk. Retrieve with: {cmd}"
 
-    # Dispatch to kind-specific hint builder
-    builder = _HINT_BUILDERS.get(kind)
-    if builder and isinstance(payload, dict):
-        detail = builder(payload, rel_path)
+    if not isinstance(payload, dict):
+        return header
+
+    detail = _extract_summary(kind, payload)
+    if detail:
         return f"{header}\n{detail}"
+    return header
 
-    # Fallback: generic cat command
-    return f"{header}\nRetrieve with: {_nav_cmd_cat(rel_path)}"
+
+def _extract_summary(kind: str, payload: dict[str, Any]) -> str:
+    """Extract a compact, actionable summary from a payload.
+
+    Returns real data — file paths, change counts, commit SHAs — not placeholders.
+    """
+    if kind == "source":
+        files = payload.get("files", [])
+        if not files:
+            return ""
+        parts = []
+        for f in files:
+            fp = f.get("path", "?")
+            r = f.get("range")
+            lc = f.get("line_count", "?")
+            parts.append(f"  {fp} L{r[0]}-L{r[1]} ({lc} lines)" if r and len(r) == 2 else f"  {fp}")
+        return f"{len(files)} file(s):\n" + "\n".join(parts)
+
+    if kind == "search_hits":
+        results = payload.get("results", [])
+        by_file: dict[str, int] = {}
+        for r in results:
+            p = r.get("path", "?")
+            by_file[p] = by_file.get(p, 0) + 1
+        dist = ", ".join(f"{p} ({c})" for p, c in list(by_file.items())[:5])
+        more = f" +{len(by_file) - 5} more" if len(by_file) > 5 else ""
+        return f"{len(results)} hit(s) across {len(by_file)} file(s): {dist}{more}"
+
+    if kind == "semantic_diff":
+        changes = payload.get("structural_changes", payload.get("changes", []))
+        summary = payload.get("summary", "")
+        if summary:
+            return str(summary)
+        ct: dict[str, int] = {}
+        for c in changes:
+            t = c.get("change", c.get("change_type", "?"))
+            ct[t] = ct.get(t, 0) + 1
+        return f"{len(changes)} change(s): " + ", ".join(f"{v} {k}" for k, v in ct.items())
+
+    if kind == "diff":
+        diff_text = payload.get("diff", payload.get("diff_text", ""))
+        if isinstance(diff_text, str):
+            n = diff_text.count("diff --git")
+            return f"{n} file(s) changed" if n else ""
+        return ""
+
+    if kind == "test_output":
+        p, f_count = payload.get("passed", 0), payload.get("failed", 0)
+        return f"{p} passed, {f_count} failed, {payload.get('total', p + f_count)} total"
+
+    if kind == "refactor_preview":
+        matches = payload.get("matches", [])
+        af = len({m.get("path", "") for m in matches})
+        return f"{len(matches)} match(es) across {af} file(s)"
+
+    if kind == "log":
+        results = payload.get("results", [])
+        if not results:
+            return "0 commits"
+        first = results[0]
+        sha = first.get("short_sha", first.get("sha", "?")[:7])
+        msg = (first.get("message", "") or "")[:60]
+        return f"{len(results)} commit(s), latest: {sha} {msg}"
+
+    if kind == "commit":
+        sha = payload.get("short_sha", payload.get("sha", "?")[:7])
+        msg = (payload.get("message", "") or "")[:80]
+        return f"Commit {sha}: {msg}"
+
+    if kind == "blame":
+        results = payload.get("results", [])
+        bp = payload.get("path", "")
+        authors = len({r.get("author", "") for r in results})
+        return f"Blame {bp}: {len(results)} hunk(s), {authors} author(s)"
+
+    if kind == "repo_map":
+        skip = {"summary", "resource_kind", "delivery"}
+        sections = [k for k in payload if k not in skip]
+        return f"Sections: {', '.join(sections)}" if sections else ""
+
+    return ""
 
 
 # =============================================================================
@@ -435,7 +530,24 @@ def build_envelope(
         if inline_summary:
             envelope["inline_summary"] = inline_summary
     else:
-        # Resource delivery — write full payload to disk
+        # Try cursor pagination first for supported kinds
+        paginated = _try_paginate(payload, resource_kind, inline_cap, inline_summary)
+        if paginated is not None:
+            if scope_id:
+                paginated["scope_id"] = scope_id
+            if scope_usage:
+                paginated["scope_usage"] = scope_usage
+            log.debug(
+                "envelope_built",
+                delivery="paginated",
+                resource_kind=resource_kind,
+                payload_bytes=payload_bytes,
+                inline_cap=inline_cap,
+                scope_id=scope_id,
+            )
+            return paginated
+
+        # Fallback: write full payload to disk
         resource_id, byte_size = _resource_cache.store(payload, resource_kind)
         envelope["delivery"] = "resource"
         if inline_summary:
@@ -491,7 +603,24 @@ def wrap_existing_response(
         if inline_summary:
             result["inline_summary"] = inline_summary
     else:
-        # Resource delivery — store full result on disk, return synopsis
+        # Try cursor pagination first for supported kinds
+        paginated = _try_paginate(result, resource_kind, inline_cap, inline_summary)
+        if paginated is not None:
+            if scope_id:
+                paginated["scope_id"] = scope_id
+            if scope_usage:
+                paginated["scope_usage"] = scope_usage
+            log.debug(
+                "envelope_wrapped",
+                delivery="paginated",
+                resource_kind=resource_kind,
+                payload_bytes=payload_bytes,
+                inline_cap=inline_cap,
+                scope_id=scope_id,
+            )
+            return paginated
+
+        # Fallback: store full result on disk, return synopsis
         resource_id, byte_size = _resource_cache.store(result, resource_kind)
         envelope: dict[str, Any] = {
             "resource_kind": resource_kind,
