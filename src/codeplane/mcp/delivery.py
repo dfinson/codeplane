@@ -62,6 +62,11 @@ def set_cache_dir(repo_root: Path) -> None:
 _CURSOR_TTL_SECONDS = 300  # 5 minutes
 _CURSOR_MAX_ENTRIES = 500
 
+# Headroom reserved for fields added after pagination (middleware pattern
+# hints, scope metadata, etc.).  Pagination targets inline_cap minus this
+# so that post-build additions don't push pages over the wire limit.
+_POST_PAGINATION_HEADROOM = 800
+
 
 @dataclass
 class PendingCursor:
@@ -416,7 +421,7 @@ def _try_paginate(
         page_index=0,
         item_line_offset=0,
         created_at=time.monotonic(),
-        inline_cap=inline_cap,
+        inline_cap=inline_cap - _POST_PAGINATION_HEADROOM,
     )
 
     with _cursor_lock:

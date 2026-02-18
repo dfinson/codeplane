@@ -552,7 +552,7 @@ class TestCursorPagination:
 
         # 2 items, cap so small only 1 fits per page
         items = [{"path": "a.py", "content": "x" * 4000}, {"path": "b.py", "content": "y" * 4000}]
-        page1 = _try_paginate({"files": items}, "source", 5000)
+        page1 = _try_paginate({"files": items}, "source", 5800)
         assert page1 is not None
         assert page1["has_more"] is True
         cursor_id = page1["cursor"]
