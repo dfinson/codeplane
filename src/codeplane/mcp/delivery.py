@@ -57,14 +57,225 @@ def set_cache_dir(repo_root: Path) -> None:
     _cache_dir.mkdir(parents=True, exist_ok=True)
 
 
-def _build_fetch_hint(resource_id: str, byte_size: int, kind: str) -> str:
-    """Build an agentic hint with a file read command for a cached resource."""
-    rel_path = f".codeplane/cache/{kind}/{resource_id}.json"
+# =============================================================================
+# OS-Agnostic Navigation Commands
+# =============================================================================
+
+
+def _nav_cmd_cat(rel_path: str) -> str:
+    """Return OS-appropriate command to print a file."""
     if sys.platform == "win32":
-        cmd = f"type {rel_path.replace('/', os.sep)}"
-    else:
-        cmd = f"cat {rel_path}"
-    return f"Full result ({byte_size:,} bytes) cached to disk. Retrieve with: {cmd}"
+        return f"type {rel_path.replace('/', os.sep)}"
+    return f"cat {rel_path}"
+
+
+def _nav_cmd_grep(pattern: str, rel_path: str) -> str:
+    """Return OS-appropriate command to search within a file."""
+    if sys.platform == "win32":
+        return f'findstr "{pattern}" {rel_path.replace("/", os.sep)}'
+    return f"grep '{pattern}' {rel_path}"
+
+
+def _nav_cmd_head(rel_path: str, n: int) -> str:
+    """Return OS-appropriate command to print first N lines."""
+    if sys.platform == "win32":
+        win_path = rel_path.replace("/", os.sep)
+        return f'powershell -c "Get-Content {win_path} -Head {n}"'
+    return f"head -n {n} {rel_path}"
+
+
+def _nav_cmd_line_range(rel_path: str, start: int, end: int) -> str:
+    """Return OS-appropriate command to print a line range."""
+    if sys.platform == "win32":
+        win_path = rel_path.replace("/", os.sep)
+        count = end - start + 1
+        skip = start - 1
+        return f'powershell -c "Get-Content {win_path} | Select-Object -Skip {skip} -First {count}"'
+    return f"sed -n '{start},{end}p' {rel_path}"
+
+
+# =============================================================================
+# Per-Kind Hint Builders
+# =============================================================================
+
+
+def _hint_source(payload: dict[str, Any], rel_path: str) -> str:
+    """Build navigation hint for source-kind resources."""
+    files = payload.get("files", [])
+    if not files:
+        return f"Retrieve with: {_nav_cmd_cat(rel_path)}"
+    parts: list[str] = []
+    for f in files:
+        fp = f.get("path", "?")
+        r = f.get("range")
+        if r and len(r) == 2:
+            parts.append(f"  {fp} (L{r[0]}-L{r[1]})")
+        else:
+            parts.append(f"  {fp}")
+    file_list = "\n".join(parts)
+    lines = [
+        f"Contains {len(files)} file(s):",
+        file_list,
+        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
+    ]
+    if len(files) > 1:
+        lines.append(f"Search for a file: {_nav_cmd_grep('<filename>', rel_path)}")
+    return "\n".join(lines)
+
+
+def _hint_search_hits(payload: dict[str, Any], rel_path: str) -> str:
+    """Build navigation hint for search_hits-kind resources."""
+    results = payload.get("results", [])
+    unique_files = len({r.get("path", "") for r in results})
+    lines = [
+        f"{len(results)} result(s) across {unique_files} file(s).",
+        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
+        f"Filter by path: {_nav_cmd_grep('<path_fragment>', rel_path)}",
+    ]
+    return "\n".join(lines)
+
+
+def _hint_repo_map(payload: dict[str, Any], rel_path: str) -> str:
+    """Build navigation hint for repo_map-kind resources."""
+    skip_keys = {"summary", "resource_kind", "delivery"}
+    sections = [k for k in payload if k not in skip_keys]
+    lines = [
+        f"Sections: {', '.join(sections) if sections else 'unknown'}",
+        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
+    ]
+    if sections:
+        lines.append(f"Search for a section: {_nav_cmd_grep(sections[0], rel_path)}")
+    return "\n".join(lines)
+
+
+def _hint_semantic_diff(payload: dict[str, Any], rel_path: str) -> str:
+    """Build navigation hint for semantic_diff-kind resources."""
+    changes = payload.get("changes", [])
+    change_types: dict[str, int] = {}
+    for c in changes:
+        ct = c.get("change_type", "unknown")
+        change_types[ct] = change_types.get(ct, 0) + 1
+    summary_parts = [f"{v} {k}" for k, v in change_types.items()]
+    lines = [
+        f"{len(changes)} structural change(s): {', '.join(summary_parts) if summary_parts else 'unknown'}",
+        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
+        f"Filter by type: {_nav_cmd_grep('<change_type>', rel_path)}",
+    ]
+    return "\n".join(lines)
+
+
+def _hint_diff(payload: dict[str, Any], rel_path: str) -> str:
+    """Build navigation hint for diff-kind resources."""
+    diff_text = payload.get("diff", payload.get("diff_text", ""))
+    file_count = diff_text.count("diff --git") if isinstance(diff_text, str) else 0
+    lines = [
+        f"Unified diff ({file_count} file(s) changed)." if file_count else "Unified diff.",
+        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
+    ]
+    if file_count > 1:
+        lines.append(f"Find a file's diff: {_nav_cmd_grep('diff --git.*<filename>', rel_path)}")
+    return "\n".join(lines)
+
+
+def _hint_test_output(payload: dict[str, Any], rel_path: str) -> str:
+    """Build navigation hint for test_output-kind resources."""
+    passed = payload.get("passed", 0)
+    failed = payload.get("failed", 0)
+    total = payload.get("total", passed + failed)
+    lines = [
+        f"Test results: {passed} passed, {failed} failed, {total} total.",
+        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
+    ]
+    if failed:
+        lines.append(f"Jump to failures: {_nav_cmd_grep('FAILED', rel_path)}")
+    return "\n".join(lines)
+
+
+def _hint_refactor_preview(payload: dict[str, Any], rel_path: str) -> str:
+    """Build navigation hint for refactor_preview-kind resources."""
+    matches = payload.get("matches", [])
+    affected_files = len({m.get("path", "") for m in matches})
+    lines = [
+        f"{len(matches)} match(es) across {affected_files} file(s).",
+        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
+        f"Filter by file: {_nav_cmd_grep('<filename>', rel_path)}",
+    ]
+    return "\n".join(lines)
+
+
+def _hint_log(payload: dict[str, Any], rel_path: str) -> str:
+    """Build navigation hint for log-kind (git log) resources."""
+    results = payload.get("results", [])
+    lines = [
+        f"{len(results)} commit(s).",
+        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
+        f"Search by message: {_nav_cmd_grep('<keyword>', rel_path)}",
+    ]
+    if results:
+        first = results[0]
+        sha = first.get("short_sha", first.get("sha", "?")[:7])
+        msg = (first.get("message", "") or "")[:60]
+        lines.insert(1, f"Latest: {sha} {msg}")
+    return "\n".join(lines)
+
+
+def _hint_commit(payload: dict[str, Any], rel_path: str) -> str:
+    """Build navigation hint for commit-kind (git inspect show) resources."""
+    sha = payload.get("short_sha", payload.get("sha", "?")[:7])
+    msg = (payload.get("message", "") or "")[:80]
+    lines = [
+        f"Commit {sha}: {msg}",
+        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
+    ]
+    return "\n".join(lines)
+
+
+def _hint_blame(payload: dict[str, Any], rel_path: str) -> str:
+    """Build navigation hint for blame-kind resources."""
+    results = payload.get("results", [])
+    blame_path = payload.get("path", "")
+    unique_authors = len({r.get("author", "") for r in results}) if results else 0
+    lines = [
+        f"Blame for {blame_path}: {len(results)} hunk(s), {unique_authors} author(s).",
+        f"Retrieve with: {_nav_cmd_cat(rel_path)}",
+    ]
+    if unique_authors > 1:
+        lines.append(f"Filter by author: {_nav_cmd_grep('<author_name>', rel_path)}")
+    return "\n".join(lines)
+
+
+_HINT_BUILDERS: dict[str, Any] = {
+    "source": _hint_source,
+    "search_hits": _hint_search_hits,
+    "repo_map": _hint_repo_map,
+    "semantic_diff": _hint_semantic_diff,
+    "diff": _hint_diff,
+    "test_output": _hint_test_output,
+    "refactor_preview": _hint_refactor_preview,
+    "log": _hint_log,
+    "commit": _hint_commit,
+    "blame": _hint_blame,
+}
+
+
+def _build_fetch_hint(
+    resource_id: str,
+    byte_size: int,
+    kind: str,
+    payload: Any = None,
+) -> str:
+    """Build an agentic hint with structural summary and OS-agnostic navigation."""
+    rel_path = f".codeplane/cache/{kind}/{resource_id}.json"
+    header = f"Full result ({byte_size:,} bytes) cached to disk."
+
+    # Dispatch to kind-specific hint builder
+    builder = _HINT_BUILDERS.get(kind)
+    if builder and isinstance(payload, dict):
+        detail = builder(payload, rel_path)
+        return f"{header}\n{detail}"
+
+    # Fallback: generic cat command
+    return f"{header}\nRetrieve with: {_nav_cmd_cat(rel_path)}"
 
 
 # =============================================================================
@@ -152,13 +363,13 @@ class ResourceCache:
     ) -> tuple[str, int]:
         """Serialize payload to disk and return (resource_id, byte_size)."""
         if isinstance(payload, dict | list):
-            raw = json.dumps(payload, separators=(",", ":"), sort_keys=False).encode("utf-8")
+            raw = json.dumps(payload, indent=2, sort_keys=False).encode("utf-8")
         elif isinstance(payload, str):
             raw = payload.encode("utf-8")
         elif isinstance(payload, bytes):
             raw = payload
         else:
-            raw = json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
+            raw = json.dumps(payload, indent=2, default=str).encode("utf-8")
 
         resource_id = uuid.uuid4().hex[:12]
 
@@ -233,7 +444,7 @@ def build_envelope(
             json.dumps(envelope, indent=2, default=str).encode("utf-8")
         )
         envelope["inline_budget_bytes_limit"] = inline_cap
-        envelope["agentic_hint"] = _build_fetch_hint(resource_id, byte_size, resource_kind)
+        envelope["agentic_hint"] = _build_fetch_hint(resource_id, byte_size, resource_kind, payload)
 
     # Echo scope
     if scope_id:
@@ -296,7 +507,7 @@ def wrap_existing_response(
             envelope["scope_id"] = scope_id
         if scope_usage:
             envelope["scope_usage"] = scope_usage
-        envelope["agentic_hint"] = _build_fetch_hint(resource_id, byte_size, resource_kind)
+        envelope["agentic_hint"] = _build_fetch_hint(resource_id, byte_size, resource_kind, result)
 
         log.debug(
             "envelope_wrapped",
