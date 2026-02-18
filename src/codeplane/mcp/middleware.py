@@ -363,17 +363,8 @@ class ToolMiddleware(Middleware):
         #    Inject bypass hints into result for write/git calls that
         #    won't pass through search/read handlers where evaluate() runs.
         pattern_match = session.pattern_detector.evaluate(current_tool=short_name)
-        if pattern_match and pattern_match.severity == "warn" and isinstance(result, dict):
-            if "agentic_hint" not in result:
-                result["agentic_hint"] = (
-                    f"PATTERN: {pattern_match.pattern_name} - {pattern_match.message}\n\n"
-                    f"{pattern_match.reason_prompt}"
-                )
-            result["detected_pattern"] = pattern_match.pattern_name
-            result["pattern_cause"] = pattern_match.cause
-            if pattern_match.suggested_workflow:
-                result["suggested_workflow"] = pattern_match.suggested_workflow
-
+        if pattern_match and pattern_match.severity == "warn":
+            self._inject_pattern_hint(result, pattern_match)
         # 4. Record call in pattern detector (may clear window for action categories)
         session.pattern_detector.record(
             tool_name=short_name,
@@ -456,6 +447,47 @@ class ToolMiddleware(Middleware):
                 params[key] = value
 
         return params
+
+    @staticmethod
+    def _inject_pattern_hint(result: Any, match: Any) -> None:
+        """Inject pattern detection hints into the tool result.
+
+        Handles three result forms:
+        - MCP CallToolResult with text content (JSON strings)
+        - ToolResult with structured_content dict
+        - Plain dict
+        """
+        import json
+
+        hints: dict[str, Any] = {
+            "agentic_hint": (
+                f"PATTERN: {match.pattern_name} - {match.message}\n\n{match.reason_prompt}"
+            ),
+            "detected_pattern": match.pattern_name,
+            "pattern_cause": match.cause,
+        }
+        if match.suggested_workflow:
+            hints["suggested_workflow"] = match.suggested_workflow
+
+        # MCP CallToolResult — parse JSON from text content, inject, reserialize
+        if hasattr(result, "content") and result.content:
+            for content_item in result.content:
+                if hasattr(content_item, "text"):
+                    try:
+                        data = json.loads(content_item.text)
+                        if isinstance(data, dict) and "agentic_hint" not in data:
+                            data.update(hints)
+                            content_item.text = json.dumps(data)
+                    except (json.JSONDecodeError, AttributeError, TypeError):
+                        pass
+                    break
+        # ToolResult with structured_content
+        elif hasattr(result, "structured_content") and isinstance(result.structured_content, dict):
+            if "agentic_hint" not in result.structured_content:
+                result.structured_content.update(hints)
+        # Plain dict
+        elif isinstance(result, dict) and "agentic_hint" not in result:
+            result.update(hints)
 
     def _extract_result_summary(self, tool_name: str, result: Any) -> dict[str, Any]:
         """Extract summary metrics from tool result for logging.
