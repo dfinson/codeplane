@@ -371,11 +371,18 @@ class ToolMiddleware(Middleware):
         #    Return match so caller can replace the MCP result with a hint-injected one.
         pattern_match = session.pattern_detector.evaluate(current_tool=short_name)
 
-        # 4. Record call in pattern detector (may clear window for action categories)
+        # 4. Record call in pattern detector (may clear window for action categories).
+        #    Lint only clears when it actually auto-fixed files (conditional mutation).
+        lint_mutated = (
+            short_name == "lint_check"
+            and result_dict is not None
+            and result_dict.get("total_files_modified", 0) > 0
+        )
         session.pattern_detector.record(
             tool_name=short_name,
             files=files,
             hit_count=hit_count,
+            clears_window=lint_mutated,
         )
 
         if pattern_match and pattern_match.severity == "warn":

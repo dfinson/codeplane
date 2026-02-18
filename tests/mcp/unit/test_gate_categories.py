@@ -165,7 +165,15 @@ class TestActionCategories:
 
     def test_expected_members(self) -> None:
         """ACTION_CATEGORIES contains exactly the expected members."""
-        assert frozenset({"write", "refactor", "lint", "test", "git"}) == ACTION_CATEGORIES
+        assert frozenset({"write", "refactor", "git"}) == ACTION_CATEGORIES
+
+    def test_lint_not_included(self) -> None:
+        """'lint' is NOT in ACTION_CATEGORIES (conditional via clears_window)."""
+        assert "lint" not in ACTION_CATEGORIES
+
+    def test_test_not_included(self) -> None:
+        """'test' is NOT in ACTION_CATEGORIES (verification, not mutation)."""
+        assert "test" not in ACTION_CATEGORIES
 
     def test_diff_not_included(self) -> None:
         """'diff' is NOT in ACTION_CATEGORIES."""
@@ -235,7 +243,7 @@ class TestToolCategoriesCompleteness:
     def test_no_action_category_values_missing_from_frozenset(self) -> None:
         """Every category that should clear the window is in ACTION_CATEGORIES."""
         action_cats_in_dict = {
-            v for v in TOOL_CATEGORIES.values() if v in ("write", "refactor", "lint", "test", "git")
+            v for v in TOOL_CATEGORIES.values() if v in ("write", "refactor", "git")
         }
         for cat in action_cats_in_dict:
             assert cat in ACTION_CATEGORIES
@@ -246,8 +254,8 @@ class TestToolCategoriesCompleteness:
 # =========================================================================
 
 
-class TestGitReadWindowBehavior:
-    """Integration: git_read tools do NOT clear the pattern window."""
+class TestWindowClearBehavior:
+    """Integration: which tools clear the pattern window and which don't."""
 
     def test_git_status_no_clear(self) -> None:
         """git_status does not clear the pattern window."""
@@ -294,6 +302,30 @@ class TestGitReadWindowBehavior:
         det.record("search")
         det.record("search")
         det.record("semantic_diff")
+        assert det.window_length == 3
+
+    def test_lint_check_no_clear(self) -> None:
+        """lint_check (check-only) does NOT clear the window."""
+        det = CallPatternDetector()
+        det.record("search")
+        det.record("search")
+        det.record("lint_check")
+        assert det.window_length == 3
+
+    def test_lint_check_with_autofix_clears(self) -> None:
+        """lint_check that auto-fixed files DOES clear (via clears_window)."""
+        det = CallPatternDetector()
+        det.record("search")
+        det.record("search")
+        det.record("lint_check", clears_window=True)
+        assert det.window_length == 0
+
+    def test_run_test_targets_no_clear(self) -> None:
+        """run_test_targets (verification) does NOT clear the window."""
+        det = CallPatternDetector()
+        det.record("search")
+        det.record("search")
+        det.record("run_test_targets")
         assert det.window_length == 3
 
 

@@ -125,8 +125,6 @@ class TestRecordActionClear:
         [
             ("write_source", "write"),
             ("refactor_rename", "refactor"),
-            ("lint_check", "lint"),
-            ("run_test_targets", "test"),
             ("git_stage_and_commit", "git"),
             ("git_push", "git"),
         ],
@@ -140,6 +138,30 @@ class TestRecordActionClear:
         det.record("search")
         det.record(tool_name)
         assert det.window_length == 0
+
+    def test_lint_does_not_clear_by_default(self) -> None:
+        """lint_check without clears_window=True does NOT clear (just a check)."""
+        det = CallPatternDetector()
+        det.record("search")
+        det.record("search")
+        det.record("lint_check")
+        assert det.window_length == 3
+
+    def test_lint_clears_when_explicit(self) -> None:
+        """lint_check with clears_window=True DOES clear (auto-fixed files)."""
+        det = CallPatternDetector()
+        det.record("search")
+        det.record("search")
+        det.record("lint_check", clears_window=True)
+        assert det.window_length == 0
+
+    def test_test_does_not_clear(self) -> None:
+        """run_test_targets does NOT clear the window (verification, not mutation)."""
+        det = CallPatternDetector()
+        det.record("search")
+        det.record("search")
+        det.record("run_test_targets")
+        assert det.window_length == 3
 
     def test_git_read_does_not_clear(self) -> None:
         """git_read tools (git_status, git_log, etc.) do NOT clear the window."""
@@ -156,6 +178,14 @@ class TestRecordActionClear:
         det.record("search")
         det.record("semantic_diff")  # category 'diff'
         assert det.window_length == 3
+
+    def test_clears_window_preserves_test_scoped(self) -> None:
+        """clears_window=True still preserves test_scoped records."""
+        det = CallPatternDetector()
+        det.record("run_test_targets", category_override="test_scoped")
+        det.record("search")
+        det.record("lint_check", clears_window=True)
+        assert det.window_length == 1  # only test_scoped remains
 
 
 class TestEvaluate:

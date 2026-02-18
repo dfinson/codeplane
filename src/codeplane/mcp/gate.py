@@ -312,10 +312,12 @@ _GIT_WRITE_TOOLS = [
 for _name in _GIT_WRITE_TOOLS:
     TOOL_CATEGORIES[_name] = "git"
 
-# Categories that represent "action" (clear pattern window).
-# Note: "git_read" and "diff" are NOT action categories — they are
-# information gathering and should not reset bypass detection windows.
-ACTION_CATEGORIES = frozenset({"write", "refactor", "lint", "test", "git"})
+# Categories that represent mutation (clear pattern window).
+# "git_read", "diff", "test", and "lint" are NOT here — they are
+# information gathering / verification and should not reset bypass
+# detection windows.  Lint clears conditionally (only when it
+# auto-fixed files); see CallPatternDetector.record(clears_window=True).
+ACTION_CATEGORIES = frozenset({"write", "refactor", "git"})
 
 
 def categorize_tool(tool_name: str) -> str:
@@ -366,6 +368,7 @@ class CallPatternDetector:
         files: list[str] | None = None,
         hit_count: int = 0,
         category_override: str | None = None,
+        clears_window: bool = False,
     ) -> None:
         """Record a tool call into the window.
 
@@ -373,6 +376,9 @@ class CallPatternDetector:
             category_override: Force a specific category instead of auto-detecting.
                 Used by test handler to record ``test_scoped`` which must persist
                 in the window as evidence for the broad-test prerequisite.
+            clears_window: Explicitly clear the window after recording.
+                Used for conditional mutations (e.g. lint_check that auto-fixed
+                files).  Unconditional mutations use ACTION_CATEGORIES instead.
         """
         category = category_override or categorize_tool(tool_name)
         self._window.append(
@@ -384,9 +390,12 @@ class CallPatternDetector:
                 hit_count=hit_count,
             )
         )
-        # Action calls clear the window (agent made progress)
-        # test_scoped is exempt — it must persist as prerequisite evidence
-        if category in ACTION_CATEGORIES and category != "test_scoped":
+        # Mutation calls clear the window (agent made progress).
+        # test_scoped is exempt — it must persist as prerequisite evidence.
+        should_clear = (
+            category in ACTION_CATEGORIES and category != "test_scoped"
+        ) or clears_window
+        if should_clear:
             scoped = [r for r in self._window if r.category == "test_scoped"]
             self._window.clear()
             self._window.extend(scoped)

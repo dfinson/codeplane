@@ -316,12 +316,38 @@ class TestPostCallBookkeeping:
         result = mw._post_call_bookkeeping(ctx, "search", {}, {})
         assert result is None
 
+    def test_lint_check_only_does_not_clear_window(self) -> None:
+        """lint_check with no auto-fixes does NOT clear the pattern window."""
+        mw, session, ctx = self._setup_middleware()
+        session.pattern_detector.record("search")
+        session.pattern_detector.record("search")
+        result_dict = {"status": "clean", "total_files_modified": 0}
+        mw._post_call_bookkeeping(ctx, "lint_check", {}, result_dict)
+        # 2 searches + 1 lint = 3 — not cleared
+        assert session.pattern_detector.window_length == 3
+
+    def test_lint_check_autofix_clears_window(self) -> None:
+        """lint_check with auto-fixes DOES clear the pattern window."""
+        mw, session, ctx = self._setup_middleware()
+        session.pattern_detector.record("search")
+        session.pattern_detector.record("search")
+        result_dict = {"status": "dirty", "total_files_modified": 2}
+        mw._post_call_bookkeeping(ctx, "lint_check", {}, result_dict)
+        assert session.pattern_detector.window_length == 0
+
+    def test_test_run_does_not_clear_window(self) -> None:
+        """run_test_targets does NOT clear the pattern window."""
+        mw, session, ctx = self._setup_middleware()
+        session.pattern_detector.record("search")
+        session.pattern_detector.record("search")
+        mw._post_call_bookkeeping(ctx, "run_test_targets", {}, {})
+        # 2 searches + 1 test = 3 — not cleared
+        assert session.pattern_detector.window_length == 3
+
 
 # ---------------------------------------------------------------------------
 # build_pattern_hint / build_pattern_gate_spec
 # ---------------------------------------------------------------------------
-
-
 class TestBuildPatternHelpers:
     """Tests for pattern match helper functions."""
 
