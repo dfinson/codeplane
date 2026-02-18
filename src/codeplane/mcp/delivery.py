@@ -60,7 +60,7 @@ def set_cache_dir(repo_root: Path) -> None:
 # =============================================================================
 
 _CURSOR_TTL_SECONDS = 300  # 5 minutes
-_CURSOR_MAX_ENTRIES = 50
+_CURSOR_MAX_ENTRIES = 500
 
 
 @dataclass
@@ -102,29 +102,30 @@ def _evict_cursors() -> None:
 
 
 def _store_cursor(cursor: PendingCursor) -> None:
-    """Store a cursor, evicting stale entries first."""
-    with _cursor_lock:
-        _evict_cursors()
-        _CURSOR_STORE[cursor.cursor_id] = cursor
+    """Store a cursor, evicting stale entries first.  Caller must hold ``_cursor_lock``."""
+    _evict_cursors()
+    _CURSOR_STORE[cursor.cursor_id] = cursor
 
 
 def _get_cursor(cursor_id: str) -> PendingCursor | None:
-    """Retrieve and validate a cursor. Returns None if expired/missing."""
-    with _cursor_lock:
-        cursor = _CURSOR_STORE.get(cursor_id)
-        if cursor is None or cursor.expired:
-            if cursor is not None:
-                del _CURSOR_STORE[cursor_id]
-            return None
-        # Move to end (LRU)
-        _CURSOR_STORE.move_to_end(cursor_id)
-        return cursor
+    """Retrieve and validate a cursor. Returns None if expired/missing.
+
+    Caller must hold ``_cursor_lock`` — the returned cursor is mutated
+    in-place by ``_build_page``.
+    """
+    cursor = _CURSOR_STORE.get(cursor_id)
+    if cursor is None or cursor.expired:
+        if cursor is not None:
+            del _CURSOR_STORE[cursor_id]
+        return None
+    # Move to end (LRU)
+    _CURSOR_STORE.move_to_end(cursor_id)
+    return cursor
 
 
 def _remove_cursor(cursor_id: str) -> None:
-    """Remove a cursor after final page."""
-    with _cursor_lock:
-        _CURSOR_STORE.pop(cursor_id, None)
+    """Remove a cursor after final page.  Caller must hold ``_cursor_lock``."""
+    _CURSOR_STORE.pop(cursor_id, None)
 
 
 # =============================================================================
@@ -308,30 +309,46 @@ def _build_page(
         envelope["has_more"] = False
         _remove_cursor(cursor.cursor_id)
 
-    # --- Post-build validation: trim if nesting overhead pushed us over cap ---
     actual_bytes = len(json.dumps(envelope, indent=2, default=str).encode("utf-8"))
+    # --- Post-build trim ---
+    # JSON nesting overhead (indent=2 pretty-print) can push the
+    # serialised envelope past inline_cap even though _fit_items /
+    # _split_content_item budgeted for it.  When that happens we trim
+    # trailing content lines and adjust the cursor state.
+    #
+    # Three cursor-state transitions are possible here:
+    #   T1  mid-split (item_line_offset > 0): already splitting this
+    #       item — just update the offset to the trimmed end.
+    #   T2  just-advanced (page_index > 0, offset == 0): we thought
+    #       the item was complete and advanced past it — rewind
+    #       page_index by 1 and set offset to the trimmed end so the
+    #       remaining lines get delivered on the next page.
+    #   T3  single first item (page_index == 0, offset == 0): first
+    #       page of a single item — just set the offset.
     if actual_bytes > cursor.inline_cap and len(page_items) == 1:
         item = page_items[0]
         content = item.get("content", "")
         if isinstance(content, str) and content:
             lines = content.split("\n")
             excess = actual_bytes - cursor.inline_cap
-            # Remove lines from end until under budget (each line ~avg bytes)
             while len(lines) > 1 and excess > 0:
                 removed = lines.pop()
                 excess -= len((removed + "\n").encode("utf-8"))
             item["content"] = "\n".join(lines)
             item["line_count"] = len(lines)
 
-            # Recalculate cursor offset
-            # figure out how many original lines are now in this chunk
             total_lines_from = item.get("content_offset", 0)
             new_end = total_lines_from + len(lines)
+
+            # T1: already mid-split — adjust offset
             if cursor.item_line_offset > 0:
                 cursor.item_line_offset = new_end
             elif cursor.page_index > 0:
-                # We advanced past this item but trimmed — rewind
+                # T2: rewind — we advanced past this item prematurely
                 cursor.page_index -= 1
+                cursor.item_line_offset = new_end
+            else:
+                # T3: first page, single item — start split
                 cursor.item_line_offset = new_end
 
             # Update truncation metadata
@@ -342,11 +359,9 @@ def _build_page(
                 item["content_lines_total"] = total_content_lines
                 envelope["has_more"] = True
                 if "cursor" not in envelope:
-                    # Re-store cursor since we still have more
                     _store_cursor(cursor)
                     envelope["cursor"] = cursor.cursor_id
 
-            # Update range if present
             if "range" in item:
                 orig_start = item["range"][0]
                 item["range"] = [orig_start, orig_start + len(lines) - 1]
@@ -355,11 +370,17 @@ def _build_page(
 
 
 def resume_cursor(cursor_id: str) -> dict[str, Any] | None:
-    """Resume a paginated response. Returns next page or None if cursor expired/invalid."""
-    cursor = _get_cursor(cursor_id)
-    if cursor is None:
-        return None
-    return _build_page(cursor)
+    """Resume a paginated response. Returns next page or None if cursor expired/invalid.
+
+    Holds ``_cursor_lock`` for the entire get-then-build cycle so
+    concurrent requests on the same cursor cannot race on
+    ``page_index`` / ``item_line_offset`` mutations.
+    """
+    with _cursor_lock:
+        cursor = _get_cursor(cursor_id)
+        if cursor is None:
+            return None
+        return _build_page(cursor)
 
 
 def _try_paginate(
@@ -398,8 +419,9 @@ def _try_paginate(
         inline_cap=inline_cap,
     )
 
-    _store_cursor(cursor)
-    return _build_page(cursor)
+    with _cursor_lock:
+        _store_cursor(cursor)
+        return _build_page(cursor)
 
 
 # =============================================================================
