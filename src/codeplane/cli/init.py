@@ -78,7 +78,7 @@ Response includes `file_sha256` per file — save it for `write_source` span edi
 6. `semantic_diff` — review structural impact before committing
 7. `git_stage_and_commit` — one-step commit with pre-commit hook handling
 
-**Testing rule**: NEVER run the full test suite or use `pytest` directly.
+**Testing rule**: NEVER run the full test suite or use test runners directly.
 Always use `run_test_targets(affected_by=[...])` with the files you changed.
 This runs only the tests impacted by your changes — fast, targeted, sufficient.
 
@@ -95,7 +95,7 @@ This runs only the tests impacted by your changes — fast, targeted, sufficient
 | All git operations | `{tool_prefix}_git_*` | Raw `git` commands |
 | Run linters | `{tool_prefix}_lint_check` | `ruff`, `black`, `mypy` directly |
 | Discover tests | `{tool_prefix}_discover_test_targets` | Manual test file search |
-| Run tests | `{tool_prefix}_run_test_targets` | `pytest`, `jest` directly |
+| Run tests | `{tool_prefix}_run_test_targets` | Test runners directly |
 | Rename across files | `{tool_prefix}_refactor_rename` | Find-and-replace, `sed` |
 | Semantic diff | `{tool_prefix}_semantic_diff` | Manual comparison |
 
