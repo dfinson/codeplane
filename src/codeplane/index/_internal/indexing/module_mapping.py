@@ -163,3 +163,100 @@ def build_module_index(file_paths: list[str]) -> dict[str, str]:
         if module_key:
             index[module_key] = fp
     return index
+
+
+def file_to_import_candidates(
+    file_path: str,
+    language_family: str | None = None,
+    declared_module: str | None = None,
+) -> list[str]:
+    """Generate all source_literal values that could import this file.
+
+    This is the inverse of import resolution: given a file path, what
+    import strings would reference it? Used by refactor_move and
+    refactor_delete to find ImportFact records.
+
+    Language-aware generation:
+    - Python/Lua: dotted paths with/without src. prefix
+    - JS/TS: relative paths (handled separately, returns empty)
+    - Go/Rust/Java/etc.: use declared_module from File record
+
+    Args:
+        file_path: Repo-relative file path (e.g. "src/codeplane/refactor/ops.py")
+        language_family: Language family from File record (e.g. "python", "go")
+        declared_module: declared_module from File record for declaration-based langs
+
+    Returns:
+        List of source_literal strings to match against ImportFact.
+        Empty list if no candidates can be generated.
+
+    Examples:
+        >>> file_to_import_candidates("src/codeplane/refactor/ops.py", "python")
+        ['src.codeplane.refactor.ops', 'codeplane.refactor.ops']
+        >>> file_to_import_candidates("pkg/util/helper.go", "go", "github.com/user/repo/pkg/util")
+        ['github.com/user/repo/pkg/util']
+        >>> file_to_import_candidates("src/utils/helper.ts", "typescript")
+        []  # JS/TS uses relative paths, handled differently
+    """
+    candidates: list[str] = []
+
+    # Python and Lua use dotted module paths
+    if language_family in ("python", "lua", None):
+        module = path_to_module(file_path)
+        if module:
+            candidates.append(module)
+            # Strip src. prefix if present - imports typically don't include it
+            if module.startswith("src."):
+                candidates.append(module[4:])
+
+    # Declaration-based languages: Go, Rust, Java, Kotlin, Scala, C#, etc.
+    # Use the declared_module directly since that's what imports reference
+    if declared_module and declared_module not in candidates:
+        candidates.append(declared_module)
+
+    # JS/TS use relative paths which require importer context
+    # They're handled via lexical fallback, not SQL ImportFact queries
+    # So we return empty for pure JS/TS files without declared_module
+
+    return candidates
+
+
+def file_to_import_sql_patterns(
+    file_path: str,
+    language_family: str | None = None,
+    declared_module: str | None = None,
+) -> tuple[list[str], list[str]]:
+    """Generate SQL patterns for matching ImportFact.source_literal.
+
+    Returns two lists:
+    - exact_matches: for "source_literal IN (...)" conditions
+    - prefix_patterns: for "source_literal LIKE '...%'" conditions
+
+    The prefix patterns catch submodule imports, e.g. moving "codeplane.utils"
+    should also update imports of "codeplane.utils.helper".
+
+    Args:
+        file_path: Repo-relative file path
+        language_family: Language family from File record
+        declared_module: declared_module from File record
+
+    Returns:
+        Tuple of (exact_matches, prefix_patterns)
+    """
+    candidates = file_to_import_candidates(file_path, language_family, declared_module)
+
+    exact_matches = candidates.copy()
+    prefix_patterns: list[str] = []
+
+    # Determine separator based on language
+    if language_family == "rust":
+        sep = "::"
+    elif language_family == "go":
+        sep = "/"
+    else:
+        sep = "."  # Python, Lua, Java, etc.
+
+    for candidate in candidates:
+        prefix_patterns.append(f"{candidate}{sep}")
+
+    return exact_matches, prefix_patterns
