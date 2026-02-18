@@ -1,6 +1,0 @@
-1..5
-ok 1 - test passes
-ok 2 - another passing test
-not ok 3 - this test fails
-ok 4 - test with skip # SKIP reason for skipping
-not ok 5 - another failure

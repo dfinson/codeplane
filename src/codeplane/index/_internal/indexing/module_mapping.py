@@ -63,6 +63,23 @@ _KNOWN_SOURCE_EXTENSIONS: frozenset[str] = frozenset(
 )
 
 
+def get_module_separator(language_family: str | None) -> str:
+    """Return the module path separator for a language family.
+
+    Args:
+        language_family: Language family name (e.g. "python", "go", "rust")
+
+    Returns:
+        Separator string: "." for Python/Java/etc, "/" for Go/JS/TS, "::" for Rust
+    """
+    if language_family == "rust":
+        return "::"
+    if language_family in ("go", "javascript", "typescript"):
+        return "/"
+    # Python, Java, Kotlin, Scala, C#, Lua, and default
+    return "."
+
+
 def path_to_module(path: str) -> str | None:
     """Convert a file path to a dotted module path.
 
@@ -163,3 +180,171 @@ def build_module_index(file_paths: list[str]) -> dict[str, str]:
         if module_key:
             index[module_key] = fp
     return index
+
+
+def file_to_import_candidates(
+    file_path: str,
+    language_family: str | None = None,
+    declared_module: str | None = None,
+) -> list[str]:
+    """Generate all source_literal values that could import this file.
+
+    This is the inverse of import resolution: given a file path, what
+    import strings would reference it? Used by refactor_move and
+    refactor_delete to find ImportFact records.
+
+    Language-aware generation:
+    - Python/Lua: dotted paths with/without src. prefix
+    - JS/TS: relative paths (handled separately, returns empty)
+    - Go/Rust/Java/etc.: use declared_module from File record
+
+    Args:
+        file_path: Repo-relative file path (e.g. "src/codeplane/refactor/ops.py")
+        language_family: Language family from File record (e.g. "python", "go")
+        declared_module: declared_module from File record for declaration-based langs
+
+    Returns:
+        List of source_literal strings to match against ImportFact.
+        Empty list if no candidates can be generated.
+
+    Examples:
+        >>> file_to_import_candidates("src/codeplane/refactor/ops.py", "python")
+        ['src.codeplane.refactor.ops', 'codeplane.refactor.ops']
+        >>> file_to_import_candidates("pkg/util/helper.go", "go", "github.com/user/repo/pkg/util")
+        ['github.com/user/repo/pkg/util']
+        >>> file_to_import_candidates("src/utils/helper.ts", "typescript")
+        []  # JS/TS uses relative paths, handled differently
+    """
+    candidates: list[str] = []
+
+    # Python and Lua use dotted module paths
+    if language_family in ("python", "lua", None):
+        module = path_to_module(file_path)
+        if module:
+            candidates.append(module)
+            # Strip src. prefix if present - imports typically don't include it
+            if module.startswith("src."):
+                candidates.append(module[4:])
+
+    # Declaration-based languages: Go, Rust, Java, Kotlin, Scala, C#, etc.
+    # Use the declared_module directly since that's what imports reference
+    if declared_module and declared_module not in candidates:
+        candidates.append(declared_module)
+
+    # JS/TS use relative paths which require importer context
+    # They're handled via lexical fallback, not SQL ImportFact queries
+    # So we return empty for pure JS/TS files without declared_module
+
+    return candidates
+
+
+def file_to_import_sql_patterns(
+    file_path: str,
+    language_family: str | None = None,
+    declared_module: str | None = None,
+) -> tuple[list[str], list[str]]:
+    """Generate SQL patterns for matching ImportFact.source_literal.
+
+    Returns two lists:
+    - exact_matches: for "source_literal IN (...)" conditions
+    - prefix_patterns: for "source_literal LIKE '...%'" conditions
+
+    The prefix patterns catch submodule imports, e.g. moving "codeplane.utils"
+    should also update imports of "codeplane.utils.helper".
+
+    Args:
+        file_path: Repo-relative file path
+        language_family: Language family from File record
+        declared_module: declared_module from File record
+
+    Returns:
+        Tuple of (exact_matches, prefix_patterns)
+    """
+    candidates = file_to_import_candidates(file_path, language_family, declared_module)
+
+    exact_matches = candidates.copy()
+    prefix_patterns: list[str] = []
+
+    # Determine separator based on language
+    if language_family == "rust":
+        sep = "::"
+    elif language_family == "go":
+        sep = "/"
+    else:
+        sep = "."  # Python, Lua, Java, etc.
+
+    for candidate in candidates:
+        prefix_patterns.append(f"{candidate}{sep}")
+
+    return exact_matches, prefix_patterns
+
+
+def infer_target_declared_module(
+    from_path: str,
+    to_path: str,
+    from_declared_module: str | None,
+    language_family: str | None = None,
+) -> str | None:
+    """Infer the target declared_module when moving a file.
+
+    For declaration-based languages (Go, Rust, Java, etc.), the import path
+    is based on the declared module. When moving files, we need to transform
+    the old declared_module to reflect the new location.
+
+    Args:
+        from_path: Original file path (e.g. "pkg/util/helper.go")
+        to_path: Target file path (e.g. "pkg/newutil/helper.go")
+        from_declared_module: declared_module from source File record
+        language_family: Language family
+
+    Returns:
+        Inferred declared_module for target, or None if can't be inferred.
+
+    Examples:
+        >>> infer_target_declared_module(
+        ...     "pkg/util/helper.go", "pkg/newutil/helper.go",
+        ...     "github.com/user/repo/pkg/util", "go"
+        ... )
+        'github.com/user/repo/pkg/newutil'
+    """
+    if not from_declared_module:
+        return None
+
+    from pathlib import Path
+
+    # Get directory parts
+    from_dir = str(Path(from_path).parent)
+    to_dir = str(Path(to_path).parent)
+
+    if from_dir == to_dir:
+        # Same directory, declared_module stays the same
+        return from_declared_module
+
+    # For Go: module ends with path-like suffix matching from_dir
+    # e.g. "github.com/user/repo/pkg/util" ends with "pkg/util"
+    if language_family == "go":
+        # Try to find and replace the path suffix
+        from_dir_normalized = from_dir.replace("\\", "/")
+        to_dir_normalized = to_dir.replace("\\", "/")
+        if from_declared_module.endswith(from_dir_normalized):
+            base = from_declared_module[: -len(from_dir_normalized)]
+            return base + to_dir_normalized
+
+    # For Rust: module path uses :: separator
+    # e.g. "crate::util::helper" → "crate::newutil::helper"
+    if language_family == "rust":
+        from_parts = from_dir.replace("/", "::").replace("\\", "::")
+        to_parts = to_dir.replace("/", "::").replace("\\", "::")
+        if from_parts in from_declared_module:
+            return from_declared_module.replace(from_parts, to_parts, 1)
+
+    # For Java/Kotlin/Scala: package path uses . separator
+    # e.g. "com.example.util" → "com.example.newutil"
+    if language_family in ("java", "kotlin", "scala", "c_sharp"):
+        from_pkg = from_dir.replace("/", ".").replace("\\", ".")
+        to_pkg = to_dir.replace("/", ".").replace("\\", ".")
+        if from_pkg in from_declared_module:
+            return from_declared_module.replace(from_pkg, to_pkg, 1)
+
+    # Fallback: can't infer
+    return from_declared_module

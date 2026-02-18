@@ -605,6 +605,11 @@ class RefactorOps:
         Uses ImportFact to find all imports referencing the source module
         and generates edits to update them to the new path.
 
+        Supports all languages via language-aware import variant generation:
+        - Python/Lua: dotted paths with/without src. prefix
+        - Go/Rust/Java/etc.: uses declared_module from File record
+        - JS/TS: handled via lexical fallback (relative paths)
+
         Args:
             from_path: Source path (relative to repo root)
             to_path: Destination path (relative to repo root)
@@ -613,8 +618,14 @@ class RefactorOps:
         Returns:
             RefactorResult with preview. Call apply() to execute.
         """
-        from sqlmodel import or_, select
+        from sqlmodel import select
 
+        from codeplane.index._internal.indexing.module_mapping import (
+            file_to_import_candidates,
+            file_to_import_sql_patterns,
+            get_module_separator,
+            infer_target_declared_module,
+        )
         from codeplane.index.models import File, ImportFact
 
         refactor_id = str(uuid.uuid4())[:8]
@@ -625,103 +636,170 @@ class RefactorOps:
         from_path = from_path.lstrip("./").rstrip("/")
         to_path = to_path.lstrip("./").rstrip("/")
 
-        # Convert file paths to module paths for import matching
-        # e.g., "src/utils/helper.py" -> "src.utils.helper"
-        from_module = self._path_to_module(from_path)
-        to_module = self._path_to_module(to_path)
-
-        # Build SQL filter patterns:
-        # - Exact match: source_literal == from_module
-        # - Prefix match: source_literal LIKE from_module.%
-        # - imported_name match for bare imports
-        from_module_prefix = f"{from_module}.%"
-        bare_name = from_module.split(".")[-1]  # e.g., "helper" from "src.utils.helper"
-
+        # Look up source file to get language_family and declared_module
+        language_family: str | None = None
+        declared_module: str | None = None
         with self._coordinator.db.session() as session:
-            # Push filtering to SQL - don't fetch all imports
-            # Note: source_literal is nullable, these comparisons handle NULL correctly
-            stmt = (
-                select(ImportFact, File.path)
-                .join(File, ImportFact.file_id == File.id)  # type: ignore[arg-type]
-                .where(
-                    or_(
-                        # Match source_literal exactly or as prefix
-                        ImportFact.source_literal == from_module,
-                        ImportFact.source_literal.like(from_module_prefix),  # type: ignore[union-attr]
-                        # Match imported_name for bare "import foo" statements
-                        ImportFact.imported_name == from_module,
-                        ImportFact.imported_name == bare_name,
-                    )
+            file_record = session.exec(select(File).where(File.path == from_path)).first()
+            if file_record:
+                language_family = file_record.language_family
+                declared_module = file_record.declared_module
+
+        # Generate import candidates for both source and target paths
+        from_candidates = file_to_import_candidates(from_path, language_family, declared_module)
+
+        # For declaration-based languages, infer the target declared_module
+        to_declared_module = infer_target_declared_module(
+            from_path, to_path, declared_module, language_family
+        )
+        to_candidates = file_to_import_candidates(to_path, language_family, to_declared_module)
+        # Build mapping from old import string to new import string
+        # The first candidate is the "canonical" form
+        to_canonical = to_candidates[0] if to_candidates else self._path_to_module(to_path)
+        replacement_map: dict[str, str] = {}
+        for fc in from_candidates:
+            # Map each from variant to the corresponding to variant
+            # For dotted paths, preserve structure
+            if to_candidates and len(to_candidates) > 1:
+                # If from has src. prefix, use to with src. prefix (first candidate)
+                # If from lacks src. prefix, use to without it (second candidate)
+                if fc.startswith("src.") and to_candidates[0].startswith("src."):
+                    replacement_map[fc] = to_candidates[0]
+                elif not fc.startswith("src.") and len(to_candidates) > 1:
+                    replacement_map[fc] = to_candidates[1]
+                else:
+                    replacement_map[fc] = to_canonical
+            else:
+                replacement_map[fc] = to_canonical
+
+        # Get SQL patterns for querying ImportFact
+        exact_matches, prefix_patterns = file_to_import_sql_patterns(
+            from_path, language_family, declared_module
+        )
+
+        # Also match bare name for Python "import foo" style
+        sep = get_module_separator(language_family)
+        bare_names: list[str] = []
+        for candidate in from_candidates:
+            bare = candidate.rsplit(sep, 1)[-1] if sep in candidate else candidate
+            if bare and bare not in bare_names:
+                bare_names.append(bare)
+        with self._coordinator.db.session() as session:
+            from sqlmodel import col, or_, select
+
+            # Build SQL conditions for all variants
+            conditions: list[Any] = []
+
+            # Exact matches
+            if exact_matches:
+                conditions.append(col(ImportFact.source_literal).in_(exact_matches))
+
+            # Prefix matches (submodule imports)
+            for prefix in prefix_patterns:
+                conditions.append(col(ImportFact.source_literal).like(f"{prefix}%"))
+
+            # Bare name matches for imported_name
+            if bare_names:
+                conditions.append(col(ImportFact.imported_name).in_(bare_names))
+
+            # Also check imported_name for full module paths
+            if from_candidates:
+                conditions.append(col(ImportFact.imported_name).in_(from_candidates))
+
+            if not conditions:
+                # No SQL conditions - skip to lexical fallback
+                pass
+            else:
+                stmt = (
+                    select(ImportFact, File.path)
+                    .join(File, ImportFact.file_id == File.id)  # type: ignore[arg-type]
+                    .where(or_(*conditions))
                 )
-            )
-            results = session.exec(stmt).all()
+                results = session.exec(stmt).all()
 
-            for imp, file_path in results:
-                # Determine what to replace
-                old_value = ""
-                new_value = ""
+                for imp, file_path in results:
+                    # Determine what to replace
+                    old_value = ""
+                    new_value = ""
 
-                if imp.source_literal:
-                    if imp.source_literal == from_module:
-                        old_value = from_module
-                        new_value = to_module
-                    elif imp.source_literal.startswith(from_module + "."):
-                        old_value = imp.source_literal
-                        new_value = imp.source_literal.replace(from_module, to_module, 1)
-
-                # If source_literal didn't match, check imported_name
-                if not old_value:
-                    if imp.imported_name == from_module:
-                        old_value = from_module
-                        new_value = to_module
-                    elif imp.imported_name == bare_name:
-                        # For "import helper" -> need to update if it refers to our module
-                        # This is lower certainty since we can't be sure
-                        old_value = bare_name
-                        new_value = to_module.split(".")[-1]  # new bare name
-
-                if old_value:
-                    # Read file to find exact line
-                    full_path = self._repo_root / file_path
-                    if full_path.exists():
-                        try:
-                            content = full_path.read_text(encoding="utf-8")
-                            lines = content.splitlines()
-                            for i, line in enumerate(lines, 1):
-                                if old_value in line and "import" in line.lower():
-                                    loc = (file_path, i)
-                                    if loc not in seen_locations:
-                                        seen_locations.add(loc)
-                                        # Certainty based on match type
-                                        cert: Literal["high", "medium", "low"] = (
-                                            "high" if imp.source_literal else "medium"
-                                        )
-                                        edits_by_file.setdefault(file_path, []).append(
-                                            EditHunk(
-                                                old=old_value,
-                                                new=new_value,
-                                                line=i,
-                                                certainty=cert,
-                                            )
-                                        )
+                    if imp.source_literal:
+                        # Check exact match first
+                        if imp.source_literal in replacement_map:
+                            old_value = imp.source_literal
+                            new_value = replacement_map[imp.source_literal]
+                        else:
+                            # Check prefix match (submodule import)
+                            for from_c, to_c in replacement_map.items():
+                                if imp.source_literal.startswith(from_c + sep):
+                                    old_value = imp.source_literal
+                                    new_value = imp.source_literal.replace(from_c, to_c, 1)
                                     break
-                        except (OSError, UnicodeDecodeError):
-                            pass
+
+                    # If source_literal didn't match, check imported_name
+                    if not old_value:
+                        if imp.imported_name in replacement_map:
+                            old_value = imp.imported_name
+                            new_value = replacement_map[imp.imported_name]
+                        elif imp.imported_name in bare_names:
+                            # Bare import like "import helper"
+                            to_bare = (
+                                to_canonical.rsplit(sep, 1)[-1]
+                                if sep in to_canonical
+                                else to_canonical
+                            )
+                            old_value = imp.imported_name
+                            new_value = to_bare
+
+                    if old_value:
+                        # Read file to find exact line
+                        full_path = self._repo_root / file_path
+                        if full_path.exists():
+                            try:
+                                content = full_path.read_text(encoding="utf-8")
+                                lines = content.splitlines()
+                                for i, line in enumerate(lines, 1):
+                                    if old_value in line and "import" in line.lower():
+                                        loc = (file_path, i)
+                                        if loc not in seen_locations:
+                                            seen_locations.add(loc)
+                                            # Certainty based on match type
+                                            cert: Literal["high", "medium", "low"] = (
+                                                "high" if imp.source_literal else "medium"
+                                            )
+                                            edits_by_file.setdefault(file_path, []).append(
+                                                EditHunk(
+                                                    old=old_value,
+                                                    new=new_value,
+                                                    line=i,
+                                                    certainty=cert,
+                                                )
+                                            )
+                                        break
+                            except (OSError, UnicodeDecodeError):
+                                pass
 
         # Lexical fallback: search for module path strings in all files
         await self._add_move_lexical_fallback(
-            from_module, to_module, from_path, to_path, seen_locations, edits_by_file
+            from_candidates,
+            to_canonical,
+            replacement_map,
+            from_path,
+            to_path,
+            seen_locations,
+            edits_by_file,
         )
 
         # Scan comments if requested
         if include_comments:
             affected_files = set(edits_by_file.keys())
             # Check for path mentions in comments
-            for pattern, replacement in [(from_path, to_path), (from_module, to_module)]:
+            patterns_to_search = [(from_path, to_path)]
+            for fc in from_candidates:
+                patterns_to_search.append((fc, replacement_map.get(fc, to_canonical)))
+            for pattern, replacement in patterns_to_search:
                 await self._add_comment_occurrences(
                     pattern, replacement, affected_files, edits_by_file
                 )
-
         # Build preview
         preview = self._build_preview(edits_by_file)
         self._pending[refactor_id] = preview
@@ -734,8 +812,9 @@ class RefactorOps:
 
     async def _add_move_lexical_fallback(
         self,
-        from_module: str,
-        to_module: str,
+        from_candidates: list[str],
+        to_canonical: str,
+        replacement_map: dict[str, str],
         from_path: str,
         to_path: str,
         seen_locations: set[tuple[str, int]],
@@ -744,9 +823,14 @@ class RefactorOps:
         """Use Tantivy index for move lexical fallback - NOT filesystem scan.
 
         Searches for quoted module/path strings via the index.
+        Handles all language variants.
         """
-        # Search for module path in quotes
-        for old_val, new_val in [(from_module, to_module), (from_path, to_path)]:
+        # Build search patterns: all from_candidates + file paths
+        search_pairs: list[tuple[str, str]] = [(from_path, to_path)]
+        for fc in from_candidates:
+            # Use replacement_map to preserve prefix structure (e.g. src. prefix)
+            search_pairs.append((fc, replacement_map.get(fc, to_canonical)))
+        for old_val, new_val in search_pairs:
             # Search for the value (index will find files containing it)
             search_response = await self._coordinator.search(f'"{old_val}"', limit=200)
 
@@ -874,31 +958,72 @@ class RefactorOps:
         seen_locations: set[tuple[str, int]],
         edits_by_file: dict[str, list[EditHunk]],
     ) -> None:
-        """Find all imports referencing a file/module."""
-        from sqlmodel import or_, select
+        """Find all imports referencing a file/module.
 
+        Supports all languages via language-aware import variant generation.
+        """
+        from sqlmodel import select
+
+        from codeplane.index._internal.indexing.module_mapping import (
+            file_to_import_candidates,
+            file_to_import_sql_patterns,
+        )
         from codeplane.index.models import File, ImportFact
 
-        # Normalize and convert to module path
+        # Normalize path
         file_path = file_path.lstrip("./").rstrip("/")
-        module_path = self._path_to_module(file_path)
-        module_prefix = f"{module_path}.%"
-        bare_name = module_path.split(".")[-1]
+
+        # Look up source file to get language_family and declared_module
+        language_family: str | None = None
+        declared_module: str | None = None
+        with self._coordinator.db.session() as session:
+            file_record = session.exec(select(File).where(File.path == file_path)).first()
+            if file_record:
+                language_family = file_record.language_family
+                declared_module = file_record.declared_module
+
+        # Generate import candidates using language-aware utility
+        candidates = file_to_import_candidates(file_path, language_family, declared_module)
+        exact_matches, prefix_patterns = file_to_import_sql_patterns(
+            file_path, language_family, declared_module
+        )
+
+        # Also match bare name for Python "import foo" style
+        bare_names: list[str] = []
+        for candidate in candidates:
+            bare = candidate.split(".")[-1] if "." in candidate else candidate
+            if bare and bare not in bare_names:
+                bare_names.append(bare)
 
         with self._coordinator.db.session() as session:
-            # Push filtering to SQL
-            # Note: source_literal is nullable, these comparisons handle NULL correctly
+            from sqlmodel import col, or_, select
+
+            # Build SQL conditions for all variants
+            conditions: list[Any] = []
+
+            # Exact matches
+            if exact_matches:
+                conditions.append(col(ImportFact.source_literal).in_(exact_matches))
+
+            # Prefix matches (submodule imports)
+            for prefix in prefix_patterns:
+                conditions.append(col(ImportFact.source_literal).like(f"{prefix}%"))
+
+            # Bare name matches for imported_name
+            if bare_names:
+                conditions.append(col(ImportFact.imported_name).in_(bare_names))
+
+            # Also check imported_name for full module paths
+            if candidates:
+                conditions.append(col(ImportFact.imported_name).in_(candidates))
+
+            if not conditions:
+                return
+
             stmt = (
                 select(ImportFact, File.path)
                 .join(File, ImportFact.file_id == File.id)  # type: ignore[arg-type]
-                .where(
-                    or_(
-                        ImportFact.source_literal == module_path,
-                        ImportFact.source_literal.like(module_prefix),  # type: ignore[union-attr]
-                        ImportFact.imported_name == module_path,
-                        ImportFact.imported_name == bare_name,
-                    )
-                )
+                .where(or_(*conditions))
             )
             results = session.exec(stmt).all()
 
@@ -984,11 +1109,35 @@ class RefactorOps:
         seen_locations: set[tuple[str, int]],
         edits_by_file: dict[str, list[EditHunk]],
     ) -> None:
-        """Use Tantivy index for delete lexical fallback - NOT filesystem scan."""
-        # Build search patterns
-        patterns = [target]
+        """Use Tantivy index for delete lexical fallback - NOT filesystem scan.
+
+        Searches for all import variants via the index.
+        """
+        from sqlmodel import select
+
+        from codeplane.index._internal.indexing.module_mapping import file_to_import_candidates
+        from codeplane.index.models import File
+
+        # Build search patterns based on target type
+        patterns: list[str] = [target]
+
+        # If target looks like a file path, generate all import variants
         if "/" in target or target.endswith(".py"):
-            patterns.append(self._path_to_module(target))
+            # Look up file info for language-aware variant generation
+            language_family: str | None = None
+            declared_module: str | None = None
+            with self._coordinator.db.session() as session:
+                file_record = session.exec(
+                    select(File).where(File.path == target.lstrip("./").rstrip("/"))
+                ).first()
+                if file_record:
+                    language_family = file_record.language_family
+                    declared_module = file_record.declared_module
+
+            # Add all import variants
+            for candidate in file_to_import_candidates(target, language_family, declared_module):
+                if candidate not in patterns:
+                    patterns.append(candidate)
 
         for pattern in patterns:
             search_response = await self._coordinator.search(pattern, limit=500)
