@@ -180,11 +180,11 @@ class TestGlobalRegistry:
         assert "search" in spec.name.lower() or "code" in spec.description.lower()
 
     @pytest.mark.skip(reason="Tools now registered via FastMCP, not at import time")
-    def test_read_files_tool_registered(self) -> None:
-        """read_files tool is registered."""
+    def test_read_source_tool_registered(self) -> None:
+        """read_source tool is registered."""
         from codeplane.mcp import tools  # noqa: F401
 
-        spec = registry.get("read_files")
+        spec = registry.get("read_source")
         assert spec is not None
 
     @pytest.mark.skip(reason="Tools now registered via FastMCP, not at import time")

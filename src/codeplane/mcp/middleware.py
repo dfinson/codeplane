@@ -47,6 +47,11 @@ class ToolMiddleware(Middleware):
     - No tracebacks printed to console
     """
 
+    def __init__(self, session_manager: Any = None) -> None:
+        """Initialize with optional session manager for gate/pattern tracking."""
+        super().__init__()
+        self._session_manager = session_manager
+
     async def on_call_tool(  # type: ignore[override]
         self,
         context: MiddlewareContext[mt.CallToolRequest],
@@ -66,6 +71,8 @@ class ToolMiddleware(Middleware):
             full_session_id = context.fastmcp_context.session_id or "unknown"
             session_id = full_session_id[:8]  # Truncate for display
 
+            # Resolve client profile from session and set for envelope builders
+            self._resolve_and_set_profile(context.fastmcp_context)
         # Extract key params for logging (avoid logging huge content)
         log_params = self._extract_log_params(tool_name, arguments)
 
@@ -98,6 +105,28 @@ class ToolMiddleware(Middleware):
                     style="green",
                     highlight=False,
                 )
+
+            # Tick gate expiry, record call, and evaluate bypass patterns
+            bypass_match = self._post_call_bookkeeping(context, tool_name, arguments, result)
+
+            # If a bypass pattern was detected, inject hints into the response.
+            # The result from call_next is a CallToolResult (frozen Pydantic model)
+            # so we extract the dict, merge hints, and return a new ToolResult.
+            if bypass_match:
+                result_dict = self._extract_result_dict(result)
+                if result_dict is not None:
+                    from codeplane.mcp.gate import build_pattern_hint
+
+                    hint_fields = build_pattern_hint(bypass_match)
+                    # Preserve existing agentic_hint (e.g. fetch commands
+                    # from delivery envelope) — append pattern coaching.
+                    existing_hint = result_dict.get("agentic_hint")
+                    if existing_hint:
+                        hint_fields["agentic_hint"] = (
+                            existing_hint + "\n\n" + hint_fields["agentic_hint"]
+                        )
+                    result_dict.update(hint_fields)
+                    return ToolResult(structured_content=result_dict)
 
             return result
 
@@ -307,6 +336,120 @@ class ToolMiddleware(Middleware):
             # Don't let schema extraction failure break error handling
             return None
 
+    def _post_call_bookkeeping(
+        self,
+        context: MiddlewareContext[mt.CallToolRequest],
+        tool_name: str,
+        arguments: dict[str, Any],
+        result: Any,
+    ) -> Any:
+        """Gate tick + pattern recording after a successful tool call.
+
+        Returns the detected PatternMatch if a warn-severity bypass
+        pattern was found, or None.
+        """
+        if not context.fastmcp_context or not self._session_manager:
+            return
+
+        session = self._session_manager.get_or_create(context.fastmcp_context.session_id)
+
+        # 1. Tick gate expiry (decrement pending gate counters)
+        session.gate_manager.tick()
+
+        # 2. Record call in pattern detector
+        #    Strip MCP prefix (e.g. "codeplane-copy3_search" -> "search")
+        short_name = self._strip_tool_prefix(tool_name)
+
+        # Extract file paths from arguments or result for pattern tracking
+        files: list[str] = []
+        if "paths" in arguments:
+            files = arguments["paths"] if isinstance(arguments["paths"], list) else []
+        elif "targets" in arguments and isinstance(arguments["targets"], list):
+            files = [t.get("path", "") for t in arguments["targets"] if isinstance(t, dict)]
+
+        # Extract hit count from search results.
+        # Result may be CallToolResult (content items) or a dict.
+        result_dict = self._extract_result_dict(result)
+        hit_count = 0
+        if result_dict:
+            results_list = result_dict.get("results", [])
+            if isinstance(results_list, list):
+                hit_count = len(results_list)
+        # 3. Evaluate patterns BEFORE recording (recording may clear the window)
+        #    Return match so caller can replace the MCP result with a hint-injected one.
+        pattern_match = session.pattern_detector.evaluate(current_tool=short_name)
+
+        # 4. Record call in pattern detector (may clear window for action categories).
+        #    Lint only clears when it actually auto-fixed files (conditional mutation).
+        lint_mutated = (
+            short_name == "lint_check"
+            and result_dict is not None
+            and result_dict.get("total_files_modified", 0) > 0
+        )
+        session.pattern_detector.record(
+            tool_name=short_name,
+            files=files,
+            hit_count=hit_count,
+            clears_window=lint_mutated,
+        )
+
+        if pattern_match and pattern_match.severity == "warn":
+            return pattern_match
+        return None
+
+    @staticmethod
+    def _strip_tool_prefix(tool_name: str) -> str:
+        """Strip MCP server prefix from tool name.
+
+        e.g. 'codeplane-copy3_search' -> 'search'
+        The prefix is everything up to the last underscore-separated
+        known tool name.
+        """
+        from codeplane.mcp.gate import TOOL_CATEGORIES
+
+        # Try matching from the longest suffix
+        for known in TOOL_CATEGORIES:
+            if tool_name.endswith(known):
+                return known
+        return tool_name
+
+    def _resolve_and_set_profile(self, fastmcp_ctx: Any) -> None:
+        """Resolve client profile from session and set on context var.
+
+        Extracts clientInfo from the MCP session's initialization params
+        and resolves the appropriate delivery profile.
+        """
+        from codeplane.mcp.delivery import resolve_profile, set_current_profile
+
+        try:
+            session = fastmcp_ctx.session
+            client_params = getattr(session, "client_params", None)
+            if client_params is None:
+                return
+
+            client_info = getattr(client_params, "clientInfo", None)
+            client_info_dict = None
+            if client_info is not None:
+                client_info_dict = {
+                    "name": getattr(client_info, "name", ""),
+                    "version": getattr(client_info, "version", ""),
+                }
+
+            capabilities = getattr(client_params, "capabilities", None)
+            caps_dict = None
+            if capabilities is not None:
+                caps_dict = (
+                    capabilities.model_dump(exclude_none=True)
+                    if hasattr(capabilities, "model_dump")
+                    else {}
+                )
+
+            profile = resolve_profile(client_info=client_info_dict, capabilities=caps_dict)
+            set_current_profile(profile)
+        except Exception:
+            # Profile resolution is best-effort; don't break tool calls
+            log.debug("profile_resolution_failed", exc_info=True)
+
     def _extract_log_params(self, _tool_name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Extract relevant parameters for logging.
 
@@ -329,6 +472,35 @@ class ToolMiddleware(Middleware):
                 params[key] = value
 
         return params
+
+    @staticmethod
+    def _extract_result_dict(result: Any) -> dict[str, Any] | None:
+        """Extract the JSON dict from an MCP result.
+
+        Handles:
+        - MCP CallToolResult with text content (JSON strings)
+        - ToolResult with structured_content dict
+        - Plain dict
+
+        Returns None if extraction fails.
+        """
+        # MCP CallToolResult — parse JSON from first text content item
+        if hasattr(result, "content") and result.content:
+            for content_item in result.content:
+                if hasattr(content_item, "text"):
+                    try:
+                        data = json.loads(content_item.text)
+                        if isinstance(data, dict):
+                            return data
+                    except (json.JSONDecodeError, AttributeError):
+                        pass
+        # ToolResult with structured_content
+        elif hasattr(result, "structured_content") and isinstance(result.structured_content, dict):
+            return dict(result.structured_content)  # copy to avoid mutation
+        # Plain dict
+        elif isinstance(result, dict):
+            return dict(result)
+        return None
 
     def _extract_result_summary(self, tool_name: str, result: Any) -> dict[str, Any]:
         """Extract summary metrics from tool result for logging.
@@ -389,7 +561,7 @@ class ToolMiddleware(Middleware):
         # Tool-specific summaries
         if tool_name == "search" and "results" in result:
             summary["matches"] = len(result.get("results", []))
-        elif tool_name == "write_files" and "delta" in result:
+        elif tool_name == "write_source" and "delta" in result:
             delta = result["delta"]
             summary["files_changed"] = delta.get("files_changed", 0)
         elif tool_name in ("run_test_targets", "get_test_run_status") and "run_status" in result:
@@ -438,12 +610,12 @@ class ToolMiddleware(Middleware):
             results = data.get("results", [])
             return f"{len(results)} results"
 
-        if tool_name == "write_files":
+        if tool_name == "write_source":
             delta = data.get("delta", {})
             files_changed = delta.get("files_changed", 0)
             return f"{files_changed} files updated"
 
-        if tool_name == "read_files":
+        if tool_name in ("read_source", "read_file_full"):
             files = data.get("files", [])
             return f"{len(files)} files read"
 

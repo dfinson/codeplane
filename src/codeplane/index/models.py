@@ -920,10 +920,10 @@ class MemberAccessFact(SQLModel, table=True):
     access_style: str  # AccessStyle value: dot, arrow, scope
 
     # The chain
-    full_expression: str  # "ctx.mutation_ops.write_files"
+    full_expression: str  # "ctx.mutation_ops.write_source"
     receiver_name: str = Field(index=True)  # Leftmost identifier: "ctx"
-    member_chain: str  # Rest of chain: "mutation_ops.write_files"
-    final_member: str = Field(index=True)  # Rightmost: "write_files"
+    member_chain: str  # Rest of chain: "mutation_ops.write_source"
+    final_member: str = Field(index=True)  # Rightmost: "write_source"
     chain_depth: int  # Number of accesses: 2
 
     # Call info

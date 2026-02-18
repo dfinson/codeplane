@@ -98,9 +98,6 @@ def mock_coordinator() -> MagicMock:
             dependencies=None,
             test_layout=None,
             public_api=[],
-            truncated=False,
-            next_cursor=None,
-            total_estimate=None,
         )
     )
     mock.db = MagicMock()
@@ -111,7 +108,7 @@ def mock_coordinator() -> MagicMock:
 def mock_file_ops() -> MagicMock:
     """Create a mock FileOps."""
     mock = MagicMock()
-    mock.read_files.return_value = MagicMock(files=[])
+    mock.read_source.return_value = MagicMock(files=[])
     mock.list_files.return_value = MagicMock(
         path="",
         entries=[],
@@ -125,7 +122,7 @@ def mock_file_ops() -> MagicMock:
 def mock_mutation_ops() -> MagicMock:
     """Create a mock MutationOps."""
     mock = MagicMock()
-    mock.write_files.return_value = MagicMock(
+    mock.write_source.return_value = MagicMock(
         applied=True,
         dry_run=False,
         delta=MagicMock(

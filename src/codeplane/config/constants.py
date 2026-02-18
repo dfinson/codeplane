@@ -6,10 +6,9 @@ These are protocol constraints, API stability limits, and implementation details
 For configurable values, see models.py (TimeoutsConfig, LimitsConfig, etc.).
 """
 
-# ======================================================================# MCP Tool Pagination Maximums
+# ======================================================================# MCP Tool Limits
 # ======================================================================# These are hard caps for API stability and security. Users can configure
 # defaults below these, but cannot exceed them.
-
 SEARCH_MAX_LIMIT = 100
 """Maximum results for index search queries."""
 
@@ -46,21 +45,27 @@ MOVE_LEXICAL_MAX = 200
 DIFF_CHANGES_MAX = 100
 """Maximum structural changes per page for semantic diff."""
 
-# ======================================================================# Response Budget
-# ======================================================================# Server-side byte budget for MCP tool responses. All paginated endpoints
-# share this single constant. Sits between the MCP fetch server default
-# VS Code Copilot writes results to file at 8KB. We use 40KB as the budget
-# to avoid excessive pagination, but add agentic hints when over 8KB.
-# Agents can optionally request a 7.5KB cap for guaranteed inline display.
+# ======================================================================
+# Delivery Envelope
+# ======================================================================
 
-RESPONSE_BUDGET_BYTES = 40_000
-"""Per-response byte budget shared by all size-bounded endpoints."""
+INLINE_CAP_BYTES = 8_000
+"""Default inline cap for delivery envelope. Fits within VS Code's inline display."""
 
-INLINE_THRESHOLD_BYTES = 8_000
-"""VS Code writes responses over this size to file instead of inline."""
+# ======================================================================# Delivery Envelope Constants
+# ======================================================================
 
-INLINE_BUDGET_BYTES = 7_500
-"""Budget when agent requests inline_only=true for guaranteed inline display."""
+MAX_SPAN_LINES = 500
+"""Maximum lines per span in read_source."""
+
+MAX_INLINE_BYTES_PER_CALL = 20_000
+"""Maximum total inline bytes per read_source call."""
+
+MAX_TARGETS_PER_CALL = 20
+"""Maximum targets per read_source call."""
+
+SMALL_FILE_THRESHOLD = 1_000
+"""Files under this byte count skip two-phase confirmation in read_file_full."""
 
 # ======================================================================# Internal Implementation Constants
 # ======================================================================# These are not exposed to users and are implementation details.

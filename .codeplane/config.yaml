@@ -2,7 +2,7 @@
 # Docs: https://codeplane.dev/config
 
 # Server port (can also use: cpl up --port <N>)
-port: 7777
+port: 7654
 
 # Maximum file size to index (MB). Files larger than this are skipped.
 # Increase for repos with large source files, but may slow indexing.

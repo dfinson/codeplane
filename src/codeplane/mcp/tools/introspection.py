@@ -44,7 +44,7 @@ def _derive_features(tool_names: list[str]) -> list[str]:
             features.add("linting")
         elif name in ("search", "map_repo"):
             features.add("indexing")
-        elif name in ("read_files", "list_files", "write_files"):
+        elif name in ("read_source", "list_files", "write_source"):
             features.add("file_ops")
         elif name == "describe":
             features.add("introspection")
@@ -187,12 +187,12 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 {
                     "name": "explore_codebase",
                     "description": "Understand repository structure",
-                    "steps": ["map_repo", "search", "read_files"],
+                    "steps": ["map_repo", "search", "read_source"],
                 },
                 {
                     "name": "fix_and_commit",
                     "description": "Edit files, lint, test, and commit",
-                    "steps": ["write_files", "lint", "test", "git_commit"],
+                    "steps": ["write_source", "lint", "test", "git_commit"],
                 },
             ]
             return {

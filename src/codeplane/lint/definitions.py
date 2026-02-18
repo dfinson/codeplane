@@ -37,9 +37,8 @@ registry.register(
         dry_run_args=["format", "--check", "--diff"],
         output_format="custom",
     ),
-    parser=parsers.parse_gofmt,  # Similar output format
+    parser=parsers.parse_ruff_format,
 )
-
 registry.register(
     LintTool(
         tool_id="python.mypy",

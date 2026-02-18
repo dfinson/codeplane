@@ -189,10 +189,10 @@ class TestMCPMutationIntegration:
     """Integration tests for MCP mutation operations."""
 
     def test_atomic_edit_creates_file(self, integration_repo: Path) -> None:
-        """MCP write_files creates new files."""
+        """MCP write_source creates new files."""
         mutation_ops = MutationOps(integration_repo)
 
-        result = mutation_ops.write_files(
+        result = mutation_ops.write_source(
             edits=[
                 Edit(
                     path="src/new_module.py",
@@ -207,16 +207,15 @@ class TestMCPMutationIntegration:
         assert "def new_func" in (integration_repo / "src" / "new_module.py").read_text()
 
     def test_atomic_edit_updates_file(self, integration_repo: Path) -> None:
-        """MCP write_files updates existing files with content-addressed edits."""
+        """MCP write_source updates existing files."""
         mutation_ops = MutationOps(integration_repo)
 
-        result = mutation_ops.write_files(
+        result = mutation_ops.write_source(
             edits=[
                 Edit(
                     path="src/main.py",
                     action="update",
-                    old_content="def greet(name: str) -> str:",
-                    new_content='def greet(name: str, greeting: str = "Hello") -> str:',
+                    content='def greet(name: str, greeting: str = "Hello") -> str:\n    pass\n',
                 )
             ],
         )
@@ -226,18 +225,17 @@ class TestMCPMutationIntegration:
         assert 'greeting: str = "Hello"' in updated
 
     def test_atomic_edit_dry_run(self, integration_repo: Path) -> None:
-        """MCP write_files dry_run doesn't modify files."""
+        """MCP write_source dry_run doesn't modify files."""
         mutation_ops = MutationOps(integration_repo)
 
         original = (integration_repo / "src" / "main.py").read_text()
 
-        result = mutation_ops.write_files(
+        result = mutation_ops.write_source(
             edits=[
                 Edit(
                     path="src/main.py",
                     action="update",
-                    old_content="def greet",
-                    new_content="def say_hello",
+                    content="def say_hello():\n    pass\n",
                 )
             ],
             dry_run=True,
@@ -250,7 +248,7 @@ class TestMCPMutationIntegration:
         assert result.dry_run
 
     def test_atomic_edit_delete(self, integration_repo: Path) -> None:
-        """MCP write_files can delete files."""
+        """MCP write_source can delete files."""
         # First create a file to delete
         to_delete = integration_repo / "src" / "to_delete.py"
         to_delete.write_text("# Delete me\n")
@@ -258,7 +256,7 @@ class TestMCPMutationIntegration:
 
         mutation_ops = MutationOps(integration_repo)
 
-        result = mutation_ops.write_files(
+        result = mutation_ops.write_source(
             edits=[
                 Edit(
                     path="src/to_delete.py",
@@ -269,21 +267,3 @@ class TestMCPMutationIntegration:
 
         assert result.applied
         assert not to_delete.exists()
-
-    def test_atomic_edit_content_not_found_error(self, integration_repo: Path) -> None:
-        """MCP write_files raises error when old_content not found."""
-        from codeplane.mutation.ops import ContentNotFoundError
-
-        mutation_ops = MutationOps(integration_repo)
-
-        with pytest.raises(ContentNotFoundError):
-            mutation_ops.write_files(
-                edits=[
-                    Edit(
-                        path="src/main.py",
-                        action="update",
-                        old_content="THIS CONTENT DOES NOT EXIST",
-                        new_content="replacement",
-                    )
-                ],
-            )

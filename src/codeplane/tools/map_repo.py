@@ -110,10 +110,6 @@ class MapRepoResult:
     dependencies: IndexedDependencies | None = None
     test_layout: TestLayout | None = None
     public_api: list[PublicSymbol] | None = None
-    # Pagination
-    truncated: bool = False
-    next_cursor: str | None = None
-    total_estimate: int | None = None
 
 
 class RepoMapper:
@@ -161,11 +157,9 @@ class RepoMapper:
         result = MapRepoResult()
 
         if "structure" in include and filtered_files is not None:
-            result.structure, truncated, file_count = self._build_structure(
+            result.structure, _truncated, _file_count = self._build_structure(
                 depth, limit, filtered_files
             )
-            result.truncated = truncated
-            result.total_estimate = file_count
 
         if "languages" in include and filtered_files is not None:
             result.languages = self._analyze_languages(limit, filtered_files)

@@ -1,8 +1,7 @@
 """Git MCP tools - consolidated git_* handlers."""
 
-import contextlib
-import secrets
 from dataclasses import asdict
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -13,7 +12,9 @@ from pydantic import Field
 from codeplane.config.constants import GIT_BLAME_MAX, GIT_LOG_MAX
 from codeplane.git._internal.hooks import run_hook
 from codeplane.git.errors import EmptyCommitMessageError, PathsNotFoundError
-from codeplane.mcp.budget import BudgetAccumulator, make_budget_pagination, measure_bytes
+from codeplane.mcp.budget import measure_bytes
+from codeplane.mcp.delivery import wrap_existing_response
+from codeplane.mcp.gate import DESTRUCTIVE_RESET_GATE
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -27,6 +28,17 @@ if TYPE_CHECKING:
 
 # Fingerprint key for tracking hard reset confirmation tokens
 _HARD_RESET_TOKEN_KEY = "pending_hard_reset_token"
+
+
+def _serialize_datetimes(obj: Any) -> Any:
+    """Recursively convert datetime objects to ISO-8601 strings."""
+    if isinstance(obj, dict):
+        return {k: _serialize_datetimes(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_serialize_datetimes(v) for v in obj]
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    return obj
 
 
 # =============================================================================
@@ -259,7 +271,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         base: str | None = Field(None, description="Base ref for comparison"),
         target: str | None = Field(None, description="Target ref for comparison"),
         staged: bool = Field(False, description="Show staged changes only"),
-        cursor: str | None = Field(None, description="Pagination cursor (file index)"),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Get diff between refs or working tree."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
@@ -272,135 +284,52 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         )
 
         all_files = list(diff.files)
-        full_patch = diff.patch or ""
 
-        # Parse the full patch into per-file sections FIRST
-        # This allows us to budget files + their patches together
-        file_patches: dict[str, str] = {}
-        current_file_path: str | None = None
-        current_file_lines: list[str] = []
+        # Build file list
+        files_out: list[dict[str, Any]] = []
+        for f in all_files:
+            files_out.append(
+                {
+                    "old_path": f.old_path,
+                    "new_path": f.new_path,
+                    "status": f.status,
+                    "additions": f.additions,
+                    "deletions": f.deletions,
+                }
+            )
 
-        for line in full_patch.splitlines(keepends=True):
-            if line.startswith("diff --git "):
-                # Flush previous file's patch
-                if current_file_path:
-                    file_patches[current_file_path] = "".join(current_file_lines)
-                # Start new file - extract path from header
-                current_file_lines = [line]
-                current_file_path = None
-                # Extract both a/ and b/ paths from the header
-                # Format: "diff --git a/path b/path\n"
-                parts = line.strip().split()
-                if len(parts) >= 4:
-                    # Try b/ path first (for modified/added), then a/ (for deleted)
-                    for p in (parts[3], parts[2]):
-                        if p.startswith("b/") or p.startswith("a/"):
-                            current_file_path = p[2:]
-                            break
-            else:
-                current_file_lines.append(line)
-
-        # Flush last file
-        if current_file_path:
-            file_patches[current_file_path] = "".join(current_file_lines)
-
-        # Apply cursor: skip files already returned
-        start_idx = 0
-        if cursor:
-            with contextlib.suppress(ValueError):
-                parsed = int(cursor)
-                if parsed >= 0:
-                    start_idx = parsed
-
-        page_files = all_files[start_idx:]
-
-        # Compute overhead for fixed response fields
-        base_overhead: dict[str, Any] = {
-            "files": [],
-            "total_additions": sum(f.additions for f in all_files),
-            "total_deletions": sum(f.deletions for f in all_files),
-            "files_changed": len(all_files),
-            "page_additions": 0,
-            "page_deletions": 0,
-            "page_files": 0,
-            "patch": "",
-            "summary": "999d files changed, +999999 -999999",  # worst-case summary
-            "pagination": {
-                "truncated": True,
-                "next_cursor": "99999",
-                "total_estimate": len(all_files),
-            },
-        }
-        overhead = measure_bytes(base_overhead) + 100  # safety margin
-
-        # Budget files + their patches TOGETHER
-        acc = BudgetAccumulator()
-        acc.reserve(overhead)
-        files_in_page: list[dict[str, Any]] = []
-        patches_in_page: list[str] = []
-
-        for f in page_files:
-            file_path = f.new_path or f.old_path or ""
-            file_patch = file_patches.get(file_path, "")
-
-            file_item = {
-                "old_path": f.old_path,
-                "new_path": f.new_path,
-                "status": f.status,
-                "additions": f.additions,
-                "deletions": f.deletions,
-            }
-
-            # Create combined item for budget measurement
-            # The patch is a string, so we measure it as part of a dict
-            combined_item = {
-                **file_item,
-                "_patch_size_proxy": file_patch,  # Include patch in measurement
-            }
-
-            if not acc.try_add(combined_item):
-                break
-
-            files_in_page.append(file_item)
-            if file_patch:
-                patches_in_page.append(file_patch)
-
-        has_more = len(files_in_page) < len(page_files)
-        next_offset = start_idx + len(files_in_page)
-
-        # Combine patches for the page
-        page_patch = "".join(patches_in_page)
-
-        # Compute totals
-        overall_additions = sum(f.additions for f in all_files)
-        overall_deletions = sum(f.deletions for f in all_files)
-        page_additions = sum(f["additions"] for f in files_in_page)
-        page_deletions = sum(f["deletions"] for f in files_in_page)
+        total_additions = sum(f.additions for f in all_files)
+        total_deletions = sum(f.deletions for f in all_files)
 
         result: dict[str, Any] = {
-            "files": files_in_page,
-            "total_additions": overall_additions,
-            "total_deletions": overall_deletions,
+            "files": files_out,
+            "total_additions": total_additions,
+            "total_deletions": total_deletions,
             "files_changed": len(all_files),
-            "page_additions": page_additions,
-            "page_deletions": page_deletions,
-            "page_files": len(files_in_page),
-            "patch": page_patch,
+            "patch": diff.patch or "",
             "summary": _summarize_diff(
-                len(files_in_page),
-                page_additions,
-                page_deletions,
+                len(all_files),
+                total_additions,
+                total_deletions,
                 staged,
                 total_files=len(all_files),
             ),
-            "pagination": make_budget_pagination(
-                has_more=has_more,
-                next_cursor=str(next_offset) if has_more else None,
-                total_estimate=len(all_files),
-            ),
         }
 
-        return result
+        # Track scope usage
+        scope_usage = None
+        if scope_id:
+            from codeplane.mcp.tools.files import _scope_manager
+
+            budget = _scope_manager.get_or_create(scope_id)
+            scope_usage = budget.to_usage_dict()
+
+        return wrap_existing_response(
+            result,
+            resource_kind="diff",
+            scope_id=scope_id,
+            scope_usage=scope_usage,
+        )
 
     @mcp.tool
     async def git_commit(
@@ -505,64 +434,49 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ctx: Context,
         ref: str = Field("HEAD", description="Starting reference"),
         limit: int = Field(default=50, le=GIT_LOG_MAX, description="Maximum commits to return"),
-        cursor: str | None = Field(None, description="Pagination cursor"),
         since: str | None = Field(None, description="Show commits after date"),
         until: str | None = Field(None, description="Show commits before date"),
         paths: list[str] | None = Field(None, description="Filter by paths"),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Get commit history."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
-        # When cursor is provided, it's a commit SHA — start walking from
-        # that commit and skip it (it was the last item of the prior page).
-        effective_ref = cursor if cursor else ref
-        skip_first = cursor is not None
-
         commits = app_ctx.git_ops.log(
-            ref=effective_ref,
-            limit=limit + 1 + (1 if skip_first else 0),
+            ref=ref,
+            limit=limit,
             since=since,
             until=until,
             paths=paths,
         )
 
-        if skip_first and commits:
-            commits = commits[1:]
-
-        has_more = len(commits) > limit
-        if has_more:
-            commits = commits[:limit]
-
-        # Reserve overhead for fixed response fields
-        base_response = {
-            "results": [],
-            "pagination": {"truncated": False, "next_cursor": "x" * 40, "total_estimate": 99999},
-            "summary": "X" * 200,
-        }
-        overhead = measure_bytes(base_response)
-        acc = BudgetAccumulator()
-        acc.reserve(overhead)
+        items: list[dict[str, Any]] = []
         for c in commits:
             d = asdict(c)
             # Convert datetime fields to ISO strings for JSON serialization
             for sig_key in ("author", "committer"):
                 if sig_key in d and "time" in d[sig_key]:
                     d[sig_key]["time"] = d[sig_key]["time"].isoformat()
-            if not acc.try_add(d):
-                break
+            items.append(d)
 
-        budget_more = has_more or (not acc.has_room and len(commits) > acc.count)
-
-        pagination = make_budget_pagination(
-            has_more=budget_more,
-            next_cursor=acc.items[-1]["sha"] if acc.items and budget_more else None,
-        )
-
-        return {
-            "results": acc.items,
-            "pagination": pagination,
-            "summary": _summarize_log(acc.count, budget_more),
+        result = {
+            "results": items,
+            "summary": _summarize_log(len(items), False),
         }
+        # Track scope usage
+        scope_usage = None
+        if scope_id:
+            from codeplane.mcp.tools.files import _scope_manager
+
+            budget = _scope_manager.get_or_create(scope_id)
+            scope_usage = budget.to_usage_dict()
+
+        return wrap_existing_response(
+            result,
+            resource_kind="log",
+            scope_id=scope_id,
+            scope_usage=scope_usage,
+        )
 
     @mcp.tool
     async def git_push(
@@ -598,11 +512,19 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ctx: Context,
         ref: str = Field(..., description="Reference to checkout"),
         create: bool = Field(False, description="Create new branch"),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Checkout a ref."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
         app_ctx.git_ops.checkout(ref, create=create)
+
+        # Reset scope budget duplicate tracking after mutation
+        if scope_id:
+            from codeplane.mcp.tools.files import _scope_manager
+
+            _scope_manager.record_mutation(scope_id)
+
         action = "created and checked out" if create else "checked out"
         return {
             "checked_out": ref,
@@ -634,6 +556,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             None,
             description="Required for hard reset. Obtain from initial call without token.",
         ),
+        gate_reason: str | None = Field(
+            None,
+            description="Reason for hard reset (min 50 chars). Required with confirmation_token.",
+        ),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Reset HEAD to a ref.
 
@@ -644,65 +571,64 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         This prevents accidental data loss from uncommitted changes.
         """
         session = app_ctx.session_manager.get_or_create(ctx.session_id)
+        gm = session.gate_manager
 
-        # For hard reset, enforce two-phase confirmation
+        # For hard reset, enforce two-phase confirmation via unified GateManager
         if mode == "hard":
-            stored_token = session.fingerprints.get(_HARD_RESET_TOKEN_KEY)
-
-            # Phase 2: Validate token and execute
+            # Phase 2: Validate token + reason and execute
             if confirmation_token:
-                if not stored_token:
+                gate_reason_str = gate_reason if isinstance(gate_reason, str) else ""
+                result = gm.validate(confirmation_token, gate_reason_str)
+                if not result.ok:
                     return {
                         "error": {
-                            "code": "INVALID_CONFIRMATION",
-                            "message": "No pending hard reset confirmation. Call without token first.",
+                            "code": "GATE_VALIDATION_FAILED",
+                            "message": result.error,
                         },
-                        "summary": "invalid confirmation token",
+                        "hint": result.hint,
+                        "summary": "gate validation failed",
                     }
-                if confirmation_token != stored_token:
-                    return {
-                        "error": {
-                            "code": "TOKEN_MISMATCH",
-                            "message": "Confirmation token does not match. Request a new token.",
-                        },
-                        "summary": "token mismatch",
-                    }
-                # Token valid - clear it and proceed to execute
-                del session.fingerprints[_HARD_RESET_TOKEN_KEY]
+                # Gate passed — proceed to execute
 
-            # Phase 1: Generate token and return warning
+            # Phase 1: Issue gate and return warning
             else:
                 # Gather information about what would be lost
                 status = app_ctx.git_ops.status()
                 uncommitted_files = list(status.keys())
                 uncommitted_count = len(uncommitted_files)
 
-                # Generate and store confirmation token
-                token = secrets.token_urlsafe(16)
-                session.fingerprints[_HARD_RESET_TOKEN_KEY] = token
+                # Issue gate via unified GateManager
+                gate_block = gm.issue(DESTRUCTIVE_RESET_GATE)
 
                 return {
                     "requires_confirmation": True,
-                    "confirmation_token": token,
+                    "gate": gate_block,
+                    "confirmation_token": gate_block["id"],
                     "mode": mode,
                     "target_ref": ref,
                     "uncommitted_files_count": uncommitted_count,
-                    "uncommitted_files": uncommitted_files[:20],  # Cap at 20 for display
-                    "warning": (
-                        "DESTRUCTIVE ACTION: git reset --hard will permanently discard "
-                        "all uncommitted changes. This cannot be undone."
-                    ),
+                    "uncommitted_files": uncommitted_files[:20],
+                    "warning": DESTRUCTIVE_RESET_GATE.message,
                     "agentic_hint": (
                         "STOP: This operation is irreversible and may destroy work. "
                         "You MUST ask the user for explicit approval before proceeding. "
                         "If approved, call git_reset again with the same parameters "
-                        f"plus confirmation_token='{token}'."
+                        f"plus confirmation_token='{gate_block['id']}' and "
+                        f"gate_reason='<reason min {DESTRUCTIVE_RESET_GATE.reason_min_chars} chars: "
+                        f"{DESTRUCTIVE_RESET_GATE.reason_prompt}>'."
                     ),
                     "summary": f"BLOCKED: hard reset requires user approval ({uncommitted_count} uncommitted files at risk)",
                 }
 
         # Execute the reset (soft/mixed immediately, hard after confirmation)
         app_ctx.git_ops.reset(ref, mode=mode)
+
+        # Reset scope budget duplicate tracking after mutation
+        if scope_id:
+            from codeplane.mcp.tools.files import _scope_manager
+
+            _scope_manager.record_mutation(scope_id)
+
         ref_display = ref[:12] if len(ref) > 12 else ref
         return {
             "reset_to": ref,
@@ -889,17 +815,37 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         path: str | None = Field(None, description="File path (required for blame)"),
         start_line: int | None = Field(None, description="Start line (for blame)"),
         end_line: int | None = Field(None, description="End line (for blame)"),
-        cursor: str | None = Field(None, description="Pagination cursor"),
         limit: int = Field(default=100, le=GIT_BLAME_MAX, description="Maximum lines to return"),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Inspect commits or blame."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
         if action == "show":
-            commit = app_ctx.git_ops.show(ref=ref)
-            result = asdict(commit)
-            result["summary"] = f"{commit.sha[:7]}: {commit.message.split(chr(10))[0][:50]}"
-            return result
+            commit_obj = app_ctx.git_ops.show(ref=ref)
+            result = _serialize_datetimes(asdict(commit_obj))
+            result["summary"] = f"{commit_obj.sha[:7]}: {commit_obj.message.split(chr(10))[0][:50]}"
+
+            # Track scope usage
+            scope_usage = None
+            if scope_id:
+                from codeplane.mcp.tools.files import _scope_manager
+
+                budget = _scope_manager.get_or_create(scope_id)
+                budget.increment_read(measure_bytes(result))
+                exceeded = budget.check_budget("read_bytes")
+                if exceeded:
+                    from codeplane.mcp.errors import BudgetExceededError
+
+                    raise BudgetExceededError(scope_id, "read_bytes", exceeded)
+                scope_usage = budget.to_usage_dict()
+
+            return wrap_existing_response(
+                result,
+                resource_kind="commit",
+                scope_id=scope_id,
+                scope_usage=scope_usage,
+            )
 
         elif action == "blame":
             if not path:
@@ -909,58 +855,38 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 min_line=start_line,
                 max_line=end_line,
             )
-            blame_dict = asdict(blame)
+            blame_dict = _serialize_datetimes(asdict(blame))
             lines = blame_dict.pop("lines", [])
-
-            start_idx = 0
-            if cursor:
-                with contextlib.suppress(ValueError):
-                    parsed = int(cursor)
-                    if parsed >= 0:
-                        start_idx = parsed
-
-            end_idx = start_idx + limit
-            candidate_page = lines[start_idx:end_idx]
-
-            # Apply budget to blame lines
-            # Reserve overhead for fixed response fields (blame_dict has path, newest_sha, oldest_sha)
-            base_response = {
-                "results": [],
-                "pagination": {
-                    "truncated": False,
-                    "next_cursor": "x" * 40,
-                    "total_estimate": 99999,
-                },
-                "path": "X" * 200,
-                "newest_sha": "x" * 40,
-                "oldest_sha": "x" * 40,
-                "summary": "X" * 200,
-            }
-            overhead = measure_bytes(base_response)
-            acc = BudgetAccumulator()
-            acc.reserve(overhead)
-            for line in candidate_page:
-                if not acc.try_add(line):
-                    break
-
-            count_more = len(lines) - start_idx - acc.count
-            has_more = count_more > 0
-
-            next_cursor_val = str(start_idx + acc.count) if has_more else None
-            pagination = make_budget_pagination(
-                has_more=has_more,
-                next_cursor=next_cursor_val,
-                total_estimate=len(lines) if has_more else None,
-            )
+            page = lines[:limit]
 
             from codeplane.core.formatting import compress_path
 
-            return {
-                "results": acc.items,
-                "pagination": pagination,
+            result = {
+                "results": page,
                 **blame_dict,
-                "summary": f"{acc.count} lines from {compress_path(path, 35)}",
+                "summary": f"{len(page)} lines from {compress_path(path, 35)}",
             }
+
+            # Track scope usage
+            scope_usage = None
+            if scope_id:
+                from codeplane.mcp.tools.files import _scope_manager
+
+                budget = _scope_manager.get_or_create(scope_id)
+                budget.increment_read(measure_bytes(result))
+                exceeded = budget.check_budget("read_bytes")
+                if exceeded:
+                    from codeplane.mcp.errors import BudgetExceededError
+
+                    raise BudgetExceededError(scope_id, "read_bytes", exceeded)
+                scope_usage = budget.to_usage_dict()
+
+            return wrap_existing_response(
+                result,
+                resource_kind="blame",
+                scope_id=scope_id,
+                scope_usage=scope_usage,
+            )
 
         raise ValueError(f"Unknown action: {action}")
 

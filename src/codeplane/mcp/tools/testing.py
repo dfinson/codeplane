@@ -7,7 +7,6 @@ Split into verb-first tools:
 - cancel_test_run: Abort a run
 """
 
-import secrets
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -20,10 +19,6 @@ if TYPE_CHECKING:
 
     from codeplane.mcp.context import AppContext
     from codeplane.testing.models import TestResult
-
-
-# Session key for broad-run confirmation tokens
-_BROAD_RUN_TOKEN_KEY = "__broad_run_confirmation_token__"
 
 
 # =============================================================================
@@ -214,11 +209,11 @@ def _build_logs_hint(
                 + "\n".join(file_examples)
                 + "\n"
                 "Each target also produces .stderr.txt (if any) and .xml (JUnit results).\n"
-                "Use read_files to inspect logs for completed targets."
+                "Use read_source to inspect logs for completed targets."
             )
         return (
             f"Test output is being written to: {artifact_dir}/\n"
-            "Use read_files to inspect logs for completed targets."
+            "Use read_source to inspect logs for completed targets."
         )
     elif status_str in ("completed", "failed", "cancelled"):
         if file_examples:
@@ -226,12 +221,12 @@ def _build_logs_hint(
                 f"Test logs available at: {artifact_dir}/\n" + "\n".join(file_examples) + "\n"
                 "Each target also produces .stderr.txt (if any) and .xml (JUnit results).\n"
                 "  - result.json: final run summary\n"
-                "Use read_files to inspect specific test output."
+                "Use read_source to inspect specific test output."
             )
         return (
             f"Test logs available at: {artifact_dir}/\n"
             "  - result.json: final run summary\n"
-            "Use read_files to inspect specific test output."
+            "Use read_source to inspect specific test output."
         )
     return None
 
@@ -640,18 +635,19 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ),
         confirm_broad_run: str | None = Field(
             None,
-            description="Required when using target_filter without explicit targets or affected_by. "
-            "Provide a reason (min 15 chars) explaining why a broad run is needed.",
+            description="Justification for non-scoped test runs. Required with confirmation_token. "
+            "Min 50 chars for target_filter runs, min 250 chars for full-suite runs.",
         ),
         confirmation_token: str | None = Field(
             None,
-            description="Token from initial blocked call. Required with confirm_broad_run.",
+            description="Gate token from a blocked test run call. Required with confirm_broad_run.",
         ),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Execute tests.
 
         RECOMMENDED: Use affected_by for efficient impact-aware testing:
-        - run_test_targets(affected_by=["src/changed_file.py"])
+        - run_test_targets(affected_by=["src/changed_file"])
 
         This automatically discovers and runs only tests affected by the changed files.
 
@@ -659,7 +655,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         - targets: Explicit target IDs (from discover_test_targets)
         - target_filter: Substring match (requires two-phase confirmation)
 
-        To run a single test file, use: targets=['test:path/to/test_file.py']
+        To run a single test file, use: targets=['test:path/to/test_file']
 
         Coverage:
         When coverage=True, coverage_dir MUST be provided.
@@ -700,66 +696,76 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     ),
                 }
 
-        # Two-phase confirmation for broad runs (target_filter without targets or affected_by)
-        needs_confirmation = target_filter and not effective_targets and not affected_by
-        if needs_confirmation:
-            stored_token = session.fingerprints.get(_BROAD_RUN_TOKEN_KEY)
+        # =====================================================================
+        # Test scope enforcement: 3-tier gating
+        # =====================================================================
+        is_scoped = bool(affected_by) or bool(effective_targets)
+        is_semi_broad = bool(target_filter) and not is_scoped
+        is_full_suite = not targets and not affected_by and not target_filter and not failed_only
 
-            # Check for partial confirmation (one param but not both)
-            if bool(confirmation_token) != bool(confirm_broad_run):
-                missing = "confirm_broad_run" if confirmation_token else "confirmation_token"
+        if is_full_suite or is_semi_broad:
+            from codeplane.mcp.gate import (
+                BROAD_FILTER_TEST_GATE,
+                FULL_SUITE_TEST_GATE,
+                has_recent_scoped_test,
+            )
+
+            gate_spec = FULL_SUITE_TEST_GATE if is_full_suite else BROAD_FILTER_TEST_GATE
+            label = "full test suite" if is_full_suite else "filtered broad test"
+
+            # Prerequisite: must have a recent scoped test in the window
+            if not has_recent_scoped_test(session.pattern_detector._window):
                 return {
                     "action": "run",
-                    "run_status": {"status": "blocked", "run_id": ""},
-                    "error": "INCOMPLETE_CONFIRMATION",
-                    "message": f"Both confirmation_token AND confirm_broad_run are required. Missing: {missing}",
+                    "status": "blocked",
+                    "error": {
+                        "code": "SCOPED_TEST_REQUIRED",
+                        "message": (
+                            f"A {label} run requires a recent scoped test run. "
+                            "Run run_test_targets(affected_by=[...]) or with explicit "
+                            "targets first, then retry."
+                        ),
+                    },
+                    "agentic_hint": (
+                        "BLOCKED: You must complete a scoped test run "
+                        "(affected_by or explicit targets) within your recent calls "
+                        f"before requesting a {label} run. "
+                        "Run run_test_targets(affected_by=['<files_you_changed>']) first."
+                    ),
+                    "summary": f"BLOCKED: {label} requires prior scoped test",
                 }
 
-            # Phase 2: Validate token + reason and execute
-            if confirmation_token and confirm_broad_run:
-                if not stored_token:
+            # Prerequisite met — gate via GateManager
+            if confirmation_token:
+                reason_str = confirm_broad_run if isinstance(confirm_broad_run, str) else ""
+                gate_result = session.gate_manager.validate(confirmation_token, reason_str)
+                if not gate_result.ok:
+                    # Re-issue the gate
+                    gate_block = session.gate_manager.issue(gate_spec)
                     return {
                         "action": "run",
-                        "run_status": {"status": "blocked", "run_id": ""},
-                        "error": "INVALID_CONFIRMATION",
-                        "message": "No pending broad run confirmation. Call without token first.",
+                        "status": "blocked",
+                        "error": {
+                            "code": "GATE_VALIDATION_FAILED",
+                            "message": gate_result.error,
+                        },
+                        "gate": gate_block,
+                        "summary": f"BLOCKED: {label} gate validation failed",
                     }
-                if confirmation_token != stored_token:
-                    return {
-                        "action": "run",
-                        "run_status": {"status": "blocked", "run_id": ""},
-                        "error": "TOKEN_MISMATCH",
-                        "message": "Confirmation token does not match. Request a new token.",
-                    }
-                if len(confirm_broad_run.strip()) < 15:
-                    return {
-                        "action": "run",
-                        "run_status": {"status": "blocked", "run_id": ""},
-                        "error": "REASON_TOO_SHORT",
-                        "message": "confirm_broad_run must be at least 15 characters.",
-                    }
-                # Valid - clear token and proceed
-                del session.fingerprints[_BROAD_RUN_TOKEN_KEY]
-
-            # Phase 1: Generate token and block
+                # Valid — proceed with test run
             else:
-                token = secrets.token_urlsafe(16)
-                session.fingerprints[_BROAD_RUN_TOKEN_KEY] = token
-
+                # No token — issue gate and block
+                gate_block = session.gate_manager.issue(gate_spec)
                 return {
                     "action": "run",
-                    "run_status": {"status": "blocked", "run_id": ""},
-                    "requires_confirmation": True,
-                    "confirmation_token": token,
-                    "target_filter": target_filter,
+                    "status": "blocked",
+                    "gate": gate_block,
                     "agentic_hint": (
-                        "BLOCKED: Using target_filter without impact analysis runs many tests. "
-                        "Preferred: run_test_targets(affected_by=['changed_file.py']) for "
-                        "automatic impact-aware selection. "
-                        "If a broad run is truly needed, retry with BOTH: "
-                        f"confirmation_token='{token}' AND confirm_broad_run='<reason min 15 chars>'."
+                        f"BLOCKED: {label} run requires justification. "
+                        f"Retry with confirmation_token='{gate_block['id']}' AND "
+                        f"confirm_broad_run='<reason min {gate_spec.reason_min_chars} chars>'."
                     ),
-                    "summary": "BLOCKED: broad test run requires confirmation",
+                    "summary": f"BLOCKED: {label} requires confirmation",
                 }
 
         # Validate coverage_dir is provided when coverage is requested
@@ -789,7 +795,36 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         serialized = _serialize_test_result(result, is_action=True)
         if impact_info:
             serialized["impact"] = impact_info
-        return serialized
+
+        # Record scoped test completion in pattern window for prerequisite tracking
+        if is_scoped:
+            session.pattern_detector.record(
+                tool_name="run_test_targets",
+                category_override="test_scoped",
+            )
+
+        from codeplane.mcp.delivery import wrap_existing_response
+
+        # Track scope usage
+        scope_usage = None
+        if scope_id:
+            from codeplane.mcp.tools.files import _scope_manager
+
+            budget = _scope_manager.get_or_create(scope_id)
+            budget.increment_paged()
+            exceeded = budget.check_budget("paged_continuations")
+            if exceeded:
+                from codeplane.mcp.errors import BudgetExceededError
+
+                raise BudgetExceededError(scope_id, "paged_continuations", exceeded)
+            scope_usage = budget.to_usage_dict()
+
+        return wrap_existing_response(
+            serialized,
+            resource_kind="test_output",
+            scope_id=scope_id,
+            scope_usage=scope_usage,
+        )
 
     @mcp.tool
     async def get_test_run_status(

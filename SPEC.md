@@ -486,7 +486,7 @@ def reconcile(repo):
 
 ### 5.10 Reconciliation Invariants
 
-- No server threads write_files **repository state** (working tree, `.git/`, HEAD).
+- No server threads write_source **repository state** (working tree, `.git/`, HEAD).
 - Background threads **may** update **derived state** (SQLite index, Tantivy, caches).
 - Index updates are continuous: file watcher detects changes, background worker reindexes.
 - Reconcile logic is stateless, deterministic, idempotent.
@@ -2979,7 +2979,7 @@ Tools are organized into namespaced families. Each tool has a single responsibil
 
 | Tool | Purpose |
 |------|---------|
-| `write_files` | Atomic file edits |
+| `write_source` | Atomic file edits |
 
 #### Refactor Tools (Requires SCIP)
 
@@ -3082,7 +3082,7 @@ Tools returning collections support cursor-based pagination for large result set
 | `git_log` | Yes | Commit history |
 | `git_blame` | Yes | Line authorship |
 | `read_files` | No | Uses explicit line ranges |
-| `write_files` | No | Single operation |
+| `write_source` | No | Single operation |
 | `semantic_diff` | Yes | Structural changes list |
 
 ### 23.7 Tool Specifications
@@ -3249,7 +3249,7 @@ Read file contents with optional line ranges.
 
 ---
 
-#### `write_files`
+#### `write_source`
 
 Atomic file edits with structured delta response.
 
@@ -3553,7 +3553,7 @@ Semantic refactoring via SCIP index.
     contexts_used: string[];
   };
   applied?: {
-    delta: MutationDelta;           // Same as write_files
+    delta: MutationDelta;           // Same as write_source
     validation?: {
       diagnostics_before: number;
       diagnostics_after: number;

@@ -22,6 +22,7 @@ Covers:
 """
 
 from dataclasses import dataclass
+from datetime import UTC
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -400,6 +401,55 @@ class TestGitInspect:
 
         tool = mcp._tool_manager._tools.get("git_inspect")
         assert tool is not None
+
+
+class TestSerializeDatetimes:
+    """Tests for _serialize_datetimes helper."""
+
+    def test_converts_datetime_to_isoformat(self) -> None:
+        from datetime import datetime
+
+        from codeplane.mcp.tools.git import _serialize_datetimes
+
+        dt = datetime(2025, 6, 15, 12, 30, 45, tzinfo=UTC)
+        assert _serialize_datetimes(dt) == "2025-06-15T12:30:45+00:00"
+
+    def test_recurses_into_dicts(self) -> None:
+        from datetime import datetime
+
+        from codeplane.mcp.tools.git import _serialize_datetimes
+
+        dt = datetime(2025, 1, 1, tzinfo=UTC)
+        result = _serialize_datetimes({"author": "alice", "time": dt, "nested": {"ts": dt}})
+        assert result["author"] == "alice"
+        assert result["time"] == "2025-01-01T00:00:00+00:00"
+        assert result["nested"]["ts"] == "2025-01-01T00:00:00+00:00"
+
+    def test_recurses_into_lists(self) -> None:
+        from datetime import datetime
+
+        from codeplane.mcp.tools.git import _serialize_datetimes
+
+        dt = datetime(2025, 3, 20, tzinfo=UTC)
+        result = _serialize_datetimes([dt, "string", 42])
+        assert result == ["2025-03-20T00:00:00+00:00", "string", 42]
+
+    def test_passthrough_non_datetime(self) -> None:
+        from codeplane.mcp.tools.git import _serialize_datetimes
+
+        assert _serialize_datetimes(42) == 42
+        assert _serialize_datetimes("hello") == "hello"
+        assert _serialize_datetimes(None) is None
+
+    def test_handles_tuple(self) -> None:
+        from datetime import datetime
+
+        from codeplane.mcp.tools.git import _serialize_datetimes
+
+        dt = datetime(2025, 1, 1, tzinfo=UTC)
+        result = _serialize_datetimes((dt, "x"))
+        assert isinstance(result, list)
+        assert result[0] == "2025-01-01T00:00:00+00:00"
 
 
 class TestGitHistory:

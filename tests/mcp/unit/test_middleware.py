@@ -243,10 +243,10 @@ class TestToolMiddleware:
 
         async def call_next(_ctx):  # noqa: ARG001
             raise MCPError(
-                code=MCPErrorCode.CONTENT_NOT_FOUND,
-                message="Content not found",
+                code=MCPErrorCode.INVALID_RANGE,
+                message="Invalid range",
                 path="src/file.py",
-                remediation="Check the old_content matches exactly.",
+                remediation="Check the line range is within file bounds.",
             )
 
         with patch("codeplane.core.progress.get_console", return_value=mock_console):
@@ -254,7 +254,7 @@ class TestToolMiddleware:
 
         content = result.structured_content
         assert content is not None
-        assert content["error"]["code"] == "CONTENT_NOT_FOUND"
+        assert content["error"]["code"] == "INVALID_RANGE"
 
     # =========================================================================
     # Internal Error Tests
@@ -376,9 +376,9 @@ class TestToolMiddleware:
         assert summary["matches"] == 2
 
     def test_extract_result_summary_write_files(self, middleware):
-        """Test write_files-specific summary extraction."""
+        """Test write_source-specific summary extraction."""
         result = {"delta": {"files_changed": 3}}
-        summary = middleware._extract_result_summary("write_files", result)
+        summary = middleware._extract_result_summary("write_source", result)
         assert summary["files_changed"] == 3
 
     def test_extract_result_summary_test_run(self, middleware):
@@ -414,15 +414,15 @@ class TestToolMiddleware:
         assert formatted == "3 results"
 
     def test_format_tool_summary_write_files(self, middleware):
-        """Test write_files-specific formatting."""
+        """Test write_source-specific formatting."""
         result = {"delta": {"files_changed": 5}}
-        formatted = middleware._format_tool_summary("write_files", result)
+        formatted = middleware._format_tool_summary("write_source", result)
         assert formatted == "5 files updated"
 
-    def test_format_tool_summary_read_files(self, middleware):
-        """Test read_files-specific formatting."""
+    def test_format_tool_summary_read_source(self, middleware):
+        """Test read_source-specific formatting."""
         result = {"files": [{"path": "a.py"}, {"path": "b.py"}]}
-        formatted = middleware._format_tool_summary("read_files", result)
+        formatted = middleware._format_tool_summary("read_source", result)
         assert formatted == "2 files read"
 
     def test_format_tool_summary_list_files(self, middleware):

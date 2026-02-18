@@ -54,7 +54,7 @@ class TestGitAfterMutation:
     def test_git_status_after_create(self, integration_repo: Path) -> None:
         """Git status shows newly created file."""
         mutation_ops = MutationOps(integration_repo)
-        mutation_ops.write_files(
+        mutation_ops.write_source(
             edits=[
                 Edit(
                     path="src/new_file.py",
@@ -74,13 +74,12 @@ class TestGitAfterMutation:
     def test_git_diff_after_update(self, integration_repo: Path) -> None:
         """Git diff shows file modifications."""
         mutation_ops = MutationOps(integration_repo)
-        mutation_ops.write_files(
+        mutation_ops.write_source(
             edits=[
                 Edit(
                     path="src/main.py",
                     action="update",
-                    old_content="Entry point.",
-                    new_content="Entry point. (modified)",
+                    content="Entry point. (modified)",
                 )
             ]
         )
@@ -96,7 +95,7 @@ class TestGitAfterMutation:
         git_ops = GitOps(integration_repo)
 
         # Create file
-        mutation_ops.write_files(
+        mutation_ops.write_source(
             edits=[
                 Edit(
                     path="src/feature.py",
@@ -169,10 +168,10 @@ class TestMultiFileOperations:
     """Tests involving multiple files."""
 
     def test_atomic_edit_multiple_files(self, integration_repo: Path) -> None:
-        """write_files can modify multiple files atomically."""
+        """write_source can modify multiple files atomically."""
         mutation_ops = MutationOps(integration_repo)
 
-        result = mutation_ops.write_files(
+        result = mutation_ops.write_source(
             edits=[
                 Edit(
                     path="src/a.py",

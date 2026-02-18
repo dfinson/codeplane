@@ -6,9 +6,6 @@ Orchestrates the full pipeline: sources -> engine -> enrichment -> output.
 # Removed: from __future__ import annotations - breaks FastMCP+pydantic Literal resolution
 
 import contextlib
-import threading
-import time
-from collections import OrderedDict
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -32,12 +29,6 @@ from codeplane.index._internal.diff.sources import (
     snapshots_from_epoch,
     snapshots_from_index,
 )
-from codeplane.mcp.budget import (
-    BudgetAccumulator,
-    get_effective_budget,
-    maybe_add_large_response_hint,
-    measure_bytes,
-)
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -45,64 +36,6 @@ if TYPE_CHECKING:
     from codeplane.mcp.context import AppContext
 
 log = structlog.get_logger(__name__)
-
-# ---------------------------------------------------------------------------
-# Result cache — avoids re-computing the full pipeline on paginated calls.
-# ---------------------------------------------------------------------------
-_CACHE_MAX_ENTRIES = 4
-_CACHE_TTL_SECONDS = 120.0  # 2 minutes
-
-
-class _CacheEntry:
-    """A cached SemanticDiffResult with creation timestamp."""
-
-    __slots__ = ("result", "created_at")
-
-    def __init__(self, result: SemanticDiffResult) -> None:
-        self.result = result
-        self.created_at = time.monotonic()
-
-    def is_expired(self) -> bool:
-        return (time.monotonic() - self.created_at) > _CACHE_TTL_SECONDS
-
-
-class _DiffCache:
-    """Thread-safe LRU cache for SemanticDiffResult objects."""
-
-    def __init__(self, max_entries: int = _CACHE_MAX_ENTRIES) -> None:
-        self._entries: OrderedDict[int, _CacheEntry] = OrderedDict()
-        self._counter = 0
-        self._lock = threading.Lock()
-        self._max = max_entries
-
-    def store(self, result: SemanticDiffResult) -> int:
-        """Store a result and return its cache ID."""
-        with self._lock:
-            self._counter += 1
-            cache_id = self._counter
-            self._entries[cache_id] = _CacheEntry(result)
-            # Evict oldest if over capacity
-            while len(self._entries) > self._max:
-                self._entries.popitem(last=False)
-            return cache_id
-
-    def get(self, cache_id: int) -> SemanticDiffResult | None:
-        """Retrieve a cached result (returns None if expired or missing)."""
-        with self._lock:
-            entry = self._entries.get(cache_id)
-            if entry is None or entry.is_expired():
-                self._entries.pop(cache_id, None)
-                return None
-            # Move to end (LRU)
-            self._entries.move_to_end(cache_id)
-            return entry.result
-
-    def clear(self) -> None:
-        with self._lock:
-            self._entries.clear()
-
-
-_diff_cache = _DiffCache()
 
 
 def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
@@ -114,7 +47,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         base: str = Field("HEAD", description="Base ref (commit, branch, tag) or epoch:N"),
         target: str | None = Field(None, description="Target ref (None = working tree)"),
         paths: list[str] | None = Field(None, description="Limit to specific paths"),
-        cursor: str | None = Field(None, description="Pagination cursor"),
         verbosity: Literal["full", "standard", "minimal"] = Field(
             "full",
             description=(
@@ -122,10 +54,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "minimal=just path/kind/name/change"
             ),
         ),
-        inline_only: bool = Field(
-            False,
-            description="If true, use 7.5KB budget for guaranteed inline display in VS Code",
-        ),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Structural change summary from index facts.
 
@@ -139,66 +68,29 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         """
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
-        # Parse cursor: "<cache_id>:<structural_offset>:<non_structural_offset>"
-        cache_id, structural_offset, non_structural_offset = _parse_cursor(cursor)
+        if base.startswith("epoch:"):
+            result = _run_epoch_diff(app_ctx, base, target, paths)
+        else:
+            result = _run_git_diff(app_ctx, base, target, paths)
 
-        # Try cache hit for paginated continuations
-        result: SemanticDiffResult | None = None
-        if cache_id is not None:
-            result = _diff_cache.get(cache_id)
-            if result is not None:
-                log.debug(
-                    "diff_cache_hit",
-                    cache_id=cache_id,
-                    structural_offset=structural_offset,
-                    non_structural_offset=non_structural_offset,
-                )
+        from codeplane.mcp.delivery import wrap_existing_response
 
-        # Cache miss or first call — compute fresh
-        if result is None:
-            if base.startswith("epoch:"):
-                result = _run_epoch_diff(app_ctx, base, target, paths)
-            else:
-                result = _run_git_diff(app_ctx, base, target, paths)
-            cache_id = _diff_cache.store(result)
-            log.debug("diff_cache_store", cache_id=cache_id, changes=len(result.structural_changes))
+        result_dict = _result_to_dict(result, verbosity=verbosity)
 
-        return _result_to_dict(
-            result,
-            cursor_offset=structural_offset,
-            non_structural_offset=non_structural_offset,
-            cache_id=cache_id,
-            verbosity=verbosity,
-            inline_only=inline_only,
+        # Track scope usage
+        scope_usage = None
+        if scope_id:
+            from codeplane.mcp.tools.files import _scope_manager
+
+            budget = _scope_manager.get_or_create(scope_id)
+            scope_usage = budget.to_usage_dict()
+
+        return wrap_existing_response(
+            result_dict,
+            resource_kind="semantic_diff",
+            scope_id=scope_id,
+            scope_usage=scope_usage,
         )
-
-
-def _parse_cursor(cursor: str | None) -> tuple[int | None, int, int]:
-    """Parse a pagination cursor into (cache_id, structural_offset, non_structural_offset).
-
-    Cursor format: ``"<cache_id>:<structural_offset>:<non_structural_offset>"``.
-    Legacy format: ``"<cache_id>:<offset>"`` (non_structural_offset defaults to 0).
-    Returns ``(None, 0, 0)`` when *cursor* is ``None``.
-    """
-    if cursor is None:
-        return None, 0, 0
-    parts = cursor.split(":")
-    if len(parts) == 3:
-        try:
-            return int(parts[0]), int(parts[1]), int(parts[2])
-        except ValueError:
-            pass
-    # Legacy 2-part format: "<cache_id>:<offset>" — assume structural only
-    if len(parts) == 2:
-        try:
-            return int(parts[0]), int(parts[1]), 0
-        except ValueError:
-            pass
-    # Malformed — treat as plain offset for backwards compat
-    try:
-        return None, int(cursor), 0
-    except ValueError:
-        return None, 0, 0
 
 
 def _run_git_diff(
@@ -307,26 +199,30 @@ def _run_git_diff(
 
 
 def _parse_epoch_ref(ref: str) -> int:
-    """Parse an epoch reference like 'epoch:3' into an integer.
+    """Parse an epoch reference like 'epoch:3' into a non-negative integer.
 
-    Only numeric epoch IDs are supported (e.g. epoch:1, epoch:42).
+    Only non-negative numeric epoch IDs are supported (e.g. epoch:0, epoch:1, epoch:42).
     Named aliases like 'epoch:previous' are not implemented.
 
     Raises:
-        ValueError: If the epoch value is not a valid integer.
+        ValueError: If the epoch value is not a valid non-negative integer.
     """
     parts = ref.split(":", 1)
     if len(parts) != 2 or parts[0] != "epoch":
         msg = f"Invalid epoch reference: {ref!r}. Expected format: epoch:<int>"
         raise ValueError(msg)
     try:
-        return int(parts[1])
+        value = int(parts[1])
     except ValueError:
         msg = (
             f"Invalid epoch value: {parts[1]!r}. "
             f"Only numeric epoch IDs are supported (e.g. epoch:1, epoch:42)."
         )
         raise ValueError(msg) from None
+    if value < 0:
+        msg = f"Epoch ID must be non-negative, got {value}."
+        raise ValueError(msg)
+    return value
 
 
 def _run_epoch_diff(
@@ -555,18 +451,9 @@ def _build_agentic_hint(result: SemanticDiffResult) -> str:
 def _result_to_dict(
     result: SemanticDiffResult,
     *,
-    cursor_offset: int = 0,
-    non_structural_offset: int = 0,
-    cache_id: int | None = None,
     verbosity: Literal["full", "standard", "minimal"] = "full",
-    inline_only: bool = False,
 ) -> dict[str, Any]:
-    """Convert SemanticDiffResult to a serializable dict with budget-based pagination.
-
-    Pagination strategy:
-    1. First exhaust structural_changes using the byte budget
-    2. Then paginate non_structural_changes with remaining/full budget
-    3. Cursor format: "<cache_id>:<structural_offset>:<non_structural_offset>"
+    """Convert SemanticDiffResult to a serializable dict.
 
     Verbosity levels:
     - full: Everything (default)
@@ -650,88 +537,12 @@ def _result_to_dict(
             d["nested_changes"] = [_change_to_dict(nc) for nc in c.nested_changes]
         return d
 
-    # Compute agentic_hint from ALL changes before pagination
     agentic_hint = _build_agentic_hint(result)
 
-    all_structural = result.structural_changes
-    all_non_structural = result.non_structural_changes
+    structural_items = [_change_to_dict(c) for c in result.structural_changes]
+    non_structural_items = [asdict(f) for f in result.non_structural_changes]
 
-    # Only include scope on the first page (saves ~0.6% per continuation page)
-    is_first_page = cursor_offset == 0 and non_structural_offset == 0
-
-    # Compute overhead for fixed response fields (summary, scope, agentic_hint, etc.)
-    # These are included in every page regardless of array item count.
-    # We use a worst-case pagination dict to ensure accurate overhead.
-    base_response: dict[str, Any] = {
-        "summary": result.summary,
-        "breaking_summary": result.breaking_summary,
-        "files_analyzed": result.files_analyzed,
-        "base": result.base_description,
-        "target": result.target_description,
-        "structural_changes": [],
-        "non_structural_changes": [],
-        **(
-            {"scope": {k: v for k, v in asdict(result.scope).items() if v is not None}}
-            if result.scope and is_first_page
-            else {}
-        ),
-        "agentic_hint": agentic_hint,
-        "pagination": {
-            "total_structural": len(all_structural),
-            "total_non_structural": len(all_non_structural),
-            # Assume worst-case: we'll have truncation and a cursor
-            "truncated": True,
-            "next_cursor": "99999:99999:99999",
-        },
-    }
-    overhead = measure_bytes(base_response)
-    # Add buffer for array framing and JSON formatting variance
-    # Empty [] becomes [\n...\n] with items, plus general measurement tolerance
-    overhead += 250  # safety margin for array framing + measurement variance
-
-    # Paginate structural_changes first, reserving space for overhead
-    effective_budget = get_effective_budget(inline_only)
-    acc = BudgetAccumulator(budget=effective_budget)
-    acc.reserve(overhead)
-    structural_items: list[dict[str, Any]] = []
-    structural_consumed = 0
-
-    for c in all_structural[cursor_offset:]:
-        item = _change_to_dict(c)
-        if acc.try_add(item):
-            structural_items.append(item)
-            structural_consumed += 1
-        else:
-            break
-
-    next_structural_offset = cursor_offset + structural_consumed
-    structural_complete = next_structural_offset >= len(all_structural)
-
-    # If structural_changes is complete and we have budget left, paginate non_structural_changes
-    non_structural_items: list[dict[str, Any]] = []
-    non_structural_consumed = 0
-
-    if structural_complete and acc.has_room:
-        for f in all_non_structural[non_structural_offset:]:
-            item = asdict(f)
-            if acc.try_add(item):
-                non_structural_items.append(item)
-                non_structural_consumed += 1
-            else:
-                break
-
-    next_non_structural_offset = non_structural_offset + non_structural_consumed
-    non_structural_complete = next_non_structural_offset >= len(all_non_structural)
-
-    # Determine if there's more data to paginate
-    has_more = not (structural_complete and non_structural_complete)
-
-    # Build cursor: "<cache_id>:<structural_offset>:<non_structural_offset>"
-    next_cursor: str | None = None
-    if has_more and cache_id is not None:
-        next_cursor = f"{cache_id}:{next_structural_offset}:{next_non_structural_offset}"
-
-    response = {
+    response: dict[str, Any] = {
         "summary": result.summary,
         "breaking_summary": result.breaking_summary,
         "files_analyzed": result.files_analyzed,
@@ -741,18 +552,10 @@ def _result_to_dict(
         "non_structural_changes": non_structural_items,
         **(
             {"scope": {k: v for k, v in asdict(result.scope).items() if v is not None}}
-            if result.scope and is_first_page
+            if result.scope
             else {}
         ),
         "agentic_hint": agentic_hint,
-        "pagination": {
-            "total_structural": len(all_structural),
-            "total_non_structural": len(all_non_structural),
-            **({"next_cursor": next_cursor, "truncated": True} if has_more and next_cursor else {}),
-        },
     }
-
-    # Add large response hint if over VS Code's inline threshold
-    maybe_add_large_response_hint(response, acc.used_bytes, existing_hint=agentic_hint)
 
     return response

@@ -1,7 +1,7 @@
 """Type-traced reference resolution (Pass 3).
 
 Resolves member accesses by tracing through type annotations.
-For example: ctx.mutation_ops.write_files() -> MutationOps.write_files def_uid.
+For example: ctx.mutation_ops.write_source() -> MutationOps.write_source def_uid.
 
 This module runs AFTER Pass 2 (import resolution) and uses:
 - TypeAnnotationFact: What type a variable/parameter has
@@ -9,7 +9,7 @@ This module runs AFTER Pass 2 (import resolution) and uses:
 - MemberAccessFact: What member chains appear in code
 
 The output is updated MemberAccessFact records with:
-- resolved_type_path: e.g., "AppContext.MutationOps.write_files"
+- resolved_type_path: e.g., "AppContext.MutationOps.write_source"
 - final_target_def_uid: The def_uid of the final member
 - resolution_method: "type_traced"
 - resolution_confidence: 1.0 (type-traced is authoritative)

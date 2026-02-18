@@ -106,7 +106,7 @@ class TestToolDocumentation:
     def test_to_dict(self) -> None:
         """Converts to dictionary."""
         doc = ToolDocumentation(
-            name="read_files",
+            name="read_source",
             description="Read file contents.",
             category=ToolCategory.FILES,
             when_to_use=["Reading code"],
@@ -114,7 +114,7 @@ class TestToolDocumentation:
         )
         data = doc.to_dict()
 
-        assert data["name"] == "read_files"
+        assert data["name"] == "read_source"
         assert data["description"] == "Read file contents."
         assert data["category"] == "files"
         assert data["when_to_use"] == ["Reading code"]
@@ -147,7 +147,7 @@ class TestToolDocs:
 
     def test_contains_core_tools(self) -> None:
         """Contains documentation for core tools."""
-        expected = ["read_files", "write_files", "map_repo", "search"]
+        expected = ["read_source", "write_source", "map_repo", "search"]
         for tool in expected:
             assert tool in TOOL_DOCS, f"Missing doc for {tool}"
 
@@ -167,9 +167,9 @@ class TestGetToolDocumentation:
 
     def test_returns_documentation_for_known_tool(self) -> None:
         """Returns documentation for known tools."""
-        doc = get_tool_documentation("read_files")
+        doc = get_tool_documentation("read_source")
         assert doc is not None
-        assert doc.name == "read_files"
+        assert doc.name == "read_source"
 
     def test_returns_none_for_unknown_tool(self) -> None:
         """Returns None for unknown tools."""
@@ -191,7 +191,7 @@ class TestGetToolsByCategory:
 
         # Check that files category exists and contains expected tools
         if "files" in result:
-            assert "read_files" in result["files"]
+            assert "read_source" in result["files"]
 
     def test_all_tools_categorized(self) -> None:
         """All documented tools appear in exactly one category."""

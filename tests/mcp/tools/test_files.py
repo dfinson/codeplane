@@ -1,7 +1,7 @@
 """Tests for mcp/tools/files.py module.
 
 Covers:
-- FileTarget model
+- SpanTarget model
 - _summarize_read() helper
 - _summarize_list() helper
 """
@@ -12,18 +12,18 @@ import pytest
 from pydantic import ValidationError
 
 from codeplane.mcp.tools.files import (
-    FileTarget,
+    SpanTarget,
     _summarize_list,
     _summarize_read,
 )
 
 
-class TestFileTarget:
-    """Tests for FileTarget model."""
+class TestSpanTarget:
+    """Tests for SpanTarget model."""
 
     def test_valid_target_with_range(self) -> None:
         """Creates valid target with range."""
-        t = FileTarget(path="src/main.py", start_line=1, end_line=50)
+        t = SpanTarget(path="src/main.py", start_line=1, end_line=50)
         assert t.path == "src/main.py"
         assert t.start_line == 1
         assert t.end_line == 50
@@ -31,40 +31,27 @@ class TestFileTarget:
     def test_path_is_required(self) -> None:
         """Path field is required."""
         with pytest.raises(ValidationError):
-            FileTarget(start_line=1, end_line=10)  # type: ignore[call-arg]
-
-    def test_range_is_optional(self) -> None:
-        """start_line and end_line can be omitted for path-only target."""
-        t = FileTarget(path="src/main.py")
-        assert t.start_line is None
-        assert t.end_line is None
+            SpanTarget(start_line=1, end_line=10)  # type: ignore[call-arg]
 
     def test_start_line_must_be_positive(self) -> None:
         """Start line must be > 0."""
         with pytest.raises(ValidationError):
-            FileTarget(path="a.py", start_line=0, end_line=10)
+            SpanTarget(path="a.py", start_line=0, end_line=10)
 
     def test_end_line_must_be_positive(self) -> None:
         """End line must be > 0."""
         with pytest.raises(ValidationError):
-            FileTarget(path="a.py", start_line=1, end_line=0)
+            SpanTarget(path="a.py", start_line=1, end_line=0)
 
     def test_end_must_be_gte_start(self) -> None:
         """End line must be >= start line."""
         with pytest.raises(ValidationError):
-            FileTarget(path="a.py", start_line=50, end_line=10)
-
-    def test_partial_range_rejected(self) -> None:
-        """Must set both start_line and end_line or neither."""
-        with pytest.raises(ValidationError):
-            FileTarget(path="a.py", start_line=1)
-        with pytest.raises(ValidationError):
-            FileTarget(path="a.py", end_line=10)
+            SpanTarget(path="a.py", start_line=50, end_line=10)
 
     def test_extra_fields_forbidden(self) -> None:
         """Extra fields are rejected."""
         with pytest.raises(ValidationError):
-            FileTarget(path="a.py", start_line=1, end_line=10, extra_field="bad")  # type: ignore[call-arg]
+            SpanTarget(path="a.py", start_line=1, end_line=10, extra_field="bad")  # type: ignore[call-arg]
 
 
 class TestSummarizeRead:

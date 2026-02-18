@@ -178,6 +178,11 @@ async def run_server(
 
     _print_banner(config.server.host, config.server.port, repo_root)
 
+    # Set port and cache dir for resource delivery envelopes
+    from codeplane.mcp.delivery import set_cache_dir, set_server_port
+
+    set_server_port(config.server.port)
+    set_cache_dir(repo_root)
     controller = ServerController(
         repo_root=repo_root,
         coordinator=coordinator,

@@ -188,7 +188,7 @@ class IndexerConfig(BaseModel):
 
 
 class LimitsConfig(BaseModel):
-    """Pagination and query limit defaults.
+    """Query limit defaults.
 
     These are DEFAULT values - tools may allow per-request overrides up to max.
     See constants.py for hard maximums that cannot be exceeded.

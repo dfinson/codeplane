@@ -1,9 +1,7 @@
-"""Tests for mutation operations - write_files tool.
+"""Tests for mutation operations - write_source tool.
 
 Covers:
 - Create/update/delete operations
-- Exact content matching
-- Error conditions (ContentNotFoundError, MultipleMatchesError)
 - Dry run mode
 - Reindex callback
 - Delta computation
@@ -18,12 +16,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from codeplane.mutation.ops import (
-    ContentNotFoundError,
-    DryRunInfo,
     Edit,
-    ExactEdit,
     FileDelta,
-    MultipleMatchesError,
     MutationDelta,
     MutationOps,
     MutationResult,
@@ -62,22 +56,6 @@ class TestHashContent:
         assert len(result) == 12
 
 
-class TestExactEdit:
-    """Tests for ExactEdit dataclass."""
-
-    def test_create_with_defaults(self) -> None:
-        """ExactEdit has correct defaults."""
-        edit = ExactEdit(old_content="old", new_content="new")
-        assert edit.old_content == "old"
-        assert edit.new_content == "new"
-        assert edit.expected_occurrences == 1
-
-    def test_create_with_expected_occurrences(self) -> None:
-        """ExactEdit accepts expected_occurrences."""
-        edit = ExactEdit(old_content="x", new_content="y", expected_occurrences=3)
-        assert edit.expected_occurrences == 3
-
-
 class TestEdit:
     """Tests for Edit dataclass."""
 
@@ -93,19 +71,6 @@ class TestEdit:
         edit = Edit(path="test.py", action="update", content="new content")
         assert edit.action == "update"
         assert edit.content == "new content"
-
-    def test_update_action_exact_mode(self) -> None:
-        """Edit with update action in exact mode."""
-        edit = Edit(
-            path="test.py",
-            action="update",
-            old_content="old",
-            new_content="new",
-            expected_occurrences=2,
-        )
-        assert edit.old_content == "old"
-        assert edit.new_content == "new"
-        assert edit.expected_occurrences == 2
 
     def test_delete_action(self) -> None:
         """Edit with delete action."""
@@ -201,53 +166,13 @@ class TestMutationResult:
     def test_dry_run_result(self) -> None:
         """Result in dry run mode."""
         delta = MutationDelta(mutation_id="xyz", files_changed=1, insertions=0, deletions=0)
-        dry_run_info = DryRunInfo(content_hash="abc123")
         result = MutationResult(
             applied=False,
             dry_run=True,
             delta=delta,
-            dry_run_info=dry_run_info,
         )
         assert result.applied is False
         assert result.dry_run is True
-        assert result.dry_run_info is not None
-
-
-class TestContentNotFoundError:
-    """Tests for ContentNotFoundError exception."""
-
-    def test_error_message(self) -> None:
-        """Error message includes path."""
-        err = ContentNotFoundError("file.py")
-        assert "file.py" in str(err)
-
-    def test_error_with_snippet(self) -> None:
-        """Error stores snippet for context."""
-        err = ContentNotFoundError("test.py", snippet="def missing_func")
-        assert err.path == "test.py"
-        assert err.snippet == "def missing_func"
-
-    def test_error_without_snippet(self) -> None:
-        """Error works without snippet."""
-        err = ContentNotFoundError("test.py")
-        assert err.snippet is None
-
-
-class TestMultipleMatchesError:
-    """Tests for MultipleMatchesError exception."""
-
-    def test_error_message(self) -> None:
-        """Error message includes count."""
-        err = MultipleMatchesError("file.py", count=3, lines=[10, 20, 30])
-        assert "3 times" in str(err)
-        assert "file.py" in str(err)
-
-    def test_stores_match_info(self) -> None:
-        """Error stores match information."""
-        err = MultipleMatchesError("test.py", count=5, lines=[1, 5, 9, 15, 20])
-        assert err.path == "test.py"
-        assert err.count == 5
-        assert err.lines == [1, 5, 9, 15, 20]
 
 
 class TestMutationOpsCreate:
@@ -257,7 +182,7 @@ class TestMutationOpsCreate:
         """Create a new file."""
         ops = MutationOps(tmp_path)
         content = "print('hello')\n"
-        result = ops.write_files([Edit(path="new.py", action="create", content=content)])
+        result = ops.write_source([Edit(path="new.py", action="create", content=content)])
 
         assert result.applied is True
         assert result.dry_run is False
@@ -267,7 +192,7 @@ class TestMutationOpsCreate:
     def test_create_file_in_nested_directory(self, tmp_path: Path) -> None:
         """Create file creates parent directories."""
         ops = MutationOps(tmp_path)
-        result = ops.write_files([Edit(path="a/b/c/deep.py", action="create", content="# deep")])
+        result = ops.write_source([Edit(path="a/b/c/deep.py", action="create", content="# deep")])
 
         assert result.applied is True
         assert (tmp_path / "a/b/c/deep.py").exists()
@@ -278,14 +203,14 @@ class TestMutationOpsCreate:
         ops = MutationOps(tmp_path)
 
         with pytest.raises(FileExistsError) as exc_info:
-            ops.write_files([Edit(path="existing.py", action="create", content="new")])
+            ops.write_source([Edit(path="existing.py", action="create", content="new")])
 
         assert "existing.py" in str(exc_info.value)
 
     def test_create_empty_file(self, tmp_path: Path) -> None:
         """Create with empty content."""
         ops = MutationOps(tmp_path)
-        result = ops.write_files([Edit(path="empty.py", action="create")])
+        result = ops.write_source([Edit(path="empty.py", action="create")])
 
         assert (tmp_path / "empty.py").read_text() == ""
         assert result.delta.files[0].insertions == 1  # Empty file = 1 line
@@ -294,7 +219,7 @@ class TestMutationOpsCreate:
         """Create produces correct delta."""
         ops = MutationOps(tmp_path)
         content = "line1\nline2\nline3"
-        result = ops.write_files([Edit(path="test.py", action="create", content=content)])
+        result = ops.write_source([Edit(path="test.py", action="create", content=content)])
 
         delta = result.delta.files[0]
         assert delta.path == "test.py"
@@ -314,7 +239,7 @@ class TestMutationOpsDelete:
         test_file.write_text("# will be deleted")
 
         ops = MutationOps(tmp_path)
-        result = ops.write_files([Edit(path="to_delete.py", action="delete")])
+        result = ops.write_source([Edit(path="to_delete.py", action="delete")])
 
         assert result.applied is True
         assert not test_file.exists()
@@ -324,7 +249,7 @@ class TestMutationOpsDelete:
         ops = MutationOps(tmp_path)
 
         with pytest.raises(FileNotFoundError) as exc_info:
-            ops.write_files([Edit(path="ghost.py", action="delete")])
+            ops.write_source([Edit(path="ghost.py", action="delete")])
 
         assert "ghost.py" in str(exc_info.value)
 
@@ -334,7 +259,7 @@ class TestMutationOpsDelete:
         test_file.write_text("line1\nline2\nline3\nline4")
 
         ops = MutationOps(tmp_path)
-        result = ops.write_files([Edit(path="del.py", action="delete")])
+        result = ops.write_source([Edit(path="del.py", action="delete")])
 
         delta = result.delta.files[0]
         assert delta.action == "deleted"
@@ -353,7 +278,7 @@ class TestMutationOpsUpdateFullContent:
         test_file.write_text("old content")
 
         ops = MutationOps(tmp_path)
-        result = ops.write_files([Edit(path="test.py", action="update", content="new content")])
+        result = ops.write_source([Edit(path="test.py", action="update", content="new content")])
 
         assert test_file.read_text() == "new content"
         assert result.applied is True
@@ -363,7 +288,7 @@ class TestMutationOpsUpdateFullContent:
         ops = MutationOps(tmp_path)
 
         with pytest.raises(FileNotFoundError) as exc_info:
-            ops.write_files([Edit(path="missing.py", action="update", content="x")])
+            ops.write_source([Edit(path="missing.py", action="update", content="x")])
 
         assert "missing.py" in str(exc_info.value)
 
@@ -373,7 +298,7 @@ class TestMutationOpsUpdateFullContent:
         test_file.write_text("a\nb")
 
         ops = MutationOps(tmp_path)
-        result = ops.write_files([Edit(path="test.py", action="update", content="x\ny\nz")])
+        result = ops.write_source([Edit(path="test.py", action="update", content="x\ny\nz")])
 
         delta = result.delta.files[0]
         assert delta.action == "updated"
@@ -384,153 +309,13 @@ class TestMutationOpsUpdateFullContent:
         assert delta.deletions == 0
 
 
-class TestMutationOpsExactMode:
-    """Tests for MutationOps update action with exact content matching."""
-
-    def test_exact_single_match(self, tmp_path: Path) -> None:
-        """Exact mode replaces single occurrence."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text("def old_func():\n    pass")
-
-        ops = MutationOps(tmp_path)
-        result = ops.write_files(
-            [
-                Edit(
-                    path="test.py",
-                    action="update",
-                    old_content="old_func",
-                    new_content="new_func",
-                )
-            ]
-        )
-
-        assert test_file.read_text() == "def new_func():\n    pass"
-        assert result.applied is True
-
-    def test_exact_multiple_expected(self, tmp_path: Path) -> None:
-        """Exact mode replaces expected number of occurrences."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text("x = 1\nx = 2\nx = 3")
-
-        ops = MutationOps(tmp_path)
-        ops.write_files(
-            [
-                Edit(
-                    path="test.py",
-                    action="update",
-                    old_content="x",
-                    new_content="y",
-                    expected_occurrences=3,
-                )
-            ]
-        )
-
-        assert test_file.read_text() == "y = 1\ny = 2\ny = 3"
-
-    def test_exact_content_not_found(self, tmp_path: Path) -> None:
-        """Exact mode raises ContentNotFoundError when content missing."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text("def func(): pass")
-
-        ops = MutationOps(tmp_path)
-
-        with pytest.raises(ContentNotFoundError) as exc_info:
-            ops.write_files(
-                [
-                    Edit(
-                        path="test.py",
-                        action="update",
-                        old_content="missing_content",
-                        new_content="replacement",
-                    )
-                ]
-            )
-
-        assert exc_info.value.path == "test.py"
-
-    def test_exact_multiple_matches_error(self, tmp_path: Path) -> None:
-        """Exact mode raises MultipleMatchesError when count mismatch."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text("foo bar foo baz foo")
-
-        ops = MutationOps(tmp_path)
-
-        with pytest.raises(MultipleMatchesError) as exc_info:
-            ops.write_files(
-                [
-                    Edit(
-                        path="test.py",
-                        action="update",
-                        old_content="foo",
-                        new_content="qux",
-                        expected_occurrences=1,  # But there are 3
-                    )
-                ]
-            )
-
-        assert exc_info.value.count == 3
-        assert len(exc_info.value.lines) == 3
-
-    def test_exact_preserves_surrounding_content(self, tmp_path: Path) -> None:
-        """Exact mode preserves content before and after match."""
-        test_file = tmp_path / "test.py"
-        original = """# Header comment
-def target_func():
-    return 42
-
-# Footer comment
-"""
-        test_file.write_text(original)
-
-        ops = MutationOps(tmp_path)
-        ops.write_files(
-            [
-                Edit(
-                    path="test.py",
-                    action="update",
-                    old_content="    return 42",
-                    new_content="    return 100",
-                )
-            ]
-        )
-
-        result = test_file.read_text()
-        assert "# Header comment" in result
-        assert "# Footer comment" in result
-        assert "return 100" in result
-
-    def test_exact_snippet_truncation_in_error(self, tmp_path: Path) -> None:
-        """ContentNotFoundError truncates long snippets."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text("short")
-
-        ops = MutationOps(tmp_path)
-        long_content = "x" * 200
-
-        with pytest.raises(ContentNotFoundError) as exc_info:
-            ops.write_files(
-                [
-                    Edit(
-                        path="test.py",
-                        action="update",
-                        old_content=long_content,
-                        new_content="y",
-                    )
-                ]
-            )
-
-        # Snippet should be truncated to 100 chars
-        assert exc_info.value.snippet is not None
-        assert len(exc_info.value.snippet) == 100
-
-
 class TestMutationOpsDryRun:
     """Tests for MutationOps dry run mode."""
 
     def test_dry_run_does_not_create(self, tmp_path: Path) -> None:
         """Dry run doesn't create file."""
         ops = MutationOps(tmp_path)
-        result = ops.write_files(
+        result = ops.write_source(
             [Edit(path="new.py", action="create", content="x")],
             dry_run=True,
         )
@@ -545,7 +330,7 @@ class TestMutationOpsDryRun:
         test_file.write_text("keep me")
 
         ops = MutationOps(tmp_path)
-        result = ops.write_files(
+        result = ops.write_source(
             [Edit(path="keep.py", action="delete")],
             dry_run=True,
         )
@@ -559,7 +344,7 @@ class TestMutationOpsDryRun:
         test_file.write_text("original")
 
         ops = MutationOps(tmp_path)
-        ops.write_files(
+        ops.write_source(
             [Edit(path="test.py", action="update", content="modified")],
             dry_run=True,
         )
@@ -569,34 +354,13 @@ class TestMutationOpsDryRun:
     def test_dry_run_returns_delta(self, tmp_path: Path) -> None:
         """Dry run still computes delta."""
         ops = MutationOps(tmp_path)
-        result = ops.write_files(
+        result = ops.write_source(
             [Edit(path="new.py", action="create", content="a\nb\nc")],
             dry_run=True,
         )
 
         assert result.delta.files_changed == 1
         assert result.delta.files[0].insertions == 3
-
-    def test_dry_run_exact_mode_info(self, tmp_path: Path) -> None:
-        """Dry run with exact mode returns DryRunInfo."""
-        test_file = tmp_path / "test.py"
-        test_file.write_text("old_content here")
-
-        ops = MutationOps(tmp_path)
-        result = ops.write_files(
-            [
-                Edit(
-                    path="test.py",
-                    action="update",
-                    old_content="old_content",
-                    new_content="new_content",
-                )
-            ],
-            dry_run=True,
-        )
-
-        assert result.dry_run_info is not None
-        assert result.dry_run_info.content_hash == _hash_content("old_content")
 
 
 class TestMutationOpsCallback:
@@ -607,7 +371,7 @@ class TestMutationOpsCallback:
         callback = MagicMock()
         ops = MutationOps(tmp_path, on_mutation=callback)
 
-        ops.write_files([Edit(path="new.py", action="create", content="x")])
+        ops.write_source([Edit(path="new.py", action="create", content="x")])
 
         callback.assert_called_once()
         paths = callback.call_args[0][0]
@@ -619,7 +383,7 @@ class TestMutationOpsCallback:
         callback = MagicMock()
         ops = MutationOps(tmp_path, on_mutation=callback)
 
-        ops.write_files(
+        ops.write_source(
             [Edit(path="new.py", action="create", content="x")],
             dry_run=True,
         )
@@ -629,12 +393,11 @@ class TestMutationOpsCallback:
     def test_callback_receives_multiple_paths(self, tmp_path: Path) -> None:
         """on_mutation callback receives all changed paths."""
         callback = MagicMock()
-        ops = MutationOps(tmp_path)
-        ops._on_mutation = callback
+        ops = MutationOps(tmp_path, on_mutation=callback)
 
         (tmp_path / "existing.py").write_text("x")
 
-        ops.write_files(
+        ops.write_source(
             [
                 Edit(path="a.py", action="create", content="a"),
                 Edit(path="b.py", action="create", content="b"),
@@ -649,7 +412,7 @@ class TestMutationOpsCallback:
     def test_no_callback_if_not_set(self, tmp_path: Path) -> None:
         """Works without callback."""
         ops = MutationOps(tmp_path)  # No callback
-        result = ops.write_files([Edit(path="test.py", action="create", content="x")])
+        result = ops.write_source([Edit(path="test.py", action="create", content="x")])
         assert result.applied is True
 
 
@@ -659,7 +422,7 @@ class TestMutationOpsMultipleEdits:
     def test_multiple_creates(self, tmp_path: Path) -> None:
         """Multiple create operations."""
         ops = MutationOps(tmp_path)
-        result = ops.write_files(
+        result = ops.write_source(
             [
                 Edit(path="a.py", action="create", content="# a"),
                 Edit(path="b.py", action="create", content="# b"),
@@ -678,7 +441,7 @@ class TestMutationOpsMultipleEdits:
         (tmp_path / "delete_me.py").write_text("bye")
 
         ops = MutationOps(tmp_path)
-        result = ops.write_files(
+        result = ops.write_source(
             [
                 Edit(path="new.py", action="create", content="created"),
                 Edit(path="update_me.py", action="update", content="updated"),
@@ -698,7 +461,7 @@ class TestMutationOpsMultipleEdits:
         ops = MutationOps(tmp_path)
 
         with pytest.raises(FileNotFoundError):
-            ops.write_files(
+            ops.write_source(
                 [
                     Edit(path="good.py", action="update", content="y"),
                     Edit(path="missing.py", action="update", content="z"),  # Should fail
@@ -714,7 +477,7 @@ class TestMutationOpsMultipleEdits:
         (tmp_path / "b.py").write_text("x")  # 1 line
 
         ops = MutationOps(tmp_path)
-        result = ops.write_files(
+        result = ops.write_source(
             [
                 Edit(path="new.py", action="create", content="a\nb\nc\nd\ne"),  # +5 lines
                 Edit(path="a.py", action="delete"),  # -3 lines
@@ -733,73 +496,14 @@ class TestMutationOpsMutationId:
     def test_mutation_id_is_8_chars(self, tmp_path: Path) -> None:
         """Mutation ID is 8 character UUID prefix."""
         ops = MutationOps(tmp_path)
-        result = ops.write_files([Edit(path="test.py", action="create", content="x")])
+        result = ops.write_source([Edit(path="test.py", action="create", content="x")])
         assert len(result.delta.mutation_id) == 8
 
     def test_mutation_ids_are_unique(self, tmp_path: Path) -> None:
         """Each mutation gets unique ID."""
         ops = MutationOps(tmp_path)
 
-        result1 = ops.write_files([Edit(path="a.py", action="create", content="a")])
-        result2 = ops.write_files([Edit(path="b.py", action="create", content="b")])
+        result1 = ops.write_source([Edit(path="a.py", action="create", content="a")])
+        result2 = ops.write_source([Edit(path="b.py", action="create", content="b")])
 
         assert result1.delta.mutation_id != result2.delta.mutation_id
-
-
-class TestApplyExactEdit:
-    """Tests for _apply_exact_edit internal method."""
-
-    def test_line_numbers_in_error(self, tmp_path: Path) -> None:
-        """MultipleMatchesError includes line numbers."""
-        content = """line 1
-foo
-line 3
-foo
-line 5
-foo
-"""
-        test_file = tmp_path / "test.py"
-        test_file.write_text(content)
-
-        ops = MutationOps(tmp_path)
-
-        with pytest.raises(MultipleMatchesError) as exc_info:
-            ops.write_files(
-                [
-                    Edit(
-                        path="test.py",
-                        action="update",
-                        old_content="foo",
-                        new_content="bar",
-                    )
-                ]
-            )
-
-        # Lines: 2, 4, 6
-        assert 2 in exc_info.value.lines
-        assert 4 in exc_info.value.lines
-        assert 6 in exc_info.value.lines
-
-    def test_line_search_limited_to_10(self, tmp_path: Path) -> None:
-        """Line number search is limited to prevent performance issues."""
-        # Create file with many occurrences
-        content = "x\n" * 100
-        test_file = tmp_path / "test.py"
-        test_file.write_text(content)
-
-        ops = MutationOps(tmp_path)
-
-        with pytest.raises(MultipleMatchesError) as exc_info:
-            ops.write_files(
-                [
-                    Edit(
-                        path="test.py",
-                        action="update",
-                        old_content="x",
-                        new_content="y",
-                    )
-                ]
-            )
-
-        # Should only report first 10 lines
-        assert len(exc_info.value.lines) <= 10

@@ -68,7 +68,7 @@ Agents using CodePlane MCP will:
 | Commit success | First-try commit with hooks passing |
 | Total time | End-to-end seconds |
 
-**CodePlane approach**: `read_files` → `write_files` → `lint_check` → `git_commit`  
+**CodePlane approach**: `read_files` → `write_source` → `lint_check` → `git_commit`  
 **Terminal approach**: `cat` → `sed`/editor → run linter manually → `git commit`
 
 **Why CodePlane shines**: Atomic writes, integrated lint, hook-compliant commits.
@@ -100,7 +100,7 @@ Agents using CodePlane MCP will:
 | Write iterations | File creation attempts |
 | First-run pass | Test passes on first execution |
 
-**CodePlane approach**: `search` (find function) → `discover_test_targets` → `write_files` → `run_test_targets`  
+**CodePlane approach**: `search` (find function) → `discover_test_targets` → `write_source` → `run_test_targets`  
 **Terminal approach**: `grep` → guess test location → write file → `pytest`/`npm test`
 
 **Why CodePlane shines**: Test discovery shows patterns, targeted test execution.
@@ -131,7 +131,7 @@ Agents using CodePlane MCP will:
 | Hook compliance | Pre-commit hooks respected |
 | Error handling | Recovery from any failures |
 
-**CodePlane approach**: `git_checkout` (create=true) → `write_files` → `git_commit` → `git_push`  
+**CodePlane approach**: `git_checkout` (create=true) → `write_source` → `git_commit` → `git_push`  
 **Terminal approach**: `git checkout -b` → edit → `git add` → `git commit` → `git push`
 
 **Why CodePlane shines**: Hooks run automatically, structured error responses.

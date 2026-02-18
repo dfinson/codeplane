@@ -98,8 +98,24 @@ def _serialize_refactor_result(result: "RefactorResult") -> dict[str, Any]:
         # Add verification fields if present
         if result.preview.verification_required:
             preview_dict["verification_required"] = True
-            preview_dict["low_certainty_files"] = result.preview.low_certainty_files
+            # Convert low_certainty_files to low_certainty_matches with span info
+            low_matches = []
+            for fe in result.preview.edits:
+                for h in fe.hunks:
+                    if h.certainty == "low":
+                        # Compute end_line from old content line count
+                        old_lines = h.old.count("\n") + 1 if h.old else 1
+                        low_matches.append(
+                            {
+                                "path": fe.path,
+                                "span": {"start_line": h.line, "end_line": h.line + old_lines - 1},
+                                "certainty": h.certainty,
+                                "match_text": h.old[:80] if h.old else "",
+                            }
+                        )
             preview_dict["verification_guidance"] = result.preview.verification_guidance
+            if low_matches:
+                preview_dict["low_certainty_matches"] = low_matches
         output["preview"] = preview_dict
 
     if result.divergence:
@@ -107,12 +123,13 @@ def _serialize_refactor_result(result: "RefactorResult") -> dict[str, Any]:
             "conflicting_hunks": result.divergence.conflicting_hunks,
             "resolution_options": result.divergence.resolution_options,
         }
-
     # Include warning if present (e.g., path:line:col format detected)
     if result.warning:
         output["warning"] = result.warning
 
-    return output
+    from codeplane.mcp.delivery import wrap_existing_response
+
+    return wrap_existing_response(output, resource_kind="refactor_preview")
 
 
 # =============================================================================
@@ -181,11 +198,19 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     async def refactor_apply(
         ctx: Context,
         refactor_id: str = Field(..., description="ID of the refactoring to apply"),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Apply a previewed refactoring."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
         result = await app_ctx.refactor_ops.apply(refactor_id, app_ctx.mutation_ops)
+
+        # Reset scope budget duplicate tracking after mutation
+        if scope_id:
+            from codeplane.mcp.tools.files import _scope_manager
+
+            _scope_manager.record_mutation(scope_id)
+
         return _serialize_refactor_result(result)
 
     @mcp.tool

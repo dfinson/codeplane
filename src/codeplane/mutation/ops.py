@@ -1,7 +1,7 @@
-"""Mutation operations - write_files tool implementation.
+"""Mutation operations - write_source tool implementation.
 
 Atomic file edits with structured delta response.
-Per SPEC.md §23.7 write_files tool specification.
+Per SPEC.md §23.7 write_source tool specification.
 
 Triggers reindex after mutation via callback.
 """
@@ -20,15 +20,6 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class ExactEdit:
-    """Content-addressed edit specification."""
-
-    old_content: str
-    new_content: str
-    expected_occurrences: int = 1
-
-
-@dataclass
 class Edit:
     """A single file edit."""
 
@@ -37,11 +28,6 @@ class Edit:
 
     # For create/update with full content
     content: str | None = None
-
-    # For exact mode (update only)
-    old_content: str | None = None
-    new_content: str | None = None
-    expected_occurrences: int = 1
 
 
 @dataclass
@@ -57,14 +43,6 @@ class FileDelta:
 
 
 @dataclass
-class DryRunInfo:
-    """Additional info returned during dry run."""
-
-    content_hash: str  # Hash of content that would be replaced
-    unified_diff: str | None = None
-
-
-@dataclass
 class MutationDelta:
     """Structured delta from a mutation."""
 
@@ -77,38 +55,18 @@ class MutationDelta:
 
 @dataclass
 class MutationResult:
-    """Result of write_files operation."""
+    """Result of write_source operation."""
 
     applied: bool
     dry_run: bool
     delta: MutationDelta
-    dry_run_info: DryRunInfo | None = None
     affected_symbols: list[str] | None = None
     affected_tests: list[str] | None = None
     repo_fingerprint: str = ""
 
 
-class ContentNotFoundError(Exception):
-    """Raised when old_content is not found in file."""
-
-    def __init__(self, path: str, snippet: str | None = None) -> None:
-        self.path = path
-        self.snippet = snippet
-        super().__init__(f"Content not found in {path}")
-
-
-class MultipleMatchesError(Exception):
-    """Raised when old_content matches multiple locations."""
-
-    def __init__(self, path: str, count: int, lines: list[int]) -> None:
-        self.path = path
-        self.count = count
-        self.lines = lines
-        super().__init__(f"Content found {count} times in {path}, expected 1")
-
-
 class MutationOps:
-    """Mutation operations for the write_files tool.
+    """Mutation operations for the write_source tool.
 
     Handles atomic file edits with rollback support.
     Triggers reindex callback after successful mutation.
@@ -130,7 +88,12 @@ class MutationOps:
         self._repo_root = repo_root
         self._on_mutation = on_mutation
 
-    def write_files(
+    def notify_mutation(self, paths: list[Path]) -> None:
+        """Notify that files were mutated, triggering reindex if configured."""
+        if self._on_mutation:
+            self._on_mutation(paths)
+
+    def write_source(
         self,
         edits: list[Edit],
         *,
@@ -146,8 +109,6 @@ class MutationOps:
             MutationResult with delta information
 
         Raises:
-            ContentNotFoundError: old_content not found (exact mode)
-            MultipleMatchesError: old_content found multiple times (exact mode)
             FileNotFoundError: File doesn't exist for update/delete
             FileExistsError: File already exists for create
         """
@@ -156,7 +117,6 @@ class MutationOps:
         changed_paths: list[Path] = []
         total_insertions = 0
         total_deletions = 0
-        dry_run_info: DryRunInfo | None = None
 
         # Validate all edits first
         for edit in edits:
@@ -195,24 +155,7 @@ class MutationOps:
                 old_file_content = full_path.read_text()
                 old_hash = _hash_content(old_file_content)
 
-                # Determine new content
-                if edit.old_content is not None:
-                    new_file_content = self._apply_exact_edit(
-                        old_file_content,
-                        edit.old_content,
-                        edit.new_content or "",
-                        edit.expected_occurrences,
-                        edit.path,
-                    )
-                    # For dry run, compute hash of content being replaced
-                    if dry_run:
-                        dry_run_info = DryRunInfo(
-                            content_hash=_hash_content(edit.old_content),
-                        )
-                elif edit.content is not None:
-                    new_file_content = edit.content
-                else:
-                    new_file_content = old_file_content
+                new_file_content = edit.content if edit.content is not None else old_file_content
 
                 new_hash = _hash_content(new_file_content)
 
@@ -253,45 +196,7 @@ class MutationOps:
                 deletions=total_deletions,
                 files=file_deltas,
             ),
-            dry_run_info=dry_run_info,
         )
-
-    def _apply_exact_edit(
-        self,
-        file_content: str,
-        old_content: str,
-        new_content: str,
-        expected_occurrences: int,
-        path: str,
-    ) -> str:
-        """Apply exact content replacement.
-
-        Raises:
-            ContentNotFoundError: old_content not found
-            MultipleMatchesError: old_content found more times than expected
-        """
-        # Count occurrences
-        count = file_content.count(old_content)
-
-        if count == 0:
-            raise ContentNotFoundError(path, old_content[:100] if old_content else None)
-
-        if count != expected_occurrences:
-            # Find line numbers of matches
-            lines = []
-            search_start = 0
-            for _ in range(min(count, 10)):  # Limit search
-                idx = file_content.find(old_content, search_start)
-                if idx == -1:
-                    break
-                line_num = file_content[:idx].count("\n") + 1
-                lines.append(line_num)
-                search_start = idx + 1
-
-            raise MultipleMatchesError(path, count, lines)
-
-        # Replace all expected occurrences
-        return file_content.replace(old_content, new_content, expected_occurrences)
 
 
 def _hash_content(content: str) -> str:

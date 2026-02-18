@@ -1,6 +1,5 @@
 """Index MCP tools - search, map_repo handlers."""
 
-import contextlib
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
@@ -10,16 +9,7 @@ from pydantic import Field
 from codeplane.config.constants import (
     MAP_DEPTH_MAX,
     MAP_LIMIT_MAX,
-    SEARCH_CONTEXT_LINES_MAX,
     SEARCH_MAX_LIMIT,
-    SEARCH_SCOPE_FALLBACK_LINES_DEFAULT,
-)
-from codeplane.mcp.budget import (
-    BudgetAccumulator,
-    get_effective_budget,
-    make_budget_pagination,
-    maybe_add_large_response_hint,
-    measure_bytes,
 )
 
 if TYPE_CHECKING:
@@ -84,42 +74,15 @@ def _serialize_tree(nodes: list[Any], *, include_line_counts: bool = True) -> li
     return result
 
 
-def _flatten_tree(nodes: list[Any], include_line_counts: bool = True) -> list[dict[str, Any]]:
-    """Flatten tree to individual path entries for inline_only pagination.
-
-    Unlike _serialize_tree which creates nested structures, this produces
-    a flat list of entries that can be paginated item-by-item within
-    the 7.5KB inline budget.
-    """
-    result: list[dict[str, Any]] = []
-
-    def _walk(nodes: list[Any]) -> None:
-        for node in nodes:
-            entry: dict[str, Any] = {
-                "path": node.path,
-                "is_dir": node.is_dir,
-            }
-            if node.is_dir:
-                entry["file_count"] = node.file_count
-            elif include_line_counts:
-                entry["line_count"] = node.line_count
-            result.append(entry)
-            if node.is_dir and node.children:
-                _walk(node.children)
-
-    _walk(nodes)
-    return result
-
-
 # ---------------------------------------------------------------------------
 # Tiered Section Serializers (F+E Pattern)
 #
 # Each section has 3 tiers:
 #   - Tier 1 (summary): Just counts - always fits
 #   - Tier 2 (sample): Top N items - usually fits in 7.5KB
-#   - Tier 3 (full): Everything - may need pagination
+#   - Tier 3 (full): Everything
 #
-# The map_repo handler tries Tier 3, falls back to 2, then 1.
+# map_repo always uses Tier 3 (full) now.
 # ---------------------------------------------------------------------------
 
 # Tier constants
@@ -293,7 +256,7 @@ def _serialize_public_api_tiered(public_api: list[Any], tier: str) -> dict[str, 
     if tier == _TIER_SAMPLE:
         top = [_sym_to_dict(s) for s in public_api[:_PUBLIC_API_SAMPLE]]
         return {
-            "tier": _TIER_SUMMARY,
+            "tier": _TIER_SAMPLE,
             "items": top,
             "items_shown": len(top),
             "count": len(public_api),
@@ -348,35 +311,6 @@ def _build_overview(result: Any) -> dict[str, Any]:
     return overview
 
 
-def _try_section_with_fallback(
-    section_name: str,
-    serializer: Any,
-    data: Any,
-    budget_remaining: int,
-    include_line_counts: bool = True,
-) -> tuple[dict[str, Any], str]:
-    """Try to serialize a section, falling back to lower tiers if needed.
-
-    Returns (serialized_section, tier_used).
-    """
-    tiers = [_TIER_FULL, _TIER_SAMPLE, _TIER_SUMMARY]
-
-    for tier in tiers:
-        if section_name == "structure":
-            section = serializer(data, tier, include_line_counts)
-        else:
-            section = serializer(data, tier)
-
-        size = measure_bytes(section)
-        if size <= budget_remaining:
-            return section, tier
-
-    # Even summary doesn't fit - return summary anyway (guaranteed small)
-    if section_name == "structure":
-        return serializer(data, _TIER_SUMMARY, include_line_counts), _TIER_SUMMARY
-    return serializer(data, _TIER_SUMMARY), _TIER_SUMMARY
-
-
 async def _get_file_path(app_ctx: "AppContext", file_id: int) -> str:
     """Look up file path from file_id."""
     from codeplane.index.models import File
@@ -394,75 +328,116 @@ async def _get_file_path(app_ctx: "AppContext", file_id: int) -> str:
 def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     """Register index tools with FastMCP server."""
 
-    # Context preset line counts
-    CONTEXT_PRESETS = {
-        "none": 0,
-        "minimal": 1,
-        "standard": 5,
-        "rich": 20,
-    }
-
     @mcp.tool
     async def search(
         ctx: Context,
-        query: str = Field(..., description="Search query"),
+        query: str | None = Field(
+            None, description="Search query (required unless resuming a cursor)"
+        ),
         mode: Literal["lexical", "symbol", "references", "definitions"] = Field(
             "lexical", description="Search mode"
         ),
-        context: Literal["none", "minimal", "standard", "rich", "function", "class"] = Field(
-            "standard",
+        enrichment: Literal["none", "minimal", "standard", "function", "class"] = Field(
+            "none",
             description=(
-                "Context mode: 'none' (path+line only), 'minimal' (1 line), "
-                "'standard' (5 lines), 'rich' (20 lines), "
-                "'function' (enclosing function body), 'class' (enclosing class body)"
-            ),
-        ),
-        context_lines: int | None = Field(
-            None,
-            ge=0,
-            le=SEARCH_CONTEXT_LINES_MAX,
-            description=(
-                "Override context lines for line-based modes; "
-                "fallback lines for structural modes (function/class)"
+                "Enrichment level for metadata (NEVER returns source text): "
+                "'none' (span+kind+symbol_id only), 'minimal' (+enclosing scope name, signature), "
+                "'standard' (+docstring flag, param names, return type), "
+                "'function' (+enclosing function span), 'class' (+full class span)"
             ),
         ),
         filter_paths: list[str] | None = Field(None, description="Filter by paths"),
         filter_languages: list[str] | None = Field(None, description="Filter by languages"),
         filter_kinds: list[str] | None = Field(None, description="Filter by symbol kinds"),
         limit: int = Field(default=20, le=SEARCH_MAX_LIMIT, description="Maximum results"),
-        cursor: str | None = Field(None, description="Pagination cursor"),
         files_only: bool = Field(
             False,
             description="Return one result per file (like rg -l). Includes match_count per file.",
         ),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
+        confirmation_token: str | None = Field(
+            None, description="Token from a previous pattern-break gate."
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Reason for continuing past a pattern-break gate (min chars per gate spec).",
+        ),
+        cursor: str | None = Field(
+            None,
+            description="Cursor token from a previous paginated response. Pass to retrieve the next page.",
+        ),
     ) -> dict[str, Any]:
-        """Search code, symbols, or references.
+        """Search code, symbols, or references. Returns spans + metadata, NEVER source text.
 
-        Context modes control how much content is returned around each match:
-        - 'none': Path and line only, no content (for counting/listing)
-        - 'minimal': 1 line of context (for quick location)
-        - 'standard': 5 lines of context (default, for understanding)
-        - 'rich': 20 lines of context (edit-ready, line-based)
-        - 'function': Enclosing function body (edit-ready, structural)
-        - 'class': Enclosing class body (broad context, structural)
+        Use read_source to retrieve actual content for spans returned by search.
 
-        Structural modes ('function', 'class') use the indexed scope facts to return
-        complete function or class bodies. If scope resolution fails (e.g., unsupported
-        language), they fall back to context_lines (default 25).
+        Enrichment controls metadata richness (not source text):
+        - 'none': span + kind + symbol_id only (default)
+        - 'minimal': + enclosing scope name, signature metadata
+        - 'standard': + docstring presence flag, parameter names, return type hint
+        - 'function': + enclosing function span, enclosing class span
+        - 'class': + full class span (all member spans)
         """
-        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+        # Resume paginated cursor if provided
+        if cursor:
+            from codeplane.mcp.delivery import resume_cursor
 
-        from codeplane.index._internal.indexing import resolve_scope_region_for_path
+            page = resume_cursor(cursor)
+            if page is None:
+                return {
+                    "error": "cursor_expired",
+                    "message": "Cursor not found or expired. Re-issue the original search.",
+                }
+            return page
+
+        # query is required for non-cursor calls
+        if not query:
+            return {
+                "error": "missing_query",
+                "message": "'query' is required when not resuming a cursor.",
+            }
+
+        session = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        # Evaluate pattern detector before executing search
+        from codeplane.mcp.gate import build_pattern_gate_spec, build_pattern_hint
+
+        pattern_match = session.pattern_detector.evaluate()
+        pattern_extras: dict[str, Any] = {}
+        if pattern_match and pattern_match.severity == "break":
+            gate_spec = build_pattern_gate_spec(pattern_match)
+            # If agent provided a valid gate token, validate and proceed
+            if confirmation_token:
+                gate_reason_str = gate_reason if isinstance(gate_reason, str) else ""
+                gate_result = session.gate_manager.validate(confirmation_token, gate_reason_str)
+                if not gate_result.ok:
+                    # Re-issue the gate — token was invalid
+                    gate_block = session.gate_manager.issue(gate_spec)
+                    return {
+                        "status": "blocked",
+                        "error": {
+                            "code": "GATE_VALIDATION_FAILED",
+                            "message": gate_result.error,
+                        },
+                        "gate": gate_block,
+                        **build_pattern_hint(pattern_match),
+                    }
+                # Token valid — wipe slate and proceed with search
+                session.pattern_detector.clear()
+            else:
+                # No token — block and return gate
+                gate_block = session.gate_manager.issue(gate_spec)
+                return {
+                    "status": "blocked",
+                    "gate": gate_block,
+                    **build_pattern_hint(pattern_match),
+                }
+        elif pattern_match and pattern_match.severity == "warn":
+            pattern_extras = build_pattern_hint(pattern_match)
         from codeplane.index.ops import SearchMode
 
-        # Determine effective context lines
-        is_structural = context in ("function", "class")
-        if context_lines is not None:
-            effective_lines = context_lines
-        elif is_structural:
-            effective_lines = SEARCH_SCOPE_FALLBACK_LINES_DEFAULT
-        else:
-            effective_lines = CONTEXT_PRESETS.get(context, 5)
+        is_structural = enrichment in ("function", "class")
+        effective_lines = 1  # We only need line info for span resolution
 
         # Map mode to SearchMode
         mode_map = {
@@ -473,60 +448,88 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         }
 
         if mode == "definitions":
-            # Use get_def for definition search
             def_fact = await app_ctx.coordinator.get_def(query, context_id=None)
             if def_fact is None:
                 return {
                     "results": [],
-                    "pagination": make_budget_pagination(has_more=False),
                     "query_time_ms": 0,
                     "summary": _summarize_search(0, "definitions", query),
                 }
 
             file_path = await _get_file_path(app_ctx, def_fact.file_id)
 
-            # Build result with context handling
             result_item: dict[str, Any] = {
+                "hit_id": f"def:{file_path}:{def_fact.start_line}",
                 "path": file_path,
-                "line": def_fact.start_line,
-                "column": def_fact.start_col,
-                "score": 1.0,
-                "match_type": "exact",
-                "symbol": {
+                "span": {
+                    "start_line": def_fact.start_line,
+                    "start_col": def_fact.start_col,
+                    "end_line": def_fact.end_line or def_fact.start_line,
+                    "end_col": def_fact.end_col or 0,
+                },
+                "kind": "def",
+                "symbol_id": def_fact.qualified_name or def_fact.name,
+                "preview_line": def_fact.display_name or def_fact.name,
+            }
+
+            # Enrichment metadata (no source text)
+            if enrichment != "none":
+                result_item["symbol"] = {
                     "name": def_fact.name,
                     "kind": def_fact.kind,
                     "qualified_name": def_fact.qualified_name,
-                },
-            }
+                }
+            if enrichment in ("standard", "function", "class"):
+                result_item["has_docstring"] = False  # Not tracked in index
+                if def_fact.signature_hash:
+                    result_item["signature_hash"] = def_fact.signature_hash
+            if is_structural:
+                from typing import Literal as _Lit
 
-            # Add content based on context mode
-            if context != "none":
-                if is_structural:
-                    with app_ctx.coordinator.db.session() as session:
-                        scope_region, content = resolve_scope_region_for_path(
-                            session,
-                            app_ctx.coordinator.repo_root,
-                            file_path,
-                            def_fact.start_line,
-                            preference="function" if context == "function" else "class",
-                            fallback_lines=effective_lines,
-                        )
-                    result_item["content"] = content
-                    result_item["content_range"] = {
-                        "start": scope_region.start_line,
-                        "end": scope_region.end_line,
-                    }
-                    result_item["context_resolved"] = scope_region.kind
-                else:
-                    result_item["snippet"] = def_fact.display_name or def_fact.name
-                    result_item["context_resolved"] = "lines"
+                from codeplane.index._internal.indexing import resolve_scope_region_for_path
 
-            return {
+                scope_pref: _Lit["function", "class", "block"] = (
+                    "function" if enrichment == "function" else "class"
+                )
+                with app_ctx.coordinator.db.session() as db_session:
+                    scope_region, _ = resolve_scope_region_for_path(
+                        db_session,
+                        app_ctx.coordinator.repo_root,
+                        file_path,
+                        def_fact.start_line,
+                        preference=scope_pref,
+                        fallback_lines=25,
+                    )
+                result_item["enclosing_span"] = {
+                    "start_line": scope_region.start_line,
+                    "end_line": scope_region.end_line,
+                    "kind": scope_region.kind,
+                }
+
+            def_result: dict[str, Any] = {
                 "results": [result_item],
-                "pagination": make_budget_pagination(has_more=False),
                 "query_time_ms": 0,
                 "summary": _summarize_search(1, "definitions", query),
             }
+            if pattern_extras:
+                def_result.update(pattern_extras)
+
+            from codeplane.mcp.delivery import wrap_existing_response
+
+            def_scope_usage = None
+            if scope_id:
+                from codeplane.mcp.tools.files import _scope_manager
+
+                def_budget = _scope_manager.get_or_create(scope_id)
+                def_budget.increment_search(1)
+                def_scope_usage = def_budget.to_usage_dict()
+
+            return wrap_existing_response(
+                def_result,
+                resource_kind="search_hits",
+                scope_id=scope_id,
+                scope_usage=def_scope_usage,
+            )
 
         if mode == "references":
             # First find the definition, then get references
@@ -534,46 +537,15 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             if def_fact is None:
                 return {
                     "results": [],
-                    "pagination": make_budget_pagination(has_more=False),
                     "query_time_ms": 0,
                     "summary": _summarize_search(0, "references", query),
                 }
 
-            # Apply cursor: skip past previously returned results
-            start_idx = 0
-            if cursor:
-                with contextlib.suppress(ValueError):
-                    parsed = int(cursor)
-                    if parsed >= 0:
-                        start_idx = parsed
-
-            # Fetch refs with offset for pagination (fetch limit+1 to detect has_more)
+            # Fetch references
             ref_fetch_limit = limit * 10 if files_only else limit
             refs = await app_ctx.coordinator.get_references(
-                def_fact, _context_id=0, limit=ref_fetch_limit + 1, offset=start_idx
+                def_fact, _context_id=0, limit=ref_fetch_limit
             )
-
-            # Check if there are more refs beyond this page
-            has_more_refs = len(refs) > ref_fetch_limit
-            if has_more_refs:
-                refs = refs[:ref_fetch_limit]
-
-            # Reserve overhead for fixed response fields
-            base_response = {
-                "results": [],
-                "pagination": {
-                    "truncated": False,
-                    "next_cursor": "x" * 40,
-                    "total_estimate": 99999,
-                },
-                "query_time_ms": 99999,
-                "summary": "X" * 200,
-            }
-            overhead = measure_bytes(base_response)
-            acc = BudgetAccumulator()
-            acc.reserve(overhead)
-            ref_files: set[str] = set()
-            raw_refs_consumed = len(refs)
 
             # Resolve paths for all refs upfront for dedup
             ref_path_pairs: list[tuple[str, Any]] = []
@@ -596,81 +568,80 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     deduped_pairs.append((p, ref))
                     ref_match_counts[path] = count
                 if len(deduped_pairs) > limit:
-                    has_more_refs = True
                     deduped_pairs = deduped_pairs[:limit]
                     kept = {p for p, _ in deduped_pairs}
-                    raw_refs_consumed = sum(c for p, c in ref_match_counts.items() if p in kept)
                     ref_match_counts = {p: c for p, c in ref_match_counts.items() if p in kept}
                 ref_path_pairs = deduped_pairs
             else:
                 ref_match_counts = {}
 
+            items: list[dict[str, Any]] = []
+            ref_files: set[str] = set()
             for path, ref in ref_path_pairs:
                 result_item = {
+                    "hit_id": f"ref:{path}:{ref.start_line}:{ref.start_col}",
                     "path": path,
-                    "line": ref.start_line,
-                    "column": ref.start_col,
-                    "score": 1.0 if ref.certainty == "CERTAIN" else 0.5,
-                    "match_type": "exact" if ref.certainty == "CERTAIN" else "fuzzy",
+                    "span": {
+                        "start_line": ref.start_line,
+                        "start_col": ref.start_col,
+                        "end_line": ref.end_line or ref.start_line,
+                        "end_col": ref.end_col or 0,
+                    },
+                    "kind": "ref",
+                    "symbol_id": ref.target_name if hasattr(ref, "target_name") else None,
+                    "preview_line": ref.token_text[:120] if ref.token_text else None,
                 }
                 if ref_match_counts and path in ref_match_counts:
                     result_item["match_count"] = ref_match_counts[path]
 
-                # Add content based on context mode
-                if context != "none":
-                    if is_structural:
-                        with app_ctx.coordinator.db.session() as session:
-                            scope_region, content = resolve_scope_region_for_path(
-                                session,
-                                app_ctx.coordinator.repo_root,
-                                path,
-                                ref.start_line,
-                                preference="function" if context == "function" else "class",
-                                fallback_lines=effective_lines,
-                            )
-                        result_item["content"] = content
-                        result_item["content_range"] = {
-                            "start": scope_region.start_line,
-                            "end": scope_region.end_line,
-                        }
-                        result_item["context_resolved"] = scope_region.kind
-                    else:
-                        result_item["snippet"] = ref.token_text
-                        result_item["context_resolved"] = "lines"
+                # Enrichment metadata (no source text)
+                if enrichment != "none" and enrichment in ("function", "class"):
+                    from codeplane.index._internal.indexing import resolve_scope_region_for_path
 
-                if not acc.try_add(result_item):
-                    break
+                    with app_ctx.coordinator.db.session() as db_session:
+                        scope_region, _ = resolve_scope_region_for_path(
+                            db_session,
+                            app_ctx.coordinator.repo_root,
+                            path,
+                            ref.start_line,
+                            preference="function" if enrichment == "function" else "class",
+                            fallback_lines=25,
+                        )
+                    result_item["enclosing_span"] = {
+                        "start_line": scope_region.start_line,
+                        "end_line": scope_region.end_line,
+                        "kind": scope_region.kind,
+                    }
+
+                items.append(result_item)
                 ref_files.add(path)
 
-            # Determine if there are more results
-            # has_more_refs = True if we fetched ref_fetch_limit+1 rows
-            # budget_more = True if budget was exhausted before all refs in page
-            budget_more = not acc.has_room and len(ref_path_pairs) > acc.count
-            has_more = has_more_refs or budget_more
-            # If budget was exhausted, only count raw refs for files actually emitted.
-            if files_only and budget_more and ref_match_counts:
-                raw_refs_consumed = sum(c for p, c in ref_match_counts.items() if p in ref_files)
-            next_offset = start_idx + (raw_refs_consumed if files_only else acc.count)
-            return {
-                "results": acc.items,
-                "pagination": make_budget_pagination(
-                    has_more=has_more,
-                    next_cursor=str(next_offset) if has_more else None,
-                ),
+            ref_result: dict[str, Any] = {
+                "results": items,
                 "query_time_ms": 0,
                 "summary": _summarize_search(
-                    acc.count, "references", query, file_count=len(ref_files)
+                    len(items), "references", query, file_count=len(ref_files)
                 ),
             }
+            if pattern_extras:
+                ref_result.update(pattern_extras)
 
-        # Parse cursor for pagination
-        start_idx = 0
-        if cursor:
-            with contextlib.suppress(ValueError):
-                parsed = int(cursor)
-                if parsed >= 0:
-                    start_idx = parsed
+            from codeplane.mcp.delivery import wrap_existing_response
 
+            ref_scope_usage = None
+            if scope_id:
+                from codeplane.mcp.tools.files import _scope_manager
+
+                ref_budget = _scope_manager.get_or_create(scope_id)
+                ref_budget.increment_search(len(items))
+                ref_scope_usage = ref_budget.to_usage_dict()
+
+            return wrap_existing_response(
+                ref_result,
+                resource_kind="search_hits",
+                scope_id=scope_id,
+                scope_usage=ref_scope_usage,
+            )
         # When files_only, a single file can produce many line-level results,
         # so we fetch a larger batch to ensure enough unique files after dedup.
         fetch_limit = limit * 10 if files_only else limit
@@ -681,28 +652,19 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 query,
                 filter_kinds=filter_kinds,
                 filter_paths=filter_paths,
-                limit=fetch_limit + 1,
-                offset=start_idx,
+                limit=fetch_limit,
             )
         else:
             search_response = await app_ctx.coordinator.search(
                 query,
                 mode_map[mode],
-                limit=fetch_limit + 1,
-                offset=start_idx,
+                limit=fetch_limit,
                 context_lines=effective_lines if not is_structural else 1,
                 filter_languages=filter_languages,
                 filter_paths=filter_paths,
             )
 
-        # Check if there are more results beyond this page
         all_results = search_response.results
-        has_more_results = len(all_results) > fetch_limit
-        if has_more_results:
-            all_results = all_results[:fetch_limit]
-
-        # Track how many raw (pre-dedup) results were consumed for cursor math
-        raw_results_consumed = len(all_results)
 
         # files_only: deduplicate to one result per file with match_count
         if files_only and mode in ("lexical", "symbol", "references"):
@@ -714,117 +676,76 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     first, count = file_groups[r.path]
                     file_groups[r.path] = (first, count + 1)
 
-            # If the last raw result shares a path with an earlier result AND
-            # there are more results beyond this batch, the trailing file was
-            # only partially consumed.  Drop it from this page so it appears
-            # complete on the next page.
-            if has_more_results and all_results:
-                trailing_path = all_results[-1].path
-                if (
-                    trailing_path in file_groups
-                    and file_groups[trailing_path][1] > 0
-                    and len(file_groups) > 1
-                ):
-                    raw_results_consumed -= file_groups[trailing_path][1]
-                    del file_groups[trailing_path]
-
             all_results_deduped = []
             match_counts: dict[str, int] = {}
             for path, (r, count) in file_groups.items():
                 all_results_deduped.append(r)
                 match_counts[path] = count
 
-            # Cap to requested limit; track raw results consumed up to that point
+            # Cap to requested limit
             if len(all_results_deduped) > limit:
-                has_more_results = True
                 all_results_deduped = all_results_deduped[:limit]
-                # Recount raw results consumed: sum match_counts for kept files only
                 kept_paths = {r.path for r in all_results_deduped}
-                raw_results_consumed = sum(
-                    count for path, count in match_counts.items() if path in kept_paths
-                )
                 match_counts = {p: c for p, c in match_counts.items() if p in kept_paths}
             all_results = all_results_deduped
         else:
             match_counts = {}
-            # For non-files_only, apply original limit
             if len(all_results) > limit:
-                has_more_results = True
                 all_results = all_results[:limit]
 
-        # Build results with context handling, bounded by budget
-        # Reserve overhead for fixed response fields
-        base_response = {
-            "results": [],
-            "pagination": {"truncated": False, "next_cursor": "x" * 40, "total_estimate": 99999},
-            "query_time_ms": 99999,
-            "summary": "X" * 200,
-            "agentic_hint": "X" * 200,
-        }
-        overhead = measure_bytes(base_response)
-        acc = BudgetAccumulator()
-        acc.reserve(overhead)
+        # Build results as spans + metadata (no source text)
+        search_items: list[dict[str, Any]] = []
         unique_files: set[str] = set()
         for r in all_results:
             result_item = {
+                "hit_id": f"{mode}:{r.path}:{r.line}:{r.column}",
                 "path": r.path,
-                "line": r.line,
-                "column": r.column,
-                "score": r.score,
-                "match_type": "fuzzy",
+                "span": {
+                    "start_line": r.line,
+                    "start_col": r.column,
+                    "end_line": r.line,
+                    "end_col": 0,
+                },
+                "kind": "def" if mode == "symbol" else "lexical",
+                "symbol_id": getattr(r, "qualified_name", None) or getattr(r, "name", None),
+                "preview_line": (r.snippet or "")[:120] if r.snippet else None,
             }
             if match_counts and r.path in match_counts:
                 result_item["match_count"] = match_counts[r.path]
 
-            # Add content based on context mode
-            if context != "none":
-                if is_structural:
-                    with app_ctx.coordinator.db.session() as session:
-                        scope_region, content = resolve_scope_region_for_path(
-                            session,
-                            app_ctx.coordinator.repo_root,
-                            r.path,
-                            r.line,
-                            preference="function" if context == "function" else "class",
-                            fallback_lines=effective_lines,
-                        )
-                    result_item["content"] = content
-                    result_item["content_range"] = {
-                        "start": scope_region.start_line,
-                        "end": scope_region.end_line,
-                    }
-                    result_item["context_resolved"] = scope_region.kind
-                else:
-                    result_item["snippet"] = r.snippet
-                    result_item["context_resolved"] = "lines"
+            # Enrichment metadata (no source text)
+            if enrichment != "none" and hasattr(r, "name") and r.name:
+                result_item["symbol"] = {
+                    "name": r.name,
+                    "kind": getattr(r, "kind", None),
+                    "qualified_name": getattr(r, "qualified_name", None),
+                }
+            if is_structural:
+                from codeplane.index._internal.indexing import resolve_scope_region_for_path
 
-            if not acc.try_add(result_item):
-                break
+                with app_ctx.coordinator.db.session() as db_session:
+                    scope_region, _ = resolve_scope_region_for_path(
+                        db_session,
+                        app_ctx.coordinator.repo_root,
+                        r.path,
+                        r.line,
+                        preference="function" if enrichment == "function" else "class",
+                        fallback_lines=25,
+                    )
+                result_item["enclosing_span"] = {
+                    "start_line": scope_region.start_line,
+                    "end_line": scope_region.end_line,
+                    "kind": scope_region.kind,
+                }
+
+            search_items.append(result_item)
             unique_files.add(r.path)
 
-        # Determine if there are more results
-        # has_more_results = True if coordinator returned limit+1 rows
-        # budget_more = True if budget was exhausted before all results in page
-        budget_more = not acc.has_room and len(all_results) > acc.count
-        has_more = has_more_results or budget_more
-        # When files_only, cursor must skip all raw results consumed (pre-dedup),
-        # not just the deduplicated count, to avoid re-fetching the same rows.
-        # If budget was exhausted, only count raw results for files actually emitted.
-        if files_only and budget_more and match_counts:
-            raw_results_consumed = sum(
-                count for path, count in match_counts.items() if path in unique_files
-            )
-        next_offset = start_idx + (raw_results_consumed if files_only else acc.count)
-
         result: dict[str, Any] = {
-            "results": acc.items,
-            "pagination": make_budget_pagination(
-                has_more=has_more,
-                next_cursor=str(next_offset) if has_more else None,
-            ),
+            "results": search_items,
             "query_time_ms": 0,
             "summary": _summarize_search(
-                acc.count,
+                len(search_items),
                 mode,
                 query,
                 fallback=search_response.fallback_reason is not None,
@@ -836,7 +757,36 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         if search_response.fallback_reason:
             result["fallback_reason"] = search_response.fallback_reason
 
-        return result
+        from codeplane.mcp.delivery import wrap_existing_response
+
+        # Track scope usage
+        scope_usage = None
+        if scope_id:
+            from codeplane.mcp.tools.files import _scope_manager
+
+            budget = _scope_manager.get_or_create(scope_id)
+            budget.increment_search(len(search_items))
+            exceeded = budget.check_budget("search_calls")
+            exceeded_counter = "search_calls"
+            if not exceeded:
+                exceeded = budget.check_budget("search_hits")
+                exceeded_counter = "search_hits"
+            if exceeded:
+                from codeplane.mcp.errors import BudgetExceededError
+
+                raise BudgetExceededError(scope_id, exceeded_counter, exceeded)
+            scope_usage = budget.to_usage_dict()
+
+        # Merge pattern detection hints into result
+        if pattern_extras:
+            result.update(pattern_extras)
+
+        return wrap_existing_response(
+            result,
+            resource_kind="search_hits",
+            scope_id=scope_id,
+            scope_usage=scope_usage,
+        )
 
     @mcp.tool
     async def map_repo(
@@ -855,7 +805,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             | None
         ) = Field(None, description="Sections to include"),
         depth: int = Field(default=3, le=MAP_DEPTH_MAX, description="Tree depth"),
-        cursor: str | None = Field(None, description="Pagination cursor"),
         limit: int = Field(default=100, le=MAP_LIMIT_MAX, description="Maximum entries"),
         include_globs: list[str] | None = Field(
             None, description="Glob patterns to include (e.g., ['src/**', 'lib/**'])"
@@ -874,59 +823,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "standard=tree without line counts, minimal=counts only (no tree)"
             ),
         ),
-        inline_only: bool = Field(
-            False,
-            description="If true, use 7.5KB budget for guaranteed inline display in VS Code",
-        ),
+        scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
-        """Get repository mental model with tiered budget-based output.
-
-        Uses progressive disclosure (F+E pattern):
-        - Overview block with counts always returned (guaranteed to fit)
-        - Each section tries full → sample → summary tiers based on budget
-        - Downgraded sections include expand cursors for drill-down
-
-        Cursor types:
-        - None: First page with overview + tiered sections
-        - "expand:<section>:<offset>": Drill into a specific section
-        """
+        """Get repository mental model."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
-
-        effective_budget = get_effective_budget(inline_only)
         include_line_counts = verbosity == "full"
 
-        # Handle expand cursor for drill-down requests
-        if cursor and cursor.startswith("expand:"):
-            # Parse section from cursor to ensure it's included
-            cursor_parts = cursor.split(":")
-            if len(cursor_parts) >= 2:
-                expand_section = cursor_parts[1]
-                # Map cursor section names to include options
-                section_map = {
-                    "structure": "structure",
-                    "dependencies": "dependencies",
-                    "test_layout": "test_layout",
-                    "entry_points": "entry_points",
-                    "public_api": "public_api",
-                }
-                if expand_section in section_map:
-                    # Fetch only the target section
-                    expand_include = [section_map[expand_section]]
-                    result = await app_ctx.coordinator.map_repo(
-                        include=expand_include,  # type: ignore[arg-type]
-                        depth=depth,
-                        limit=limit,
-                        include_globs=include_globs,
-                        exclude_globs=exclude_globs,
-                        respect_gitignore=respect_gitignore,
-                    )
-                    return await _handle_expand_cursor(
-                        cursor, result, effective_budget, include_line_counts
-                    )
-            # Invalid expand cursor
-            return {"error": "Invalid expand cursor", "cursor": cursor}
-
-        # Fetch data from coordinator for first page
+        # Fetch data from coordinator
         result = await app_ctx.coordinator.map_repo(
             include=include,
             depth=depth,
@@ -936,341 +839,53 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             respect_gitignore=respect_gitignore,
         )
 
-        # --- First page: Overview + tiered sections ---
-
-        # Compute overhead for fixed response fields
-        overhead_template: dict[str, Any] = {
-            "overview": {},
-            "sections": {},
-            "pagination": {"expandable": [], "cursors": {}},
-            "summary": "X" * 100,
-            "agentic_hint": "X" * 150,
-        }
-        overhead = measure_bytes(overhead_template) + 300  # safety margin
-
-        # Track budget usage
-        used_bytes = overhead
-        sections_output: dict[str, Any] = {}
-        downgraded: list[str] = []
-        expand_cursors: dict[str, str] = {}
-
-        # Build overview (always fits, ~500 bytes)
+        # Build overview
         overview = _build_overview(result)
-        used_bytes += measure_bytes(overview)
 
-        # Allocate remaining budget across sections
-        remaining = effective_budget - used_bytes
-
-        # --- Languages (small, no tiering needed) ---
+        # Serialize all sections at full detail
+        sections_output: dict[str, Any] = {}
         if result.languages:
-            lang_section = _serialize_languages(result.languages)
-            size = measure_bytes({"languages": lang_section})
-            if size <= remaining:
-                sections_output["languages"] = lang_section
-                remaining -= size
-
-        # --- Structure ---
+            sections_output["languages"] = _serialize_languages(result.languages)
         if result.structure:
-            section, tier = _try_section_with_fallback(
-                "structure",
-                _serialize_structure_tiered,
-                result.structure,
-                remaining,
-                include_line_counts,
+            sections_output["structure"] = _serialize_structure_tiered(
+                result.structure, _TIER_FULL, include_line_counts
             )
-            size = measure_bytes({"structure": section})
-            if size <= remaining:
-                sections_output["structure"] = section
-                remaining -= size
-                if tier != _TIER_FULL:
-                    downgraded.append("structure")
-                    expand_cursors["structure"] = "expand:structure:0"
-            else:
-                # Even summary didn't fit - add minimal
-                minimal = _serialize_structure_tiered(
-                    result.structure, _TIER_SUMMARY, include_line_counts
-                )
-                sections_output["structure"] = minimal
-                downgraded.append("structure")
-                expand_cursors["structure"] = "expand:structure:0"
-
-        # --- Dependencies ---
         if result.dependencies:
-            section, tier = _try_section_with_fallback(
-                "dependencies",
-                _serialize_dependencies_tiered,
-                result.dependencies,
-                remaining,
+            sections_output["dependencies"] = _serialize_dependencies_tiered(
+                result.dependencies, _TIER_FULL
             )
-            size = measure_bytes({"dependencies": section})
-            if size <= remaining:
-                sections_output["dependencies"] = section
-                remaining -= size
-                if tier != _TIER_FULL:
-                    downgraded.append("dependencies")
-                    expand_cursors["dependencies"] = "expand:dependencies:0"
-            else:
-                minimal = _serialize_dependencies_tiered(result.dependencies, _TIER_SUMMARY)
-                sections_output["dependencies"] = minimal
-                downgraded.append("dependencies")
-                expand_cursors["dependencies"] = "expand:dependencies:0"
-
-        # --- Test Layout ---
         if result.test_layout:
-            section, tier = _try_section_with_fallback(
-                "test_layout",
-                _serialize_test_layout_tiered,
-                result.test_layout,
-                remaining,
+            sections_output["test_layout"] = _serialize_test_layout_tiered(
+                result.test_layout, _TIER_FULL
             )
-            size = measure_bytes({"test_layout": section})
-            if size <= remaining:
-                sections_output["test_layout"] = section
-                remaining -= size
-                if tier != _TIER_FULL:
-                    downgraded.append("test_layout")
-                    expand_cursors["test_layout"] = "expand:test_layout:0"
-            else:
-                minimal = _serialize_test_layout_tiered(result.test_layout, _TIER_SUMMARY)
-                sections_output["test_layout"] = minimal
-                downgraded.append("test_layout")
-                expand_cursors["test_layout"] = "expand:test_layout:0"
-
-        # --- Entry Points ---
         if result.entry_points:
-            section, tier = _try_section_with_fallback(
-                "entry_points",
-                _serialize_entry_points_tiered,
-                result.entry_points,
-                remaining,
+            sections_output["entry_points"] = _serialize_entry_points_tiered(
+                result.entry_points, _TIER_FULL
             )
-            size = measure_bytes({"entry_points": section})
-            if size <= remaining:
-                sections_output["entry_points"] = section
-                remaining -= size
-                if tier != _TIER_FULL:
-                    downgraded.append("entry_points")
-                    expand_cursors["entry_points"] = "expand:entry_points:0"
-            else:
-                minimal = _serialize_entry_points_tiered(result.entry_points, _TIER_SUMMARY)
-                sections_output["entry_points"] = minimal
-                downgraded.append("entry_points")
-                expand_cursors["entry_points"] = "expand:entry_points:0"
-
-        # --- Public API ---
         if result.public_api:
-            section, tier = _try_section_with_fallback(
-                "public_api",
-                _serialize_public_api_tiered,
-                result.public_api,
-                remaining,
+            sections_output["public_api"] = _serialize_public_api_tiered(
+                result.public_api, _TIER_FULL
             )
-            size = measure_bytes({"public_api": section})
-            if size <= remaining:
-                sections_output["public_api"] = section
-                remaining -= size
-                if tier != _TIER_FULL:
-                    downgraded.append("public_api")
-                    expand_cursors["public_api"] = "expand:public_api:0"
-            else:
-                minimal = _serialize_public_api_tiered(result.public_api, _TIER_SUMMARY)
-                sections_output["public_api"] = minimal
-                downgraded.append("public_api")
-                expand_cursors["public_api"] = "expand:public_api:0"
 
-        # --- Build output ---
+        # Build output
         output: dict[str, Any] = {
             "overview": overview,
             **sections_output,
         }
 
-        # Build pagination
-        pagination: dict[str, Any] = {}
-        if downgraded:
-            pagination["expandable"] = downgraded
-            pagination["cursors"] = expand_cursors
-        output["pagination"] = pagination
-
         # Summary
         file_count = result.structure.file_count if result.structure else 0
         section_names = list(sections_output.keys())
-        output["summary"] = _summarize_map(file_count, section_names, bool(downgraded))
+        output["summary"] = _summarize_map(file_count, section_names, False)
+        output["preset_used"] = "synopsis" if include is None else "custom"
 
-        # Agentic hint
-        if downgraded:
-            output["agentic_hint"] = (
-                f"Sections {', '.join(downgraded)} were summarized to fit budget. "
-                "Use pagination.cursors to expand specific sections for full detail."
-            )
-        else:
-            # Add large response hint if over inline threshold
-            total_size = effective_budget - remaining
-            maybe_add_large_response_hint(output, total_size)
+        from codeplane.mcp.delivery import wrap_existing_response
 
-        return output
-
-    async def _handle_expand_cursor(
-        cursor: str,
-        result: Any,
-        budget: int,
-        include_line_counts: bool,
-    ) -> dict[str, Any]:
-        """Handle expand cursor for drilling into a specific section."""
-        # Parse: "expand:<section>:<offset>"
-        parts = cursor.split(":")
-        if len(parts) != 3:
-            return {"error": "Invalid cursor format", "cursor": cursor}
-
-        section = parts[1]
-        try:
-            offset = int(parts[2])
-        except ValueError:
-            return {"error": "Invalid cursor offset", "cursor": cursor}
-
-        # Reserve overhead
-        overhead = 500
-        acc = BudgetAccumulator(budget=budget)
-        acc.reserve(overhead)
-
-        output: dict[str, Any] = {"section": section}
-        next_cursor: str | None = None
-
-        if section == "structure" and result.structure:
-            # Paginate flat tree entries
-            all_entries = _flatten_tree(result.structure.tree, include_line_counts)
-            items: list[dict[str, Any]] = []
-            consumed = 0
-
-            for entry in all_entries[offset:]:
-                if acc.try_add(entry):
-                    items.append(entry)
-                    consumed += 1
-                else:
-                    break
-
-            output["entries"] = items
-            output["entries_shown"] = len(items)
-            output["entries_total"] = len(all_entries)
-
-            next_offset = offset + consumed
-            if next_offset < len(all_entries):
-                next_cursor = f"expand:structure:{next_offset}"
-
-        elif section == "dependencies" and result.dependencies:
-            all_modules = result.dependencies.external_modules
-            items = []
-            consumed = 0
-
-            for mod in all_modules[offset:]:
-                item = {"module": mod}
-                if acc.try_add(item):
-                    items.append(mod)
-                    consumed += 1
-                else:
-                    break
-
-            output["external_modules"] = items
-            output["modules_shown"] = len(items)
-            output["modules_total"] = len(all_modules)
-
-            next_offset = offset + consumed
-            if next_offset < len(all_modules):
-                next_cursor = f"expand:dependencies:{next_offset}"
-
-        elif section == "test_layout" and result.test_layout:
-            all_files = result.test_layout.test_files
-            items = []
-            consumed = 0
-
-            for f in all_files[offset:]:
-                item = {"path": f}
-                if acc.try_add(item):
-                    items.append(f)
-                    consumed += 1
-                else:
-                    break
-
-            output["test_files"] = items
-            output["files_shown"] = len(items)
-            output["files_total"] = len(all_files)
-
-            next_offset = offset + consumed
-            if next_offset < len(all_files):
-                next_cursor = f"expand:test_layout:{next_offset}"
-
-        elif section == "entry_points" and result.entry_points:
-            all_eps = result.entry_points
-            items = []
-            consumed = 0
-
-            for ep in all_eps[offset:]:
-                item = {
-                    "path": ep.path,
-                    "kind": ep.kind,
-                    "name": ep.name,
-                    "qualified_name": ep.qualified_name,
-                }
-                if acc.try_add(item):
-                    items.append(item)
-                    consumed += 1
-                else:
-                    break
-
-            output["items"] = items
-            output["items_shown"] = len(items)
-            output["items_total"] = len(all_eps)
-
-            next_offset = offset + consumed
-            if next_offset < len(all_eps):
-                next_cursor = f"expand:entry_points:{next_offset}"
-
-        elif section == "public_api" and result.public_api:
-            all_syms = result.public_api
-            items = []
-            consumed = 0
-
-            for sym in all_syms[offset:]:
-                item = {
-                    "name": sym.name,
-                    "def_uid": sym.def_uid,
-                    "certainty": sym.certainty,
-                    "evidence": sym.evidence,
-                }
-                if acc.try_add(item):
-                    items.append(item)
-                    consumed += 1
-                else:
-                    break
-
-            output["items"] = items
-            output["items_shown"] = len(items)
-            output["items_total"] = len(all_syms)
-
-            next_offset = offset + consumed
-            if next_offset < len(all_syms):
-                next_cursor = f"expand:public_api:{next_offset}"
-
-        else:
-            return {"error": f"Unknown or empty section: {section}"}
-
-        output["pagination"] = {
-            "next_cursor": next_cursor,
-            "complete": next_cursor is None,
-        }
-
-        return output
-
-    def _parse_map_cursor(cursor: str | None) -> tuple[int, int, int]:
-        """Parse map_repo pagination cursor into (tree_offset, ep_offset, api_offset)."""
-        if cursor is None:
-            return 0, 0, 0
-        parts = cursor.split(":")
-        if len(parts) == 3:
-            try:
-                return int(parts[0]), int(parts[1]), int(parts[2])
-            except ValueError:
-                pass
-        return 0, 0, 0
+        return wrap_existing_response(
+            output,
+            resource_kind="repo_map",
+            scope_id=scope_id,
+        )
 
     # Flatten schemas to remove $ref/$defs for Claude compatibility
     for tool in mcp._tool_manager._tools.values():

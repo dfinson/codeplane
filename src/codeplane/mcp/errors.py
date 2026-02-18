@@ -10,13 +10,13 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from fastmcp.exceptions import ToolError
+
 
 class MCPErrorCode(StrEnum):
     """Machine-readable error codes for MCP tool failures."""
 
     # Validation errors - agent should fix input
-    CONTENT_NOT_FOUND = "CONTENT_NOT_FOUND"
-    MULTIPLE_MATCHES = "MULTIPLE_MATCHES"
     ANCHOR_NOT_FOUND = "ANCHOR_NOT_FOUND"
     ANCHOR_AMBIGUOUS = "ANCHOR_AMBIGUOUS"
     INVALID_RANGE = "INVALID_RANGE"
@@ -27,9 +27,6 @@ class MCPErrorCode(StrEnum):
     HASH_MISMATCH = "HASH_MISMATCH"
     DRY_RUN_EXPIRED = "DRY_RUN_EXPIRED"
     DRY_RUN_REQUIRED = "DRY_RUN_REQUIRED"
-
-    # Pagination errors - agent should restart pagination
-    CURSOR_STALE = "CURSOR_STALE"
 
     # File errors
     FILE_NOT_FOUND = "FILE_NOT_FOUND"
@@ -46,6 +43,15 @@ class MCPErrorCode(StrEnum):
     # System errors
     IO_ERROR = "IO_ERROR"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+
+    # Delivery envelope errors
+    BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
+    SCOPE_EXPIRED = "SCOPE_EXPIRED"
+    SPAN_OVERLAP = "SPAN_OVERLAP"
+    FILE_HASH_MISMATCH = "FILE_HASH_MISMATCH"
+    CONFIRMATION_REQUIRED = "CONFIRMATION_REQUIRED"
+    DUPLICATE_FULL_READ = "DUPLICATE_FULL_READ"
+    RESOURCE_EVICTED = "RESOURCE_EVICTED"
 
 
 @dataclass
@@ -69,7 +75,15 @@ class ErrorResponse:
         }
 
 
-class MCPError(Exception):
+class MCPError(ToolError):
+    """Base exception for MCP tool errors with structured response.
+
+    Extends FastMCP's ToolError so that FastMCP's tool_manager passes it
+    through (``except FastMCPError: raise``) instead of wrapping it in a
+    generic ToolError.  Our ToolMiddleware then catches it as MCPError
+    and returns the structured error code.
+    """
+
     """Base exception for MCP tool errors with structured response."""
 
     def __init__(
@@ -101,33 +115,6 @@ class MCPError(Exception):
 # =============================================================================
 # Specific Error Classes
 # =============================================================================
-
-
-class ContentNotFoundError(MCPError):
-    """Raised when old_content is not found in file."""
-
-    def __init__(self, path: str, snippet: str | None = None) -> None:
-        super().__init__(
-            code=MCPErrorCode.CONTENT_NOT_FOUND,
-            message=f"Content not found in {path}",
-            remediation="Re-read the file to get current content. Ensure exact whitespace match.",
-            path=path,
-            snippet_preview=snippet[:100] if snippet else None,
-        )
-
-
-class MultipleMatchesError(MCPError):
-    """Raised when old_content matches multiple locations."""
-
-    def __init__(self, path: str, count: int, lines: list[int]) -> None:
-        super().__init__(
-            code=MCPErrorCode.MULTIPLE_MATCHES,
-            message=f"Content found {count} times in {path}, expected 1",
-            remediation="Add more context lines to old_content to make it unique, or set expected_occurrences.",
-            path=path,
-            match_count=count,
-            match_lines=lines[:10],  # Limit to first 10
-        )
 
 
 class InvalidRangeError(MCPError):
@@ -166,7 +153,7 @@ class DryRunRequiredError(MCPError):
         super().__init__(
             code=MCPErrorCode.DRY_RUN_REQUIRED,
             message=f"Line-range edit on {path} requires prior dry_run",
-            remediation="Call write_files with dry_run=True first to get content_hash, then call again with the hash.",
+            remediation="Call write_source with dry_run=True first to get content_hash, then call again with the hash.",
             path=path,
         )
 
@@ -184,30 +171,61 @@ class DryRunExpiredError(MCPError):
         )
 
 
-class CursorStaleError(MCPError):
-    """Raised when pagination cursor is invalidated by index changes.
+class BudgetExceededError(MCPError):
+    """Raised when a scope budget is exceeded."""
 
-    This error tells agents clearly that they MUST restart pagination from
-    the beginning because the underlying index has changed since the cursor
-    was created.
-    """
-
-    def __init__(self, cursor_epoch: int, current_epoch: int) -> None:
+    def __init__(self, scope_id: str, counter: str, hint: str) -> None:
         super().__init__(
-            code=MCPErrorCode.CURSOR_STALE,
-            message=(
-                f"Pagination cursor is stale. Index was updated since cursor creation "
-                f"(cursor epoch: {cursor_epoch}, current epoch: {current_epoch}). "
-                f"Results may have changed."
-            ),
-            remediation=(
-                "RESTART PAGINATION FROM THE BEGINNING. "
-                "Do not continue from this cursor. "
-                "Call the same tool again WITHOUT a cursor parameter to start fresh. "
-                "This ensures you see consistent, up-to-date results."
-            ),
-            cursor_epoch=cursor_epoch,
-            current_epoch=current_epoch,
+            code=MCPErrorCode.BUDGET_EXCEEDED,
+            message=f"Scope budget exceeded for '{counter}' in scope '{scope_id}'",
+            remediation=hint,
+            scope_id=scope_id,
+            counter=counter,
+        )
+
+
+class SpanOverlapError(MCPError):
+    """Raised when span-based edits have overlapping ranges."""
+
+    def __init__(self, path: str, conflicts: list[dict[str, Any]]) -> None:
+        super().__init__(
+            code=MCPErrorCode.SPAN_OVERLAP,
+            message=f"Overlapping span edits in {path}",
+            remediation="Ensure all span edits are non-overlapping. Combine overlapping spans into a single edit.",
+            path=path,
+            conflicts=conflicts,
+        )
+
+
+class FileHashMismatchError(MCPError):
+    """Raised when file SHA256 doesn't match expected for span edits."""
+
+    def __init__(self, path: str, expected: str, actual: str) -> None:
+        super().__init__(
+            code=MCPErrorCode.FILE_HASH_MISMATCH,
+            message=f"File {path} was modified since last read (hash mismatch)",
+            remediation="Re-read the file with read_source to get the current file_sha256, then retry.",
+            path=path,
+            expected_file_sha256=expected,
+            current_file_sha256=actual,
+        )
+
+
+class ConfirmationRequiredError(MCPError):
+    """Raised when a two-phase confirmation is required."""
+
+    _RESERVED_KEYS = frozenset({"code", "message", "remediation", "path", "confirmation_token"})
+
+    def __init__(self, reason: str, token: str, details: dict[str, Any] | None = None) -> None:
+        safe_details = (
+            {k: v for k, v in details.items() if k not in self._RESERVED_KEYS} if details else {}
+        )
+        super().__init__(
+            code=MCPErrorCode.CONFIRMATION_REQUIRED,
+            message=reason,
+            remediation="Retry with confirmation_token and confirm_reason parameters.",
+            confirmation_token=token,
+            **safe_details,
         )
 
 
@@ -251,36 +269,6 @@ class ErrorDocumentation:
 
 
 ERROR_CATALOG: dict[str, ErrorDocumentation] = {
-    MCPErrorCode.CONTENT_NOT_FOUND.value: ErrorDocumentation(
-        code=MCPErrorCode.CONTENT_NOT_FOUND,
-        category="validation",
-        description="The specified old_content was not found in the file.",
-        causes=[
-            "File was modified since you last read it",
-            "Whitespace mismatch (trailing spaces, tabs vs spaces)",
-            "Line ending mismatch (CRLF vs LF)",
-            "Content exists but with different indentation",
-        ],
-        remediation=[
-            "Re-read the file with read_files to get current content",
-            "Copy exact content including all whitespace",
-            "Check for invisible characters or encoding issues",
-        ],
-    ),
-    MCPErrorCode.MULTIPLE_MATCHES.value: ErrorDocumentation(
-        code=MCPErrorCode.MULTIPLE_MATCHES,
-        category="validation",
-        description="The old_content matched multiple locations in the file.",
-        causes=[
-            "Content is not unique (common pattern like 'return None')",
-            "Insufficient context lines provided",
-        ],
-        remediation=[
-            "Add more surrounding lines to old_content to make it unique",
-            "Set expected_occurrences if you want to replace all matches",
-            "Use line numbers from the error response to identify which match you want",
-        ],
-    ),
     MCPErrorCode.HASH_MISMATCH.value: ErrorDocumentation(
         code=MCPErrorCode.HASH_MISMATCH,
         category="state",
@@ -305,7 +293,7 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
             "Missing content_hash parameter",
         ],
         remediation=[
-            "First call write_files with dry_run=True to preview and get content_hash",
+            "First call write_source with dry_run=True to preview and get content_hash",
             "Then call again with the content_hash to apply",
             "Or use 'exact' mode which doesn't require dry_run",
         ],
@@ -370,20 +358,70 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
             "If auto-fixes were applied, stage them and retry",
         ],
     ),
-    MCPErrorCode.CURSOR_STALE.value: ErrorDocumentation(
-        code=MCPErrorCode.CURSOR_STALE,
-        category="pagination",
-        description="Pagination cursor is invalid because the index was updated.",
+    MCPErrorCode.BUDGET_EXCEEDED.value: ErrorDocumentation(
+        code=MCPErrorCode.BUDGET_EXCEEDED,
+        category="system",
+        description="A scope budget counter was exceeded.",
         causes=[
-            "Files were added, modified, or deleted since pagination started",
-            "A reindex operation completed during pagination",
-            "Another session triggered an index update",
+            "Too many reads, searches, or full file accesses in one scope",
         ],
         remediation=[
-            "RESTART PAGINATION FROM THE BEGINNING - do not continue from this cursor",
-            "Call the same tool again WITHOUT a cursor parameter",
-            "This ensures consistent, up-to-date results",
-            "Consider completing pagination quickly to avoid this issue",
+            "Use more targeted queries to reduce resource usage",
+            "Use read_source with spans instead of read_file_full",
+            "Start a new scope if the current one is exhausted",
+        ],
+    ),
+    MCPErrorCode.SPAN_OVERLAP.value: ErrorDocumentation(
+        code=MCPErrorCode.SPAN_OVERLAP,
+        category="validation",
+        description="Span-based edits have overlapping line ranges in the same file.",
+        causes=[
+            "Two or more edits in the same file have overlapping start_line/end_line ranges",
+        ],
+        remediation=[
+            "Combine overlapping spans into a single edit",
+            "Ensure all edits to the same file have non-overlapping line ranges",
+        ],
+    ),
+    MCPErrorCode.FILE_HASH_MISMATCH.value: ErrorDocumentation(
+        code=MCPErrorCode.FILE_HASH_MISMATCH,
+        category="state",
+        description="File was modified since last read (SHA256 mismatch).",
+        causes=[
+            "Another process modified the file",
+            "A previous write_source call changed the file",
+            "Auto-formatter or pre-commit hook modified the file",
+        ],
+        remediation=[
+            "Re-read the file with read_source to get current file_sha256",
+            "Retry the span edit with the updated hash",
+        ],
+    ),
+    MCPErrorCode.CONFIRMATION_REQUIRED.value: ErrorDocumentation(
+        code=MCPErrorCode.CONFIRMATION_REQUIRED,
+        category="validation",
+        description="Operation requires two-phase confirmation.",
+        causes=[
+            "Reading more than 500 lines in a single span",
+            "Reading a large file with read_file_full",
+            "Exceeding per-call target limits",
+        ],
+        remediation=[
+            "Retry with confirmation_token and confirm_reason from the error response",
+            "Or reduce the request scope to avoid confirmation",
+        ],
+    ),
+    MCPErrorCode.RESOURCE_EVICTED.value: ErrorDocumentation(
+        code=MCPErrorCode.RESOURCE_EVICTED,
+        category="system",
+        description="Resource was evicted from cache before TTL expired.",
+        causes=[
+            "Cache capacity exceeded, oldest entries evicted",
+            "Resource TTL expired",
+        ],
+        remediation=[
+            "Re-request the original tool call to regenerate the resource",
+            "Consider fetching resources promptly after receiving URIs",
         ],
     ),
 }

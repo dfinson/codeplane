@@ -10,6 +10,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from codeplane.config.models import TimeoutsConfig
+from codeplane.mcp.gate import CallPatternDetector, GateManager
 
 
 @dataclass
@@ -22,6 +23,8 @@ class SessionState:
     task_id: str | None = None
     fingerprints: dict[str, str] = field(default_factory=dict)
     counters: dict[str, int] = field(default_factory=dict)
+    gate_manager: GateManager = field(default_factory=GateManager)
+    pattern_detector: CallPatternDetector = field(default_factory=CallPatternDetector)
 
     def touch(self) -> None:
         """Update last active timestamp."""

@@ -1,4 +1,4 @@
-"""Tests for MCP mutation tools (write_files).
+"""Tests for MCP mutation tools (write_source).
 
 Verifies EditParam model and summary helpers.
 """
@@ -27,26 +27,30 @@ class TestEditParam:
         assert edit.action == "create"
         assert edit.content is not None
 
-    def test_update_with_content(self) -> None:
-        """Should create an update with full content."""
+    def test_update_with_span_fields(self) -> None:
+        """Should create an update with span-based edit fields."""
         edit = EditParam(
             path="file.py",
             action="update",
-            content="new content",
+            start_line=1,
+            end_line=5,
+            expected_file_sha256="a" * 64,
+            new_content="new content",
+            expected_content="old content",
         )
         assert edit.action == "update"
+        assert edit.start_line == 1
+        assert edit.end_line == 5
 
-    def test_update_with_old_new(self) -> None:
-        """Should create update with old/new content."""
-        edit = EditParam(
-            path="file.py",
-            action="update",
-            old_content="old",
-            new_content="new",
-        )
-        assert edit.old_content == "old"
-        assert edit.new_content == "new"
-        assert edit.expected_occurrences == 1
+    def test_update_rejects_old_content(self) -> None:
+        """Update no longer accepts old_content (span-only mode)."""
+        with pytest.raises(ValidationError):
+            EditParam(
+                path="file.py",
+                action="update",
+                old_content="old",  # type: ignore[call-arg]
+                new_content="new",
+            )
 
     def test_delete(self) -> None:
         """Should create delete edit."""
@@ -63,15 +67,13 @@ class TestEditParam:
         with pytest.raises(ValidationError):
             EditParam(path="file.py", action="create", content="x", extra="bad")  # type: ignore
 
-    def test_expected_occurrences_must_be_positive(self) -> None:
-        """expected_occurrences must be >= 1."""
+    def test_update_missing_span_fields(self) -> None:
+        """Update without all span fields is rejected."""
         with pytest.raises(ValidationError):
             EditParam(
                 path="file.py",
                 action="update",
-                old_content="x",
                 new_content="y",
-                expected_occurrences=0,
             )
 
 
