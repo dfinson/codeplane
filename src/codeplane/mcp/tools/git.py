@@ -1,6 +1,5 @@
 """Git MCP tools - consolidated git_* handlers."""
 
-import secrets
 from dataclasses import asdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -14,6 +13,7 @@ from codeplane.git._internal.hooks import run_hook
 from codeplane.git.errors import EmptyCommitMessageError, PathsNotFoundError
 from codeplane.mcp.budget import measure_bytes
 from codeplane.mcp.delivery import wrap_existing_response
+from codeplane.mcp.gate import DESTRUCTIVE_RESET_GATE
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -544,6 +544,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             None,
             description="Required for hard reset. Obtain from initial call without token.",
         ),
+        gate_reason: str | None = Field(
+            None,
+            description="Reason for hard reset (min 50 chars). Required with confirmation_token.",
+        ),
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Reset HEAD to a ref.
@@ -555,59 +559,51 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         This prevents accidental data loss from uncommitted changes.
         """
         session = app_ctx.session_manager.get_or_create(ctx.session_id)
+        gm = session.gate_manager
 
-        # For hard reset, enforce two-phase confirmation
+        # For hard reset, enforce two-phase confirmation via unified GateManager
         if mode == "hard":
-            stored_token = session.fingerprints.get(_HARD_RESET_TOKEN_KEY)
-
-            # Phase 2: Validate token and execute
+            # Phase 2: Validate token + reason and execute
             if confirmation_token:
-                if not stored_token:
+                gate_reason_str = gate_reason if isinstance(gate_reason, str) else ""
+                result = gm.validate(confirmation_token, gate_reason_str)
+                if not result.ok:
                     return {
                         "error": {
-                            "code": "INVALID_CONFIRMATION",
-                            "message": "No pending hard reset confirmation. Call without token first.",
+                            "code": "GATE_VALIDATION_FAILED",
+                            "message": result.error,
                         },
-                        "summary": "invalid confirmation token",
+                        "hint": result.hint,
+                        "summary": "gate validation failed",
                     }
-                if confirmation_token != stored_token:
-                    return {
-                        "error": {
-                            "code": "TOKEN_MISMATCH",
-                            "message": "Confirmation token does not match. Request a new token.",
-                        },
-                        "summary": "token mismatch",
-                    }
-                # Token valid - clear it and proceed to execute
-                del session.fingerprints[_HARD_RESET_TOKEN_KEY]
+                # Gate passed — proceed to execute
 
-            # Phase 1: Generate token and return warning
+            # Phase 1: Issue gate and return warning
             else:
                 # Gather information about what would be lost
                 status = app_ctx.git_ops.status()
                 uncommitted_files = list(status.keys())
                 uncommitted_count = len(uncommitted_files)
 
-                # Generate and store confirmation token
-                token = secrets.token_urlsafe(16)
-                session.fingerprints[_HARD_RESET_TOKEN_KEY] = token
+                # Issue gate via unified GateManager
+                gate_block = gm.issue(DESTRUCTIVE_RESET_GATE)
 
                 return {
                     "requires_confirmation": True,
-                    "confirmation_token": token,
+                    "gate": gate_block,
+                    "confirmation_token": gate_block["id"],
                     "mode": mode,
                     "target_ref": ref,
                     "uncommitted_files_count": uncommitted_count,
-                    "uncommitted_files": uncommitted_files[:20],  # Cap at 20 for display
-                    "warning": (
-                        "DESTRUCTIVE ACTION: git reset --hard will permanently discard "
-                        "all uncommitted changes. This cannot be undone."
-                    ),
+                    "uncommitted_files": uncommitted_files[:20],
+                    "warning": DESTRUCTIVE_RESET_GATE.message,
                     "agentic_hint": (
                         "STOP: This operation is irreversible and may destroy work. "
                         "You MUST ask the user for explicit approval before proceeding. "
                         "If approved, call git_reset again with the same parameters "
-                        f"plus confirmation_token='{token}'."
+                        f"plus confirmation_token='{gate_block['id']}' and "
+                        f"gate_reason='<reason min {DESTRUCTIVE_RESET_GATE.reason_min_chars} chars: "
+                        f"{DESTRUCTIVE_RESET_GATE.reason_prompt}>'."
                     ),
                     "summary": f"BLOCKED: hard reset requires user approval ({uncommitted_count} uncommitted files at risk)",
                 }

@@ -365,8 +365,23 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         - 'function': + enclosing function span, enclosing class span
         - 'class': + full class span (all member spans)
         """
-        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+        session = app_ctx.session_manager.get_or_create(ctx.session_id)
 
+        # Evaluate pattern detector before executing search
+        from codeplane.mcp.gate import build_pattern_gate_spec, build_pattern_hint
+
+        pattern_match = session.pattern_detector.evaluate()
+        pattern_extras: dict[str, Any] = {}
+        if pattern_match and pattern_match.severity == "break":
+            # Issue gate — agent must justify continuing
+            gate_spec = build_pattern_gate_spec(pattern_match)
+            gate_block = session.gate_manager.issue(gate_spec)
+            pattern_extras = {
+                "gate": gate_block,
+                **build_pattern_hint(pattern_match),
+            }
+        elif pattern_match and pattern_match.severity == "warn":
+            pattern_extras = build_pattern_hint(pattern_match)
         from codeplane.index.ops import SearchMode
 
         is_structural = enrichment in ("function", "class")
@@ -671,6 +686,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
                 raise BudgetExceededError(scope_id, exceeded_counter, exceeded)
             scope_usage = budget.to_usage_dict()
+
+        # Merge pattern detection hints into result
+        if pattern_extras:
+            result.update(pattern_extras)
 
         return wrap_existing_response(
             result,

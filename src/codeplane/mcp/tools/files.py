@@ -7,7 +7,6 @@ Three-tool read model:
 """
 
 import hashlib
-import secrets
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
@@ -25,6 +24,12 @@ from codeplane.mcp.delivery import ScopeManager, build_envelope
 from codeplane.mcp.errors import (
     MCPError,
     MCPErrorCode,
+)
+from codeplane.mcp.gate import (
+    EXPENSIVE_READ_GATE,
+    READ_CAP_EXCEEDED_GATE,
+    build_pattern_gate_spec,
+    build_pattern_hint,
 )
 
 if TYPE_CHECKING:
@@ -158,6 +163,19 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         """
         session = app_ctx.session_manager.get_or_create(ctx.session_id)
 
+        # Evaluate pattern detector before executing read
+        pattern_match = session.pattern_detector.evaluate()
+        pattern_extras: dict[str, Any] = {}
+        if pattern_match and pattern_match.severity == "break":
+            gate_spec = build_pattern_gate_spec(pattern_match)
+            gate_block = session.gate_manager.issue(gate_spec)
+            pattern_extras = {
+                "gate": gate_block,
+                **build_pattern_hint(pattern_match),
+            }
+        elif pattern_match and pattern_match.severity == "warn":
+            pattern_extras = build_pattern_hint(pattern_match)
+
         all_targets: list[SpanTarget | StructuralTarget] = []
         if targets:
             all_targets.extend(targets)
@@ -185,29 +203,32 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 )
 
         if needs_confirmation:
-            # Check for valid confirmation
-            stored_token = session.fingerprints.get(_READ_CONFIRM_TOKEN_KEY)
-            if (
-                confirmation_token
-                and confirm_reason
-                and len(confirm_reason) >= 15
-                and stored_token
-                and confirmation_token == stored_token
-            ):
-                # Confirmed — clear token and proceed
-                session.fingerprints.pop(_READ_CONFIRM_TOKEN_KEY, None)
+            gm = session.gate_manager
+            # Phase 2: Validate token + reason
+            if confirmation_token:
+                reason_str = confirm_reason or ""
+                result = gm.validate(confirmation_token, reason_str)
+                if not result.ok:
+                    return {
+                        "status": "blocked",
+                        "error": result.error,
+                        "hint": result.hint,
+                        "summary": "gate validation failed",
+                    }
+                # Gate passed — proceed
             else:
-                # Generate token and block
-                token = secrets.token_hex(16)
-                session.fingerprints[_READ_CONFIRM_TOKEN_KEY] = token
+                # Phase 1: Issue gate and block
+                gate_block = gm.issue(READ_CAP_EXCEEDED_GATE)
                 return {
                     "status": "blocked",
-                    "confirmation_token": token,
+                    "gate": gate_block,
+                    "confirmation_token": gate_block["id"],
                     "reason": f"Read exceeds caps: {'; '.join(cap_reasons)}",
                     "cap_violations": cap_reasons,
                     "agentic_hint": (
-                        f"To proceed, retry with confirmation_token='{token}' "
-                        f"AND confirm_reason='<reason min 15 chars>'."
+                        f"To proceed, retry with confirmation_token='{gate_block['id']}' "
+                        f"AND confirm_reason='<reason min {READ_CAP_EXCEEDED_GATE.reason_min_chars} chars>'.\n"
+                        f"{READ_CAP_EXCEEDED_GATE.reason_prompt}"
                     ),
                 }
 
@@ -327,6 +348,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         }
         if not_found:
             response["not_found"] = not_found
+        if pattern_extras:
+            response.update(pattern_extras)
 
         return build_envelope(
             response,
@@ -343,7 +366,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
         confirm_reason: str | None = Field(
             None,
-            description="Reason for reading large file (min 15 chars). Required with confirmation_token.",
+            description="Reason for reading large file (min 50 chars). Required with confirmation_token.",
         ),
         confirmation_token: str | None = Field(
             None, description="Token from a previous blocked call."
@@ -370,32 +393,34 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 pass
 
         if large_files:
-            stored_token = session.fingerprints.get(_READ_CONFIRM_TOKEN_KEY)
-            if (
-                confirmation_token
-                and confirm_reason
-                and len(confirm_reason) >= 15
-                and stored_token
-                and confirmation_token == stored_token
-            ):
-                session.fingerprints.pop(_READ_CONFIRM_TOKEN_KEY, None)
+            gm = session.gate_manager
+            # Phase 2: Validate token + reason
+            if confirmation_token:
+                reason_str = confirm_reason or ""
+                result = gm.validate(confirmation_token, reason_str)
+                if not result.ok:
+                    return {
+                        "status": "blocked",
+                        "error": result.error,
+                        "hint": result.hint,
+                        "summary": "gate validation failed",
+                    }
+                # Gate passed — proceed
             else:
-                token = secrets.token_hex(16)
-                session.fingerprints[_READ_CONFIRM_TOKEN_KEY] = token
+                # Phase 1: Issue gate and block
+                gate_block = gm.issue(EXPENSIVE_READ_GATE)
                 return {
                     "status": "blocked",
-                    "confirmation_token": token,
+                    "gate": gate_block,
+                    "confirmation_token": gate_block["id"],
                     "reason": f"Full read of {len(large_files)} large file(s): {', '.join(large_files[:5])}",
                     "large_files": large_files,
                     "agentic_hint": (
-                        f"To proceed, retry with confirmation_token='{token}' "
-                        f"AND confirm_reason='<reason min 15 chars>'.\n"
-                        "BEFORE confirming, consider: do you actually need the full file? "
-                        "search(mode=references) + read_source on the spans is usually sufficient. "
-                        "Only confirm if you truly need the entire file content."
+                        f"To proceed, retry with confirmation_token='{gate_block['id']}' "
+                        f"AND confirm_reason='<reason min {EXPENSIVE_READ_GATE.reason_min_chars} chars>'.\n"
+                        f"{EXPENSIVE_READ_GATE.reason_prompt}"
                     ),
                 }
-
         # Read files
         files_out: list[dict[str, Any]] = []
         not_found: list[str] = []

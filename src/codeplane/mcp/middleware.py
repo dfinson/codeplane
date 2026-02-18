@@ -47,6 +47,11 @@ class ToolMiddleware(Middleware):
     - No tracebacks printed to console
     """
 
+    def __init__(self, session_manager: Any = None) -> None:
+        """Initialize with optional session manager for gate/pattern tracking."""
+        super().__init__()
+        self._session_manager = session_manager
+
     async def on_call_tool(  # type: ignore[override]
         self,
         context: MiddlewareContext[mt.CallToolRequest],
@@ -100,6 +105,9 @@ class ToolMiddleware(Middleware):
                     style="green",
                     highlight=False,
                 )
+
+            # Tick gate expiry and record call for pattern detection
+            self._post_call_bookkeeping(context, tool_name, arguments, result)
 
             return result
 
@@ -308,6 +316,70 @@ class ToolMiddleware(Middleware):
         except Exception:
             # Don't let schema extraction failure break error handling
             return None
+
+    def _post_call_bookkeeping(
+        self,
+        context: MiddlewareContext[mt.CallToolRequest],
+        tool_name: str,
+        arguments: dict[str, Any],
+        result: Any,
+    ) -> None:
+        """Gate tick + pattern recording after a successful tool call."""
+        if not context.fastmcp_context or not self._session_manager:
+            return
+
+        session = self._session_manager.get_or_create(context.fastmcp_context.session_id)
+
+        # 1. Tick gate expiry (decrement pending gate counters)
+        session.gate_manager.tick()
+
+        # 2. Record call in pattern detector
+        #    Strip MCP prefix (e.g. "codeplane-copy3_search" -> "search")
+        short_name = self._strip_tool_prefix(tool_name)
+
+        # Extract file paths from arguments or result for pattern tracking
+        files: list[str] = []
+        if "paths" in arguments:
+            files = arguments["paths"] if isinstance(arguments["paths"], list) else []
+        elif "targets" in arguments and isinstance(arguments["targets"], list):
+            files = [t.get("path", "") for t in arguments["targets"] if isinstance(t, dict)]
+
+        # Extract hit count from search results
+        hit_count = 0
+        if isinstance(result, dict):
+            results_list = result.get("results", [])
+            if isinstance(results_list, list):
+                hit_count = len(results_list)
+        elif hasattr(result, "model_dump"):
+            try:
+                data = result.model_dump()
+                results_list = data.get("results", [])
+                if isinstance(results_list, list):
+                    hit_count = len(results_list)
+            except Exception:
+                pass
+
+        session.pattern_detector.record(
+            tool_name=short_name,
+            files=files,
+            hit_count=hit_count,
+        )
+
+    @staticmethod
+    def _strip_tool_prefix(tool_name: str) -> str:
+        """Strip MCP server prefix from tool name.
+
+        e.g. 'codeplane-copy3_search' -> 'search'
+        The prefix is everything up to the last underscore-separated
+        known tool name.
+        """
+        from codeplane.mcp.gate import TOOL_CATEGORIES
+
+        # Try matching from the longest suffix
+        for known in TOOL_CATEGORIES:
+            if tool_name.endswith(known):
+                return known
+        return tool_name
 
     def _resolve_and_set_profile(self, fastmcp_ctx: Any) -> None:
         """Resolve client profile from session and set on context var.

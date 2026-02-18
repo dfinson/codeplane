@@ -210,8 +210,11 @@ class TestGitResetHardConfirmationIntegration:
         )
         token = result1["confirmation_token"]
 
+        reason = "User confirmed: resetting to HEAD~1 to discard all uncommitted work"
         result2 = await self._call_tool(
-            mcp, "git_reset", {"ref": "HEAD~1", "mode": "hard", "confirmation_token": token}
+            mcp,
+            "git_reset",
+            {"ref": "HEAD~1", "mode": "hard", "confirmation_token": token, "gate_reason": reason},
         )
 
         app_ctx_with_session.git_ops.reset.assert_called_once_with("HEAD~1", mode="hard")
@@ -241,7 +244,7 @@ class TestGitResetHardConfirmationIntegration:
         app_ctx_with_session.git_ops.reset.assert_not_called()
 
         assert "error" in result
-        assert result["error"]["code"] == "TOKEN_MISMATCH"
+        assert result["error"]["code"] == "GATE_VALIDATION_FAILED"
 
     @pytest.mark.asyncio
     async def test_hard_reset_fails_without_pending_confirmation(
@@ -262,7 +265,7 @@ class TestGitResetHardConfirmationIntegration:
         app_ctx_with_session.git_ops.reset.assert_not_called()
 
         assert "error" in result
-        assert result["error"]["code"] == "INVALID_CONFIRMATION"
+        assert result["error"]["code"] == "GATE_VALIDATION_FAILED"
 
     @pytest.mark.asyncio
     async def test_hard_reset_token_is_single_use(self, app_ctx_with_session: MagicMock) -> None:
@@ -279,8 +282,11 @@ class TestGitResetHardConfirmationIntegration:
         )
         token = result1["confirmation_token"]
 
+        reason = "User confirmed: resetting to HEAD~1 to discard all uncommitted work"
         await self._call_tool(
-            mcp, "git_reset", {"ref": "HEAD~1", "mode": "hard", "confirmation_token": token}
+            mcp,
+            "git_reset",
+            {"ref": "HEAD~1", "mode": "hard", "confirmation_token": token, "gate_reason": reason},
         )
 
         result3 = await self._call_tool(
@@ -288,7 +294,7 @@ class TestGitResetHardConfirmationIntegration:
         )
 
         assert "error" in result3
-        assert result3["error"]["code"] == "INVALID_CONFIRMATION"
+        assert result3["error"]["code"] == "GATE_VALIDATION_FAILED"
 
     @pytest.mark.asyncio
     async def test_hard_reset_caps_uncommitted_files_list(

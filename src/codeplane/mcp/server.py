@@ -108,7 +108,7 @@ def create_mcp_server(context: "AppContext") -> "FastMCP":
     )
 
     # Add middleware for structured error handling and UX
-    mcp.add_middleware(ToolMiddleware())
+    mcp.add_middleware(ToolMiddleware(session_manager=context.session_manager))
 
     # Register all tools using native FastMCP decorators
     diff.register_tools(mcp, context)

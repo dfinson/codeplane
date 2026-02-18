@@ -26,7 +26,6 @@ import structlog
 
 from codeplane.config.constants import INLINE_CAP_BYTES
 from codeplane.config.user_config import DEFAULT_PORT
-from codeplane.mcp.gate import CallPatternDetector
 
 log = structlog.get_logger(__name__)
 
@@ -364,9 +363,6 @@ class ScopeBudget:
     _total_resets: int = field(default=0)
     _reset_log: list[dict[str, Any]] = field(default_factory=list)
     mutations_for_search_reset: int = field(default=3)
-
-    # Call pattern detector
-    pattern_detector: CallPatternDetector = field(default_factory=CallPatternDetector)
 
     def touch(self) -> None:
         self.last_active = time.monotonic()

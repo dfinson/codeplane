@@ -525,7 +525,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         commonly_preceded_by=["git_log", "git_status"],
         commonly_followed_by=[],
         behavior=BehaviorFlags(has_side_effects=True),
-        possible_errors=["REF_NOT_FOUND", "INVALID_CONFIRMATION", "TOKEN_MISMATCH"],
+        possible_errors=["REF_NOT_FOUND", "GATE_VALIDATION_FAILED"],
         examples=[
             {
                 "description": "Soft reset to undo last commit",
