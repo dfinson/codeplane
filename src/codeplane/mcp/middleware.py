@@ -106,8 +106,19 @@ class ToolMiddleware(Middleware):
                     highlight=False,
                 )
 
-            # Tick gate expiry and record call for pattern detection
-            self._post_call_bookkeeping(context, tool_name, arguments, result)
+            # Tick gate expiry, record call, and evaluate bypass patterns
+            bypass_match = self._post_call_bookkeeping(context, tool_name, arguments, result)
+
+            # If a bypass pattern was detected, inject hints into the response.
+            # The result from call_next is a CallToolResult (frozen Pydantic model)
+            # so we extract the dict, merge hints, and return a new ToolResult.
+            if bypass_match:
+                result_dict = self._extract_result_dict(result)
+                if result_dict is not None:
+                    from codeplane.mcp.gate import build_pattern_hint
+
+                    result_dict.update(build_pattern_hint(bypass_match))
+                    return ToolResult(structured_content=result_dict)
 
             return result
 
@@ -323,8 +334,12 @@ class ToolMiddleware(Middleware):
         tool_name: str,
         arguments: dict[str, Any],
         result: Any,
-    ) -> None:
-        """Gate tick + pattern recording after a successful tool call."""
+    ) -> Any:
+        """Gate tick + pattern recording after a successful tool call.
+
+        Returns the detected PatternMatch if a warn-severity bypass
+        pattern was found, or None.
+        """
         if not context.fastmcp_context or not self._session_manager:
             return
 
@@ -344,33 +359,28 @@ class ToolMiddleware(Middleware):
         elif "targets" in arguments and isinstance(arguments["targets"], list):
             files = [t.get("path", "") for t in arguments["targets"] if isinstance(t, dict)]
 
-        # Extract hit count from search results
+        # Extract hit count from search results.
+        # Result may be CallToolResult (content items) or a dict.
+        result_dict = self._extract_result_dict(result)
         hit_count = 0
-        if isinstance(result, dict):
-            results_list = result.get("results", [])
+        if result_dict:
+            results_list = result_dict.get("results", [])
             if isinstance(results_list, list):
                 hit_count = len(results_list)
-        elif hasattr(result, "model_dump"):
-            try:
-                data = result.model_dump()
-                results_list = data.get("results", [])
-                if isinstance(results_list, list):
-                    hit_count = len(results_list)
-            except Exception:
-                pass
-
         # 3. Evaluate patterns BEFORE recording (recording may clear the window)
-        #    Inject bypass hints into result for write/git calls that
-        #    won't pass through search/read handlers where evaluate() runs.
+        #    Return match so caller can replace the MCP result with a hint-injected one.
         pattern_match = session.pattern_detector.evaluate(current_tool=short_name)
-        if pattern_match and pattern_match.severity == "warn":
-            self._inject_pattern_hint(result, pattern_match)
+
         # 4. Record call in pattern detector (may clear window for action categories)
         session.pattern_detector.record(
             tool_name=short_name,
             files=files,
             hit_count=hit_count,
         )
+
+        if pattern_match and pattern_match.severity == "warn":
+            return pattern_match
+        return None
 
     @staticmethod
     def _strip_tool_prefix(tool_name: str) -> str:
@@ -449,45 +459,33 @@ class ToolMiddleware(Middleware):
         return params
 
     @staticmethod
-    def _inject_pattern_hint(result: Any, match: Any) -> None:
-        """Inject pattern detection hints into the tool result.
+    def _extract_result_dict(result: Any) -> dict[str, Any] | None:
+        """Extract the JSON dict from an MCP result.
 
-        Handles three result forms:
+        Handles:
         - MCP CallToolResult with text content (JSON strings)
         - ToolResult with structured_content dict
         - Plain dict
+
+        Returns None if extraction fails.
         """
-        import json
-
-        hints: dict[str, Any] = {
-            "agentic_hint": (
-                f"PATTERN: {match.pattern_name} - {match.message}\n\n{match.reason_prompt}"
-            ),
-            "detected_pattern": match.pattern_name,
-            "pattern_cause": match.cause,
-        }
-        if match.suggested_workflow:
-            hints["suggested_workflow"] = match.suggested_workflow
-
-        # MCP CallToolResult — parse JSON from text content, inject, reserialize
+        # MCP CallToolResult — parse JSON from first text content item
         if hasattr(result, "content") and result.content:
             for content_item in result.content:
                 if hasattr(content_item, "text"):
                     try:
                         data = json.loads(content_item.text)
-                        if isinstance(data, dict) and "agentic_hint" not in data:
-                            data.update(hints)
-                            content_item.text = json.dumps(data)
-                    except (json.JSONDecodeError, AttributeError, TypeError):
+                        if isinstance(data, dict):
+                            return data
+                    except (json.JSONDecodeError, AttributeError):
                         pass
-                    break
         # ToolResult with structured_content
         elif hasattr(result, "structured_content") and isinstance(result.structured_content, dict):
-            if "agentic_hint" not in result.structured_content:
-                result.structured_content.update(hints)
+            return dict(result.structured_content)  # copy to avoid mutation
         # Plain dict
-        elif isinstance(result, dict) and "agentic_hint" not in result:
-            result.update(hints)
+        elif isinstance(result, dict):
+            return dict(result)
+        return None
 
     def _extract_result_summary(self, tool_name: str, result: Any) -> dict[str, Any]:
         """Extract summary metrics from tool result for logging.
