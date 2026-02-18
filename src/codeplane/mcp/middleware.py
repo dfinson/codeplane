@@ -117,7 +117,15 @@ class ToolMiddleware(Middleware):
                 if result_dict is not None:
                     from codeplane.mcp.gate import build_pattern_hint
 
-                    result_dict.update(build_pattern_hint(bypass_match))
+                    hint_fields = build_pattern_hint(bypass_match)
+                    # Preserve existing agentic_hint (e.g. fetch commands
+                    # from delivery envelope) — append pattern coaching.
+                    existing_hint = result_dict.get("agentic_hint")
+                    if existing_hint:
+                        hint_fields["agentic_hint"] = (
+                            existing_hint + "\n\n" + hint_fields["agentic_hint"]
+                        )
+                    result_dict.update(hint_fields)
                     return ToolResult(structured_content=result_dict)
 
             return result

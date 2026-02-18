@@ -431,3 +431,32 @@ class TestHintInjection:
         assert tr.structured_content is not None
         assert tr.structured_content["detected_pattern"] == "phantom_read"
         assert tr.structured_content["results"] == []
+
+    def test_existing_agentic_hint_preserved(self) -> None:
+        """Pattern hint appends to existing agentic_hint (e.g. fetch commands)."""
+        match = PatternMatch(
+            pattern_name="zero_result_searches",
+            severity="warn",
+            cause="inefficient",
+            message="3 searches returned 0 results",
+            reason_prompt="Try mode='lexical' for text patterns.",
+            suggested_workflow={"if_exploring": "use map_repo"},
+        )
+        # Simulate a resource-delivery response with fetch hint
+        original = {
+            "resource_kind": "log",
+            "delivery": "resource",
+            "agentic_hint": "Full result cached at .codeplane/cache/log/abc.json\njq '.results' .codeplane/cache/log/abc.json",
+        }
+        hint_fields = build_pattern_hint(match)
+        existing = original.get("agentic_hint")
+        if existing:
+            hint_fields["agentic_hint"] = existing + "\n\n" + hint_fields["agentic_hint"]
+        original.update(hint_fields)
+
+        # Fetch hint comes first, pattern coaching appended
+        assert original["agentic_hint"].startswith("Full result cached at")
+        assert "jq '.results'" in original["agentic_hint"]
+        assert "PATTERN: zero_result_searches" in original["agentic_hint"]
+        # Other pattern fields are present
+        assert original["detected_pattern"] == "zero_result_searches"
