@@ -32,7 +32,7 @@ Response includes `file_sha256` per file — save it for `write_source` span edi
 2. `map_repo(include=["structure", "dependencies", "test_layout"])` — understand repo shape
 3. `search` to find relevant code — definitions, references, or lexical patterns
 4. `read_source` on spans from search results — understand the code you'll modify
-5. After changes: `lint_check` → `run_test_targets(affected_by=["changed_file.py"])` for impact-aware testing
+5. After changes: `lint_check` → `run_test_targets(affected_by=["changed_file"])` for impact-aware testing
 6. `semantic_diff` — review structural impact before committing
 7. `git_stage_and_commit` — one-step commit with pre-commit hook handling
 
@@ -51,7 +51,7 @@ This runs only the tests impacted by your changes — fast, targeted, sufficient
 | Search code | `mcp_codeplane-codeplane_copy3_search` | `grep`, `rg`, `ag`, `ack` |
 | Repository overview | `mcp_codeplane-codeplane_copy3_map_repo` | Manual file traversal |
 | All git operations | `mcp_codeplane-codeplane_copy3_git_*` | Raw `git` commands |
-| Run linters | `mcp_codeplane-codeplane_copy3_lint_check` | `ruff`, `black`, `mypy` directly |
+| Run linters | `mcp_codeplane-codeplane_copy3_lint_check` | Running linters directly |
 | Discover tests | `mcp_codeplane-codeplane_copy3_discover_test_targets` | Manual test file search |
 | Run tests | `mcp_codeplane-codeplane_copy3_run_test_targets` | Test runners directly |
 | Rename across files | `mcp_codeplane-codeplane_copy3_refactor_rename` | Find-and-replace, `sed` |

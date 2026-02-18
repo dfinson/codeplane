@@ -652,7 +652,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         """Execute tests.
 
         RECOMMENDED: Use affected_by for efficient impact-aware testing:
-        - run_test_targets(affected_by=["src/changed_file.py"])
+        - run_test_targets(affected_by=["src/changed_file"])
 
         This automatically discovers and runs only tests affected by the changed files.
 
@@ -660,7 +660,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         - targets: Explicit target IDs (from discover_test_targets)
         - target_filter: Substring match (requires two-phase confirmation)
 
-        To run a single test file, use: targets=['test:path/to/test_file.py']
+        To run a single test file, use: targets=['test:path/to/test_file']
 
         Coverage:
         When coverage=True, coverage_dir MUST be provided.
@@ -755,7 +755,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "target_filter": target_filter,
                     "agentic_hint": (
                         "BLOCKED: Using target_filter without impact analysis runs many tests. "
-                        "Preferred: run_test_targets(affected_by=['changed_file.py']) for "
+                        "Preferred: run_test_targets(affected_by=['changed_file']) for "
                         "automatic impact-aware selection. "
                         "If a broad run is truly needed, retry with BOTH: "
                         f"confirmation_token='{token}' AND confirm_broad_run='<reason min 15 chars>'."
