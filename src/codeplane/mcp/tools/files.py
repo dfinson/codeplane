@@ -184,7 +184,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                         "gate": gate_block,
                         **build_pattern_hint(pattern_match),
                     }
-                # Token valid — proceed (pattern_extras stays empty)
+                # Token valid — wipe slate and proceed
+                session.pattern_detector.clear()
             else:
                 # No token — block and return gate
                 gate_block = session.gate_manager.issue(gate_spec)

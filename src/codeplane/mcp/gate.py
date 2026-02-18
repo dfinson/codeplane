@@ -123,10 +123,7 @@ class GateManager:
         if len(reason) < min_chars:
             return GateResult(
                 ok=False,
-                error=(
-                    f"Reason must be at least {min_chars} characters "
-                    f"(got {len(reason)})"
-                ),
+                error=(f"Reason must be at least {min_chars} characters (got {len(reason)})"),
                 hint=pending.spec.reason_prompt,
             )
 
@@ -213,8 +210,7 @@ def budget_reset_gate(has_mutations: bool) -> GateSpec:
         kind="budget_reset",
         reason_min_chars=min_chars,
         reason_prompt=(
-            "What new information do you need that the previous budget "
-            "window didn't provide?"
+            "What new information do you need that the previous budget window didn't provide?"
         ),
         expires_calls=3,
         message=f"Budget reset (min {min_chars} char justification required).",
@@ -252,10 +248,24 @@ TOOL_CATEGORIES: dict[str, str] = {
 
 # Git tools are all "git" category
 _GIT_TOOL_NAMES = [
-    "git_status", "git_diff", "git_commit", "git_stage_and_commit",
-    "git_log", "git_push", "git_pull", "git_checkout", "git_merge",
-    "git_reset", "git_stage", "git_branch", "git_remote", "git_stash",
-    "git_rebase", "git_inspect", "git_history", "git_submodule",
+    "git_status",
+    "git_diff",
+    "git_commit",
+    "git_stage_and_commit",
+    "git_log",
+    "git_push",
+    "git_pull",
+    "git_checkout",
+    "git_merge",
+    "git_reset",
+    "git_stage",
+    "git_branch",
+    "git_remote",
+    "git_stash",
+    "git_rebase",
+    "git_inspect",
+    "git_history",
+    "git_submodule",
     "git_worktree",
 ]
 for _name in _GIT_TOOL_NAMES:
@@ -359,31 +369,24 @@ class CallPatternDetector:
 
 _SEARCH_WORKFLOW: dict[str, str] = {
     "if_exploring_structure": (
-        "Use map_repo(include=['structure','dependencies']) for overview, "
-        "then one targeted search"
+        "Use map_repo(include=['structure','dependencies']) for overview, then one targeted search"
     ),
     "if_finding_references": (
         "Use search(mode='references', enrichment='function') - "
         "one call gets callers with full function bodies"
     ),
-    "if_reading_code": (
-        "Switch to read_source with multiple targets per call (up to 20)"
-    ),
+    "if_reading_code": ("Switch to read_source with multiple targets per call (up to 20)"),
     "if_ready_to_act": (
         "Proceed to write_source, refactor_rename, lint_check, or run_test_targets"
     ),
 }
 
 _READ_WORKFLOW: dict[str, str] = {
-    "if_looking_for_callers": (
-        "Use search(mode='references') instead of reading files manually"
-    ),
+    "if_looking_for_callers": ("Use search(mode='references') instead of reading files manually"),
     "if_understanding_a_function": (
         "Use search(mode='definitions', enrichment='function') for edit-ready code"
     ),
-    "if_reading_multiple_spans": (
-        "Batch up to 20 targets in one read_source call"
-    ),
+    "if_reading_multiple_spans": ("Batch up to 20 targets in one read_source call"),
     "if_ready_to_act": (
         "Proceed to write_source, refactor_rename, lint_check, or run_test_targets"
     ),
@@ -439,17 +442,17 @@ def _check_pure_search_chain(window: deque[CallRecord]) -> PatternMatch | None:
 
 
 def _check_read_spiral(window: deque[CallRecord]) -> PatternMatch | None:
-    """Detect 6+ reads touching <= 2 unique files (re-reading)."""
+    """Detect 8+ reads touching <= 1 unique file (re-reading same file)."""
     recent = list(window)[-10:]
     read_records = [r for r in recent if r.category in ("read", "read_full")]
-    if len(read_records) < 6:
+    if len(read_records) < 8:
         return None
 
     all_files: set[str] = set()
     for r in read_records:
         all_files.update(r.files)
 
-    if len(all_files) > 2:
+    if len(all_files) > 1:
         return None
 
     return PatternMatch(
@@ -501,9 +504,7 @@ def _check_scatter_read(window: deque[CallRecord]) -> PatternMatch | None:
         pattern_name="scatter_read",
         severity="warn",
         cause=cause,
-        message=(
-            f"{len(read_records)} reads across {len(all_files)} different files."
-        ),
+        message=(f"{len(read_records)} reads across {len(all_files)} different files."),
         reason_prompt=reason_prompt,
         suggested_workflow=_READ_WORKFLOW,
     )
@@ -624,8 +625,7 @@ def build_pattern_hint(match: PatternMatch) -> dict[str, Any]:
     """Build the agentic_hint + suggested_workflow for a pattern warning."""
     return {
         "agentic_hint": (
-            f"PATTERN: {match.pattern_name} - {match.message}\n\n"
-            f"{match.reason_prompt}"
+            f"PATTERN: {match.pattern_name} - {match.message}\n\n{match.reason_prompt}"
         ),
         "detected_pattern": match.pattern_name,
         "pattern_cause": match.cause,
