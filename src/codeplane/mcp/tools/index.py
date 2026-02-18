@@ -506,11 +506,30 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "kind": scope_region.kind,
                 }
 
-            return {
+            def_result: dict[str, Any] = {
                 "results": [result_item],
                 "query_time_ms": 0,
                 "summary": _summarize_search(1, "definitions", query),
             }
+            if pattern_extras:
+                def_result.update(pattern_extras)
+
+            from codeplane.mcp.delivery import wrap_existing_response
+
+            def_scope_usage = None
+            if scope_id:
+                from codeplane.mcp.tools.files import _scope_manager
+
+                def_budget = _scope_manager.get_or_create(scope_id)
+                def_budget.increment_search(1)
+                def_scope_usage = def_budget.to_usage_dict()
+
+            return wrap_existing_response(
+                def_result,
+                resource_kind="search_hits",
+                scope_id=scope_id,
+                scope_usage=def_scope_usage,
+            )
 
         if mode == "references":
             # First find the definition, then get references
@@ -597,13 +616,32 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 items.append(result_item)
                 ref_files.add(path)
 
-            return {
+            ref_result: dict[str, Any] = {
                 "results": items,
                 "query_time_ms": 0,
                 "summary": _summarize_search(
                     len(items), "references", query, file_count=len(ref_files)
                 ),
             }
+            if pattern_extras:
+                ref_result.update(pattern_extras)
+
+            from codeplane.mcp.delivery import wrap_existing_response
+
+            ref_scope_usage = None
+            if scope_id:
+                from codeplane.mcp.tools.files import _scope_manager
+
+                ref_budget = _scope_manager.get_or_create(scope_id)
+                ref_budget.increment_search(len(items))
+                ref_scope_usage = ref_budget.to_usage_dict()
+
+            return wrap_existing_response(
+                ref_result,
+                resource_kind="search_hits",
+                scope_id=scope_id,
+                scope_usage=ref_scope_usage,
+            )
         # When files_only, a single file can produce many line-level results,
         # so we fetch a larger batch to ensure enough unique files after dedup.
         fetch_limit = limit * 10 if files_only else limit
@@ -727,7 +765,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             from codeplane.mcp.tools.files import _scope_manager
 
             budget = _scope_manager.get_or_create(scope_id)
-            budget.increment_search(len(items))
+            budget.increment_search(len(search_items))
             exceeded = budget.check_budget("search_calls")
             exceeded_counter = "search_calls"
             if not exceeded:
