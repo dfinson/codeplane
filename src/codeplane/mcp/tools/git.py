@@ -856,15 +856,16 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 max_line=end_line,
             )
             blame_dict = _serialize_datetimes(asdict(blame))
-            lines = blame_dict.pop("lines", [])
-            page = lines[:limit]
-
+            hunks = blame_dict.pop("hunks", [])
+            page = hunks[:limit]
             from codeplane.core.formatting import compress_path
 
+            # Count total lines covered by hunks on this page
+            total_lines = sum(h.get("line_count", 0) for h in page)
             result = {
                 "results": page,
                 **blame_dict,
-                "summary": f"{len(page)} lines from {compress_path(path, 35)}",
+                "summary": f"{total_lines} lines ({len(page)} hunks) from {compress_path(path, 35)}",
             }
 
             # Track scope usage

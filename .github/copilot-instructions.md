@@ -149,6 +149,7 @@ This runs only the tests impacted by your changes — fast, targeted, sufficient
 | Run tests | `mcp_codeplane-codeplane_copy3_run_test_targets` | Test runners directly |
 | Rename across files | `mcp_codeplane-codeplane_copy3_refactor_rename` | Find-and-replace, `sed` |
 | Semantic diff | `mcp_codeplane-codeplane_copy3_semantic_diff` | Manual comparison |
+| Stage and commit | `mcp_codeplane-codeplane_copy3_git_stage_and_commit` | `git_stage` + `git_commit` separately |
 
 ### Before You Edit: Decision Gate
 
@@ -212,4 +213,5 @@ avoids wasted round-trips.
 - **DON'T** skip `lint_check` after `write_source`
 - **DON'T** ignore `agentic_hint` in responses
 - **DON'T** use `target_filter` for post-change testing — use `affected_by` on `run_test_targets`
+- **DON'T** use `git_stage` + `git_commit` separately — use `git_stage_and_commit`
 <!-- /codeplane-instructions -->
