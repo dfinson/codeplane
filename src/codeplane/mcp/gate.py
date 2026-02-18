@@ -383,20 +383,40 @@ class CallPatternDetector:
             self._window.clear()
             self._window.extend(scoped)
 
-    def evaluate(self) -> PatternMatch | None:
+    def evaluate(self, current_tool: str | None = None) -> PatternMatch | None:
         """Evaluate the current window against known anti-patterns.
+
+        Args:
+            current_tool: The tool being invoked NOW but not yet recorded.
+                A temporary record is appended so pattern checks can see it,
+                then removed after evaluation.
 
         Returns the highest-severity match, or None if no patterns fire.
         """
-        if len(self._window) < 5:
-            return None
+        # Temporarily include the current call so bypass patterns can
+        # detect write/commit at the moment it happens (before record()
+        # which may clear the window for action categories).
+        if current_tool:
+            temp = CallRecord(
+                category=categorize_tool(current_tool),
+                tool_name=current_tool,
+                timestamp=time.monotonic(),
+            )
+            self._window.append(temp)
 
-        # Check patterns in severity order (break first)
-        for check in _PATTERN_CHECKS:
-            match = check(self._window)
-            if match is not None:
-                return match
-        return None
+        try:
+            if len(self._window) < 5:
+                return None
+
+            # Check patterns in severity order (break first)
+            for check in _PATTERN_CHECKS:
+                match = check(self._window)
+                if match is not None:
+                    return match
+            return None
+        finally:
+            if current_tool:
+                self._window.pop()
 
     def clear(self) -> None:
         """Clear the window (e.g. after a mutation)."""

@@ -362,7 +362,7 @@ class ToolMiddleware(Middleware):
         # 3. Evaluate patterns BEFORE recording (recording may clear the window)
         #    Inject bypass hints into result for write/git calls that
         #    won't pass through search/read handlers where evaluate() runs.
-        pattern_match = session.pattern_detector.evaluate()
+        pattern_match = session.pattern_detector.evaluate(current_tool=short_name)
         if pattern_match and pattern_match.severity == "warn" and isinstance(result, dict):
             if "agentic_hint" not in result:
                 result["agentic_hint"] = (
