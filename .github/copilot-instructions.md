@@ -123,10 +123,11 @@ Response includes `file_sha256` per file — save it for `write_source` span edi
 
 1. `describe` — get repo metadata, language, active branch, index status
 2. `map_repo(include=["structure", "dependencies", "test_layout"])` — understand repo shape
-3. `read_source` on relevant files — understand the code you'll modify
-4. After changes: `lint_check` → `run_test_targets(affected_by=["changed_file.py"])` for impact-aware testing
-5. `semantic_diff` — review structural impact before committing
-6. `git_stage_and_commit` — one-step commit with pre-commit hook handling
+3. `search` to find relevant code — definitions, references, or lexical patterns
+4. `read_source` on spans from search results — understand the code you'll modify
+5. After changes: `lint_check` → `run_test_targets(affected_by=["changed_file.py"])` for impact-aware testing
+6. `semantic_diff` — review structural impact before committing
+7. `git_stage_and_commit` — one-step commit with pre-commit hook handling
 
 ### Required Tool Mapping
 
