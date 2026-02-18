@@ -199,9 +199,9 @@ class TestEvaluate:
         assert det.evaluate() is None
 
     def test_detects_pure_search_chain(self) -> None:
-        """evaluate() fires pure_search_chain for 8+ searches."""
+        """evaluate() fires pure_search_chain for 5+ of last 7 searches."""
         det = CallPatternDetector()
-        for _ in range(10):
+        for _ in range(7):
             det.record("search")
         match = det.evaluate()
         assert match is not None
@@ -209,9 +209,9 @@ class TestEvaluate:
         assert match.severity == "break"
 
     def test_detects_read_spiral(self) -> None:
-        """evaluate() fires read_spiral for 8+ reads of 1 file."""
+        """evaluate() fires read_spiral for 6+ reads of 1 file."""
         det = CallPatternDetector()
-        for _ in range(8):
+        for _ in range(6):
             det.record("read_source", files=["same.py"])
         match = det.evaluate()
         assert match is not None
@@ -222,7 +222,7 @@ class TestEvaluate:
         det = CallPatternDetector()
         # Create a window that triggers both pure_search_chain (break)
         # and zero_result_searches (warn)
-        for _ in range(10):
+        for _ in range(7):
             det.record("search", hit_count=0)
         match = det.evaluate()
         assert match is not None

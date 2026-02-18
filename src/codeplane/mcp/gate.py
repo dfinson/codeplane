@@ -476,13 +476,13 @@ _READ_WORKFLOW: dict[str, str] = {
 
 
 def _check_pure_search_chain(window: deque[CallRecord]) -> PatternMatch | None:
-    """Detect 8+ of last 10 calls being searches."""
-    recent = list(window)[-10:]
-    if len(recent) < 8:
+    """Detect 5+ of last 7 calls being searches."""
+    recent = list(window)[-7:]
+    if len(recent) < 5:
         return None
 
     search_count = sum(1 for r in recent if r.category == "search")
-    if search_count < 8:
+    if search_count < 5:
         return None
 
     # Classify cause: check if searches hit overlapping files
@@ -524,10 +524,15 @@ def _check_pure_search_chain(window: deque[CallRecord]) -> PatternMatch | None:
 
 
 def _check_read_spiral(window: deque[CallRecord]) -> PatternMatch | None:
-    """Detect 8+ reads touching <= 1 unique file (re-reading same file)."""
+    """Detect 6+ reads touching <= 1 unique file (re-reading same file).
+
+    Even large files should be read with batched targets (up to 20 per
+    call). Six separate single-file reads means the agent is making
+    round-trips instead of batching.
+    """
     recent = list(window)[-10:]
     read_records = [r for r in recent if r.category in ("read", "read_full")]
-    if len(read_records) < 8:
+    if len(read_records) < 6:
         return None
 
     all_files: set[str] = set()
@@ -547,28 +552,29 @@ def _check_read_spiral(window: deque[CallRecord]) -> PatternMatch | None:
         ),
         reason_prompt=(
             "You've read these files multiple times. What specific uncertainty "
-            "remains? State what would change your confidence to act."
+            "remains? Batch up to 20 targets in one read_source call for "
+            "different spans of the same file."
         ),
         suggested_workflow=_READ_WORKFLOW,
     )
 
 
 def _check_scatter_read(window: deque[CallRecord]) -> PatternMatch | None:
-    """Detect 8+ reads across 8+ different files (unfocused)."""
+    """Detect 6+ reads across 5+ different files (unfocused)."""
     read_records = [r for r in window if r.category in ("read", "read_full")]
-    if len(read_records) < 8:
+    if len(read_records) < 6:
         return None
 
     all_files: set[str] = set()
     for r in read_records:
         all_files.update(r.files)
 
-    if len(all_files) < 8:
+    if len(all_files) < 5:
         return None
 
     # Check if reads have 1 target each (inefficient batching)
     single_target_reads = sum(1 for r in read_records if len(r.files) == 1)
-    if single_target_reads >= 6:
+    if single_target_reads >= 4:
         cause = "inefficient"
         reason_prompt = (
             "You're reading files one at a time. Batch up to 20 targets "
@@ -593,23 +599,26 @@ def _check_scatter_read(window: deque[CallRecord]) -> PatternMatch | None:
 
 
 def _check_search_read_loop(window: deque[CallRecord]) -> PatternMatch | None:
-    """Detect 5+ alternating search/read cycles."""
-    categories = [r.category for r in window]
-    # Collapse consecutive same-category entries
-    collapsed: list[str] = []
-    for cat in categories:
-        if cat in ("search", "read", "read_full"):
-            norm = "search" if cat == "search" else "read"
-            if not collapsed or collapsed[-1] != norm:
-                collapsed.append(norm)
+    """Detect repeated search-then-read cycling.
 
-    # Count transitions between search and read
-    transitions = 0
-    for i in range(1, len(collapsed)):
-        if collapsed[i - 1] != collapsed[i]:
-            transitions += 1
+    Instead of requiring strict alternation, count how many
+    search->read "rounds" appear in the window.  A round is any
+    search followed (eventually) by a read before another search
+    starts a new round.  This catches realistic loops like
+    search, search, read, search, read, read -- not just perfect
+    ABABAB alternation.
+    """
+    rounds = 0
+    saw_search = False
+    for r in window:
+        cat = r.category
+        if cat == "search":
+            saw_search = True
+        elif cat in ("read", "read_full") and saw_search:
+            rounds += 1
+            saw_search = False  # reset for next round
 
-    if transitions < 8:  # 5 cycles = ~10 transitions, be conservative
+    if rounds < 4:
         return None
 
     return PatternMatch(
@@ -617,7 +626,7 @@ def _check_search_read_loop(window: deque[CallRecord]) -> PatternMatch | None:
         severity="warn",
         cause="inefficient",
         message=(
-            f"{transitions} search/read alternations detected. "
+            f"{rounds} search-then-read rounds detected. "
             "You're bouncing between searching and reading."
         ),
         reason_prompt=(

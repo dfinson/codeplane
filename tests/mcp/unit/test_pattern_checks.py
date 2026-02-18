@@ -53,17 +53,17 @@ def _window(*records: CallRecord) -> deque[CallRecord]:
 
 
 class TestPureSearchChain:
-    """8+ of last 10 calls being searches triggers break."""
+    """5+ of last 7 calls being searches triggers break."""
 
     def test_no_match_below_threshold(self) -> None:
-        """7 searches out of 10 should NOT trigger."""
-        records = [_rec("search", "search") for _ in range(7)]
+        """4 searches out of 7 should NOT trigger."""
+        records = [_rec("search", "search") for _ in range(4)]
         records += [_rec("read", "read_source") for _ in range(3)]
         assert _check_pure_search_chain(_window(*records)) is None
 
     def test_match_at_threshold(self) -> None:
-        """Exactly 8 searches out of 10 triggers."""
-        records = [_rec("search", "search") for _ in range(8)]
+        """Exactly 5 searches out of 7 triggers."""
+        records = [_rec("search", "search") for _ in range(5)]
         records += [_rec("meta", "describe") for _ in range(2)]
         match = _check_pure_search_chain(_window(*records))
         assert match is not None
@@ -71,15 +71,15 @@ class TestPureSearchChain:
         assert match.severity == "break"
 
     def test_match_all_searches(self) -> None:
-        """10/10 searches should trigger."""
-        records = [_rec("search", "search") for _ in range(10)]
+        """7/7 searches should trigger."""
+        records = [_rec("search", "search") for _ in range(7)]
         match = _check_pure_search_chain(_window(*records))
         assert match is not None
         assert match.severity == "break"
 
     def test_window_too_small(self) -> None:
-        """If window has fewer than 8 calls total, not enough to trigger."""
-        records = [_rec("search", "search") for _ in range(5)]
+        """If window has fewer than 5 calls total, not enough to trigger."""
+        records = [_rec("search", "search") for _ in range(4)]
         assert _check_pure_search_chain(_window(*records)) is None
 
     def test_overlap_cause(self) -> None:
@@ -90,9 +90,6 @@ class TestPureSearchChain:
             _rec("search", "search", files=["c.py", "d.py"]),
             _rec("search", "search", files=["d.py", "e.py"]),
             _rec("search", "search", files=["e.py", "f.py"]),
-            _rec("search", "search", files=["f.py", "g.py"]),
-            _rec("search", "search", files=["g.py", "h.py"]),
-            _rec("search", "search", files=["h.py", "i.py"]),
         ]
         match = _check_pure_search_chain(_window(*records))
         assert match is not None
@@ -100,66 +97,61 @@ class TestPureSearchChain:
 
     def test_no_overlap_cause(self) -> None:
         """Searches with no overlapping files get 'inefficient' cause."""
-        records = [_rec("search", "search", files=[f"file{i}.py"]) for i in range(8)]
+        records = [_rec("search", "search", files=[f"file{i}.py"]) for i in range(5)]
         records += [_rec("meta", "describe") for _ in range(2)]
         match = _check_pure_search_chain(_window(*records))
         assert match is not None
         assert match.cause == "inefficient"
 
-    def test_only_considers_last_10(self) -> None:
-        """Pattern only checks the last 10 calls."""
-        # 15 total: first 7 are reads, last 8 are searches -> triggers
+    def test_only_considers_last_7(self) -> None:
+        """Pattern only checks the last 7 calls."""
+        # 12 total: first 7 are reads, last 5 are searches -> triggers
         records = [_rec("read", "read_source") for _ in range(7)]
-        records += [_rec("search", "search") for _ in range(8)]
+        records += [_rec("search", "search") for _ in range(5)]
         match = _check_pure_search_chain(_window(*records))
         assert match is not None
 
 
-# =========================================================================
-# _check_read_spiral
-# =========================================================================
-
-
 class TestReadSpiral:
-    """8+ reads touching <= 1 unique file triggers break."""
+    """6+ reads touching <= 1 unique file triggers break."""
 
     def test_spiral_same_file(self) -> None:
-        """8 reads of the same file triggers."""
-        records = [_rec("read", "read_source", files=["same.py"]) for _ in range(8)]
+        """6 reads of the same file triggers."""
+        records = [_rec("read", "read_source", files=["same.py"]) for _ in range(6)]
         match = _check_read_spiral(_window(*records))
         assert match is not None
         assert match.pattern_name == "read_spiral"
         assert match.severity == "break"
 
     def test_spiral_no_files(self) -> None:
-        """8 reads with no files (0 unique files) triggers."""
-        records = [_rec("read", "read_source") for _ in range(8)]
+        """6 reads with no files (0 unique files) triggers."""
+        records = [_rec("read", "read_source") for _ in range(6)]
         match = _check_read_spiral(_window(*records))
         assert match is not None
 
     def test_no_match_multiple_files(self) -> None:
-        """8 reads across 2+ unique files does not trigger."""
+        """6 reads across 2+ unique files does not trigger."""
         records = [
-            _rec("read", "read_source", files=["a.py" if i % 2 == 0 else "b.py"]) for i in range(8)
+            _rec("read", "read_source", files=["a.py" if i % 2 == 0 else "b.py"]) for i in range(6)
         ]
         assert _check_read_spiral(_window(*records)) is None
 
     def test_no_match_below_threshold(self) -> None:
-        """7 reads of the same file does not trigger."""
-        records = [_rec("read", "read_source", files=["same.py"]) for _ in range(7)]
+        """5 reads of the same file does not trigger."""
+        records = [_rec("read", "read_source", files=["same.py"]) for _ in range(5)]
         assert _check_read_spiral(_window(*records)) is None
 
     def test_mixed_read_and_read_full(self) -> None:
         """Both 'read' and 'read_full' categories count."""
-        records = [_rec("read", "read_source", files=["f.py"]) for _ in range(4)]
-        records += [_rec("read_full", "read_file_full", files=["f.py"]) for _ in range(4)]
+        records = [_rec("read", "read_source", files=["f.py"]) for _ in range(3)]
+        records += [_rec("read_full", "read_file_full", files=["f.py"]) for _ in range(3)]
         match = _check_read_spiral(_window(*records))
         assert match is not None
 
     def test_non_read_calls_ignored(self) -> None:
         """Non-read calls in window don't count toward threshold."""
-        records = [_rec("read", "read_source", files=["f.py"]) for _ in range(6)]
-        records += [_rec("search", "search") for _ in range(4)]
+        records = [_rec("read", "read_source", files=["f.py"]) for _ in range(4)]
+        records += [_rec("search", "search") for _ in range(6)]
         assert _check_read_spiral(_window(*records)) is None
 
 
@@ -243,36 +235,36 @@ class TestPhantomRead:
 
 
 class TestScatterRead:
-    """8+ reads across 8+ different files triggers warn."""
+    """6+ reads across 5+ different files triggers warn."""
 
     def test_scatter_many_files(self) -> None:
-        """8 reads across 8 different files triggers."""
-        records = [_rec("read", "read_source", files=[f"file{i}.py"]) for i in range(8)]
+        """6 reads across 6 different files triggers."""
+        records = [_rec("read", "read_source", files=[f"file{i}.py"]) for i in range(6)]
         match = _check_scatter_read(_window(*records))
         assert match is not None
         assert match.pattern_name == "scatter_read"
         assert match.severity == "warn"
 
     def test_no_match_few_files(self) -> None:
-        """8 reads across only 3 files does not trigger."""
-        records = [_rec("read", "read_source", files=[f"file{i % 3}.py"]) for i in range(8)]
+        """6 reads across only 3 files does not trigger."""
+        records = [_rec("read", "read_source", files=[f"file{i % 3}.py"]) for i in range(6)]
         assert _check_scatter_read(_window(*records)) is None
 
     def test_no_match_few_reads(self) -> None:
-        """7 reads across 7 files does not trigger."""
-        records = [_rec("read", "read_source", files=[f"file{i}.py"]) for i in range(7)]
+        """5 reads across 5 files does not trigger."""
+        records = [_rec("read", "read_source", files=[f"file{i}.py"]) for i in range(5)]
         assert _check_scatter_read(_window(*records)) is None
 
     def test_single_target_inefficient(self) -> None:
         """Single-target reads get 'inefficient' cause (bad batching)."""
-        records = [_rec("read", "read_source", files=[f"f{i}.py"]) for i in range(8)]
+        records = [_rec("read", "read_source", files=[f"f{i}.py"]) for i in range(6)]
         match = _check_scatter_read(_window(*records))
         assert match is not None
         assert match.cause == "inefficient"
 
     def test_multi_target_over_gathering(self) -> None:
         """Multi-target reads across many files get 'over_gathering' cause."""
-        records = [_rec("read", "read_source", files=[f"a{i}.py", f"b{i}.py"]) for i in range(8)]
+        records = [_rec("read", "read_source", files=[f"a{i}.py", f"b{i}.py"]) for i in range(6)]
         match = _check_scatter_read(_window(*records))
         assert match is not None
         assert match.cause == "over_gathering"
@@ -284,10 +276,10 @@ class TestScatterRead:
 
 
 class TestSearchReadLoop:
-    """8+ alternating search/read transitions triggers warn."""
+    """4+ search-then-read rounds triggers warn."""
 
     def test_alternating_loop(self) -> None:
-        """Perfect alternation: s,r,s,r,s,r,s,r,s,r -> 9 transitions."""
+        """5 search->read rounds triggers (>= 4 threshold)."""
         records = []
         for _ in range(5):
             records.append(_rec("search", "search"))
@@ -297,8 +289,8 @@ class TestSearchReadLoop:
         assert match.pattern_name == "search_read_loop"
         assert match.severity == "warn"
 
-    def test_too_few_transitions(self) -> None:
-        """3 cycles (s,r,s,r,s,r) = 5 transitions -- not enough."""
+    def test_too_few_rounds(self) -> None:
+        """3 search->read rounds -- below 4 threshold."""
         records = []
         for _ in range(3):
             records.append(_rec("search", "search"))
@@ -306,32 +298,32 @@ class TestSearchReadLoop:
         assert _check_search_read_loop(_window(*records)) is None
 
     def test_consecutive_same_category_collapsed(self) -> None:
-        """Consecutive same-category calls collapse into one."""
+        """Consecutive same-category calls naturally collapse in rounds counting."""
         records = [
             _rec("search", "search"),
-            _rec("search", "search"),  # collapsed with above
-            _rec("read", "read_source"),
-            _rec("read", "read_source"),  # collapsed with above
+            _rec("search", "search"),  # flag already set
+            _rec("read", "read_source"),  # round 1
+            _rec("read", "read_source"),  # no-op, flag not set
             _rec("search", "search"),
-            _rec("read", "read_source"),
-            _rec("read_full", "read_file_full"),  # collapsed into 'read'
+            _rec("read", "read_source"),  # round 2
+            _rec("read_full", "read_file_full"),  # no-op, flag not set
             _rec("search", "search"),
-            _rec("read", "read_source"),
+            _rec("read", "read_source"),  # round 3
             _rec("search", "search"),
-            _rec("read", "read_source"),
+            _rec("read", "read_source"),  # round 4
             _rec("search", "search"),
-            _rec("read", "read_source"),
+            _rec("read", "read_source"),  # round 5
         ]
         match = _check_search_read_loop(_window(*records))
         assert match is not None
 
     def test_meta_calls_ignored(self) -> None:
-        """Non-search/read categories don't count toward transitions."""
+        """Non-search/read categories don't affect round counting."""
         records = [
             _rec("search", "search"),
             _rec("meta", "describe"),
             _rec("meta", "list_files"),
-            _rec("read", "read_source"),
+            _rec("read", "read_source"),  # round 1
             _rec("meta", "describe"),
         ]
         assert _check_search_read_loop(_window(*records)) is None
@@ -461,9 +453,9 @@ class TestPatternMatchStructure:
         "build_window",
         [
             # pure_search_chain
-            lambda: _window(*[_rec("search", "search") for _ in range(10)]),
+            lambda: _window(*[_rec("search", "search") for _ in range(7)]),
             # read_spiral
-            lambda: _window(*[_rec("read", "read_source", files=["f.py"]) for _ in range(8)]),
+            lambda: _window(*[_rec("read", "read_source", files=["f.py"]) for _ in range(6)]),
             # phantom_read
             lambda: _window(
                 _rec("search", "search"),
@@ -473,7 +465,7 @@ class TestPatternMatchStructure:
                 _rec("write", "write_source"),
             ),
             # scatter_read
-            lambda: _window(*[_rec("read", "read_source", files=[f"f{i}.py"]) for i in range(8)]),
+            lambda: _window(*[_rec("read", "read_source", files=[f"f{i}.py"]) for i in range(6)]),
             # zero_result_searches
             lambda: _window(
                 _rec("search", "search", hit_count=0),
