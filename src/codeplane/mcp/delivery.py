@@ -310,6 +310,49 @@ def _build_page(
         envelope["has_more"] = False
         _remove_cursor(cursor.cursor_id)
 
+    # --- Post-build validation: trim if nesting overhead pushed us over cap ---
+    actual_bytes = len(json.dumps(envelope, indent=2, default=str).encode("utf-8"))
+    if actual_bytes > cursor.inline_cap and len(page_items) == 1:
+        item = page_items[0]
+        content = item.get("content", "")
+        if isinstance(content, str) and content:
+            lines = content.split("\n")
+            excess = actual_bytes - cursor.inline_cap
+            # Remove lines from end until under budget (each line ~avg bytes)
+            while len(lines) > 1 and excess > 0:
+                removed = lines.pop()
+                excess -= len((removed + "\n").encode("utf-8"))
+            item["content"] = "\n".join(lines)
+            item["line_count"] = len(lines)
+
+            # Recalculate cursor offset
+            # figure out how many original lines are now in this chunk
+            total_lines_from = item.get("content_offset", 0)
+            new_end = total_lines_from + len(lines)
+            if cursor.item_line_offset > 0:
+                cursor.item_line_offset = new_end
+            elif cursor.page_index > 0:
+                # We advanced past this item but trimmed — rewind
+                cursor.page_index -= 1
+                cursor.item_line_offset = new_end
+
+            # Update truncation metadata
+            total_content_lines = item.get("content_lines_total", len(lines))
+            if new_end < total_content_lines:
+                item["content_truncated"] = True
+                item["content_lines_delivered"] = len(lines)
+                item["content_lines_total"] = total_content_lines
+                envelope["has_more"] = True
+                if "cursor" not in envelope:
+                    # Re-store cursor since we still have more
+                    _store_cursor(cursor)
+                    envelope["cursor"] = cursor.cursor_id
+
+            # Update range if present
+            if "range" in item:
+                orig_start = item["range"][0]
+                item["range"] = [orig_start, orig_start + len(lines) - 1]
+
     return envelope
 
 
