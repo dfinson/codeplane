@@ -328,6 +328,7 @@ def _serialize_test_result(result: "TestResult", is_action: bool = False) -> dic
         if display:
             output["display_to_user"] = display
 
+    poll_hint: float | None = None
     if result.run_status:
         status = result.run_status
         # Compute poll hint based on current progress
@@ -422,8 +423,19 @@ def _serialize_test_result(result: "TestResult", is_action: bool = False) -> dic
             if logs_hint:
                 output["run_status"]["logs_hint"] = logs_hint
 
-    if result.agentic_hint:
-        output["agentic_hint"] = result.agentic_hint
+    # Build agentic_hint with optional sleep guidance
+    hints: list[str] = []
+    if isinstance(result.agentic_hint, str) and result.agentic_hint:
+        hints.append(result.agentic_hint)
+    if isinstance(poll_hint, (int, float)) and poll_hint > 0:
+        sleep_seconds = int(poll_hint) + 2
+        hints.append(
+            f"Tests are running asynchronously. "
+            f"Sleep for {sleep_seconds} seconds before calling get_test_run_status "
+            f"to check results."
+        )
+    if hints:
+        output["agentic_hint"] = " ".join(hints)
 
     return output
 

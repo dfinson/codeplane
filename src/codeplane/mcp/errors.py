@@ -23,6 +23,7 @@ class MCPErrorCode(StrEnum):
     INVALID_MODE = "INVALID_MODE"
 
     # State errors - agent should re-read file
+    CONTENT_MISMATCH = "CONTENT_MISMATCH"
     FILE_MODIFIED = "FILE_MODIFIED"
     HASH_MISMATCH = "HASH_MISMATCH"
     DRY_RUN_EXPIRED = "DRY_RUN_EXPIRED"
@@ -282,6 +283,21 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
             "Re-read the file to see current state",
             "Re-run with dry_run=True to get fresh content_hash",
             "Apply changes more quickly after dry_run",
+        ],
+    ),
+    MCPErrorCode.CONTENT_MISMATCH.value: ErrorDocumentation(
+        code=MCPErrorCode.CONTENT_MISMATCH,
+        category="state",
+        description="expected_content does not match actual file content at the given span.",
+        causes=[
+            "File was modified after read_source but before write_source",
+            "Agent line numbers drifted beyond fuzzy-match window (±5 lines)",
+            "expected_content was fabricated instead of copied from read_source",
+        ],
+        remediation=[
+            "Re-read the target span with read_source to get current content",
+            "Use the returned file_sha256 and actual content for the next write",
+            "Ensure expected_content is copied verbatim from read_source output",
         ],
     ),
     MCPErrorCode.DRY_RUN_REQUIRED.value: ErrorDocumentation(

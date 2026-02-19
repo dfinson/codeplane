@@ -24,6 +24,7 @@ and safe refactoring that terminal commands cannot provide.
 Search = find. Read = retrieve. Full = gated.
 
 `read_source` accepts multiple `targets` in one call — batch reads of independent spans.
+`read_source` target format: `[{"path": "src/foo.py", "start_line": 10, "end_line": 50}]`
 Response includes `file_sha256` per file — save it for `write_source` span edits.
 
 ### First Steps When Starting a Task
@@ -39,6 +40,14 @@ Response includes `file_sha256` per file — save it for `write_source` span edi
 **Testing rule**: NEVER run the full test suite or use test runners directly.
 Always use `run_test_targets(affected_by=[...])` with the files you changed.
 This runs only the tests impacted by your changes — fast, targeted, sufficient.
+
+### Reviewing Changes (PR Review)
+
+1. `semantic_diff(base="main")` — structural overview of all changes vs main
+2. `read_source` on changed symbols — review each change in context
+3. `run_test_targets(affected_by=[...])` — verify correctness
+
+`semantic_diff` first — NOT `git_diff`. It gives symbol-level changes, not raw patches.
 
 ### Required Tool Mapping
 
@@ -80,6 +89,10 @@ STOP before using `read_file_full`:
 | Explore a symbol's shape | `symbol` | `standard` | Metadata without source text |
 
 Search NEVER returns source text. Use `read_source` with spans from search results.
+
+`search` params: `query` (str), `mode` (definitions|references|lexical|symbol), `enrichment` (none|minimal|standard|function|class).
+`lint_check` takes no arguments — always lints the full repo.
+`run_test_targets` params: `affected_by` (list of changed file paths) for post-change testing.
 
 ### Refactor: preview → inspect → apply/cancel
 
