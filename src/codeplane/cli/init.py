@@ -105,7 +105,7 @@ This runs only the tests impacted by your changes — fast, targeted, sufficient
 STOP before using `write_source` for multi-file changes:
 - Changing a name across files? → `refactor_rename` (NOT write_source + search)
 - Moving a file? → `refactor_move` (NOT write_source + delete)
-- Deleting a symbol or file? → `refactor_delete`
+- Deleting a symbol or file? → `refactor_impact`
 
 ### Before You Read: Decision Gate
 
@@ -125,7 +125,7 @@ Search NEVER returns source text. Use `read_source` with spans from search resul
 
 ### Refactor: preview → inspect → apply/cancel
 
-1. `refactor_rename`/`refactor_move`/`refactor_delete` — preview with `refactor_id`
+1. `refactor_rename`/`refactor_move`/`refactor_impact` — preview with `refactor_id`
 2. If `verification_required`: `refactor_inspect` — review low-certainty matches
 3. `refactor_apply` or `refactor_cancel`
 

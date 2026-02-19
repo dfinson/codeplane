@@ -2,7 +2,7 @@
 
 Covers:
 - refactor_move: import path updates
-- refactor_delete: reference discovery
+- refactor_impact: reference discovery
 - Helper methods: _path_to_module, _build_preview
 """
 
@@ -122,7 +122,7 @@ class TestBuildPreview:
 
 
 class TestBuildDeletePreview:
-    """Test _build_delete_preview method."""
+    """Test _build_impact_preview method."""
 
     @pytest.fixture
     def refactor_ops(self, tmp_path: Path) -> RefactorOps:
@@ -135,7 +135,7 @@ class TestBuildDeletePreview:
                 EditHunk(old="target", new="", line=1, certainty="high"),
             ]
         }
-        preview = refactor_ops._build_delete_preview("target", edits)
+        preview = refactor_ops._build_impact_preview("target", edits)
         assert preview.verification_required
         assert "target" in (preview.verification_guidance or "")
         assert "does NOT auto-remove" in (preview.verification_guidance or "")
@@ -197,8 +197,8 @@ class TestRefactorMove:
 
 
 @pytest.mark.asyncio
-class TestRefactorDelete:
-    """Test refactor_delete operation."""
+class TestRefactorImpact:
+    """Test refactor_impact operation."""
 
     @pytest.fixture
     def mock_coordinator(self) -> MagicMock:
@@ -218,7 +218,7 @@ class TestRefactorDelete:
         (tmp_path / "src" / "target.py").write_text("def target_func(): pass")
         return tmp_path
 
-    async def test_delete_symbol(self, temp_repo: Path, mock_coordinator: MagicMock) -> None:
+    async def test_impact_symbol(self, temp_repo: Path, mock_coordinator: MagicMock) -> None:
         ops = RefactorOps(temp_repo, mock_coordinator)
 
         mock_session = MagicMock()
@@ -226,13 +226,13 @@ class TestRefactorDelete:
         mock_coordinator.db.session.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_coordinator.db.session.return_value.__exit__ = MagicMock(return_value=False)
 
-        result = await ops.delete("target_func")
+        result = await ops.impact("target_func")
 
         assert result.status == "previewed"
         assert result.preview is not None
         assert result.preview.verification_required
 
-    async def test_delete_file_path(self, temp_repo: Path, mock_coordinator: MagicMock) -> None:
+    async def test_impact_file_path(self, temp_repo: Path, mock_coordinator: MagicMock) -> None:
         ops = RefactorOps(temp_repo, mock_coordinator)
 
         mock_session = MagicMock()
@@ -240,7 +240,7 @@ class TestRefactorDelete:
         mock_coordinator.db.session.return_value.__enter__ = MagicMock(return_value=mock_session)
         mock_coordinator.db.session.return_value.__exit__ = MagicMock(return_value=False)
 
-        result = await ops.delete("src/target.py")
+        result = await ops.impact("src/target.py")
 
         assert result.status == "previewed"
         # File path detected by / or .py

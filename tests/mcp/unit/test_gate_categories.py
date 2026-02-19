@@ -42,7 +42,7 @@ class TestCategorizeTool:
             ("write_source", "write"),
             ("refactor_rename", "refactor"),
             ("refactor_move", "refactor"),
-            ("refactor_delete", "refactor"),
+            ("refactor_impact", "refactor"),
             ("refactor_apply", "refactor"),
             ("refactor_cancel", "meta"),
             ("refactor_inspect", "meta"),
