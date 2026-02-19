@@ -356,3 +356,73 @@ class TestAffectedTestsGoPackageAffinity:
         result = graph.affected_tests(["README.md"])
         # No Go affinity match — only import-based matching applies
         assert len(result.matches) == 0
+
+
+# ---------------------------------------------------------------------------
+# affected_tests: direct test file changes
+# ---------------------------------------------------------------------------
+
+
+class TestAffectedTestsDirectTestFiles:
+    """Test that changed test files appear directly in affected_tests results.
+
+    When affected_by contains a test file path, the import graph has no edge
+    leading to it (nothing imports a test).  Step 5b adds it directly.
+    """
+
+    @pytest.fixture
+    def graph(self, db: Database) -> Generator[ImportGraph, None, None]:
+        _seed_data(
+            db,
+            files=[
+                "src/mylib/core.py",
+                "tests/test_core.py",
+                "tests/test_utils.py",
+            ],
+            imports=[
+                ("tests/test_core.py", "mylib.core"),
+            ],
+        )
+        with db.session() as session:
+            yield ImportGraph(session)
+
+    def test_test_file_only(self, graph: ImportGraph) -> None:
+        """A single test file as changed_files appears in results."""
+        result = graph.affected_tests(["tests/test_utils.py"])
+        assert len(result.matches) == 1
+        assert result.matches[0].test_file == "tests/test_utils.py"
+        assert result.matches[0].confidence == "high"
+        assert result.matches[0].reason == "test file directly changed"
+        assert result.matches[0].source_modules == []
+
+    def test_test_file_with_source_file(self, graph: ImportGraph) -> None:
+        """Mixed: source + test file.  Both contribute to results."""
+        result = graph.affected_tests(["src/mylib/core.py", "tests/test_utils.py"])
+        test_files = sorted(result.test_files)
+        # test_core found via import graph (imports mylib.core)
+        assert "tests/test_core.py" in test_files
+        # test_utils found via direct inclusion (is a test file)
+        assert "tests/test_utils.py" in test_files
+
+    def test_test_file_already_matched_by_import_not_duplicated(
+        self, graph: ImportGraph
+    ) -> None:
+        """If a changed test also imports the changed source, no duplicate."""
+        result = graph.affected_tests(["src/mylib/core.py", "tests/test_core.py"])
+        paths = result.test_files
+        # test_core.py should appear exactly once
+        assert paths.count("tests/test_core.py") == 1
+
+    def test_all_test_files(self, graph: ImportGraph) -> None:
+        """All changed files are test files — all appear directly."""
+        result = graph.affected_tests(["tests/test_core.py", "tests/test_utils.py"])
+        test_files = sorted(result.test_files)
+        assert test_files == ["tests/test_core.py", "tests/test_utils.py"]
+        # Both should be high confidence
+        for m in result.matches:
+            assert m.confidence == "high"
+
+    def test_confidence_tier_still_complete(self, graph: ImportGraph) -> None:
+        """Direct test inclusions don't degrade the confidence tier."""
+        result = graph.affected_tests(["tests/test_utils.py"])
+        assert result.confidence.tier == "complete"

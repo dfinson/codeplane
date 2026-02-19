@@ -131,7 +131,11 @@ class ImportGraph:
     # -----------------------------------------------------------------
 
     def affected_tests(self, changed_files: list[str]) -> ImportGraphResult:
-        """Given changed source files, find test files that import them.
+        """Find test files affected by changed files.
+
+        Changed source files are traced through the import graph to find tests
+        that import them.  Changed test files are included directly as
+        high-confidence matches (a modified test is inherently affected).
 
         Args:
             changed_files: File paths that changed (relative to repo root).
@@ -141,6 +145,13 @@ class ImportGraph:
         """
         self._ensure_caches()
         assert self._module_index is not None
+
+        # Step 0: Partition — test files in changed_files are directly affected.
+        # The import graph traces source→test imports but cannot discover that
+        # a test file changed.  We include them as high-confidence matches at
+        # the end (Step 5b) and still run the full graph for source files.
+        assert self._test_file_set is not None
+        direct_test_files = [f for f in changed_files if f in self._test_file_set]
 
         # Step 1: Convert changed file paths to module names.
         # Strategy:
@@ -391,6 +402,21 @@ class ImportGraph:
                     reason=reason,
                 )
             )
+
+        # Step 5b: Include directly-changed test files that weren't already
+        # found through import tracing.  A changed test file is the strongest
+        # possible signal — it *is* the affected test.
+        already_matched = {m.test_file for m in matches}
+        for tf in direct_test_files:
+            if tf not in already_matched:
+                matches.append(
+                    ImpactMatch(
+                        test_file=tf,
+                        source_modules=[],
+                        confidence="high",
+                        reason="test file directly changed",
+                    )
+                )
 
         # Confidence: resolved_path covers ALL changed files regardless of
         # whether they have a declared_module or Python path_to_module mapping.
