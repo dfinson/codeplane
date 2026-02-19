@@ -14,10 +14,11 @@
 | Step | With CodePlane | Without CodePlane |
 |------|---------------|-------------------|
 | 1. Ensure `.vscode/mcp.json` | present (CodePlane entry) | renamed to `mcp.json.bak` |
-| 2. Open a **new** Copilot Agent chat | same prompt verbatim | same prompt verbatim |
-| 3. Let the agent run to completion | — | — |
-| 4. Undo mutations | `git checkout HEAD -- .` | `git checkout HEAD -- .` |
-| 5. Extract trace | `python ~/extract_vscode_agent_trace.py --chat-name "<fragment>" --out ~/bench_Nw.json` | `…--out ~/bench_Nwo.json` |
+| 2. Checkout `main`, ensure clean | `git checkout main && git clean -fd` | same |
+| 3. Open a **new** Copilot Agent chat | same prompt verbatim | same prompt verbatim |
+| 4. Let the agent run to completion | (prompt tells agent to create feature branch) | same |
+| 5. Extract trace | `python extract_vscode_agent_trace.py --chat-name "<fragment>"` | same (output auto-derived from chat name) |
+| 6. Reset repo | `git checkout main && git clean -fd && git branch -D bench/<N>-*` | same |
 
 ### Key comparison metrics (from trace JSON)
 
@@ -423,12 +424,13 @@ Start with #226 for a quick sanity check, then #233 for a meatier comparison.
 
 ## Checklist per run
 
-- [ ] Confirm branch is clean: `git status`
+- [ ] On `main`, confirm clean: `git status && git clean -fd`
 - [ ] CodePlane on/off: check `.vscode/mcp.json` presence
 - [ ] Open **new** Agent chat, paste prompt verbatim
 - [ ] Let agent complete (don't interrupt)
-- [ ] Extract trace: `python ~/extract_vscode_agent_trace.py --chat-name "..." --out ~/bench_<N>_<with|without>.json`
-- [ ] Reset: `git checkout HEAD -- .`
+- [ ] Extract trace: `python tests/benchmarking/evee/extract_vscode_agent_trace.py --chat-name "..."`
+- [ ] Move trace JSON to `tests/benchmarking/evee/results/`
+- [ ] Reset: `git checkout main && git clean -fd && git branch -D bench/<N>-*`
 - [ ] Repeat with CodePlane toggled
 
 ---
@@ -445,9 +447,17 @@ print(f\"{'Metric':<45} {'With CP':>10} {'Without':>10}\")
 print('-'*67)
 for k in ['codeplane_tool_calls_total','codeplane_share_of_all_tool_calls']:
     print(f'{k:<45} {w[\"summaries\"][k]:>10} {wo[\"summaries\"][k]:>10}')
-for k in ['native_mcp_ratio','tool_calls_per_pseudo_turn','longest_native_only_streak']:
-    wv = w['mcp_comparison_metrics'].get('tier_1_structure',{}).get(k) or w['mcp_comparison_metrics'].get('tier_2_behavioral',{}).get(k) or w['mcp_comparison_metrics'].get('tier_3_adoption',{}).get(k)
-    wov = wo['mcp_comparison_metrics'].get('tier_1_structure',{}).get(k) or wo['mcp_comparison_metrics'].get('tier_2_behavioral',{}).get(k) or wo['mcp_comparison_metrics'].get('tier_3_adoption',{}).get(k)
-    print(f'{k:<45} {str(wv):>10} {str(wov):>10}')
-" bench_1_with.json bench_1_without.json
+mc_w = w.get('mcp_comparison_metrics', {})
+mc_wo = wo.get('mcp_comparison_metrics', {})
+for tier, keys in [
+    ('tier1_core', ['native_mcp_ratio', 'session_duration_s', 'tool_calls_per_second']),
+    ('tier2_convergence', ['tool_calls_per_pseudo_turn', 'calls_before_first_mcp', 'longest_native_only_streak']),
+    ('tier3_cost_proxies', ['total_result_bytes', 'avg_result_bytes_per_call']),
+    ('tier4_stability', ['error_calls', 'error_rate']),
+]:
+    for k in keys:
+        wv = mc_w.get(tier, {}).get(k, 'N/A')
+        wov = mc_wo.get(tier, {}).get(k, 'N/A')
+        print(f'{tier}.{k:<35} {str(wv):>10} {str(wov):>10}')
+" results/with_trace.json results/without_trace.json
 ```
