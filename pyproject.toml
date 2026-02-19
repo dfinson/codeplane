@@ -68,6 +68,8 @@ dev = [
     "tree-sitter-typescript>=0.23.0",
     "tree-sitter-json>=0.23.0",
     "tree-sitter-yaml>=0.6.0",
+    "tree-sitter-toml>=0.6.0",
+    "tree-sitter-markdown>=0.3.0",
     "tree-sitter-rust>=0.23.0",
     "tree-sitter-c-sharp>=0.23.0",
     # Multilang import extraction support
