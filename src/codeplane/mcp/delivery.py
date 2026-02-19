@@ -500,16 +500,19 @@ def _os_extraction_cmds(jq_cmd: str, path: str) -> list[str]:
     """Return OS-appropriate extraction commands.
 
     On Unix: returns just the jq command.
-    On Windows: returns both jq (with install hint) and PowerShell equivalent.
+    On Windows: returns both the jq command and a PowerShell equivalent.
     """
     if sys.platform != "win32":
         return [jq_cmd]
 
     ps_cmd = _jq_to_powershell(jq_cmd, path)
-    return [
-        jq_cmd,
-        ps_cmd,
-    ]
+    result = [jq_cmd, ps_cmd]
+
+    # Add hint for Unix pipes that won't work on Windows
+    if " | head" in jq_cmd:
+        result.append("# Note: '| head' requires Unix. PowerShell: Select-Object -First N")
+
+    return result
 
 
 def _build_fetch_hint(

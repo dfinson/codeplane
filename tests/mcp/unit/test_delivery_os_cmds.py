@@ -73,3 +73,10 @@ class TestOsExtractionCmds:
         assert len(result) == 2
         assert "jq" in result[0]
         assert "gc" in result[1] or "ConvertFrom-Json" in result[1] or "Requires" in result[1]
+
+    def test_windows_adds_hint_for_head_pipe(self) -> None:
+        """On Windows, adds a hint when jq command pipes to head."""
+        with patch.object(sys, "platform", "win32"):
+            result = _os_extraction_cmds("jq '.diff' path.json | head -100", "path.json")
+        assert len(result) == 3
+        assert "Select-Object -First" in result[2]
