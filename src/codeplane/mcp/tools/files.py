@@ -851,19 +851,23 @@ async def _build_scaffold(
     ext = Path(rel_path).suffix.lower()
     language = EXTENSION_TO_NAME.get(ext, "unknown")
 
-    # Build imports list
-    imports_out: list[dict[str, Any]] = []
+    # Group imports by source into compact text lines
+    from collections import defaultdict
+
+    source_groups: dict[str, list[str]] = defaultdict(list)
+    bare_imports: list[str] = []
     for imp in imports:
-        imp_entry: dict[str, Any] = {
-            "imported_name": imp.imported_name,
-            "source": imp.source_literal,
-            "kind": imp.import_kind,
-        }
+        name = imp.imported_name
         if imp.alias:
-            imp_entry["alias"] = imp.alias
-        if imp.start_line is not None:
-            imp_entry["line"] = imp.start_line
-        imports_out.append(imp_entry)
+            name = f"{name} as {imp.alias}"
+        if imp.source_literal and imp.source_literal != imp.imported_name:
+            source_groups[imp.source_literal].append(name)
+        else:
+            bare_imports.append(name)
+
+    imports_out: list[str] = bare_imports[:]
+    for source, names in sorted(source_groups.items()):
+        imports_out.append(f"{source}: {', '.join(names)}")
 
     # Filter defs based on include_constants
     constant_kinds = frozenset({"variable", "constant", "val", "var", "property", "field"})
@@ -901,42 +905,21 @@ def _build_symbol_tree(
     defs: list[Any],
     *,
     include_docstrings: bool = False,
-) -> list[dict[str, Any]]:
-    """Organize DefFacts into a hierarchical tree.
+) -> list[str]:
+    """Organize DefFacts into compact one-line text summaries.
 
-    Top-level symbols are roots. Methods/nested symbols are children
-    of the class or container they belong to (determined by line range containment).
+    Each symbol becomes a single line like:
+        class SpanTarget  [63-78]
+          method validate_range(self) -> SpanTarget  @model_validator  [73-78]
+        function _compute_sha256(full_path) -> str  [52-55]
+
+    Nesting is expressed via 2-space indentation (line-range containment).
     """
     import json as _json
 
     # Sort by start_line for stable ordering
     sorted_defs = sorted(defs, key=lambda d: (d.start_line, d.start_col))
 
-    # Build flat entries first
-    entries: list[dict[str, Any]] = []
-    for d in sorted_defs:
-        entry: dict[str, Any] = {
-            "name": d.name,
-            "kind": d.kind,
-            "line": d.start_line,
-            "end_line": d.end_line,
-        }
-        if d.signature_text:
-            entry["signature"] = d.signature_text
-        if d.return_type:
-            entry["return_type"] = d.return_type
-        if d.decorators_json:
-            import contextlib
-
-            with contextlib.suppress(ValueError, TypeError):
-                entry["decorators"] = _json.loads(d.decorators_json)
-        if include_docstrings and d.docstring:
-            entry["docstring"] = d.docstring
-        if d.display_name and d.display_name != d.signature_text:
-            entry["display_name"] = d.display_name
-        entries.append(entry)
-
-    # Build tree: nest children inside containers by line-range containment
     container_kinds = frozenset(
         {
             "class",
@@ -954,29 +937,53 @@ def _build_symbol_tree(
         }
     )
 
-    roots: list[dict[str, Any]] = []
-    # Stack of (entry, end_line) for nesting
-    stack: list[tuple[dict[str, Any], int]] = []
+    lines: list[str] = []
+    # Stack of (end_line, depth) for nesting
+    stack: list[tuple[int, int]] = []
 
-    for entry in entries:
+    for d in sorted_defs:
         # Pop stack entries that this symbol is NOT contained within
-        while stack and entry["line"] >= stack[-1][1]:
+        while stack and d.start_line >= stack[-1][0]:
             stack.pop()
 
-        if stack:
-            # This entry is inside the top of stack
-            parent = stack[-1][0]
-            if "children" not in parent:
-                parent["children"] = []
-            parent["children"].append(entry)
-        else:
-            roots.append(entry)
+        depth = len(stack)
+        indent = "  " * depth
+
+        # Build compact one-line summary
+        parts: list[str] = [f"{d.kind} {d.name}"]
+
+        if d.signature_text:
+            sig = d.signature_text
+            if not sig.startswith("("):
+                sig = f"({sig})"
+            parts.append(sig)
+
+        if d.return_type:
+            parts.append(f" -> {d.return_type}")
+
+        if d.decorators_json:
+            import contextlib
+
+            with contextlib.suppress(ValueError, TypeError):
+                dec_list = _json.loads(d.decorators_json)
+                if dec_list:
+                    # Strip leading @ if already present in stored strings
+                    cleaned = [s.lstrip("@") for s in dec_list]
+                    parts.append(f"  @{', @'.join(cleaned)}")
+
+        parts.append(f"  [{d.start_line}-{d.end_line}]")
+
+        lines.append(f"{indent}{''.join(parts)}")
+
+        if include_docstrings and d.docstring:
+            # Docstring as indented line below
+            lines.append(f'{indent}  "{d.docstring}"')
 
         # If this is a container, push onto stack
-        if entry["kind"] in container_kinds:
-            stack.append((entry, entry["end_line"]))
+        if d.kind in container_kinds:
+            stack.append((d.end_line, depth + 1))
 
-    return roots
+    return lines
 
 
 def _build_unindexed_fallback(full_path: Any, rel_path: str) -> dict[str, Any]:

@@ -64,11 +64,8 @@ class TestBuildSymbolTree:
         ]
         tree = build(defs)
         assert len(tree) == 2
-        assert tree[0]["name"] == "func_a"
-        assert tree[1]["name"] == "func_b"
-        assert tree[0]["signature"] == "(x: int)"
-        assert "children" not in tree[0]
-        assert "children" not in tree[1]
+        assert tree[0] == "function func_a(x: int)  [1-5]"
+        assert tree[1] == "function func_b(y: str)  [7-10]"
 
     def test_nested_class_with_methods(self) -> None:
         build = self._import_tree_builder()
@@ -80,15 +77,12 @@ class TestBuildSymbolTree:
         ]
         tree = build(defs)
 
-        # 2 top-level: MyClass and standalone
-        assert len(tree) == 2
-        assert tree[0]["name"] == "MyClass"
-        assert tree[1]["name"] == "standalone"
-
-        children = tree[0].get("children", [])
-        assert len(children) == 2
-        assert children[0]["name"] == "__init__"
-        assert children[1]["name"] == "do_work"
+        # 4 lines total: class, 2 indented methods, standalone
+        assert len(tree) == 4
+        assert tree[0] == "class MyClass  [1-20]"
+        assert tree[1] == "  method __init__(self, x: int)  [3-8]"
+        assert tree[2] == "  method do_work(self)  [10-18]"
+        assert tree[3] == "function standalone()  [22-25]"
 
     def test_deeply_nested_containers(self) -> None:
         """class > inner class > method."""
@@ -100,17 +94,10 @@ class TestBuildSymbolTree:
         ]
         tree = build(defs)
 
-        assert len(tree) == 1
-        outer = tree[0]
-        assert outer["name"] == "Outer"
-
-        inner_children = outer.get("children", [])
-        assert len(inner_children) == 1
-        assert inner_children[0]["name"] == "Inner"
-
-        deep_children = inner_children[0].get("children", [])
-        assert len(deep_children) == 1
-        assert deep_children[0]["name"] == "deep_method"
+        assert len(tree) == 3
+        assert tree[0] == "class Outer  [1-30]"
+        assert tree[1] == "  class Inner  [5-25]"
+        assert tree[2] == "    method deep_method(self)  [10-20]"
 
     def test_docstrings_excluded_by_default(self) -> None:
         build = self._import_tree_builder()
@@ -118,7 +105,8 @@ class TestBuildSymbolTree:
             FakeDef("func", "function", 1, 5, docstring="Important docs."),
         ]
         tree = build(defs, include_docstrings=False)
-        assert "docstring" not in tree[0]
+        assert len(tree) == 1
+        assert '"Important docs."' not in tree[0]
 
     def test_docstrings_included_when_requested(self) -> None:
         build = self._import_tree_builder()
@@ -126,7 +114,8 @@ class TestBuildSymbolTree:
             FakeDef("func", "function", 1, 5, docstring="Important docs."),
         ]
         tree = build(defs, include_docstrings=True)
-        assert tree[0]["docstring"] == "Important docs."
+        assert len(tree) == 2
+        assert tree[1] == '  "Important docs."'
 
     def test_return_type_present(self) -> None:
         build = self._import_tree_builder()
@@ -134,7 +123,7 @@ class TestBuildSymbolTree:
             FakeDef("compute", "function", 1, 5, return_type="int"),
         ]
         tree = build(defs)
-        assert tree[0]["return_type"] == "int"
+        assert "-> int" in tree[0]
 
     def test_return_type_omitted_when_none(self) -> None:
         build = self._import_tree_builder()
@@ -142,7 +131,7 @@ class TestBuildSymbolTree:
             FakeDef("compute", "function", 1, 5),
         ]
         tree = build(defs)
-        assert "return_type" not in tree[0]
+        assert "->" not in tree[0]
 
     def test_decorators_json_parsed(self) -> None:
         build = self._import_tree_builder()
@@ -157,7 +146,8 @@ class TestBuildSymbolTree:
             ),
         ]
         tree = build(defs)
-        assert tree[0].get("decorators") == decos
+        assert "@" in tree[0]
+        assert "@app.route('/api'), @login_required" in tree[0]
 
     def test_invalid_decorators_json_handled(self) -> None:
         build = self._import_tree_builder()
@@ -172,8 +162,9 @@ class TestBuildSymbolTree:
         ]
         # Should not raise
         tree = build(defs)
-        # Decorators should either be absent or have a fallback
+        # No decorator segment should appear
         assert isinstance(tree, list)
+        assert "@" not in tree[0]
 
     def test_empty_defs_list(self) -> None:
         build = self._import_tree_builder()
@@ -188,7 +179,7 @@ class TestBuildSymbolTree:
         ]
         tree = build(defs)
         assert len(tree) == 1
-        assert tree[0]["name"] == "orphan_method"
+        assert tree[0] == "method orphan_method(self)  [1-5]"
 
     def test_line_range_includes_span_info(self) -> None:
         build = self._import_tree_builder()
@@ -196,10 +187,10 @@ class TestBuildSymbolTree:
             FakeDef("func", "function", 10, 25),
         ]
         tree = build(defs)
-        assert tree[0]["line"] == 10
-        assert tree[0]["end_line"] == 25
+        assert "[10-25]" in tree[0]
 
     def test_display_name_used_when_present(self) -> None:
+        """display_name is not used in compact format; name is used."""
         build = self._import_tree_builder()
         defs = [
             FakeDef(
@@ -211,9 +202,7 @@ class TestBuildSymbolTree:
             ),
         ]
         tree = build(defs)
-        # Should use display_name if present, or name
-        node = tree[0]
-        assert node["name"] in ("impl_trait_method", "Trait::method")
+        assert "impl_trait_method" in tree[0]
 
 
 # =============================================================================
