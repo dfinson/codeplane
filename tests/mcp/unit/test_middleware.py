@@ -517,17 +517,23 @@ class TestToolMiddleware:
         assert schema is None
 
     def test_get_tool_schema_handles_exception(self, middleware):
-        """Test schema extraction handles exceptions gracefully."""
+        """Test schema extraction handles exceptions in the except branch."""
+        from unittest.mock import patch
+
         mock_context = MagicMock()
         mock_context.fastmcp_context = MagicMock()
         mock_context.fastmcp_context._mcp_context = MagicMock()
         mock_context.fastmcp_context._mcp_context.session = MagicMock()
-        mock_context.fastmcp_context._mcp_context.session.app = MagicMock()
-        # Mock server has no real tools registered in local_provider._components,
-        # so get_tools_sync returns empty dict → tool lookup returns None
+        server = MagicMock()
+        server.local_provider = MagicMock()  # Pass the hasattr guard
+        mock_context.fastmcp_context._mcp_context.session.app = server
 
-        # Should not raise, should return None
-        schema = middleware._get_tool_schema(mock_context, "test_tool")
+        # Patch get_tools_sync to raise, exercising the except Exception branch
+        with patch(
+            "codeplane.mcp._compat.get_tools_sync",
+            side_effect=RuntimeError("boom"),
+        ):
+            schema = middleware._get_tool_schema(mock_context, "test_tool")
         assert schema is None
 
     def test_get_tool_schema_with_real_fastmcp(self, middleware):
