@@ -12,8 +12,8 @@
 
 ## Problem Statement
 
-The current `extract_vscode_agent_trace.py` scrapes VS Code's internal
-`workspaceStorage/` directories after a session completes. This has
+The previous workspace-storage scraping approach read VS Code's internal
+`workspaceStorage/` directories after a session completed. This had
 fundamental limitations:
 
 | Limitation | Impact |
@@ -86,7 +86,7 @@ through the local mitmproxy instance.  Add these to your User or Workspace
 
 2. **Transform** (`trace_from_capture.py` — post-processor):
    Reads a capture JSON and produces the benchmark trace JSON in the same
-   schema as `extract_vscode_agent_trace.py` (schema version `0.7.0`).
+   schema (version `0.8.0`).
    Computes all tiered metrics (T1–T4) from the captured data.
 
 ---
@@ -427,15 +427,14 @@ python3 copilot_logger.py --stats
 
 ### What we keep from the old approach
 
-- **Tool classification** (`_SUBKIND_BY_TOOL_NAME`, `_classify_tool_kind`,
-  `_derive_tool_namespace`, `_strip_mcp_prefix`) — reused in the transformer.
+- **Tool classification** (`_SUBKIND_BY_TOOL_NAME`, `classify_tool_kind`,
+  `derive_tool_namespace`, `strip_mcp_prefix`) — extracted to `tool_classification.py`.
 - **Tiered metrics** (T1–T4 structure) — same metric definitions, better data.
 - **Trace JSON schema** — same top-level structure, version bumped.
-- **`extract_vscode_agent_trace.py`** — kept as fallback for sessions where
-  the proxy wasn't running.
 
-### What we retire
+### What we retired
 
+- `extract_vscode_agent_trace.py` — replaced by the capture pipeline.
 - `state.vscdb` parsing (no longer needed — text is in the capture).
 - Workspace storage directory scanning (no longer primary source).
 - Character-based token estimation (replaced by exact counts).
@@ -513,16 +512,16 @@ The `_parse_sse_response` function should handle:
 ## File layout
 
 ```
-tests/benchmarking/evee/
-├── benchmark-design.md              # Existing — benchmark protocol
-├── capture-design.md                # This document
-├── copilot_logger.py                # mitmproxy addon (capture)
-├── trace_from_capture.py            # Capture -> trace transformer
-├── extract_vscode_agent_trace.py    # Legacy scraper (fallback)
-└── results/
-    ├── 226_mlflow_with_codeplane.json
-    ├── 226_mlflow_without_codeplane.json
-    └── ...
+tests/benchmarking/
+├── capture/                          # Repo-agnostic capture tools
+│   ├── capture-design.md             # This document
+│   ├── copilot_logger.py             # mitmproxy addon (capture)
+│   ├── trace_from_capture.py         # Capture -> trace transformer
+│   └── tool_classification.py        # Shared tool classification constants
+└── evee/                             # CodePlane/Evee-specific benchmarks
+    ├── benchmark-design.md           # Benchmark protocol
+    └── results/
+        └── ...
 ```
 
 ---

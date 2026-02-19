@@ -3,7 +3,7 @@
 trace_from_capture.py — Transform mitmproxy capture JSON into benchmark trace.
 
 Reads a capture file produced by ``copilot_logger.py`` and outputs a benchmark
-trace JSON in the same schema as ``extract_vscode_agent_trace.py`` (schema
+trace JSON using the benchmark trace schema (schema
 version 0.8.0).  All tiered metrics (T1–T4) are computed from the richer
 captured data: exact token counts, full tool arguments, per-turn latency,
 finish reasons, and HTTP status codes.
@@ -27,15 +27,15 @@ from pathlib import Path
 from typing import Any
 
 # ---------------------------------------------------------------------------
-# Import tool classification from the existing extractor
+# Import tool classification (sibling module)
 # ---------------------------------------------------------------------------
 
-sys.path.insert(0, str(Path(__file__).parent))
-from extract_vscode_agent_trace import (  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tool_classification import (  # noqa: E402
     DEFAULT_CODEPLANE_PREFIX,
-    _classify_tool_kind,
-    _derive_tool_namespace,
-    _infer_call_subkind,
+    classify_tool_kind,
+    derive_tool_namespace,
+    infer_call_subkind,
 )
 
 # ---------------------------------------------------------------------------
@@ -81,9 +81,9 @@ def _classify_tool_call(
 ) -> dict[str, Any]:
     """Classify a raw tool call from capture into the trace format."""
     name = tc.get("name", "")
-    tool_kind = _classify_tool_kind(name)
-    tool_namespace = _derive_tool_namespace(name, tool_kind, codeplane_prefix)
-    call_subkind = _infer_call_subkind(name, tool_kind)
+    tool_kind = classify_tool_kind(name)
+    tool_namespace = derive_tool_namespace(name, tool_kind, codeplane_prefix)
+    call_subkind = infer_call_subkind(name, tool_kind)
     arguments = tc.get("arguments", {})
     arguments_bytes = len(json.dumps(arguments).encode("utf-8"))
 

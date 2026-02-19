@@ -174,7 +174,7 @@ strict = false
 warn_return_any = false
 
 [[tool.mypy.overrides]]
-module = "extract_vscode_agent_trace"
+module = "tool_classification"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
