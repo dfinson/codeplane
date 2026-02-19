@@ -19,7 +19,12 @@ from codeplane.config.constants import (
     SMALL_FILE_THRESHOLD,
 )
 from codeplane.core.languages import EXTENSION_TO_NAME
-from codeplane.mcp.delivery import ScopeManager, build_envelope, resume_cursor
+from codeplane.mcp.delivery import (
+    ScopeManager,
+    build_envelope,
+    resume_cursor,
+    wrap_existing_response,
+)
 from codeplane.mcp.errors import (
     MCPError,
     MCPErrorCode,
@@ -598,6 +603,54 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     # -------------------------------------------------------------------------
 
     @mcp.tool
+    async def read_scaffold(
+        ctx: Context,
+        path: str = Field(
+            ...,
+            description="File path relative to repo root.",
+        ),
+        include_docstrings: bool = Field(
+            False,
+            description="Include first-paragraph docstrings for each symbol.",
+        ),
+        include_constants: bool = Field(
+            False,
+            description="Include module-level constants and variables.",
+        ),
+    ) -> dict[str, Any]:
+        """Semantic scaffold view of a file.
+
+        Returns the structural skeleton: imports, classes, functions, methods,
+        their signatures, decorators, return types, and line numbers.
+        No source code is returned — only metadata from the structural index.
+
+        For indexed files: structured scaffold from DefFact + ImportFact data.
+        For unindexed files: falls back to paginated full-file read with hint.
+        """
+        from codeplane.files.ops import validate_path_in_repo
+
+        try:
+            full_path = validate_path_in_repo(app_ctx.repo_root, path)
+        except MCPError:
+            return {"error": "file_not_found", "message": f"File not found: {path}"}
+
+        if not full_path.is_file():
+            return {"error": "file_not_found", "message": f"Not a file: {path}"}
+
+        scaffold = await _build_scaffold(
+            app_ctx,
+            path,
+            full_path,
+            include_docstrings=include_docstrings,
+            include_constants=include_constants,
+        )
+        return wrap_existing_response(
+            scaffold,
+            resource_kind="scaffold",
+            inline_summary=scaffold.get("summary"),
+        )
+
+    @mcp.tool
     async def reset_budget(
         ctx: Context,
         scope_id: str = Field(..., description="Scope ID for budget tracking"),
@@ -754,3 +807,203 @@ async def _resolve_structural_target(
             fallback_lines=25,
         )
     return content, scope_region.start_line, scope_region.end_line
+
+
+async def _build_scaffold(
+    app_ctx: "AppContext",
+    rel_path: str,
+    full_path: Any,
+    *,
+    include_docstrings: bool = False,
+    include_constants: bool = False,
+) -> dict[str, Any]:
+    """Build a scaffold response for a file.
+
+    Queries the structural index for DefFacts and ImportFacts, then assembles
+    a hierarchical scaffold view with symbols organized by scope.
+    """
+    from pathlib import Path
+
+    from codeplane.index._internal.indexing.graph import FactQueries
+    from codeplane.index.models import DefFact, File, ImportFact
+
+    # Look up the file in the index
+    file_rec: File | None = None
+    with app_ctx.coordinator.db.session() as session:
+        from sqlmodel import select
+
+        stmt = select(File).where(File.path == rel_path)
+        file_rec = session.exec(stmt).first()
+
+    if file_rec is None or file_rec.id is None:
+        # Unindexed file fallback: return line count and hint
+        return _build_unindexed_fallback(full_path, rel_path)
+
+    # Query defs and imports for this file
+    defs: list[DefFact] = []
+    imports: list[ImportFact] = []
+    with app_ctx.coordinator.db.session() as session:
+        fq = FactQueries(session)
+        defs = fq.list_defs_in_file(file_rec.id, limit=5000)
+        imports = fq.list_imports(file_rec.id, limit=1000)
+
+    # Detect language from extension
+    ext = Path(rel_path).suffix.lower()
+    language = EXTENSION_TO_NAME.get(ext, "unknown")
+
+    # Group imports by source into compact text lines
+    from collections import defaultdict
+
+    source_groups: dict[str, list[str]] = defaultdict(list)
+    bare_imports: list[str] = []
+    for imp in imports:
+        name = imp.imported_name
+        if imp.alias:
+            name = f"{name} as {imp.alias}"
+        if imp.source_literal and imp.source_literal != imp.imported_name:
+            source_groups[imp.source_literal].append(name)
+        else:
+            bare_imports.append(name)
+
+    imports_out: list[str] = bare_imports[:]
+    for source, names in sorted(source_groups.items()):
+        imports_out.append(f"{source}: {', '.join(names)}")
+
+    # Filter defs based on include_constants
+    constant_kinds = frozenset({"variable", "constant", "val", "var", "property", "field"})
+    filtered_defs = [d for d in defs if include_constants or d.kind not in constant_kinds]
+
+    # Build symbol tree (hierarchical)
+    symbols_out = _build_symbol_tree(
+        filtered_defs,
+        include_docstrings=include_docstrings,
+    )
+
+    # Compute file line count
+    try:
+        content = full_path.read_text(encoding="utf-8", errors="replace")
+        total_lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+    except Exception:
+        total_lines = 0
+
+    result: dict[str, Any] = {
+        "path": rel_path,
+        "language": language,
+        "total_lines": total_lines,
+        "indexed": True,
+        "imports": imports_out,
+        "symbols": symbols_out,
+        "summary": (
+            f"scaffold: {rel_path} — {len(imports_out)} imports, "
+            f"{len(filtered_defs)} symbols, {total_lines} lines"
+        ),
+    }
+    return result
+
+
+def _build_symbol_tree(
+    defs: list[Any],
+    *,
+    include_docstrings: bool = False,
+) -> list[str]:
+    """Organize DefFacts into compact one-line text summaries.
+
+    Each symbol becomes a single line like:
+        class SpanTarget  [63-78]
+          method validate_range(self) -> SpanTarget  @model_validator  [73-78]
+        function _compute_sha256(full_path) -> str  [52-55]
+
+    Nesting is expressed via 2-space indentation (line-range containment).
+    """
+    import json as _json
+
+    # Sort by start_line for stable ordering
+    sorted_defs = sorted(defs, key=lambda d: (d.start_line, d.start_col))
+
+    container_kinds = frozenset(
+        {
+            "class",
+            "struct",
+            "enum",
+            "interface",
+            "trait",
+            "module",
+            "namespace",
+            "impl",
+            "protocol",
+            "object",
+            "record",
+            "type_class",
+        }
+    )
+
+    lines: list[str] = []
+    # Stack of (end_line, depth) for nesting
+    stack: list[tuple[int, int]] = []
+
+    for d in sorted_defs:
+        # Pop stack entries that this symbol is NOT contained within
+        while stack and d.start_line >= stack[-1][0]:
+            stack.pop()
+
+        depth = len(stack)
+        indent = "  " * depth
+
+        # Build compact one-line summary
+        parts: list[str] = [f"{d.kind} {d.name}"]
+
+        if d.signature_text:
+            sig = d.signature_text
+            if not sig.startswith("("):
+                sig = f"({sig})"
+            parts.append(sig)
+
+        if d.return_type:
+            parts.append(f" -> {d.return_type}")
+
+        if d.decorators_json:
+            import contextlib
+
+            with contextlib.suppress(ValueError, TypeError):
+                dec_list = _json.loads(d.decorators_json)
+                if dec_list:
+                    # Strip leading @ if already present in stored strings
+                    cleaned = [s.lstrip("@") for s in dec_list]
+                    parts.append(f"  @{', @'.join(cleaned)}")
+
+        parts.append(f"  [{d.start_line}-{d.end_line}]")
+
+        lines.append(f"{indent}{''.join(parts)}")
+
+        if include_docstrings and d.docstring:
+            # Docstring as indented line below
+            lines.append(f'{indent}  "{d.docstring}"')
+
+        # If this is a container, push onto stack
+        if d.kind in container_kinds:
+            stack.append((d.end_line, depth + 1))
+
+    return lines
+
+
+def _build_unindexed_fallback(full_path: Any, rel_path: str) -> dict[str, Any]:
+    """Fallback for files not in the structural index."""
+    try:
+        content = full_path.read_text(encoding="utf-8", errors="replace")
+        total_lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+    except Exception:
+        total_lines = 0
+
+    return {
+        "path": rel_path,
+        "indexed": False,
+        "total_lines": total_lines,
+        "symbols": [],
+        "imports": [],
+        "summary": f"unindexed: {rel_path}, {total_lines} lines",
+        "agentic_hint": (
+            "This file is not in the structural index. "
+            "Use read_source with span targets to read specific line ranges, "
+            "or read_file_full for the complete file."
+        ),
+    }

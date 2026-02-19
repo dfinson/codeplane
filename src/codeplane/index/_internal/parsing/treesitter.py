@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -99,6 +100,10 @@ class SyntacticSymbol:
     end_column: int
     signature: str | None = None
     parent_name: str | None = None  # For methods: the class name
+    signature_text: str | None = None  # Raw signature text (params only)
+    decorators: list[str] | None = None  # Decorator/annotation strings
+    docstring: str | None = None  # First paragraph of docstring
+    return_type: str | None = None  # Return type annotation text
 
 
 @dataclass
@@ -2852,6 +2857,15 @@ class TreeSitterParser:
             # --- signature ---
             signature = self._extract_signature(captures, node, config.params_from_children)
 
+            # --- decorators (language-agnostic) ---
+            decorators = self._extract_decorators(node)
+
+            # --- return type ---
+            return_type = self._extract_return_type(node)
+
+            # --- docstring ---
+            docstring = self._extract_docstring(node, config.body_node_types)
+
             symbols.append(
                 SyntacticSymbol(
                     name=name,
@@ -2862,6 +2876,10 @@ class TreeSitterParser:
                     end_column=node.end_point[1],
                     signature=signature,
                     parent_name=parent_name,
+                    signature_text=signature,
+                    decorators=decorators,
+                    docstring=docstring,
+                    return_type=return_type,
                 )
             )
 
@@ -2919,6 +2937,163 @@ class TreeSitterParser:
                     params.append(child.text.decode("utf-8"))
             if params or in_params:
                 return "(" + ", ".join(params) + ")"
+
+        return None
+
+    @staticmethod
+    def _extract_decorators(node: Any) -> list[str] | None:
+        """Extract decorator/annotation strings from a definition node.
+
+        Language-agnostic strategy:
+        1. Python: parent is 'decorated_definition' → collect 'decorator' children.
+        2. Java/C#/Kotlin/PHP: node itself has 'modifiers' child with annotations.
+        3. Rust: preceding 'attribute_item' siblings.
+        4. Otherwise: return None.
+        """
+        decorators: list[str] = []
+
+        # Strategy 1: Python decorated_definition parent
+        parent = node.parent
+        if parent is not None and parent.type == "decorated_definition":
+            for child in parent.children:
+                if child.type == "decorator":
+                    decorators.append(child.text.decode("utf-8").strip())
+            if decorators:
+                return decorators
+
+        # Strategy 2: Modifiers/attribute children on node itself
+        # Covers Java, C#, Kotlin, Scala, PHP
+        _annotation_types = frozenset(
+            {
+                "annotation",
+                "marker_annotation",
+                "attribute_list",
+                "attribute",
+                "single_annotation",
+                "multi_annotation",
+                "user_type",  # Kotlin annotations
+            }
+        )
+        for child in node.children:
+            if child.type == "modifiers":
+                for mod_child in child.children:
+                    if mod_child.type in _annotation_types:
+                        decorators.append(mod_child.text.decode("utf-8").strip())
+            elif child.type in _annotation_types:
+                decorators.append(child.text.decode("utf-8").strip())
+
+        # Strategy 3: Rust attribute_item siblings preceding the node
+        if not decorators and parent is not None:
+            for sibling in parent.children:
+                if sibling == node:
+                    break
+                if sibling.type == "attribute_item":
+                    decorators.append(sibling.text.decode("utf-8").strip())
+
+        return decorators if decorators else None
+
+    @staticmethod
+    def _extract_return_type(node: Any) -> str | None:
+        """Extract return type annotation from a definition node.
+
+        Language-agnostic: checks common field names used across grammars.
+        """
+        # Most languages use 'return_type' or 'type' as the field name
+        for field_name in ("return_type", "type"):
+            type_node = node.child_by_field_name(field_name)
+            if type_node is not None:
+                text: str = str(type_node.text.decode("utf-8")).strip()
+                # Avoid returning the whole body if 'type' matched something too big
+                if len(text) < 200:
+                    return text
+
+        # Check for return type indicated by '->' or ':' followed by type
+        # (TypeScript/Rust arrow return types handled by field names above)
+        return None
+
+    @staticmethod
+    def _extract_docstring(
+        node: Any,
+        body_node_types: frozenset[str],
+    ) -> str | None:
+        """Extract docstring from a definition node.
+
+        Three strategies:
+        1. Python-style: body's first statement is expression_statement(string).
+        2. Block comment: preceding sibling block/comment node (JSDoc, Javadoc).
+        3. Line comments: consecutive preceding /// or // doc-comment siblings.
+        """
+        _comment_types = frozenset({"comment", "line_comment", "block_comment"})
+
+        # Strategy 1: Python docstrings (first expression_statement > string in body)
+        for child in node.children:
+            if child.type in body_node_types:
+                body = child
+                if body.child_count > 0:
+                    first = body.children[0]
+                    if first.type == "expression_statement" and first.child_count > 0:
+                        string_node = first.children[0]
+                        if string_node.type == "string":
+                            raw = string_node.text.decode("utf-8").strip()
+                            # Strip triple quotes
+                            for q in ('"""', "'''"):
+                                if raw.startswith(q) and raw.endswith(q):
+                                    raw = raw[3:-3].strip()
+                                    break
+                            # Take first paragraph only
+                            first_para = raw.split("\n\n")[0].strip()
+                            if first_para:
+                                # Normalize whitespace
+                                return " ".join(first_para.split())
+                break  # Only check first body child
+
+        # Strategy 2+3: Preceding sibling comment(s)
+        prev = node.prev_named_sibling
+        if prev is None or prev.type not in _comment_types:
+            return None
+
+        text = prev.text.decode("utf-8").strip()
+
+        # Strategy 2: Block doc-comment (/** ... */)
+        if text.startswith("/**"):
+            text = text[3:]
+            if text.endswith("*/"):
+                text = text[:-2]
+            text = text.strip()
+            lines = []
+            for line in text.splitlines():
+                clean = line.strip().lstrip("* ").strip()
+                lines.append(clean)
+            full = " ".join(lines)
+            first_para = full.split("\n\n")[0].strip()
+            if first_para:
+                return " ".join(first_para.split())
+
+        # Strategy 3: Consecutive /// line-comments (Rust, C#, etc.)
+        if text.startswith("///"):
+            # Walk backward collecting all consecutive /// lines
+            doc_lines: list[str] = []
+            sibling = prev
+            while sibling is not None and sibling.type in _comment_types:
+                sib_text = sibling.text.decode("utf-8").strip()
+                if sib_text.startswith("///"):
+                    doc_lines.append(sib_text[3:].strip())
+                    sibling = sibling.prev_named_sibling
+                else:
+                    break
+            # Lines were collected in reverse order
+            doc_lines.reverse()
+            # Strip XML tags (C# style) and take meaningful content
+            cleaned: list[str] = []
+            for line in doc_lines:
+                # Remove XML tags like <summary>, </summary>, <param>, etc.
+                stripped = re.sub(r"<[^>]+>", "", line).strip()
+                if stripped:
+                    cleaned.append(stripped)
+            full = " ".join(cleaned)
+            first_para = full.split("\n\n")[0].strip()
+            if first_para:
+                return " ".join(first_para.split())
 
         return None
 
