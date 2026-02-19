@@ -750,6 +750,59 @@ LUA_QUERIES = LanguageQueryConfig(
 
 
 # ---------------------------------------------------------------------------
+# Markdown
+# ---------------------------------------------------------------------------
+MARKDOWN_QUERIES = LanguageQueryConfig(
+    query_text="""
+        (section
+            (atx_heading (inline) @name)) @node
+    """,
+    patterns=(SymbolPattern(kind="heading"),),
+)
+
+
+# ---------------------------------------------------------------------------
+# TOML
+# ---------------------------------------------------------------------------
+TOML_QUERIES = LanguageQueryConfig(
+    query_text="""
+        (table
+            [(bare_key) (dotted_key)] @name) @node
+        (pair
+            (bare_key) @name) @node
+    """,
+    patterns=(
+        SymbolPattern(kind="table"),
+        SymbolPattern(kind="pair"),
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# YAML
+# ---------------------------------------------------------------------------
+YAML_QUERIES = LanguageQueryConfig(
+    query_text="""
+        (block_mapping_pair
+            key: (flow_node) @name) @node
+    """,
+    patterns=(SymbolPattern(kind="key"),),
+)
+
+
+# ---------------------------------------------------------------------------
+# JSON
+# ---------------------------------------------------------------------------
+JSON_QUERIES = LanguageQueryConfig(
+    query_text="""
+        (pair
+            key: (string (string_content) @name)) @node
+    """,
+    patterns=(SymbolPattern(kind="pair"),),
+)
+
+
+# ---------------------------------------------------------------------------
 # Language -> Config mapping
 # ---------------------------------------------------------------------------
 # Keys match the language names used in extract_symbols() dispatch
@@ -775,4 +828,9 @@ LANGUAGE_QUERY_CONFIGS: dict[str, LanguageQueryConfig] = {
     "ocaml": OCAML_QUERIES,
     "julia": JULIA_QUERIES,
     "lua": LUA_QUERIES,
+    # Data/Config formats
+    "markdown": MARKDOWN_QUERIES,
+    "toml": TOML_QUERIES,
+    "yaml": YAML_QUERIES,
+    "json": JSON_QUERIES,
 }
