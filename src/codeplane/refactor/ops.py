@@ -54,6 +54,9 @@ class RefactorPreview:
     verification_required: bool = False
     low_certainty_files: list[str] = field(default_factory=list)
     verification_guidance: str | None = None
+    # File move metadata (set by move(), consumed by apply())
+    move_from: str | None = None
+    move_to: str | None = None
 
 
 @dataclass
@@ -802,6 +805,8 @@ class RefactorOps:
                 )
         # Build preview
         preview = self._build_preview(edits_by_file)
+        preview.move_from = from_path
+        preview.move_to = to_path
         self._pending[refactor_id] = preview
 
         return RefactorResult(
@@ -1238,8 +1243,36 @@ class RefactorOps:
 
             edits.append(Edit(path=file_edit.path, action="update", content=new_content))
 
-        # Execute mutation
+        # Execute mutation (import reference updates)
         mutation_result = mutation_ops.write_source(edits)
+
+        # Physical file move (per SPEC.md §lines 1524-1531)
+        if preview.move_from and preview.move_to:
+            src = self._repo_root / preview.move_from
+            dst = self._repo_root / preview.move_to
+            if src.exists():
+                import shutil
+                import subprocess
+
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                # Check if file is git-tracked
+                try:
+                    subprocess.run(
+                        ["git", "ls-files", "--error-unmatch", preview.move_from],
+                        cwd=self._repo_root,
+                        capture_output=True,
+                        check=True,
+                    )
+                    # Tracked: use git mv to preserve history
+                    subprocess.run(
+                        ["git", "mv", preview.move_from, preview.move_to],
+                        cwd=self._repo_root,
+                        capture_output=True,
+                        check=True,
+                    )
+                except subprocess.CalledProcessError:
+                    # Untracked or dirty: plain filesystem move
+                    shutil.move(str(src), str(dst))
 
         # Clear pending
         del self._pending[refactor_id]
