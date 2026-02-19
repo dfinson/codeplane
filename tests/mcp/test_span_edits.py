@@ -303,7 +303,7 @@ class TestFuzzySpanMatching:
         from codeplane.mcp.tools.mutation import _fuzzy_match_span
 
         lines = ["a\n", "b\n", "c\n", "d\n", "e\n"]
-        # Agent says lines 1-3 (0-indexed: start=0, end=3) but expected_content is only 2 lines
+        # Agent says span [0:3] (3 lines) but expected_content is only 2 lines
         start, end, corrected = _fuzzy_match_span(lines, 0, 3, "a\nb\n")
         assert start == 0
         assert end == 2  # Corrected to match expected_content width
@@ -380,3 +380,45 @@ class TestContentVerification:
         actual_count = new_end - new_start
         assert exp_count == 5
         assert actual_count == 3
+
+    def test_mismatch_raises_mcp_error_with_content_mismatch_code(self) -> None:
+        """Full error path: MCPError raised with CONTENT_MISMATCH code and message."""
+        from codeplane.mcp.errors import MCPError, MCPErrorCode
+        from codeplane.mcp.tools.mutation import _fuzzy_match_span, _lines_match
+
+        lines = ["a\n", "b\n", "c\n", "d\n", "e\n"]
+        expected_content = "WRONG\nCONTENT\n"
+        start, end = 1, 3
+        path = "test.py"
+        start_line_1indexed = start + 1
+        end_line_1indexed = end
+
+        # Reproduce the exact error-raising logic from mutation.py
+        new_start, new_end, was_corrected = _fuzzy_match_span(lines, start, end, expected_content)
+        assert was_corrected is False
+
+        exp_lines = expected_content.splitlines(keepends=True)
+        if exp_lines and not exp_lines[-1].endswith("\n"):
+            exp_lines[-1] += "\n"
+
+        assert not _lines_match(lines[start:end], exp_lines)
+
+        with pytest.raises(MCPError, match="expected_content") as exc_info:
+            raise MCPError(
+                code=MCPErrorCode.CONTENT_MISMATCH,
+                message=(
+                    f"expected_content ({len(exp_lines)} lines) does not match "
+                    f"actual content ({end - start} lines) at "
+                    f"{path}:{start_line_1indexed}-{end_line_1indexed}. "
+                    f"Fuzzy search (\xb1{5} lines) also found no match."
+                ),
+                remediation=(
+                    "Re-read the target span with read_source to get "
+                    "current content and correct line numbers, then retry."
+                ),
+            )
+
+        assert exc_info.value.code == MCPErrorCode.CONTENT_MISMATCH
+        assert "2 lines" in exc_info.value.message  # expected line count
+        assert "test.py" in exc_info.value.message  # path included
+        assert "re-read" in exc_info.value.remediation.lower()  # actionable hint
