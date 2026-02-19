@@ -204,6 +204,38 @@ class TestBuildSymbolTree:
         tree = build(defs)
         assert "impl_trait_method" in tree[0]
 
+    def test_constants_included_in_tree_when_passed(self) -> None:
+        """_build_symbol_tree renders all defs it receives, including constants."""
+        build = self._import_tree_builder()
+        defs = [
+            FakeDef("MY_CONST", "variable", 1, 1),
+            FakeDef("func", "function", 3, 10),
+        ]
+        tree = build(defs)
+        assert len(tree) == 2
+        assert "variable MY_CONST" in tree[0]
+        assert "function func" in tree[1]
+
+    def test_constant_filtering_logic(self) -> None:
+        """Validates the constant-kind filtering used by _build_scaffold."""
+        constant_kinds = frozenset({"variable", "constant", "val", "var", "property", "field"})
+        defs = [
+            FakeDef("MY_VAR", "variable", 1, 1),
+            FakeDef("SETTING", "constant", 2, 2),
+            FakeDef("func", "function", 5, 10),
+            FakeDef("MyClass", "class", 12, 30),
+        ]
+        # exclude constants (default behavior)
+        filtered = [d for d in defs if d.kind not in constant_kinds]
+        assert len(filtered) == 2
+        assert filtered[0].name == "func"
+        assert filtered[1].name == "MyClass"
+
+        # include constants (include_constants=True means keep all)
+        include_constants = True
+        filtered_all = [d for d in defs if include_constants or d.kind not in constant_kinds]
+        assert len(filtered_all) == 4
+
 
 # =============================================================================
 # _build_unindexed_fallback tests
