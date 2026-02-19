@@ -970,8 +970,8 @@ def main() -> None:
         help="Path to .chatreplay.json file.",
     )
     parser.add_argument(
-        "--out",
-        "-o",
+        "output",
+        nargs="?",
         default=None,
         help="Output JSON file path. Auto-derived from prompt text if omitted.",
     )
@@ -1084,8 +1084,8 @@ def main() -> None:
     )
 
     # 6. Output
-    if args.out:
-        out_path = Path(args.out)
+    if args.output:
+        out_path = Path(args.output)
     else:
         preview = (prompt.get("prompt") or "trace")[:60]
         out_path = Path(f"{_to_underscore_case(preview)}_trace.json")
