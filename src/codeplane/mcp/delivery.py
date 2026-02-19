@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+import re
 import sys
 import threading
 import time
@@ -434,24 +435,6 @@ def _try_paginate(
 # Disk-Cache Fetch Hints (for non-paginated overflow)
 # =============================================================================
 
-# PowerShell equivalents for jq commands used in fetch hints.
-# Maps jq patterns to PowerShell. Used on Windows to provide native alternatives.
-_PS_EQUIVALENTS: dict[str, str] = {
-    # semantic_diff
-    "length": ".Count",
-    "group_by": "| Group-Object",
-    "select(.change": "| Where-Object {$_.change",
-    "select((.change": "| Where-Object {($_.change",
-    # test_output
-    'select(.status == "failed"': '| Where-Object {$_.status -eq "failed"',
-    'select(.result == "failed"': '| Where-Object {$_.result -eq "failed"',
-    # refactor_preview
-    'select(.certainty == "low"': '| Where-Object {$_.certainty -eq "low"',
-    'select(.certainty == "medium"': '| Where-Object {$_.certainty -eq "medium"',
-    # generic
-    "keys": ".PSObject.Properties.Name",
-}
-
 
 def _jq_to_powershell(jq_cmd: str, path: str) -> str:
     """Convert a jq command to PowerShell equivalent.
@@ -463,8 +446,6 @@ def _jq_to_powershell(jq_cmd: str, path: str) -> str:
     ps_base = f"(gc {path} | ConvertFrom-Json)"
 
     # Extract the jq filter (between single quotes)
-    import re
-
     match = re.search(r"jq\s+(?:-r\s+)?'([^']+)'", jq_cmd)
     if not match:
         # Fallback: just note jq is needed
