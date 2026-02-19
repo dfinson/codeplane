@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextvars
 import json
+import sys
 import threading
 import time
 import uuid
@@ -433,6 +434,102 @@ def _try_paginate(
 # Disk-Cache Fetch Hints (for non-paginated overflow)
 # =============================================================================
 
+# PowerShell equivalents for jq commands used in fetch hints.
+# Maps jq patterns to PowerShell. Used on Windows to provide native alternatives.
+_PS_EQUIVALENTS: dict[str, str] = {
+    # semantic_diff
+    "length": ".Count",
+    "group_by": "| Group-Object",
+    "select(.change": "| Where-Object {$_.change",
+    "select((.change": "| Where-Object {($_.change",
+    # test_output
+    'select(.status == "failed"': '| Where-Object {$_.status -eq "failed"',
+    'select(.result == "failed"': '| Where-Object {$_.result -eq "failed"',
+    # refactor_preview
+    'select(.certainty == "low"': '| Where-Object {$_.certainty -eq "low"',
+    'select(.certainty == "medium"': '| Where-Object {$_.certainty -eq "medium"',
+    # generic
+    "keys": ".PSObject.Properties.Name",
+}
+
+
+def _jq_to_powershell(jq_cmd: str, path: str) -> str:
+    """Convert a jq command to PowerShell equivalent.
+
+    Handles the specific patterns used in this module's fetch hints.
+    Returns a PowerShell command that extracts similar data.
+    """
+    # Base: (Get-Content <path> | ConvertFrom-Json)
+    ps_base = f"(gc {path} | ConvertFrom-Json)"
+
+    # Extract the jq filter (between single quotes)
+    import re
+
+    match = re.search(r"jq\s+(?:-r\s+)?'([^']+)'", jq_cmd)
+    if not match:
+        # Fallback: just note jq is needed
+        return f"# Requires jq: {jq_cmd}"
+
+    jq_filter = match.group(1)
+
+    # Handle common patterns
+    # Simple property: .foo -> .foo
+    if re.match(r"^\.\w+$", jq_filter):
+        return f"{ps_base}{jq_filter}"
+
+    # Property access with sub-property: .foo.bar -> .foo.bar
+    if re.match(r"^[.\w]+$", jq_filter):
+        return f"{ps_base}{jq_filter}"
+
+    # Length: .foo | length -> .foo.Count
+    if jq_filter.endswith(" | length"):
+        prop = jq_filter.replace(" | length", "")
+        return f"{ps_base}{prop}.Count"
+
+    # Object construction: {passed, failed, total}
+    if re.match(r"^\{[\w, ]+\}$", jq_filter):
+        props = jq_filter[1:-1].replace(" ", "").split(",")
+        return f"{ps_base} | Select-Object {','.join(props)}"
+
+    # Array iteration with select: [.arr[] | select(.x == "y")]
+    if "select(" in jq_filter:
+        # Extract array path and build Where-Object
+        arr_match = re.match(r"\[\.([\w]+)\[\]\s*\|\s*select\(", jq_filter)
+        if arr_match:
+            arr_name = arr_match.group(1)
+            # Simplify: return Where-Object pattern
+            return f"{ps_base}.{arr_name} | Where-Object {{ <condition> }}"
+
+    # Array iteration: [.arr[] | .prop] -> .arr.prop
+    arr_prop = re.match(r"\[\.([\w]+)\[\]\s*\|\s*\.([\w]+)\]$", jq_filter)
+    if arr_prop:
+        return f"{ps_base}.{arr_prop.group(1)}.{arr_prop.group(2)}"
+
+    # Array iteration: [.arr[] | .prop // .alt] -> .arr | Select prop
+    if "//" in jq_filter and "[" in jq_filter:
+        arr_match = re.match(r"\[\.([\w]+)\[\]", jq_filter)
+        if arr_match:
+            return f"{ps_base}.{arr_match.group(1)} | Select-Object <props>"
+
+    # Fallback: note jq is needed with install hint
+    return f"# Requires jq (choco install jq): {jq_cmd}"
+
+
+def _os_extraction_cmds(jq_cmd: str, path: str) -> list[str]:
+    """Return OS-appropriate extraction commands.
+
+    On Unix: returns just the jq command.
+    On Windows: returns both jq (with install hint) and PowerShell equivalent.
+    """
+    if sys.platform != "win32":
+        return [jq_cmd]
+
+    ps_cmd = _jq_to_powershell(jq_cmd, path)
+    return [
+        jq_cmd,
+        ps_cmd,
+    ]
+
 
 def _build_fetch_hint(
     resource_id: str,
@@ -471,10 +568,31 @@ def _extract_summary_and_commands(
     payload: dict[str, Any],
     path: str,
 ) -> tuple[str, list[str]]:
-    """Extract structural summary + tailored jq commands for a disk-cached payload.
+    """Extract structural summary + OS-appropriate extraction commands.
 
-    Returns (summary_line, [jq_commands]) — both derived from actual payload data.
+    Returns (summary_line, [commands]) — both derived from actual payload data.
+    On Unix: returns jq commands.
+    On Windows: returns both jq commands and PowerShell equivalents.
     Commands use the real cache file path, not placeholders.
+    """
+    summary, jq_cmds = _extract_jq_commands(kind, payload, path)
+
+    # Convert to OS-appropriate commands
+    os_cmds: list[str] = []
+    for jq_cmd in jq_cmds:
+        os_cmds.extend(_os_extraction_cmds(jq_cmd, path))
+
+    return summary, os_cmds
+
+
+def _extract_jq_commands(
+    kind: str,
+    payload: dict[str, Any],
+    path: str,
+) -> tuple[str, list[str]]:
+    """Extract structural summary and jq commands for a payload.
+
+    Internal helper - returns raw jq commands before OS adaptation.
     """
     if kind == "semantic_diff":
         # Detect which key holds the changes array
