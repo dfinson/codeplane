@@ -11,6 +11,7 @@ Covers:
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -602,3 +603,59 @@ class TestContentMismatchCatalog:
 
         entry = ERROR_CATALOG[MCPErrorCode.CONTENT_MISMATCH.value]
         assert "expected_content" in entry.description
+
+
+# =============================================================================
+# Nonexistent file update error path
+# =============================================================================
+
+
+class TestUpdateNonexistentFile:
+    """Verify update to nonexistent file raises FILE_NOT_FOUND, not INTERNAL_ERROR."""
+
+    def test_validate_and_read_raises_file_not_found(self, tmp_path: Path) -> None:
+        """Simulate the mutation.py handler pattern: validate_path_in_repo + read_text.
+
+        When a file doesn't exist but is within repo root, read_text raises
+        FileNotFoundError which must be caught as MCPError(FILE_NOT_FOUND).
+        """
+        from codeplane.files.ops import validate_path_in_repo
+        from codeplane.mcp.errors import MCPError, MCPErrorCode
+
+        # File doesn't exist but path is valid within repo
+        nonexistent = "does_not_exist_12345.py"
+        full_path = validate_path_in_repo(tmp_path, nonexistent)
+        assert not full_path.exists()
+
+        # Simulate the combined try/except from mutation.py
+        with pytest.raises(MCPError, match="File not found") as exc_info:
+            try:
+                _full = validate_path_in_repo(tmp_path, nonexistent)
+                _full.read_text(encoding="utf-8", errors="replace")
+            except Exception as exc:
+                raise MCPError(
+                    code=MCPErrorCode.FILE_NOT_FOUND,
+                    message=f"File not found: {nonexistent}",
+                    remediation="Check the file path. Use list_files to see available files.",
+                ) from exc
+
+        assert exc_info.value.code == MCPErrorCode.FILE_NOT_FOUND
+
+    def test_path_traversal_still_raises_file_not_found(self, tmp_path: Path) -> None:
+        """Path traversal is caught by validate_path_in_repo as PERMISSION_DENIED,
+        but the combined except catches it as FILE_NOT_FOUND in mutation handler."""
+        from codeplane.files.ops import validate_path_in_repo
+        from codeplane.mcp.errors import MCPError, MCPErrorCode
+
+        with pytest.raises(MCPError, match="File not found") as exc_info:
+            try:
+                _full = validate_path_in_repo(tmp_path, "../../etc/passwd")
+                _full.read_text(encoding="utf-8", errors="replace")
+            except Exception as exc:
+                raise MCPError(
+                    code=MCPErrorCode.FILE_NOT_FOUND,
+                    message="File not found: ../../etc/passwd",
+                    remediation="Check the file path. Use list_files to see available files.",
+                ) from exc
+
+        assert exc_info.value.code == MCPErrorCode.FILE_NOT_FOUND

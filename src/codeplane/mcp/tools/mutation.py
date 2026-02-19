@@ -287,17 +287,17 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                             ],
                         )
 
-                # Validate path
+                # Validate path and read file
                 try:
                     full_path = validate_path_in_repo(app_ctx.repo_root, path)
+                    content = full_path.read_text(encoding="utf-8", errors="replace")
                 except Exception as exc:
                     raise MCPError(
                         code=MCPErrorCode.FILE_NOT_FOUND,
                         message=f"File not found: {path}",
-                        remediation="Check the file path.",
+                        remediation="Check the file path. Use list_files to see available files.",
                     ) from exc
 
-                content = full_path.read_text(encoding="utf-8", errors="replace")
                 actual_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
                 # Verify hash for all edits to this file
