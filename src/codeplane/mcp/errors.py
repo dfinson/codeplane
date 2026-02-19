@@ -21,6 +21,7 @@ class MCPErrorCode(StrEnum):
     ANCHOR_AMBIGUOUS = "ANCHOR_AMBIGUOUS"
     INVALID_RANGE = "INVALID_RANGE"
     INVALID_MODE = "INVALID_MODE"
+    CONTENT_MISMATCH = "CONTENT_MISMATCH"
 
     # State errors - agent should re-read file
     FILE_MODIFIED = "FILE_MODIFIED"

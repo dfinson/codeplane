@@ -116,13 +116,21 @@ def _fuzzy_match_span(
     if expected_lines and not expected_lines[-1].endswith("\n"):
         expected_lines[-1] += "\n"
     search_len = len(expected_lines)
+    span_width = end - start
 
-    # First check: does expected_content match at the given position?
+    # First check: does expected_content match at the given position and width?
     actual_at_span = lines[start:end]
     if _lines_match(actual_at_span, expected_lines):
         return start, end, False  # Already correct
 
-    # Search nearby positions
+    # Width-correction: same position but use expected_content's line count.
+    # Catches off-by-one in end_line (agent miscounted span width).
+    if search_len != span_width and start >= 0 and start + search_len <= len(lines):
+        candidate = lines[start : start + search_len]
+        if _lines_match(candidate, expected_lines):
+            return start, start + search_len, True
+
+    # Search nearby positions (both offset and width corrected)
     for offset in range(1, _FUZZY_SEARCH_WINDOW + 1):
         for direction in (-1, 1):
             candidate_start = start + (offset * direction)
@@ -133,7 +141,7 @@ def _fuzzy_match_span(
             if _lines_match(candidate, expected_lines):
                 return candidate_start, candidate_end, True
 
-    # No match found — return original (hash will catch if wrong)
+    # No match found — return original (caller verifies content)
     return start, end, False
 
 
@@ -326,7 +334,27 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                             )
                             start = new_start
                             end = new_end
-                    # Reject spans that start past end of file
+                        else:
+                            # Verify content actually matches — fail loudly vs silent corruption
+                            exp_lines = e.expected_content.splitlines(keepends=True)
+                            if exp_lines and not exp_lines[-1].endswith("\n"):
+                                exp_lines[-1] += "\n"
+                            if not _lines_match(lines[start:end], exp_lines):
+                                exp_count = len(exp_lines)
+                                actual_count = end - start
+                                raise MCPError(
+                                    code=MCPErrorCode.CONTENT_MISMATCH,
+                                    message=(
+                                        f"expected_content ({exp_count} lines) does not match "
+                                        f"actual content ({actual_count} lines) at "
+                                        f"{path}:{e.start_line}-{e.end_line}. "
+                                        f"Fuzzy search (±{_FUZZY_SEARCH_WINDOW} lines) also found no match."
+                                    ),
+                                    remediation=(
+                                        "Re-read the target span with read_source to get "
+                                        "current content and correct line numbers, then retry."
+                                    ),
+                                )
                     if start >= len(lines):
                         raise InvalidRangeError(
                             path=path,

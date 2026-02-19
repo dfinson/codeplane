@@ -297,3 +297,86 @@ class TestFuzzySpanMatching:
                 expected_file_sha256="abc123",
                 new_content="new stuff",
             )
+
+    def test_width_correction_same_position(self) -> None:
+        """Agent has correct start but wrong end_line (off-by-one width)."""
+        from codeplane.mcp.tools.mutation import _fuzzy_match_span
+
+        lines = ["a\n", "b\n", "c\n", "d\n", "e\n"]
+        # Agent says lines 1-3 (0-indexed: start=0, end=3) but expected_content is only 2 lines
+        start, end, corrected = _fuzzy_match_span(lines, 0, 3, "a\nb\n")
+        assert start == 0
+        assert end == 2  # Corrected to match expected_content width
+        assert corrected is True
+
+    def test_width_correction_end_extending_past(self) -> None:
+        """Agent end_line is 1 too many — width correction shrinks span."""
+        from codeplane.mcp.tools.mutation import _fuzzy_match_span
+
+        lines = ["x\n", "target1\n", "target2\n", "target3\n", "y\n"]
+        # Agent says start=1, end=5 (4 lines) but content is 3 lines
+        start, end, corrected = _fuzzy_match_span(lines, 1, 5, "target1\ntarget2\ntarget3\n")
+        assert start == 1
+        assert end == 4
+        assert corrected is True
+
+    def test_width_correction_not_triggered_when_exact(self) -> None:
+        """Width correction skipped when span width matches expected_content lines."""
+        from codeplane.mcp.tools.mutation import _fuzzy_match_span
+
+        lines = ["a\n", "b\n", "c\n"]
+        start, end, corrected = _fuzzy_match_span(lines, 0, 2, "a\nb\n")
+        assert start == 0
+        assert end == 2
+        assert corrected is False  # Exact match, no correction
+
+    def test_content_mismatch_no_match_returns_original(self) -> None:
+        """When expected_content doesn't match anywhere, original span returned."""
+        from codeplane.mcp.tools.mutation import _fuzzy_match_span
+
+        lines = ["a\n", "b\n", "c\n", "d\n", "e\n"]
+        start, end, corrected = _fuzzy_match_span(lines, 1, 2, "NONEXISTENT\n")
+        assert start == 1
+        assert end == 2
+        assert corrected is False
+
+
+class TestContentVerification:
+    """Tests for expected_content verification in write_source apply loop."""
+
+    def test_content_mismatch_raises_error(self) -> None:
+        """Mismatched expected_content raises MCPError with line counts."""
+        from codeplane.mcp.tools.mutation import _fuzzy_match_span, _lines_match
+
+        lines = ["a\n", "b\n", "c\n", "d\n", "e\n"]
+        expected_content = "WRONG\nCONTENT\n"
+        start, end = 1, 3  # 0-indexed
+
+        # Simulate the verification logic from write_source
+        new_start, new_end, was_corrected = _fuzzy_match_span(lines, start, end, expected_content)
+        assert was_corrected is False
+
+        exp_lines = expected_content.splitlines(keepends=True)
+        if exp_lines and not exp_lines[-1].endswith("\n"):
+            exp_lines[-1] += "\n"
+        assert not _lines_match(lines[start:end], exp_lines)
+
+    def test_line_count_reported_in_mismatch(self) -> None:
+        """Error message includes both expected and actual line counts."""
+        from codeplane.mcp.tools.mutation import _fuzzy_match_span, _lines_match
+
+        lines = [f"line{i}\n" for i in range(10)]
+        # 5-line expected_content vs 3-line span — no match anywhere
+        expected_content = "no\nmatch\nanywhere\nin\nfile\n"
+        start, end = 2, 5
+
+        new_start, new_end, was_corrected = _fuzzy_match_span(lines, start, end, expected_content)
+        exp_lines = expected_content.splitlines(keepends=True)
+        if exp_lines and not exp_lines[-1].endswith("\n"):
+            exp_lines[-1] += "\n"
+
+        assert not _lines_match(lines[new_start:new_end], exp_lines)
+        exp_count = len(exp_lines)
+        actual_count = new_end - new_start
+        assert exp_count == 5
+        assert actual_count == 3
