@@ -8,7 +8,7 @@ Public API:
     DEFAULT_CODEPLANE_PREFIX
     classify_tool_kind(tool_name)      -> "mcp" | "native" | "builtin"
     derive_tool_namespace(...)         -> "codeplane" | "github_mcp" | ...
-    infer_call_subkind(tool_name, kind)-> "terminal" | "edit" | ...
+    infer_call_subkind(tool_name)      -> "terminal" | "edit" | ...
     strip_mcp_prefix(tool_name)        -> short tool name
 """
 
@@ -154,62 +154,6 @@ _SUBKIND_BY_TOOL_NAME: dict[str, str] = {
     "mcp_s_pylanceWorkspaceUserFiles": "read_file",
 }
 
-# Known CodePlane MCP tool names (schema-inferred short names).
-_CODEPLANE_TOOL_NAMES: frozenset[str] = frozenset(
-    k
-    for k in _SUBKIND_BY_TOOL_NAME
-    if k
-    not in (
-        "github_api",
-        "github_repo",
-        "run_in_terminal",
-        "get_terminal_output",
-        "manage_todo_list",
-        "ask_questions",
-        "tool_search_tool_regex",
-    )
-    and not k[0].isupper()  # exclude camelCase VS Code builtins
-    and not k.startswith("mcp_s_pylance")
-    and k
-    not in (
-        "edit_file",
-        "create_file",
-        "delete_file",
-        "rename_file",
-        "insert_edit",
-        "replace_in_file",
-        "list_directory",
-        "open_file",
-        "get_workspace_structure",
-        "search_files",
-        "find_text_in_files",
-        "find_in_files",
-        "configure_python_environment",
-        "install_python_packages",
-        "get_python_environment_details",
-        "get_python_executable_details",
-        "configure_python_notebook",
-        "configure_non_python_notebook",
-        "restart_notebook_kernel",
-        "fetch_webpage",
-        "open_simple_browser",
-        "run_vscode_command",
-        "install_extension",
-        "vscode_searchExtensions_internal",
-        "create_new_workspace",
-        "get_project_setup_info",
-        "create_and_run_task",
-        "get_vscode_api",
-        "test_failure",
-        "search_code",
-        "search_issues",
-        "search_pull_requests",
-        "search_repositories",
-        "search_users",
-        "get_file_contents",
-    )
-)
-
 
 # ---------------------------------------------------------------------------
 # Public functions
@@ -217,15 +161,23 @@ _CODEPLANE_TOOL_NAMES: frozenset[str] = frozenset(
 
 
 def strip_mcp_prefix(tool_name: str) -> str:
-    """Strip MCP server prefix: 'mcp_codeplane-eve_git_checkout' -> 'git_checkout'."""
-    if tool_name.startswith("mcp_"):
-        parts = tool_name.split("_", 2)  # ['mcp', 'codeplane-eve', 'git_checkout']
-        if len(parts) >= 3:
-            return parts[2]
-    return tool_name
+    """Strip MCP server prefix: ``mcp_<server-label>_<tool>`` -> ``<tool>``.
+
+    The server label sits between the first and second ``_`` after the
+    ``mcp_`` literal.  Labels may contain hyphens (``codeplane-cod``) but
+    real labels don't contain underscores today, so the first ``_`` inside
+    the remainder reliably separates label from tool name.
+    """
+    if not tool_name.startswith("mcp_"):
+        return tool_name
+    rest = tool_name[4:]  # drop 'mcp_'
+    sep = rest.find("_")
+    if sep == -1:
+        return tool_name  # no second underscore — not a real MCP name
+    return rest[sep + 1 :]
 
 
-def infer_call_subkind(tool_name: str, tool_kind: str) -> str:
+def infer_call_subkind(tool_name: str) -> str:
     """Classify a tool invocation into a broad functional subkind.
 
     Applies to all tool_kind values (native, mcp, builtin).
@@ -272,9 +224,7 @@ def derive_tool_namespace(
     "other_mcp", "native", "builtin", "unknown".
     """
     if tool_kind == "mcp":
-        if tool_name in _CODEPLANE_TOOL_NAMES or tool_name.startswith(codeplane_prefix):
-            return "codeplane"
-        if "codeplane" in tool_name:
+        if tool_name.startswith(codeplane_prefix) or "codeplane" in tool_name:
             return "codeplane"
         if tool_name.startswith("mcp_github"):
             return "github_mcp"

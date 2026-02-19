@@ -83,7 +83,7 @@ def _classify_tool_call(
     name = tc.get("name", "")
     tool_kind = classify_tool_kind(name)
     tool_namespace = derive_tool_namespace(name, tool_kind, codeplane_prefix)
-    call_subkind = infer_call_subkind(name, tool_kind)
+    call_subkind = infer_call_subkind(name)
     arguments = tc.get("arguments", {})
     arguments_bytes = len(json.dumps(arguments).encode("utf-8"))
 
@@ -141,11 +141,16 @@ def _segment_pseudo_turns(
             "finish_reason": last.get("finish_reason"),
         }
 
+    # finish_reason values that mean "continuation, not a user-facing boundary":
+    # - tool_calls: agent wants to invoke tools, loop continues
+    # - length: token limit hit, server will re-prompt to continue
+    _CONTINUATION_REASONS = {"tool_calls", "length"}
+
     for turn in turns:
         current_turns.append(turn)
         finish = turn.get("finish_reason")
-        # Boundary: stop (not tool_calls) marks end of a pseudo-turn
-        if finish and finish != "tool_calls":
+        # Boundary: only 'stop' (or other non-continuation reasons)
+        if finish and finish not in _CONTINUATION_REASONS:
             pt = _flush(current_turns)
             pt["pseudo_turn_index"] = pt_index
             pseudo_turns.append(pt)
@@ -210,16 +215,27 @@ def _compute_metrics(
     cps_samples: list[float] = []
     if len(turn_timestamps_ms) >= 2:
         sorted_ts = sorted(turn_timestamps_ms)
-        for i, ts in enumerate(sorted_ts):
-            count = sum(1 for t in sorted_ts[i:] if t <= ts + 1000)
-            max_burst_1s = max(max_burst_1s, count)
 
-        bucket_start = sorted_ts[0]
-        bucket_t = bucket_start
+        # Sliding-window max burst in any 1-second window — O(n)
+        left = 0
+        for right in range(len(sorted_ts)):
+            while sorted_ts[right] - sorted_ts[left] > 1000:
+                left += 1
+            max_burst_1s = max(max_burst_1s, right - left + 1)
+
+        # Per-second bucket counts — O(n) with a pointer
+        bucket_t = sorted_ts[0]
+        ptr = 0
         while bucket_t <= sorted_ts[-1]:
-            count = sum(1 for ts in sorted_ts if bucket_t <= ts < bucket_t + 1000)
+            bucket_end = bucket_t + 1000
+            count = 0
+            while ptr < len(sorted_ts) and sorted_ts[ptr] < bucket_end:
+                count += 1
+                ptr += 1
             cps_samples.append(count)
-            bucket_t += 1000
+            bucket_t = bucket_end
+            # Reset ptr to first element >= bucket_t for next bucket
+            # (no reset needed — events are consumed in order)
 
         current = 1
         for i in range(1, len(sorted_ts)):
@@ -336,14 +352,31 @@ def _compute_metrics(
     total_api_latency_ms = sum(durations)
     mean_latency = round(statistics.mean(durations)) if durations else None
 
-    # Cost estimate (approximate; uses public pricing)
-    # Claude Opus 4: ~$15/Mtok prompt, ~$75/Mtok completion
-    # GPT-4o: ~$5/Mtok prompt, ~$15/Mtok completion
-    # We use a rough average; the consumer can refine per-model
-    cost_estimate = round(
-        (total_prompt_tokens * 15 / 1_000_000) + (total_completion_tokens * 75 / 1_000_000),
-        4,
-    )
+    # Cost estimate (approximate; per-model public pricing in $/Mtok)
+    _MODEL_PRICING: dict[str, tuple[float, float]] = {
+        # (prompt_$/Mtok, completion_$/Mtok)
+        "claude-sonnet-4": (3, 15),
+        "claude-opus-4": (15, 75),
+        "gpt-4o": (2.5, 10),
+        "gpt-4.1": (2, 8),
+        "gpt-4.1-mini": (0.4, 1.6),
+        "o3-mini": (1.1, 4.4),
+    }
+    _DEFAULT_PRICING = (15.0, 75.0)  # conservative fallback
+
+    cost_estimate = 0.0
+    for turn in classified_turns:
+        model = (turn.get("model") or "").lower()
+        pt = turn.get("usage", {}).get("prompt_tokens", 0)
+        ct = turn.get("usage", {}).get("completion_tokens", 0)
+        # Match the longest prefix from known models
+        pricing = _DEFAULT_PRICING
+        for model_key, mp in _MODEL_PRICING.items():
+            if model_key in model:
+                pricing = mp
+                break
+        cost_estimate += pt * pricing[0] / 1_000_000 + ct * pricing[1] / 1_000_000
+    cost_estimate = round(cost_estimate, 4)
 
     tier3: dict[str, Any] = {
         "total_result_bytes": total_result_bytes,
@@ -465,11 +498,8 @@ def build_trace(
     )
     total_tokens = capture.get("totals", {}).get("tokens", 0)
 
-    # Tool result bytes
-    tool_result_bytes_total = 0
-    for turn in classified_turns:
-        for tr in turn.get("tool_results_in_context", []):
-            tool_result_bytes_total += tr.get("content_bytes", 0)
+    # Reuse total_result_bytes from metrics (already computed in _compute_metrics)
+    tool_result_bytes_total = metrics["tier3_cost_proxies"]["total_result_bytes"]
 
     # Build turn records for output
     output_turns: list[dict[str, Any]] = []
