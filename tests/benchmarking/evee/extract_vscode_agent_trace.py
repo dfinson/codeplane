@@ -3,6 +3,15 @@
 extract_vscode_agent_trace.py — Extract a pseudo-trace from VS Code Copilot Chat
 / Agent sessions.
 
+LEGACY / FALLBACK APPROACH:
+  This scrapes VS Code's internal ``workspaceStorage/`` directories after a
+  session completes.  For richer data (exact token counts, tool arguments,
+  per-turn latency, model info), use the mitmproxy-based capture approach:
+      copilot_logger.py  →  trace_from_capture.py
+
+  This script is retained as a fallback for sessions where the proxy was not
+  running, and its tool classification functions are re-used by the transformer.
+
 DIRECTORIES SCANNED (in priority order):
   1. ~/.vscode-server/data/User/          (VS Code Remote / WSL server)
   2. ~/.config/Code/User/                 (Linux local)
@@ -37,6 +46,8 @@ KNOWN LIMITATIONS:
   - Token estimation is character-based heuristic (chars / 4 by default).
   - Schema may change between VS Code / Copilot Chat versions without notice.
   - Multiple exthost log directories may exist; we pick the most recent by mtime.
+  - For exact token counts, latency, and tool arguments, use the
+    mitmproxy-based capture approach (copilot_logger.py + trace_from_capture.py).
 """
 
 import argparse
@@ -57,6 +68,7 @@ from typing import Any
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _to_underscore_case(s: str) -> str:
     """Convert an arbitrary string to lowercase_underscore form.
 
@@ -66,6 +78,7 @@ def _to_underscore_case(s: str) -> str:
     s = s.strip().lower()
     s = re.sub(r"[^a-z0-9]+", "_", s)
     return s.strip("_")
+
 
 # ---------------------------------------------------------------------------
 # Parser version — increment on each structural change to the output schema
@@ -87,25 +100,17 @@ log.addHandler(_handler)
 # ---------------------------------------------------------------------------
 # Constants & patterns
 # ---------------------------------------------------------------------------
-UUID4_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I
-)
+UUID4_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 # Tool call directory naming: <tool_call_id>__vscode-<epoch_ms>
-TOOL_DIR_RE = re.compile(
-    r"^(toolu_(?:vrtx_)?[A-Za-z0-9]+)__vscode-(\d+)$"
-)
+TOOL_DIR_RE = re.compile(r"^(toolu_(?:vrtx_)?[A-Za-z0-9]+)__vscode-(\d+)$")
 # Log line timestamp format: "2026-02-17 15:40:46.582 [info] ..."
-LOG_LINE_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\s+\[(\w+)\]\s+(.*)$"
-)
+LOG_LINE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\s+\[(\w+)\]\s+(.*)$")
 # Log: "request done: requestId: [UUID] model deployment ID: [...]"
 REQUEST_DONE_RE = re.compile(
     r"request done: requestId: \[([^\]]+)\] model deployment ID: \[([^\]]*)\]"
 )
 # Log: "message N returned. finish reason: [stop]"
-MESSAGE_RETURNED_RE = re.compile(
-    r"message (\d+) returned\. finish reason: \[(\w+)\]"
-)
+MESSAGE_RETURNED_RE = re.compile(r"message (\d+) returned\. finish reason: \[(\w+)\]")
 # Log: ccreq:<hex>.<tag> | status | model -> deployment | Xms | [wrapper]
 CCREQ_RE = re.compile(
     r"ccreq:([a-f0-9]+)\.(\S+)\s+\|\s+(\w+)\s+\|\s+(\S+?)(?:\s*->\s*(\S+))?\s+\|\s+([\d.]+)ms"
@@ -262,27 +267,57 @@ _SUBKIND_BY_TOOL_NAME: dict[str, str] = {
 # Known CodePlane MCP tool names (schema-inferred short names).
 # Used for namespace classification since inferred names don't carry a prefix.
 _CODEPLANE_TOOL_NAMES: frozenset[str] = frozenset(
-    k for k in _SUBKIND_BY_TOOL_NAME
-    if k not in (
-        "github_api", "github_repo", "run_in_terminal", "get_terminal_output",
-        "manage_todo_list", "ask_questions", "tool_search_tool_regex",
+    k
+    for k in _SUBKIND_BY_TOOL_NAME
+    if k
+    not in (
+        "github_api",
+        "github_repo",
+        "run_in_terminal",
+        "get_terminal_output",
+        "manage_todo_list",
+        "ask_questions",
+        "tool_search_tool_regex",
     )
     and not k[0].isupper()  # exclude camelCase VS Code builtins
     and not k.startswith("mcp_s_pylance")
-    and k not in (
-        "edit_file", "create_file", "delete_file", "rename_file",
-        "insert_edit", "replace_in_file", "list_directory", "open_file",
-        "get_workspace_structure", "search_files", "find_text_in_files",
-        "find_in_files", "configure_python_environment",
-        "install_python_packages", "get_python_environment_details",
-        "get_python_executable_details", "configure_python_notebook",
-        "configure_non_python_notebook", "restart_notebook_kernel",
-        "fetch_webpage", "open_simple_browser", "run_vscode_command",
-        "install_extension", "vscode_searchExtensions_internal",
-        "create_new_workspace", "get_project_setup_info",
-        "create_and_run_task", "get_vscode_api", "test_failure",
-        "search_code", "search_issues", "search_pull_requests",
-        "search_repositories", "search_users", "get_file_contents",
+    and k
+    not in (
+        "edit_file",
+        "create_file",
+        "delete_file",
+        "rename_file",
+        "insert_edit",
+        "replace_in_file",
+        "list_directory",
+        "open_file",
+        "get_workspace_structure",
+        "search_files",
+        "find_text_in_files",
+        "find_in_files",
+        "configure_python_environment",
+        "install_python_packages",
+        "get_python_environment_details",
+        "get_python_executable_details",
+        "configure_python_notebook",
+        "configure_non_python_notebook",
+        "restart_notebook_kernel",
+        "fetch_webpage",
+        "open_simple_browser",
+        "run_vscode_command",
+        "install_extension",
+        "vscode_searchExtensions_internal",
+        "create_new_workspace",
+        "get_project_setup_info",
+        "create_and_run_task",
+        "get_vscode_api",
+        "test_failure",
+        "search_code",
+        "search_issues",
+        "search_pull_requests",
+        "search_repositories",
+        "search_users",
+        "get_file_contents",
     )
 )
 
@@ -340,7 +375,9 @@ def _classify_tool_kind(tool_name: str) -> str:
 
 
 def _derive_tool_namespace(
-    tool_name: str, tool_kind: str, codeplane_prefix: str,
+    tool_name: str,
+    tool_kind: str,
+    codeplane_prefix: str,
 ) -> str:
     """Classify a tool call into a namespace bucket.
 
@@ -362,7 +399,6 @@ def _derive_tool_namespace(
     if tool_kind == "builtin":
         return "builtin"
     return "unknown"
-
 
 
 # ---------------------------------------------------------------------------
@@ -435,6 +471,7 @@ def build_session_name_index(user_dirs: list[Path]) -> dict[str, str]:
     Works on local installs and WSL (via /mnt/c/).
     """
     import importlib
+
     try:
         sqlite3_mod = importlib.import_module("sqlite3")
     except ImportError:
@@ -469,9 +506,7 @@ def build_session_name_index(user_dirs: list[Path]) -> dict[str, str]:
             try:
                 conn = sqlite3_mod.connect(str(db_path))
                 cur = conn.cursor()
-                cur.execute(
-                    "SELECT value FROM ItemTable WHERE key = 'chat.ChatSessionStore.index'"
-                )
+                cur.execute("SELECT value FROM ItemTable WHERE key = 'chat.ChatSessionStore.index'")
                 row = cur.fetchone()
                 conn.close()
                 if not row:
@@ -483,9 +518,7 @@ def build_session_name_index(user_dirs: list[Path]) -> dict[str, str]:
                         title = meta.get("title", "")
                         if title and sid not in index:
                             index[sid] = title
-                    log.debug(
-                        "Loaded %d session names from %s", len(entries), db_path
-                    )
+                    log.debug("Loaded %d session names from %s", len(entries), db_path)
             except Exception as e:
                 log.debug("Could not read session names from %s: %s", db_path, e)
 
@@ -493,9 +526,7 @@ def build_session_name_index(user_dirs: list[Path]) -> dict[str, str]:
     return index
 
 
-def find_chat_sessions(
-    user_dirs: list[Path], max_age_minutes: int | None
-) -> list[dict]:
+def find_chat_sessions(user_dirs: list[Path], max_age_minutes: int | None) -> list[dict]:
     """
     Scan workspaceStorage directories for Copilot Chat session-resource dirs.
     Returns a list of session descriptors sorted by most-recent tool call mtime (desc).
@@ -536,8 +567,7 @@ def find_chat_sessions(
 
                 # Enumerate tool call sub-directories
                 tool_dirs = [
-                    d for d in session_dir.iterdir()
-                    if d.is_dir() and TOOL_DIR_RE.match(d.name)
+                    d for d in session_dir.iterdir() if d.is_dir() and TOOL_DIR_RE.match(d.name)
                 ]
                 if not tool_dirs:
                     continue
@@ -578,27 +608,33 @@ def find_chat_sessions(
                         if max_epoch_ms < cutoff_ms:
                             log.debug(
                                 "  Skipping session %s (too old: epoch_ms %d < cutoff %d)",
-                                session_dir.name, max_epoch_ms, cutoff_ms,
+                                session_dir.name,
+                                max_epoch_ms,
+                                cutoff_ms,
                             )
                             continue
                     elif newest_mtime < cutoff:
                         log.debug(
                             "  Skipping session %s (too old: mtime %.0f < cutoff %.0f)",
-                            session_dir.name, newest_mtime, cutoff,
+                            session_dir.name,
+                            newest_mtime,
+                            cutoff,
                         )
                         continue
 
-                sessions.append({
-                    "session_id": session_dir.name,
-                    "session_path": session_dir,
-                    "workspace_hash": ws_hash_dir.name,
-                    "user_dir": user_dir,
-                    "newest_tool_mtime": newest_mtime,
-                    "oldest_tool_mtime": oldest_mtime,
-                    "max_epoch_ms": max_epoch_ms,
-                    "min_epoch_ms": min_epoch_ms,
-                    "tool_count": len(tool_dirs),
-                })
+                sessions.append(
+                    {
+                        "session_id": session_dir.name,
+                        "session_path": session_dir,
+                        "workspace_hash": ws_hash_dir.name,
+                        "user_dir": user_dir,
+                        "newest_tool_mtime": newest_mtime,
+                        "oldest_tool_mtime": oldest_mtime,
+                        "max_epoch_ms": max_epoch_ms,
+                        "min_epoch_ms": min_epoch_ms,
+                        "tool_count": len(tool_dirs),
+                    }
+                )
 
     # Sort by max_epoch_ms (preferred), fall back to newest_tool_mtime
     sessions.sort(
@@ -611,7 +647,10 @@ def find_chat_sessions(
         ts = datetime.fromtimestamp(s["newest_tool_mtime"], tz=UTC).isoformat()
         log.info(
             "  session=%s  workspace=%s  tools=%d  newest=%s",
-            s["session_id"], s["workspace_hash"], s["tool_count"], ts,
+            s["session_id"],
+            s["workspace_hash"],
+            s["tool_count"],
+            ts,
         )
 
     return sessions
@@ -696,10 +735,18 @@ def extract_tool_calls(session_path: Path) -> list[dict]:
         if tool_kind == "unknown" and tool_name != "unknown":
             if tool_name == "github_api":
                 tool_kind = "builtin"
-            elif tool_name in ("git_log", "git_status", "git_diff", "git_commit",
-                               "describe", "lint_check", "lint_tools",
-                               "discover_test_targets", "run_test_targets",
-                               "refactor_preview"):
+            elif tool_name in (
+                "git_log",
+                "git_status",
+                "git_diff",
+                "git_commit",
+                "describe",
+                "lint_check",
+                "lint_tools",
+                "discover_test_targets",
+                "run_test_targets",
+                "refactor_preview",
+            ):
                 tool_kind = "mcp"
 
         # Derive call_subkind
@@ -708,27 +755,29 @@ def extract_tool_calls(session_path: Path) -> list[dict]:
         # Infer args shape hint from result structure
         args_shape_hint = _infer_args_shape_hint(entry, tool_name)
 
-        calls.append({
-            "tool_call_id": tool_call_id,
-            "tool_name": tool_name,
-            "raw_tool_name": raw_tool_name,
-            "raw_record_type": raw_record_type,
-            "tool_kind": tool_kind,
-            "call_subkind": call_subkind,
-            "timestamp_epoch_ms": epoch_ms,
-            "timestamp_iso": datetime.fromtimestamp(
-                epoch_ms / 1000, tz=UTC
-            ).isoformat() if epoch_ms > 1_000_000_000_000 else None,
-            "result_bytes": result_bytes,
-            "args_bytes": None,  # Arguments are not persisted on disk
-            "args_shape_hint": args_shape_hint,
-            "status": status,
-            "content_type": content_type,
-            "resource_kind": resource_kind,
-            "source_file": source_file,
-            "source_dir": str(entry),
-            "turn_index": None,  # Will be inferred later if possible
-        })
+        calls.append(
+            {
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "raw_tool_name": raw_tool_name,
+                "raw_record_type": raw_record_type,
+                "tool_kind": tool_kind,
+                "call_subkind": call_subkind,
+                "timestamp_epoch_ms": epoch_ms,
+                "timestamp_iso": datetime.fromtimestamp(epoch_ms / 1000, tz=UTC).isoformat()
+                if epoch_ms > 1_000_000_000_000
+                else None,
+                "result_bytes": result_bytes,
+                "args_bytes": None,  # Arguments are not persisted on disk
+                "args_shape_hint": args_shape_hint,
+                "status": status,
+                "content_type": content_type,
+                "resource_kind": resource_kind,
+                "source_file": source_file,
+                "source_dir": str(entry),
+                "turn_index": None,  # Will be inferred later if possible
+            }
+        )
 
     # Sort by epoch timestamp for ordering
     calls.sort(key=lambda c: c["timestamp_epoch_ms"])
@@ -790,18 +839,27 @@ def _infer_tool_raw(entry: Path, tool_call_id: str) -> tuple[str, str]:
                 if "refactor_id" in props:
                     return ("refactor_preview", "schema_inference:refactor_preview")
                 if "filename" in props or (
-                    schema.get("type") == "array" and
-                    isinstance(schema.get("items"), dict) and
-                    "filename" in schema["items"].get("properties", {})
+                    schema.get("type") == "array"
+                    and isinstance(schema.get("items"), dict)
+                    and "filename" in schema["items"].get("properties", {})
                 ):
                     return ("github_api", "schema_inference:github_api")
                 # Top-level array with typical GitHub API item keys
                 if schema.get("type") == "array" and isinstance(schema.get("items"), dict):
                     item_props = schema["items"].get("properties", {})
-                    github_indicators = {"sha", "html_url", "commit", "node_id", "author_association"}
+                    github_indicators = {
+                        "sha",
+                        "html_url",
+                        "commit",
+                        "node_id",
+                        "author_association",
+                    }
                     matched = github_indicators & set(item_props.keys())
                     if len(matched) >= 2:
-                        return ("github_api", f"schema_inference:github_api_array:{','.join(sorted(matched))}")
+                        return (
+                            "github_api",
+                            f"schema_inference:github_api_array:{','.join(sorted(matched))}",
+                        )
                 # Generic schema present but no match
                 prop_keys = sorted(props.keys())[:5]
                 return ("unknown", f"schema_inference:unmatched:{','.join(prop_keys)}")
@@ -819,9 +877,7 @@ def _infer_tool_raw(entry: Path, tool_call_id: str) -> tuple[str, str]:
     return ("unknown", "none")
 
 
-def _refine_tool_name(
-    current: str, resource_kind: str | None, capability: str | None
-) -> str:
+def _refine_tool_name(current: str, resource_kind: str | None, capability: str | None) -> str:
     """Refine tool name using resource_kind and capability_used from content.json."""
     if resource_kind:
         # Map known resource kinds to tool names
@@ -893,7 +949,9 @@ def _infer_args_shape_hint(entry: Path, tool_name: str) -> dict | None:
         pagination = data.get("pagination")
         if isinstance(pagination, dict):
             hint["pagination_total"] = pagination.get("total_count") or pagination.get("total")
-            hint["pagination_returned"] = pagination.get("returned_count") or pagination.get("count")
+            hint["pagination_returned"] = pagination.get("returned_count") or pagination.get(
+                "count"
+            )
 
         # Search results count
         results = data.get("results")
@@ -1010,34 +1068,40 @@ def parse_log_metadata(log_paths: list[Path]) -> dict:
                 # Request done
                 rdm = REQUEST_DONE_RE.search(msg)
                 if rdm:
-                    meta["requests"].append({
-                        "request_id": rdm.group(1),
-                        "model_deployment": rdm.group(2) or None,
-                        "timestamp": ts_str,
-                    })
+                    meta["requests"].append(
+                        {
+                            "request_id": rdm.group(1),
+                            "model_deployment": rdm.group(2) or None,
+                            "timestamp": ts_str,
+                        }
+                    )
 
                 # ccreq line (most reliable completion timing)
                 ccm = CCREQ_RE.search(msg)
                 if ccm:
-                    meta["ccreqs"].append({
-                        "ccreq_id": ccm.group(1),
-                        "tag": ccm.group(2),
-                        "status": ccm.group(3),
-                        "model_requested": ccm.group(4),
-                        "model_served": ccm.group(5),
-                        "duration_ms": float(ccm.group(6)),
-                        "timestamp": ts_str,
-                    })
+                    meta["ccreqs"].append(
+                        {
+                            "ccreq_id": ccm.group(1),
+                            "tag": ccm.group(2),
+                            "status": ccm.group(3),
+                            "model_requested": ccm.group(4),
+                            "model_served": ccm.group(5),
+                            "duration_ms": float(ccm.group(6)),
+                            "timestamp": ts_str,
+                        }
+                    )
 
                 # fetchCompletions timing
                 fcm = FETCH_COMPLETIONS_RE.search(msg)
                 if fcm:
-                    meta["completions"].append({
-                        "request_id": fcm.group(1),
-                        "status": int(fcm.group(2)),
-                        "duration_ms": float(fcm.group(3)),
-                        "timestamp": ts_str,
-                    })
+                    meta["completions"].append(
+                        {
+                            "request_id": fcm.group(1),
+                            "status": int(fcm.group(2)),
+                            "duration_ms": float(fcm.group(3)),
+                            "timestamp": ts_str,
+                        }
+                    )
 
     except OSError as e:
         log.warning("Could not read log %s: %s", chosen_log, e)
@@ -1056,6 +1120,7 @@ def try_parse_state_vscdb(user_dir: Path, session_id: str) -> tuple[list[dict] |
     extraction_status: "ok" | "not_found" | "failed" | "partial"
     """
     import importlib
+
     try:
         sqlite3 = importlib.import_module("sqlite3")
     except ImportError:
@@ -1142,11 +1207,11 @@ def _extract_turns_from_state(data: Any, session_id: str) -> list[dict] | None:
             continue
 
         exchanges = (
-            session.get("requests") or
-            session.get("exchanges") or
-            session.get("turns") or
-            session.get("messages") or
-            []
+            session.get("requests")
+            or session.get("exchanges")
+            or session.get("turns")
+            or session.get("messages")
+            or []
         )
         if not exchanges:
             continue
@@ -1158,10 +1223,15 @@ def _extract_turns_from_state(data: Any, session_id: str) -> list[dict] | None:
             turn = {
                 "turn_index": i,
                 "role": _infer_role(ex),
-                "input_chars": _safe_len(ex.get("message") or ex.get("prompt") or ex.get("input") or ""),
+                "input_chars": _safe_len(
+                    ex.get("message") or ex.get("prompt") or ex.get("input") or ""
+                ),
                 "output_chars": _safe_len(
-                    ex.get("response") or ex.get("result") or ex.get("output") or
-                    _extract_response_text(ex) or ""
+                    ex.get("response")
+                    or ex.get("result")
+                    or ex.get("output")
+                    or _extract_response_text(ex)
+                    or ""
                 ),
             }
             turns.append(turn)
@@ -1299,7 +1369,9 @@ def get_vscode_version_from_binary(user_dir: Path) -> str | None:
     try:
         result = subprocess.run(
             ["code", "--version"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0:
             lines = result.stdout.strip().split("\n")
@@ -1331,17 +1403,19 @@ def build_events_timeline(
 
     # Tool invocation events
     for tc in tool_calls:
-        events.append({
-            "event_type": "tool_invocation",
-            "timestamp_iso": tc.get("timestamp_iso"),
-            "timestamp_epoch_ms": tc["timestamp_epoch_ms"],
-            "tool_call_id": tc["tool_call_id"],
-            "tool_name": tc["tool_name"],
-            "tool_kind": tc["tool_kind"],
-            "call_subkind": tc["call_subkind"],
-            "status": tc["status"],
-            "result_bytes": tc["result_bytes"],
-        })
+        events.append(
+            {
+                "event_type": "tool_invocation",
+                "timestamp_iso": tc.get("timestamp_iso"),
+                "timestamp_epoch_ms": tc["timestamp_epoch_ms"],
+                "tool_call_id": tc["tool_call_id"],
+                "tool_name": tc["tool_name"],
+                "tool_kind": tc["tool_kind"],
+                "call_subkind": tc["call_subkind"],
+                "status": tc["status"],
+                "result_bytes": tc["result_bytes"],
+            }
+        )
 
     # Completion events from ccreq log lines
     for ccreq in log_meta.get("ccreqs", []):
@@ -1357,17 +1431,19 @@ def build_events_timeline(
                 iso_str = dt.isoformat() + "+00:00[assumed_local]"
             except ValueError:
                 pass
-        events.append({
-            "event_type": "completion",
-            "timestamp_iso": iso_str,
-            "timestamp_epoch_ms": epoch_ms,
-            "ccreq_id": ccreq.get("ccreq_id"),
-            "status": ccreq.get("status"),
-            "model_requested": ccreq.get("model_requested"),
-            "model_served": ccreq.get("model_served"),
-            "duration_ms": ccreq.get("duration_ms"),
-            "tag": ccreq.get("tag"),
-        })
+        events.append(
+            {
+                "event_type": "completion",
+                "timestamp_iso": iso_str,
+                "timestamp_epoch_ms": epoch_ms,
+                "ccreq_id": ccreq.get("ccreq_id"),
+                "status": ccreq.get("status"),
+                "model_requested": ccreq.get("model_requested"),
+                "model_served": ccreq.get("model_served"),
+                "duration_ms": ccreq.get("duration_ms"),
+                "tag": ccreq.get("tag"),
+            }
+        )
 
     # Sort by epoch_ms; events without timestamps go last
     events.sort(key=lambda e: e.get("timestamp_epoch_ms") or float("inf"))
@@ -1390,6 +1466,7 @@ def build_events_timeline(
 # Pseudo-turn segmentation (heuristic)
 # ---------------------------------------------------------------------------
 PSEUDO_TURN_GAP_MS = 5000  # 5 seconds gap → new pseudo-turn
+
 
 def segment_pseudo_turns(
     events: list[dict],
@@ -1429,9 +1506,7 @@ def segment_pseudo_turns(
         start_ms = min(epoch_values) if epoch_values else 0
         end_ms = max(epoch_values) if epoch_values else 0
         tool_names = [
-            e.get("tool_name", "")
-            for e in evts
-            if e.get("event_type") == "tool_invocation"
+            e.get("tool_name", "") for e in evts if e.get("event_type") == "tool_invocation"
         ]
         return {
             "pseudo_turn_index": -1,  # set by caller
@@ -1439,20 +1514,20 @@ def segment_pseudo_turns(
             "end_epoch_ms": end_ms,
             "start_iso": (
                 datetime.fromtimestamp(start_ms / 1000, tz=UTC).isoformat()
-                if start_ms > 1_000_000_000_000 else None
+                if start_ms > 1_000_000_000_000
+                else None
             ),
             "end_iso": (
                 datetime.fromtimestamp(end_ms / 1000, tz=UTC).isoformat()
-                if end_ms > 1_000_000_000_000 else None
+                if end_ms > 1_000_000_000_000
+                else None
             ),
             "duration_ms": end_ms - start_ms if start_ms and end_ms else 0,
             "event_count": len(evts),
             "tool_invocation_count": sum(
                 1 for e in evts if e.get("event_type") == "tool_invocation"
             ),
-            "completion_count": sum(
-                1 for e in evts if e.get("event_type") == "completion"
-            ),
+            "completion_count": sum(1 for e in evts if e.get("event_type") == "completion"),
             "tool_names": tool_names,
         }
 
@@ -1513,8 +1588,7 @@ def compute_mcp_comparison_metrics(
     # -------------------------------------------------------------------
     tool_events = [e for e in events if e["event_type"] == "tool_invocation"]
     tool_timestamps = sorted(
-        e["timestamp_epoch_ms"] for e in tool_events
-        if e.get("timestamp_epoch_ms")
+        e["timestamp_epoch_ms"] for e in tool_events if e.get("timestamp_epoch_ms")
     )
 
     # -------------------------------------------------------------------
@@ -1580,12 +1654,15 @@ def compute_mcp_comparison_metrics(
 
     cps_mean = round(stats.mean(calls_per_second_samples), 2) if calls_per_second_samples else None
     cps_max = max(calls_per_second_samples) if calls_per_second_samples else None
-    cps_stddev = round(stats.stdev(calls_per_second_samples), 2) if len(calls_per_second_samples) > 1 else None
+    cps_stddev = (
+        round(stats.stdev(calls_per_second_samples), 2)
+        if len(calls_per_second_samples) > 1
+        else None
+    )
 
     # 5. Native terminal calls
     native_terminal_calls = sum(
-        1 for tc in tool_calls
-        if tc["tool_kind"] == "native" and tc["call_subkind"] == "terminal"
+        1 for tc in tool_calls if tc["tool_kind"] == "native" and tc["call_subkind"] == "terminal"
     )
 
     tier1 = {
@@ -1617,8 +1694,7 @@ def compute_mcp_comparison_metrics(
     # 6. Tool calls per pseudo-turn
     pseudo_turn_count = len(pseudo_turns)
     tool_calls_per_turn = (
-        round(total_tool_calls / pseudo_turn_count, 2)
-        if pseudo_turn_count > 0 else None
+        round(total_tool_calls / pseudo_turn_count, 2) if pseudo_turn_count > 0 else None
     )
 
     # 7. Tool calls before first MCP call
@@ -1675,7 +1751,9 @@ def compute_mcp_comparison_metrics(
 
     tier3 = {
         "total_result_bytes": total_result_bytes,
-        "avg_result_bytes_per_call": round(total_result_bytes / total_tool_calls) if total_tool_calls else 0,
+        "avg_result_bytes_per_call": round(total_result_bytes / total_tool_calls)
+        if total_tool_calls
+        else 0,
         "avg_result_by_tool": avg_result_by_tool,
     }
 
@@ -1719,7 +1797,9 @@ def build_trace(
     user_dir = session["user_dir"]
 
     # --- Session time bounds from tool call timestamps ---
-    tool_epoch_ms_values = [tc["timestamp_epoch_ms"] for tc in tool_calls if tc["timestamp_epoch_ms"]]
+    tool_epoch_ms_values = [
+        tc["timestamp_epoch_ms"] for tc in tool_calls if tc["timestamp_epoch_ms"]
+    ]
     session_start_iso = None
     session_end_iso = None
     if tool_epoch_ms_values:
@@ -1731,10 +1811,7 @@ def build_trace(
             session_end_iso = datetime.fromtimestamp(max_ms / 1000, tz=UTC).isoformat()
 
     # --- Run metadata ---
-    vscode_version = (
-        log_meta.get("vscode_version") or
-        get_vscode_version_from_binary(user_dir)
-    )
+    vscode_version = log_meta.get("vscode_version") or get_vscode_version_from_binary(user_dir)
     workspace_name = resolve_workspace_name(user_dir, session["workspace_hash"])
 
     # Extraction warnings collector
@@ -1794,29 +1871,33 @@ def build_trace(
     tool_invocations = []
     for i, tc in enumerate(tool_calls):
         tool_namespace = _derive_tool_namespace(
-            tc["tool_name"], tc["tool_kind"], codeplane_prefix,
+            tc["tool_name"],
+            tc["tool_kind"],
+            codeplane_prefix,
         )
-        tool_invocations.append({
-            "order_index": i,
-            "turn_index": tc.get("turn_index"),
-            "tool_call_id": tc["tool_call_id"],
-            "tool_name": tc["tool_name"],
-            "raw_tool_name": tc["raw_tool_name"],
-            "raw_record_type": tc["raw_record_type"],
-            "tool_kind": tc["tool_kind"],
-            "tool_namespace": tool_namespace,
-            "call_subkind": tc["call_subkind"],
-            "args_bytes": tc["args_bytes"],
-            "args_shape_hint": tc.get("args_shape_hint"),
-            "result_bytes": tc["result_bytes"],
-            "status": tc["status"],
-            "content_type": tc.get("content_type"),
-            "resource_kind": tc.get("resource_kind"),
-            "timestamp_epoch_ms": tc["timestamp_epoch_ms"],
-            "timestamp_iso": tc.get("timestamp_iso"),
-            "source_file": tc.get("source_file"),
-            "source_dir": tc.get("source_dir"),
-        })
+        tool_invocations.append(
+            {
+                "order_index": i,
+                "turn_index": tc.get("turn_index"),
+                "tool_call_id": tc["tool_call_id"],
+                "tool_name": tc["tool_name"],
+                "raw_tool_name": tc["raw_tool_name"],
+                "raw_record_type": tc["raw_record_type"],
+                "tool_kind": tc["tool_kind"],
+                "tool_namespace": tool_namespace,
+                "call_subkind": tc["call_subkind"],
+                "args_bytes": tc["args_bytes"],
+                "args_shape_hint": tc.get("args_shape_hint"),
+                "result_bytes": tc["result_bytes"],
+                "status": tc["status"],
+                "content_type": tc.get("content_type"),
+                "resource_kind": tc.get("resource_kind"),
+                "timestamp_epoch_ms": tc["timestamp_epoch_ms"],
+                "timestamp_iso": tc.get("timestamp_iso"),
+                "source_file": tc.get("source_file"),
+                "source_dir": tc.get("source_dir"),
+            }
+        )
 
     # --- Unified events timeline ---
     events = build_events_timeline(tool_calls, log_meta)
@@ -1857,8 +1938,7 @@ def build_trace(
     total_tc = len(tool_calls) or 1  # avoid div-by-zero
     codeplane_share_of_all_tool_calls = round(codeplane_tool_calls_total / total_tc, 4)
     codeplane_share_of_all_result_bytes = (
-        round(codeplane_result_bytes_total / total_result_bytes, 4)
-        if total_result_bytes else 0.0
+        round(codeplane_result_bytes_total / total_result_bytes, 4) if total_result_bytes else 0.0
     )
 
     # Token estimation — clearly hypothetical
@@ -1881,8 +1961,7 @@ def build_trace(
         "total_chars_in": total_chars_in if turns else None,
         "total_chars_out": total_chars_out if turns else None,
         "total_token_est": (
-            math.ceil((total_chars_in + total_chars_out) * tokens_per_char)
-            if turns else None
+            math.ceil((total_chars_in + total_chars_out) * tokens_per_char) if turns else None
         ),
         "tool_result_bytes_total": total_result_bytes,
         "tool_result_tokens_est_if_inlined": tool_result_tokens_est_if_inlined,
@@ -1927,8 +2006,7 @@ def build_trace(
 
     # --- Inference counts ---
     schema_inferred = sum(
-        1 for tc in tool_calls
-        if tc.get("raw_record_type", "").startswith("schema_inference:")
+        1 for tc in tool_calls if tc.get("raw_record_type", "").startswith("schema_inference:")
     )
     name_unknown = sum(1 for tc in tool_calls if tc["tool_name"] == "unknown")
     run_metadata["inference_counts"] = {
@@ -1942,13 +2020,9 @@ def build_trace(
             f"could not infer tool name for {name_unknown} of {len(tool_calls)} tool calls"
         )
     if turns_extraction_status == "not_found":
-        extraction_warnings.append(
-            "state.vscdb not found; chat turns unavailable (remote server)"
-        )
+        extraction_warnings.append("state.vscdb not found; chat turns unavailable (remote server)")
     elif turns_extraction_status == "failed":
-        extraction_warnings.append(
-            "state.vscdb found but extraction failed"
-        )
+        extraction_warnings.append("state.vscdb found but extraction failed")
     if not log_meta.get("log_file"):
         extraction_warnings.append("no Copilot Chat log file found")
 
@@ -1957,9 +2031,35 @@ def build_trace(
     # Update summaries with pseudo-turn count
     summaries["pseudo_turn_count"] = len(pseudo_turns)
 
+    # --- Enrich summaries with fields matching capture-based schema ---
+    # These are estimated/unavailable from workspace storage; the fields
+    # exist for schema compatibility with trace_from_capture.py output.
+    summaries["total_prompt_tokens"] = None  # unavailable from scraping
+    summaries["total_completion_tokens"] = None
+    summaries["total_tokens"] = summaries.get("total_token_est")
+    summaries["tokens_source"] = "estimated"
+
+    # --- Enrich T3 metrics with capture-compatible fields ---
+    tier3 = mcp_metrics.get("tier3_cost_proxies", {})
+    tier3["total_prompt_tokens"] = None  # unavailable
+    tier3["total_completion_tokens"] = None
+    tier3["tokens_source"] = "estimated"
+    tier3["total_api_latency_ms"] = completions_summary["total_ms"] if completions_summary else None
+    tier3["mean_latency_per_turn_ms"] = (
+        completions_summary["mean_ms"] if completions_summary else None
+    )
+    tier3["cost_estimate_usd"] = None  # requires exact token counts
+
+    # --- Enrich T4 metrics with capture-compatible fields ---
+    tier4 = mcp_metrics.get("tier4_stability", {})
+    tier4["rate_limited_count"] = completions_summary["rate_limited"] if completions_summary else 0
+    tier4["finish_reason_distribution"] = None  # unavailable from scraping
+
     # --- Assemble trace ---
+    run_metadata["capture_source"] = "workspace_storage"
+
     trace = {
-        "schema_version": "0.6.0",
+        "schema_version": "0.8.0",
         "run_metadata": run_metadata,
         "selection_criteria": selection_criteria,
         "turns": turns if turns else [],
@@ -1984,10 +2084,11 @@ def main():
         epilog=__doc__,
     )
     parser.add_argument(
-        "--out", "-o",
+        "--out",
+        "-o",
         default=None,
         help="Output JSON file path. If omitted and --chat-name is used, "
-             "auto-derives <chat_name_underscore_case>_trace.json.",
+        "auto-derives <chat_name_underscore_case>_trace.json.",
     )
     parser.add_argument(
         "--repo-dir",
@@ -2020,7 +2121,7 @@ def main():
         "--chat-name",
         default=None,
         help="Substring match against chat session title (case-insensitive). "
-             "Requires state.vscdb access (local or WSL /mnt/c/).",
+        "Requires state.vscdb access (local or WSL /mnt/c/).",
     )
     parser.add_argument(
         "--codeplane-prefix",
@@ -2028,7 +2129,8 @@ def main():
         help=f"Prefix for CodePlane MCP tool names (default: {DEFAULT_CODEPLANE_PREFIX!r}).",
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Enable verbose debug logging.",
     )
@@ -2078,12 +2180,15 @@ def main():
         if not matches:
             log.error("No sessions matching chat name '%s'.", args.chat_name)
             # Show available named sessions to help the user pick
-            named = [(s["session_id"], session_name_index.get(s["session_id"], "(unnamed)"))
-                     for s in sessions if session_name_index.get(s["session_id"])]
+            named = [
+                (s["session_id"], session_name_index.get(s["session_id"], "(unnamed)"))
+                for s in sessions
+                if session_name_index.get(s["session_id"])
+            ]
             if named:
                 log.error("Available named sessions:")
                 for sid, title in named[:20]:
-                    log.error('  %s  "%s"', sid[:8] + '..', title)
+                    log.error('  %s  "%s"', sid[:8] + "..", title)
             sys.exit(1)
         elif len(matches) == 1:
             chosen = matches[0]
@@ -2098,11 +2203,13 @@ def main():
             )
             for m in matches:
                 title = session_name_index.get(m["session_id"], "(unnamed)")
-                log.warning('  %s  "%s"', m['session_id'][:8] + '..', title)
+                log.warning('  %s  "%s"', m["session_id"][:8] + "..", title)
     elif args.workspace_hash:
         selection_reason = f"explicit_workspace_hash:{args.workspace_hash}"
         for s in sessions:
-            if s["workspace_hash"] == args.workspace_hash or s["workspace_hash"].startswith(args.workspace_hash):
+            if s["workspace_hash"] == args.workspace_hash or s["workspace_hash"].startswith(
+                args.workspace_hash
+            ):
                 chosen = s
                 break
         if not chosen:
@@ -2120,7 +2227,9 @@ def main():
 
     log.info(
         "Selected session: %s (workspace: %s, %d tool calls, title: %s)",
-        chosen["session_id"], chosen["workspace_hash"], chosen["tool_count"],
+        chosen["session_id"],
+        chosen["workspace_hash"],
+        chosen["tool_count"],
         chosen["chat_title"] or "(unnamed)",
     )
 
@@ -2166,13 +2275,16 @@ def main():
 
     # Brief summary to stderr
     s = trace["summaries"]
-    print(f"\n{'='*60}", file=sys.stderr)
+    print(f"\n{'=' * 60}", file=sys.stderr)
     print(f"Session:      {trace['run_metadata']['session_id']}", file=sys.stderr)
-    if trace['run_metadata'].get('chat_title'):
+    if trace["run_metadata"].get("chat_title"):
         print(f"Chat title:   {trace['run_metadata']['chat_title']}", file=sys.stderr)
     print(f"VS Code:      {trace['run_metadata']['vscode_version']}", file=sys.stderr)
     print(f"Copilot Chat: {trace['run_metadata']['copilot_chat_version']}", file=sys.stderr)
-    print(f"Time range:   {trace['run_metadata']['session_start_iso']} -> {trace['run_metadata']['session_end_iso']}", file=sys.stderr)
+    print(
+        f"Time range:   {trace['run_metadata']['session_start_iso']} -> {trace['run_metadata']['session_end_iso']}",
+        file=sys.stderr,
+    )
     print(f"Tool calls:   {s['total_tool_calls']}", file=sys.stderr)
     print(f"Turns status: {s['turns_extraction_status']}", file=sys.stderr)
     if s["total_turns"] is not None:
@@ -2181,12 +2293,20 @@ def main():
         print(f"Chars out:    {s['total_chars_out']}", file=sys.stderr)
         print(f"Token est:    {s['total_token_est']}", file=sys.stderr)
     else:
-        print(f"Turns:        unknown (state.vscdb {s['turns_extraction_status']})", file=sys.stderr)
+        print(
+            f"Turns:        unknown (state.vscdb {s['turns_extraction_status']})", file=sys.stderr
+        )
     print(f"Result bytes: {s['tool_result_bytes_total']}", file=sys.stderr)
-    print(f"Tool tokens (hypothetical if inlined):  {s['tool_result_tokens_est_if_inlined']}", file=sys.stderr)
+    print(
+        f"Tool tokens (hypothetical if inlined):  {s['tool_result_tokens_est_if_inlined']}",
+        file=sys.stderr,
+    )
     if trace.get("completions_timing"):
         ct = trace["completions_timing"]
-        print(f"Completions:  {ct['count']} reqs ({ct['successful']} ok, {ct['rate_limited']} rate-limited), {ct['total_ms']:.0f}ms total, {ct['mean_ms']:.0f}ms avg", file=sys.stderr)
+        print(
+            f"Completions:  {ct['count']} reqs ({ct['successful']} ok, {ct['rate_limited']} rate-limited), {ct['total_ms']:.0f}ms total, {ct['mean_ms']:.0f}ms avg",
+            file=sys.stderr,
+        )
         print(f"Models used:  {ct['models_used']}", file=sys.stderr)
     print(f"Events:       {len(trace['events'])} unified timeline entries", file=sys.stderr)
     print(f"Pseudo turns: {s.get('pseudo_turn_count', 'N/A')}", file=sys.stderr)
@@ -2201,26 +2321,49 @@ def main():
         t2 = m["tier2_convergence"]
         t3 = m["tier3_cost_proxies"]
         t4 = m["tier4_stability"]
-        print(f"{'─'*60}", file=sys.stderr)
+        print(f"{'─' * 60}", file=sys.stderr)
         print("MCP COMPARISON METRICS", file=sys.stderr)
-        print(f"{'─'*60}", file=sys.stderr)
-        print(f"  T1 │ By kind:     native={t1['by_kind']['native']}  mcp={t1['by_kind']['mcp']}  builtin={t1['by_kind']['builtin']}", file=sys.stderr)
+        print(f"{'─' * 60}", file=sys.stderr)
+        print(
+            f"  T1 │ By kind:     native={t1['by_kind']['native']}  mcp={t1['by_kind']['mcp']}  builtin={t1['by_kind']['builtin']}",
+            file=sys.stderr,
+        )
         print(f"  T1 │ native/MCP:  {t1['native_mcp_ratio']}", file=sys.stderr)
         print(f"  T1 │ Duration:    {t1['session_duration_s']}s", file=sys.stderr)
-        print(f"  T1 │ Calls/sec:   {t1['tool_calls_per_second']}  (MCP: {t1['mcp_calls_per_second']})", file=sys.stderr)
+        print(
+            f"  T1 │ Calls/sec:   {t1['tool_calls_per_second']}  (MCP: {t1['mcp_calls_per_second']})",
+            file=sys.stderr,
+        )
         ts = t1["thrash_shape"]
-        print(f"  T1 │ Thrash:      burst₁ₛ={ts['max_burst_1s']}  streak={ts['longest_uninterrupted_streak']}  cps_mean={ts['calls_per_second_mean']}  cps_max={ts['calls_per_second_max']}", file=sys.stderr)
-        print(f"  T1 │ Terminal:    {t1['native_terminal_calls']} native terminal calls", file=sys.stderr)
+        print(
+            f"  T1 │ Thrash:      burst₁ₛ={ts['max_burst_1s']}  streak={ts['longest_uninterrupted_streak']}  cps_mean={ts['calls_per_second_mean']}  cps_max={ts['calls_per_second_max']}",
+            file=sys.stderr,
+        )
+        print(
+            f"  T1 │ Terminal:    {t1['native_terminal_calls']} native terminal calls",
+            file=sys.stderr,
+        )
         print(f"  T2 │ Calls/turn:  {t2['tool_calls_per_pseudo_turn']}", file=sys.stderr)
-        print(f"  T2 │ Before MCP:  {t2['calls_before_first_mcp']} calls before first MCP call", file=sys.stderr)
-        print(f"  T2 │ Nat streak:  {t2['longest_native_only_streak']} longest native-only streak", file=sys.stderr)
-        print(f"  T3 │ Result:      {t3['total_result_bytes']} bytes total, {t3['avg_result_bytes_per_call']} avg/call", file=sys.stderr)
+        print(
+            f"  T2 │ Before MCP:  {t2['calls_before_first_mcp']} calls before first MCP call",
+            file=sys.stderr,
+        )
+        print(
+            f"  T2 │ Nat streak:  {t2['longest_native_only_streak']} longest native-only streak",
+            file=sys.stderr,
+        )
+        print(
+            f"  T3 │ Result:      {t3['total_result_bytes']} bytes total, {t3['avg_result_bytes_per_call']} avg/call",
+            file=sys.stderr,
+        )
         print(f"  T4 │ Errors:      {t4['error_calls']} ({t4['error_rate']:.1%})", file=sys.stderr)
-    print(f"Selection:    {trace['selection_criteria']['selected_session_reason']}", file=sys.stderr)
-    if trace['run_metadata'].get('extraction_warnings'):
+    print(
+        f"Selection:    {trace['selection_criteria']['selected_session_reason']}", file=sys.stderr
+    )
+    if trace["run_metadata"].get("extraction_warnings"):
         print(f"Warnings:     {trace['run_metadata']['extraction_warnings']}", file=sys.stderr)
     print(f"Parser:       {trace['run_metadata']['parser_version']}", file=sys.stderr)
-    print(f"{'='*60}\n", file=sys.stderr)
+    print(f"{'=' * 60}\n", file=sys.stderr)
 
 
 if __name__ == "__main__":

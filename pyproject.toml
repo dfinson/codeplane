@@ -173,6 +173,10 @@ disallow_untyped_defs = false
 strict = false
 warn_return_any = false
 
+[[tool.mypy.overrides]]
+module = "extract_vscode_agent_trace"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
