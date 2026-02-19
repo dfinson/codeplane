@@ -386,3 +386,58 @@ class TestSerializeTestResult:
 
         # logs_hint should not be in run_status for actions
         assert "logs_hint" not in serialized["run_status"]
+
+    def test_sleep_hint_in_agentic_hint_when_running(self) -> None:
+        """Should include sleep guidance in agentic_hint when poll_after_seconds > 0."""
+        status = TestRunStatus(
+            run_id="abc123",
+            status="running",
+            progress=TestProgress(
+                targets=TargetProgress(total=10, completed=0),
+            ),
+        )
+        result = TestResult(action="run", run_status=status)
+        serialized = _serialize_test_result(result, is_action=True)
+
+        poll_hint = serialized["run_status"]["poll_after_seconds"]
+        assert poll_hint is not None and poll_hint > 0
+        assert "agentic_hint" in serialized
+        assert "Sleep for" in serialized["agentic_hint"]
+        assert "get_test_run_status" in serialized["agentic_hint"]
+        # Verify the sleep seconds is poll_hint + 2
+        expected_sleep = int(poll_hint) + 2
+        assert f"Sleep for {expected_sleep} seconds" in serialized["agentic_hint"]
+
+    def test_no_sleep_hint_when_completed(self) -> None:
+        """Should NOT include sleep hint when run is already completed."""
+        status = TestRunStatus(
+            run_id="abc123",
+            status="completed",
+            duration_seconds=5.0,
+        )
+        result = TestResult(action="status", run_status=status)
+        serialized = _serialize_test_result(result)
+
+        # poll_after_seconds should be None for completed runs
+        assert serialized["run_status"]["poll_after_seconds"] is None
+        assert "agentic_hint" not in serialized
+
+    def test_sleep_hint_combined_with_existing_hint(self) -> None:
+        """Sleep hint should be appended to existing agentic_hint."""
+        status = TestRunStatus(
+            run_id="abc123",
+            status="running",
+            progress=TestProgress(
+                targets=TargetProgress(total=10, completed=0),
+            ),
+        )
+        result = TestResult(
+            action="run",
+            run_status=status,
+            agentic_hint="No test framework detected.",
+        )
+        serialized = _serialize_test_result(result, is_action=True)
+
+        hint = serialized["agentic_hint"]
+        assert "No test framework detected." in hint
+        assert "Sleep for" in hint
