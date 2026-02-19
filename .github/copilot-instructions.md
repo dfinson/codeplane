@@ -108,13 +108,14 @@ CodePlane maintains a **structural index** of your codebase — definitions, imp
 references. This enables structural search, semantic diff, impact-aware test selection,
 and safe refactoring that terminal commands cannot provide.
 
-### Three-Tool Read Model
+### Four-Tool Read Model
 
-  search        -> semantic enumeration (spans + metadata, NEVER source text)
-  read_source   -> bounded semantic retrieval (span-based or structural-unit-based)
+  search         -> semantic enumeration (spans + metadata, NEVER source text)
+  read_scaffold  -> structural skeleton (imports, signatures, hierarchy — no source)
+  read_source    -> bounded semantic retrieval (span-based or structural-unit-based)
   read_file_full -> gated bulk access (two-phase confirmation, resource-first delivery)
 
-Search = find. Read = retrieve. Full = gated.
+Search = find. Scaffold = orient. Read = retrieve. Full = gated.
 
 `read_source` accepts multiple `targets` in one call — batch reads of independent spans.
 `read_source` target format: `[{"path": "src/foo.py", "start_line": 10, "end_line": 50}]`
@@ -146,6 +147,7 @@ This runs only the tests impacted by your changes — fast, targeted, sufficient
 
 | Operation | REQUIRED Tool | FORBIDDEN Alternative |
 |-----------|---------------|----------------------|
+| File scaffold | `mcp_codeplane-codeplane_copy3_read_scaffold` | Manual traversal, `cat` for structure |
 | Read source | `mcp_codeplane-codeplane_copy3_read_source` | `cat`, `head`, `less`, `tail` |
 | Read full file | `mcp_codeplane-codeplane_copy3_read_file_full` | `cat`, `head`, bulk reads |
 | Write/edit files | `mcp_codeplane-codeplane_copy3_write_source` | `sed`, `echo >>`, `awk`, `tee` |
@@ -170,6 +172,7 @@ STOP before using `write_source` for multi-file changes:
 ### Before You Read: Decision Gate
 
 STOP before using `read_file_full`:
+- Need a file's structure or API shape? → `read_scaffold` (signatures, hierarchy, no source)
 - Need to find call sites or consumers? → `search(mode=references)` + `read_source`
 - Need to understand a specific function? → `search(mode=definitions)` + `read_source`
 - Need the ENTIRE file content with no alternative? → ONLY then `read_file_full`

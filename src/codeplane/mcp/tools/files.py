@@ -19,7 +19,12 @@ from codeplane.config.constants import (
     SMALL_FILE_THRESHOLD,
 )
 from codeplane.core.languages import EXTENSION_TO_NAME
-from codeplane.mcp.delivery import ScopeManager, build_envelope, resume_cursor
+from codeplane.mcp.delivery import (
+    ScopeManager,
+    build_envelope,
+    resume_cursor,
+    wrap_existing_response,
+)
 from codeplane.mcp.errors import (
     MCPError,
     MCPErrorCode,
@@ -639,7 +644,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             include_docstrings=include_docstrings,
             include_constants=include_constants,
         )
-        return scaffold
+        return wrap_existing_response(
+            scaffold,
+            resource_kind="scaffold",
+            inline_summary=scaffold.get("summary"),
+        )
 
     @mcp.tool
     async def reset_budget(

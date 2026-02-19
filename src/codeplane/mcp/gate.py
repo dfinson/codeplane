@@ -464,6 +464,10 @@ _SEARCH_WORKFLOW: dict[str, str] = {
 }
 
 _READ_WORKFLOW: dict[str, str] = {
+    "if_exploring_file_structure": (
+        "Use read_scaffold(path) to see imports, classes, functions, and signatures "
+        "without reading source — then read_source on specific symbols"
+    ),
     "if_looking_for_callers": ("Use search(mode='references') instead of reading files manually"),
     "if_understanding_a_function": (
         "Use search(mode='definitions', enrichment='function') for edit-ready code"
@@ -577,15 +581,16 @@ def _check_scatter_read(window: deque[CallRecord]) -> PatternMatch | None:
     if single_target_reads >= 4:
         cause = "inefficient"
         reason_prompt = (
-            "You're reading files one at a time. Batch up to 20 targets "
-            "in a single read_source call to reduce round-trips."
+            "You're reading files one at a time. Use read_scaffold(path) to see "
+            "a file's structure first, then read_source on specific symbols. "
+            "Batch up to 20 targets in a single read_source call."
         )
     else:
         cause = "over_gathering"
         reason_prompt = (
-            f"You've read {len(all_files)} different files. Which are "
-            "actually relevant to your change? State your plan before "
-            "reading more."
+            f"You've read {len(all_files)} different files. "
+            "Use read_scaffold to orient on a file's structure before reading. "
+            "Which files are actually relevant to your change?"
         )
 
     return PatternMatch(
@@ -678,8 +683,9 @@ def _check_full_file_creep(window: deque[CallRecord]) -> PatternMatch | None:
             "Full reads are expensive - most tasks only need specific spans."
         ),
         reason_prompt=(
-            "Use search to find the relevant spans, then read_source on "
-            "just those spans instead of reading entire files."
+            "Use read_scaffold(path) for structural overview (imports, signatures, "
+            "hierarchy) without downloading source. Then read_source on the "
+            "specific symbols you need."
         ),
         suggested_workflow=_READ_WORKFLOW,
     )
