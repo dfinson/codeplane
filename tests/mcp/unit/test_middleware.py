@@ -523,10 +523,8 @@ class TestToolMiddleware:
         mock_context.fastmcp_context._mcp_context = MagicMock()
         mock_context.fastmcp_context._mcp_context.session = MagicMock()
         mock_context.fastmcp_context._mcp_context.session.app = MagicMock()
-        mock_context.fastmcp_context._mcp_context.session.app._tool_manager = MagicMock()
-        mock_context.fastmcp_context._mcp_context.session.app._tool_manager._tools = {
-            "test_tool": None
-        }
+        # Mock server has no real tools registered in local_provider._components,
+        # so get_tools_sync returns empty dict → tool lookup returns None
 
         # Should not raise, should return None
         schema = middleware._get_tool_schema(mock_context, "test_tool")
