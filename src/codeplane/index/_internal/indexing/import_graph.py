@@ -149,9 +149,13 @@ class ImportGraph:
         # Step 0: Partition — test files in changed_files are directly affected.
         # The import graph traces source→test imports but cannot discover that
         # a test file changed.  We include them as high-confidence matches at
-        # the end (Step 5b) and still run the full graph for source files.
+        # the end (Step 5b).  Source files go through the normal graph walk;
+        # test files are excluded from module resolution (Step 1) because they
+        # are not importable in most languages and would pollute unresolved/ratio.
         assert self._test_file_set is not None
         direct_test_files = [f for f in changed_files if f in self._test_file_set]
+        direct_test_set = set(direct_test_files)
+        source_changed_files = [f for f in changed_files if f not in direct_test_set]
 
         # Step 1: Convert changed file paths to module names.
         # Strategy:
@@ -162,18 +166,19 @@ class ImportGraph:
         changed_modules: list[str] = []
         unresolved: list[str] = []
 
-        # Batch-fetch declared_module for all changed files
+        # Batch-fetch declared_module for source files only (test files are
+        # handled by Step 5b and don't need module resolution).
         declared_map: dict[str, str] = {}
-        if changed_files:
+        if source_changed_files:
             decl_stmt = select(File.path, File.declared_module).where(
-                col(File.path).in_(changed_files),
+                col(File.path).in_(source_changed_files),
                 File.declared_module != None,  # noqa: E711
             )
             for path, decl in self._session.exec(decl_stmt).all():
                 if decl:
                     declared_map[path] = decl
 
-        for fp in changed_files:
+        for fp in source_changed_files:
             if fp in declared_map:
                 changed_modules.append(declared_map[fp])
             else:
@@ -183,7 +188,6 @@ class ImportGraph:
                     changed_modules.append(mod)
                 else:
                     unresolved.append(fp)
-
         if not changed_files:
             return ImportGraphResult(
                 matches=[],
@@ -422,7 +426,11 @@ class ImportGraph:
         # whether they have a declared_module or Python path_to_module mapping.
         # So module-name "unresolved" files are still searchable via
         # resolved_path — the only true gap is null source_literals in tests.
-        resolved_ratio = (len(changed_modules) / len(changed_files)) if changed_files else 1.0
+        # Ratio is based on source files only (test files don't need module
+        # resolution — they are matched directly by Step 5b).
+        resolved_ratio = (
+            (len(changed_modules) / len(source_changed_files)) if source_changed_files else 1.0
+        )
         # Tier is "complete" when all match paths are covered; resolved_path
         # query covers files that have no module name, so they're not truly
         # unresolved for matching purposes.
