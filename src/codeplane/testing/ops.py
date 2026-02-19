@@ -11,6 +11,7 @@ import contextlib
 import json
 import os
 import shutil
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -394,6 +395,22 @@ def detect_workspaces(repo_root: Path) -> list[DetectedWorkspace]:
 # =============================================================================
 
 
+def _os_script_path(unix_path: str) -> str:
+    """Convert Unix script path to OS-appropriate form.
+
+    On Windows, converts ./script to script (relies on .bat/.cmd lookup).
+    On Unix, returns the path unchanged.
+    """
+    if sys.platform == "win32" and unix_path.startswith("./"):
+        base = unix_path[2:]
+        # Simple wrapper script (no subdirs): ./gradlew -> gradlew
+        if "/" not in base:
+            return base
+        # Subdir path: ./vendor/bin/phpunit -> vendor\bin\phpunit
+        return base.replace("/", "\\")
+    return unix_path
+
+
 class TestOps:
     """Test discovery and execution operations.
 
@@ -629,13 +646,15 @@ class TestOps:
         if "rust" in languages:
             hints.append("Rust: Run `cargo test`")
         if "jvm" in languages:
-            hints.append("Java/Kotlin: Run `./gradlew test` or `mvn test`")
+            gradlew = _os_script_path("./gradlew")
+            hints.append(f"Java/Kotlin: Run `{gradlew} test` or `mvn test`")
         if "ruby" in languages:
             hints.append("Ruby: Run `bundle exec rspec` or `rake test`")
         if "dotnet" in languages:
             hints.append("C#/.NET: Run `dotnet test`")
         if "php" in languages:
-            hints.append("PHP: Run `phpunit` or `./vendor/bin/phpunit`")
+            phpunit = _os_script_path("./vendor/bin/phpunit")
+            hints.append(f"PHP: Run `phpunit` or `{phpunit}`")
         if "elixir" in languages:
             hints.append("Elixir: Run `mix test`")
 
