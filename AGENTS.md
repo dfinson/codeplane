@@ -60,7 +60,6 @@ This runs only the tests impacted by your changes — fast, targeted, sufficient
 
 ### Before You Edit: Decision Gate
 
-
 STOP before using `write_source` for multi-file changes:
 - Changing a name across files? → `refactor_rename` (NOT write_source + search)
 - Moving a file? → `refactor_move` (NOT write_source + delete)

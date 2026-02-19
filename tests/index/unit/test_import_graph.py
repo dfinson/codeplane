@@ -404,9 +404,7 @@ class TestAffectedTestsDirectTestFiles:
         # test_utils found via direct inclusion (is a test file)
         assert "tests/test_utils.py" in test_files
 
-    def test_test_file_already_matched_by_import_not_duplicated(
-        self, graph: ImportGraph
-    ) -> None:
+    def test_test_file_already_matched_by_import_not_duplicated(self, graph: ImportGraph) -> None:
         """If a changed test also imports the changed source, no duplicate."""
         result = graph.affected_tests(["src/mylib/core.py", "tests/test_core.py"])
         paths = result.test_files
