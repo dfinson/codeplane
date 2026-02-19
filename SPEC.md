@@ -177,9 +177,9 @@ Core commands (idempotent; human output derivable from structured JSON via `--js
 | `cpl init` | One-time repo setup: write `.codeplane/`, generate `.cplignore`, bind repo ID, build first index (or schedule immediately). |
 | `cpl up` | Start the CodePlane server (foreground). Ctrl+C to stop. Idempotent check prevents duplicate instances. |
 | `cpl status` | Single human-readable view: server running, repo fingerprint, index version, last reconcile, last error. |
-| `cpl doctor` | Single "tell me what's wrong and how to fix it" command. Output suitable for pasting into issues. |
+| `cpl clear` | Remove CodePlane artifacts (`.codeplane/` directory) from this repository. Idempotent. |
 
-Humans learn: `init` once, then `up/status/doctor`.
+Humans learn: `init` once, then `up/status/clear`.
 
 ### Folded and Removed Commands
 
@@ -1023,17 +1023,17 @@ To prevent misuse, this section explicitly documents what the index cannot do:
 6. **No inference or heuristics**: If explicit syntactic proof doesn't exist, the ref stays UNKNOWN.
 
 ---
-## 8. Deterministic Refactor Engine (SCIP-Based Semantic Data)
+## 8. Deterministic Refactor Engine (Structural Index)
 
 ### 8.1 Purpose
 
-Provide IntelliJ-class deterministic refactoring (rename / move / delete / change signature) across multi-language repositories using **pre-indexed SCIP semantic data** as the semantic authority, preserving determinism, auditability, and user control.
+Provide deterministic refactoring (rename / move / delete) across multi-language repositories using the **structural index** (Tree-sitter-based DefFact/RefFact data) as the semantic authority, preserving determinism, auditability, and user control.
 
 This subsystem is narrowly scoped: a high-correctness refactor planner and executor.
 
 ### 8.2 Core Principles
 
-- SCIP-based semantics: all refactor planning uses pre-indexed SCIP semantic data
+- Structural index semantics: all refactor planning uses Tree-sitter-based DefFact/RefFact data from the structural index
 - Static configuration: languages, environments, roots known at startup
 - No speculative semantics: CodePlane never guesses bindings
 - No working tree mutation during planning
@@ -1060,34 +1060,34 @@ All operations:
 
 ![CodePlane Semantic Refactor Architecture](docs/images/codeplane-semantic-refactor-architecture.png)
 
-#### SCIP-Based Execution
+#### Structural Index Execution
 
-- All refactor planning (rename, move, delete) uses SCIP semantic index data
-- SCIP provides: symbol definitions, references, type hierarchies, import graphs
-- No persistent language servers; semantic data pre-computed by batch indexers
+- All refactor planning (rename, move, delete) uses the structural index (DefFact/RefFact data)
+- The structural index provides: symbol definitions, references, and cross-file resolution via Tree-sitter
+- No persistent language servers; structural data built by Tree-sitter parsers at index time
 - CodePlane maintains full control of edit application, version tracking, and reindexing
 
 #### Semantic Data Flow
 
 1. User requests refactor (e.g., rename symbol)
 2. CodePlane checks mutation gate: all affected files must be CLEAN
-3. Query SCIP index for all occurrences of target symbol
+3. Query structural index for all DefFact/RefFact occurrences of target symbol
 4. Generate structured edit plan from occurrence positions
 5. Preview edits to user
 6. Apply edits atomically
-7. Mark affected files as DIRTY, enqueue semantic refresh
+7. Mark affected files as DIRTY, enqueue index refresh
 
 #### Edit Application and Reindexing
 
-- Edit plans generated from SCIP occurrence data
+- Edit plans generated from structural index occurrence data (DefFact/RefFact)
 - File edits are applied atomically via mutation engine
 - Affected files are marked DIRTY and re-indexed
-- Syntactic index updated immediately; semantic index refreshed via job queue
+- Structural index updated after apply; overlay files re-indexed
 - Overlay/untracked files are updated as first-class citizens
 
 ### 8.3b Language Support Model
 
-- Semantic refactors available for languages with SCIP indexers installed
+- Structural refactors available for languages with Tree-sitter grammars
 - Syntactic-only fallback available via `force_syntactic: true` option
 - Unsupported languages can still use syntactic edits (find/replace with confirmation)
 - No runtime auto-detection; language support declared at init
@@ -2456,7 +2456,7 @@ Refactors described as tool operations:
 
 Implementation:
 
-- All semantic refactors use SCIP index data as the sole authority
+- All structural refactors use the structural index (Tree-sitter-based DefFact/RefFact data) as the sole authority
 - CodePlane never guesses or speculatively resolves bindings
 - Non-semantic operations (exact-match comment/docstring sweeps, mechanical file renames) are handled separately and reported as optional, previewable patches
 
@@ -2496,7 +2496,7 @@ If added later:
 - Indexing:
   - Tantivy lexical index
   - SQLite structural metadata
-  - Graph construction/traversal bounds
+### 17.1 CodePlane Owns
   - Atomic index updates
 - Shared tracked index artifact production/consumption rules (CI build, checksum verify, cache, forward-compat limits)
 - Overlay index lifecycle (local-only, rebuildable)
@@ -2516,11 +2516,11 @@ If added later:
 - Operation ledger persistence + retention + optional artifacts
 - Operator CLI + lifecycle + diagnostics + config layering
 
-### 15.2 CodePlane Does Not Own
+### 17.2 CodePlane Does Not Own
 
 - Planning, strategy selection, retries, success inference
 - Editor buffer state; it reconciles from disk + Git
-- Git commits, staging/branch management flows, merges, rebases, stashes, resets (explicitly out of scope for mutation engine; read-only operations allowed)
+- Git protocol itself (CodePlane exposes git operations as MCP tools but does not own git internals)
 - Embeddings-first semantic retrieval
 - Remote execution / CI sharding
 
@@ -2532,7 +2532,7 @@ The following contradictions have been resolved:
 
 1. **`.env` overlay indexing**: Resolved. Default-blocked in `.cplignore`. Users can explicitly whitelist via `!.env` if needed. See section 6.10.
 
-2. **Refactor fallback semantics**: Resolved. Semantic refactors are SCIP-based; CodePlane never guesses bindings. "Structured lexical edits" refers only to non-semantic operations (exact-match comment sweeps, mechanical file renames). These are explicitly not semantic refactors.
+2. **Refactor fallback semantics**: Resolved. Structural refactors use the structural index (DefFact/RefFact); CodePlane never guesses bindings. "Structured lexical edits" refers only to non-semantic operations (exact-match comment sweeps, mechanical file renames). These are explicitly not structural refactors.
 
 3. **Tree-sitter failure policy**: Resolved. On parse failure, skip file, log warning, continue indexing. Never abort the indexing pass for a single file failure. See section 7.4.
 
@@ -2882,128 +2882,95 @@ Any tool can accept optional `session_id` parameter to:
 
 ### 23.4 Tool Catalog
 
-Tools are organized into namespaced families. Each tool has a single responsibility and strongly-typed response.
+Tools are organized into functional families. Each tool is a standalone MCP tool registered via FastMCP's `@mcp.tool()` decorator with strongly-typed Pydantic models for input/output. Many git and refactor operations use a consolidated action-parameter design where a single tool handles multiple sub-operations via an `action` parameter.
 
-#### Session Tools
-
-| Tool | Purpose |
-|------|---------|
-| `session_info` | Get current session state, task context, operation history |
-| `session_create` | Create new session with optional task description |
-| `session_close` | Close session and finalize task |
-
-#### Git Tools — Read Operations
+#### Introspection Tools
 
 | Tool | Purpose |
 |------|---------|
-| `git_status` | Repository status (staged, modified, untracked, conflicts) |
-| `git_diff` | Generate diff between refs or working tree |
-| `git_blame` | Line-by-line authorship for a file |
-| `git_log` | Commit history with optional filters |
-| `git_show` | Show commit details |
-| `git_branches` | List branches with tracking info |
-| `git_tags` | List tags |
-| `git_remotes` | List configured remotes |
-| `git_stash_list` | List stash entries |
+| `describe` | Repo metadata, language, active branch, index status, tool documentation |
 
-#### Git Tools — Write Operations
+#### File Tools
 
 | Tool | Purpose |
 |------|---------|
-| `git_stage` | Stage files for commit |
-| `git_unstage` | Unstage files |
-| `git_discard` | Discard working tree changes |
-| `git_commit` | Create commit |
-| `git_amend` | Amend previous commit |
-| `git_create_branch` | Create new branch |
-| `git_checkout` | Switch branches or restore files |
-| `git_delete_branch` | Delete branch |
-| `git_merge` | Merge branches |
-| `git_cherrypick` | Cherry-pick commits |
-| `git_revert` | Revert commits |
-| `git_reset` | Reset HEAD to a state |
-| `git_stash_push` | Stash changes |
-| `git_stash_pop` | Pop stash entry |
-| `git_fetch` | Fetch from remote |
-| `git_push` | Push to remote |
-| `git_pull` | Pull from remote |
+| `read_source` | Read file contents with optional line ranges (span-based, returns `file_sha256`) |
+| `read_file_full` | Gated bulk file access (two-phase confirmation, resource-first delivery) |
+| `list_files` | List directory contents with filtering |
+| `reset_budget` | Reset the read budget for the current session |
 
-#### Git Tools — Rebase
+#### Search & Index Tools
 
 | Tool | Purpose |
 |------|---------|
-| `git_rebase_plan` | Generate rebase plan (commits to be rebased) |
-| `git_rebase_execute` | Execute rebase plan |
-| `git_rebase_continue` | Continue after conflict resolution |
-| `git_rebase_abort` | Abort and restore original state |
-| `git_rebase_skip` | Skip current commit |
-
-#### Git Tools — Submodules
-
-| Tool | Purpose |
-|------|---------|
-| `git_submodules` | List submodules with status |
-| `git_submodule_init` | Initialize submodules |
-| `git_submodule_update` | Update submodules to recorded commits |
-| `git_submodule_add` | Add new submodule |
-| `git_submodule_remove` | Remove submodule |
-
-#### Git Tools — Worktrees
-
-| Tool | Purpose |
-|------|---------|
-| `git_worktrees` | List worktrees |
-| `git_worktree_add` | Add new worktree |
-| `git_worktree_remove` | Remove worktree |
-
-#### Search Tools
-
-| Tool | Purpose |
-|------|---------|
-| `search` | Unified search (lexical, symbol, references, definitions) |
-
-#### Analysis Tools
-
-| Tool | Purpose |
-|------|---------|
-| `semantic_diff` | Structural change summary from index facts (added, removed, signature/body changed, renamed) with blast-radius enrichment |
-
-#### Read Tools
-
-| Tool | Purpose |
-|------|---------|
-| `read_files` | Read file contents with optional line ranges |
-| `map_repo` | Repository structure and mental model |
+| `search` | Unified search: lexical, symbol, references, definitions (returns spans, never source text) |
+| `map_repo` | Repository structure, dependencies, and test layout |
 
 #### Mutation Tools
 
 | Tool | Purpose |
 |------|---------|
-| `write_source` | Atomic file edits |
+| `write_source` | Atomic file edits with span-based updates, SHA256 validation, and structured delta response |
 
-#### Refactor Tools (Requires SCIP)
-
-| Tool | Purpose |
-|------|---------|
-| `refactor_rename` | Rename symbol across codebase |
-| `refactor_move` | Move symbol to different file |
-| `refactor_preview` | Preview refactoring changes |
-| `refactor_apply` | Apply previewed refactoring |
-
-#### Test Tools
+#### Git Tools (19 tools, consolidated action-parameter design)
 
 | Tool | Purpose |
 |------|---------|
-| `test_discover` | Discover tests in codebase |
-| `test_run` | Execute tests with progress |
+| `git_status` | Repository status (staged, modified, untracked, conflicts) |
+| `git_diff` | Generate diff between refs or working tree |
+| `git_commit` | Create commit |
+| `git_stage_and_commit` | Stage files and commit in one atomic step |
+| `git_log` | Commit history with optional filters |
+| `git_push` | Push to remote |
+| `git_pull` | Pull from remote |
+| `git_checkout` | Switch branches or restore files |
+| `git_merge` | Merge branches |
+| `git_reset` | Reset HEAD to a state |
+| `git_stage` | Stage files for commit |
+| `git_branch` | Branch management (create, delete, list, rename) |
+| `git_remote` | Remote management (add, remove, list) |
+| `git_stash` | Stash management (push, pop, list, drop) |
+| `git_rebase` | Rebase operations (start, continue, abort, skip) |
+| `git_inspect` | Inspect git objects (show, blame, tags) |
+| `git_history` | File and line history |
+| `git_submodule` | Submodule management (init, update, add, remove, status) |
+| `git_worktree` | Worktree management (add, remove, list) |
 
-#### Status Tools
+#### Refactor Tools (6 tools, structural index based)
 
 | Tool | Purpose |
 |------|---------|
-| `status` | Server health, index state |
+| `refactor_rename` | Rename symbol across codebase (preview → inspect → apply/cancel) |
+| `refactor_move` | Move file or symbol to different location |
+| `refactor_delete` | Delete file or symbol |
+| `refactor_inspect` | Inspect low-certainty matches in a pending refactor |
+| `refactor_apply` | Apply a previewed refactoring |
+| `refactor_cancel` | Cancel a previewed refactoring |
 
-**Total: ~36 tools**
+#### Analysis Tools
+
+| Tool | Purpose |
+|------|---------|
+| `semantic_diff` | Structural change summary with blast-radius enrichment |
+
+#### Lint Tools
+
+| Tool | Purpose |
+|------|---------|
+| `lint_check` | Run configured linters on specified files or paths |
+| `lint_tools` | List available lint tools and their configuration |
+
+#### Test Tools (5 tools)
+
+| Tool | Purpose |
+|------|---------|
+| `discover_test_targets` | Discover test targets in the codebase |
+| `inspect_affected_tests` | Find tests affected by specific file changes |
+| `run_test_targets` | Execute tests with `affected_by` for impact-aware selection |
+| `get_test_run_status` | Check status of an async test run |
+| `cancel_test_run` | Cancel a running test execution |
+
+**Total: 43 tools**
 
 ### 23.5 Progress Reporting
 
@@ -3012,8 +2979,8 @@ Long-running operations report progress through MCP's native `Context.report_pro
 **Example:**
 
 ```python
-@codeplane_tool(mcp)
-async def test_run(
+@mcp.tool()
+async def run_test_targets(
     targets: list[str] | None = None,
     fail_fast: bool = False,
     ctx: Context,
@@ -3207,22 +3174,20 @@ interface DirectoryNode {
 
 ---
 
-#### `read_files`
+#### `read_source`
 
-Read file contents with optional line ranges.
+Read file contents with optional line ranges. Returns `file_sha256` per file for use with `write_source` span edits.
 
 **Parameters:**
 
 ```typescript
 {
-  paths: string | string[];         // Single path or array
-  ranges?: Array<{                  // Optional line ranges per file
+  targets: Array<{
     path: string;
-    start_line: number;
-    end_line: number;
+    start_line?: number;            // Optional line range start
+    end_line?: number;              // Optional line range end
   }>;
-  include_metadata?: boolean;       // Include file stats (default false)
-  session_id?: string;
+  cursor?: string;                  // Continuation token for paginated results
 }
 ```
 
@@ -3230,22 +3195,59 @@ Read file contents with optional line ranges.
 
 ```typescript
 {
+  resource_kind: "source";
+  delivery: "inline";
   files: Array<{
     path: string;
     content: string;
     language: string;
     line_count: number;
-    range?: { start: number; end: number };
-    metadata?: {
-      size_bytes: number;
-      modified_at: string;
-      git_status: "clean" | "modified" | "untracked";
-      hash: string;
-    };
+    range: [number, number];        // [start_line, end_line]
+    file_sha256: string;            // Use for write_source expected_file_sha256
   }>;
-  _session: SessionState;
+  cursor?: string;                  // For pagination
+  has_more: boolean;
 }
 ```
+
+---
+
+#### `read_file_full`
+
+Gated bulk file access with two-phase confirmation. Use only when you need the ENTIRE file content.
+
+**Parameters:**
+
+```typescript
+{
+  path: string;                     // File to read in full
+  confirm?: boolean;                // Must be true to receive content (two-phase gate)
+}
+```
+
+---
+
+#### `list_files`
+
+List directory contents with filtering.
+
+**Parameters:**
+
+```typescript
+{
+  path?: string;                    // Directory path (default: repo root)
+  depth?: number;                   // Max depth to recurse
+  pattern?: string;                 // Glob pattern filter
+}
+```
+
+---
+
+#### `reset_budget`
+
+Reset the read budget for the current session.
+
+**Parameters:** None.
 
 ---
 
@@ -3260,14 +3262,14 @@ Atomic file edits with structured delta response.
   edits: Array<{
     path: string;
     action: "create" | "update" | "delete";
-    content?: string;               // Full content for create/update
-    patches?: Array<{               // Or line-level patches
-      range: { start: number; end: number };
-      replacement: string;
-    }>;
+    content?: string;               // Full content for create
+    new_content?: string;           // Replacement content for span updates
+    expected_content?: string;      // Old text at span (fuzzy-matched for line drift)
+    start_line?: number;            // Span start (for update)
+    end_line?: number;              // Span end (for update)
+    expected_file_sha256?: string;  // SHA256 from read_source (hash validation)
   }>;
   dry_run?: boolean;                // Preview only (default false)
-  session_id?: string;
 }
 ```
 
@@ -3278,7 +3280,6 @@ Atomic file edits with structured delta response.
   applied: boolean;
   dry_run: boolean;
   delta: {
-    mutation_id: string;
     files_changed: number;
     insertions: number;
     deletions: number;
@@ -3287,13 +3288,18 @@ Atomic file edits with structured delta response.
       action: "created" | "updated" | "deleted";
       old_hash?: string;
       new_hash?: string;
-      diff_stats: { insertions: number; deletions: number };
+      file_sha256: string;          // New file SHA256 after edit
+      insertions: number;
+      deletions: number;
+      line_corrections?: Array<{    // When fuzzy-match adjusted line numbers
+        original: { start_line: number; end_line: number };
+        corrected: { start_line: number; end_line: number };
+      }>;
+      verification_context?: string; // Surrounding lines for human review
     }>;
   };
-  affected_symbols?: string[];
-  affected_tests?: string[];
-  repo_fingerprint: string;
-  _session: SessionState;
+  summary: string;
+  display_to_user?: string;
 }
 ```
 
@@ -3301,11 +3307,9 @@ Atomic file edits with structured delta response.
 
 #### Git Tools (`git_*`)
 
-Git operations are exposed as individual tools with the `git_` prefix. Each tool maps to a specific operation with strongly-typed parameters and responses.
+Git operations are exposed as 19 individual MCP tools with the `git_` prefix. Several tools (e.g., `git_branch`, `git_stash`, `git_rebase`, `git_submodule`, `git_worktree`) use a consolidated action-parameter design where a single tool handles multiple sub-operations.
 
-**Tool naming convention:** `git_{operation}` (e.g., `git_status`, `git_commit`, `git_diff`)
-
-**Common optional parameter:** All git tools accept `session_id?: string` for session override.
+**Tool naming convention:** `git_{operation}` (e.g., `git_status`, `git_commit`, `git_diff`, `git_stage_and_commit`)
 
 ##### `git_status`
 
@@ -3465,115 +3469,142 @@ Git operations are exposed as individual tools with the `git_` prefix. Each tool
 }
 ```
 
-##### Other Git Tools
+##### Other Git Tools (Consolidated)
 
-The remaining git tools follow similar patterns:
+The remaining git tools use a consolidated action-parameter design:
 
-| Tool | Key Parameters | Response Summary |
-|------|---------------|------------------|
-| `git_blame` | `path`, `line_range?` | Line authorship with commit info |
-| `git_show` | `ref` | Commit details with diff |
-| `git_branches` | - | List of branches with tracking |
-| `git_tags` | - | List of tags |
-| `git_remotes` | - | List of remotes with URLs |
-| `git_stage` | `paths` | Staging result |
-| `git_unstage` | `paths` | Unstaging result |
-| `git_discard` | `paths` | Discard result |
-| `git_amend` | `message?` | Amended commit OID |
-| `git_create_branch` | `name`, `ref?` | New branch info |
-| `git_checkout` | `ref`, `create?` | Checkout result |
-| `git_delete_branch` | `name`, `force?` | Deletion result |
-| `git_reset` | `ref`, `mode` | Reset result |
-| `git_cherrypick` | `commit` | Cherry-pick result |
-| `git_revert` | `commit` | Revert result |
-| `git_stash_push` | `message?`, `include_untracked?` | Stash commit |
-| `git_stash_pop` | `index?` | Pop result |
-| `git_stash_list` | - | List of stash entries |
-| `git_fetch` | `remote?`, `prune?` | Updated refs |
-| `git_push` | `remote?`, `force?` | Push result |
-| `git_pull` | `remote?` | Pull result |
-| `git_rebase_continue` | - | Rebase state |
-| `git_rebase_abort` | - | Abort confirmation |
-| `git_rebase_skip` | - | Skip result |
-| `git_submodules` | - | List with status |
-| `git_submodule_init` | `paths?` | Init result |
-| `git_submodule_update` | `paths?`, `recursive?` | Update result |
-| `git_submodule_add` | `url`, `path`, `branch?` | New submodule info |
-| `git_submodule_remove` | `path` | Removal result |
-| `git_worktrees` | - | List of worktrees |
-| `git_worktree_add` | `path`, `ref` | New worktree info |
-| `git_worktree_remove` | `name`, `force?` | Removal result |
-
----
+| Tool | Actions | Key Parameters |
+|------|---------|---------------|
+| `git_stage` | - | `paths` |
+| `git_stage_and_commit` | - | `paths`, `message`, `pre_commit?` |
+| `git_checkout` | - | `ref`, `create?`, `paths?` |
+| `git_merge` | - | `target`, `strategy?`, `no_ff?` |
+| `git_reset` | - | `ref`, `mode` (soft/mixed/hard) |
+| `git_push` | - | `remote?`, `branch?`, `force?` |
+| `git_pull` | - | `remote?`, `rebase?` |
+| `git_branch` | create, delete, list, rename | `name`, `ref?`, `force?` |
+| `git_remote` | add, remove, list | `name`, `url?` |
+| `git_stash` | push, pop, list, drop, apply | `message?`, `include_untracked?` |
+| `git_rebase` | start, continue, abort, skip | `target?`, `interactive?` |
+| `git_inspect` | show, blame, tags | `ref?`, `path?`, `line_range?` |
+| `git_history` | - | `path?`, `line_range?`, `limit?` |
+| `git_submodule` | init, update, add, remove, status | `paths?`, `url?`, `recursive?` |
+| `git_worktree` | add, remove, list | `path?`, `ref?`, `force?` |
 
 #### Refactor Tools (`refactor_*`)
 
-Semantic refactoring via SCIP index.
+Structural refactoring via the structural index (DefFact/RefFact). Six separate MCP tools following the preview → inspect → apply/cancel flow.
 
-**Parameters:**
+##### `refactor_rename`
+
+Rename a symbol across the codebase. Returns a `refactor_id` for inspect/apply/cancel.
 
 ```typescript
-{
-  action: "rename" | "move" | "delete" | "preview" | "apply" | "cancel";
-  
-  // For rename
-  symbol?: string;                  // Symbol name or path:line:col
-  new_name?: string;
-  
-  // For move
-  from_path?: string;
-  to_path?: string;
-  
-  // For delete
-  target?: string;                  // Symbol or path
-  
-  // For apply/cancel
-  refactor_id?: string;             // From preview response
-  
-  // Options
-  include_comments?: boolean;       // Sweep comments/docs (default true)
-  contexts?: string[];              // Specific contexts (default all)
-  session_id?: string;
-}
+// Parameters
+{ symbol: string; new_name: string }
+// Response: { refactor_id: string; matches: number; verification_required: boolean }
 ```
 
-**Response:**
+##### `refactor_move`
+
+Move a file or symbol to a new location.
 
 ```typescript
-{
-  refactor_id: string;
-  status: "previewed" | "applied" | "cancelled" | "divergence";
-  preview?: {
-    files_affected: number;
-    edits: Array<{
-      path: string;
-      hunks: Array<{ old: string; new: string; line: number }>;
-      semantic: boolean;            // SCIP-based vs comment sweep
-    }>;
-    contexts_used: string[];
-  };
-  applied?: {
-    delta: MutationDelta;           // Same as write_source
-    validation?: {
-      diagnostics_before: number;
-      diagnostics_after: number;
-    };
-  };
-  divergence?: {
-    conflicting_hunks: Array<{
-      path: string;
-      contexts: string[];
-      hunks: Array<{ context: string; content: string }>;
-    }>;
-    resolution_options: string[];
-  };
-  _session: SessionState;
-}
+// Parameters
+{ from_path: string; to_path: string }
+```
+
+##### `refactor_delete`
+
+Delete a file or symbol.
+
+```typescript
+// Parameters
+{ target: string }
+```
+
+##### `refactor_inspect`
+
+Inspect low-certainty matches in a pending refactoring. Call when `verification_required` is true.
+
+```typescript
+// Parameters
+{ refactor_id: string }
+```
+
+##### `refactor_apply`
+
+Apply a previewed refactoring.
+
+```typescript
+// Parameters
+{ refactor_id: string }
+```
+
+##### `refactor_cancel`
+
+Cancel a previewed refactoring.
+
+```typescript
+// Parameters
+{ refactor_id: string }
 ```
 
 ---
 
-#### Test Tools (`test_*`)
+#### Test Tools
+
+Five separate MCP tools for test discovery, execution, and lifecycle.
+
+##### `discover_test_targets`
+
+Discover test targets in the codebase.
+
+```typescript
+// Parameters
+{ paths?: string[] }  // Scope discovery to specific paths
+```
+
+##### `inspect_affected_tests`
+
+Find tests affected by specific file changes. Use `affected_by` with changed file paths.
+
+```typescript
+// Parameters
+{ affected_by: string[] }  // File paths that changed
+```
+
+##### `run_test_targets`
+
+Execute tests with impact-aware selection via `affected_by`.
+
+```typescript
+// Parameters
+{
+  affected_by?: string[];           // Run tests affected by these files
+  target_filter?: string[];         // Specific test targets
+  fail_fast?: boolean;
+  timeout_sec?: number;
+}
+```
+
+##### `get_test_run_status`
+
+Check status of an async test run.
+
+```typescript
+// Parameters
+{ run_id: string }
+```
+
+##### `cancel_test_run`
+
+Cancel a running test execution.
+
+```typescript
+// Parameters
+{ run_id: string }
+```
 
 ---
 
@@ -3692,217 +3723,86 @@ Structural change summary from index facts. Compares definitions between two sta
 
 ---
 
-#### Test Tools (`test_*`)
+#### Lint Tools
 
-Test discovery and execution.
+Two MCP tools for linting.
 
-**Parameters:**
+##### `lint_check`
+
+Run configured linters on specified files or paths.
 
 ```typescript
-{
-  action: "discover" | "run" | "status" | "cancel";
-  
-  // For discover
-  paths?: string[];                 // Scope discovery
-  
-  // For run
-  targets?: string[];               // Specific targets (default all)
-  filter?: {
-    pattern?: string;               // Test name pattern
-    tags?: string[];                // Test tags/markers
-    failed_only?: boolean;          // Re-run failures
-  };
-  parallelism?: number;             // Worker count (default auto)
-  timeout_sec?: number;             // Per-target timeout
-  fail_fast?: boolean;              // Stop on first failure
-  
-  // For status/cancel
-  run_id?: string;
-  
-  session_id?: string;
-}
+// Parameters
+{ paths?: string[]; fix?: boolean }
 ```
 
-**Response:**
+##### `lint_tools`
+
+List available lint tools and their configuration.
 
 ```typescript
-{
-  action: "discover" | "run" | "status" | "cancel";
-  
-  // discover
-  targets?: Array<{
-    target_id: string;
-    path: string;
-    language: string;
-    runner: string;
-    estimated_cost: number;
-    test_count?: number;
-  }>;
-  
-  // run / status
-  run_id?: string;
-  status?: "running" | "completed" | "cancelled" | "failed";
-  progress?: {
-    total: number;
-    completed: number;
-    passed: number;
-    failed: number;
-    skipped: number;
-  };
-  results?: Array<{
-    target_id: string;
-    status: "passed" | "failed" | "skipped" | "error";
-    duration_ms: number;
-    failure?: {
-      message: string;
-      stack?: string;
-      output?: string;
-    };
-  }>;
-  summary?: {
-    total_duration_ms: number;
-    flaky: string[];
-    new_failures: string[];
-    fixed: string[];
-  };
-  
-  _session: SessionState;
-}
+// Parameters: none
 ```
 
 ---
 
-#### Session Tools (`session_*`)
+#### Session Management (Internal)
 
-Session and task lifecycle management.
+Session lifecycle is managed internally by the `SessionManager` class. Sessions are **not** exposed as MCP tools. The session state is included in tool responses via `_session` fields.
 
-**Parameters:**
-
-```typescript
-{
-  action: "status" | "new" | "close" | "configure";
-  
-  // For new
-  limits?: {
-    max_mutations?: number;
-    max_test_runs?: number;
-    max_duration_sec?: number;
-  };
-  
-  // For close
-  reason?: "success" | "failed" | "abandoned";
-  
-  // For configure (update limits mid-task)
-  limits_delta?: {
-    add_mutations?: number;
-    add_test_runs?: number;
-  };
-  
-  session_id?: string;
-}
-```
-
-**Response:**
-
-```typescript
-{
-  action: "status" | "new" | "close" | "configure";
-  task: {
-    task_id: string;
-    state: "OPEN" | "CLOSED_SUCCESS" | "CLOSED_FAILED" | "CLOSED_INTERRUPTED";
-    limits: {
-      max_mutations: number;
-      max_test_runs: number;
-      max_duration_sec: number;
-    };
-    counters: {
-      mutations: number;
-      test_runs: number;
-      elapsed_sec: number;
-    };
-    fingerprints: {
-      last_mutation: string | null;
-      last_failure: string | null;
-      repeated_failure_count: number;
-    };
-    timeline: Array<{
-      timestamp: string;
-      op_type: string;
-      success: boolean;
-      fingerprint?: string;
-    }>;
-  };
-  _session: SessionState;
-}
-```
-
+Session operations (create, get, close) are handled server-side, not by agent-facing tools.
 ---
 
-#### `status`
+#### `describe`
 
-Server health, index state, and session info.
+Repo metadata, language, active branch, index status, and tool documentation.
 
 **Parameters:**
 
 ```typescript
 {
-  include?: Array<"daemon" | "index" | "session" | "indexers" | "config">;
-  session_id?: string;
+  action?: "repo" | "tool";         // Default: "repo"
+  name?: string;                    // Tool name (when action="tool")
 }
 ```
 
-**Response:**
+**Response (action="repo"):**
 
 ```typescript
 {
-  daemon: {
-    version: string;
-    uptime_sec: number;
-    pid: number;
-    port: number;
-    memory_mb: number;
-  };
-  index: {
-    version: number;
-    commit: string;
-    file_count: number;
-    symbol_count: number;
-    last_updated: string;
-    overlay_files: number;
-    healthy: boolean;
-  };
-  session: SessionState;
-  indexers: {
-    languages: Array<{
-      language: string;
-      indexer: string;
-      status: "ready" | "running" | "not_installed";
-      memory_mb?: number;
-    }>;
-    pending_install: string[];
-  };
-  config: {
-    repo_root: string;
-    config_sources: string[];
-    active_contexts: string[];
-  };
-  _session: SessionState;
+  repo_root: string;
+  language: string;
+  branch: string;
+  index_status: string;
+  tool_count: number;
 }
 ```
 
+**Response (action="tool"):**
+
+```typescript
+{
+  name: string;
+  description: string;
+  category: string;
+  when_to_use: string[];
+  when_not_to_use: string[];
+  examples: Array<{ description: string; params: object }>;
+}
+```
 ---
 
 ### 23.8 REST Endpoints (Operator)
 
 Non-MCP endpoints for operators and monitoring.
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/health` | GET | Liveness check (returns 200 if alive) |
-| `/ready` | GET | Readiness check (returns 200 if index loaded) |
-| `/metrics` | GET | Prometheus-format metrics (see section 13) |
-| `/status` | GET | JSON status (same as `status` tool) |
-| `/dashboard` | GET | Observability dashboard (see section 13) |
+| Endpoint | Method | Purpose | Status |
+|----------|--------|---------|--------|
+| `/health` | GET | Liveness check (returns 200 if alive) | **Implemented** |
+| `/status` | GET | JSON status (server health, index state) | **Implemented** |
+| `/ready` | GET | Readiness check (returns 200 if index loaded) | Planned |
+| `/metrics` | GET | Prometheus-format metrics (see section 13) | Planned |
+| `/dashboard` | GET | Observability dashboard (see section 13) | Planned |
 
 **Response header:** All responses include `X-CodePlane-Repo` header with the server's repository path.
 
@@ -3995,4 +3895,4 @@ Clients read `.codeplane/port` for the port number.
 - Tools may gain optional parameters without version bump
 - Deprecated tools return warning in `meta.warnings`
 
-Current version: `1.0.0`
+Current version: `0.1.0`
