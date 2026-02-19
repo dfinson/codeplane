@@ -27,8 +27,8 @@ USAGE:
 
 OUTPUT:
   Produces a trace JSON compatible with the benchmark-design.md analysis format.
-  The trace includes tiered MCP comparison metrics identical to the legacy
-  extract_vscode_agent_trace.py output.
+  The trace includes tiered MCP comparison metrics (T1-T4) covering tool
+  classification, convergence, cost proxies, and stability.
 """
 
 import argparse
@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 # ---------------------------------------------------------------------------
-PARSER_VERSION = "1.0.0"
+PARSER_VERSION = "1.1.0"
 DEFAULT_CODEPLANE_PREFIX = "codeplane_"
 PSEUDO_TURN_GAP_MS = 5000
 
@@ -75,11 +75,17 @@ def _parse_iso(ts: str | None) -> float | None:
 
 
 # ---------------------------------------------------------------------------
-# Tool classification (shared with legacy extractor)
+# Tool classification
 # ---------------------------------------------------------------------------
 _SUBKIND_BY_TOOL_NAME: dict[str, str] = {
+    # --- Terminal ---
     "run_in_terminal": "terminal",
     "get_terminal_output": "terminal",
+    # --- Agent planning ---
+    "manage_todo_list": "planning",
+    "ask_questions": "planning",
+    "tool_search_tool_regex": "planning",
+    # --- CodePlane MCP: read ---
     "read_source": "read_file",
     "read_file_full": "read_file",
     "read_scaffold": "read_file",
@@ -88,15 +94,11 @@ _SUBKIND_BY_TOOL_NAME: dict[str, str] = {
     "list_files": "read_file",
     "map_repo": "read_file",
     "describe": "read_file",
+    # --- CodePlane MCP: edit ---
     "write_source": "edit",
     "write_files": "edit",
+    # --- CodePlane MCP: git ---
     "semantic_diff": "git",
-    "lint_check": "lint",
-    "lint_tools": "lint",
-    "run_test_targets": "tests",
-    "discover_test_targets": "tests",
-    "inspect_affected_tests": "tests",
-    "get_test_run_status": "tests",
     "git_status": "git",
     "git_log": "git",
     "git_diff": "git",
@@ -116,6 +118,16 @@ _SUBKIND_BY_TOOL_NAME: dict[str, str] = {
     "git_history": "git",
     "git_submodule": "git",
     "git_worktree": "git",
+    # --- CodePlane MCP: lint ---
+    "lint_check": "lint",
+    "lint_tools": "lint",
+    # --- CodePlane MCP: tests ---
+    "run_test_targets": "tests",
+    "discover_test_targets": "tests",
+    "inspect_affected_tests": "tests",
+    "get_test_run_status": "tests",
+    "cancel_test_run": "tests",
+    # --- CodePlane MCP: refactor ---
     "refactor_rename": "edit",
     "refactor_move": "edit",
     "refactor_delete": "edit",
@@ -123,10 +135,80 @@ _SUBKIND_BY_TOOL_NAME: dict[str, str] = {
     "refactor_cancel": "edit",
     "refactor_inspect": "read_file",
     "refactor_impact": "read_file",
+    # --- CodePlane MCP: budget ---
+    "reset_budget": "planning",
+    # --- GitHub (non-MCP built-in) ---
     "github_api": "git",
-    "manage_todo_list": "planning",
-    "ask_questions": "planning",
-    "tool_search_tool_regex": "planning",
+    "github_repo": "git",
+    # --- VS Code built-in: file editing ---
+    "editFiles": "edit",
+    "edit_file": "edit",
+    "createFile": "edit",
+    "create_file": "edit",
+    "deleteFile": "edit",
+    "delete_file": "edit",
+    "renameFile": "edit",
+    "rename_file": "edit",
+    "insertEdit": "edit",
+    "insert_edit": "edit",
+    "replaceInFile": "edit",
+    "replace_in_file": "edit",
+    # --- VS Code built-in: file reading ---
+    "readFile": "read_file",
+    "listDirectory": "read_file",
+    "list_directory": "read_file",
+    "openFile": "read_file",
+    "open_file": "read_file",
+    "getWorkspaceStructure": "read_file",
+    "get_workspace_structure": "read_file",
+    # --- VS Code built-in: search ---
+    "searchFiles": "search",
+    "search_files": "search",
+    "findTextInFiles": "search",
+    "find_text_in_files": "search",
+    "findInFiles": "search",
+    "find_in_files": "search",
+    # --- VS Code built-in: environment ---
+    "configure_python_environment": "environment",
+    "install_python_packages": "environment",
+    "get_python_environment_details": "environment",
+    "get_python_executable_details": "environment",
+    "configure_python_notebook": "environment",
+    "configure_non_python_notebook": "environment",
+    "restart_notebook_kernel": "environment",
+    # --- VS Code built-in: browser ---
+    "fetch_webpage": "browser",
+    "open_simple_browser": "browser",
+    # --- VS Code built-in: commands ---
+    "run_vscode_command": "vscode_cmd",
+    "install_extension": "vscode_cmd",
+    "vscode_searchExtensions_internal": "vscode_cmd",
+    "create_new_workspace": "vscode_cmd",
+    "get_project_setup_info": "vscode_cmd",
+    "create_and_run_task": "vscode_cmd",
+    "get_vscode_api": "vscode_cmd",
+    # --- VS Code built-in: tests ---
+    "test_failure": "tests",
+    # --- GitHub MCP overrides (short names that differ from default "git") ---
+    "search_code": "search",
+    "search_issues": "search",
+    "search_pull_requests": "search",
+    "search_repositories": "search",
+    "search_users": "search",
+    "get_file_contents": "read_file",
+    # --- Pylance MCP (short names via _strip_mcp_prefix) ---
+    "mcp_s_pylanceDocuments": "read_file",
+    "mcp_s_pylanceFileSyntaxErrors": "lint",
+    "mcp_s_pylanceImports": "read_file",
+    "mcp_s_pylanceInstalledTopLevelModules": "read_file",
+    "mcp_s_pylanceInvokeRefactoring": "edit",
+    "mcp_s_pylancePythonEnvironments": "environment",
+    "mcp_s_pylanceRunCodeSnippet": "terminal",
+    "mcp_s_pylanceSettings": "read_file",
+    "mcp_s_pylanceSyntaxErrors": "lint",
+    "mcp_s_pylanceUpdatePythonEnvironment": "environment",
+    "mcp_s_pylanceWorkspaceRoots": "read_file",
+    "mcp_s_pylanceWorkspaceUserFiles": "read_file",
 }
 
 
@@ -142,6 +224,7 @@ def _strip_mcp_prefix(tool_name: str) -> str:
 
 
 def _infer_call_subkind(tool_name: str, tool_kind: str) -> str:
+    """Infer the functional sub-kind of a tool call."""
     short = _strip_mcp_prefix(tool_name)
     if short in _SUBKIND_BY_TOOL_NAME:
         return _SUBKIND_BY_TOOL_NAME[short]
@@ -152,6 +235,7 @@ def _infer_call_subkind(tool_name: str, tool_kind: str) -> str:
         ("refactor_", "edit"),
         ("mcp_codeplane", "mcp_codeplane"),
         ("mcp_github", "git"),
+        ("mcp_pylance", "read_file"),
     ]:
         if tool_name.startswith(prefix) or short.startswith(prefix):
             return kind
@@ -161,19 +245,15 @@ def _infer_call_subkind(tool_name: str, tool_kind: str) -> str:
 
 
 def _classify_tool_kind(tool_name: str) -> str:
-    """Classify tool into kind: mcp, native, builtin."""
+    """Classify tool into kind: mcp, native, builtin.
+
+    - mcp: MCP server tools (prefixed with ``mcp_``)
+    - native: raw terminal access (``run_in_terminal``, ``get_terminal_output``)
+    - builtin: all other VS Code / agent platform tools
+    """
     if tool_name.startswith("mcp_"):
         return "mcp"
-    if tool_name in (
-        "run_in_terminal",
-        "get_terminal_output",
-        "manage_todo_list",
-        "ask_questions",
-        "tool_search_tool_regex",
-    ):
-        return "native"
-    # Tool names with " [server]" suffix are VS Code internal
-    if "[server]" in tool_name:
+    if tool_name in ("run_in_terminal", "get_terminal_output"):
         return "native"
     return "builtin"
 
@@ -183,9 +263,14 @@ def _derive_tool_namespace(
     tool_kind: str,
     codeplane_prefix: str,
 ) -> str:
+    """Derive logical namespace for grouping tool calls."""
     if tool_kind == "mcp":
         if "codeplane" in tool_name or tool_name.startswith(codeplane_prefix):
             return "codeplane"
+        if tool_name.startswith("mcp_github"):
+            return "github_mcp"
+        if tool_name.startswith("mcp_pylance"):
+            return "pylance_mcp"
         return "other_mcp"
     if tool_kind == "native":
         return "native"
@@ -261,6 +346,9 @@ def extract_tool_calls_from_prompt(prompt: dict[str, Any]) -> list[dict[str, Any
             continue
 
         tool_name = lg.get("tool", "unknown")
+        # Strip VS Code internal " [server]" suffix
+        if " [server]" in tool_name:
+            tool_name = tool_name.split(" [server]")[0]
         tool_call_id = lg.get("id", "")
         time_iso = lg.get("time")
         epoch_ms = _parse_iso(time_iso)
@@ -546,6 +634,18 @@ def compute_mcp_comparison_metrics(
     total_args_bytes = sum(tc["args_bytes"] or 0 for tc in tool_calls)
     avg_result_bytes = round(total_result_bytes / total_tc, 1) if total_tc else 0
 
+    # Per-tool result breakdown
+    _result_by_tool: dict[str, dict[str, int]] = {}
+    for tc in tool_calls:
+        name = _strip_mcp_prefix(tc["tool_name"])
+        entry = _result_by_tool.setdefault(name, {"count": 0, "total_bytes": 0})
+        entry["count"] += 1
+        entry["total_bytes"] += tc["result_bytes"] or 0
+    avg_result_by_tool = {
+        name: {**v, "avg_bytes": round(v["total_bytes"] / v["count"], 1) if v["count"] else 0}
+        for name, v in sorted(_result_by_tool.items())
+    }
+
     # Real token counts from requests
     total_prompt_tokens = sum(r.get("prompt_tokens") or 0 for r in requests)
     total_completion_tokens = sum(r.get("completion_tokens") or 0 for r in requests)
@@ -559,6 +659,7 @@ def compute_mcp_comparison_metrics(
 
     return {
         "tier1_core": {
+            "total_tool_calls": total_tc,
             "by_kind": dict(by_kind),
             "native_mcp_ratio": native_mcp_ratio,
             "session_duration_s": duration_s,
@@ -568,6 +669,7 @@ def compute_mcp_comparison_metrics(
             "native_terminal_calls": native_terminal_calls,
         },
         "tier2_convergence": {
+            "total_pseudo_turns": len(pseudo_turns),
             "tool_calls_per_pseudo_turn": tool_calls_per_turn,
             "calls_before_first_mcp": calls_before_first_mcp,
             "longest_native_only_streak": longest_native_only,
@@ -576,6 +678,7 @@ def compute_mcp_comparison_metrics(
             "total_result_bytes": total_result_bytes,
             "total_args_bytes": total_args_bytes,
             "avg_result_bytes_per_call": avg_result_bytes,
+            "avg_result_by_tool": avg_result_by_tool,
             "total_prompt_tokens": total_prompt_tokens,
             "total_completion_tokens": total_completion_tokens,
             "total_tokens": total_tokens,
@@ -593,22 +696,20 @@ def compute_mcp_comparison_metrics(
 
 
 def _compute_thrash_shape(tool_calls: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute burst / cadence shape for tool-call thrashing analysis."""
+    _empty: dict[str, Any] = {
+        "max_burst_1s": 0,
+        "longest_uninterrupted_streak": 0,
+        "calls_per_second_mean": 0,
+        "calls_per_second_max": 0,
+        "calls_per_second_stddev": 0,
+    }
     if not tool_calls:
-        return {
-            "max_burst_1s": 0,
-            "longest_uninterrupted_streak": 0,
-            "calls_per_second_mean": 0,
-            "calls_per_second_max": 0,
-        }
+        return _empty
 
     timestamps = [tc["timestamp_epoch_ms"] for tc in tool_calls if tc["timestamp_epoch_ms"]]
     if not timestamps:
-        return {
-            "max_burst_1s": 0,
-            "longest_uninterrupted_streak": len(tool_calls),
-            "calls_per_second_mean": 0,
-            "calls_per_second_max": 0,
-        }
+        return {**_empty, "longest_uninterrupted_streak": len(tool_calls)}
 
     # Max burst in 1-second window
     max_burst = 1
@@ -618,6 +719,7 @@ def _compute_thrash_shape(tool_calls: list[dict[str, Any]]) -> dict[str, Any]:
             max_burst = count
 
     # CPS per second bucket
+    cps_stddev: float = 0
     if len(timestamps) >= 2:
         min_t = min(timestamps)
         max_t = max(timestamps)
@@ -630,6 +732,7 @@ def _compute_thrash_shape(tool_calls: list[dict[str, Any]]) -> dict[str, Any]:
             cps_values = list(buckets.values())
             cps_mean = round(stats.mean(cps_values), 2) if cps_values else 0
             cps_max = max(cps_values) if cps_values else 0
+            cps_stddev = round(stats.stdev(cps_values), 2) if len(cps_values) > 1 else 0
         else:
             cps_mean = len(timestamps)
             cps_max = len(timestamps)
@@ -653,6 +756,7 @@ def _compute_thrash_shape(tool_calls: list[dict[str, Any]]) -> dict[str, Any]:
         "longest_uninterrupted_streak": longest_streak,
         "calls_per_second_mean": cps_mean,
         "calls_per_second_max": cps_max,
+        "calls_per_second_stddev": cps_stddev,
     }
 
 
@@ -888,6 +992,12 @@ def main() -> None:
         help=f"Prefix for CodePlane MCP tool names (default: {DEFAULT_CODEPLANE_PREFIX!r}).",
     )
     parser.add_argument(
+        "-l",
+        "--list-prompts",
+        action="store_true",
+        help="List all prompts in the export with stats, then exit.",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -912,6 +1022,25 @@ def main() -> None:
         data.get("totalLogEntries", 0),
         data.get("exportedAt", "?"),
     )
+
+    # 1b. List prompts mode
+    if args.list_prompts:
+        prompts = data.get("prompts", [])
+        hdr = f"{'Idx':>4}  {'Logs':>5}  {'Tools':>6}  {'LLM':>4}  Prompt"
+        sep = f"{'\u2500' * 4}  {'\u2500' * 5}  {'\u2500' * 6}  {'\u2500' * 4}  {'\u2500' * 60}"
+        print(f"\n{hdr}", file=sys.stderr)
+        print(sep, file=sys.stderr)
+        for i, p in enumerate(prompts):
+            logs = p.get("logs", [])
+            n_tools = sum(1 for lg in logs if lg.get("kind") == "toolCall")
+            n_llm = sum(1 for lg in logs if lg.get("kind") == "request")
+            preview = (p.get("prompt") or "")[:60].replace("\n", " ")
+            print(
+                f"{i:>4}  {p.get('logCount', len(logs)):>5}  {n_tools:>6}  {n_llm:>4}  {preview}",
+                file=sys.stderr,
+            )
+        print(f"\n{len(prompts)} prompt(s) total.\n", file=sys.stderr)
+        return
 
     # 2. Select prompt
     prompt, prompt_index, selection_reason = select_prompt(
@@ -1029,11 +1158,16 @@ def main() -> None:
         f"burst\u2081\u209b={ts['max_burst_1s']}  "
         f"streak={ts['longest_uninterrupted_streak']}  "
         f"cps_mean={ts['calls_per_second_mean']}  "
-        f"cps_max={ts['calls_per_second_max']}",
+        f"cps_max={ts['calls_per_second_max']}  "
+        f"cps_\u03c3={ts['calls_per_second_stddev']}",
         file=sys.stderr,
     )
     print(
         f"  T1 \u2502 Terminal:    {t1['native_terminal_calls']} native terminal calls",
+        file=sys.stderr,
+    )
+    print(
+        f"  T2 \u2502 Turns:       {t2['total_pseudo_turns']}",
         file=sys.stderr,
     )
     print(
