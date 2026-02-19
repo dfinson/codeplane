@@ -183,3 +183,111 @@ class TestRejoindMerging:
         tr = ToolResult(structured_content=result_dict)
         assert tr.structured_content is not None
         assert "REJOINDER:" in tr.structured_content["agentic_hint"]
+
+
+class TestRejoinerConstants:
+    """Validate module-level constants are well-formed."""
+
+    def test_interval_is_positive(self) -> None:
+        assert _REJOINDER_INTERVAL > 0
+
+    def test_rotation_indices_valid(self) -> None:
+        """Every index in the rotation tuple addresses a valid rejoinder."""
+        for idx in _REJOINDER_ROTATION:
+            assert 0 <= idx < len(_REJOINDERS)
+
+    def test_rejoinders_are_nonempty_strings(self) -> None:
+        for r in _REJOINDERS:
+            assert isinstance(r, str)
+            assert len(r) > 0
+
+    def test_all_rejoinders_start_with_prefix(self) -> None:
+        for r in _REJOINDERS:
+            assert r.startswith("REJOINDER:")
+
+    def test_rotation_has_expected_weights(self) -> None:
+        """Rotation (0,1,0) gives A weight 2 and B weight 1."""
+        from collections import Counter
+
+        counts = Counter(_REJOINDER_ROTATION)
+        assert counts[0] == 2  # A appears twice
+        assert counts[1] == 1  # B appears once
+
+
+class TestRejoinerCounterBehavior:
+    """Tests for counter increment and persistence behavior."""
+
+    def test_counter_increments_every_call(self) -> None:
+        """Counter reaches expected value after N calls."""
+        mgr, session = _make_session_manager()
+        mw = ToolMiddleware(session_manager=mgr)
+        ctx = _make_mock_context()
+
+        for _ in range(7):
+            mw._maybe_get_rejoinder(ctx)
+
+        assert session.counters["rejoinder_calls"] == 7
+
+    def test_counter_not_reset_after_firing(self) -> None:
+        """Counter continues incrementing past the firing point."""
+        mgr, session = _make_session_manager()
+        mw = ToolMiddleware(session_manager=mgr)
+        ctx = _make_mock_context()
+
+        # Fire once at interval, then continue
+        for _ in range(_REJOINDER_INTERVAL + 3):
+            mw._maybe_get_rejoinder(ctx)
+
+        assert session.counters["rejoinder_calls"] == _REJOINDER_INTERVAL + 3
+
+    def test_first_fire_is_rejoinder_a(self) -> None:
+        """First rejoinder (call 5) is A (search/read tools)."""
+        mgr, _ = _make_session_manager()
+        mw = ToolMiddleware(session_manager=mgr)
+        ctx = _make_mock_context()
+
+        for _ in range(_REJOINDER_INTERVAL - 1):
+            mw._maybe_get_rejoinder(ctx)
+        result = mw._maybe_get_rejoinder(ctx)
+        assert result == _REJOINDERS[0]
+        assert "search" in result
+        assert "read_source" in result
+
+    def test_second_fire_is_rejoinder_b(self) -> None:
+        """Second rejoinder (call 10) is B (test runners)."""
+        mgr, _ = _make_session_manager()
+        mw = ToolMiddleware(session_manager=mgr)
+        ctx = _make_mock_context()
+
+        for _ in range(_REJOINDER_INTERVAL * 2 - 1):
+            mw._maybe_get_rejoinder(ctx)
+        result = mw._maybe_get_rejoinder(ctx)
+        assert result == _REJOINDERS[1]
+        assert "run_test_targets" in result
+
+    def test_no_repack_when_extract_returns_none(self) -> None:
+        """If _extract_result_dict returns None, rejoinder is silently skipped."""
+        # Verify _extract_result_dict returns None for non-dict results
+        assert ToolMiddleware._extract_result_dict("plain string") is None
+        assert ToolMiddleware._extract_result_dict(None) is None
+        assert ToolMiddleware._extract_result_dict(42) is None
+
+    def test_long_run_rotation_wraps(self) -> None:
+        """Rotation wraps correctly over many cycles."""
+        mgr, _ = _make_session_manager()
+        mw = ToolMiddleware(session_manager=mgr)
+        ctx = _make_mock_context()
+
+        fired: list[str] = []
+        # Run 5 full cycles (15 rejoinders = 75 calls)
+        for _ in range(_REJOINDER_INTERVAL * 15):
+            result = mw._maybe_get_rejoinder(ctx)
+            if result is not None:
+                fired.append(result)
+
+        assert len(fired) == 15
+        # Every group of 3 should follow A, B, A
+        for i in range(0, 15, 3):
+            assert fired[i] == _REJOINDERS[0]  # A
+            assert fired[i + 1] == _REJOINDERS[1]  # B
+            assert fired[i + 2] == _REJOINDERS[0]  # A
