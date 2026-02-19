@@ -3,7 +3,6 @@
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
-from fastmcp.utilities.json_schema import dereference_refs
 from pydantic import Field
 
 from codeplane.mcp.docs import get_tool_documentation
@@ -88,7 +87,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             doc = get_tool_documentation(name)
             if doc is None:
                 # Get available tools from MCP tool manager
-                available_tools = list(mcp._tool_manager._tools.keys())
+                from codeplane.mcp._compat import get_tools_sync
+
+                tools_dict = get_tools_sync(mcp)
+                available_tools = list(tools_dict.keys())
                 if name not in available_tools:
                     return {
                         "found": False,
@@ -97,7 +99,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                         "summary": f"tool '{name}' not found",
                     }
                 # Basic info from tool manager
-                tool_spec = mcp._tool_manager._tools.get(name)
+                tool_spec = tools_dict.get(name)
                 desc = tool_spec.description if tool_spec else "No description"
                 return {
                     "found": True,
@@ -135,7 +137,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             }
 
         if action == "capabilities":
-            all_tools = mcp._tool_manager._tools
+            from codeplane.mcp._compat import get_tools_sync
+
+            all_tools = get_tools_sync(mcp)
             tool_names = list(all_tools.keys())
             tool_list = [
                 {"name": name, "description": spec.description} for name, spec in all_tools.items()
@@ -228,7 +232,3 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             }
 
         return {"error": f"unknown action: {action}", "summary": "error: unknown action"}
-
-    # Flatten schemas to remove $ref/$defs for Claude compatibility
-    for tool in mcp._tool_manager._tools.values():
-        tool.parameters = dereference_refs(tool.parameters)

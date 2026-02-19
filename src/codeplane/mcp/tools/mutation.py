@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
-from fastmcp.utilities.json_schema import dereference_refs
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from codeplane.mcp.errors import (
@@ -496,7 +495,3 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         }
 
         return response
-
-    # Flatten schemas to remove $ref/$defs for Claude compatibility
-    for tool in mcp._tool_manager._tools.values():
-        tool.parameters = dereference_refs(tool.parameters)

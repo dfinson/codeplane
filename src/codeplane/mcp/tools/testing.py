@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastmcp import Context
-from fastmcp.utilities.json_schema import dereference_refs
 from pydantic import Field
 
 if TYPE_CHECKING:
@@ -847,7 +846,3 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         result = await app_ctx.test_ops.cancel(run_id)
         return _serialize_test_result(result, is_action=True)
-
-    # Flatten schemas to remove $ref/$defs for Claude compatibility
-    for tool in mcp._tool_manager._tools.values():
-        tool.parameters = dereference_refs(tool.parameters)

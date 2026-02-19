@@ -109,8 +109,10 @@ class TestGitInspectBlameHandler:
 
         mcp = FastMCP("test")
         register_tools(mcp, mock_context)
-        tool = mcp._tool_manager._tools["git_inspect"]
-        return tool.fn  # type: ignore[attr-defined]
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp)["git_inspect"]
+        return tool.fn
 
     @pytest.fixture
     def mock_ctx(self) -> MagicMock:

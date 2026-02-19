@@ -37,13 +37,16 @@ class TestCreateMcpServer:
     def test_registers_tools(self, mock_context: MagicMock) -> None:
         """Registers tools from all tool modules."""
         mcp = create_mcp_server(mock_context)
-        tool_count = len(mcp._tool_manager._tools)
-        assert tool_count > 0
+        from codeplane.mcp._compat import get_tools_sync
+
+        assert len(get_tools_sync(mcp)) > 0
 
     def test_has_expected_tools(self, mock_context: MagicMock) -> None:
         """Has core tools registered."""
         mcp = create_mcp_server(mock_context)
-        tool_names = set(mcp._tool_manager._tools.keys())
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool_names = set(get_tools_sync(mcp).keys())
         assert "read_source" in tool_names
         assert "search" in tool_names
         assert "git_status" in tool_names

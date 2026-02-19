@@ -48,8 +48,10 @@ def git_commit_tool(
     register_tools(mcp, mock_context)
 
     # Retrieve the registered tool function
-    tool = mcp._tool_manager._tools["git_commit"]
-    return tool.fn  # type: ignore[attr-defined]
+    from codeplane.mcp._compat import get_tools_sync
+
+    tool = get_tools_sync(mcp)["git_commit"]
+    return tool.fn
 
 
 @pytest.fixture

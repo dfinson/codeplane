@@ -61,7 +61,7 @@ def _patch_fastmcp_docket() -> None:
     from fastmcp import FastMCP
 
     # Only patch once
-    if not hasattr(FastMCP, "_docket_patched"):
+    if not hasattr(FastMCP, "_docket_patched") and hasattr(FastMCP, "_docket_lifespan"):
         FastMCP._docket_lifespan = staticmethod(_noop_docket_lifespan)  # type: ignore[method-assign]
         FastMCP._docket_patched = True  # type: ignore[attr-defined]
         log.debug("fastmcp_docket_disabled")
@@ -74,18 +74,16 @@ def _enrich_tool_descriptions(mcp: "FastMCP") -> None:
     to include examples, making them visible in ListTools responses without
     requiring a separate describe() call.
     """
+    from codeplane.mcp._compat import get_tools_sync
     from codeplane.mcp.docs import build_tool_description
 
     enriched_count = 0
-    for name, tool in mcp._tool_manager._tools.items():
+    for name, tool in get_tools_sync(mcp).items():
         original_desc = tool.description or ""
         enriched_desc = build_tool_description(name, original_desc)
         if enriched_desc != original_desc:
             tool.description = enriched_desc
             enriched_count += 1
-
-    if enriched_count > 0:
-        log.debug("tool_descriptions_enriched", count=enriched_count)
 
 
 def create_mcp_server(context: "AppContext") -> "FastMCP":
@@ -100,6 +98,7 @@ def create_mcp_server(context: "AppContext") -> "FastMCP":
     import fastmcp
     from fastmcp import FastMCP
 
+    from codeplane.mcp._compat import get_tools_sync
     from codeplane.mcp.middleware import ToolMiddleware
     from codeplane.mcp.tools import (
         diff,
@@ -145,7 +144,7 @@ def create_mcp_server(context: "AppContext") -> "FastMCP":
     # Enrich tool descriptions with inline examples from TOOL_DOCS
     _enrich_tool_descriptions(mcp)
 
-    tool_count = len(mcp._tool_manager._tools)
+    tool_count = len(get_tools_sync(mcp))
     log.info("mcp_server_created", tool_count=tool_count)
 
     return mcp
