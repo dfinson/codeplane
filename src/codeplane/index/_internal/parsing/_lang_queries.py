@@ -796,7 +796,7 @@ YAML_QUERIES = LanguageQueryConfig(
 JSON_QUERIES = LanguageQueryConfig(
     query_text="""
         (pair
-            key: (string) @name) @node
+            key: (string (string_content) @name)) @node
     """,
     patterns=(SymbolPattern(kind="pair"),),
 )

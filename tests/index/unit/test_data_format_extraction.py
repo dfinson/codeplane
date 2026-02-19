@@ -189,10 +189,20 @@ class TestJsonExtraction:
         symbols = _parse(parser, self.JSON_SRC, ".json", tmp_path)
         assert all(s.kind == "pair" for s in symbols)
 
+    def test_pair_names_unquoted(self, parser: TreeSitterParser, tmp_path: Path) -> None:
+        """JSON key names should not include surrounding quotes."""
+        symbols = _parse(parser, self.JSON_SRC, ".json", tmp_path)
+        names = [s.name for s in symbols]
+        assert "name" in names
+        assert "scripts" in names
+        assert "build" in names
+        # Verify no quotes leaked into names
+        assert all(not s.name.startswith('"') for s in symbols)
+
     def test_nested_pairs_contained(self, parser: TreeSitterParser, tmp_path: Path) -> None:
         """Nested JSON pairs should fall within parent pair span."""
         symbols = _parse(parser, self.JSON_SRC, ".json", tmp_path)
-        scripts = next(s for s in symbols if "scripts" in s.name)
-        build = next(s for s in symbols if "build" in s.name)
+        scripts = next(s for s in symbols if s.name == "scripts")
+        build = next(s for s in symbols if s.name == "build")
         assert build.line >= scripts.line
         assert build.end_line <= scripts.end_line
