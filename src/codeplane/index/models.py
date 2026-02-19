@@ -593,6 +593,10 @@ class DefFact(SQLModel, table=True):
     end_col: int
     signature_hash: str | None = None  # Hash of syntactic signature
     display_name: str | None = None  # Human-readable form
+    signature_text: str | None = None  # Raw signature text (e.g. '(self, x: int, y: int)')
+    decorators_json: str | None = None  # JSON array of decorator/annotation strings
+    docstring: str | None = None  # First paragraph of docstring text
+    return_type: str | None = None  # Return type annotation text
 
     # Relationships
     file: File | None = Relationship(back_populates="defs")
@@ -701,6 +705,10 @@ class ImportFact(SQLModel, table=True):
     )
     import_kind: str  # python_import, python_from, js_import, etc.
     certainty: str = Field(default=Certainty.CERTAIN.value)
+    start_line: int | None = None  # 1-indexed start line of import statement
+    start_col: int | None = None  # 0-indexed start column
+    end_line: int | None = None  # 1-indexed end line of import statement
+    end_col: int | None = None  # 0-indexed end column
 
     # Relationships
     file: File | None = Relationship(back_populates="imports")

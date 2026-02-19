@@ -36,6 +36,9 @@ class LanguageQueryConfig:
     # If True, signature is extracted by collecting 'parameter' children
     # between '(' and ')' on the @node (used for Swift, OCaml)
     params_from_children: bool = False
+    # Node types whose text forms the body of a definition.
+    # Used to extract the declaration header (everything before the body).
+    body_node_types: frozenset[str] = frozenset({"block", "body", "class_body"})
 
 
 # ---------------------------------------------------------------------------
@@ -54,8 +57,8 @@ PYTHON_QUERIES = LanguageQueryConfig(
         SymbolPattern(kind="class"),
     ),
     container_types=frozenset({"class_definition"}),
+    body_node_types=frozenset({"block"}),
 )
-
 
 # ---------------------------------------------------------------------------
 # JavaScript

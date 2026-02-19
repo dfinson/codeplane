@@ -280,6 +280,10 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
                 "end_col": sym.end_column,
                 "signature_hash": sig_hash,
                 "display_name": sym.signature,
+                "signature_text": sym.signature_text,
+                "decorators_json": (json.dumps(sym.decorators) if sym.decorators else None),
+                "docstring": sym.docstring,
+                "return_type": sym.return_type,
             }
             result.defs.append(def_dict)
 
@@ -326,7 +330,11 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
                 "source_literal": imp.source_literal,
                 "import_kind": imp.import_kind,
                 "certainty": Certainty.CERTAIN.value,
-                # Not stored in DB, but used for deduplication
+                "start_line": imp.start_line,
+                "start_col": imp.start_col,
+                "end_line": imp.end_line,
+                "end_col": imp.end_col,
+                # Also kept for deduplication (aliased)
                 "_start_line": imp.start_line,
                 "_start_col": imp.start_col,
             }
