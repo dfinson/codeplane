@@ -31,6 +31,17 @@ log = structlog.get_logger(__name__)
 _AGENT_TAG = "\\[agent] "
 
 
+# Periodic tool-preference reminders (ambient, not corrective).
+# Weighted rotation: A appears twice, B once per cycle.
+_REJOINDER_INTERVAL = 5
+_REJOINDERS = (
+    "REJOINDER: search(), read_source, and read_scaffold"
+    " replace grep/rg/find/cat/head/tail/sed/wc.",
+    "REJOINDER: run_test_targets replaces direct test runner invocation.",
+)
+_REJOINDER_ROTATION = (0, 1, 0)
+
+
 def _timestamp() -> str:
     """Return current time as HH:MM:SS for log prefix."""
     return time.strftime("%H:%M:%S")
@@ -109,24 +120,40 @@ class ToolMiddleware(Middleware):
             # Tick gate expiry, record call, and evaluate bypass patterns
             bypass_match = self._post_call_bookkeeping(context, tool_name, arguments, result)
 
-            # If a bypass pattern was detected, inject hints into the response.
-            # The result from call_next is a CallToolResult (frozen Pydantic model)
-            # so we extract the dict, merge hints, and return a new ToolResult.
+            # --- Hint injection (pattern hints + periodic rejoinders) ---
+            # Both can coexist in the same response.  We accumulate changes
+            # into result_dict and repack into a new ToolResult at the end.
+            result_dict: dict[str, Any] | None = None
+            needs_repack = False
+
             if bypass_match:
                 result_dict = self._extract_result_dict(result)
                 if result_dict is not None:
                     from codeplane.mcp.gate import build_pattern_hint
 
                     hint_fields = build_pattern_hint(bypass_match)
-                    # Preserve existing agentic_hint (e.g. fetch commands
-                    # from delivery envelope) — append pattern coaching.
                     existing_hint = result_dict.get("agentic_hint")
                     if existing_hint:
                         hint_fields["agentic_hint"] = (
                             existing_hint + "\n\n" + hint_fields["agentic_hint"]
                         )
                     result_dict.update(hint_fields)
-                    return ToolResult(structured_content=result_dict)
+                    needs_repack = True
+
+            rejoinder = self._maybe_get_rejoinder(context)
+            if rejoinder:
+                if result_dict is None:
+                    result_dict = self._extract_result_dict(result)
+                if result_dict is not None:
+                    existing = result_dict.get("agentic_hint", "")
+                    if existing:
+                        result_dict["agentic_hint"] = existing + "\n\n" + rejoinder
+                    else:
+                        result_dict["agentic_hint"] = rejoinder
+                    needs_repack = True
+
+            if needs_repack and result_dict is not None:
+                return ToolResult(structured_content=result_dict)
 
             return result
 
@@ -398,6 +425,30 @@ class ToolMiddleware(Middleware):
         if pattern_match and pattern_match.severity == "warn":
             return pattern_match
         return None
+
+    def _maybe_get_rejoinder(
+        self,
+        context: MiddlewareContext[mt.CallToolRequest],
+    ) -> str | None:
+        """Return a periodic tool-preference rejoinder, or ``None``.
+
+        Fires every ``_REJOINDER_INTERVAL`` successful tool calls using
+        a weighted rotation (A twice, B once per 3-slot cycle).
+        """
+        if not context.fastmcp_context or not self._session_manager:
+            return None
+
+        session = self._session_manager.get_or_create(
+            context.fastmcp_context.session_id,
+        )
+        count = session.counters.get("rejoinder_calls", 0) + 1
+        session.counters["rejoinder_calls"] = count
+
+        if count % _REJOINDER_INTERVAL != 0:
+            return None
+
+        slot = (count // _REJOINDER_INTERVAL - 1) % len(_REJOINDER_ROTATION)
+        return _REJOINDERS[_REJOINDER_ROTATION[slot]]
 
     @staticmethod
     def _strip_tool_prefix(tool_name: str) -> str:

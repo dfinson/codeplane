@@ -108,7 +108,7 @@ This runs only the tests impacted by your changes — fast, targeted, sufficient
 | Discover tests | `{tool_prefix}_discover_test_targets` | Manual test file search |
 | Run tests | `{tool_prefix}_run_test_targets` | Test runners directly |
 | Rename across files | `{tool_prefix}_refactor_rename` | Find-and-replace, `sed` |
-| Semantic diff | `{tool_prefix}_semantic_diff` | Manual comparison |
+| Semantic diff | `{tool_prefix}_semantic_diff` | `git_diff` for change review, manual comparison |
 | Stage and commit | `{tool_prefix}_git_stage_and_commit` | `git_stage` + `git_commit` separately |
 
 ### Before You Edit: Decision Gate

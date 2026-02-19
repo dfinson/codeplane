@@ -159,7 +159,7 @@ This runs only the tests impacted by your changes — fast, targeted, sufficient
 | Discover tests | `mcp_codeplane-codeplane_copy3_discover_test_targets` | Manual test file search |
 | Run tests | `mcp_codeplane-codeplane_copy3_run_test_targets` | Test runners directly |
 | Rename across files | `mcp_codeplane-codeplane_copy3_refactor_rename` | Find-and-replace, `sed` |
-| Semantic diff | `mcp_codeplane-codeplane_copy3_semantic_diff` | Manual comparison |
+| Semantic diff | `mcp_codeplane-codeplane_copy3_semantic_diff` | `git_diff` for change review, manual comparison |
 | Stage and commit | `mcp_codeplane-codeplane_copy3_git_stage_and_commit` | `git_stage` + `git_commit` separately |
 
 ### Before You Edit: Decision Gate
