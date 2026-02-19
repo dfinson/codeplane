@@ -105,7 +105,7 @@ class TestMaybeGetRejoinder:
         assert mw._maybe_get_rejoinder(ctx) is None
 
 
-class TestRejoindMerging:
+class TestRejoinerMerging:
     """Tests for rejoinder merging into result dicts."""
 
     def test_append_to_existing_agentic_hint(self) -> None:
