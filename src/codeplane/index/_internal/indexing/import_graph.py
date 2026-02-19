@@ -188,6 +188,7 @@ class ImportGraph:
                     changed_modules.append(mod)
                 else:
                     unresolved.append(fp)
+
         if not changed_files:
             return ImportGraphResult(
                 matches=[],

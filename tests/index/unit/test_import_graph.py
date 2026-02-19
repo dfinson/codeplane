@@ -424,3 +424,10 @@ class TestAffectedTestsDirectTestFiles:
         """Direct test inclusions don't degrade the confidence tier."""
         result = graph.affected_tests(["tests/test_utils.py"])
         assert result.confidence.tier == "complete"
+
+    def test_only_test_files_no_changed_modules(self, graph: ImportGraph) -> None:
+        """When only test files change, changed_modules is empty and ratio is 1.0."""
+        result = graph.affected_tests(["tests/test_utils.py"])
+        assert result.changed_modules == []
+        assert result.confidence.resolved_ratio == 1.0
+        assert result.confidence.unresolved_files == []
