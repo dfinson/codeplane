@@ -54,6 +54,9 @@ class RefactorPreview:
     verification_required: bool = False
     low_certainty_files: list[str] = field(default_factory=list)
     verification_guidance: str | None = None
+    # File move metadata (set by move(), consumed by apply())
+    move_from: str | None = None
+    move_to: str | None = None
 
 
 @dataclass
@@ -802,6 +805,8 @@ class RefactorOps:
                 )
         # Build preview
         preview = self._build_preview(edits_by_file)
+        preview.move_from = from_path
+        preview.move_to = to_path
         self._pending[refactor_id] = preview
 
         return RefactorResult(
@@ -899,25 +904,25 @@ class RefactorOps:
             verification_guidance=verification_guidance,
         )
 
-    async def delete(
+    async def impact(
         self,
         target: str,
         *,
         include_comments: bool = True,
     ) -> RefactorResult:
-        """Delete a symbol or file, finding all references that need cleanup.
+        """Find all references to a symbol or file for impact analysis.
 
-        Unlike rename/move, delete doesn't auto-fix references - it surfaces them
-        for manual cleanup since deletion semantics vary (remove import, replace
+        Unlike rename/move, impact doesn't auto-fix references - it surfaces them
+        for manual cleanup since removal semantics vary (remove import, replace
         with alternative, etc.).
 
         Args:
-            target: Symbol name or file path to delete
+            target: Symbol name or file path to analyze
             include_comments: Include comment references in preview
 
         Returns:
             RefactorResult with preview showing all references.
-            Hunks have old=target, new="" to indicate deletion sites.
+            Hunks have old=target, new="" to indicate affected sites.
         """
         refactor_id = str(uuid.uuid4())[:8]
         edits_by_file: dict[str, list[EditHunk]] = {}
@@ -934,16 +939,16 @@ class RefactorOps:
             await self._find_symbol_references(target, seen_locations, edits_by_file)
 
         # Lexical fallback for both cases
-        await self._add_delete_lexical_fallback(target, seen_locations, edits_by_file)
+        await self._add_impact_lexical_fallback(target, seen_locations, edits_by_file)
 
         # Scan comments if requested
         if include_comments:
             affected_files = set(edits_by_file.keys())
-            # For delete, we mark comment refs but don't auto-remove
+            # For impact analysis, mark comment refs for review
             await self._add_comment_occurrences(target, "", affected_files, edits_by_file)
 
         # Build preview with guidance
-        preview = self._build_delete_preview(target, edits_by_file)
+        preview = self._build_impact_preview(target, edits_by_file)
         self._pending[refactor_id] = preview
 
         return RefactorResult(
@@ -1103,7 +1108,7 @@ class RefactorOps:
                             )
                         )
 
-    async def _add_delete_lexical_fallback(
+    async def _add_impact_lexical_fallback(
         self,
         target: str,
         seen_locations: set[tuple[str, int]],
@@ -1159,20 +1164,20 @@ class RefactorOps:
                         )
                     )
 
-    def _build_delete_preview(
+    def _build_impact_preview(
         self,
         target: str,
         edits_by_file: dict[str, list[EditHunk]],
     ) -> RefactorPreview:
-        """Build preview with delete-specific guidance."""
+        """Build preview with impact-analysis-specific guidance."""
         preview = self._build_preview(edits_by_file)
 
-        # Override guidance for delete operation
+        # Override guidance for impact operation
         total_refs = sum(len(fe.hunks) for fe in preview.edits)
         preview.verification_required = True
         preview.verification_guidance = (
             f"Found {total_refs} references to '{target}' that need cleanup.\n\n"
-            f"Delete does NOT auto-remove references. You must:\n"
+            f"Impact does NOT auto-remove references. You must:\n"
             f"  1. Review each reference with refactor_inspect\n"
             f"  2. Decide how to handle: remove import, replace with alternative, etc.\n"
             f"  3. Use write_source to make changes manually\n"
@@ -1238,8 +1243,36 @@ class RefactorOps:
 
             edits.append(Edit(path=file_edit.path, action="update", content=new_content))
 
-        # Execute mutation
+        # Execute mutation (import reference updates)
         mutation_result = mutation_ops.write_source(edits)
+
+        # Physical file move (per SPEC.md §lines 1524-1531)
+        if preview.move_from and preview.move_to:
+            src = self._repo_root / preview.move_from
+            dst = self._repo_root / preview.move_to
+            if src.exists():
+                import shutil
+                import subprocess
+
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                # Check if file is git-tracked
+                try:
+                    subprocess.run(
+                        ["git", "ls-files", "--error-unmatch", preview.move_from],
+                        cwd=self._repo_root,
+                        capture_output=True,
+                        check=True,
+                    )
+                    # Tracked: use git mv to preserve history
+                    subprocess.run(
+                        ["git", "mv", preview.move_from, preview.move_to],
+                        cwd=self._repo_root,
+                        capture_output=True,
+                        check=True,
+                    )
+                except subprocess.CalledProcessError:
+                    # Untracked or dirty: plain filesystem move
+                    shutil.move(str(src), str(dst))
 
         # Clear pending
         del self._pending[refactor_id]

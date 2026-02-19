@@ -191,7 +191,7 @@ def file_to_import_candidates(
 
     This is the inverse of import resolution: given a file path, what
     import strings would reference it? Used by refactor_move and
-    refactor_delete to find ImportFact records.
+    refactor_impact to find ImportFact records.
 
     Language-aware generation:
     - Python/Lua: dotted paths with/without src. prefix

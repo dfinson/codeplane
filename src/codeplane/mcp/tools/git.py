@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
-from fastmcp.utilities.json_schema import dereference_refs
 from pydantic import Field
 
 from codeplane.config.constants import GIT_BLAME_MAX, GIT_LOG_MAX
@@ -1033,7 +1032,3 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             }
 
         raise ValueError(f"Unknown action: {action}")
-
-    # Flatten schemas to remove $ref/$defs for Claude compatibility
-    for tool in mcp._tool_manager._tools.values():
-        tool.parameters = dereference_refs(tool.parameters)

@@ -248,7 +248,9 @@ class TestGitStatus:
         git_tools.register_tools(mcp, mock_app_ctx)
 
         # Get the registered tool
-        tool = mcp._tool_manager._tools.get("git_status")
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp).get("git_status")
         assert tool is not None
 
     @pytest.mark.asyncio
@@ -267,7 +269,9 @@ class TestGitStatus:
         mcp = FastMCP("test")
         git_tools.register_tools(mcp, mock_app_ctx)
 
-        tool = mcp._tool_manager._tools.get("git_status")
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp).get("git_status")
         assert tool is not None
 
 
@@ -288,7 +292,9 @@ class TestGitDiff:
         mcp = FastMCP("test")
         git_tools.register_tools(mcp, mock_app_ctx)
 
-        tool = mcp._tool_manager._tools.get("git_diff")
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp).get("git_diff")
         assert tool is not None
 
 
@@ -301,7 +307,9 @@ class TestGitCommit:
         mcp = FastMCP("test")
         git_tools.register_tools(mcp, mock_app_ctx)
 
-        tool = mcp._tool_manager._tools.get("git_commit")
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp).get("git_commit")
         assert tool is not None
 
 
@@ -314,7 +322,9 @@ class TestGitLog:
         mcp = FastMCP("test")
         git_tools.register_tools(mcp, mock_app_ctx)
 
-        tool = mcp._tool_manager._tools.get("git_log")
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp).get("git_log")
         assert tool is not None
 
 
@@ -325,7 +335,9 @@ class TestGitReset:
         mcp = FastMCP("test")
         git_tools.register_tools(mcp, mock_app_ctx)
 
-        tool = mcp._tool_manager._tools.get("git_reset")
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp).get("git_reset")
         assert tool is not None
         assert "confirmation_token" in str(tool.parameters)
 
@@ -337,7 +349,9 @@ class TestGitStage:
         mcp = FastMCP("test")
         git_tools.register_tools(mcp, mock_app_ctx)
 
-        tool = mcp._tool_manager._tools.get("git_stage")
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp).get("git_stage")
         assert tool is not None
 
 
@@ -351,7 +365,9 @@ class TestGitBranch:
         mcp = FastMCP("test")
         git_tools.register_tools(mcp, mock_app_ctx)
 
-        tool = mcp._tool_manager._tools.get("git_branch")
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp).get("git_branch")
         assert tool is not None
 
 
@@ -364,7 +380,9 @@ class TestGitRemote:
         mcp = FastMCP("test")
         git_tools.register_tools(mcp, mock_app_ctx)
 
-        tool = mcp._tool_manager._tools.get("git_remote")
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp).get("git_remote")
         assert tool is not None
 
 
@@ -377,7 +395,9 @@ class TestGitStash:
         mcp = FastMCP("test")
         git_tools.register_tools(mcp, mock_app_ctx)
 
-        tool = mcp._tool_manager._tools.get("git_stash")
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp).get("git_stash")
         assert tool is not None
 
 
@@ -388,7 +408,9 @@ class TestGitRebase:
         mcp = FastMCP("test")
         git_tools.register_tools(mcp, mock_app_ctx)
 
-        tool = mcp._tool_manager._tools.get("git_rebase")
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp).get("git_rebase")
         assert tool is not None
 
 
@@ -399,7 +421,9 @@ class TestGitInspect:
         mcp = FastMCP("test")
         git_tools.register_tools(mcp, mock_app_ctx)
 
-        tool = mcp._tool_manager._tools.get("git_inspect")
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp).get("git_inspect")
         assert tool is not None
 
 
@@ -459,7 +483,9 @@ class TestGitHistory:
         mcp = FastMCP("test")
         git_tools.register_tools(mcp, mock_app_ctx)
 
-        tool = mcp._tool_manager._tools.get("git_history")
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp).get("git_history")
         assert tool is not None
 
 
@@ -472,7 +498,9 @@ class TestGitSubmodule:
         mcp = FastMCP("test")
         git_tools.register_tools(mcp, mock_app_ctx)
 
-        tool = mcp._tool_manager._tools.get("git_submodule")
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp).get("git_submodule")
         assert tool is not None
 
 
@@ -485,5 +513,7 @@ class TestGitWorktree:
         mcp = FastMCP("test")
         git_tools.register_tools(mcp, mock_app_ctx)
 
-        tool = mcp._tool_manager._tools.get("git_worktree")
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp).get("git_worktree")
         assert tool is not None

@@ -2942,7 +2942,7 @@ Tools are organized into functional families. Each tool is a standalone MCP tool
 |------|---------|
 | `refactor_rename` | Rename symbol across codebase (preview → inspect → apply/cancel) |
 | `refactor_move` | Move file or symbol to different location |
-| `refactor_delete` | Delete file or symbol |
+| `refactor_impact` | Delete file or symbol |
 | `refactor_inspect` | Inspect low-certainty matches in a pending refactor |
 | `refactor_apply` | Apply a previewed refactoring |
 | `refactor_cancel` | Cancel a previewed refactoring |
@@ -3514,9 +3514,9 @@ Move a file or symbol to a new location.
 { from_path: string; to_path: string }
 ```
 
-##### `refactor_delete`
+##### `refactor_impact`
 
-Delete a file or symbol.
+Find all references to a symbol or file for impact analysis before removal.
 
 ```typescript
 // Parameters

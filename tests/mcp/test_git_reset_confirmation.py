@@ -116,15 +116,16 @@ class TestGitResetHardConfirmationIntegration:
         """
         from typing import Any, cast
 
-        tool = mcp._tool_manager._tools[name]
-        # Create a mock FastMCP Context with session_id
+        from codeplane.mcp._compat import get_tools_sync
+
+        tool = get_tools_sync(mcp)[name]
         from unittest.mock import MagicMock
 
         ctx = MagicMock()
         ctx.session_id = "test-session"
         # FastMCP's tool.fn is wrapped - get the underlying function
         # and call it directly with kwargs
-        fn = tool.fn  # type: ignore[attr-defined]
+        fn = tool.fn
         # If fn is a wrapped async function, we need to call it properly
         # FastMCP may wrap tools differently, so we access the raw function
         if hasattr(fn, "__wrapped__"):

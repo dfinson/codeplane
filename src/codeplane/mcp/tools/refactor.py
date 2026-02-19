@@ -3,7 +3,6 @@
 from typing import TYPE_CHECKING, Any
 
 from fastmcp import Context
-from fastmcp.utilities.json_schema import dereference_refs
 from pydantic import Field
 
 if TYPE_CHECKING:
@@ -180,15 +179,15 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         return _serialize_refactor_result(result)
 
     @mcp.tool
-    async def refactor_delete(
+    async def refactor_impact(
         ctx: Context,
-        target: str = Field(..., description="Symbol or path to delete"),
+        target: str = Field(..., description="Symbol or path to analyze for impact"),
         include_comments: bool = Field(True, description="Include comment references"),
     ) -> dict[str, Any]:
-        """Find all references to a symbol/file for manual cleanup."""
+        """Find all references to a symbol/file for impact analysis before removal."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
-        result = await app_ctx.refactor_ops.delete(
+        result = await app_ctx.refactor_ops.impact(
             target,
             include_comments=include_comments,
         )
@@ -247,7 +246,3 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             "matches": result.matches,
             "summary": f"{len(result.matches)} matches in {compress_path(result.path, 35)}",
         }
-
-    # Flatten schemas to remove $ref/$defs for Claude compatibility
-    for tool in mcp._tool_manager._tools.values():
-        tool.parameters = dereference_refs(tool.parameters)

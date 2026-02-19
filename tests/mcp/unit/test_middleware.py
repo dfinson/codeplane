@@ -517,18 +517,81 @@ class TestToolMiddleware:
         assert schema is None
 
     def test_get_tool_schema_handles_exception(self, middleware):
-        """Test schema extraction handles exceptions gracefully."""
+        """Test schema extraction handles exceptions in the except branch."""
+        from unittest.mock import patch
+
         mock_context = MagicMock()
         mock_context.fastmcp_context = MagicMock()
         mock_context.fastmcp_context._mcp_context = MagicMock()
         mock_context.fastmcp_context._mcp_context.session = MagicMock()
-        mock_context.fastmcp_context._mcp_context.session.app = MagicMock()
-        mock_context.fastmcp_context._mcp_context.session.app._tool_manager = MagicMock()
-        mock_context.fastmcp_context._mcp_context.session.app._tool_manager._tools = {
-            "test_tool": None
-        }
+        server = MagicMock()
+        server.local_provider = MagicMock()  # Pass the hasattr guard
+        mock_context.fastmcp_context._mcp_context.session.app = server
 
-        # Should not raise, should return None
+        # Patch get_tools_sync to raise, exercising the except Exception branch
+        with patch(
+            "codeplane.mcp._compat.get_tools_sync",
+            side_effect=RuntimeError("boom"),
+        ):
+            schema = middleware._get_tool_schema(mock_context, "test_tool")
+        assert schema is None
+
+    def test_get_tool_schema_with_real_fastmcp(self, middleware):
+        """Test schema extraction with a real FastMCP server."""
+        from fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+
+        @mcp.tool()
+        def my_test_tool(name: str, count: int = 1) -> str:
+            """Test tool description."""
+            return f"{name}:{count}"
+
+        # Build mock context chain: context.fastmcp_context._mcp_context.session.app = mcp
+        mock_context = MagicMock()
+        mock_context.fastmcp_context = MagicMock()
+        mock_context.fastmcp_context._mcp_context = MagicMock()
+        mock_context.fastmcp_context._mcp_context.session = MagicMock()
+        mock_context.fastmcp_context._mcp_context.session.app = mcp
+
+        schema = middleware._get_tool_schema(mock_context, "my_test_tool")
+        assert schema is not None
+        assert schema["name"] == "my_test_tool"
+        assert schema["description"] == "Test tool description."
+        assert "parameters" in schema
+        param_names = {p["name"] for p in schema["parameters"]}
+        assert "name" in param_names
+        assert "count" in param_names
+
+    def test_get_tool_schema_tool_not_found(self, middleware):
+        """Returns None when tool name doesn't match any registered tool."""
+        from fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+
+        @mcp.tool()
+        def existing_tool() -> str:
+            """Exists."""
+            return "ok"
+
+        mock_context = MagicMock()
+        mock_context.fastmcp_context = MagicMock()
+        mock_context.fastmcp_context._mcp_context = MagicMock()
+        mock_context.fastmcp_context._mcp_context.session = MagicMock()
+        mock_context.fastmcp_context._mcp_context.session.app = mcp
+
+        schema = middleware._get_tool_schema(mock_context, "nonexistent_tool")
+        assert schema is None
+
+    def test_get_tool_schema_no_local_provider(self, middleware):
+        """Returns None when server has no local_provider."""
+        mock_context = MagicMock()
+        mock_context.fastmcp_context = MagicMock()
+        mock_context.fastmcp_context._mcp_context = MagicMock()
+        mock_context.fastmcp_context._mcp_context.session = MagicMock()
+        mock_server = MagicMock(spec=[])  # spec=[] means NO attributes
+        mock_context.fastmcp_context._mcp_context.session.app = mock_server
+
         schema = middleware._get_tool_schema(mock_context, "test_tool")
         assert schema is None
 

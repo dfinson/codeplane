@@ -856,9 +856,9 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             },
         ],
     ),
-    "refactor_delete": ToolDocumentation(
-        name="refactor_delete",
-        description="Find all references to a symbol/file for manual cleanup.",
+    "refactor_impact": ToolDocumentation(
+        name="refactor_impact",
+        description="Find all references to a symbol/file for impact analysis before removal.",
         category=ToolCategory.REFACTOR,
         when_to_use=[
             "Removing deprecated code",
@@ -892,7 +892,7 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         when_not_to_use=[
             "For high-certainty matches (definitions proven by index)",
         ],
-        hints_before="Run refactor_rename/move/delete first. Check low_certainty_files in response to know which files need inspection.",
+        hints_before="Run refactor_rename/move/impact first. Check low_certainty_files in response to know which files need inspection.",
         hints_after="If matches look correct, use refactor_apply. If false positives found, use refactor_cancel and handle manually with write_source.",
         commonly_preceded_by=["refactor_rename", "refactor_move"],
         commonly_followed_by=["refactor_apply", "refactor_cancel"],

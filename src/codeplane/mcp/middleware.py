@@ -290,9 +290,11 @@ class ToolMiddleware(Middleware):
             if mcp_ctx is None:
                 return None
             server = getattr(getattr(mcp_ctx, "session", None), "app", None)
-            if server is None or not hasattr(server, "_tool_manager"):
+            if server is None or not hasattr(server, "local_provider"):
                 return None
-            tool_spec = server._tool_manager._tools.get(tool_name)
+            from codeplane.mcp._compat import get_tools_sync
+
+            tool_spec = get_tools_sync(server).get(tool_name)
             if not tool_spec:
                 return None
 
