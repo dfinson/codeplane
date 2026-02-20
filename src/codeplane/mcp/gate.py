@@ -187,7 +187,8 @@ EXPENSIVE_READ_GATE = GateSpec(
     reason_min_chars=50,
     reason_prompt=(
         "Why do you need the entire file? What specific information can't you "
-        "get via search(mode=references) + read_source on the spans?"
+        "get via read_scaffold (structure/signatures) + search(mode=references) "
+        "+ read_source on the spans?"
     ),
     expires_calls=3,
 )
