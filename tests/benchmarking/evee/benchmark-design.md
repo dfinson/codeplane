@@ -18,8 +18,9 @@
 | 3. Checkout `main`, ensure clean | `git checkout main && git clean -fd` | same |
 | 4. Open a **new** Copilot Agent chat | paste prompt verbatim (single convo only) | same |
 | 5. Let the agent run to completion | look for `END_BENCHMARKING_RUN` in output | same (best effort if agent doesn't emit it) |
-| 6. Export debug logs | Copilot output channel → save to `results/` | same |
-| 7. Reset repo | `git checkout main && git clean -fd && git branch -D bench/<N>-*` | same |
+| 6. Export debug logs | **Export Chat with Prompts** → save `.chatreplay.json` | same |
+| 7. Process logs | see [Post-run processing](#post-run-processing) below | same |
+| 8. Reset repo | `git checkout main && git clean -fd && git branch -D bench/<N>-*` | same |
 
 ### Session isolation
 
@@ -31,6 +32,41 @@ This keeps the debug logs scoped to a single benchmarking run.
 Every prompt begins with `START_BENCHMARKING_RUN` and instructs the agent to emit
 `END_BENCHMARKING_RUN` when finished. If the agent doesn't emit the end marker,
 treat the end of the debug log as the boundary (best effort).
+
+### Post-run processing
+
+Two scripts in `tests/benchmarking/` process the exported chatreplay:
+
+**Step 1 — Extract trace** (`extract_trace.py`)
+
+```bash
+python -m tests.benchmarking.extract_trace <chatreplay.json> [--output-dir DIR]
+```
+
+- Checks for `START_BENCHMARKING_RUN` / `END_BENCHMARKING_RUN` markers
+- Trims the export to only the marker window
+- Auto-detects: repo (from MCP server label), issue number (from prompt text),
+  model (from LLM request metadata), codeplane vs native (from tool calls)
+- Saves `{name}_raw.json` (trimmed chatreplay) and `{name}_trace.json` (events)
+
+**Step 2 — Compute metrics** (`compute_metrics.py`)
+
+```bash
+python -m tests.benchmarking.compute_metrics <trace.json> [--output-dir DIR]
+```
+
+- Reads a `*_trace.json` and computes aggregate metrics
+- Saves `{name}_result_metrics.json`
+
+**Output naming convention:**
+
+```
+{repo}_{issue}_{model}_{codeplane|native}_{suffix}.json
+```
+
+Example: `evee_260_claude-opus-4-6-fast_codeplane_trace.json`
+
+All outputs default to `tests/benchmarking/evee/results/`.
 
 ---
 
