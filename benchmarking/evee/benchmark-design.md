@@ -35,12 +35,12 @@ treat the end of the debug log as the boundary (best effort).
 
 ### Post-run processing
 
-Two scripts in `tests/benchmarking/` process the exported chatreplay:
+Two scripts in `benchmarking/` process the exported chatreplay:
 
 **Step 1 — Extract trace** (`extract_trace.py`)
 
 ```bash
-python -m tests.benchmarking.extract_trace <chatreplay.json> [--output-dir DIR]
+python -m benchmarking.extract_trace <chatreplay.json> [--output-dir DIR]
 ```
 
 - Checks for `START_BENCHMARKING_RUN` / `END_BENCHMARKING_RUN` markers
@@ -52,7 +52,7 @@ python -m tests.benchmarking.extract_trace <chatreplay.json> [--output-dir DIR]
 **Step 2 — Compute metrics** (`compute_metrics.py`)
 
 ```bash
-python -m tests.benchmarking.compute_metrics <trace.json> [--output-dir DIR]
+python -m benchmarking.compute_metrics <trace.json> [--output-dir DIR]
 ```
 
 - Reads a `*_trace.json` and computes aggregate metrics
@@ -66,7 +66,7 @@ python -m tests.benchmarking.compute_metrics <trace.json> [--output-dir DIR]
 
 Example: `evee_260_claude-opus-4-6-fast_codeplane_trace.json`
 
-All outputs default to `tests/benchmarking/evee/results/`.
+All outputs default to `benchmarking/evee/results/`.
 
 ---
 

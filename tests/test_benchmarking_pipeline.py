@@ -6,13 +6,13 @@ import json
 from pathlib import Path
 from typing import Any
 
-from tests.benchmarking.compute_metrics import (
+from benchmarking.compute_metrics import (
     compute_metrics,
 )
-from tests.benchmarking.compute_metrics import (
+from benchmarking.compute_metrics import (
     main as metrics_main,
 )
-from tests.benchmarking.extract_trace import (
+from benchmarking.extract_trace import (
     _build_session_name,
     _detect_issue,
     _detect_model,
@@ -21,7 +21,7 @@ from tests.benchmarking.extract_trace import (
     _has_codeplane,
     extract_trace,
 )
-from tests.benchmarking.extract_trace import (
+from benchmarking.extract_trace import (
     main as extract_main,
 )
 

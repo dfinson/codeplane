@@ -1,7 +1,7 @@
 """Extract a benchmark trace from a VS Code Copilot chatreplay export.
 
 Usage:
-    python -m tests.benchmarking.extract_trace <chatreplay.json> [--output-dir DIR]
+    python -m benchmarking.extract_trace <chatreplay.json> [--output-dir DIR]
 
 Steps:
   1. Load the chatreplay JSON.
@@ -276,7 +276,7 @@ def main(argv: list[str] | None = None) -> int:
         "--output-dir",
         type=Path,
         default=None,
-        help="Directory for output files (default: tests/benchmarking/evee/results/).",
+        help="Directory for output files (default: benchmarking/evee/results/).",
     )
     args = parser.parse_args(argv)
 
@@ -320,7 +320,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Session name: {session_name}")
 
     # Output dir -------------------------------------------------------------
-    output_dir: Path = args.output_dir or (Path("tests/benchmarking/evee/results"))
+    output_dir: Path = args.output_dir or (Path("benchmarking/evee/results"))
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Save raw ---------------------------------------------------------------

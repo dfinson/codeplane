@@ -617,7 +617,7 @@ class ToolMiddleware(Middleware):
         elif tool_name == "write_source" and "delta" in result:
             delta = result["delta"]
             summary["files_changed"] = delta.get("files_changed", 0)
-        elif tool_name in ("run_test_targets", "get_test_run_status") and "run_status" in result:
+        elif tool_name == "run_test_targets" and "run_status" in result:
             run_status = result.get("run_status", {})
             if isinstance(run_status, dict):
                 progress = run_status.get("progress", {})
@@ -682,7 +682,7 @@ class ToolMiddleware(Middleware):
                 return str(data["summary"])
             return f"{tool_name} complete"
 
-        if tool_name in ("run_test_targets", "get_test_run_status"):
+        if tool_name == "run_test_targets":
             run_status = data.get("run_status", {})
             if isinstance(run_status, dict):
                 progress = run_status.get("progress", {})

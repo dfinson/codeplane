@@ -1,7 +1,7 @@
 """Compute benchmark metrics from an extracted trace.
 
 Usage:
-    python -m tests.benchmarking.compute_metrics <trace.json> [--output-dir DIR]
+    python -m benchmarking.compute_metrics <trace.json> [--output-dir DIR]
 
 Reads a *_trace.json produced by extract_trace and computes per-session
 metrics.  Output is saved alongside the trace as
