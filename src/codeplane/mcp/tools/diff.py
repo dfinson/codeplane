@@ -54,6 +54,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "minimal=just path/kind/name/change"
             ),
         ),
+        format: Literal["json", "text"] = Field(
+            "json",
+            description=(
+                "Response format: 'json' (default, structured dicts) or "
+                "'text' (compact flat lines — same info, ~70%% fewer tokens)"
+            ),
+        ),
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Structural change summary from index facts.
@@ -75,7 +82,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         from codeplane.mcp.delivery import wrap_existing_response
 
-        result_dict = _result_to_dict(result, verbosity=verbosity)
+        if format == "text":
+            result_dict = _result_to_text(result)
+        else:
+            result_dict = _result_to_dict(result, verbosity=verbosity)
 
         # Track scope usage
         scope_usage = None
@@ -446,6 +456,46 @@ def _build_agentic_hint(result: SemanticDiffResult) -> str:
         hint += f" Run {len(all_test_files)} affected test files."
 
     return hint
+
+
+def _result_to_text(result: SemanticDiffResult) -> dict[str, Any]:
+    """Convert SemanticDiffResult to compact text format.
+
+    Same information as _result_to_dict, but structural_changes rendered as
+    flat text lines instead of nested JSON objects.
+    Format per change: {change} {kind} {name}  {path}:{start}-{end}  Δ{lines}  risk:{risk}  refs:{N}  tests:{list}
+    """
+    from codeplane.mcp.tools.index import _change_to_text
+
+    agentic_hint = _build_agentic_hint(result)
+
+    structural_lines: list[str] = []
+    for c in result.structural_changes:
+        structural_lines.extend(_change_to_text(c))
+
+    non_structural_lines: list[str] = []
+    for f in result.non_structural_changes:
+        parts = [f"{f.status} {f.path}  {f.category}"]
+        if f.language:
+            parts.append(f"  {f.language}")
+        non_structural_lines.append("".join(parts))
+
+    response: dict[str, Any] = {
+        "summary": result.summary,
+        "breaking_summary": result.breaking_summary,
+        "files_analyzed": result.files_analyzed,
+        "base": result.base_description,
+        "target": result.target_description,
+        "structural_changes": structural_lines,
+        "non_structural_changes": non_structural_lines,
+        "agentic_hint": agentic_hint,
+    }
+
+    if result.scope:
+        scope_d = {k: v for k, v in asdict(result.scope).items() if v is not None}
+        response["scope"] = scope_d
+
+    return response
 
 
 def _result_to_dict(
