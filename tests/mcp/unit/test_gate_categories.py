@@ -105,11 +105,11 @@ class TestActionCategories:
 
     def test_expected_members(self) -> None:
         """ACTION_CATEGORIES contains exactly the expected members."""
-        assert frozenset({"write", "refactor", "git"}) == ACTION_CATEGORIES
+        assert frozenset({"write", "refactor"}) == ACTION_CATEGORIES
 
     @pytest.mark.parametrize(
         "excluded",
-        ["lint", "test", "diff", "git_read", "search", "read", "read_full", "meta"],
+        ["lint", "test", "diff", "git", "git_read", "search", "read", "read_full", "meta"],
     )
     def test_non_mutation_categories_excluded(self, excluded: str) -> None:
         assert excluded not in ACTION_CATEGORIES

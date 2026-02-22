@@ -267,7 +267,7 @@ TOOL_CATEGORIES: dict[str, str] = {
 # information gathering / verification and should not reset bypass
 # detection windows.  Lint clears conditionally (only when it
 # auto-fixed files); see CallPatternDetector.record(clears_window=True).
-ACTION_CATEGORIES = frozenset({"write", "refactor", "git"})
+ACTION_CATEGORIES = frozenset({"write", "refactor"})
 
 
 def categorize_tool(tool_name: str) -> str:
@@ -641,7 +641,7 @@ _BYPASS_WORKFLOW: dict[str, str] = {
     "for_editing": "Use write_source with span edits — NOT sed, awk, echo, or tee",
     "for_searching": "Use search(mode='lexical') — NOT grep, rg, or ag",
     "for_reading": "Use read_source with multiple targets — NOT cat, head, or tail",
-    "for_git": "Use commit for staging+committing — for other git ops, use terminal",
+    "for_git": "Use checkpoint with commit_message for staging+committing — for other git ops, use terminal",
 }
 
 

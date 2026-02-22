@@ -83,7 +83,6 @@ Always check for and follow these hints—they provide actionable guidance for n
 
 This applies to:
 - `git reset --hard` (any ref)
-- `mcp_codeplane_git_reset` with `mode: hard`
 - Any equivalent destructive operation that discards uncommitted changes
 
 If you believe a hard reset is needed:

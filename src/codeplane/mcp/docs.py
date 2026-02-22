@@ -427,9 +427,9 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             "If low_certainty_files contains files with potential false positives",
         ],
         hints_before="For common words (data, result, value), use refactor_inspect first. For unique identifiers, usually safe to apply directly.",
-        hints_after="Run verify to confirm the changes compile and tests pass.",
+        hints_after="Run checkpoint to confirm the changes compile and tests pass.",
         commonly_preceded_by=["refactor_inspect", "refactor_rename"],
-        commonly_followed_by=["verify"],
+        commonly_followed_by=["checkpoint"],
         behavior=BehaviorFlags(has_side_effects=True, atomic=True),
         possible_errors=[],
         examples=[
