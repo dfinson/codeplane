@@ -1,4 +1,4 @@
-"""Tests for git_commit auto-restage-on-hook-autofix behavior.
+"""Tests for commit auto-restage-on-hook-autofix behavior.
 
 Covers:
 - Hook passes on first try: normal commit
@@ -39,7 +39,11 @@ def _make_hook_result(
 def git_commit_tool(
     mock_context: MagicMock,
 ) -> Any:
-    """Register git tools and return the git_commit function."""
+    """Register git tools and return the commit function.
+
+    Wraps the raw tool function to resolve Pydantic Field defaults,
+    since calling tool.fn() directly bypasses FastMCP's parameter parsing.
+    """
     from fastmcp import FastMCP
 
     mcp = FastMCP("test")
@@ -50,8 +54,27 @@ def git_commit_tool(
     # Retrieve the registered tool function
     from codeplane.mcp._compat import get_tools_sync
 
-    tool = get_tools_sync(mcp)["git_commit"]
-    return tool.fn
+    raw_fn = get_tools_sync(mcp)["commit"].fn
+
+    async def _wrapper(
+        ctx: Any,
+        *,
+        message: str,
+        paths: list[str] | None = None,
+        all: bool = False,  # noqa: A002
+        push: bool = False,
+        allow_empty: bool = False,
+    ) -> Any:
+        return await raw_fn(
+            ctx,
+            message=message,
+            paths=paths,
+            all=all,
+            push=push,
+            allow_empty=allow_empty,
+        )
+
+    return _wrapper
 
 
 @pytest.fixture

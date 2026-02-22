@@ -76,19 +76,19 @@ Response includes `file_sha256` per file — save it for `write_source` span edi
 2. `map_repo(include=["structure", "dependencies", "test_layout"])` — understand repo shape
 3. `search` to find relevant code — definitions, references, or lexical patterns
 4. `read_source` on spans from search results — understand the code you'll modify
-5. After changes: `lint_check` → `run_test_targets(affected_by=["changed_file"])` for impact-aware testing
+5. After changes: `verify(changed_files=[...])` — lint + affected tests in one call
 6. `semantic_diff` — review structural impact before committing
-7. `git_stage_and_commit` — one-step commit with pre-commit hook handling
+7. `commit` — stage, lint, hooks, commit (optionally push)
 
 **Testing rule**: NEVER run the full test suite or use test runners directly.
-Always use `run_test_targets(affected_by=[...])` with the files you changed.
+Always use `verify(changed_files=[...])` to lint and run affected tests.
 This runs only the tests impacted by your changes — fast, targeted, sufficient.
 
 ### Reviewing Changes (PR Review)
 
 1. `semantic_diff(base="main")` — structural overview of all changes vs main
 2. `read_source` on changed symbols — review each change in context
-3. `run_test_targets(affected_by=[...])` — verify correctness
+3. `verify(changed_files=[...])` — lint + run affected tests
 
 `semantic_diff` first — NOT `git_diff`. It gives symbol-level changes, not raw patches.
 
@@ -103,13 +103,10 @@ This runs only the tests impacted by your changes — fast, targeted, sufficient
 | List directory | `{tool_prefix}_list_files` | `ls`, `find`, `tree` |
 | Search code | `{tool_prefix}_search` | `grep`, `rg`, `ag`, `ack` |
 | Repository overview | `{tool_prefix}_map_repo` | Manual file traversal |
-| All git operations | `{tool_prefix}_git_*` | Raw `git` commands |
-| Run linters | `{tool_prefix}_lint_check` | Running linters directly |
-| Discover tests | `{tool_prefix}_discover_test_targets` | Manual test file search |
-| Run tests | `{tool_prefix}_run_test_targets` | Test runners directly |
+| All git operations | `{tool_prefix}_commit` | Raw `git` commands (for commit) |
+| Verify changes | `{tool_prefix}_verify` | Running linters/tests directly |
 | Rename across files | `{tool_prefix}_refactor_rename` | Find-and-replace, `sed` |
 | Semantic diff | `{tool_prefix}_semantic_diff` | `git_diff` for change review, manual comparison |
-| Stage and commit | `{tool_prefix}_git_stage_and_commit` | `git_stage` + `git_commit` separately |
 
 ### Before You Edit: Decision Gate
 
@@ -136,8 +133,8 @@ STOP before using `read_file_full`:
 Search NEVER returns source text. Use `read_source` with spans from search results.
 
 `search` params: `query` (str), `mode` (definitions|references|lexical|symbol), `enrichment` (none|minimal|standard|function|class).
-`lint_check` takes no arguments — always lints the full repo.
-`run_test_targets` params: `affected_by` (list of changed file paths) for post-change testing.
+`verify` params: `changed_files` (list of paths), `lint` (bool), `autofix` (bool), `tests` (bool).
+`commit` params: `message` (str), `paths` (list), `all` (bool), `push` (bool).
 
 ### Refactor: preview → inspect → apply/cancel
 
@@ -175,10 +172,9 @@ avoids wasted round-trips.
 - **DON'T** pass `context:` to search — the parameter is `enrichment`
 - **DON'T** use `read_files` — it's replaced by `read_source` and `read_file_full`
 - **DON'T** use `refactor_rename` with file:line:col — pass the symbol NAME only
-- **DON'T** skip `lint_check` after `write_source`
+- **DON'T** skip `verify` after `write_source`
 - **DON'T** ignore `agentic_hint` in responses
-- **DON'T** use `target_filter` for post-change testing — use `affected_by` on `run_test_targets`
-- **DON'T** use `git_stage` + `git_commit` separately — use `git_stage_and_commit`
+- **DON'T** use `target_filter` for post-change testing — use `changed_files` on `verify`
 <!-- /codeplane-instructions -->
 """
 

@@ -33,13 +33,12 @@ def _get_version() -> str:
 def _derive_features(tool_names: list[str]) -> list[str]:
     features: set[str] = set()
     for name in tool_names:
-        if name.startswith("git_"):
+        if name.startswith("git_") or name == "commit":
             features.add("git_ops")
         elif name.startswith("refactor_"):
             features.add("refactoring")
-        elif name == "test":
+        elif name == "verify":
             features.add("testing")
-        elif name == "lint":
             features.add("linting")
         elif name in ("search", "map_repo"):
             features.add("indexing")

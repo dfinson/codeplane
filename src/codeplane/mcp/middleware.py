@@ -37,7 +37,7 @@ _REJOINDER_INTERVAL = 5
 _REJOINDERS = (
     "REJOINDER: search(), read_source, and read_scaffold"
     " replace grep/rg/find/cat/head/tail/sed/wc.",
-    "REJOINDER: run_test_targets replaces direct test runner invocation.",
+    "REJOINDER: verify replaces direct test runner and linter invocation.",
 )
 _REJOINDER_ROTATION = (0, 1, 0)
 
@@ -425,12 +425,12 @@ class ToolMiddleware(Middleware):
         pattern_match = session.pattern_detector.evaluate(current_tool=short_name)
 
         # 4. Record call in pattern detector (may clear window for action categories).
-        #    Lint only clears when it actually auto-fixed files (conditional mutation).
-        lint_mutated = (
-            short_name == "lint_check"
-            and result_dict is not None
-            and result_dict.get("total_files_modified", 0) > 0
-        )
+        #    Verify only clears when lint actually auto-fixed files (conditional mutation).
+        lint_mutated = False
+        if short_name == "verify" and result_dict is not None:
+            lint_section = result_dict.get("lint")
+            if isinstance(lint_section, dict):
+                lint_mutated = lint_section.get("total_files_modified", 0) > 0
         session.pattern_detector.record(
             tool_name=short_name,
             files=files,
@@ -633,7 +633,7 @@ class ToolMiddleware(Middleware):
         elif tool_name == "write_source" and "delta" in result:
             delta = result["delta"]
             summary["files_changed"] = delta.get("files_changed", 0)
-        elif tool_name == "run_test_targets" and "run_status" in result:
+        elif tool_name == "verify" and "run_status" in result:
             run_status = result.get("run_status", {})
             if isinstance(run_status, dict):
                 progress = run_status.get("progress", {})
@@ -692,13 +692,13 @@ class ToolMiddleware(Middleware):
             entries = data.get("entries", [])
             return f"{len(entries)} entries"
 
-        if tool_name in ("git_status", "git_diff", "git_commit", "git_branch"):
+        if tool_name in ("commit",):
             # Git tools often return text-based summaries
             if "summary" in data:
                 return str(data["summary"])
             return f"{tool_name} complete"
 
-        if tool_name == "run_test_targets":
+        if tool_name == "verify":
             run_status = data.get("run_status", {})
             if isinstance(run_status, dict):
                 progress = run_status.get("progress", {})

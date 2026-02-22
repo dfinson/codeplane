@@ -148,10 +148,10 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             "When you haven't read the file recently",
         ],
         hints_before="Read the target file first to ensure you have current content.",
-        hints_after="Use git_stage_and_commit to commit the change.",
+        hints_after="Use commit to commit the change.",
         alternatives=["refactor_rename (for symbol renames)"],
         commonly_preceded_by=["read_source"],
-        commonly_followed_by=["git_stage_and_commit"],
+        commonly_followed_by=["commit"],
         possible_errors=[
             "FILE_NOT_FOUND",
             "FILE_EXISTS",
@@ -241,69 +241,23 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             },
         ],
     ),
-    "git_status": ToolDocumentation(
-        name="git_status",
-        description="Get repository status.",
+    "commit": ToolDocumentation(
+        name="commit",
+        description="Stage, lint, run pre-commit hooks, commit, and optionally push.",
         category=ToolCategory.GIT,
         when_to_use=[
-            "Checking for uncommitted changes",
-            "Seeing which branch you're on",
-            "Before making commits",
-        ],
-        when_not_to_use=[],
-        behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
-        possible_errors=[],
-        examples=[
-            {
-                "description": "Check repository status",
-                "params": {},
-            },
-        ],
-    ),
-    "git_commit": ToolDocumentation(
-        name="git_commit",
-        description="Create a commit from already-staged changes.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Committing when files are already staged via git_stage",
-            "Low-level control over staging and committing separately",
-        ],
-        when_not_to_use=[
-            "Nothing is staged - stage files first or use git_stage_and_commit",
-            "Typical commit workflow - prefer git_stage_and_commit",
-        ],
-        hints_before="Prefer git_stage_and_commit for most workflows. Use git_commit only when you need granular staging control.",
-        hints_after="Use git_push to share the commit.",
-        alternatives=["git_stage_and_commit (preferred for most workflows)"],
-        commonly_preceded_by=["git_stage", "write_source"],
-        commonly_followed_by=["git_push"],
-        behavior=BehaviorFlags(has_side_effects=True, atomic=True),
-        possible_errors=["DIRTY_WORKING_TREE", "HOOK_FAILED", "HOOK_FAILED_AFTER_RETRY"],
-        examples=[
-            {
-                "description": "Commit staged changes",
-                "params": {"message": "feat: add new feature"},
-            },
-        ],
-    ),
-    "git_stage_and_commit": ToolDocumentation(
-        name="git_stage_and_commit",
-        description="Stage files and create a commit in one step. Handles pre-commit hook auto-fixes automatically.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Standard commit workflow — stage and commit in one tool call",
-            "After completing a logical unit of work",
+            "Committing changes after edits",
             "When pre-commit hooks may auto-fix files (formatters, linters)",
+            "Single-step stage + commit + push workflow",
         ],
         when_not_to_use=[
-            "When you need to stage selectively (add some, remove others) — use git_stage + git_commit",
-            "When nothing should be staged (committing already-staged changes) — use git_commit",
+            "When you only need git status/log/diff/branch — use terminal commands",
         ],
-        hints_before="Use git_status to verify which files will be staged.",
-        hints_after="Use git_push to share the commit.",
-        alternatives=["git_stage + git_commit (for granular staging control)"],
-        commonly_preceded_by=["write_source", "lint_check"],
-        commonly_followed_by=["git_push"],
+        hints_before="Verify your changes look correct before committing.",
+        hints_after="For other git operations (status, log, diff, push, pull, branch, checkout, merge, reset, stash, rebase), use terminal commands directly.",
+        alternatives=[],
+        commonly_preceded_by=["write_source", "verify"],
+        commonly_followed_by=[],
         behavior=BehaviorFlags(has_side_effects=True, atomic=True),
         possible_errors=["HOOK_FAILED", "HOOK_FAILED_AFTER_RETRY"],
         examples=[
@@ -312,40 +266,41 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
                 "params": {"paths": ["src/foo.py", "src/bar.py"], "message": "feat: add feature"},
             },
             {
-                "description": "Stage all modified files and commit",
-                "params": {"paths": ["."], "message": "chore: update files"},
+                "description": "Stage all and commit",
+                "params": {"all": True, "message": "chore: update files"},
+            },
+            {
+                "description": "Commit and push in one call",
+                "params": {"paths": ["src/foo.py"], "message": "fix: resolve bug", "push": True},
             },
         ],
     ),
-    "git_stage": ToolDocumentation(
-        name="git_stage",
-        description="Stage or unstage files. Use for granular staging control.",
-        category=ToolCategory.GIT,
+    "verify": ToolDocumentation(
+        name="verify",
+        description="Run lint + affected tests in one call. The 'did I break anything?' check.",
+        category=ToolCategory.TESTING,
         when_to_use=[
-            "Selectively staging or unstaging files",
-            "Discarding changes to specific files",
-            "Staging all changes at once",
+            "After making code changes, before committing",
+            "Quick validation that nothing is broken",
         ],
         when_not_to_use=[
-            "Standard commit workflow — prefer git_stage_and_commit",
+            "When you need fine-grained control over lint or test options",
         ],
-        alternatives=["git_stage_and_commit (preferred for stage + commit workflow)"],
+        hints_before=None,
+        hints_after="If verify passes, use commit to save your work.",
+        alternatives=[],
         commonly_preceded_by=["write_source"],
-        commonly_followed_by=["git_commit"],
-        behavior=BehaviorFlags(has_side_effects=True),
-        possible_errors=["FILE_NOT_FOUND"],
+        commonly_followed_by=["commit"],
+        behavior=BehaviorFlags(has_side_effects=True, may_be_slow=True),
+        possible_errors=[],
         examples=[
             {
-                "description": "Stage specific files",
-                "params": {"add": ["src/foo.py", "src/bar.py"]},
+                "description": "Verify after editing files",
+                "params": {"changed_files": ["src/foo.py", "src/bar.py"]},
             },
             {
-                "description": "Stage all changes",
-                "params": {"add": ["."]},
-            },
-            {
-                "description": "Unstage files",
-                "params": {"remove": ["src/foo.py"]},
+                "description": "Lint only, skip tests",
+                "params": {"changed_files": ["src/foo.py"], "tests": False},
             },
         ],
     ),
@@ -376,431 +331,6 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             {
                 "description": "List Python files recursively",
                 "params": {"path": "src", "pattern": "*.py", "recursive": True},
-            },
-        ],
-    ),
-    # =========================================================================
-    # Git Tools
-    # =========================================================================
-    "git_diff": ToolDocumentation(
-        name="git_diff",
-        description="Get diff between refs or working tree.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Reviewing changes before commit",
-            "Comparing branches",
-            "Seeing staged changes",
-        ],
-        when_not_to_use=[
-            "When you need current status - use git_status",
-        ],
-        hints_before=None,
-        hints_after="Use git_stage if changes look correct.",
-        commonly_preceded_by=["git_status"],
-        commonly_followed_by=["git_stage", "git_commit"],
-        behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
-        possible_errors=["REF_NOT_FOUND"],
-        examples=[
-            {
-                "description": "Show staged changes",
-                "params": {"staged": True},
-            },
-            {
-                "description": "Compare branches",
-                "params": {"base": "main", "target": "feature-branch"},
-            },
-        ],
-    ),
-    "git_log": ToolDocumentation(
-        name="git_log",
-        description="Get commit history.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Viewing commit history",
-            "Finding when a change was made",
-            "Reviewing recent commits",
-        ],
-        when_not_to_use=[
-            "When you need blame info - use git_inspect with action='blame'",
-        ],
-        hints_before=None,
-        hints_after="Use git_inspect with action='show' for full commit details.",
-        commonly_preceded_by=["git_status"],
-        commonly_followed_by=["git_inspect"],
-        behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
-        possible_errors=["REF_NOT_FOUND"],
-        examples=[
-            {
-                "description": "Get last 10 commits",
-                "params": {"limit": 10},
-            },
-            {
-                "description": "Filter by path",
-                "params": {"paths": ["src/main.py"], "limit": 20},
-            },
-        ],
-    ),
-    "git_push": ToolDocumentation(
-        name="git_push",
-        description="Push to remote.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Sharing commits with remote",
-            "After completing a feature",
-        ],
-        when_not_to_use=[
-            "Before committing - commit first",
-            "When remote is ahead - pull first",
-        ],
-        hints_before="Ensure all tests pass and commits are ready.",
-        hints_after=None,
-        commonly_preceded_by=["git_commit"],
-        commonly_followed_by=[],
-        behavior=BehaviorFlags(has_side_effects=True),
-        possible_errors=["REF_NOT_FOUND"],
-        examples=[
-            {
-                "description": "Push to origin",
-                "params": {},
-            },
-        ],
-    ),
-    "git_pull": ToolDocumentation(
-        name="git_pull",
-        description="Pull from remote.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Getting latest changes",
-            "Before starting new work",
-        ],
-        when_not_to_use=[
-            "When you have uncommitted changes - stash or commit first",
-        ],
-        hints_before="Check git_status to ensure clean working tree.",
-        hints_after=None,
-        commonly_preceded_by=["git_status"],
-        commonly_followed_by=[],
-        behavior=BehaviorFlags(has_side_effects=True),
-        possible_errors=["MERGE_CONFLICT"],
-        examples=[
-            {
-                "description": "Pull from origin",
-                "params": {},
-            },
-        ],
-    ),
-    "git_checkout": ToolDocumentation(
-        name="git_checkout",
-        description="Checkout a ref.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Switching branches",
-            "Creating new branch",
-            "Checking out a commit",
-        ],
-        when_not_to_use=[
-            "When you have uncommitted changes - stash or commit first",
-        ],
-        hints_before="Check git_status to ensure clean working tree.",
-        hints_after=None,
-        commonly_preceded_by=["git_status", "git_branch"],
-        commonly_followed_by=[],
-        behavior=BehaviorFlags(has_side_effects=True),
-        possible_errors=["REF_NOT_FOUND", "DIRTY_WORKING_TREE"],
-        examples=[
-            {
-                "description": "Switch to existing branch",
-                "params": {"ref": "main"},
-            },
-            {
-                "description": "Create and switch to new branch",
-                "params": {"ref": "feature/new-feature", "create": True},
-            },
-        ],
-    ),
-    "git_merge": ToolDocumentation(
-        name="git_merge",
-        description="Merge a branch.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Incorporating changes from another branch",
-            "Completing a feature branch",
-        ],
-        when_not_to_use=[
-            "When you have uncommitted changes - commit first",
-            "When rebasing is preferred",
-        ],
-        hints_before="Ensure target branch is up to date with remote.",
-        hints_after="Push the merge commit to share.",
-        commonly_preceded_by=["git_checkout", "git_pull"],
-        commonly_followed_by=["git_push"],
-        behavior=BehaviorFlags(has_side_effects=True),
-        possible_errors=["MERGE_CONFLICT", "REF_NOT_FOUND"],
-        examples=[
-            {
-                "description": "Merge feature branch",
-                "params": {"ref": "feature/my-feature"},
-            },
-        ],
-    ),
-    "git_reset": ToolDocumentation(
-        name="git_reset",
-        description="Reset HEAD to a ref. Hard reset requires two-phase confirmation.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Undoing commits (soft/mixed)",
-            "Discarding changes (hard) - requires explicit user approval",
-            "Unstaging files (mixed)",
-        ],
-        when_not_to_use=[
-            "When changes are pushed - use revert instead",
-            "When unsure - hard reset loses changes permanently",
-            "Without explicit user approval for hard reset",
-        ],
-        hints_before="For hard reset: MUST obtain user approval. First call returns confirmation token; second call with token executes.",
-        hints_after=None,
-        commonly_preceded_by=["git_log", "git_status"],
-        commonly_followed_by=[],
-        behavior=BehaviorFlags(has_side_effects=True),
-        possible_errors=["REF_NOT_FOUND", "GATE_VALIDATION_FAILED"],
-        examples=[
-            {
-                "description": "Soft reset to undo last commit",
-                "params": {"ref": "HEAD~1", "mode": "soft"},
-            },
-            {
-                "description": "Hard reset phase 1 - get confirmation token",
-                "params": {"ref": "HEAD~1", "mode": "hard"},
-            },
-            {
-                "description": "Hard reset phase 2 - execute with token",
-                "params": {
-                    "ref": "HEAD~1",
-                    "mode": "hard",
-                    "confirmation_token": "<token_from_phase_1>",
-                },
-            },
-        ],
-    ),
-    "git_branch": ToolDocumentation(
-        name="git_branch",
-        description="Manage branches.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Listing branches",
-            "Creating new branches",
-            "Deleting old branches",
-        ],
-        when_not_to_use=[
-            "When switching branches - use git_checkout",
-        ],
-        hints_before=None,
-        hints_after="Use git_checkout to switch to a created branch.",
-        commonly_preceded_by=[],
-        commonly_followed_by=["git_checkout"],
-        behavior=BehaviorFlags(has_side_effects=True),
-        possible_errors=["REF_NOT_FOUND"],
-        examples=[
-            {
-                "description": "List all branches",
-                "params": {"action": "list"},
-            },
-            {
-                "description": "Create a new branch",
-                "params": {"action": "create", "name": "feature/new"},
-            },
-        ],
-    ),
-    "git_remote": ToolDocumentation(
-        name="git_remote",
-        description="Manage remotes.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Listing remotes",
-            "Fetching updates from remote",
-            "Listing tags",
-        ],
-        when_not_to_use=[
-            "When pushing/pulling - use git_push/git_pull",
-        ],
-        hints_before=None,
-        hints_after=None,
-        commonly_preceded_by=[],
-        commonly_followed_by=["git_pull", "git_checkout"],
-        behavior=BehaviorFlags(has_side_effects=True),
-        possible_errors=[],
-        examples=[
-            {
-                "description": "Fetch from origin",
-                "params": {"action": "fetch"},
-            },
-        ],
-    ),
-    "git_stash": ToolDocumentation(
-        name="git_stash",
-        description="Manage stash.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Temporarily saving uncommitted changes",
-            "Switching branches with changes",
-        ],
-        when_not_to_use=[
-            "When changes should be committed",
-        ],
-        hints_before=None,
-        hints_after="Remember to pop the stash when ready.",
-        commonly_preceded_by=["git_status"],
-        commonly_followed_by=["git_checkout"],
-        behavior=BehaviorFlags(has_side_effects=True),
-        possible_errors=[],
-        examples=[
-            {
-                "description": "Save changes to stash",
-                "params": {"action": "push", "message": "WIP: feature work"},
-            },
-            {
-                "description": "Restore stashed changes",
-                "params": {"action": "pop"},
-            },
-        ],
-    ),
-    "git_rebase": ToolDocumentation(
-        name="git_rebase",
-        description="Manage rebase.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Updating feature branch with latest main",
-            "Cleaning up commit history",
-        ],
-        when_not_to_use=[
-            "When branch is shared/pushed - use merge instead",
-            "When merge conflicts are complex",
-        ],
-        hints_before="Ensure working tree is clean before rebasing.",
-        hints_after="Force push may be required after rebase.",
-        commonly_preceded_by=["git_status", "git_remote"],
-        commonly_followed_by=["git_push"],
-        behavior=BehaviorFlags(has_side_effects=True, may_be_slow=True),
-        possible_errors=["MERGE_CONFLICT", "REF_NOT_FOUND"],
-        examples=[
-            {
-                "description": "Rebase onto main",
-                "params": {"action": "plan", "upstream": "main"},
-            },
-        ],
-    ),
-    "git_inspect": ToolDocumentation(
-        name="git_inspect",
-        description="Inspect commits or blame.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Viewing full commit details",
-            "Finding who changed a line (blame)",
-        ],
-        when_not_to_use=[
-            "When you need commit list - use git_log",
-        ],
-        hints_before=None,
-        hints_after=None,
-        commonly_preceded_by=["git_log"],
-        commonly_followed_by=["read_source"],
-        behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
-        possible_errors=["REF_NOT_FOUND", "FILE_NOT_FOUND"],
-        examples=[
-            {
-                "description": "Show commit details",
-                "params": {"action": "show", "ref": "abc1234"},
-            },
-            {
-                "description": "Get blame for lines",
-                "params": {
-                    "action": "blame",
-                    "path": "src/main.py",
-                    "start_line": 10,
-                    "end_line": 20,
-                },
-            },
-        ],
-    ),
-    "git_history": ToolDocumentation(
-        name="git_history",
-        description="Amend, cherry-pick, or revert commits.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Amending the last commit",
-            "Cherry-picking specific commits",
-            "Reverting pushed commits",
-        ],
-        when_not_to_use=[
-            "When commit is already pushed - amend requires force push",
-        ],
-        hints_before="For amend, stage your changes first.",
-        hints_after=None,
-        commonly_preceded_by=["git_stage"],
-        commonly_followed_by=["git_push"],
-        behavior=BehaviorFlags(has_side_effects=True),
-        possible_errors=["REF_NOT_FOUND", "MERGE_CONFLICT"],
-        examples=[
-            {
-                "description": "Amend last commit message",
-                "params": {"action": "amend", "message": "Better commit message"},
-            },
-            {
-                "description": "Cherry-pick a commit",
-                "params": {"action": "cherrypick", "commit": "abc1234"},
-            },
-        ],
-    ),
-    "git_submodule": ToolDocumentation(
-        name="git_submodule",
-        description="Manage submodules.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Adding external dependencies as submodules",
-            "Updating submodule references",
-            "Initializing submodules after clone",
-        ],
-        when_not_to_use=[
-            "When package managers can handle dependency",
-        ],
-        hints_before=None,
-        hints_after=None,
-        commonly_preceded_by=[],
-        commonly_followed_by=["git_commit"],
-        behavior=BehaviorFlags(has_side_effects=True),
-        possible_errors=["FILE_NOT_FOUND"],
-        examples=[
-            {
-                "description": "List submodules",
-                "params": {"action": "list"},
-            },
-            {
-                "description": "Update all submodules",
-                "params": {"action": "update", "recursive": True},
-            },
-        ],
-    ),
-    "git_worktree": ToolDocumentation(
-        name="git_worktree",
-        description="Manage worktrees.",
-        category=ToolCategory.GIT,
-        when_to_use=[
-            "Working on multiple branches simultaneously",
-            "Testing changes without affecting main worktree",
-        ],
-        when_not_to_use=[
-            "Simple branch switching - use git_checkout",
-        ],
-        hints_before=None,
-        hints_after=None,
-        commonly_preceded_by=[],
-        commonly_followed_by=[],
-        behavior=BehaviorFlags(has_side_effects=True),
-        possible_errors=["REF_NOT_FOUND"],
-        examples=[
-            {
-                "description": "Add worktree for branch",
-                "params": {"action": "add", "path": "../feature-work", "ref": "feature/branch"},
             },
         ],
     ),
@@ -922,9 +452,9 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             "If low_certainty_files contains files with potential false positives",
         ],
         hints_before="For common words (data, result, value), use refactor_inspect first. For unique identifiers, usually safe to apply directly.",
-        hints_after="Run lint_check and run_test_targets to verify the changes compile and tests pass.",
+        hints_after="Run verify to confirm the changes compile and tests pass.",
         commonly_preceded_by=["refactor_inspect", "refactor_rename"],
-        commonly_followed_by=["lint_check", "run_test_targets"],
+        commonly_followed_by=["verify"],
         behavior=BehaviorFlags(has_side_effects=True, atomic=True),
         possible_errors=[],
         examples=[
@@ -954,130 +484,6 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             {
                 "description": "Cancel refactoring",
                 "params": {"refactor_id": "ref_abc123"},
-            },
-        ],
-    ),
-    # =========================================================================
-    # Lint Tools
-    # =========================================================================
-    "lint_check": ToolDocumentation(
-        name="lint_check",
-        description="Run linters, formatters, and type checkers.",
-        category=ToolCategory.LINT,
-        when_to_use=[
-            "Before committing changes",
-            "After making code modifications",
-            "Checking code quality",
-        ],
-        when_not_to_use=[
-            "When you only want to see available tools - use lint_tools",
-        ],
-        hints_before=None,
-        hints_after="Fix reported issues before committing.",
-        commonly_preceded_by=["write_source"],
-        commonly_followed_by=["run_test_targets", "git_commit"],
-        behavior=BehaviorFlags(has_side_effects=True),
-        possible_errors=[],
-        examples=[
-            {
-                "description": "Lint entire repo",
-                "params": {},
-            },
-            {
-                "description": "Lint specific files (dry run)",
-                "params": {"paths": ["src/main.py"], "dry_run": True},
-            },
-        ],
-    ),
-    "lint_tools": ToolDocumentation(
-        name="lint_tools",
-        description="List available lint tools and their detection status.",
-        category=ToolCategory.LINT,
-        when_to_use=[
-            "Checking which linters are available",
-            "Verifying tool configuration",
-        ],
-        when_not_to_use=[
-            "When you want to run checks - use lint_check",
-        ],
-        hints_before=None,
-        hints_after="Use lint_check with specific tools if needed.",
-        commonly_preceded_by=[],
-        commonly_followed_by=["lint_check"],
-        behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
-        possible_errors=[],
-        examples=[
-            {
-                "description": "List all detected tools",
-                "params": {},
-            },
-            {
-                "description": "Filter by language",
-                "params": {"language": "python"},
-            },
-        ],
-    ),
-    # =========================================================================
-    # Testing Tools
-    # =========================================================================
-    "discover_test_targets": ToolDocumentation(
-        name="discover_test_targets",
-        description="Find test targets in the repository.",
-        category=ToolCategory.TESTING,
-        when_to_use=[
-            "Finding available tests before running",
-            "Understanding test organization",
-        ],
-        when_not_to_use=[
-            "When you already know the test target IDs",
-        ],
-        hints_before=None,
-        hints_after="Use run_test_targets with specific target IDs.",
-        commonly_preceded_by=["map_repo"],
-        commonly_followed_by=["run_test_targets"],
-        behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
-        possible_errors=[],
-        examples=[
-            {
-                "description": "Discover all tests",
-                "params": {},
-            },
-            {
-                "description": "Discover tests in specific path",
-                "params": {"paths": ["tests/unit"]},
-            },
-        ],
-    ),
-    "run_test_targets": ToolDocumentation(
-        name="run_test_targets",
-        description="Execute tests.",
-        category=ToolCategory.TESTING,
-        when_to_use=[
-            "Running tests after code changes",
-            "Verifying fixes",
-            "Running specific test subsets",
-        ],
-        when_not_to_use=[
-            "When you need to find tests first - use discover_test_targets",
-        ],
-        hints_before="Use discover_test_targets to get target IDs.",
-        hints_after="Results are returned inline — no polling needed.",
-        commonly_preceded_by=["discover_test_targets", "lint_check"],
-        commonly_followed_by=[],
-        behavior=BehaviorFlags(has_side_effects=True, may_be_slow=True),
-        possible_errors=[],
-        examples=[
-            {
-                "description": "Run all tests",
-                "params": {},
-            },
-            {
-                "description": "Run specific targets with coverage",
-                "params": {"targets": ["test:tests/unit/test_main.py"], "coverage": True},
-            },
-            {
-                "description": "Run tests matching path pattern",
-                "params": {"target_filter": "test_api"},
             },
         ],
     ),
@@ -1150,17 +556,17 @@ def get_common_workflows() -> list[dict[str, Any]]:
         {
             "name": "modification",
             "description": "Making code changes",
-            "tools": ["read_source", "write_source", "git_stage_and_commit"],
+            "tools": ["read_source", "write_source", "verify", "commit"],
         },
         {
             "name": "refactoring",
             "description": "Renaming and restructuring",
-            "tools": ["search", "refactor_rename", "git_diff", "git_stage_and_commit"],
+            "tools": ["search", "refactor_rename", "semantic_diff", "commit"],
         },
         {
             "name": "review",
             "description": "Reviewing changes",
-            "tools": ["git_status", "git_diff", "git_log"],
+            "tools": ["semantic_diff", "verify"],
         },
     ]
 

@@ -689,7 +689,7 @@ class TestOps:
                 ),
                 agentic_hint="Empty targets list provided. Either omit targets "
                 "to run all tests, or specify at least one target. "
-                "Use discover_test_targets to find available targets.",
+                "Use verify to find available targets.",
             )
 
         run_id = str(uuid.uuid4())[:8]
@@ -730,7 +730,7 @@ class TestOps:
                         status="failed",
                     ),
                     agentic_hint=f"target_filter='{target_filter}' matched 0 of {before_count} targets. "
-                    f"Use discover_test_targets to see available target paths. "
+                    f"Use verify to see available target paths. "
                     f"To filter test NAMES within targets, use test_filter instead.",
                 )
 
@@ -747,7 +747,7 @@ class TestOps:
                 agentic_hint="No test targets found to run. "
                 + (
                     agentic_hint_for_empty
-                    or "Use discover_test_targets to check available targets."
+                    or "Use verify to check available targets."
                 ),
             )
 

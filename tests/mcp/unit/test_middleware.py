@@ -393,7 +393,7 @@ class TestToolMiddleware:
                 }
             }
         }
-        summary = middleware._extract_result_summary("run_test_targets", result)
+        summary = middleware._extract_result_summary("verify", result)
         assert summary["passed"] == 10
         assert summary["failed"] == 2
 
@@ -448,7 +448,7 @@ class TestToolMiddleware:
                 }
             }
         }
-        formatted = middleware._format_tool_summary("run_test_targets", result)
+        formatted = middleware._format_tool_summary("verify", result)
         assert "10 passed" in formatted
         assert "2 failed" in formatted
 

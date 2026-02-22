@@ -67,7 +67,7 @@ class TestRecord:
     def test_category_override(self) -> None:
         """category_override forces a specific category."""
         det = CallPatternDetector()
-        det.record("run_test_targets", category_override="test_scoped")
+        det.record("verify", category_override="test_scoped")
         assert det._window[-1].category == "test_scoped"
 
 
@@ -89,7 +89,7 @@ class TestRecordActionClear:
     def test_action_preserves_test_scoped(self) -> None:
         """Action-category clear preserves test_scoped records."""
         det = CallPatternDetector()
-        det.record("run_test_targets", category_override="test_scoped")
+        det.record("verify", category_override="test_scoped")
         det.record("search")
         det.record("read_source")
         assert det.window_length == 3
@@ -102,9 +102,9 @@ class TestRecordActionClear:
     def test_multiple_test_scoped_preserved(self) -> None:
         """Multiple test_scoped records all survive an action clear."""
         det = CallPatternDetector()
-        det.record("run_test_targets", category_override="test_scoped")
+        det.record("verify", category_override="test_scoped")
         det.record("search")
-        det.record("run_test_targets", category_override="test_scoped")
+        det.record("verify", category_override="test_scoped")
         det.record("read_source")
         assert det.window_length == 4
 
@@ -125,8 +125,7 @@ class TestRecordActionClear:
         [
             ("write_source", "write"),
             ("refactor_rename", "refactor"),
-            ("git_stage_and_commit", "git"),
-            ("git_push", "git"),
+            ("commit", "git"),
         ],
     )
     def test_all_action_categories_clear(self, tool_name: str, expected_cat: str) -> None:
@@ -139,36 +138,28 @@ class TestRecordActionClear:
         det.record(tool_name)
         assert det.window_length == 0
 
-    def test_lint_does_not_clear_by_default(self) -> None:
-        """lint_check without clears_window=True does NOT clear (just a check)."""
+    def test_verify_does_not_clear(self) -> None:
+        """verify (test/lint) does NOT clear the window (verification, not mutation)."""
         det = CallPatternDetector()
         det.record("search")
         det.record("search")
-        det.record("lint_check")
+        det.record("verify")
         assert det.window_length == 3
 
-    def test_lint_clears_when_explicit(self) -> None:
-        """lint_check with clears_window=True DOES clear (auto-fixed files)."""
+    def test_verify_clears_when_explicit(self) -> None:
+        """verify with clears_window=True DOES clear (auto-fixed files)."""
         det = CallPatternDetector()
         det.record("search")
         det.record("search")
-        det.record("lint_check", clears_window=True)
+        det.record("verify", clears_window=True)
         assert det.window_length == 0
 
-    def test_test_does_not_clear(self) -> None:
-        """run_test_targets does NOT clear the window (verification, not mutation)."""
+    def test_unknown_tool_does_not_clear(self) -> None:
+        """Unknown tools (mapped to 'meta') do NOT clear the window."""
         det = CallPatternDetector()
         det.record("search")
         det.record("search")
-        det.record("run_test_targets")
-        assert det.window_length == 3
-
-    def test_git_read_does_not_clear(self) -> None:
-        """git_read tools (git_status, git_log, etc.) do NOT clear the window."""
-        det = CallPatternDetector()
-        det.record("search")
-        det.record("search")
-        det.record("git_status")  # git_read, not in ACTION_CATEGORIES
+        det.record("some_unknown_tool")  # maps to 'meta'
         assert det.window_length == 3
 
     def test_diff_does_not_clear(self) -> None:
@@ -182,9 +173,9 @@ class TestRecordActionClear:
     def test_clears_window_preserves_test_scoped(self) -> None:
         """clears_window=True still preserves test_scoped records."""
         det = CallPatternDetector()
-        det.record("run_test_targets", category_override="test_scoped")
+        det.record("verify", category_override="test_scoped")
         det.record("search")
-        det.record("lint_check", clears_window=True)
+        det.record("verify", clears_window=True)
         assert det.window_length == 1  # only test_scoped remains
 
 

@@ -106,10 +106,9 @@ def create_mcp_server(context: "AppContext") -> "FastMCP":
         git,
         index,
         introspection,
-        lint,
         mutation,
         refactor,
-        testing,
+        verify,
     )
 
     log.info("mcp_server_creating", repo_root=str(context.repo_root))
@@ -135,10 +134,9 @@ def create_mcp_server(context: "AppContext") -> "FastMCP":
     files.register_tools(mcp, context)
     git.register_tools(mcp, context)
     index.register_tools(mcp, context)
-    lint.register_tools(mcp, context)
     mutation.register_tools(mcp, context)
     refactor.register_tools(mcp, context)
-    testing.register_tools(mcp, context)
+    verify.register_tools(mcp, context)
     introspection.register_tools(mcp, context)
 
     # Enrich tool descriptions with inline examples from TOOL_DOCS

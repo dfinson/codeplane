@@ -34,7 +34,7 @@ class TestDeriveFeatures:
 
     def test_git_tools(self) -> None:
         """Git tools add git_ops feature."""
-        features = _derive_features(["git_status", "git_commit"])
+        features = _derive_features(["commit"])
         assert "git_ops" in features
 
     def test_refactor_tools(self) -> None:
@@ -42,14 +42,10 @@ class TestDeriveFeatures:
         features = _derive_features(["refactor_rename", "refactor_move"])
         assert "refactoring" in features
 
-    def test_test_tool(self) -> None:
-        """Test tool adds testing feature."""
-        features = _derive_features(["test"])
+    def test_verify_tool(self) -> None:
+        """Verify tool adds both testing and linting features."""
+        features = _derive_features(["verify"])
         assert "testing" in features
-
-    def test_lint_tool(self) -> None:
-        """Lint tool adds linting feature."""
-        features = _derive_features(["lint"])
         assert "linting" in features
 
     def test_index_tools(self) -> None:
@@ -70,10 +66,9 @@ class TestDeriveFeatures:
     def test_multiple_features(self) -> None:
         """Multiple tool types add multiple features."""
         tools = [
-            "git_status",
+            "commit",
             "refactor_rename",
-            "test",
-            "lint",
+            "verify",
             "search",
             "read_source",
             "describe",
@@ -89,12 +84,12 @@ class TestDeriveFeatures:
 
     def test_sorted_output(self) -> None:
         """Features are sorted alphabetically."""
-        tools = ["describe", "git_status", "test"]
+        tools = ["describe", "commit", "verify"]
         features = _derive_features(tools)
         assert features == sorted(features)
 
     def test_no_duplicates(self) -> None:
         """Multiple tools of same type don't create duplicates."""
-        tools = ["git_status", "git_commit", "git_diff", "git_log"]
+        tools = ["commit", "commit"]
         features = _derive_features(tools)
         assert features.count("git_ops") == 1

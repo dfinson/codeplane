@@ -1,12 +1,10 @@
-"""Unit tests for tool categorization and git read/write split.
+"""Unit tests for tool categorization after git/lint/test consolidation.
 
 Covers:
-- categorize_tool() returns correct categories for all known tools
-- git_read tools are NOT in ACTION_CATEGORIES
-- git (mutating) tools ARE in ACTION_CATEGORIES
-- diff is NOT in ACTION_CATEGORIES
-- ACTION_CATEGORIES frozenset completeness
+- categorize_tool() returns correct categories for all remaining tools
+- ACTION_CATEGORIES frozenset correctness
 - TOOL_CATEGORIES dict completeness
+- Window clear behavior (commit clears, verify does not)
 - has_recent_scoped_test() helper
 """
 
@@ -46,16 +44,13 @@ class TestCategorizeTool:
             ("refactor_apply", "refactor"),
             ("refactor_cancel", "meta"),
             ("refactor_inspect", "meta"),
-            ("lint_check", "lint"),
-            ("lint_tools", "meta"),
-            ("run_test_targets", "test"),
-            ("discover_test_targets", "meta"),
             ("semantic_diff", "diff"),
             ("map_repo", "meta"),
             ("list_files", "meta"),
             ("describe", "meta"),
             ("reset_budget", "meta"),
-            ("inspect_affected_tests", "meta"),
+            ("verify", "test"),
+            ("commit", "git"),
         ],
     )
     def test_known_tool_category(self, tool_name: str, expected_category: str) -> None:
@@ -67,90 +62,19 @@ class TestCategorizeTool:
         assert categorize_tool("completely_unknown_tool") == "meta"
         assert categorize_tool("") == "meta"
 
-
-# =========================================================================
-# Git read/write split
-# =========================================================================
-
-
-class TestGitReadWriteSplit:
-    """Tests for git_read vs git (mutating) categorization."""
-
-    @pytest.mark.parametrize(
-        "tool_name",
-        [
-            "git_status",
-            "git_diff",
-            "git_log",
-            "git_branch",
-            "git_remote",
-            "git_inspect",
-            "git_history",
-            "git_submodule",
-            "git_worktree",
-        ],
-    )
-    def test_git_read_tools_categorize_as_git_read(self, tool_name: str) -> None:
-        """Read-only git tools are categorized as 'git_read'."""
-        assert categorize_tool(tool_name) == "git_read"
-
-    @pytest.mark.parametrize(
-        "tool_name",
-        [
-            "git_commit",
-            "git_stage_and_commit",
-            "git_stage",
-            "git_push",
-            "git_pull",
-            "git_checkout",
-            "git_merge",
-            "git_reset",
-            "git_stash",
-            "git_rebase",
-        ],
-    )
-    def test_git_write_tools_categorize_as_git(self, tool_name: str) -> None:
-        """Mutating git tools are categorized as 'git'."""
-        assert categorize_tool(tool_name) == "git"
-
-    @pytest.mark.parametrize(
-        "tool_name",
-        [
-            "git_status",
-            "git_diff",
-            "git_log",
-            "git_branch",
-            "git_remote",
-            "git_inspect",
-            "git_history",
-            "git_submodule",
-            "git_worktree",
-        ],
-    )
-    def test_git_read_not_in_action_categories(self, tool_name: str) -> None:
-        """git_read is NOT in ACTION_CATEGORIES."""
-        cat = categorize_tool(tool_name)
-        assert cat not in ACTION_CATEGORIES
-
-    @pytest.mark.parametrize(
-        "tool_name",
-        [
-            "git_commit",
-            "git_stage_and_commit",
-            "git_stage",
-            "git_push",
-            "git_pull",
-            "git_checkout",
-            "git_merge",
-            "git_reset",
-            "git_stash",
-            "git_rebase",
-        ],
-    )
-    def test_git_write_in_action_categories(self, tool_name: str) -> None:
-        """Mutating git tools ('git' category) ARE in ACTION_CATEGORIES."""
-        cat = categorize_tool(tool_name)
-        assert cat in ACTION_CATEGORIES
+    def test_deleted_tools_are_not_in_categories(self) -> None:
+        """Tools removed in consolidation are NOT in TOOL_CATEGORIES."""
+        deleted = [
+            "git_status", "git_diff", "git_log", "git_branch",
+            "git_remote", "git_inspect", "git_history", "git_submodule",
+            "git_worktree", "git_commit", "git_stage_and_commit",
+            "git_stage", "git_push", "git_pull", "git_checkout",
+            "git_merge", "git_reset", "git_stash", "git_rebase",
+            "lint_check", "lint_tools", "run_test_targets",
+            "discover_test_targets", "inspect_affected_tests",
+        ]
+        for name in deleted:
+            assert name not in TOOL_CATEGORIES, f"{name} should be removed"
 
 
 # =========================================================================
@@ -165,78 +89,12 @@ class TestActionCategories:
         """ACTION_CATEGORIES contains exactly the expected members."""
         assert frozenset({"write", "refactor", "git"}) == ACTION_CATEGORIES
 
-    def test_lint_not_included(self) -> None:
-        """'lint' is NOT in ACTION_CATEGORIES (conditional via clears_window)."""
-        assert "lint" not in ACTION_CATEGORIES
-
-    def test_test_not_included(self) -> None:
-        """'test' is NOT in ACTION_CATEGORIES (verification, not mutation)."""
-        assert "test" not in ACTION_CATEGORIES
-
-    def test_diff_not_included(self) -> None:
-        """'diff' is NOT in ACTION_CATEGORIES."""
-        assert "diff" not in ACTION_CATEGORIES
-
-    def test_git_read_not_included(self) -> None:
-        """'git_read' is NOT in ACTION_CATEGORIES."""
-        assert "git_read" not in ACTION_CATEGORIES
-
-    def test_search_not_included(self) -> None:
-        """'search' is NOT in ACTION_CATEGORIES."""
-        assert "search" not in ACTION_CATEGORIES
-
-    def test_read_not_included(self) -> None:
-        """'read' and 'read_full' are NOT in ACTION_CATEGORIES."""
-        assert "read" not in ACTION_CATEGORIES
-        assert "read_full" not in ACTION_CATEGORIES
-
-    def test_meta_not_included(self) -> None:
-        """'meta' is NOT in ACTION_CATEGORIES."""
-        assert "meta" not in ACTION_CATEGORIES
-
-
-# =========================================================================
-# TOOL_CATEGORIES completeness
-# =========================================================================
-
-
-class TestToolCategoriesCompleteness:
-    """Verify the TOOL_CATEGORIES dict is consistent."""
-
-    def test_all_git_read_tools_present(self) -> None:
-        """All expected git read tools are in TOOL_CATEGORIES."""
-        expected = [
-            "git_status",
-            "git_diff",
-            "git_log",
-            "git_branch",
-            "git_remote",
-            "git_inspect",
-            "git_history",
-            "git_submodule",
-            "git_worktree",
-        ]
-        for tool in expected:
-            assert tool in TOOL_CATEGORIES, f"{tool} missing from TOOL_CATEGORIES"
-            assert TOOL_CATEGORIES[tool] == "git_read"
-
-    def test_all_git_write_tools_present(self) -> None:
-        """All expected git write tools are in TOOL_CATEGORIES."""
-        expected = [
-            "git_commit",
-            "git_stage_and_commit",
-            "git_stage",
-            "git_push",
-            "git_pull",
-            "git_checkout",
-            "git_merge",
-            "git_reset",
-            "git_stash",
-            "git_rebase",
-        ]
-        for tool in expected:
-            assert tool in TOOL_CATEGORIES, f"{tool} missing from TOOL_CATEGORIES"
-            assert TOOL_CATEGORIES[tool] == "git"
+    @pytest.mark.parametrize(
+        "excluded",
+        ["lint", "test", "diff", "git_read", "search", "read", "read_full", "meta"],
+    )
+    def test_non_mutation_categories_excluded(self, excluded: str) -> None:
+        assert excluded not in ACTION_CATEGORIES
 
     def test_no_action_category_values_missing_from_frozenset(self) -> None:
         """Every category that should clear the window is in ACTION_CATEGORIES."""
@@ -248,51 +106,29 @@ class TestToolCategoriesCompleteness:
 
 
 # =========================================================================
-# Git read does not clear pattern window (integration)
+# Window clear behavior
 # =========================================================================
 
 
 class TestWindowClearBehavior:
     """Integration: which tools clear the pattern window and which don't."""
 
-    def test_git_status_no_clear(self) -> None:
-        """git_status does not clear the pattern window."""
+    def test_commit_clears_window(self) -> None:
+        """commit (mutating git) clears the pattern window."""
         det = CallPatternDetector()
         det.record("search")
         det.record("search")
         det.record("search")
-        det.record("git_status")
-        assert det.window_length == 4
-
-    def test_git_log_no_clear(self) -> None:
-        det = CallPatternDetector()
-        det.record("search")
-        det.record("search")
-        det.record("git_log")
-        assert det.window_length == 3
-
-    def test_git_diff_no_clear(self) -> None:
-        det = CallPatternDetector()
-        det.record("search")
-        det.record("search")
-        det.record("git_diff")
-        assert det.window_length == 3
-
-    def test_git_commit_does_clear(self) -> None:
-        """git_commit (mutating) DOES clear the pattern window."""
-        det = CallPatternDetector()
-        det.record("search")
-        det.record("search")
-        det.record("search")
-        det.record("git_commit")
+        det.record("commit")
         assert det.window_length == 0
 
-    def test_git_stage_and_commit_does_clear(self) -> None:
+    def test_verify_no_clear(self) -> None:
+        """verify (test category) does NOT clear the window."""
         det = CallPatternDetector()
         det.record("search")
         det.record("search")
-        det.record("git_stage_and_commit")
-        assert det.window_length == 0
+        det.record("verify")
+        assert det.window_length == 3
 
     def test_semantic_diff_no_clear(self) -> None:
         """semantic_diff (category 'diff') does NOT clear the window."""
@@ -302,29 +138,13 @@ class TestWindowClearBehavior:
         det.record("semantic_diff")
         assert det.window_length == 3
 
-    def test_lint_check_no_clear(self) -> None:
-        """lint_check (check-only) does NOT clear the window."""
+    def test_clears_window_override(self) -> None:
+        """clears_window=True forces clear regardless of category."""
         det = CallPatternDetector()
         det.record("search")
         det.record("search")
-        det.record("lint_check")
-        assert det.window_length == 3
-
-    def test_lint_check_with_autofix_clears(self) -> None:
-        """lint_check that auto-fixed files DOES clear (via clears_window)."""
-        det = CallPatternDetector()
-        det.record("search")
-        det.record("search")
-        det.record("lint_check", clears_window=True)
+        det.record("verify", clears_window=True)
         assert det.window_length == 0
-
-    def test_run_test_targets_no_clear(self) -> None:
-        """run_test_targets (verification) does NOT clear the window."""
-        det = CallPatternDetector()
-        det.record("search")
-        det.record("search")
-        det.record("run_test_targets")
-        assert det.window_length == 3
 
 
 # =========================================================================
@@ -350,7 +170,7 @@ class TestHasRecentScopedTest:
         window: deque[CallRecord] = deque(
             [
                 CallRecord(category="search", tool_name="search"),
-                CallRecord(category="test_scoped", tool_name="run_test_targets"),
+                CallRecord(category="test_scoped", tool_name="verify"),
                 CallRecord(category="read", tool_name="read_source"),
             ]
         )

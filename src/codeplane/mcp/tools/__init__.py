@@ -6,10 +6,9 @@ from codeplane.mcp.tools import (
     git,
     index,
     introspection,
-    lint,
     mutation,
     refactor,
-    testing,
+    verify,
 )
 
 __all__ = [
@@ -18,8 +17,7 @@ __all__ = [
     "git",
     "index",
     "introspection",
-    "lint",
     "mutation",
     "refactor",
-    "testing",
+    "verify",
 ]

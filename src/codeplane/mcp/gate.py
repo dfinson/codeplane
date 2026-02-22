@@ -168,20 +168,6 @@ class GateManager:
 # Standard Gate Specs (reusable across handlers)
 # =============================================================================
 
-DESTRUCTIVE_RESET_GATE = GateSpec(
-    kind="destructive_action",
-    reason_min_chars=50,
-    reason_prompt=(
-        "What uncommitted work will be lost and why is this reset necessary? "
-        "Have you confirmed with your user?"
-    ),
-    expires_calls=1,
-    message=(
-        "DESTRUCTIVE ACTION: git reset --hard will permanently discard "
-        "all uncommitted changes. This cannot be undone."
-    ),
-)
-
 EXPENSIVE_READ_GATE = GateSpec(
     kind="expensive_read",
     reason_min_chars=50,
@@ -228,7 +214,7 @@ BROAD_FILTER_TEST_GATE = GateSpec(
     expires_calls=3,
     message=(
         "Broad test run via target_filter requires justification. "
-        "Prefer run_test_targets(affected_by=[...]) for impact-aware selection."
+        "Prefer verify(changed_files=[...]) for impact-aware selection."
     ),
 )
 
@@ -268,51 +254,17 @@ TOOL_CATEGORIES: dict[str, str] = {
     "refactor_apply": "refactor",
     "refactor_cancel": "meta",
     "refactor_inspect": "meta",
-    "lint_check": "lint",
-    "lint_tools": "meta",
-    "run_test_targets": "test",
-    "discover_test_targets": "meta",
     "semantic_diff": "diff",
     "map_repo": "meta",
     "list_files": "meta",
     "describe": "meta",
     "reset_budget": "meta",
-    "inspect_affected_tests": "meta",
+    "verify": "test",
+    "commit": "git",
 }
 
-# Read-only git tools — information gathering, do NOT clear pattern window
-_GIT_READ_TOOLS = [
-    "git_status",
-    "git_diff",
-    "git_log",
-    "git_branch",
-    "git_remote",
-    "git_inspect",
-    "git_history",
-    "git_submodule",
-    "git_worktree",
-]
-for _name in _GIT_READ_TOOLS:
-    TOOL_CATEGORIES[_name] = "git_read"
-
-# Mutating git tools — actual progress, clear pattern window
-_GIT_WRITE_TOOLS = [
-    "git_commit",
-    "git_stage_and_commit",
-    "git_stage",
-    "git_push",
-    "git_pull",
-    "git_checkout",
-    "git_merge",
-    "git_reset",
-    "git_stash",
-    "git_rebase",
-]
-for _name in _GIT_WRITE_TOOLS:
-    TOOL_CATEGORIES[_name] = "git"
-
 # Categories that represent mutation (clear pattern window).
-# "git_read", "diff", "test", and "lint" are NOT here — they are
+# "diff", "test", and "lint" are NOT here — they are
 # information gathering / verification and should not reset bypass
 # detection windows.  Lint clears conditionally (only when it
 # auto-fixed files); see CallPatternDetector.record(clears_window=True).
@@ -458,7 +410,7 @@ _SEARCH_WORKFLOW: dict[str, str] = {
     ),
     "if_reading_code": ("Switch to read_source with multiple targets per call (up to 20)"),
     "if_ready_to_act": (
-        "Proceed to write_source, refactor_rename, lint_check, or run_test_targets"
+        "Proceed to write_source, refactor_rename, verify, or commit"
     ),
 }
 
@@ -473,7 +425,7 @@ _READ_WORKFLOW: dict[str, str] = {
     ),
     "if_reading_multiple_spans": ("Batch up to 20 targets in one read_source call"),
     "if_ready_to_act": (
-        "Proceed to write_source, refactor_rename, lint_check, or run_test_targets"
+        "Proceed to write_source, refactor_rename, verify, or commit"
     ),
 }
 
@@ -694,7 +646,7 @@ _BYPASS_WORKFLOW: dict[str, str] = {
     "for_editing": "Use write_source with span edits — NOT sed, awk, echo, or tee",
     "for_searching": "Use search(mode='lexical') — NOT grep, rg, or ag",
     "for_reading": "Use read_source with multiple targets — NOT cat, head, or tail",
-    "for_git": "Use git_stage_and_commit, git_status, etc. — NOT raw git commands",
+    "for_git": "Use commit for staging+committing — for other git ops, use terminal",
 }
 
 

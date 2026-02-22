@@ -263,7 +263,7 @@ class TestRejoinerCounterBehavior:
             mw._maybe_get_rejoinder(ctx)
         result = mw._maybe_get_rejoinder(ctx)
         assert result == _REJOINDERS[1]
-        assert "run_test_targets" in result
+        assert "verify" in result
 
     def test_no_repack_when_extract_returns_none(self) -> None:
         """If _extract_result_dict returns None, rejoinder is silently skipped."""
