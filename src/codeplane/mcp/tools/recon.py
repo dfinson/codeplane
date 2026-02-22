@@ -628,7 +628,6 @@ async def _expand_seed(
     *,
     depth: int = 1,
     task_terms: list[str] | None = None,
-    bm25_scores: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Expand a single seed via graph walk.
 
@@ -642,9 +641,11 @@ async def _expand_seed(
     (term match in def name) + hub score.  Defs with no term match and hub < 3
     are dropped to reduce noise.
 
-    When *bm25_scores* is provided (``{path: score}``), expansion candidates
-    (callees and import_defs) whose files have zero BM25 relevance to the task
-    are dropped.  This is the primary precision lever for expansion.
+    Expansion relies on structural filters (package proximity for callees,
+    hub + term-relevance for import_defs, file diversity for callers) rather
+    than BM25 gating, which was found to drop too many true-positive
+    infrastructure files (config, core types) that lack lexical overlap
+    with task text.
     """
     coordinator = app_ctx.coordinator
 
@@ -690,9 +691,6 @@ async def _expand_seed(
         # Require at least 2 path segments in common (e.g. "src/evee/")
         if common.count("/") < 2:
             continue
-        # BM25 gate: drop callees whose file has zero task relevance
-        if bm25_scores is not None and c_path not in bm25_scores:
-            continue
         callee_sigs.append(
             {
                 "symbol": _def_signature_text(c),
@@ -725,9 +723,6 @@ async def _expand_seed(
         if imp.resolved_path in seen_import_paths:
             continue
         seen_import_paths.add(imp.resolved_path)
-        # BM25 gate: skip imported files with zero task relevance
-        if bm25_scores is not None and imp.resolved_path not in bm25_scores:
-            continue
         # For each imported file, include its top hub-scored def signature
         imp_full = repo_root / imp.resolved_path
         if not imp_full.exists():
@@ -794,9 +789,6 @@ async def _expand_seed(
         if ref_path in seen_caller_files:
             continue
         seen_caller_files.add(ref_path)
-        # BM25 gate: drop callers whose file has low task relevance
-        if bm25_scores is not None and ref_path not in bm25_scores:
-            continue
 
         ref_full = repo_root / ref_path
         if ref_full.exists():
@@ -1041,25 +1033,15 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         repo_root = coordinator.repo_root
 
         # Step 1: BM25 scoring — compute BEFORE seed selection so file-level
-        # relevance can inform both seed ranking and expansion gating.
+        # relevance can inform seed ranking.  BM25 is NOT used for expansion
+        # gating (removed: structural filters like package proximity, hub
+        # score, and file diversity are sufficient; BM25 gating dropped too
+        # many TP infrastructure files with low lexical overlap).
         raw_bm25 = coordinator.score_files_bm25(task)
-        bm25_threshold = 0.0
-        if raw_bm25:
-            sorted_scores = sorted(raw_bm25.values())
-            # Median (P50) threshold: drop bottom half for expansion gating
-            p50_idx = max(0, len(sorted_scores) // 2 - 1)
-            bm25_threshold = sorted_scores[p50_idx]
-
-        # Build a filtered dict: only files above median for expansion gating
-        bm25_scores: dict[str, float] = {
-            path: score for path, score in raw_bm25.items() if score > bm25_threshold
-        }
         log.debug(
             "recon.bm25_scores",
             total_scored=len(raw_bm25),
-            above_threshold=len(bm25_scores),
-            threshold=round(bm25_threshold, 2),
-            top5=sorted(bm25_scores.items(), key=lambda x: -x[1])[:5],
+            top5=sorted(raw_bm25.items(), key=lambda x: -x[1])[:5] if raw_bm25 else [],
         )
 
         # Step 2: Seed selection (term-intersection + BM25 + structural rerank)
@@ -1097,7 +1079,6 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                 repo_root,
                 depth=depth,
                 task_terms=terms,
-                bm25_scores=bm25_scores,
             )
             seed_results.append(expanded)
             seed_paths.add(expanded["path"])
