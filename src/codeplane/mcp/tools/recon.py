@@ -536,14 +536,12 @@ async def _select_seeds(
         log.info("recon.no_candidates", task=task, terms=terms)
         return seeds  # return any path-extracted seeds we already have
 
-    # ---- Score: term coverage + hub score + BM25 + path boost - test penalty ----
+    # ---- Score: hub * 3 + coverage * 5 + BM25 * 3 + name * 3 + path - test ----
     #
-    # Formula balances structural importance (hub, capped) with task
-    # relevance (term coverage, BM25, name match).  Hub is capped at 5
-    # to prevent high-connectivity symbols (events, base classes) from
-    # drowning out task-relevant symbols.  Test files get a flat penalty
-    # because test functions match many terms via imports but provide
-    # little implementation insight.
+    # Hub (capped at 20, max 60 pts) is the primary discriminator —
+    # core implementation classes like ModelEvaluator score far above
+    # noise (CLI stubs, event dataclasses).  Term coverage and BM25
+    # provide task-relevance signal.  Test files get a -10 penalty.
     scored: list[tuple[DefFact, float]] = []
     if def_term_hits:
         from codeplane.index.models import File as FileModel
@@ -561,7 +559,7 @@ async def _select_seeds(
                 path_bonus = 0.5 if d.file_id in path_boost_file_ids else 0.0
                 name_lower = d.name.lower()
                 name_bonus = 1.0 if any(t in name_lower for t in real_terms) else 0.0
-                hub = min(caller_count, 5)  # cap hub contribution
+                hub = min(caller_count, 20)  # cap at 20 (max 60 points)
 
                 # Resolve file path (cached) for test detection + BM25
                 if d.file_id not in _fid_path_cache:
@@ -572,7 +570,7 @@ async def _select_seeds(
                 # Test file penalty: test functions match many terms
                 # (via imports) but aren't useful implementation starting
                 # points.  The penalty offsets their term-coverage advantage.
-                test_penalty = 15 if _is_test_file(fpath) else 0
+                test_penalty = 10 if _is_test_file(fpath) else 0
 
                 # BM25 file-level score: 0-1 normalized, then scaled
                 bm25_bonus = 0.0
@@ -581,12 +579,12 @@ async def _select_seeds(
                     bm25_bonus = bm25_file_scores[fpath] / max_bm25 if max_bm25 > 0 else 0.0
 
                 score = (
-                    hub * 2  # structural importance (max 10)
-                    + term_coverage * 8  # task-relevance via term matching
+                    hub * 3  # structural importance (max 60)
+                    + term_coverage * 5  # task-relevance via term matching
                     + name_bonus * 3  # symbol name matches task term
                     + path_bonus  # file path matches task term
-                    + bm25_bonus * 4  # BM25 file-level relevance (max 4)
-                    - test_penalty  # deprioritize test files (-15)
+                    + bm25_bonus * 3  # BM25 file-level relevance (max 3)
+                    - test_penalty  # deprioritize test files (-10)
                 )
                 scored.append((d, score))
 
