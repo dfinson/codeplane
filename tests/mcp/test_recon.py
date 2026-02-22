@@ -1,7 +1,8 @@
 """Tests for the recon MCP tool.
 
 Tests:
-- _select_seeds: BM25 + structural reranking
+- _tokenize_task: task description tokenization
+- _select_seeds: term-intersection + hub-score reranking
 - _expand_seed: graph expansion
 - _trim_to_budget: budget assembly
 - _summarize_recon: summary generation
@@ -13,13 +14,151 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from codeplane.mcp.tools.recon import (
     _def_signature_text,
     _estimate_bytes,
+    _extract_paths,
     _read_lines,
     _summarize_recon,
+    _tokenize_task,
     _trim_to_budget,
 )
+
+# ---------------------------------------------------------------------------
+# Tokenization tests
+# ---------------------------------------------------------------------------
+
+
+class TestTokenizeTask:
+    """Tests for _tokenize_task."""
+
+    def test_single_word(self) -> None:
+        terms = _tokenize_task("FactQueries")
+        assert "factqueries" in terms
+
+    def test_multi_word(self) -> None:
+        terms = _tokenize_task("add validation to the search tool")
+        assert "validation" in terms
+        assert "search" in terms
+        # "add", "to", "the", "tool" are stop words → excluded
+        assert "add" not in terms
+        assert "to" not in terms
+        assert "the" not in terms
+        assert "tool" not in terms
+
+    def test_camelcase_split(self) -> None:
+        terms = _tokenize_task("IndexCoordinator")
+        assert "indexcoordinator" in terms
+        # camelCase parts also extracted
+        assert "index" in terms
+        assert "coordinator" in terms
+
+    def test_snake_case_split(self) -> None:
+        terms = _tokenize_task("get_callees")
+        assert "get_callees" in terms
+        assert "callees" in terms
+
+    def test_quoted_terms_preserved(self) -> None:
+        terms = _tokenize_task('fix "read_source" tool')
+        assert "read_source" in terms
+
+    def test_stop_words_filtered(self) -> None:
+        terms = _tokenize_task("how does the checkpoint tool run tests")
+        assert "checkpoint" in terms
+        assert "how" not in terms
+        assert "does" not in terms
+        assert "the" not in terms
+
+    def test_short_terms_filtered(self) -> None:
+        terms = _tokenize_task("a b cd ef")
+        assert "a" not in terms
+        assert "b" not in terms
+        assert "cd" in terms
+        assert "ef" in terms
+
+    def test_empty_task(self) -> None:
+        assert _tokenize_task("") == []
+
+    def test_all_stop_words(self) -> None:
+        assert _tokenize_task("the is and or") == []
+
+    def test_dedup(self) -> None:
+        terms = _tokenize_task("search search search")
+        assert terms.count("search") == 1
+
+    def test_sorted_by_length_descending(self) -> None:
+        terms = _tokenize_task("IndexCoordinator search lint")
+        # Longer terms should come first
+        lengths = [len(t) for t in terms]
+        assert lengths == sorted(lengths, reverse=True)
+
+    @pytest.mark.parametrize(
+        ("task", "expected_term"),
+        [
+            ("FactQueries", "factqueries"),
+            ("checkpoint", "checkpoint"),
+            ("semantic_diff", "semantic_diff"),
+            ("recon tool", "recon"),
+            ("MCP server", "mcp"),
+            ("graph.py", "graph"),
+        ],
+    )
+    def test_common_tasks(self, task: str, expected_term: str) -> None:
+        terms = _tokenize_task(task)
+        assert expected_term in terms
+
+
+# ---------------------------------------------------------------------------
+# Path extraction tests
+# ---------------------------------------------------------------------------
+
+
+class TestExtractPaths:
+    """Tests for _extract_paths."""
+
+    def test_backtick_path(self) -> None:
+        paths = _extract_paths("Fix the model in `src/evee/core/base_model.py` to add caching")
+        assert "src/evee/core/base_model.py" in paths
+
+    def test_quoted_path(self) -> None:
+        paths = _extract_paths('Look at "config/models.py" for settings')
+        assert "config/models.py" in paths
+
+    def test_bare_path(self) -> None:
+        paths = _extract_paths("The evaluator is in evaluation/model_evaluator.py")
+        assert "evaluation/model_evaluator.py" in paths
+
+    def test_multiple_paths(self) -> None:
+        task = "Modify `src/core/base_model.py` and `src/config/models.py` to support caching"
+        paths = _extract_paths(task)
+        assert "src/core/base_model.py" in paths
+        assert "src/config/models.py" in paths
+
+    def test_no_paths(self) -> None:
+        paths = _extract_paths("add caching to the model abstraction")
+        assert paths == []
+
+    def test_dotted_but_not_path(self) -> None:
+        # Version numbers, URLs etc should not match as paths
+        paths = _extract_paths("upgrade to version 3.12")
+        assert paths == []
+
+    def test_strip_leading_dot_slash(self) -> None:
+        paths = _extract_paths("Fix `./src/main.py` please")
+        assert "src/main.py" in paths
+
+    def test_dedup(self) -> None:
+        paths = _extract_paths("`config/models.py` and also config/models.py again")
+        assert paths.count("config/models.py") == 1
+
+    def test_various_extensions(self) -> None:
+        paths = _extract_paths("Check `src/app.ts` and `lib/utils.js` and `main.go`")
+        assert "src/app.ts" in paths
+        assert "lib/utils.js" in paths
+        assert "main.go" in paths
+
 
 # ---------------------------------------------------------------------------
 # Helper unit tests
@@ -78,18 +217,20 @@ class TestSummarizeRecon:
     """Tests for _summarize_recon."""
 
     def test_full_summary(self) -> None:
-        s = _summarize_recon(3, 10, 5, 2, "add caching to search")
+        s = _summarize_recon(3, 10, 5, 4, 2, "add caching to search")
         assert "3 seeds" in s
         assert "10 callees" in s
+        assert "4 import defs" in s
         assert "5 callers" in s
         assert "2 scaffolds" in s
         assert "add caching to search" in s
 
     def test_minimal_summary(self) -> None:
-        s = _summarize_recon(1, 0, 0, 0, "fix bug")
+        s = _summarize_recon(1, 0, 0, 0, 0, "fix bug")
         assert "1 seeds" in s
         assert "callees" not in s
         assert "callers" not in s
+        assert "import defs" not in s
 
 
 class TestEstimateBytes:

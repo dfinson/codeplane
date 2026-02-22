@@ -279,6 +279,64 @@ class FactQueries:
         stmt = select(File).limit(limit)
         return list(self._session.exec(stmt).all())
 
+    # -------------------------------------------------------------------------
+    # Seed finding (recon-dedicated)
+    # -------------------------------------------------------------------------
+
+    def find_defs_matching_term(
+        self,
+        term: str,
+        *,
+        limit: int = 200,
+    ) -> list[DefFact]:
+        """Find definitions whose name, qualified_name, or docstring contain a term.
+
+        Uses SQL LIKE for case-insensitive substring matching directly on
+        the structural index — no BM25, no Tantivy.
+
+        Args:
+            term: Lowercase search term (minimum 2 chars).
+            limit: Maximum results.
+
+        Returns:
+            List of DefFact objects matching the term.
+        """
+        if len(term) < 2:
+            return []
+        pattern = f"%{term}%"
+        stmt = (
+            select(DefFact)
+            .where(
+                (col(DefFact.name).ilike(pattern))
+                | (col(DefFact.qualified_name).ilike(pattern))
+                | (col(DefFact.docstring).ilike(pattern))
+                | (col(DefFact.lexical_path).ilike(pattern))
+            )
+            .limit(limit)
+        )
+        return list(self._session.exec(stmt).all())
+
+    def find_files_matching_term(
+        self,
+        term: str,
+        *,
+        limit: int = 100,
+    ) -> list[File]:
+        """Find files whose path contains a term.
+
+        Args:
+            term: Lowercase search term (minimum 2 chars).
+            limit: Maximum results.
+
+        Returns:
+            List of File objects whose path matches.
+        """
+        if len(term) < 2:
+            return []
+        pattern = f"%{term}%"
+        stmt = select(File).where(col(File.path).ilike(pattern)).limit(limit)
+        return list(self._session.exec(stmt).all())
+
 
 # Re-export for backwards compatibility during migration
 # These will be removed once all consumers are updated

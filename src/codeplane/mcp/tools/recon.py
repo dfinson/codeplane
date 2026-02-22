@@ -1,13 +1,15 @@
 """Recon MCP tool — task-aware code discovery.
 
 Collapses the multi-call context-gathering stage (search → scaffold → read_source)
-into a single call. Uses BM25 seed selection + structural reranking + graph-walk
-expansion to deliver relevant source, scaffolds, and metadata in one response.
+into a single call. Uses term-intersection seed selection over the structural
+index + hub-score reranking + graph-walk expansion to deliver relevant source,
+scaffolds, and metadata in one response.
 """
 
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -28,7 +30,6 @@ log = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 # Seed selection
-_MAX_BM25_CANDIDATES = 40  # Raw candidates from Tantivy
 _MAX_SEEDS = 5  # Seeds after structural reranking
 _DEFAULT_DEPTH = 1  # Graph expansion depth
 
@@ -43,12 +44,274 @@ _CALLER_CONTEXT_LINES = 8  # lines around each caller ref
 _MAX_CALLERS_PER_SEED = 5
 _MAX_CALLEES_PER_SEED = 15
 _MAX_IMPORT_SCAFFOLDS = 5
+_MAX_IMPORT_DEFS_PER_SEED = 10  # Max imported-file defs surfaced per seed
 
 # Priority tiers for budget allocation
 _P1_SEED_BODIES = 1
 _P2_CALLEE_SIGS = 2
 _P3_CALLER_CONTEXTS = 3
 _P4_IMPORT_SCAFFOLDS = 4
+
+# File extensions for path extraction
+_PATH_EXTENSIONS = frozenset(
+    {
+        ".py",
+        ".js",
+        ".ts",
+        ".jsx",
+        ".tsx",
+        ".java",
+        ".go",
+        ".rs",
+        ".c",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".rb",
+        ".php",
+        ".cs",
+        ".swift",
+        ".kt",
+        ".scala",
+        ".lua",
+        ".r",
+        ".m",
+        ".mm",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".yaml",
+        ".yml",
+        ".json",
+        ".toml",
+        ".cfg",
+        ".ini",
+        ".xml",
+    }
+)
+
+# Stop words for task tokenization — terms too generic to be useful
+_STOP_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "shall",
+        "can",
+        "need",
+        "must",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "of",
+        "with",
+        "by",
+        "from",
+        "as",
+        "into",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "between",
+        "under",
+        "over",
+        "and",
+        "or",
+        "but",
+        "not",
+        "no",
+        "nor",
+        "so",
+        "yet",
+        "both",
+        "either",
+        "if",
+        "then",
+        "else",
+        "when",
+        "where",
+        "how",
+        "what",
+        "which",
+        "who",
+        "that",
+        "this",
+        "these",
+        "those",
+        "it",
+        "its",
+        "i",
+        "we",
+        "you",
+        "they",
+        "me",
+        "my",
+        "our",
+        "your",
+        "his",
+        "her",
+        "all",
+        "each",
+        "every",
+        "any",
+        "some",
+        "such",
+        "only",
+        "also",
+        "very",
+        "just",
+        "more",
+        # task-description noise
+        "add",
+        "fix",
+        "implement",
+        "change",
+        "update",
+        "modify",
+        "create",
+        "make",
+        "use",
+        "get",
+        "set",
+        "new",
+        "code",
+        "file",
+        "method",
+        "function",
+        "class",
+        "module",
+        "test",
+        "check",
+        "ensure",
+        "want",
+        "like",
+        "about",
+        "etc",
+        "using",
+        "way",
+        "thing",
+        "tool",
+        "run",
+    }
+)
+
+
+# ---------------------------------------------------------------------------
+# Task Tokenization
+# ---------------------------------------------------------------------------
+
+
+def _tokenize_task(task: str) -> list[str]:
+    """Extract meaningful search terms from a task description.
+
+    Splits on non-alphanumeric boundaries, lowercases, filters stop words,
+    and preserves camelCase/PascalCase segments.
+
+    Returns deduplicated terms ordered by length descending (longer = more specific).
+    """
+    # Split camelCase/PascalCase into parts while keeping the original
+    raw_tokens: list[str] = []
+
+    # First, extract quoted strings as exact terms
+    quoted = re.findall(r"['\"]([^'\"]+)['\"]", task)
+    for q in quoted:
+        raw_tokens.append(q.lower())
+        task = task.replace(f'"{q}"', " ").replace(f"'{q}'", " ")
+
+    # Split on word boundaries (spaces, punctuation, underscores)
+    words = re.split(r"[^a-zA-Z0-9_]+", task)
+    for word in words:
+        if not word:
+            continue
+        lower = word.lower()
+        raw_tokens.append(lower)
+
+        # Also split camelCase: "IndexCoordinator" → ["index", "coordinator"]
+        camel_parts = re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z][a-z]|\d|\b)", word)
+        for part in camel_parts:
+            p = part.lower()
+            if p != lower and len(p) >= 3:
+                raw_tokens.append(p)
+
+        # Split snake_case: "get_callees" → ["get", "callees"]
+        if "_" in word:
+            for part in word.split("_"):
+                p = part.lower()
+                if p and p != lower and len(p) >= 2:
+                    raw_tokens.append(p)
+
+    # Deduplicate, filter stop words and very short terms
+    seen: set[str] = set()
+    terms: list[str] = []
+    for t in raw_tokens:
+        if t in seen or t in _STOP_WORDS or len(t) < 2:
+            continue
+        seen.add(t)
+        terms.append(t)
+
+    # Sort by length descending — longer terms are more specific
+    terms.sort(key=lambda x: -len(x))
+    return terms
+
+
+# ---------------------------------------------------------------------------
+# Path Extraction
+# ---------------------------------------------------------------------------
+
+# Regex to find file-path-like strings: at least one directory separator + file extension
+_PATH_REGEX = re.compile(
+    r"(?:^|[\s`\"'(,;])("  # preceded by whitespace, backtick, quote, paren, etc.
+    r"(?:[\w./-]+/)?[\w.-]+"  # path: optional dirs + filename
+    r"\.(?:py|js|ts|jsx|tsx|java|go|rs|c|cpp|h|hpp|rb|php|cs|swift|kt|scala"
+    r"|lua|r|m|mm|sh|bash|zsh|yaml|yml|json|toml|cfg|ini|xml)"
+    r")"  # end capture
+    r"(?:[\s`\"'),;:.]|$)",  # followed by whitespace, backtick, quote, paren, etc.
+    re.IGNORECASE,
+)
+
+
+def _extract_paths(task: str) -> list[str]:
+    """Extract explicit file paths from a task description.
+
+    Looks for strings that resemble repo-relative file paths (e.g.,
+    ``src/evee/core/base_model.py``, ``config/models.py``).
+
+    Returns deduplicated paths in order of appearance.
+    """
+    matches = _PATH_REGEX.findall(task)
+    seen: set[str] = set()
+    paths: list[str] = []
+    for m in matches:
+        # Normalize: strip leading ./ if present
+        p = m.lstrip("./")
+        if p and p not in seen:
+            seen.add(p)
+            paths.append(p)
+    return paths
 
 
 # ---------------------------------------------------------------------------
@@ -105,89 +368,170 @@ async def _select_seeds(
     explicit_seeds: list[str] | None,
     max_seeds: int,
 ) -> list[DefFact]:
-    """Select seed definitions using BM25 + structural reranking.
+    """Select seed definitions using path extraction + term-intersection scoring.
 
-    1. If explicit seeds are given, resolve them via get_def.
-    2. Otherwise, run symbol search + lexical search, merge candidates.
-    3. Rerank by hub score (caller count) and deduplicate.
+    Pipeline:
+
+    1. If the caller provides explicit seed symbol names, use those directly.
+    2. Extract explicit file paths from the task text (e.g.,
+       ``src/evee/core/base_model.py``).  Resolve them to indexed File
+       records, pull their top-level definitions (ranked by hub score),
+       and treat them as *priority seeds* that fill the first slots.
+    3. Tokenize the task into search terms.  For each term, query DefFact
+       via SQL LIKE + score by hub * 3 + coverage * 5 + name * 3 + path.
+    4. Fill remaining seed slots from the scored term-intersection results,
+       skipping defs already taken by path extraction.
+    5. Enforce file diversity (max 2 seeds per file).
     """
     from codeplane.index._internal.indexing.graph import FactQueries
-    from codeplane.index.ops import SearchMode
 
     coordinator = app_ctx.coordinator
     seeds: list[DefFact] = []
+    used_uids: set[str] = set()
 
-    # Explicit seeds: resolve by name
+    # ---- Explicit seeds: resolve by name ----
     if explicit_seeds:
         for name in explicit_seeds[:max_seeds]:
             d = await coordinator.get_def(name)
             if d is not None:
                 seeds.append(d)
+                used_uids.add(d.def_uid)
         if seeds:
             return seeds
 
-    # BM25 candidate generation — symbol + lexical searches merged
-    symbol_resp = await coordinator.search(
-        task,
-        mode=SearchMode.SYMBOL,
-        limit=_MAX_BM25_CANDIDATES,
-    )
-    lexical_resp = await coordinator.search(
-        task,
-        mode=SearchMode.TEXT,
-        limit=_MAX_BM25_CANDIDATES,
-    )
+    # ==================================================================
+    # Phase 1: Path-extracted priority seeds
+    # ==================================================================
+    extracted_paths = _extract_paths(task)
+    path_seed_file_ids: set[int] = set()
 
-    # Merge hits, resolve to DefFacts, deduplicate
-    seen_paths: set[tuple[str, int]] = set()
-    candidate_defs: list[DefFact] = []
-
-    with coordinator.db.session() as session:
-        fq = FactQueries(session)
-
-        for hit in symbol_resp.results + lexical_resp.results:
-            key = (hit.path, hit.line)
-            if key in seen_paths:
-                continue
-            seen_paths.add(key)
-
-            # Find the DefFact at this location
-            file_rec = fq.get_file_by_path(hit.path)
-            if file_rec is None or file_rec.id is None:
-                continue
-
-            # Find defs that contain (or start at) this hit line
-            defs_in_file = fq.list_defs_in_file(file_rec.id, limit=500)
-            for d in defs_in_file:
-                if d.start_line <= hit.line <= d.end_line:
-                    if d.def_uid not in {c.def_uid for c in candidate_defs}:
-                        candidate_defs.append(d)
+    if extracted_paths:
+        log.debug("recon.extracted_paths", paths=extracted_paths)
+        with coordinator.db.session() as session:
+            fq = FactQueries(session)
+            for epath in extracted_paths:
+                if len(seeds) >= max_seeds:
                     break
+                frec = fq.get_file_by_path(epath)
+                if frec is None or frec.id is None:
+                    continue
+                path_seed_file_ids.add(frec.id)
+                # Pull top-level defs from this file, ranked by hub score
+                defs_in = fq.list_defs_in_file(frec.id, limit=50)
+                # Score by hub (callers) so we pick the most important def
+                def_scored = []
+                for d in defs_in:
+                    if d.def_uid in used_uids:
+                        continue
+                    hub = min(fq.count_callers(d.def_uid), 30)
+                    def_scored.append((d, hub))
+                def_scored.sort(key=lambda x: -x[1])
+                for d, _hub in def_scored[:2]:  # max 2 per file
+                    if len(seeds) >= max_seeds:
+                        break
+                    seeds.append(d)
+                    used_uids.add(d.def_uid)
 
-    if not candidate_defs:
+    if len(seeds) >= max_seeds:
+        return seeds
+
+    # ==================================================================
+    # Phase 2: Term-intersection scoring (fills remaining slots)
+    # ==================================================================
+
+    # ---- Tokenize task ----
+    terms = _tokenize_task(task)
+    if not terms and not seeds:
+        log.warning("recon.no_terms", task=task)
         return []
 
-    # Structural reranking: score by hub-ness (caller count)
-    scored: list[tuple[DefFact, int]] = []
-    with coordinator.db.session() as session:
-        fq = FactQueries(session)
-        for d in candidate_defs:
-            caller_count = fq.count_callers(d.def_uid)
-            scored.append((d, caller_count))
+    if terms:
+        log.debug("recon.terms", terms=terms, count=len(terms))
 
-    # Sort by caller count descending (hubs first), then by BM25 position (original order)
-    scored.sort(key=lambda x: -x[1])
+    # ---- Per-term SQLite LIKE queries ----
+    def_term_hits: dict[str, set[str]] = {}
+    def_lookup: dict[str, DefFact] = {}
+    path_boost_file_ids: set[int] = set()
 
-    # Take top seeds, but ensure file diversity (max 2 seeds per file)
+    if terms:
+        with coordinator.db.session() as session:
+            fq = FactQueries(session)
+
+            for term in terms:
+                matching_defs = fq.find_defs_matching_term(term, limit=200)
+                for d in matching_defs:
+                    uid = d.def_uid
+                    if uid in used_uids:
+                        continue
+                    if uid not in def_term_hits:
+                        def_term_hits[uid] = set()
+                        def_lookup[uid] = d
+                    def_term_hits[uid].add(term)
+
+                matching_files = fq.find_files_matching_term(term, limit=50)
+                for f in matching_files:
+                    if f.id is not None:
+                        path_boost_file_ids.add(f.id)
+
+            # If file-path matches found but no defs matched, pull defs from those files
+            if not def_term_hits and path_boost_file_ids:
+                for fid in list(path_boost_file_ids)[:10]:
+                    defs_in_file = fq.list_defs_in_file(fid, limit=50)
+                    for d in defs_in_file:
+                        uid = d.def_uid
+                        if uid in used_uids:
+                            continue
+                        if uid not in def_term_hits:
+                            def_term_hits[uid] = set()
+                            def_lookup[uid] = d
+                        def_term_hits[uid].add("__path__")
+
+    if not def_term_hits and not seeds:
+        log.info("recon.no_candidates", task=task, terms=terms)
+        return seeds  # return any path-extracted seeds we already have
+
+    # ---- Score: term coverage + hub score + path boost ----
+    scored: list[tuple[DefFact, float]] = []
+    if def_term_hits:
+        with coordinator.db.session() as session:
+            fq = FactQueries(session)
+            for uid, matched_terms in def_term_hits.items():
+                d = def_lookup[uid]
+                term_coverage = len(matched_terms)
+                caller_count = fq.count_callers(uid)
+                path_bonus = 0.5 if d.file_id in path_boost_file_ids else 0.0
+                name_lower = d.name.lower()
+                name_bonus = (
+                    1.0 if any(t in name_lower for t in matched_terms - {"__path__"}) else 0.0
+                )
+                hub = min(caller_count, 30)
+                score = hub * 3 + term_coverage * 5 + name_bonus * 3 + path_bonus
+                scored.append((d, score))
+
+        scored.sort(key=lambda x: -x[1])
+
+    log.debug(
+        "recon.scored_candidates",
+        count=len(scored),
+        top5=[(d.name, round(s, 1)) for d, s in scored[:5]],
+    )
+
+    # ---- Fill remaining slots with file diversity (max 2 seeds per file) ----
     file_counts: dict[int, int] = {}
+    # Account for files already used by path-extracted seeds
+    for s in seeds:
+        fid = s.file_id
+        file_counts[fid] = file_counts.get(fid, 0) + 1
+
     for d, _score in scored:
+        if len(seeds) >= max_seeds:
+            break
         fid = d.file_id
         if file_counts.get(fid, 0) >= 2:
             continue
         file_counts[fid] = file_counts.get(fid, 0) + 1
         seeds.append(d)
-        if len(seeds) >= max_seeds:
-            break
+        used_uids.add(d.def_uid)
 
     return seeds
 
@@ -253,6 +597,49 @@ async def _expand_seed(
         )
     if callee_sigs:
         result["callees"] = callee_sigs
+
+    # P2.5: Imports — top defs from files imported by this seed's file
+    imports = await coordinator.get_file_imports(seed_path, limit=50)
+    import_defs: list[dict[str, str]] = []
+    seen_import_paths: set[str] = set()
+    for imp in imports:
+        if not imp.resolved_path or imp.resolved_path == seed_path:
+            continue
+        if imp.resolved_path in seen_import_paths:
+            continue
+        seen_import_paths.add(imp.resolved_path)
+        # For each imported file, include its top hub-scored def signature
+        imp_full = repo_root / imp.resolved_path
+        if not imp_full.exists():
+            continue
+        with coordinator.db.session() as _session:
+            from codeplane.index._internal.indexing.graph import FactQueries
+
+            _fq = FactQueries(_session)
+            imp_file = _fq.get_file_by_path(imp.resolved_path)
+            if imp_file is None or imp_file.id is None:
+                continue
+            imp_file_defs = _fq.list_defs_in_file(imp_file.id, limit=20)
+            # Pick top defs by hub score, max 3 per imported file
+            imp_scored = []
+            for idef in imp_file_defs:
+                if idef.def_uid == seed.def_uid:
+                    continue
+                ihub = min(_fq.count_callers(idef.def_uid), 30)
+                imp_scored.append((idef, ihub))
+            imp_scored.sort(key=lambda x: -x[1])
+            for idef, _ihub in imp_scored[:3]:
+                import_defs.append(
+                    {
+                        "symbol": _def_signature_text(idef),
+                        "path": imp.resolved_path,
+                        "span": f"{idef.start_line}-{idef.end_line}",
+                    }
+                )
+        if len(import_defs) >= _MAX_IMPORT_DEFS_PER_SEED:
+            break
+    if import_defs:
+        result["import_defs"] = import_defs
 
     # P3: Callers — context snippets around references to this seed
     refs = await coordinator.get_references(seed, _context_id=0, limit=50)
@@ -337,7 +724,7 @@ def _estimate_bytes(obj: Any) -> int:
 def _trim_to_budget(result: dict[str, Any], budget: int) -> dict[str, Any]:
     """Trim response to fit within budget, removing lowest-priority content first.
 
-    Priority (keep order): seeds > callees > callers > scaffolds
+    Priority (keep order): seeds > callees > import_defs > callers > scaffolds
     """
     current = _estimate_bytes(result)
     if current <= budget:
@@ -364,6 +751,18 @@ def _trim_to_budget(result: dict[str, Any], budget: int) -> dict[str, Any]:
     if _estimate_bytes(result) <= budget:
         return result
 
+    # Trim P2.5: import_defs within each seed
+    if "seeds" in result:
+        for seed_data in result["seeds"]:
+            if "import_defs" in seed_data:
+                while seed_data["import_defs"] and _estimate_bytes(result) > budget:
+                    seed_data["import_defs"].pop()
+                if not seed_data["import_defs"]:
+                    del seed_data["import_defs"]
+
+    if _estimate_bytes(result) <= budget:
+        return result
+
     # Trim P2: callees within each seed
     if "seeds" in result:
         for seed_data in result["seeds"]:
@@ -385,6 +784,7 @@ def _summarize_recon(
     seed_count: int,
     callee_count: int,
     caller_count: int,
+    import_def_count: int,
     scaffold_count: int,
     task_preview: str,
 ) -> str:
@@ -392,6 +792,8 @@ def _summarize_recon(
     parts = [f'{seed_count} seeds for "{task_preview}"']
     if callee_count:
         parts.append(f"{callee_count} callees")
+    if import_def_count:
+        parts.append(f"{import_def_count} import defs")
     if caller_count:
         parts.append(f"{caller_count} callers")
     if scaffold_count:
@@ -471,7 +873,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             task_preview = task[:40] + "..." if len(task) > 40 else task
             return {
                 "seeds": [],
-                "summary": _summarize_recon(0, 0, 0, 0, task_preview),
+                "summary": _summarize_recon(0, 0, 0, 0, 0, task_preview),
                 "agentic_hint": (
                     "No relevant definitions found. Try: "
                     "(1) use search(mode='lexical') for text patterns, "
@@ -485,6 +887,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         seed_paths: set[str] = set()
         total_callees = 0
         total_callers = 0
+        total_import_defs = 0
 
         for seed_def in selected_seeds:
             expanded = await _expand_seed(app_ctx, seed_def, repo_root, depth=depth)
@@ -492,6 +895,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             seed_paths.add(expanded["path"])
             total_callees += len(expanded.get("callees", []))
             total_callers += len(expanded.get("callers", []))
+            total_import_defs += len(expanded.get("import_defs", []))
 
         # Step 3: Import scaffolds for seed files
         scaffolds: list[dict[str, Any]] = []
@@ -506,6 +910,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                 len(seed_results),
                 total_callees,
                 total_callers,
+                total_import_defs,
                 len(scaffolds),
                 task_preview,
             ),

@@ -52,9 +52,9 @@ def _stats(values: list[float | int]) -> dict[str, float | int | None]:
     }
 
 
-def _safe_get(d: dict, *keys: str, default: float | int = 0) -> float | int:
+def _safe_get(d: dict[str, Any], *keys: str, default: float | int = 0) -> float | int:
     """Nested dict get with a default."""
-    val = d
+    val: Any = d
     for k in keys:
         if not isinstance(val, dict):
             return default
@@ -186,7 +186,7 @@ def _per_issue_breakdown(
     all_issues = sorted(set(baseline_by_issue) | set(codeplane_by_issue))
     breakdown = []
 
-    key_metrics = [
+    key_metrics: list[tuple[str, Any]] = [
         ("turns", lambda m: m.get("turns", 0)),
         ("tool_calls", lambda m: _safe_get(m, "tool_calls", "total")),
         ("tool_errors", lambda m: _safe_get(m, "tool_calls", "errors")),
