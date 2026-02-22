@@ -177,7 +177,7 @@ def _per_issue_breakdown(
         ("cache_hit_ratio", lambda m: _safe_get(m, "tokens", "cache_hit_ratio")),
         ("llm_duration_ms", lambda m: m.get("llm_duration_ms", 0)),
         ("avg_ttft_ms", lambda m: m.get("avg_ttft_ms")),
-        ("outcome_total", lambda m: _safe_get(m, "outcome", "total")),
+        ("outcome_score", lambda m: _safe_get(m, "outcome", "score")),
     ]
 
     for issue in all_issues:
@@ -260,7 +260,7 @@ _HIGHER_IS_BETTER = {
     "outcome_documentation",
     "outcome_lint_clean",
     "outcome_tests_pass",
-    "outcome_total",
+    "outcome_score",
 }
 
 
