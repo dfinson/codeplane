@@ -572,7 +572,7 @@ class TestCursorPagination:
         page1 = _try_paginate(payload, "source", 5000, "3 files")
         assert page1 is not None
         assert page1.get("not_found") == ["missing.py"]
-        assert page1.get("inline_summary") == "3 files"
+        assert page1.get("summary") == "3 files"
 
         if page1.get("has_more"):
             page2 = resume_cursor(page1["cursor"])

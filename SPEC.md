@@ -3295,7 +3295,6 @@ Atomic file edits with structured delta response.
         original: { start_line: number; end_line: number };
         corrected: { start_line: number; end_line: number };
       }>;
-      verification_context?: string; // Surrounding lines for human review
     }>;
   };
   summary: string;

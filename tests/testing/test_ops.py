@@ -1,7 +1,5 @@
 """Comprehensive tests for TestOps operations."""
 
-import asyncio
-import contextlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,10 +11,8 @@ from codeplane.testing.models import (
     TargetProgress,
     TestCaseProgress,
     TestProgress,
-    TestRunStatus,
 )
 from codeplane.testing.ops import (
-    ActiveRun,
     DetectedWorkspace,
     TestOps,
     _is_prunable_path,
@@ -212,51 +208,6 @@ class TestDetectedWorkspace:
         assert ws.root == Path("/repo")
         assert ws.pack.pack_id == "python.pytest"
         assert ws.confidence == 0.95
-
-
-# =============================================================================
-# ActiveRun
-# =============================================================================
-
-
-class TestActiveRun:
-    """Tests for ActiveRun dataclass."""
-
-    @pytest.mark.asyncio
-    async def test_create(self) -> None:
-        # Create a mock task
-        async def dummy_coro() -> TestRunStatus:
-            return TestRunStatus(
-                run_id="run-123",
-                status="completed",
-                progress=None,
-                failures=[],
-            )
-
-        task = asyncio.create_task(dummy_coro())
-        cancel_event = asyncio.Event()
-
-        run = ActiveRun(
-            run_id="run-123",
-            task=task,
-            start_time=1234567890.0,
-            progress=TestProgress(
-                targets=TargetProgress(),
-                cases=TestCaseProgress(),
-            ),
-            failures=[],
-            cancel_event=cancel_event,
-            artifact_dir=Path("/artifacts"),
-        )
-
-        assert run.run_id == "run-123"
-        assert run.start_time == 1234567890.0
-        assert run.artifact_dir == Path("/artifacts")
-
-        # Cleanup
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await task
 
 
 # =============================================================================
@@ -496,12 +447,12 @@ class TestAgenticHint:
 class TestTestOpsRun:
     """Tests for TestOps.run().
 
-    Note: run() is now index-first. Tests mock the coordinator to return
-    indexed test targets.
+    Note: run() is now blocking and index-first. Tests mock the coordinator
+    to return indexed test targets. run() always awaits test completion.
     """
 
     @pytest.mark.asyncio
-    async def test_run_returns_running_status(self) -> None:
+    async def test_run_returns_completed_status(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             (root / "pytest.ini").write_text("")
@@ -509,7 +460,6 @@ class TestTestOpsRun:
             (root / "tests" / "test_x.py").write_text("def test_x(): pass")
 
             coordinator = create_mock_coordinator()
-            # Mock indexed test target
             mock_target = MagicMock()
             mock_target.target_id = "test:tests/test_x.py"
             mock_target.selector = "tests/test_x.py"
@@ -526,13 +476,9 @@ class TestTestOpsRun:
 
             assert result.action == "run"
             assert result.run_status is not None
-            assert result.run_status.status == "running"
+            # Blocking run returns terminal status
+            assert result.run_status.status in ("completed", "failed")
             assert result.run_status.run_id is not None
-
-            # Cleanup - cancel the running task
-            if result.run_status.run_id in ops._active_runs:
-                ops._active_runs[result.run_status.run_id].cancel_event.set()
-                ops._active_runs[result.run_status.run_id].task.cancel()
 
     @pytest.mark.asyncio
     async def test_run_creates_artifact_directory(self) -> None:
@@ -541,7 +487,6 @@ class TestTestOpsRun:
             (root / "pytest.ini").write_text("")
 
             coordinator = create_mock_coordinator()
-            # Mock indexed test target
             mock_target = MagicMock()
             mock_target.target_id = "test:tests/test_x.py"
             mock_target.selector = "tests/test_x.py"
@@ -561,11 +506,6 @@ class TestTestOpsRun:
             assert artifact_dir is not None
             assert Path(artifact_dir).exists()
 
-            # Cleanup
-            if result.run_status.run_id in ops._active_runs:
-                ops._active_runs[result.run_status.run_id].cancel_event.set()
-                ops._active_runs[result.run_status.run_id].task.cancel()
-
     @pytest.mark.asyncio
     async def test_run_with_specific_targets(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -575,7 +515,6 @@ class TestTestOpsRun:
             (root / "tests" / "test_a.py").write_text("def test_a(): pass")
 
             coordinator = create_mock_coordinator()
-            # Mock indexed test target
             mock_target = MagicMock()
             mock_target.target_id = "test:tests/test_a.py"
             mock_target.selector = "tests/test_a.py"
@@ -588,174 +527,10 @@ class TestTestOpsRun:
 
             ops = TestOps(root, coordinator)
 
-            # Run with specific target
             result = await ops.run(targets=["test:tests/test_a.py"])
 
             assert result.action == "run"
             assert result.run_status is not None
-
-            # Cleanup
-            if result.run_status.run_id in ops._active_runs:
-                ops._active_runs[result.run_status.run_id].cancel_event.set()
-                ops._active_runs[result.run_status.run_id].task.cancel()
-
-
-# =============================================================================
-# TestOps.status()
-# =============================================================================
-
-
-class TestTestOpsStatus:
-    """Tests for TestOps.status()."""
-
-    @pytest.mark.asyncio
-    async def test_status_of_active_run(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            (root / "pytest.ini").write_text("")
-
-            coordinator = create_mock_coordinator()
-            # Mock indexed test target
-            mock_target = MagicMock()
-            mock_target.target_id = "test:tests/test_x.py"
-            mock_target.selector = "tests/test_x.py"
-            mock_target.kind = "file"
-            mock_target.language = "python"
-            mock_target.runner_pack_id = "python.pytest"
-            mock_target.workspace_root = str(root)
-            mock_target.test_count = None
-            coordinator.get_test_targets = AsyncMock(return_value=[mock_target])
-
-            ops = TestOps(root, coordinator)
-
-            # Start a run
-            run_result = await ops.run()
-            assert run_result.run_status is not None
-            run_id = run_result.run_status.run_id
-
-            # Get status
-            status_result = await ops.status(run_id)
-
-            assert status_result.action == "status"
-            assert status_result.run_status is not None
-            assert status_result.run_status.run_id == run_id
-
-            # Cleanup
-            if run_id in ops._active_runs:
-                ops._active_runs[run_id].cancel_event.set()
-                ops._active_runs[run_id].task.cancel()
-
-    @pytest.mark.asyncio
-    async def test_status_of_unknown_run(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            coordinator = create_mock_coordinator()
-            ops = TestOps(root, coordinator)
-
-            # Get status of non-existent run
-            status_result = await ops.status("unknown-run-id")
-
-            assert status_result.action == "status"
-            assert status_result.run_status is not None
-            assert status_result.run_status.status == "not_found"
-
-    @pytest.mark.asyncio
-    async def test_status_loads_persisted_result(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            coordinator = create_mock_coordinator()
-            ops = TestOps(root, coordinator)
-
-            # Create a fake persisted result
-            run_id = "persisted-run"
-            artifact_dir = ops._artifacts_base / run_id
-            artifact_dir.mkdir(parents=True)
-            result_file = artifact_dir / "result.json"
-            result_file.write_text(
-                json.dumps(
-                    {
-                        "run_id": run_id,
-                        "status": "completed",
-                        "progress": {
-                            "targets": {"total": 5, "completed": 5, "failed": 0, "running": 0},
-                            "cases": {
-                                "total": 10,
-                                "passed": 10,
-                                "failed": 0,
-                                "skipped": 0,
-                                "errors": 0,
-                            },
-                        },
-                        "failures": [],
-                        "diagnostics": [],
-                    }
-                )
-            )
-
-            # Get status should load from artifact
-            status_result = await ops.status(run_id)
-
-            assert status_result.action == "status"
-            assert status_result.run_status is not None
-            assert status_result.run_status.status == "completed"
-            assert status_result.run_status.progress is not None
-            assert status_result.run_status.progress.targets.total == 5
-
-
-# =============================================================================
-# TestOps.cancel()
-# =============================================================================
-
-
-class TestTestOpsCancel:
-    """Tests for TestOps.cancel()."""
-
-    @pytest.mark.asyncio
-    async def test_cancel_active_run(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            (root / "pytest.ini").write_text("")
-
-            coordinator = create_mock_coordinator()
-            # Mock indexed test target
-            mock_target = MagicMock()
-            mock_target.target_id = "test:tests/test_x.py"
-            mock_target.selector = "tests/test_x.py"
-            mock_target.kind = "file"
-            mock_target.language = "python"
-            mock_target.runner_pack_id = "python.pytest"
-            mock_target.workspace_root = str(root)
-            mock_target.test_count = None
-            coordinator.get_test_targets = AsyncMock(return_value=[mock_target])
-
-            ops = TestOps(root, coordinator)
-
-            # Start a run
-            run_result = await ops.run()
-            assert run_result.run_status is not None
-            run_id = run_result.run_status.run_id
-
-            # Cancel it
-            cancel_result = await ops.cancel(run_id)
-
-            assert cancel_result.action == "cancel"
-            assert cancel_result.run_status is not None
-            assert cancel_result.run_status.status == "cancelled"
-            assert run_id not in ops._active_runs
-
-    @pytest.mark.asyncio
-    async def test_cancel_unknown_run(self) -> None:
-        with TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            coordinator = create_mock_coordinator()
-            ops = TestOps(root, coordinator)
-
-            # Cancel non-existent run
-            cancel_result = await ops.cancel("unknown-run-id")
-
-            assert cancel_result.action == "cancel"
-            assert cancel_result.run_status is not None
-            assert cancel_result.run_status.status == "cancelled"
 
 
 # =============================================================================
