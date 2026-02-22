@@ -76,7 +76,9 @@ class TestRunHookWithRetry:
         mock_result.success = True
 
         with patch("codeplane.mcp.tools.checkpoint.run_hook", return_value=mock_result):
-            hook_result, failure = checkpoint_tools._run_hook_with_retry(tmp_path, ["a.py"], MagicMock())
+            hook_result, failure = checkpoint_tools._run_hook_with_retry(
+                tmp_path, ["a.py"], MagicMock()
+            )
 
         assert failure is None
         assert hook_result.success is True
@@ -118,7 +120,9 @@ class TestRunHookWithRetry:
             "codeplane.mcp.tools.checkpoint.run_hook",
             side_effect=[first_result, retry_result],
         ):
-            hook_result, failure = checkpoint_tools._run_hook_with_retry(tmp_path, ["a.py"], stage_fn)
+            hook_result, failure = checkpoint_tools._run_hook_with_retry(
+                tmp_path, ["a.py"], stage_fn
+            )
 
         assert failure is None
         stage_fn.assert_called_once()
