@@ -39,11 +39,11 @@ _DEFAULT_BUDGET_BYTES = 30_000
 _MAX_BUDGET_BYTES = 60_000
 
 # Per-tier line caps
-_SEED_BODY_MAX_LINES = 120
+_SEED_BODY_MAX_LINES = 80
 _CALLEE_SIG_MAX_LINES = 5
 _CALLER_CONTEXT_LINES = 8  # lines around each caller ref
 _MAX_CALLERS_PER_SEED = 5
-_MAX_CALLEES_PER_SEED = 15
+_MAX_CALLEES_PER_SEED = 8
 _MAX_IMPORT_SCAFFOLDS = 5
 _MAX_IMPORT_DEFS_PER_SEED = 10  # Max imported-file defs surfaced per seed
 
@@ -595,13 +595,25 @@ async def _expand_seed(
         return result
 
     # P2: Callees — signatures of symbols this seed references
-    callees = await coordinator.get_callees(seed, limit=_MAX_CALLEES_PER_SEED)
+    #      Filter to same-package or adjacent-package callees to reduce noise.
+    callees = await coordinator.get_callees(seed, limit=_MAX_CALLEES_PER_SEED * 2)
     callee_sigs: list[dict[str, str]] = []
+    seed_pkg = str(Path(seed_path).parent)
     for c in callees:
+        if len(callee_sigs) >= _MAX_CALLEES_PER_SEED:
+            break
         # Skip self-references
         if c.def_uid == seed.def_uid:
             continue
         c_path = await _file_path_for_id(app_ctx, c.file_id)
+        # Filter distant packages: callee must share at least the top-level
+        # source directory with the seed (e.g. both under src/evee/core or
+        # src/evee/evaluation).  This drops noise like mcp/tools/base.py.
+        c_pkg = str(Path(c_path).parent)
+        common = os.path.commonprefix([seed_pkg + "/", c_pkg + "/"])
+        # Require at least 2 path segments in common (e.g. "src/evee/")
+        if common.count("/") < 2:
+            continue
         callee_sigs.append(
             {
                 "symbol": _def_signature_text(c),
