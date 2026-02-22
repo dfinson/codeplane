@@ -690,11 +690,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 await ctx.report_progress(total_phases, total_phases + 2, "Staging changes")
                 if changed_files:
                     _validate_paths_exist(repo_path, changed_files)
-                staged_paths = (
                     app_ctx.git_ops.stage(changed_files)
-                    if changed_files
-                    else app_ctx.git_ops.stage_all()
-                )
+                    staged_paths = list(changed_files)
+                else:
+                    staged_paths = app_ctx.git_ops.stage_all()
 
                 await ctx.report_progress(
                     total_phases + 1, total_phases + 2, "Running pre-commit hooks"
@@ -754,7 +753,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 )
             else:
                 result["agentic_hint"] = (
-                    "All checks passed. Call checkpoint again with commit_message=\"...\" "
+                    'All checks passed. Call checkpoint again with commit_message="..." '
                     "to commit your changes."
                 )
 
