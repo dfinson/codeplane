@@ -1,10 +1,8 @@
 """Testing MCP tools - test discovery and execution.
 
-Split into verb-first tools:
+Tools:
 - discover_test_targets: Find test targets
-- run_test_targets: Execute tests
-- get_test_run_status: Check run progress
-- cancel_test_run: Abort a run
+- run_test_targets: Execute tests (blocking, returns final results)
 """
 
 from pathlib import Path
@@ -174,62 +172,6 @@ def _target_id_to_safe_name(target_id: str) -> str:
     return target_id.replace("/", "_").replace(":", "_")
 
 
-def _build_logs_hint(
-    artifact_dir: str | None,
-    status_str: str,
-    target_selectors: list[str] | None = None,
-) -> str | None:
-    """Build hint for where to find test logs.
-
-    Args:
-        artifact_dir: Path to artifact directory
-        status_str: Current run status
-        target_selectors: List of target selectors that were executed
-    """
-    if not artifact_dir:
-        return None
-
-    # Build list of actual artifact files if we have target info
-    file_examples: list[str] = []
-    if target_selectors:
-        # Show up to 3 examples of actual file names
-        for selector in target_selectors[:3]:
-            # Target IDs use "test:" prefix, selectors don't - construct the target_id
-            target_id = f"test:{selector}"
-            safe_name = _target_id_to_safe_name(target_id)
-            file_examples.append(f"  - {safe_name}.stdout.txt")
-        if len(target_selectors) > 3:
-            file_examples.append(f"  ... and {len(target_selectors) - 3} more targets")
-
-    if status_str == "running":
-        if file_examples:
-            return (
-                f"Test output is being written to: {artifact_dir}/\n"
-                + "\n".join(file_examples)
-                + "\n"
-                "Each target also produces .stderr.txt (if any) and .xml (JUnit results).\n"
-                "Use read_source to inspect logs for completed targets."
-            )
-        return (
-            f"Test output is being written to: {artifact_dir}/\n"
-            "Use read_source to inspect logs for completed targets."
-        )
-    elif status_str in ("completed", "failed", "cancelled"):
-        if file_examples:
-            return (
-                f"Test logs available at: {artifact_dir}/\n" + "\n".join(file_examples) + "\n"
-                "Each target also produces .stderr.txt (if any) and .xml (JUnit results).\n"
-                "  - result.json: final run summary\n"
-                "Use read_source to inspect specific test output."
-            )
-        return (
-            f"Test logs available at: {artifact_dir}/\n"
-            "  - result.json: final run summary\n"
-            "Use read_source to inspect specific test output."
-        )
-    return None
-
-
 def _build_coverage_hint(
     coverage_artifacts: list[dict[str, str]],
     target_selectors: list[str] | None = None,
@@ -328,18 +270,14 @@ def _serialize_test_result(result: "TestResult", is_action: bool = False) -> dic
         if display:
             output["display_to_user"] = display
 
-    poll_hint: float | None = None
     if result.run_status:
         status = result.run_status
-        # Compute poll hint based on current progress
-        poll_hint = status.compute_poll_hint()
 
         output["run_status"] = {
             "run_id": status.run_id,
             "status": status.status,
             "duration_seconds": status.duration_seconds,
             "artifact_dir": status.artifact_dir,
-            "poll_after_seconds": poll_hint,
         }
         if status.progress:
             progress = status.progress
@@ -413,29 +351,9 @@ def _serialize_test_result(result: "TestResult", is_action: bool = False) -> dic
             if coverage_stats:
                 output["run_status"]["coverage_stats"] = coverage_stats
 
-        # Add logs hint for status checks (not for initial run action)
-        if not is_action:
-            logs_hint = _build_logs_hint(
-                status.artifact_dir,
-                status.status,
-                status.target_selectors,
-            )
-            if logs_hint:
-                output["run_status"]["logs_hint"] = logs_hint
-
-    # Build agentic_hint with optional sleep guidance
-    hints: list[str] = []
+    # Forward any agentic_hint from the result
     if isinstance(result.agentic_hint, str) and result.agentic_hint:
-        hints.append(result.agentic_hint)
-    if isinstance(poll_hint, (int, float)) and poll_hint > 0:
-        sleep_seconds = int(poll_hint) + 2
-        hints.append(
-            f"Tests are running asynchronously. "
-            f"Sleep for {sleep_seconds} seconds before calling get_test_run_status "
-            f"to check results."
-        )
-    if hints:
-        output["agentic_hint"] = " ".join(hints)
+        output["agentic_hint"] = result.agentic_hint
 
     return output
 
@@ -836,25 +754,3 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             scope_id=scope_id,
             scope_usage=scope_usage,
         )
-
-    @mcp.tool
-    async def get_test_run_status(
-        ctx: Context,
-        run_id: str = Field(..., description="ID of the test run to check"),
-    ) -> dict[str, Any]:
-        """Check progress of a running test. Returns pass/fail counts and any failures."""
-        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
-
-        result = await app_ctx.test_ops.status(run_id)
-        return _serialize_test_result(result, is_action=False)
-
-    @mcp.tool
-    async def cancel_test_run(
-        ctx: Context,
-        run_id: str = Field(..., description="ID of the test run to cancel"),
-    ) -> dict[str, Any]:
-        """Abort a running test execution."""
-        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
-
-        result = await app_ctx.test_ops.cancel(run_id)
-        return _serialize_test_result(result, is_action=True)

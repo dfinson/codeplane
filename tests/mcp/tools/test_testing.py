@@ -6,7 +6,6 @@ Verifies summary helpers and serialization.
 from unittest.mock import MagicMock
 
 from codeplane.mcp.tools.testing import (
-    _build_logs_hint,
     _display_discover,
     _display_run_start,
     _display_run_status,
@@ -210,98 +209,6 @@ class TestDisplayRunStatus:
         assert "cancelled" in display.lower()
 
 
-class TestBuildLogsHint:
-    """Tests for _build_logs_hint helper."""
-
-    def test_no_artifact_dir(self) -> None:
-        """Should return None if no artifact_dir."""
-        hint = _build_logs_hint(None, "running")
-        assert hint is None
-
-    def test_running_status_without_targets(self) -> None:
-        """Should show generic hint for running tests without target info."""
-        hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "running")
-        assert hint is not None
-        assert ".codeplane/artifacts/tests/abc123" in hint
-        assert "read_source" in hint
-
-    def test_running_status_with_targets(self) -> None:
-        """Should show actual target file names for running tests."""
-        hint = _build_logs_hint(
-            ".codeplane/artifacts/tests/abc123",
-            "running",
-            target_selectors=["tests/test_foo.py", "tests/test_bar.py"],
-        )
-        assert hint is not None
-        assert ".codeplane/artifacts/tests/abc123" in hint
-        # Should contain actual file names, not <target_id> placeholder
-        assert "test_tests_test_foo.py.stdout.txt" in hint
-        assert "test_tests_test_bar.py.stdout.txt" in hint
-        assert "<target_id>" not in hint
-        assert "read_source" in hint
-
-    def test_completed_status_without_targets(self) -> None:
-        """Should show generic hint for completed tests without target info."""
-        hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "completed")
-        assert hint is not None
-        assert ".codeplane/artifacts/tests/abc123" in hint
-        assert "result.json" in hint
-        assert "read_source" in hint
-
-    def test_completed_status_with_targets(self) -> None:
-        """Should show actual target file names for completed tests."""
-        hint = _build_logs_hint(
-            ".codeplane/artifacts/tests/abc123",
-            "completed",
-            target_selectors=["tests/test_foo.py"],
-        )
-        assert hint is not None
-        assert "test_tests_test_foo.py.stdout.txt" in hint
-        assert "<target_id>" not in hint
-        assert "result.json" in hint
-        assert "read_source" in hint
-
-    def test_failed_status(self) -> None:
-        """Should show hint for failed tests."""
-        hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "failed")
-        assert hint is not None
-        assert "result.json" in hint
-
-    def test_cancelled_status(self) -> None:
-        """Should show hint for cancelled tests."""
-        hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "cancelled")
-        assert hint is not None
-        assert "result.json" in hint
-
-    def test_not_found_status(self) -> None:
-        """Should return None for not_found status."""
-        hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "not_found")
-        assert hint is None
-
-    def test_many_targets_shows_ellipsis(self) -> None:
-        """Should show ellipsis for many targets."""
-        hint = _build_logs_hint(
-            ".codeplane/artifacts/tests/abc123",
-            "completed",
-            target_selectors=[
-                "tests/test_one.py",
-                "tests/test_two.py",
-                "tests/test_three.py",
-                "tests/test_four.py",
-                "tests/test_five.py",
-            ],
-        )
-        assert hint is not None
-        # Should show first 3
-        assert "test_tests_test_one.py.stdout.txt" in hint
-        assert "test_tests_test_two.py.stdout.txt" in hint
-        assert "test_tests_test_three.py.stdout.txt" in hint
-        # Should indicate more
-        assert "2 more targets" in hint
-        # Should NOT show the last ones
-        assert "test_tests_test_four.py" not in hint
-
-
 class TestSerializeTestResult:
     """Tests for _serialize_test_result helper."""
 
@@ -347,89 +254,28 @@ class TestSerializeTestResult:
         serialized = _serialize_test_result(result)
         assert serialized["agentic_hint"] == "No test framework detected."
 
-    def test_poll_hint_included(self) -> None:
-        """Should include poll_after_seconds."""
-        status = TestRunStatus(
-            run_id="abc123",
-            status="running",
-            progress=TestProgress(
-                targets=TargetProgress(total=10, completed=0),
-            ),
-        )
-        result = TestResult(action="status", run_status=status)
-        serialized = _serialize_test_result(result)
-
-        assert "poll_after_seconds" in serialized["run_status"]
-
-    def test_logs_hint_for_status(self) -> None:
-        """Should include logs_hint for status checks."""
-        status = TestRunStatus(
-            run_id="abc123",
-            status="running",
-            artifact_dir=".codeplane/artifacts/tests/abc123",
-        )
-        result = TestResult(action="status", run_status=status)
-        serialized = _serialize_test_result(result, is_action=False)
-
-        assert "logs_hint" in serialized["run_status"]
-        assert ".codeplane/artifacts/tests/abc123" in serialized["run_status"]["logs_hint"]
-
-    def test_no_logs_hint_for_action(self) -> None:
-        """Should NOT include logs_hint for run_test_targets action."""
-        status = TestRunStatus(
-            run_id="abc123",
-            status="running",
-            artifact_dir=".codeplane/artifacts/tests/abc123",
-        )
-        result = TestResult(action="run", run_status=status)
-        serialized = _serialize_test_result(result, is_action=True)
-
-        # logs_hint should not be in run_status for actions
-        assert "logs_hint" not in serialized["run_status"]
-
-    def test_sleep_hint_in_agentic_hint_when_running(self) -> None:
-        """Should include sleep guidance in agentic_hint when poll_after_seconds > 0."""
-        status = TestRunStatus(
-            run_id="abc123",
-            status="running",
-            progress=TestProgress(
-                targets=TargetProgress(total=10, completed=0),
-            ),
-        )
-        result = TestResult(action="run", run_status=status)
-        serialized = _serialize_test_result(result, is_action=True)
-
-        poll_hint = serialized["run_status"]["poll_after_seconds"]
-        assert poll_hint is not None and poll_hint > 0
-        assert "agentic_hint" in serialized
-        assert "Sleep for" in serialized["agentic_hint"]
-        assert "get_test_run_status" in serialized["agentic_hint"]
-        # Verify the sleep seconds is poll_hint + 2
-        expected_sleep = int(poll_hint) + 2
-        assert f"Sleep for {expected_sleep} seconds" in serialized["agentic_hint"]
-
-    def test_no_sleep_hint_when_completed(self) -> None:
-        """Should NOT include sleep hint when run is already completed."""
+    def test_no_poll_fields_in_output(self) -> None:
+        """Tests always block — no poll_after_seconds in output."""
         status = TestRunStatus(
             run_id="abc123",
             status="completed",
             duration_seconds=5.0,
         )
-        result = TestResult(action="status", run_status=status)
-        serialized = _serialize_test_result(result)
+        result = TestResult(action="run", run_status=status)
+        serialized = _serialize_test_result(result, is_action=True)
 
-        # poll_after_seconds should be None for completed runs
-        assert serialized["run_status"]["poll_after_seconds"] is None
-        assert "agentic_hint" not in serialized
+        assert "poll_after_seconds" not in serialized["run_status"]
+        # No sleep/poll hints in agentic_hint
+        if "agentic_hint" in serialized:
+            assert "Sleep for" not in serialized["agentic_hint"]
+            assert "get_test_run_status" not in serialized["agentic_hint"]
 
-    def test_sleep_hint_combined_with_existing_hint(self) -> None:
-        """Sleep hint should be appended to existing agentic_hint."""
+    def test_agentic_hint_forwarded_from_result(self) -> None:
+        """agentic_hint from TestResult is forwarded directly."""
         status = TestRunStatus(
             run_id="abc123",
-            status="running",
-            progress=TestProgress(
-                targets=TargetProgress(total=10, completed=0),
-            ),
+            status="completed",
+            duration_seconds=5.0,
         )
         result = TestResult(
             action="run",
@@ -438,6 +284,4 @@ class TestSerializeTestResult:
         )
         serialized = _serialize_test_result(result, is_action=True)
 
-        hint = serialized["agentic_hint"]
-        assert "No test framework detected." in hint
-        assert "Sleep for" in hint
+        assert serialized["agentic_hint"] == "No test framework detected."

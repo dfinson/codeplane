@@ -107,11 +107,14 @@ Search NEVER returns source text. Use `read_source` with spans from search resul
 
 `write_source` supports span edits: provide `start_line`, `end_line`, `expected_file_sha256`
 (from `read_source`), and `new_content`. Server validates hash; mismatch → re-read.
-`edits` accepts multiple entries across different files — always batch independent edits
-into a single `write_source` call to minimize round-trips.
 For updates, always include `expected_content` (the old text at the span) — the server
 fuzzy-matches nearby lines if your line numbers are slightly off, auto-correcting
 within a few lines. This is required.
+
+**Batching**: `edits` accepts multiple entries across different files — always batch
+independent edits into a single `write_source` call. If you need to edit 3 files,
+send all 3 edits in one call, not 3 separate calls. This is the single biggest
+latency win available to you.
 
 ### CRITICAL: Follow Agentic Hints
 

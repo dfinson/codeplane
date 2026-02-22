@@ -9,9 +9,13 @@ import pytest
 
 from codeplane.config.constants import SEARCH_SCOPE_FALLBACK_LINES_DEFAULT
 from codeplane.mcp.tools.index import (
+    _change_to_text,
+    _map_repo_sections_to_text,
+    _search_results_to_text,
     _serialize_tree,
     _summarize_map,
     _summarize_search,
+    _tree_to_text,
 )
 
 
@@ -186,3 +190,424 @@ class TestContextPresets:
         # The fallback should be a reasonable default (25 as per design)
         assert SEARCH_SCOPE_FALLBACK_LINES_DEFAULT >= 20
         assert SEARCH_SCOPE_FALLBACK_LINES_DEFAULT <= 30
+
+
+# =============================================================================
+# Text Serializer Tests
+# =============================================================================
+
+
+class TestSearchResultsToText:
+    """Tests for _search_results_to_text."""
+
+    def test_empty_list(self) -> None:
+        assert _search_results_to_text([]) == []
+
+    def test_basic_hit(self) -> None:
+        items = [{"kind": "function", "path": "src/a.py", "span": {"start_line": 10}}]
+        lines = _search_results_to_text(items)
+        assert len(lines) == 1
+        assert "function src/a.py:10" in lines[0]
+
+    def test_with_symbol_id(self) -> None:
+        items = [
+            {
+                "kind": "function",
+                "path": "src/a.py",
+                "span": {"start_line": 5},
+                "symbol_id": "my_func",
+            }
+        ]
+        lines = _search_results_to_text(items)
+        assert "my_func" in lines[0]
+
+    def test_with_preview(self) -> None:
+        items = [
+            {
+                "kind": "hit",
+                "path": "src/b.py",
+                "span": {"start_line": 20},
+                "preview_line": "x = 42",
+            }
+        ]
+        lines = _search_results_to_text(items)
+        assert "x = 42" in lines[0]
+
+    def test_with_enclosing_span(self) -> None:
+        items = [
+            {
+                "kind": "function",
+                "path": "src/a.py",
+                "span": {"start_line": 10},
+                "enclosing_span": {"kind": "class", "start_line": 1, "end_line": 50},
+            }
+        ]
+        lines = _search_results_to_text(items)
+        assert "[class 1-50]" in lines[0]
+
+    def test_with_match_count(self) -> None:
+        items = [
+            {
+                "kind": "hit",
+                "path": "src/a.py",
+                "span": {"start_line": 1},
+                "match_count": 5,
+            }
+        ]
+        lines = _search_results_to_text(items)
+        assert "(×5)" in lines[0]
+
+    def test_match_count_one_not_shown(self) -> None:
+        items = [
+            {
+                "kind": "hit",
+                "path": "src/a.py",
+                "span": {"start_line": 1},
+                "match_count": 1,
+            }
+        ]
+        lines = _search_results_to_text(items)
+        assert "×" not in lines[0]
+
+    def test_symbol_enrichment_fallback(self) -> None:
+        """symbol.name used when symbol_id is absent."""
+        items = [
+            {
+                "kind": "variable",
+                "path": "src/a.py",
+                "span": {"start_line": 3},
+                "symbol": {"name": "MY_CONST"},
+            }
+        ]
+        lines = _search_results_to_text(items)
+        assert "MY_CONST" in lines[0]
+
+    def test_multiple_items(self) -> None:
+        items = [
+            {"kind": "function", "path": "a.py", "span": {"start_line": 1}},
+            {"kind": "class", "path": "b.py", "span": {"start_line": 2}},
+        ]
+        lines = _search_results_to_text(items)
+        assert len(lines) == 2
+
+
+class _MockChange:
+    """Minimal mock for StructuralChange used by _change_to_text."""
+
+    def __init__(
+        self,
+        *,
+        change: str = "added",
+        kind: str = "function",
+        name: str = "foo",
+        path: str = "src/a.py",
+        start_line: int = 10,
+        end_line: int = 20,
+        lines_changed: int | None = 5,
+        behavior_change_risk: str = "low",
+        old_sig: str | None = None,
+        new_sig: str | None = None,
+        old_name: str | None = None,
+        impact: Any = None,
+        nested_changes: list[Any] | None = None,
+    ) -> None:
+        self.change = change
+        self.kind = kind
+        self.name = name
+        self.path = path
+        self.start_line = start_line
+        self.end_line = end_line
+        self.lines_changed = lines_changed
+        self.behavior_change_risk = behavior_change_risk
+        self.old_sig = old_sig
+        self.new_sig = new_sig
+        self.old_name = old_name
+        self.impact = impact
+        self.nested_changes = nested_changes
+
+
+class _MockImpact:
+    def __init__(
+        self,
+        reference_count: int | None = None,
+        affected_test_files: list[str] | None = None,
+    ) -> None:
+        self.reference_count = reference_count
+        self.affected_test_files = affected_test_files
+
+
+class TestChangeToText:
+    """Tests for _change_to_text."""
+
+    def test_basic_added(self) -> None:
+        c = _MockChange(change="added", kind="function", name="foo")
+        lines = _change_to_text(c)
+        assert len(lines) == 1
+        assert "added function foo" in lines[0]
+        assert "src/a.py:10-20" in lines[0]
+
+    def test_lines_changed(self) -> None:
+        c = _MockChange(lines_changed=42)
+        lines = _change_to_text(c)
+        assert "Δ42" in lines[0]
+
+    def test_no_lines_changed(self) -> None:
+        c = _MockChange(lines_changed=None)
+        lines = _change_to_text(c)
+        assert "Δ" not in lines[0]
+
+    def test_high_risk(self) -> None:
+        c = _MockChange(behavior_change_risk="high")
+        lines = _change_to_text(c)
+        assert "risk:high" in lines[0]
+
+    def test_low_risk_not_shown(self) -> None:
+        c = _MockChange(behavior_change_risk="low")
+        lines = _change_to_text(c)
+        assert "risk:" not in lines[0]
+
+    def test_signature_changed_shows_sigs(self) -> None:
+        c = _MockChange(
+            change="signature_changed",
+            old_sig="def foo(a)",
+            new_sig="def foo(a, b)",
+        )
+        lines = _change_to_text(c)
+        assert "old:def foo(a)" in lines[0]
+        assert "new:def foo(a, b)" in lines[0]
+
+    def test_renamed_shows_old_name(self) -> None:
+        c = _MockChange(change="renamed", old_name="bar")
+        lines = _change_to_text(c)
+        assert "was:bar" in lines[0]
+
+    def test_impact_refs(self) -> None:
+        c = _MockChange(impact=_MockImpact(reference_count=12))
+        lines = _change_to_text(c)
+        assert "refs:12" in lines[0]
+
+    def test_impact_tests(self) -> None:
+        c = _MockChange(impact=_MockImpact(affected_test_files=["test_a.py", "test_b.py"]))
+        lines = _change_to_text(c)
+        assert "tests:test_a.py,test_b.py" in lines[0]
+
+    def test_nested_changes(self) -> None:
+        inner = _MockChange(change="removed", name="inner_fn")
+        outer = _MockChange(change="body_changed", name="outer", nested_changes=[inner])
+        lines = _change_to_text(outer)
+        assert len(lines) == 2
+        assert "  removed" in lines[1]  # indented
+
+    def test_no_span_shows_path_only(self) -> None:
+        c = _MockChange(start_line=0, end_line=0)
+        lines = _change_to_text(c)
+        assert "src/a.py" in lines[0]
+        assert ":0-0" not in lines[0]  # no span when start_line=0
+
+
+class TestTreeToText:
+    """Tests for _tree_to_text."""
+
+    def test_empty(self) -> None:
+        assert _tree_to_text([]) == []
+
+    def test_file_with_line_count(self) -> None:
+        node = MockFileNode(name="main.py", path="src/main.py", line_count=100)
+        lines = _tree_to_text([node])
+        assert len(lines) == 1
+        assert "main.py" in lines[0]
+        assert "100" in lines[0]
+
+    def test_file_without_line_count(self) -> None:
+        node = MockFileNode(name="main.py", path="src/main.py", line_count=100)
+        lines = _tree_to_text([node], include_line_counts=False)
+        assert "100" not in lines[0]
+
+    def test_directory(self) -> None:
+        child = MockFileNode(name="app.py", path="src/app.py", line_count=50)
+        d = MockDirNode(name="src", path="src", file_count=1, children=[child])
+        lines = _tree_to_text([d])
+        assert len(lines) == 2
+        assert "src/" in lines[0]
+        assert "1 files" in lines[0]
+        assert "  app.py" in lines[1]  # indented child
+
+    def test_nested_depth(self) -> None:
+        leaf = MockFileNode(name="x.py", path="a/b/x.py", line_count=10)
+        inner = MockDirNode(name="b", path="a/b", file_count=1, children=[leaf])
+        outer = MockDirNode(name="a", path="a", file_count=1, children=[inner])
+        lines = _tree_to_text([outer])
+        assert len(lines) == 3
+        # Check increasing indentation
+        assert lines[0].startswith("a/")
+        assert lines[1].startswith("  a/b/")
+        assert lines[2].startswith("    x.py")
+
+
+class _MockStructureInfo:
+    def __init__(
+        self, root: str, tree: list[Any], file_count: int, contexts: list[str] | None = None
+    ) -> None:
+        self.root = root
+        self.tree = tree
+        self.file_count = file_count
+        self.contexts = contexts or []
+
+
+class _MockLanguageStats:
+    def __init__(self, language: str, file_count: int, percentage: float) -> None:
+        self.language = language
+        self.file_count = file_count
+        self.percentage = percentage
+
+
+class _MockDependencies:
+    def __init__(self, external_modules: list[str], import_count: int) -> None:
+        self.external_modules = external_modules
+        self.import_count = import_count
+
+
+class _MockTestLayout:
+    def __init__(self, test_files: list[str], test_count: int) -> None:
+        self.test_files = test_files
+        self.test_count = test_count
+
+
+class _MockEntryPoint:
+    def __init__(self, kind: str, name: str, path: str, qualified_name: str | None = None) -> None:
+        self.kind = kind
+        self.name = name
+        self.path = path
+        self.qualified_name = qualified_name
+
+
+class _MockPublicSymbol:
+    def __init__(
+        self, name: str, certainty: str, def_uid: str | None = None, evidence: str | None = None
+    ) -> None:
+        self.name = name
+        self.certainty = certainty
+        self.def_uid = def_uid
+        self.evidence = evidence
+
+
+class _MockMapRepoResult:
+    def __init__(
+        self,
+        structure: Any = None,
+        languages: list[Any] | None = None,
+        entry_points: list[Any] | None = None,
+        dependencies: Any = None,
+        test_layout: Any = None,
+        public_api: list[Any] | None = None,
+    ) -> None:
+        self.structure = structure
+        self.languages = languages
+        self.entry_points = entry_points
+        self.dependencies = dependencies
+        self.test_layout = test_layout
+        self.public_api = public_api
+
+
+class TestMapRepoSectionsToText:
+    """Tests for _map_repo_sections_to_text."""
+
+    def test_empty_result(self) -> None:
+        result = _MockMapRepoResult()
+        sections = _map_repo_sections_to_text(result)
+        assert sections == {}
+
+    def test_languages(self) -> None:
+        result = _MockMapRepoResult(
+            languages=[
+                _MockLanguageStats("python", 10, 80.0),
+                _MockLanguageStats("yaml", 2, 20.0),
+            ]
+        )
+        sections = _map_repo_sections_to_text(result)
+        assert "languages" in sections
+        assert len(sections["languages"]) == 2
+        assert "python 80.0%" in sections["languages"][0]
+        assert "10 files" in sections["languages"][0]
+
+    def test_structure(self) -> None:
+        file_node = MockFileNode(name="main.py", path="src/main.py", line_count=100)
+        tree = [file_node]
+        result = _MockMapRepoResult(
+            structure=_MockStructureInfo(root="/repo", tree=tree, file_count=1)
+        )
+        sections = _map_repo_sections_to_text(result)
+        assert "structure" in sections
+        assert sections["structure"]["root"] == "/repo"
+        assert sections["structure"]["file_count"] == 1
+        assert len(sections["structure"]["tree"]) == 1
+
+    def test_structure_with_contexts(self) -> None:
+        result = _MockMapRepoResult(
+            structure=_MockStructureInfo(
+                root="/repo", tree=[], file_count=0, contexts=["src", "lib"]
+            )
+        )
+        sections = _map_repo_sections_to_text(result)
+        assert sections["structure"]["contexts"] == ["src", "lib"]
+
+    def test_dependencies(self) -> None:
+        result = _MockMapRepoResult(dependencies=_MockDependencies(["requests", "flask"], 15))
+        sections = _map_repo_sections_to_text(result)
+        assert "dependencies" in sections
+        assert "requests" in sections["dependencies"]
+        assert "2 modules" in sections["dependencies"]
+        assert "15 imports" in sections["dependencies"]
+
+    def test_test_layout(self) -> None:
+        result = _MockMapRepoResult(
+            test_layout=_MockTestLayout(["tests/test_a.py", "tests/test_b.py"], 25)
+        )
+        sections = _map_repo_sections_to_text(result)
+        assert "test_layout" in sections
+        assert "2 test files" in sections["test_layout"]
+        assert "25 tests" in sections["test_layout"]
+
+    def test_entry_points(self) -> None:
+        result = _MockMapRepoResult(
+            entry_points=[
+                _MockEntryPoint("function", "main", "src/main.py", "src.main.main"),
+            ]
+        )
+        sections = _map_repo_sections_to_text(result)
+        assert "entry_points" in sections
+        assert len(sections["entry_points"]) == 1
+        assert "function main" in sections["entry_points"][0]
+        assert "src/main.py" in sections["entry_points"][0]
+        assert "src.main.main" in sections["entry_points"][0]
+
+    def test_entry_point_no_qualified_name(self) -> None:
+        result = _MockMapRepoResult(
+            entry_points=[
+                _MockEntryPoint("function", "main", "src/main.py"),
+            ]
+        )
+        sections = _map_repo_sections_to_text(result)
+        assert "(" not in sections["entry_points"][0]
+
+    def test_public_api(self) -> None:
+        result = _MockMapRepoResult(
+            public_api=[
+                _MockPublicSymbol("MyClass", "high", def_uid="uid123", evidence="__all__"),
+            ]
+        )
+        sections = _map_repo_sections_to_text(result)
+        assert "public_api" in sections
+        assert "MyClass" in sections["public_api"][0]
+        assert "high" in sections["public_api"][0]
+        assert "uid123" in sections["public_api"][0]
+        assert "[__all__]" in sections["public_api"][0]
+
+    def test_public_api_minimal(self) -> None:
+        result = _MockMapRepoResult(
+            public_api=[
+                _MockPublicSymbol("func", "medium"),
+            ]
+        )
+        sections = _map_repo_sections_to_text(result)
+        assert "func  medium" in sections["public_api"][0]

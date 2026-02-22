@@ -1,5 +1,12 @@
 """File watcher using watchfiles for async filesystem monitoring.
 
+Design:
+- Python walks the repo tree respecting IgnoreChecker pruning tiers
+- Builds an explicit list of directories to watch
+- Passes them to awatch with recursive=False (one inotify watch per dir)
+- Reacts immediately to new directory creation by restarting awatch
+- Falls back to mtime polling for cross-filesystem (WSL /mnt/*)
+
 Improved logging (Issues #4, #6):
 - Change detection logs summarize by file type with grammatical correctness
 - cplignore changes show pattern diff and explain consequence
@@ -9,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import time
 from collections import Counter
 from collections.abc import Callable
@@ -16,9 +24,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import structlog
-from watchfiles import Change, DefaultFilter, awatch
+from watchfiles import Change, awatch
 
-from codeplane.core.excludes import PRUNABLE_DIRS
 from codeplane.index._internal.ignore import IgnoreChecker
 
 logger = structlog.get_logger()
@@ -30,40 +37,29 @@ logger = structlog.get_logger()
 HARDCODED_DIRS: frozenset[str] = frozenset({".git", ".svn", ".hg", ".bzr", ".codeplane"})
 
 
-def _get_watchable_paths(repo_root: Path, hardcoded_dirs: frozenset[str]) -> list[Path]:
-    """Get list of paths to watch, excluding HARDCODED_DIRS.
+def _collect_watch_dirs(
+    repo_root: Path,
+    ignore_checker: IgnoreChecker,
+) -> list[Path]:
+    """Walk the repo tree and collect all directories to watch.
 
-    Instead of watching repo_root recursively (which includes .codeplane/logs
-    and causes inotify feedback loops), we watch only the top-level entries
-    that are not in HARDCODED_DIRS.
+    Respects the directory pruning model implemented by IgnoreChecker.should_prune_dir():
+    - Tier 0 (HARDCODED_DIRS): Always pruned, never watched
+    - Tier 1 (DEFAULT_PRUNABLE_DIRS): Pruned unless negated in .cplignore at the repo root
+
+    Returns a flat list of directories. The repo_root itself is always included.
+    Each directory gets a single non-recursive inotify watch.
     """
-    paths: list[Path] = []
+    dirs: list[Path] = [repo_root]
     try:
-        for entry in repo_root.iterdir():
-            if entry.name not in hardcoded_dirs:
-                paths.append(entry)
+        for dirpath, dirnames, _filenames in os.walk(repo_root):
+            # Prune in-place: remove dirs we should skip
+            dirnames[:] = [d for d in dirnames if not ignore_checker.should_prune_dir(d)]
+            for d in dirnames:
+                dirs.append(Path(dirpath) / d)
     except OSError:
-        # If we can't list the directory, fall back to watching root
-        # (will be noisy but functional)
-        paths = [repo_root]
-    return paths
-
-
-# Debouncing configuration
-DEBOUNCE_WINDOW_SEC = 0.5  # Sliding window for batching rapid changes
-MAX_DEBOUNCE_WAIT_SEC = 2.0  # Maximum wait before forcing flush
-
-
-def _create_watch_filter() -> DefaultFilter:
-    """Create a watchfiles filter that ignores PRUNABLE_DIRS.
-
-    Merges PRUNABLE_DIRS with watchfiles' DefaultFilter to ensure
-    consistent exclusions between native and polling watcher modes.
-    """
-    # Combine default ignore_dirs with our PRUNABLE_DIRS
-    default_filter = DefaultFilter()
-    combined_dirs = default_filter._ignore_dirs | PRUNABLE_DIRS
-    return DefaultFilter(ignore_dirs=list(combined_dirs))
+        pass
+    return dirs
 
 
 def _is_cross_filesystem(path: Path) -> bool:
@@ -138,14 +134,21 @@ def _summarize_changes_by_type(paths: list[Path]) -> str:
     return ", ".join(parts)
 
 
+# Debouncing configuration
+DEBOUNCE_WINDOW_SEC = 0.5  # Sliding window for batching rapid changes
+MAX_DEBOUNCE_WAIT_SEC = 2.0  # Maximum wait before forcing flush
+
+
 @dataclass
 class FileWatcher:
     """
     Async file watcher with sliding-window debouncing.
 
     Design:
-    - Uses watchfiles for native filesystem watching
-    - Falls back to git-based polling for cross-filesystem (WSL /mnt/*)
+    - Python walks repo tree to build explicit directory list
+    - Uses watchfiles with recursive=False (one inotify watch per dir)
+    - Reacts immediately to new directory creation by restarting awatch
+    - Falls back to mtime polling for cross-filesystem (WSL /mnt/*)
     - Implements sliding-window debounce to batch rapid changes
     - Filters changes through IgnoreChecker before emitting
     - Detects .cplignore changes and reloads filter
@@ -176,10 +179,12 @@ class FileWatcher:
     # Track previous cplignore content for diff (Issue #6)
     _last_cplignore_content: str | None = field(default=None, init=False)
     _dir_scan_task: asyncio.Task[None] | None = field(default=None, init=False)
+    # Watched directory set for non-recursive mode
+    _watched_dirs: set[Path] = field(default_factory=set, init=False)
 
     def __post_init__(self) -> None:
         """Initialize ignore checker and detect cross-filesystem."""
-        self._ignore_checker = IgnoreChecker(self.repo_root)
+        self._ignore_checker = IgnoreChecker(self.repo_root, respect_gitignore=True)
         self._is_cross_fs = _is_cross_filesystem(self.repo_root)
         # Capture initial cplignore content for diff
         cplignore_path = self.repo_root / ".codeplane" / ".cplignore"
@@ -204,12 +209,12 @@ class FileWatcher:
             )
         else:
             self._watch_task = asyncio.create_task(self._watch_loop())
-            # Start periodic scan for new directories
+            # Periodic safety-net scan for directory changes we might have missed
             self._dir_scan_task = asyncio.create_task(self._periodic_dir_scan())
             logger.info(
                 "file_watcher_started",
                 repo_root=str(self.repo_root),
-                mode="native",
+                mode="native_nonrecursive",
                 debounce_window=self.debounce_window,
             )
 
@@ -293,66 +298,99 @@ class FileWatcher:
             pass
 
     async def _watch_loop(self) -> None:
-        """Main watch loop using watchfiles (native filesystem events)."""
-        watch_filter = _create_watch_filter()
+        """Main watch loop using watchfiles with non-recursive inotify.
 
+        Python builds the complete directory list, awatch gets recursive=False.
+        This prevents notify-rs from recursively traversing into prunable dirs
+        (node_modules, .venv, etc.) which causes inotify setup failures and
+        silent fallback to CPU-intensive PollWatcher.
+
+        When new directories are created, we detect them via inotify events
+        and restart awatch to include them.
+        """
         # Start debounce flush task
         self._debounce_task = asyncio.create_task(self._debounce_flush_loop())
 
         try:
-            # Watch explicit paths to avoid inotify feedback from .codeplane/logs
-            watch_paths = _get_watchable_paths(self.repo_root, HARDCODED_DIRS)
-            if not watch_paths:
-                logger.warning("no_watchable_paths", repo_root=str(self.repo_root))
-                return
+            while not self._stop_event.is_set():
+                # Build directory list using Python walk with pruning
+                watch_dirs = _collect_watch_dirs(self.repo_root, self._ignore_checker)
+                self._watched_dirs = set(watch_dirs)
 
-            async for changes in awatch(
-                *watch_paths,
-                watch_filter=watch_filter,
-                step=500,  # Reduce CPU: check every 500ms instead of default 50ms
-                rust_timeout=10_000,  # 10s timeout for cleaner shutdown
-                stop_event=self._stop_event,
-                ignore_permission_denied=True,
-            ):
-                await self._handle_changes(changes)
+                if not watch_dirs:
+                    logger.warning("no_watchable_dirs", repo_root=str(self.repo_root))
+                    return
+
+                logger.info(
+                    "watch_dirs_collected",
+                    count=len(watch_dirs),
+                    repo_root=str(self.repo_root),
+                )
+
+                try:
+                    async for changes in awatch(
+                        *watch_dirs,
+                        recursive=False,
+                        force_polling=False,  # Override WSL auto-detect (watchfiles#187)
+                        step=500,  # Check Rust side every 500ms
+                        rust_timeout=10_000,
+                        stop_event=self._stop_event,
+                        ignore_permission_denied=True,
+                    ):
+                        needs_restart = await self._handle_changes(changes)
+                        if needs_restart:
+                            logger.info("watcher_restart_requested", reason="new_directories")
+                            break  # Break inner loop to re-collect dirs
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    if self._stop_event.is_set():
+                        return
+                    logger.error("watcher_error", error=str(e))
+                    # Brief backoff before retry
+                    await asyncio.sleep(1.0)
         except asyncio.CancelledError:
             pass
-        except Exception as e:
-            logger.error("watcher_error", error=str(e))
         finally:
             if self._debounce_task:
                 self._debounce_task.cancel()
 
     async def _periodic_dir_scan(self) -> None:
-        """Periodically scan for new top-level directories to watch.
+        """Periodic safety-net scan for directory changes.
 
-        Since we watch explicit paths rather than repo_root, new directories
-        created after watcher starts won't be watched. This task checks for
-        new directories every 30 seconds and restarts watching if needed.
+        Primary detection is via inotify events in _handle_changes.
+        This scan catches edge cases: directories created during watcher restart,
+        symlink changes, or any events that slipped through.
         """
         try:
-            known_paths = set(_get_watchable_paths(self.repo_root, HARDCODED_DIRS))
             while not self._stop_event.is_set():
                 await asyncio.sleep(30.0)
-                current_paths = set(_get_watchable_paths(self.repo_root, HARDCODED_DIRS))
-                new_paths = current_paths - known_paths
-                if new_paths:
+                current_dirs = set(_collect_watch_dirs(self.repo_root, self._ignore_checker))
+                if current_dirs != self._watched_dirs:
+                    new_dirs = current_dirs - self._watched_dirs
+                    removed_dirs = self._watched_dirs - current_dirs
                     logger.info(
-                        "new_directories_detected",
-                        count=len(new_paths),
-                        paths=[str(p.name) for p in new_paths],
+                        "dir_scan_drift_detected",
+                        new_count=len(new_dirs),
+                        removed_count=len(removed_dirs),
+                        new_sample=[
+                            str(d.relative_to(self.repo_root)) for d in sorted(new_dirs)[:5]
+                        ],
                     )
-                    # Queue changes for new directories (will trigger reindex)
-                    for path in new_paths:
-                        self._queue_change(path.relative_to(self.repo_root))
-                    known_paths = current_paths
+                    # Signal the watch loop to restart by cancelling it.
+                    # The outer while loop in _watch_loop will re-collect dirs.
+                    if self._watch_task and not self._watch_task.done():
+                        self._watch_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await self._watch_task
+                        self._watch_task = asyncio.create_task(self._watch_loop())
         except asyncio.CancelledError:
             pass
 
     async def _poll_loop(self) -> None:
         """Poll loop using mtime checks (for cross-filesystem where inotify fails).
 
-        Uses the coordinator's indexed file list rather than git status,
+        Uses os.walk with pruning rather than git status,
         since gitignored files may still be indexed if not in .cplignore.
 
         Implements sliding-window debounce for burst handling.
@@ -361,7 +399,7 @@ class FileWatcher:
         mtimes: dict[Path, float] = {}
 
         # Initial scan
-        mtimes = self._scan_mtimes(PRUNABLE_DIRS)
+        mtimes = self._scan_mtimes()
 
         # Start debounce flush task
         self._debounce_task = asyncio.create_task(self._debounce_flush_loop())
@@ -371,7 +409,7 @@ class FileWatcher:
                 await asyncio.sleep(self.poll_interval)
 
                 try:
-                    current_mtimes = self._scan_mtimes(PRUNABLE_DIRS)
+                    current_mtimes = self._scan_mtimes()
 
                     # Find changed files
                     for path, mtime in current_mtimes.items():
@@ -404,14 +442,12 @@ class FileWatcher:
             if self._debounce_task:
                 self._debounce_task.cancel()
 
-    def _scan_mtimes(self, prunable_dirs: frozenset[str]) -> dict[Path, float]:
-        """Scan filesystem for file mtimes, respecting PRUNABLE_DIRS."""
-        import os
-
+    def _scan_mtimes(self) -> dict[Path, float]:
+        """Scan filesystem for file mtimes, respecting prunable dirs."""
         mtimes: dict[Path, float] = {}
         for dirpath, dirnames, filenames in os.walk(self.repo_root):
-            # Prune expensive directories in-place
-            dirnames[:] = [d for d in dirnames if d not in prunable_dirs]
+            # Prune using IgnoreChecker (respects tiers + .cplignore negation)
+            dirnames[:] = [d for d in dirnames if not self._ignore_checker.should_prune_dir(d)]
 
             for filename in filenames:
                 file_path = Path(dirpath) / filename
@@ -448,9 +484,11 @@ class FileWatcher:
         # Log with diff summary (Issue #6 Option B)
         diff_parts: list[str] = []
         if added:
-            diff_parts.append(f"+{len(added)} pattern{'s' if len(added) != 1 else ''}")
+            suffix = "s" if len(added) != 1 else ""
+            diff_parts.append(f"+{len(added)} pattern{suffix}")
         if removed:
-            diff_parts.append(f"-{len(removed)} pattern{'s' if len(removed) != 1 else ''}")
+            suffix = "s" if len(removed) != 1 else ""
+            diff_parts.append(f"-{len(removed)} pattern{suffix}")
         diff_summary = ", ".join(diff_parts) if diff_parts else "no changes"
 
         logger.info(
@@ -472,8 +510,13 @@ class FileWatcher:
         # Update cached content
         self._last_cplignore_content = new_content
 
-    async def _handle_changes(self, changes: set[tuple[Change, str]]) -> None:
-        """Process a batch of file changes (queue for debouncing)."""
+    async def _handle_changes(self, changes: set[tuple[Change, str]]) -> bool:
+        """Process a batch of file changes (queue for debouncing).
+
+        Returns True if a watcher restart is needed (new directories detected).
+        """
+        needs_restart = False
+
         for change_type, path_str in changes:
             path = Path(path_str)
 
@@ -485,6 +528,19 @@ class FileWatcher:
 
             if ".git" in rel_path.parts:
                 continue
+
+            # Detect new directory creation — request watcher restart to add watch
+            if change_type == Change.added and path.is_dir():
+                if (
+                    not self._ignore_checker.should_prune_dir(path.name)
+                    and path not in self._watched_dirs
+                ):
+                    logger.info(
+                        "new_directory_detected",
+                        path=str(rel_path),
+                    )
+                    needs_restart = True
+                continue  # Directories themselves don't get queued as file changes
 
             # Check for .cplignore change
             if rel_path.name == ".cplignore":
@@ -503,3 +559,5 @@ class FileWatcher:
                 path=str(rel_path),
                 change_type=change_type.name,
             )
+
+        return needs_restart
