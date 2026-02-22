@@ -777,27 +777,42 @@ class LexicalIndex:
 
         # Build an OR query from the terms so partial overlap still yields
         # a positive score.  Quoted phrases are kept intact.
-        tokens = re.findall(r'"[^"]+"|\S+', query)
-        if not tokens:
+        # Tokenize on whitespace, strip punctuation that isn't part of
+        # meaningful identifiers, and escape Tantivy syntax characters.
+        raw_tokens = re.findall(r'"[^"]+"|\S+', query)
+        if not raw_tokens:
             return {}
 
-        # Characters that are Tantivy query syntax operators
-        _syntax_chars = set(r'+-&|!(){}[]^~*?\\/"')
+        # Tantivy query syntax characters (including : for field prefix,
+        # . and , which commonly appear in natural language task text).
+        _syntax_chars = set(r'+-&|!(){}[]^~*?:\\/".@,;')
 
-        def _escape_token(tok: str) -> str:
-            if not any(c in _syntax_chars for c in tok):
-                return tok
-            return "".join(f"\\{ch}" if ch in _syntax_chars else ch for ch in tok)
+        def _clean_token(tok: str) -> str:
+            """Strip Tantivy syntax chars from a token entirely.
+
+            For BM25 scoring we want plain words, not escaped operators.
+            Stripping is safer than escaping because some characters
+            (notably ``:`` for field prefixes) cause parse errors even
+            when escaped in certain positions.
+            """
+            cleaned = "".join(ch for ch in tok if ch not in _syntax_chars)
+            return cleaned
 
         parts: list[str] = []
-        for token in tokens:
+        for token in raw_tokens:
             upper = token.upper()
             if upper in ("AND", "OR", "NOT"):
                 continue  # strip boolean operators from the task text
             if token.startswith('"') and token.endswith('"'):
-                parts.append(token)
+                # Strip quotes and clean the inner text
+                inner = token[1:-1]
+                cleaned = _clean_token(inner)
+                if cleaned:
+                    parts.append(f'"{cleaned}"')
             else:
-                parts.append(_escape_token(token))
+                cleaned = _clean_token(token)
+                if cleaned and len(cleaned) >= 2:  # skip single-char noise
+                    parts.append(cleaned)
 
         if not parts:
             return {}

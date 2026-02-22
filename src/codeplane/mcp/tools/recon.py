@@ -719,6 +719,9 @@ async def _expand_seed(
         if ref_path in seen_caller_files:
             continue
         seen_caller_files.add(ref_path)
+        # BM25 gate: drop callers whose file has low task relevance
+        if bm25_scores is not None and ref_path not in bm25_scores:
+            continue
 
         ref_full = repo_root / ref_path
         if ref_full.exists():
@@ -979,10 +982,28 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             }
 
         # Step 2: BM25 scoring pass — parallel plumbing for expansion gating
-        bm25_scores = coordinator.score_files_bm25(task)
+        #
+        # Compute per-file BM25 relevance to the task text.  Use the score
+        # distribution to set a threshold: files below the 25th percentile
+        # are dropped from expansion candidates (callees + import_defs).
+        # This removes the bottom quartile of structurally-connected but
+        # task-irrelevant files.
+        raw_bm25 = coordinator.score_files_bm25(task)
+        bm25_threshold = 0.0
+        if raw_bm25:
+            sorted_scores = sorted(raw_bm25.values())
+            p25_idx = max(0, len(sorted_scores) // 4 - 1)
+            bm25_threshold = sorted_scores[p25_idx]
+
+        # Build a filtered dict: only files above the threshold
+        bm25_scores: dict[str, float] = {
+            path: score for path, score in raw_bm25.items() if score > bm25_threshold
+        }
         log.debug(
             "recon.bm25_scores",
-            scored_files=len(bm25_scores),
+            total_scored=len(raw_bm25),
+            above_threshold=len(bm25_scores),
+            threshold=round(bm25_threshold, 2),
             top5=sorted(bm25_scores.items(), key=lambda x: -x[1])[:5],
         )
 
