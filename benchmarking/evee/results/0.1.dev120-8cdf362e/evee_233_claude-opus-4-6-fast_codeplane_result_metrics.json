@@ -1,0 +1,67 @@
+{
+  "session_name": "evee_233_claude-opus-4-6-fast_codeplane",
+  "repo": "evee",
+  "issue": "233",
+  "model": "claude-opus-4.6-fast",
+  "codeplane": true,
+  "wall_clock": {
+    "start": "2026-02-22T14:15:35.397Z",
+    "end": "2026-02-22T14:21:41.385Z"
+  },
+  "turns": 40,
+  "tool_calls": {
+    "total": 46,
+    "codeplane": 37,
+    "terminal": 9,
+    "tool_search": 0,
+    "other": 0,
+    "errors": 3,
+    "by_tool": {
+      "mcp_codeplane-eve_read_source": 11,
+      "mcp_codeplane-eve_write_source": 10,
+      "run_in_terminal": 9,
+      "mcp_codeplane-eve_git_stage_and_commit": 4,
+      "mcp_codeplane-eve_git_log": 3,
+      "mcp_codeplane-eve_describe": 2,
+      "mcp_codeplane-eve_search": 2,
+      "mcp_codeplane-eve_lint_check": 2,
+      "mcp_codeplane-eve_run_test_targets": 2,
+      "mcp_codeplane-eve_semantic_diff": 1
+    },
+    "total_thinking_chars": 0
+  },
+  "llm_requests": {
+    "agent": 40,
+    "routing": 6,
+    "total": 46
+  },
+  "tokens": {
+    "prompt": 3023453,
+    "completion": 28010,
+    "cached": 2981719,
+    "reasoning": 0,
+    "total": 3051463,
+    "cache_hit_ratio": 0.9862
+  },
+  "llm_duration_ms": 237982,
+  "avg_ttft_ms": 2541,
+  "context_growth": {
+    "first": 55,
+    "last": 144,
+    "max": 144,
+    "mean": 99
+  },
+  "outcome": {
+    "correctness": 3,
+    "completeness": 3,
+    "code_quality": 3,
+    "test_quality": 3,
+    "documentation": 3,
+    "lint_clean": 1,
+    "tests_pass": 1,
+    "score": 17,
+    "max_score": 17,
+    "scored_by": "Claude Opus 4.6 (fast mode)",
+    "review_summary": "Excellent implementation of early-stop on inference errors. The feature adds a clean `max_error_count` config field, correctly implements threshold-based early stopping in both sync (ThreadPoolExecutor) and async (asyncio) paths with proper future/task cancellation, and propagates `stopped_early` status through the full call chain up to the evaluate() return dict. Seven dedicated tests cover threshold triggering, below-threshold completion, disabled mode, and evaluate-level status for both sync and async paths, plus all existing tests were updated to handle the new tuple returns. PR description is thorough with usage example. All 1255 tests pass, lint is clean."
+  }
+}

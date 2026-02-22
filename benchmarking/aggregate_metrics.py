@@ -10,8 +10,9 @@ them by variant (codeplane vs native), and produces:
   2. Head-to-head comparison (deltas + percentages)
   3. Per-issue paired breakdown
 
-Output is saved as aggregate_report.json in the first results directory,
-and a human-readable summary is printed to stdout.
+Output is saved as aggregate_report.json in the first results directory
+(or --output-dir if specified), and a human-readable summary is printed
+to stdout.
 """
 
 from __future__ import annotations
@@ -365,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # Save report
-    output_dir: Path = args.output_dir or dirs[0].parent
+    output_dir: Path = args.output_dir or dirs[0]
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / "aggregate_report.json"
     with open(report_path, "w") as f:

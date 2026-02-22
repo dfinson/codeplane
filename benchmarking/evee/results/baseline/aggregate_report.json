@@ -1,0 +1,231 @@
+{
+  "total_runs": 5,
+  "baseline_runs": 5,
+  "codeplane_runs": 0,
+  "baseline_summary": {
+    "turns": {
+      "mean": 29.2,
+      "median": 29,
+      "stdev": 1.92,
+      "min": 27,
+      "max": 32,
+      "n": 5
+    },
+    "tool_calls_total": {
+      "mean": 46.0,
+      "median": 46,
+      "stdev": 3.81,
+      "min": 41,
+      "max": 51,
+      "n": 5
+    },
+    "tool_calls_codeplane": {
+      "mean": 0.0,
+      "median": 0,
+      "stdev": 0.0,
+      "min": 0,
+      "max": 0,
+      "n": 5
+    },
+    "tool_calls_terminal": {
+      "mean": 11.4,
+      "median": 10,
+      "stdev": 4.45,
+      "min": 6,
+      "max": 18,
+      "n": 5
+    },
+    "tool_calls_tool_search": {
+      "mean": 0.0,
+      "median": 0,
+      "stdev": 0.0,
+      "min": 0,
+      "max": 0,
+      "n": 5
+    },
+    "tool_calls_other": {
+      "mean": 34.6,
+      "median": 38,
+      "stdev": 7.57,
+      "min": 23,
+      "max": 41,
+      "n": 5
+    },
+    "tool_calls_errors": {
+      "mean": 0.2,
+      "median": 0,
+      "stdev": 0.45,
+      "min": 0,
+      "max": 1,
+      "n": 5
+    },
+    "tool_thinking_chars": {
+      "mean": 0.0,
+      "median": 0,
+      "stdev": 0.0,
+      "min": 0,
+      "max": 0,
+      "n": 5
+    },
+    "tokens_total": {
+      "mean": 1784155.4,
+      "median": 1483890,
+      "stdev": 844579.01,
+      "min": 1087002,
+      "max": 3238438,
+      "n": 5
+    },
+    "tokens_prompt": {
+      "mean": 1772101.0,
+      "median": 1468574,
+      "stdev": 842657.48,
+      "min": 1080759,
+      "max": 3224700,
+      "n": 5
+    },
+    "tokens_completion": {
+      "mean": 12054.4,
+      "median": 13738,
+      "stdev": 4255.88,
+      "min": 6243,
+      "max": 16011,
+      "n": 5
+    },
+    "tokens_cached": {
+      "mean": 1718003.6,
+      "median": 1419013,
+      "stdev": 853936.46,
+      "min": 1037121,
+      "max": 3197777,
+      "n": 5
+    },
+    "tokens_reasoning": {
+      "mean": 0.0,
+      "median": 0,
+      "stdev": 0.0,
+      "min": 0,
+      "max": 0,
+      "n": 5
+    },
+    "cache_hit_ratio": {
+      "mean": 0.96,
+      "median": 0.96,
+      "stdev": 0.02,
+      "min": 0.9504,
+      "max": 0.9917,
+      "n": 5
+    },
+    "llm_duration_ms": {
+      "mean": 134116.4,
+      "median": 132920,
+      "stdev": 41521.1,
+      "min": 81209,
+      "max": 181074,
+      "n": 5
+    },
+    "avg_ttft_ms": {
+      "mean": 2563.2,
+      "median": 2320,
+      "stdev": 592.77,
+      "min": 2170,
+      "max": 3612,
+      "n": 5
+    },
+    "context_first": {
+      "mean": 28.2,
+      "median": 18,
+      "stdev": 30.78,
+      "min": 3,
+      "max": 81,
+      "n": 5
+    },
+    "context_last": {
+      "mean": 109.0,
+      "median": 99,
+      "stdev": 29.69,
+      "min": 82,
+      "max": 159,
+      "n": 5
+    },
+    "context_max": {
+      "mean": 109.0,
+      "median": 99,
+      "stdev": 29.69,
+      "min": 82,
+      "max": 159,
+      "n": 5
+    },
+    "context_mean": {
+      "mean": 72.0,
+      "median": 63,
+      "stdev": 28.54,
+      "min": 45,
+      "max": 120,
+      "n": 5
+    },
+    "outcome_correctness": {
+      "mean": 3.0,
+      "median": 3,
+      "stdev": 0.0,
+      "min": 3,
+      "max": 3,
+      "n": 5
+    },
+    "outcome_completeness": {
+      "mean": 2.6,
+      "median": 3,
+      "stdev": 0.55,
+      "min": 2,
+      "max": 3,
+      "n": 5
+    },
+    "outcome_code_quality": {
+      "mean": 3.0,
+      "median": 3,
+      "stdev": 0.0,
+      "min": 3,
+      "max": 3,
+      "n": 5
+    },
+    "outcome_test_quality": {
+      "mean": 2.8,
+      "median": 3,
+      "stdev": 0.45,
+      "min": 2,
+      "max": 3,
+      "n": 5
+    },
+    "outcome_documentation": {
+      "mean": 2.6,
+      "median": 3,
+      "stdev": 0.55,
+      "min": 2,
+      "max": 3,
+      "n": 5
+    },
+    "outcome_lint_clean": {
+      "mean": 1.0,
+      "median": 1,
+      "stdev": 0.0,
+      "min": 1,
+      "max": 1,
+      "n": 5
+    },
+    "outcome_tests_pass": {
+      "mean": 1.0,
+      "median": 1,
+      "stdev": 0.0,
+      "min": 1,
+      "max": 1,
+      "n": 5
+    },
+    "outcome_score": {
+      "mean": 16.0,
+      "median": 17,
+      "stdev": 1.41,
+      "min": 14,
+      "max": 17,
+      "n": 5
+    }
+  }
+}

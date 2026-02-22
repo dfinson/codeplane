@@ -1,0 +1,64 @@
+{
+  "session_name": "evee_233_claude-opus-4-6-fast_native",
+  "repo": "evee",
+  "issue": "233",
+  "model": "claude-opus-4.6-fast",
+  "codeplane": false,
+  "wall_clock": {
+    "start": "2026-02-22T12:53:21.479Z",
+    "end": "2026-02-22T12:58:30.030Z"
+  },
+  "turns": 32,
+  "tool_calls": {
+    "total": 41,
+    "codeplane": 0,
+    "terminal": 18,
+    "tool_search": 0,
+    "other": 23,
+    "errors": 1,
+    "by_tool": {
+      "run_in_terminal": 18,
+      "read_file": 10,
+      "manage_todo_list": 4,
+      "multi_replace_string_in_file": 4,
+      "replace_string_in_file": 3,
+      "grep_search": 1,
+      "create_file": 1
+    },
+    "total_thinking_chars": 0
+  },
+  "llm_requests": {
+    "agent": 32,
+    "routing": 7,
+    "total": 39
+  },
+  "tokens": {
+    "prompt": 3224700,
+    "completion": 13738,
+    "cached": 3197777,
+    "reasoning": 0,
+    "total": 3238438,
+    "cache_hit_ratio": 0.9917
+  },
+  "llm_duration_ms": 181074,
+  "avg_ttft_ms": 3612,
+  "context_growth": {
+    "first": 81,
+    "last": 159,
+    "max": 159,
+    "mean": 120
+  },
+  "outcome": {
+    "correctness": 3,
+    "completeness": 3,
+    "code_quality": 3,
+    "test_quality": 3,
+    "documentation": 3,
+    "lint_clean": 1,
+    "tests_pass": 1,
+    "score": 17,
+    "max_score": 17,
+    "scored_by": "Claude Opus 4.6 (fast mode)",
+    "review_summary": "Excellent implementation: adds max_error_count config field, early-stop logic in both sync and async evaluation paths with task/future cancellation, proper propagation through the evaluation loop, and a clear stopped_early status in the result dict. 14 well-structured new tests cover all paths (sync/async, threshold/below/none, propagation, message content) plus config model edge cases. Existing tests updated for the new return type. Documentation updated in schema, reference table, and usage tips. Lint clean, all 1262 tests pass."
+  }
+}

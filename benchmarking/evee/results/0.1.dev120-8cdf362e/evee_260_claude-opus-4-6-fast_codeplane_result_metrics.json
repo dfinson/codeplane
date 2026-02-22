@@ -1,0 +1,70 @@
+{
+  "session_name": "evee_260_claude-opus-4-6-fast_codeplane",
+  "repo": "evee",
+  "issue": "260",
+  "model": "claude-opus-4.6-fast",
+  "codeplane": true,
+  "wall_clock": {
+    "start": "2026-02-22T13:33:24.335Z",
+    "end": "2026-02-22T13:37:46.645Z"
+  },
+  "turns": 49,
+  "tool_calls": {
+    "total": 49,
+    "codeplane": 39,
+    "terminal": 9,
+    "tool_search": 1,
+    "other": 0,
+    "errors": 5,
+    "by_tool": {
+      "mcp_codeplane-eve_write_source": 12,
+      "mcp_codeplane-eve_read_source": 10,
+      "run_in_terminal": 9,
+      "mcp_codeplane-eve_git_stage_and_commit": 6,
+      "mcp_codeplane-eve_git_log": 3,
+      "mcp_codeplane-eve_describe": 2,
+      "tool_search_tool_regex [server]": 1,
+      "mcp_codeplane-eve_search": 1,
+      "mcp_codeplane-eve_list_files": 1,
+      "mcp_codeplane-eve_read_scaffold": 1,
+      "mcp_codeplane-eve_lint_check": 1,
+      "mcp_codeplane-eve_run_test_targets": 1,
+      "mcp_codeplane-eve_semantic_diff": 1
+    },
+    "total_thinking_chars": 0
+  },
+  "llm_requests": {
+    "agent": 49,
+    "routing": 0,
+    "total": 49
+  },
+  "tokens": {
+    "prompt": 2555485,
+    "completion": 13997,
+    "cached": 2518923,
+    "reasoning": 0,
+    "total": 2569482,
+    "cache_hit_ratio": 0.9857
+  },
+  "llm_duration_ms": 210943,
+  "avg_ttft_ms": 3094,
+  "context_growth": {
+    "first": 39,
+    "last": 135,
+    "max": 135,
+    "mean": 87
+  },
+  "outcome": {
+    "correctness": 3,
+    "completeness": 2,
+    "code_quality": 3,
+    "test_quality": 3,
+    "documentation": 3,
+    "lint_clean": 1,
+    "tests_pass": 1,
+    "score": 16,
+    "max_score": 17,
+    "scored_by": "Claude Opus 4.6 (fast mode) (Preview)",
+    "review_summary": "Excellent, clean implementation that adds a disable_progress_bars config flag, threads it through ProgressTracker and ModelEvaluator, with thorough tests (7 new tests covering default, flag, env-suppression, and workflow scenarios) and well-written PR description and docs. Minor completeness gap: the samples/ directory configs (agent-sample, coding-sample) were not updated with the commented-out option, unlike the example/ configs. The PR description also states '572 existing tests pass' while the actual count is 1256."
+  }
+}

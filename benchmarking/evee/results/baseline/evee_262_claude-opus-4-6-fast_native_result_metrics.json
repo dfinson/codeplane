@@ -1,0 +1,64 @@
+{
+  "session_name": "evee_262_claude-opus-4-6-fast_native",
+  "repo": "evee",
+  "issue": "262",
+  "model": "claude-opus-4.6-fast",
+  "codeplane": false,
+  "wall_clock": {
+    "start": "2026-02-22T13:19:53.896Z",
+    "end": "2026-02-22T13:23:22.212Z"
+  },
+  "turns": 30,
+  "tool_calls": {
+    "total": 44,
+    "codeplane": 0,
+    "terminal": 13,
+    "tool_search": 0,
+    "other": 31,
+    "errors": 0,
+    "by_tool": {
+      "run_in_terminal": 13,
+      "read_file": 12,
+      "manage_todo_list": 8,
+      "replace_string_in_file": 5,
+      "create_file": 3,
+      "multi_replace_string_in_file": 2,
+      "runSubagent": 1
+    },
+    "total_thinking_chars": 0
+  },
+  "llm_requests": {
+    "agent": 30,
+    "routing": 11,
+    "total": 41
+  },
+  "tokens": {
+    "prompt": 1468574,
+    "completion": 15316,
+    "cached": 1419013,
+    "reasoning": 0,
+    "total": 1483890,
+    "cache_hit_ratio": 0.9663
+  },
+  "llm_duration_ms": 132920,
+  "avg_ttft_ms": 2299,
+  "context_growth": {
+    "first": 18,
+    "last": 99,
+    "max": 99,
+    "mean": 63
+  },
+  "outcome": {
+    "correctness": 3,
+    "completeness": 3,
+    "code_quality": 3,
+    "test_quality": 3,
+    "documentation": 3,
+    "lint_clean": 1,
+    "tests_pass": 1,
+    "score": 17,
+    "max_score": 17,
+    "scored_by": "Claude Opus 4.6 (fast mode)",
+    "review_summary": "Excellent implementation: RestModel cleanly extends BaseModel with well-structured config validation (Pydantic models), session management, request/response mapping, and comprehensive error handling. The 41 new tests are thorough, covering config validation, auth setup, mapping edge cases, mocked HTTP inference, and cleanup. PR description is detailed with example YAML config. Integration into ModelEvaluator is minimal and backward-compatible, lint passes cleanly, and all 1289 tests pass."
+  }
+}
