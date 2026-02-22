@@ -552,5 +552,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         else:
             result["passed"] = True
             await ctx.report_progress(total_phases, total_phases, "Verify passed")
+            result["agentic_hint"] = (
+                "All checks passed. Use commit(message=..., all=True) to commit your changes."
+            )
 
         return result

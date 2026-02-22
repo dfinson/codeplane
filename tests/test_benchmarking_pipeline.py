@@ -16,8 +16,6 @@ from benchmarking.extract_trace import (
     _build_session_name,
     _detect_issue,
     _detect_model,
-    _detect_repo,
-    _find_marker_window,
     _has_codeplane,
     extract_trace,
 )
@@ -105,20 +103,6 @@ def _llm_request(
 # ---------------------------------------------------------------------------
 
 
-class TestDetectRepo:
-    def test_codeplane_label(self) -> None:
-        data = _make_chatreplay([], mcp_servers=[{"label": "codeplane-evee", "type": "http"}])
-        assert _detect_repo(data) == "evee"
-
-    def test_codeplane_label_with_copy_suffix(self) -> None:
-        data = _make_chatreplay([], mcp_servers=[{"label": "codeplane-evee_copy3", "type": "http"}])
-        assert _detect_repo(data) == "evee"
-
-    def test_no_codeplane(self) -> None:
-        data = _make_chatreplay([], mcp_servers=[{"label": "other-server", "type": "http"}])
-        assert _detect_repo(data) == "unknown"
-
-
 class TestDetectIssue:
     def test_branch_pattern(self) -> None:
         prompts = [_make_prompt("checkout bench/233-early-stop")]
@@ -184,41 +168,6 @@ class TestBuildSessionName:
 # ---------------------------------------------------------------------------
 # Marker window tests
 # ---------------------------------------------------------------------------
-
-
-class TestMarkerWindow:
-    def test_both_markers_in_prompts(self) -> None:
-        prompts = [
-            _make_prompt("before"),
-            _make_prompt("START_BENCHMARKING_RUN\ndo stuff"),
-            _make_prompt("middle step"),
-            _make_prompt("END_BENCHMARKING_RUN"),
-            _make_prompt("after"),
-        ]
-        window = _find_marker_window(prompts)
-        assert window == (1, 3)
-
-    def test_end_in_llm_response(self) -> None:
-        prompts = [
-            _make_prompt(
-                "START_BENCHMARKING_RUN\ndo stuff",
-                [_llm_request(response_message="Done! END_BENCHMARKING_RUN")],
-            ),
-        ]
-        window = _find_marker_window(prompts)
-        assert window == (0, 0)
-
-    def test_no_start(self) -> None:
-        prompts = [_make_prompt("no markers here")]
-        assert _find_marker_window(prompts) is None
-
-    def test_no_end_defaults_to_last(self) -> None:
-        prompts = [
-            _make_prompt("START_BENCHMARKING_RUN\ngo"),
-            _make_prompt("still going"),
-        ]
-        window = _find_marker_window(prompts)
-        assert window == (0, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -363,9 +312,9 @@ class TestExtractTraceCLI:
     def test_full_pipeline(self, tmp_path: Path) -> None:
         """Extract → raw + trace → metrics."""
         prompts = [
-            _make_prompt("unrelated"),
+            _make_prompt("checkout bench/260-disable-progress-bars"),
             _make_prompt(
-                "START_BENCHMARKING_RUN\ncheckout bench/260-disable-progress-bars",
+                "START_BENCHMARKING_RUN\nlet's begin",
                 [
                     _tool_call("tool_search_tool_regex [server]"),
                     _llm_request(model="claude-opus-4.6-fast"),
@@ -392,7 +341,7 @@ class TestExtractTraceCLI:
         output_dir = tmp_path / "results"
 
         # Run extract_trace
-        rc = extract_main([str(input_file), "--output-dir", str(output_dir)])
+        rc = extract_main([str(input_file), "--repo", "evee", "--output-dir", str(output_dir)])
         assert rc == 0
 
         # Check outputs exist with correct naming
@@ -402,9 +351,9 @@ class TestExtractTraceCLI:
         assert raw_file.exists()
         assert trace_file.exists()
 
-        # Raw should have only the marker-window prompt (prompt index 1)
+        # Raw should have all prompts (no marker windowing)
         raw = json.loads(raw_file.read_text())
-        assert raw["totalPrompts"] == 1
+        assert raw["totalPrompts"] == 3
 
         # Trace should have events
         trace = json.loads(trace_file.read_text())
@@ -422,10 +371,10 @@ class TestExtractTraceCLI:
         assert metrics["tool_calls"]["codeplane"] == 2
         assert metrics["turns"] == 3
 
-    def test_missing_markers(self, tmp_path: Path) -> None:
-        chatreplay = _make_chatreplay([_make_prompt("no markers")])
+    def test_no_prompts(self, tmp_path: Path) -> None:
+        chatreplay = _make_chatreplay([])
         input_file = tmp_path / "replay.json"
         input_file.write_text(json.dumps(chatreplay))
 
-        rc = extract_main([str(input_file)])
+        rc = extract_main([str(input_file), "--repo", "evee"])
         assert rc == 1

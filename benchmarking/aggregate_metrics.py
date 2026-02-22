@@ -36,10 +36,7 @@ def _stats(values: list[float | int]) -> dict[str, float | int | None]:
     n = len(values)
     mean = sum(values) / n
     sorted_v = sorted(values)
-    if n % 2 == 1:
-        median = sorted_v[n // 2]
-    else:
-        median = (sorted_v[n // 2 - 1] + sorted_v[n // 2]) / 2
+    median = sorted_v[n // 2] if n % 2 == 1 else (sorted_v[n // 2 - 1] + sorted_v[n // 2]) / 2
     if n > 1:
         variance = sum((x - mean) ** 2 for x in values) / (n - 1)
         stdev = math.sqrt(variance)
