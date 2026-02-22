@@ -2,7 +2,7 @@
 
 Tests cover:
 - HARDCODED_DIRS constant
-- _get_watchable_paths() function
+- _collect_watch_dirs() function (replaces _get_watchable_paths)
 - FileWatcher debouncing behavior
 - cplignore change detection
 - Cross-filesystem detection
@@ -24,11 +24,11 @@ from codeplane.daemon.watcher import (
     HARDCODED_DIRS,
     MAX_DEBOUNCE_WAIT_SEC,
     FileWatcher,
-    _create_watch_filter,
-    _get_watchable_paths,
+    _collect_watch_dirs,
     _is_cross_filesystem,
     _summarize_changes_by_type,
 )
+from codeplane.index._internal.ignore import IgnoreChecker
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -59,68 +59,91 @@ class TestHardcodedDirs:
         assert isinstance(HARDCODED_DIRS, frozenset)
 
 
-class TestGetWatchablePaths:
-    """Tests for _get_watchable_paths function."""
+class TestCollectWatchDirs:
+    """Tests for _collect_watch_dirs function."""
 
-    def test_excludes_hardcoded_dirs(self, tmp_path: Path) -> None:
-        """Paths in HARDCODED_DIRS are excluded from watch list."""
-        # Create directories including hardcoded ones
+    @pytest.fixture
+    def ignore_checker(self, tmp_path: Path) -> IgnoreChecker:
+        """Create an IgnoreChecker for testing."""
+        return IgnoreChecker(tmp_path, respect_gitignore=False)
+
+    def test_includes_repo_root(self, tmp_path: Path, ignore_checker: IgnoreChecker) -> None:
+        """Repo root is always included in the watch list."""
+        dirs = _collect_watch_dirs(tmp_path, ignore_checker)
+        assert tmp_path in dirs
+
+    def test_excludes_hardcoded_dirs(self, tmp_path: Path, ignore_checker: IgnoreChecker) -> None:
+        """Directories in HARDCODED_DIRS are excluded from watch list."""
         (tmp_path / ".git").mkdir()
         (tmp_path / ".codeplane").mkdir()
         (tmp_path / "src").mkdir()
         (tmp_path / "tests").mkdir()
 
-        paths = _get_watchable_paths(tmp_path, HARDCODED_DIRS)
-        path_names = {p.name for p in paths}
+        dirs = _collect_watch_dirs(tmp_path, ignore_checker)
+        dir_names = {d.name for d in dirs}
 
-        assert ".git" not in path_names
-        assert ".codeplane" not in path_names
-        assert "src" in path_names
-        assert "tests" in path_names
+        assert ".git" not in dir_names
+        assert ".codeplane" not in dir_names
+        assert "src" in dir_names
+        assert "tests" in dir_names
 
-    def test_includes_files(self, tmp_path: Path) -> None:
-        """Files at root level are included."""
-        (tmp_path / "README.md").touch()
-        (tmp_path / "pyproject.toml").touch()
+    def test_excludes_prunable_dirs(self, tmp_path: Path, ignore_checker: IgnoreChecker) -> None:
+        """Directories in DEFAULT_PRUNABLE_DIRS are excluded."""
         (tmp_path / "src").mkdir()
+        (tmp_path / "node_modules").mkdir()
+        (tmp_path / "__pycache__").mkdir()
+        (tmp_path / ".venv").mkdir()
 
-        paths = _get_watchable_paths(tmp_path, HARDCODED_DIRS)
-        path_names = {p.name for p in paths}
+        dirs = _collect_watch_dirs(tmp_path, ignore_checker)
+        dir_names = {d.name for d in dirs}
 
-        assert "README.md" in path_names
-        assert "pyproject.toml" in path_names
-        assert "src" in path_names
+        assert "src" in dir_names
+        assert "node_modules" not in dir_names
+        assert "__pycache__" not in dir_names
+        assert ".venv" not in dir_names
 
-    def test_empty_directory(self, tmp_path: Path) -> None:
-        """Empty directory returns empty list."""
-        paths = _get_watchable_paths(tmp_path, HARDCODED_DIRS)
-        assert paths == []
+    def test_walks_recursively(self, tmp_path: Path, ignore_checker: IgnoreChecker) -> None:
+        """Collects nested directories (non-prunable ones)."""
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "core").mkdir()
+        (tmp_path / "src" / "core" / "utils").mkdir()
 
-    def test_only_hardcoded_dirs(self, tmp_path: Path) -> None:
-        """Directory with only hardcoded dirs returns empty list."""
+        dirs = _collect_watch_dirs(tmp_path, ignore_checker)
+        dir_strs = {str(d) for d in dirs}
+
+        assert str(tmp_path / "src") in dir_strs
+        assert str(tmp_path / "src" / "core") in dir_strs
+        assert str(tmp_path / "src" / "core" / "utils") in dir_strs
+
+    def test_prunes_nested_prunable_dirs(
+        self, tmp_path: Path, ignore_checker: IgnoreChecker
+    ) -> None:
+        """Prunable dirs nested inside non-prunable dirs are excluded."""
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "__pycache__").mkdir()
+        (tmp_path / "src" / "lib").mkdir()
+        (tmp_path / "src" / "lib" / "node_modules").mkdir()
+
+        dirs = _collect_watch_dirs(tmp_path, ignore_checker)
+        dir_names = {d.name for d in dirs}
+
+        assert "src" in dir_names
+        assert "lib" in dir_names
+        assert "__pycache__" not in dir_names
+        assert "node_modules" not in dir_names
+
+    def test_empty_directory(self, tmp_path: Path, ignore_checker: IgnoreChecker) -> None:
+        """Empty directory returns only the root."""
+        dirs = _collect_watch_dirs(tmp_path, ignore_checker)
+        assert dirs == [tmp_path]
+
+    def test_only_hardcoded_dirs(self, tmp_path: Path, ignore_checker: IgnoreChecker) -> None:
+        """Directory with only hardcoded dirs returns only the root."""
         (tmp_path / ".git").mkdir()
         (tmp_path / ".codeplane").mkdir()
 
-        paths = _get_watchable_paths(tmp_path, HARDCODED_DIRS)
-        assert paths == []
-
-    def test_nonexistent_directory_fallback(self) -> None:
-        """Nonexistent directory returns fallback (the path itself)."""
-        fake_path = Path("/nonexistent/path/that/does/not/exist")
-        paths = _get_watchable_paths(fake_path, HARDCODED_DIRS)
-        assert paths == [fake_path]
-
-    def test_custom_hardcoded_dirs(self, tmp_path: Path) -> None:
-        """Custom hardcoded dirs are excluded."""
-        (tmp_path / "keep").mkdir()
-        (tmp_path / "exclude").mkdir()
-
-        custom_hardcoded = frozenset({"exclude"})
-        paths = _get_watchable_paths(tmp_path, custom_hardcoded)
-        path_names = {p.name for p in paths}
-
-        assert "keep" in path_names
-        assert "exclude" not in path_names
+        dirs = _collect_watch_dirs(tmp_path, ignore_checker)
+        assert dirs == [tmp_path]
 
 
 class TestCrossFilesystemDetection:
@@ -187,23 +210,6 @@ class TestSummarizeChangesByType:
         """Empty list returns empty summary."""
         summary = _summarize_changes_by_type([])
         assert summary == ""
-
-
-class TestWatchFilterExcludes:
-    """Tests for watch filter alignment with PRUNABLE_DIRS."""
-
-    def test_filter_excludes_prunable_dirs(self) -> None:
-        """Watch filter excludes all PRUNABLE_DIRS."""
-        watch_filter = _create_watch_filter()
-        # The filter's _ignore_dirs should contain PRUNABLE_DIRS
-        assert PRUNABLE_DIRS.issubset(watch_filter._ignore_dirs)
-
-    def test_filter_excludes_common_dirs(self) -> None:
-        """Watch filter excludes common directories to skip."""
-        watch_filter = _create_watch_filter()
-        # Check specific common directories
-        common_excludes = {"node_modules", "__pycache__", ".git", "venv", ".venv"}
-        assert common_excludes.issubset(watch_filter._ignore_dirs)
 
 
 class TestFileWatcherDebouncing:
@@ -337,7 +343,7 @@ class TestFileWatcherPollingMode:
 
 
 class TestFileWatcherNativeMode:
-    """Tests for FileWatcher native (inotify) mode."""
+    """Tests for FileWatcher native (non-recursive inotify) mode."""
 
     @pytest.fixture
     def native_watcher(self, tmp_path: Path) -> Generator[FileWatcher, None, None]:
@@ -381,6 +387,26 @@ class TestFileWatcherNativeMode:
         assert native_watcher._watch_task is None
         assert native_watcher._debounce_task is None
         assert native_watcher._dir_scan_task is None
+
+    @pytest.mark.asyncio
+    async def test_native_collects_watch_dirs(
+        self, native_watcher: FileWatcher, tmp_path: Path
+    ) -> None:
+        """Native mode collects non-recursive directory list."""
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "core").mkdir()
+        (tmp_path / "node_modules").mkdir()
+
+        await native_watcher.start()
+        try:
+            await asyncio.sleep(0.2)
+            # Watched dirs should include src and src/core but not node_modules
+            watched_names = {d.name for d in native_watcher._watched_dirs}
+            assert "src" in watched_names
+            assert "core" in watched_names
+            assert "node_modules" not in watched_names
+        finally:
+            await native_watcher.stop()
 
 
 class TestFileWatcherCplignore:

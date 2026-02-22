@@ -191,24 +191,6 @@ def _default_parallelism() -> int:
 
 
 # =============================================================================
-# Active Run Tracking
-# =============================================================================
-
-
-@dataclass
-class ActiveRun:
-    """Tracks an active test run."""
-
-    run_id: str
-    task: asyncio.Task[TestRunStatus]
-    start_time: float
-    progress: TestProgress
-    failures: list[TestFailure]
-    cancel_event: asyncio.Event
-    artifact_dir: Path
-
-
-# =============================================================================
 # Workspace Detection
 # =============================================================================
 
@@ -426,7 +408,6 @@ class TestOps:
         """Initialize test ops."""
         self._repo_root = repo_root
         self._coordinator = coordinator
-        self._active_runs: dict[str, ActiveRun] = {}
         self._artifacts_base = repo_root / ".codeplane" / "artifacts" / "tests"
 
     async def discover(
@@ -791,25 +772,19 @@ class TestOps:
             )
         )
 
-        self._active_runs[run_id] = ActiveRun(
-            run_id=run_id,
-            task=task,
-            start_time=time.time(),
-            progress=progress,
-            failures=failures,
-            cancel_event=cancel_event,
-            artifact_dir=artifact_dir,
-        )
-
-        return TestResult(
-            action="run",
-            run_status=TestRunStatus(
+        start_time = time.time()
+        try:
+            run_status = await task
+        except Exception:
+            run_status = TestRunStatus(
                 run_id=run_id,
-                status="running",
+                status="failed",
                 progress=progress,
+                failures=failures,
+                duration_seconds=time.time() - start_time,
                 artifact_dir=str(artifact_dir),
-            ),
-        )
+            )
+        return TestResult(action="run", run_status=run_status)
 
     async def _execute_tests(
         self,
@@ -945,9 +920,6 @@ class TestOps:
         status: Literal["running", "completed", "cancelled", "failed"] = (
             "cancelled" if cancel_event.is_set() else "completed"
         )
-
-        if run_id in self._active_runs:
-            del self._active_runs[run_id]
 
         # Convert coverage artifacts to serializable dicts
         coverage_dicts = [
@@ -1395,73 +1367,3 @@ class TestOps:
             )
         except (json.JSONDecodeError, KeyError):
             return None
-
-    async def status(self, run_id: str) -> TestResult:
-        """Get status of a test run."""
-        # Check active runs first
-        if run_id in self._active_runs:
-            active = self._active_runs[run_id]
-            duration = time.time() - active.start_time
-
-            if active.task.done():
-                try:
-                    return TestResult(action="status", run_status=active.task.result())
-                except Exception:
-                    return TestResult(
-                        action="status",
-                        run_status=TestRunStatus(run_id=run_id, status="failed"),
-                    )
-
-            return TestResult(
-                action="status",
-                run_status=TestRunStatus(
-                    run_id=run_id,
-                    status="running",
-                    progress=active.progress,
-                    failures=active.failures,
-                    duration_seconds=duration,
-                    artifact_dir=str(active.artifact_dir),
-                ),
-            )
-
-        # Check for persisted result in artifacts
-        artifact_dir = self._artifacts_base / run_id
-        if artifact_dir.exists():
-            loaded_status = self._load_result(artifact_dir)
-            if loaded_status:
-                return TestResult(action="status", run_status=loaded_status)
-
-        # Run not found
-        return TestResult(
-            action="status",
-            run_status=TestRunStatus(run_id=run_id, status="not_found"),
-            agentic_hint=f"No test run found with ID '{run_id}'. "
-            "Use testing_run to start a new test run.",
-        )
-
-    async def cancel(self, run_id: str) -> TestResult:
-        """Cancel a running test."""
-        if run_id in self._active_runs:
-            active = self._active_runs[run_id]
-            active.cancel_event.set()
-            active.task.cancel()
-
-            duration = time.time() - active.start_time
-            del self._active_runs[run_id]
-
-            return TestResult(
-                action="cancel",
-                run_status=TestRunStatus(
-                    run_id=run_id,
-                    status="cancelled",
-                    progress=active.progress,
-                    failures=active.failures,
-                    duration_seconds=duration,
-                    artifact_dir=str(active.artifact_dir),
-                ),
-            )
-
-        return TestResult(
-            action="cancel",
-            run_status=TestRunStatus(run_id=run_id, status="cancelled"),
-        )

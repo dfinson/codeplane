@@ -1061,9 +1061,9 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             "When you need to find tests first - use discover_test_targets",
         ],
         hints_before="Use discover_test_targets to get target IDs.",
-        hints_after="Use get_test_run_status to monitor progress.",
+        hints_after="Results are returned inline — no polling needed.",
         commonly_preceded_by=["discover_test_targets", "lint_check"],
-        commonly_followed_by=["get_test_run_status"],
+        commonly_followed_by=[],
         behavior=BehaviorFlags(has_side_effects=True, may_be_slow=True),
         possible_errors=[],
         examples=[
@@ -1078,52 +1078,6 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             {
                 "description": "Run tests matching path pattern",
                 "params": {"target_filter": "test_api"},
-            },
-        ],
-    ),
-    "get_test_run_status": ToolDocumentation(
-        name="get_test_run_status",
-        description="Check progress of a running test.",
-        category=ToolCategory.TESTING,
-        when_to_use=[
-            "Monitoring test progress",
-            "Getting final test results",
-        ],
-        when_not_to_use=[],
-        hints_before="Get run_id from run_test_targets response.",
-        hints_after=None,
-        commonly_preceded_by=["run_test_targets"],
-        commonly_followed_by=[],
-        behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
-        possible_errors=[],
-        examples=[
-            {
-                "description": "Check test status",
-                "params": {"run_id": "run_abc123"},
-            },
-        ],
-    ),
-    "cancel_test_run": ToolDocumentation(
-        name="cancel_test_run",
-        description="Abort a running test execution.",
-        category=ToolCategory.TESTING,
-        when_to_use=[
-            "Stopping long-running tests",
-            "Cancelling after finding a critical failure",
-        ],
-        when_not_to_use=[
-            "When tests have already completed",
-        ],
-        hints_before=None,
-        hints_after=None,
-        commonly_preceded_by=["get_test_run_status"],
-        commonly_followed_by=[],
-        behavior=BehaviorFlags(has_side_effects=True),
-        possible_errors=[],
-        examples=[
-            {
-                "description": "Cancel test run",
-                "params": {"run_id": "run_abc123"},
             },
         ],
     ),

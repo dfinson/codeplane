@@ -69,7 +69,6 @@ def mock_test_ops() -> AsyncMock:
     run_status.status = "running"
     run_status.duration_seconds = 1.0
     run_status.progress = progress
-    run_status.poll_after_seconds = 1
     run_status.artifact_dir = "/tmp/test-artifacts"
 
     result = MagicMock()

@@ -266,47 +266,6 @@ class TestRunStatus:
     coverage: list[dict[str, str]] = field(default_factory=list)  # [{format, path, pack_id}]
     # Target selectors that were executed (for coverage correlation)
     target_selectors: list[str] = field(default_factory=list)
-    # Polling hint: suggested seconds until next status check (None = don't poll)
-    poll_after_seconds: float | None = None
-
-    def compute_poll_hint(self) -> float | None:
-        """Compute intelligent polling interval based on progress.
-
-        Returns None if polling is not needed (run finished).
-        Otherwise returns suggested seconds until next poll.
-        """
-        # Terminal states - no more polling needed
-        if self.status in ("completed", "cancelled", "failed", "not_found"):
-            return None
-
-        # Running - estimate based on progress
-        if not self.progress or self.progress.targets.total == 0:
-            # No progress info yet, poll in 2 seconds
-            return 2.0
-
-        completed = self.progress.targets.completed
-        total = self.progress.targets.total
-        remaining = total - completed
-
-        if completed == 0:
-            # Just started, no rate info - poll in 3 seconds
-            return 3.0
-
-        if remaining == 0:
-            # Should be completing very soon
-            return 0.5
-
-        # Estimate time per target from elapsed time
-        if self.duration_seconds > 0 and completed > 0:
-            seconds_per_target = self.duration_seconds / completed
-            estimated_remaining = seconds_per_target * remaining
-
-            # Poll at roughly 20% intervals, min 1s, max 10s
-            poll_interval = max(1.0, min(10.0, estimated_remaining * 0.2))
-            return round(poll_interval, 1)
-
-        # Fallback: poll every 3 seconds
-        return 3.0
 
 
 @dataclass

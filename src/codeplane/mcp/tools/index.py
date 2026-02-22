@@ -46,6 +46,181 @@ def _summarize_map(file_count: int, sections: list[str], truncated: bool) -> str
     return ", ".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Text-format serializers (scaffold pattern)
+#
+# Same information as JSON, but as compact flat-text lines.
+# Pattern: one line per item, double-space separators, key:value pairs,
+# nesting via indentation. Mirrors _build_symbol_tree in files.py.
+# ---------------------------------------------------------------------------
+
+
+def _search_results_to_text(
+    items: list[dict[str, Any]],
+) -> list[str]:
+    """Convert search result dicts to compact text lines.
+
+    Format: {kind} {path}:{line}  {name}  {preview}
+    With enrichment: ... [scope {start}-{end}]
+    With match_count: ... (×N)
+    """
+    lines: list[str] = []
+    for item in items:
+        kind = item.get("kind", "hit")
+        path = item.get("path", "")
+        span = item.get("span", {})
+        line_no = span.get("start_line", 0) if isinstance(span, dict) else 0
+        name = item.get("symbol_id") or ""
+        preview = item.get("preview_line") or ""
+
+        # Compact symbol info from enrichment
+        sym = item.get("symbol")
+        if sym and not name:
+            name = sym.get("name", "")
+
+        parts = [f"{kind} {path}:{line_no}"]
+        if name:
+            parts.append(f"  {name}")
+        if preview:
+            parts.append(f"  {preview}")
+
+        # Enclosing span for structural enrichment
+        enc = item.get("enclosing_span")
+        if enc:
+            enc_kind = enc.get("kind", "scope")
+            parts.append(f"  [{enc_kind} {enc['start_line']}-{enc['end_line']}]")
+
+        # files_only match count
+        mc = item.get("match_count")
+        if mc and mc > 1:
+            parts.append(f"  (×{mc})")
+
+        lines.append("".join(parts))
+    return lines
+
+
+def _change_to_text(c: Any, depth: int = 0) -> list[str]:
+    """Convert a StructuralChange to compact text lines.
+
+    Format: {change} {kind} {name}  {path}:{start}-{end}  Δ{lines}  risk:{risk}  refs:{N}  tests:{list}
+    """
+    indent = "  " * depth
+    parts = [f"{indent}{c.change} {c.kind} {c.name}"]
+
+    if c.start_line and c.end_line:
+        parts.append(f"  {c.path}:{c.start_line}-{c.end_line}")
+    else:
+        parts.append(f"  {c.path}")
+
+    if c.lines_changed is not None:
+        parts.append(f"  Δ{c.lines_changed}")
+
+    if c.behavior_change_risk and c.behavior_change_risk != "low":
+        parts.append(f"  risk:{c.behavior_change_risk}")
+
+    if c.change == "signature_changed":
+        parts.append(f"  old:{c.old_sig or ''}  new:{c.new_sig or ''}")
+
+    if c.change == "renamed" and c.old_name:
+        parts.append(f"  was:{c.old_name}")
+
+    if c.impact:
+        if c.impact.reference_count:
+            parts.append(f"  refs:{c.impact.reference_count}")
+        if c.impact.affected_test_files:
+            tests = ",".join(c.impact.affected_test_files)
+            parts.append(f"  tests:{tests}")
+
+    result_lines = ["".join(parts)]
+    if c.nested_changes:
+        for nc in c.nested_changes:
+            result_lines.extend(_change_to_text(nc, depth + 1))
+    return result_lines
+
+
+def _tree_to_text(
+    nodes: list[Any], *, include_line_counts: bool = True, depth: int = 0
+) -> list[str]:
+    """Convert directory tree nodes to indented text lines.
+
+    Directories: indent + path/ (N files)
+    Files: indent + filename  [lines]
+    """
+    lines: list[str] = []
+    indent = "  " * depth
+    for node in nodes:
+        if node.is_dir:
+            lines.append(f"{indent}{node.path}/  ({node.file_count} files)")
+            lines.extend(
+                _tree_to_text(
+                    node.children,
+                    include_line_counts=include_line_counts,
+                    depth=depth + 1,
+                )
+            )
+        else:
+            name = node.path.rsplit("/", 1)[-1] if "/" in node.path else node.path
+            if include_line_counts:
+                lines.append(f"{indent}{name}  {node.line_count}")
+            else:
+                lines.append(f"{indent}{name}")
+    return lines
+
+
+def _map_repo_sections_to_text(result: Any, *, include_line_counts: bool = True) -> dict[str, Any]:
+    """Convert map_repo result sections to compact text format.
+
+    Same data as JSON serializers, but as flat lines.
+    """
+    sections: dict[str, Any] = {}
+
+    if result.languages:
+        sections["languages"] = [
+            f"{lang.language} {lang.percentage:.1f}%  {lang.file_count} files"
+            for lang in result.languages
+        ]
+
+    if result.structure:
+        tree_lines = _tree_to_text(result.structure.tree, include_line_counts=include_line_counts)
+        sections["structure"] = {
+            "root": result.structure.root,
+            "file_count": result.structure.file_count,
+            "tree": tree_lines,
+        }
+        if result.structure.contexts:
+            sections["structure"]["contexts"] = result.structure.contexts
+
+    if result.dependencies:
+        deps = result.dependencies
+        sections["dependencies"] = (
+            f"{', '.join(deps.external_modules)}  "
+            f"({len(deps.external_modules)} modules, {deps.import_count} imports)"
+        )
+
+    if result.test_layout:
+        tl = result.test_layout
+        sections["test_layout"] = (
+            f"{len(tl.test_files)} test files, {tl.test_count} tests\n" + "\n".join(tl.test_files)
+        )
+
+    if result.entry_points:
+        sections["entry_points"] = [
+            f"{ep.kind} {ep.name}  {ep.path}"
+            + (f"  ({ep.qualified_name})" if ep.qualified_name else "")
+            for ep in result.entry_points
+        ]
+
+    if result.public_api:
+        sections["public_api"] = [
+            f"{sym.name}  {sym.certainty}"
+            + (f"  {sym.def_uid}" if sym.def_uid else "")
+            + (f"  [{sym.evidence}]" if sym.evidence else "")
+            for sym in result.public_api
+        ]
+
+    return sections
+
+
 def _serialize_tree(nodes: list[Any], *, include_line_counts: bool = True) -> list[dict[str, Any]]:
     """Recursively serialize directory tree nodes.
 
@@ -510,6 +685,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "query_time_ms": 0,
                 "summary": _summarize_search(1, "definitions", query),
             }
+            def_result["results"] = _search_results_to_text(def_result["results"])
             if pattern_extras:
                 def_result.update(pattern_extras)
 
@@ -622,6 +798,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     len(items), "references", query, file_count=len(ref_files)
                 ),
             }
+            ref_result["results"] = _search_results_to_text(ref_result["results"])
             if pattern_extras:
                 ref_result.update(pattern_extras)
 
@@ -756,6 +933,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         if search_response.fallback_reason:
             result["fallback_reason"] = search_response.fallback_reason
 
+        result["results"] = _search_results_to_text(result["results"])
+
         from codeplane.mcp.delivery import wrap_existing_response
 
         # Track scope usage
@@ -841,30 +1020,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         # Build overview
         overview = _build_overview(result)
 
-        # Serialize all sections at full detail
-        sections_output: dict[str, Any] = {}
-        if result.languages:
-            sections_output["languages"] = _serialize_languages(result.languages)
-        if result.structure:
-            sections_output["structure"] = _serialize_structure_tiered(
-                result.structure, _TIER_FULL, include_line_counts
-            )
-        if result.dependencies:
-            sections_output["dependencies"] = _serialize_dependencies_tiered(
-                result.dependencies, _TIER_FULL
-            )
-        if result.test_layout:
-            sections_output["test_layout"] = _serialize_test_layout_tiered(
-                result.test_layout, _TIER_FULL
-            )
-        if result.entry_points:
-            sections_output["entry_points"] = _serialize_entry_points_tiered(
-                result.entry_points, _TIER_FULL
-            )
-        if result.public_api:
-            sections_output["public_api"] = _serialize_public_api_tiered(
-                result.public_api, _TIER_FULL
-            )
+        sections_output = _map_repo_sections_to_text(
+            result, include_line_counts=include_line_counts
+        )
 
         # Build output
         output: dict[str, Any] = {

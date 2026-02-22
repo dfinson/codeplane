@@ -8,7 +8,6 @@ Tests the environment detection and workspace discovery functions:
 - _default_parallelism: Default parallelism calculation
 - _is_prunable_path: Prunable path detection
 - detect_workspaces: Workspace detection in monorepos
-- ActiveRun: Active run tracking dataclass
 - DetectedWorkspace: Detected workspace dataclass
 """
 
@@ -18,7 +17,6 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from codeplane.testing.ops import (
-    ActiveRun,
     DetectedWorkspace,
     _default_parallelism,
     _is_prunable_path,
@@ -408,38 +406,6 @@ class TestDetectWorkspaces:
                 key = (ws.root, ws.pack.pack_id)
                 assert key not in seen, f"Duplicate workspace: {key}"
                 seen.add(key)
-
-
-class TestActiveRun:
-    """Tests for ActiveRun dataclass."""
-
-    def test_creation(self) -> None:
-        """Can create ActiveRun instance."""
-        import asyncio
-        from unittest.mock import MagicMock
-
-        from codeplane.testing.models import TargetProgress, TestCaseProgress, TestProgress
-
-        progress = TestProgress(
-            targets=TargetProgress(total=5),
-            cases=TestCaseProgress(total=10),
-        )
-        cancel_event = asyncio.Event()
-        mock_task = MagicMock(spec=asyncio.Task)
-
-        run = ActiveRun(
-            run_id="test-123",
-            task=mock_task,
-            start_time=1000.0,
-            progress=progress,
-            failures=[],
-            cancel_event=cancel_event,
-            artifact_dir=Path("/tmp/artifacts"),
-        )
-
-        assert run.run_id == "test-123"
-        assert run.start_time == 1000.0
-        assert run.progress.targets.total == 5
 
 
 class TestDetectedWorkspace:

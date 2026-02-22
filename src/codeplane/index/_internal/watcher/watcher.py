@@ -110,6 +110,7 @@ class FileWatcher:
         self._ignore_checker = IgnoreChecker(
             config.root,
             extra_patterns=config.ignore_patterns,
+            respect_gitignore=True,
         )
         self._pending: dict[Path, FileChangeEvent] = {}
         self._running = False

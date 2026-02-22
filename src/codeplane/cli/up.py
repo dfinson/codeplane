@@ -170,7 +170,20 @@ def up_command(path: Path | None, port: int | None, reindex: bool) -> None:
     loop = asyncio.new_event_loop()
     try:
         if not loop.run_until_complete(coordinator.load_existing()):
-            raise click.ClickException("Failed to load index")
+            # Index DB missing or corrupted — auto-rebuild
+            coordinator.close()
+            click.echo("Index not found — building index...")
+            if not initialize_repo(repo_root, reindex=True, show_cpl_up_hint=False, port=port):
+                raise click.ClickException("Failed to build index")
+            # Reload paths (may differ after init) and retry
+            db_path, tantivy_path = get_index_paths(repo_root)
+            coordinator = IndexCoordinator(
+                repo_root=repo_root,
+                db_path=db_path,
+                tantivy_path=tantivy_path,
+            )
+            if not loop.run_until_complete(coordinator.load_existing()):
+                raise click.ClickException("Failed to load index after initialization")
     finally:
         loop.close()
 

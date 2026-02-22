@@ -181,7 +181,7 @@ class TestToolMiddleware:
         assert content["error"]["code"] == "VALIDATION_ERROR"
         assert "details" in content["error"]
         assert "agentic_hint" in content
-        assert "describe" in content["agentic_hint"]
+        assert "tool_schema" in content["agentic_hint"]
 
     @pytest.mark.asyncio
     async def test_validation_error_extracts_field_info(

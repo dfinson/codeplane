@@ -411,8 +411,8 @@ def _try_paginate(
 
     cursor_id = uuid.uuid4().hex[:12]
     extra = {k: v for k, v in payload.items() if k != items_key}
-    if inline_summary:
-        extra["inline_summary"] = inline_summary
+    if inline_summary and "summary" not in extra:
+        extra["summary"] = inline_summary
 
     cursor = PendingCursor(
         cursor_id=cursor_id,
@@ -583,21 +583,31 @@ def _extract_jq_commands(
         changes_key = "structural_changes" if "structural_changes" in payload else "changes"
         changes = payload.get(changes_key, [])
         ct: dict[str, int] = {}
+        text_format = changes and isinstance(changes[0], str)
         for c in changes:
-            t = c.get("change", c.get("change_type", "?"))
+            if text_format:
+                # Text format lines start with "{change} {kind} {name}"
+                t = c.split(" ", 1)[0] if c else "?"
+            else:
+                t = c.get("change", c.get("change_type", "?"))
             ct[t] = ct.get(t, 0) + 1
         summary = payload.get("summary", "")
         if not summary:
             summary = f"{len(changes)} change(s): " + ", ".join(f"{v} {k}" for k, v in ct.items())
         cmds = [
             f"jq '.{changes_key} | length' {path}",
-            f"jq '[.{changes_key}[] | .change // .change_type] | group_by(.) | map({{type: .[0], count: length}})' {path}",
         ]
-        # Add targeted filter commands for each change type present
-        for change_type in ct:
+        if text_format:
+            cmds.append(f"jq '.{changes_key}[]' {path}")
+        else:
             cmds.append(
-                f"jq '[.{changes_key}[] | select((.change // .change_type) == \"{change_type}\")] | map({{name: .name, path: .path}})' {path}"
+                f"jq '[.{changes_key}[] | .change // .change_type] | group_by(.) | map({{type: .[0], count: length}})' {path}"
             )
+            # Add targeted filter commands for each change type present
+            for change_type in ct:
+                cmds.append(
+                    f"jq '[.{changes_key}[] | select((.change // .change_type) == \"{change_type}\")] | map({{name: .name, path: .path}})' {path}"
+                )
         return str(summary), cmds
 
     if kind == "diff":
@@ -852,8 +862,6 @@ def build_envelope(
         envelope.update(payload)
         envelope["inline_budget_bytes_used"] = payload_bytes
         envelope["inline_budget_bytes_limit"] = inline_cap
-        if inline_summary:
-            envelope["inline_summary"] = inline_summary
     else:
         # Try cursor pagination first for supported kinds
         # Subtract post-overhead (scope_id/scope_usage added after pagination)
@@ -884,7 +892,7 @@ def build_envelope(
         resource_id, byte_size = _resource_cache.store(payload, resource_kind)
         envelope["delivery"] = "resource"
         if inline_summary:
-            envelope["inline_summary"] = inline_summary
+            envelope["summary"] = inline_summary
         envelope["inline_budget_bytes_used"] = len(
             json.dumps(envelope, indent=2, default=str).encode("utf-8")
         )
@@ -933,8 +941,6 @@ def wrap_existing_response(
         result["delivery"] = "inline"
         result["inline_budget_bytes_used"] = payload_bytes
         result["inline_budget_bytes_limit"] = inline_cap
-        if inline_summary:
-            result["inline_summary"] = inline_summary
     else:
         # Try cursor pagination first for supported kinds
         # Subtract post-overhead (scope_id/scope_usage added after pagination)
@@ -966,7 +972,7 @@ def wrap_existing_response(
             "delivery": "resource",
         }
         if inline_summary:
-            envelope["inline_summary"] = inline_summary
+            envelope["summary"] = inline_summary
         envelope["inline_budget_bytes_used"] = len(
             json.dumps(envelope, indent=2, default=str).encode("utf-8")
         )
