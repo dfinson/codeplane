@@ -561,6 +561,7 @@ async def _expand_seed(
     repo_root: Path,
     *,
     depth: int = 1,
+    task_terms: list[str] | None = None,
 ) -> dict[str, Any]:
     """Expand a single seed via graph walk.
 
@@ -569,6 +570,10 @@ async def _expand_seed(
       - callee_sigs: signatures of symbols it calls
       - callers: context snippets around call sites
       - imports: scaffold of files the seed's file imports from
+
+    When *task_terms* is provided, import_defs are scored by task relevance
+    (term match in def name) + hub score.  Defs with no term match and hub < 3
+    are dropped to reduce noise.
     """
     coordinator = app_ctx.coordinator
 
@@ -655,15 +660,23 @@ async def _expand_seed(
             if imp_file is None or imp_file.id is None:
                 continue
             imp_file_defs = _fq.list_defs_in_file(imp_file.id, limit=20)
-            # Pick top defs by hub score, max 3 per imported file
-            imp_scored = []
+            # Score defs by task relevance + hub score
+            imp_scored: list[tuple[DefFact, float]] = []
+            _terms = task_terms or []
             for idef in imp_file_defs:
                 if idef.def_uid == seed.def_uid:
                     continue
                 ihub = min(_fq.count_callers(idef.def_uid), 30)
-                imp_scored.append((idef, ihub))
+                # Term match: does the def name contain a task term?
+                iname_lower = idef.name.lower()
+                term_match = 1.0 if any(t in iname_lower for t in _terms) else 0.0
+                # Drop low-signal defs: no term match AND low hub
+                if term_match == 0 and ihub < 3 and _terms:
+                    continue
+                score = ihub * 2 + term_match * 5
+                imp_scored.append((idef, score))
             imp_scored.sort(key=lambda x: -x[1])
-            for idef, _ihub in imp_scored[:3]:
+            for idef, _iscore in imp_scored[:3]:
                 import_defs.append(
                     {
                         "symbol": _def_signature_text(idef),
@@ -961,8 +974,13 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         total_callers = 0
         total_import_defs = 0
 
+        # Tokenize task for import_def relevance filtering
+        terms = _tokenize_task(task)
+
         for seed_def in selected_seeds:
-            expanded = await _expand_seed(app_ctx, seed_def, repo_root, depth=depth)
+            expanded = await _expand_seed(
+                app_ctx, seed_def, repo_root, depth=depth, task_terms=terms
+            )
             seed_results.append(expanded)
             seed_paths.add(expanded["path"])
             total_callees += len(expanded.get("callees", []))
