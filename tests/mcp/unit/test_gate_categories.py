@@ -65,13 +65,30 @@ class TestCategorizeTool:
     def test_deleted_tools_are_not_in_categories(self) -> None:
         """Tools removed in consolidation are NOT in TOOL_CATEGORIES."""
         deleted = [
-            "git_status", "git_diff", "git_log", "git_branch",
-            "git_remote", "git_inspect", "git_history", "git_submodule",
-            "git_worktree", "git_commit", "git_stage_and_commit",
-            "git_stage", "git_push", "git_pull", "git_checkout",
-            "git_merge", "git_reset", "git_stash", "git_rebase",
-            "lint_check", "lint_tools", "run_test_targets",
-            "discover_test_targets", "inspect_affected_tests",
+            "git_status",
+            "git_diff",
+            "git_log",
+            "git_branch",
+            "git_remote",
+            "git_inspect",
+            "git_history",
+            "git_submodule",
+            "git_worktree",
+            "git_commit",
+            "git_stage_and_commit",
+            "git_stage",
+            "git_push",
+            "git_pull",
+            "git_checkout",
+            "git_merge",
+            "git_reset",
+            "git_stash",
+            "git_rebase",
+            "lint_check",
+            "lint_tools",
+            "run_test_targets",
+            "discover_test_targets",
+            "inspect_affected_tests",
         ]
         for name in deleted:
             assert name not in TOOL_CATEGORIES, f"{name} should be removed"

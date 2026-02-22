@@ -145,38 +145,28 @@ class TestTargetMatchesAffectedFiles:
         target = MagicMock()
         target.workspace_root = "/repo"
         target.selector = "./tests/test_foo.py"
-        assert _target_matches_affected_files(
-            target, {"tests/test_foo.py"}, Path("/repo")
-        )
+        assert _target_matches_affected_files(target, {"tests/test_foo.py"}, Path("/repo"))
 
     def test_no_match(self) -> None:
         target = MagicMock()
         target.workspace_root = "/repo"
         target.selector = "./tests/test_bar.py"
-        assert not _target_matches_affected_files(
-            target, {"tests/test_foo.py"}, Path("/repo")
-        )
+        assert not _target_matches_affected_files(target, {"tests/test_foo.py"}, Path("/repo"))
 
     def test_package_scope(self) -> None:
         target = MagicMock()
         target.workspace_root = "/repo"
         target.selector = "./tests"
-        assert _target_matches_affected_files(
-            target, {"tests/test_foo.py"}, Path("/repo")
-        )
+        assert _target_matches_affected_files(target, {"tests/test_foo.py"}, Path("/repo"))
 
     def test_root_scope_matches_all(self) -> None:
         target = MagicMock()
         target.workspace_root = "/repo"
         target.selector = "."
-        assert _target_matches_affected_files(
-            target, {"src/foo.py"}, Path("/repo")
-        )
+        assert _target_matches_affected_files(target, {"src/foo.py"}, Path("/repo"))
 
     def test_empty_affected_paths(self) -> None:
         target = MagicMock()
         target.workspace_root = "/repo"
         target.selector = "."
-        assert not _target_matches_affected_files(
-            target, set(), Path("/repo")
-        )
+        assert not _target_matches_affected_files(target, set(), Path("/repo"))

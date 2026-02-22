@@ -188,23 +188,31 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         _validate_commit_message(message)
         repo_path = Path(app_ctx.git_ops.repo.workdir)
 
+        total_steps = 2 + int(push)  # stage + hooks + commit (+ push)
+        step = 0
+
         # Stage files
         staged_paths: list[str] = []
         if all:
+            await ctx.report_progress(step, total_steps, "Staging all tracked changes")
             staged_paths = app_ctx.git_ops.stage_all()
         elif paths:
+            await ctx.report_progress(step, total_steps, f"Staging {len(paths)} path(s)")
             _validate_paths_exist(repo_path, paths)
             app_ctx.git_ops.stage(paths)
             staged_paths = paths
+        step += 1
 
         # Run pre-commit hooks with auto-fix retry
-        hook_result, failure = _run_hook_with_retry(
-            repo_path, staged_paths, app_ctx.git_ops.stage
-        )
+        await ctx.report_progress(step, total_steps, "Running pre-commit hooks")
+        hook_result, failure = _run_hook_with_retry(repo_path, staged_paths, app_ctx.git_ops.stage)
         if failure:
+            await ctx.warning("Pre-commit hooks failed")
             return failure
+        step += 1
 
         # Commit
+        await ctx.report_progress(step, total_steps, "Committing")
         sha = app_ctx.git_ops.commit(message, allow_empty=allow_empty)
         result: dict[str, Any] = {
             "oid": sha,
@@ -224,8 +232,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         # Optional push
         if push:
+            await ctx.report_progress(step, total_steps, "Pushing to origin")
             app_ctx.git_ops.push(remote="origin", force=False)
             result["pushed"] = "origin"
             result["summary"] += " → pushed to origin"
+            step += 1
 
+        await ctx.report_progress(total_steps, total_steps, f"Committed {sha[:7]}")
         return result

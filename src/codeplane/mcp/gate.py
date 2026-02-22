@@ -409,9 +409,7 @@ _SEARCH_WORKFLOW: dict[str, str] = {
         "one call gets callers with full function bodies"
     ),
     "if_reading_code": ("Switch to read_source with multiple targets per call (up to 20)"),
-    "if_ready_to_act": (
-        "Proceed to write_source, refactor_rename, verify, or commit"
-    ),
+    "if_ready_to_act": ("Proceed to write_source, refactor_rename, verify, or commit"),
 }
 
 _READ_WORKFLOW: dict[str, str] = {
@@ -424,9 +422,7 @@ _READ_WORKFLOW: dict[str, str] = {
         "Use search(mode='definitions', enrichment='function') for edit-ready code"
     ),
     "if_reading_multiple_spans": ("Batch up to 20 targets in one read_source call"),
-    "if_ready_to_act": (
-        "Proceed to write_source, refactor_rename, verify, or commit"
-    ),
+    "if_ready_to_act": ("Proceed to write_source, refactor_rename, verify, or commit"),
 }
 
 

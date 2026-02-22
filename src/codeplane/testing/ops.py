@@ -745,10 +745,7 @@ class TestOps:
                     artifact_dir=str(artifact_dir),
                 ),
                 agentic_hint="No test targets found to run. "
-                + (
-                    agentic_hint_for_empty
-                    or "Use verify to check available targets."
-                ),
+                + (agentic_hint_for_empty or "Use verify to check available targets."),
             )
 
         progress.targets.total = len(resolved_targets)

@@ -37,7 +37,6 @@ _ROUTING_MODELS = frozenset({"gpt-4o-mini", "gpt-3.5-turbo"})
 # ---------------------------------------------------------------------------
 
 
-
 def _detect_issue(prompts: list[dict[str, Any]]) -> str:
     """Extract issue number from the first prompt.
 
@@ -105,7 +104,6 @@ def _build_session_name(repo: str, issue: str, model: str, codeplane: bool) -> s
     safe_model = re.sub(r"[./]", "-", model)
     variant = "codeplane" if codeplane else "native"
     return f"{repo}_{issue}_{safe_model}_{variant}"
-
 
 
 # ---------------------------------------------------------------------------

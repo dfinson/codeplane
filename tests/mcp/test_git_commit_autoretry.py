@@ -11,7 +11,7 @@ Covers:
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -81,6 +81,9 @@ def git_commit_tool(
 def mock_ctx() -> MagicMock:
     ctx = MagicMock()
     ctx.session_id = "test-session"
+    ctx.report_progress = AsyncMock()
+    ctx.info = AsyncMock()
+    ctx.warning = AsyncMock()
     return ctx
 
 

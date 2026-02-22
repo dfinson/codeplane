@@ -366,6 +366,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         """
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
+        # Compute total phases for progress reporting
+        total_phases = int(lint) + int(tests) * 3  # tests = discover + filter + run
+        phase = 0
+
         result: dict[str, Any] = {"action": "verify", "changed_files": changed_files}
         lint_status = "skipped"
         lint_diagnostics = 0
@@ -375,6 +379,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         # --- Phase 1: Lint ---
         if lint:
+            mode = "auto-fix" if autofix else "check-only"
+            await ctx.report_progress(phase, total_phases, f"Linting ({mode})")
             lint_result = await app_ctx.lint_ops.check(
                 paths=None,  # full repo
                 tools=None,
@@ -383,6 +389,15 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             )
             lint_status = lint_result.status
             lint_diagnostics = lint_result.total_diagnostics
+            phase += 1
+
+            if lint_status == "clean":
+                await ctx.info("Lint: clean")
+            else:
+                await ctx.info(
+                    f"Lint: {lint_diagnostics} issue(s), "
+                    f"{lint_result.total_files_modified} file(s) modified"
+                )
 
             result["lint"] = {
                 "status": lint_result.status,
@@ -416,13 +431,18 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         # --- Phase 2: Tests ---
         if tests:
+            await ctx.report_progress(phase, total_phases, "Discovering test targets")
             discover_result = await app_ctx.test_ops.discover(paths=None)
             all_targets = discover_result.targets or []
+            phase += 1
 
             if all_targets and changed_files:
-                graph_result = await app_ctx.coordinator.get_affected_test_targets(
-                    changed_files
+                await ctx.report_progress(
+                    phase,
+                    total_phases,
+                    f"Filtering {len(all_targets)} targets by import graph",
                 )
+                graph_result = await app_ctx.coordinator.get_affected_test_targets(changed_files)
                 affected_paths = set(graph_result.test_files)
 
                 filtered = [
@@ -431,9 +451,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     if _target_matches_affected_files(t, affected_paths, app_ctx.repo_root)
                 ]
                 effective_targets = [t.target_id for t in filtered]
+                phase += 1
 
                 if not effective_targets:
                     test_status = "skipped"
+                    await ctx.info("Tests: no affected targets — skipping")
                     result["tests"] = {
                         "status": "skipped",
                         "reason": "no affected tests found",
@@ -448,6 +470,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                             "reason": "coverage=True requires coverage_dir",
                         }
                     else:
+                        await ctx.report_progress(
+                            phase,
+                            total_phases,
+                            f"Running {len(effective_targets)} affected test target(s)",
+                        )
                         test_result = await app_ctx.test_ops.run(
                             targets=effective_targets,
                             target_filter=None,
@@ -470,6 +497,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                                 test_passed = test_result.run_status.progress.cases.passed
                                 test_failed = test_result.run_status.progress.cases.failed
 
+                        if test_failed > 0:
+                            await ctx.warning(f"Tests: {test_passed} passed, {test_failed} FAILED")
+                        elif test_passed > 0:
+                            await ctx.info(f"Tests: {test_passed} passed")
+
                         # Track scoped test for pattern detection
                         session = app_ctx.session_manager.get_or_create(ctx.session_id)
                         session.pattern_detector.record(
@@ -482,6 +514,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     reason = "no test targets discovered"
                 else:
                     reason = "changed_files is empty — nothing to match against"
+                await ctx.info(f"Tests: skipped — {reason}")
                 result["tests"] = {
                     "status": "skipped",
                     "reason": reason,
@@ -497,6 +530,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         has_test_error = test_status == "error"
         if has_lint_issues or has_test_failures or has_test_error:
             result["passed"] = False
+            await ctx.report_progress(total_phases, total_phases, "Verify FAILED")
             hints: list[str] = []
             if has_lint_issues:
                 hints.append(f"Fix {lint_diagnostics} lint issues.")
@@ -507,5 +541,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             result["agentic_hint"] = " ".join(hints)
         else:
             result["passed"] = True
+            await ctx.report_progress(total_phases, total_phases, "Verify passed")
 
         return result

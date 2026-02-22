@@ -185,10 +185,7 @@ class TestStripToolPrefix:
 
     def test_git_tools(self) -> None:
         """Git tool names are correctly stripped."""
-        assert (
-            ToolMiddleware._strip_tool_prefix("codeplane-cod_commit")
-            == "commit"
-        )
+        assert ToolMiddleware._strip_tool_prefix("codeplane-cod_commit") == "commit"
 
     def test_write_source(self) -> None:
         assert ToolMiddleware._strip_tool_prefix("codeplane-cod_write_source") == "write_source"

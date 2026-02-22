@@ -78,9 +78,7 @@ class TestRunHookWithRetry:
         mock_result.success = True
 
         with patch("codeplane.mcp.tools.git.run_hook", return_value=mock_result):
-            hook_result, failure = git_tools._run_hook_with_retry(
-                tmp_path, ["a.py"], MagicMock()
-            )
+            hook_result, failure = git_tools._run_hook_with_retry(tmp_path, ["a.py"], MagicMock())
 
         assert failure is None
         assert hook_result.success is True
@@ -97,9 +95,7 @@ class TestRunHookWithRetry:
         mock_result.stderr = ""
 
         with patch("codeplane.mcp.tools.git.run_hook", return_value=mock_result):
-            _, failure = git_tools._run_hook_with_retry(
-                tmp_path, ["a.py"], MagicMock()
-            )
+            _, failure = git_tools._run_hook_with_retry(tmp_path, ["a.py"], MagicMock())
 
         assert failure is not None
         assert failure["hook_failure"]["code"] == "HOOK_FAILED"
@@ -124,9 +120,7 @@ class TestRunHookWithRetry:
             "codeplane.mcp.tools.git.run_hook",
             side_effect=[first_result, retry_result],
         ):
-            hook_result, failure = git_tools._run_hook_with_retry(
-                tmp_path, ["a.py"], stage_fn
-            )
+            hook_result, failure = git_tools._run_hook_with_retry(tmp_path, ["a.py"], stage_fn)
 
         assert failure is None
         stage_fn.assert_called_once()
@@ -153,9 +147,7 @@ class TestRunHookWithRetry:
             "codeplane.mcp.tools.git.run_hook",
             side_effect=[first_result, retry_result],
         ):
-            _, failure = git_tools._run_hook_with_retry(
-                tmp_path, ["a.py"], MagicMock()
-            )
+            _, failure = git_tools._run_hook_with_retry(tmp_path, ["a.py"], MagicMock())
 
         assert failure is not None
         assert failure["hook_failure"]["code"] == "HOOK_FAILED_AFTER_RETRY"
@@ -240,10 +232,24 @@ class TestCommitTool:
 
         tools = get_tools_sync(mcp)
         deleted = [
-            "git_status", "git_diff", "git_commit", "git_log", "git_push",
-            "git_pull", "git_checkout", "git_merge", "git_reset", "git_stage",
-            "git_branch", "git_remote", "git_stash", "git_rebase",
-            "git_inspect", "git_history", "git_submodule", "git_worktree",
+            "git_status",
+            "git_diff",
+            "git_commit",
+            "git_log",
+            "git_push",
+            "git_pull",
+            "git_checkout",
+            "git_merge",
+            "git_reset",
+            "git_stage",
+            "git_branch",
+            "git_remote",
+            "git_stash",
+            "git_rebase",
+            "git_inspect",
+            "git_history",
+            "git_submodule",
+            "git_worktree",
             "git_stage_and_commit",
         ]
         for name in deleted:

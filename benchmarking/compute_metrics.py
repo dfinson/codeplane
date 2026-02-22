@@ -65,9 +65,7 @@ def compute_metrics(trace: dict[str, Any]) -> dict[str, Any]:
 
     # Time to first token (TTFT) — average across agent requests
     ttft_values = [
-        e["time_to_first_token_ms"]
-        for e in agent_llm_events
-        if e.get("time_to_first_token_ms")
+        e["time_to_first_token_ms"] for e in agent_llm_events if e.get("time_to_first_token_ms")
     ]
     avg_ttft_ms = sum(ttft_values) / len(ttft_values) if ttft_values else None
 
@@ -205,7 +203,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  Avg TTFT: {metrics['avg_ttft_ms']}ms")
     cg = metrics.get("context_growth", {})
     if cg.get("first") is not None:
-        print(f"  Context messages: {cg['first']} → {cg['last']} (max={cg['max']}, mean={cg['mean']})")
+        print(
+            f"  Context messages: {cg['first']} → {cg['last']} (max={cg['max']}, mean={cg['mean']})"
+        )
 
     return 0
 

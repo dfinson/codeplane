@@ -92,13 +92,34 @@ _METRIC_EXTRACTORS: list[tuple[str, Any]] = [
     ("context_max", lambda m: _safe_get(m, "context_growth", "max")),
     ("context_mean", lambda m: _safe_get(m, "context_growth", "mean")),
     # Outcome metrics (may not be present — added manually)
-    ("outcome_correctness", lambda m: _safe_get(m, "outcome", "correctness") if "outcome" in m else None),
-    ("outcome_completeness", lambda m: _safe_get(m, "outcome", "completeness") if "outcome" in m else None),
-    ("outcome_code_quality", lambda m: _safe_get(m, "outcome", "code_quality") if "outcome" in m else None),
-    ("outcome_test_quality", lambda m: _safe_get(m, "outcome", "test_quality") if "outcome" in m else None),
-    ("outcome_documentation", lambda m: _safe_get(m, "outcome", "documentation") if "outcome" in m else None),
-    ("outcome_lint_clean", lambda m: _safe_get(m, "outcome", "lint_clean") if "outcome" in m else None),
-    ("outcome_tests_pass", lambda m: _safe_get(m, "outcome", "tests_pass") if "outcome" in m else None),
+    (
+        "outcome_correctness",
+        lambda m: _safe_get(m, "outcome", "correctness") if "outcome" in m else None,
+    ),
+    (
+        "outcome_completeness",
+        lambda m: _safe_get(m, "outcome", "completeness") if "outcome" in m else None,
+    ),
+    (
+        "outcome_code_quality",
+        lambda m: _safe_get(m, "outcome", "code_quality") if "outcome" in m else None,
+    ),
+    (
+        "outcome_test_quality",
+        lambda m: _safe_get(m, "outcome", "test_quality") if "outcome" in m else None,
+    ),
+    (
+        "outcome_documentation",
+        lambda m: _safe_get(m, "outcome", "documentation") if "outcome" in m else None,
+    ),
+    (
+        "outcome_lint_clean",
+        lambda m: _safe_get(m, "outcome", "lint_clean") if "outcome" in m else None,
+    ),
+    (
+        "outcome_tests_pass",
+        lambda m: _safe_get(m, "outcome", "tests_pass") if "outcome" in m else None,
+    ),
     ("outcome_score", lambda m: _safe_get(m, "outcome", "score") if "outcome" in m else None),
 ]
 
@@ -278,10 +299,12 @@ def _direction_indicator(name: str, delta_pct: float | None) -> str:
 def print_report(report: dict[str, Any]) -> None:
     """Print a human-readable summary of the aggregate report."""
     print(f"\n{'=' * 60}")
-    print(f"BENCHMARK AGGREGATE REPORT")
+    print("BENCHMARK AGGREGATE REPORT")
     print(f"{'=' * 60}")
-    print(f"Total runs: {report['total_runs']} "
-          f"(baseline={report['baseline_runs']}, codeplane={report['codeplane_runs']})")
+    print(
+        f"Total runs: {report['total_runs']} "
+        f"(baseline={report['baseline_runs']}, codeplane={report['codeplane_runs']})"
+    )
 
     # Summary stats per group
     for group in ("baseline", "codeplane"):
@@ -293,26 +316,30 @@ def print_report(report: dict[str, Any]) -> None:
         for name, stats in summary.items():
             if stats.get("n", 0) == 0:
                 continue
-            print(f"  {name:30s}  mean={stats['mean']:>12.2f}  "
-                  f"median={stats['median']:>12.2f}  stdev={stats['stdev']:>10.2f}  "
-                  f"[{stats['min']}, {stats['max']}]")
+            print(
+                f"  {name:30s}  mean={stats['mean']:>12.2f}  "
+                f"median={stats['median']:>12.2f}  stdev={stats['stdev']:>10.2f}  "
+                f"[{stats['min']}, {stats['max']}]"
+            )
 
     # Comparison
     if "comparison" in report:
         comp = report["comparison"]
-        print(f"\n--- COMPARISON (CodePlane vs Baseline) ---")
+        print("\n--- COMPARISON (CodePlane vs Baseline) ---")
         for name, c in comp.items():
             if c["baseline_mean"] == 0 and c["codeplane_mean"] == 0:
                 continue
             pct_str = f"{c['delta_pct']:+.1f}%" if c["delta_pct"] is not None else "N/A"
             indicator = _direction_indicator(name, c.get("delta_pct"))
-            print(f"  {name:30s}  {c['baseline_mean']:>12.2f} → {c['codeplane_mean']:>12.2f}  "
-                  f"Δ={c['delta']:>+12.2f}  ({pct_str}){indicator}")
+            print(
+                f"  {name:30s}  {c['baseline_mean']:>12.2f} → {c['codeplane_mean']:>12.2f}  "
+                f"Δ={c['delta']:>+12.2f}  ({pct_str}){indicator}"
+            )
 
     # Per-issue breakdown
     if "per_issue" in report:
         issues = report["per_issue"]
-        print(f"\n--- PER-ISSUE BREAKDOWN ---")
+        print("\n--- PER-ISSUE BREAKDOWN ---")
         for row in issues:
             print(f"\n  Issue #{row['issue']}:")
             for key, vals in row.items():
