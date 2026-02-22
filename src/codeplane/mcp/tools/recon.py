@@ -371,6 +371,23 @@ async def _file_path_for_id(app_ctx: AppContext, file_id: int) -> str:
         return f.path if f else "unknown"
 
 
+def _is_test_file(path: str) -> bool:
+    """Check if a file path points to a test file.
+
+    Test files are deprioritized in seed selection because test functions
+    are rarely the right starting point for understanding production code.
+    They match many task terms (via imports of the symbols under test) but
+    provide little implementation insight.
+    """
+    parts = path.split("/")
+    basename = parts[-1] if parts else ""
+    return (
+        any(p in ("tests", "test") for p in parts[:-1])
+        or basename.startswith("test_")
+        or basename.endswith("_test.py")
+    )
+
+
 # ---------------------------------------------------------------------------
 # Seed Selection
 # ---------------------------------------------------------------------------
@@ -405,10 +422,12 @@ async def _select_seeds(
               + name_bonus * 3             # symbol name matches a task term
               + path_bonus                 # file path matches a task term
               + bm25_bonus * 4             # BM25 file-level task relevance
+              - test_penalty               # deprioritize test files
 
-    BM25 file scores (if provided) add up to 4 points for files with high
-    textual relevance to the task, ensuring relevant but low-hub files
-    like config/models.py are selected.
+    Test files are penalized because test functions typically have hub ≈ 0
+    (nothing calls test functions) but match many task terms through their
+    imports.  Without the penalty, test files often outscore the source
+    files they test.
     """
     from codeplane.index._internal.indexing.graph import FactQueries
 
@@ -517,14 +536,15 @@ async def _select_seeds(
         log.info("recon.no_candidates", task=task, terms=terms)
         return seeds  # return any path-extracted seeds we already have
 
-    # ---- Score: term coverage + hub score + BM25 + path boost ----
+    # ---- Score: term coverage + hub score + BM25 + path boost - test penalty ----
     #
     # Formula balances structural importance (hub, capped) with task
     # relevance (term coverage, BM25, name match).  Hub is capped at 5
     # to prevent high-connectivity symbols (events, base classes) from
-    # drowning out task-relevant symbols like config models.
+    # drowning out task-relevant symbols.  Test files get a flat penalty
+    # because test functions match many terms via imports but provide
+    # little implementation insight.
     scored: list[tuple[DefFact, float]] = []
-    num_terms = len(terms) if terms else 0
     if def_term_hits:
         from codeplane.index.models import File as FileModel
 
@@ -535,12 +555,7 @@ async def _select_seeds(
             for uid, matched_terms in def_term_hits.items():
                 d = def_lookup[uid]
 
-                # Skip single-term matches when task has many terms —
-                # these are usually noise from broad substring matches
                 real_terms = matched_terms - {"__path__"}
-                if len(real_terms) <= 1 and num_terms >= 4:
-                    continue
-
                 term_coverage = len(matched_terms)
                 caller_count = fq.count_callers(uid)
                 path_bonus = 0.5 if d.file_id in path_boost_file_ids else 0.0
@@ -548,16 +563,22 @@ async def _select_seeds(
                 name_bonus = 1.0 if any(t in name_lower for t in real_terms) else 0.0
                 hub = min(caller_count, 5)  # cap hub contribution
 
+                # Resolve file path (cached) for test detection + BM25
+                if d.file_id not in _fid_path_cache:
+                    frec = session.get(FileModel, d.file_id)
+                    _fid_path_cache[d.file_id] = frec.path if frec else ""
+                fpath = _fid_path_cache[d.file_id]
+
+                # Test file penalty: test functions match many terms
+                # (via imports) but aren't useful implementation starting
+                # points.  The penalty offsets their term-coverage advantage.
+                test_penalty = 15 if _is_test_file(fpath) else 0
+
                 # BM25 file-level score: 0-1 normalized, then scaled
                 bm25_bonus = 0.0
-                if bm25_file_scores:
-                    if d.file_id not in _fid_path_cache:
-                        frec = session.get(FileModel, d.file_id)
-                        _fid_path_cache[d.file_id] = frec.path if frec else ""
-                    fpath = _fid_path_cache[d.file_id]
-                    if fpath in bm25_file_scores:
-                        max_bm25 = max(bm25_file_scores.values()) if bm25_file_scores else 1.0
-                        bm25_bonus = bm25_file_scores[fpath] / max_bm25 if max_bm25 > 0 else 0.0
+                if bm25_file_scores and fpath in bm25_file_scores:
+                    max_bm25 = max(bm25_file_scores.values()) if bm25_file_scores else 1.0
+                    bm25_bonus = bm25_file_scores[fpath] / max_bm25 if max_bm25 > 0 else 0.0
 
                 score = (
                     hub * 2  # structural importance (max 10)
@@ -565,6 +586,7 @@ async def _select_seeds(
                     + name_bonus * 3  # symbol name matches task term
                     + path_bonus  # file path matches task term
                     + bm25_bonus * 4  # BM25 file-level relevance (max 4)
+                    - test_penalty  # deprioritize test files (-15)
                 )
                 scored.append((d, score))
 
