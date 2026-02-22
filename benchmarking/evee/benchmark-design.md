@@ -4,6 +4,7 @@
 > then compare the agent debug logs to measure efficiency.
 >
 > **Target repo:** [microsoft/evee](https://github.com/microsoft/evee)
+> **Evee main at time of benchmarking:** `7aad1e8b37c539ea0e9e4e05bdec6b8b7c6f7e1c`
 >
 > **Ground rule — DO NOT push to evee remote or modify issue state.**
 
@@ -17,7 +18,7 @@
 | 2. Reload Window (`Ctrl+Shift+P` → Reload) | clean session | clean session |
 | 3. Checkout `main`, ensure clean | `git checkout main && git clean -fd` | same |
 | 4. Open a **new** Copilot Agent chat | paste prompt verbatim (single convo only) | same |
-| 5. Let the agent run to completion | look for `END_BENCHMARKING_RUN` in output | same (best effort if agent doesn't emit it) |
+| 5. Let the agent run to completion | wait for agent to finish | same |
 | 6. Export debug logs | **Export Chat with Prompts** → save `.chatreplay.json` | same |
 | 7. Process logs | see [Post-run processing](#post-run-processing) below | same |
 | 8. Reset repo | `git checkout main && git clean -fd && git branch -D bench/<N>-*` | same |
@@ -29,9 +30,8 @@ This keeps the debug logs scoped to a single benchmarking run.
 
 ### Markers
 
-Every prompt begins with `START_BENCHMARKING_RUN` and instructs the agent to emit
-`END_BENCHMARKING_RUN` when finished. If the agent doesn't emit the end marker,
-treat the end of the debug log as the boundary (best effort).
+Every prompt begins with `START_BENCHMARKING_RUN` for metadata extraction.
+The chatreplay export boundary is the session boundary — no end marker is needed.
 
 ### Post-run processing
 
@@ -43,11 +43,10 @@ Two scripts in `benchmarking/` process the exported chatreplay:
 python -m benchmarking.extract_trace <chatreplay.json> [--output-dir DIR]
 ```
 
-- Checks for `START_BENCHMARKING_RUN` / `END_BENCHMARKING_RUN` markers
-- Trims the export to only the marker window
-- Auto-detects: repo (from MCP server label), issue number (from prompt text),
-  model (from LLM request metadata), codeplane vs native (from tool calls)
-- Saves `{name}_raw.json` (trimmed chatreplay) and `{name}_trace.json` (events)
+- Uses `START_BENCHMARKING_RUN` marker in the first prompt for metadata extraction
+- Auto-detects: issue number (from prompt text), model (from LLM request metadata),
+  codeplane vs native (from tool calls)
+- Saves `{name}_raw.json` (full chatreplay) and `{name}_trace.json` (events)
 
 **Step 2 — Compute metrics** (`compute_metrics.py`)
 
@@ -67,6 +66,41 @@ python -m benchmarking.compute_metrics <trace.json> [--output-dir DIR]
 Example: `evee_260_claude-opus-4-6-fast_codeplane_trace.json`
 
 All outputs default to `benchmarking/evee/results/`.
+
+**Step 3 — Code review** (manual)
+
+After each run, review the agent's diff and score outcome quality.
+Amend the `_result_metrics.json` with an `"outcome"` block:
+
+```json
+{
+  "...existing metrics...",
+  "outcome": {
+    "correctness": 0-3,
+    "completeness": 0-3,
+    "code_quality": 0-3,
+    "test_quality": 0-3,
+    "documentation": 0-3,
+    "lint_clean": 0-1,
+    "tests_pass": 0-1,
+    "total": "<sum>",
+    "max": 17,
+    "review_summary": "<free text>"
+  }
+}
+```
+
+Scoring rubric:
+
+| Dimension | 0 | 1 | 2 | 3 |
+|-----------|---|---|---|---|
+| **correctness** | Wrong approach / doesn't work | Partially correct, major gaps | Mostly correct, minor issues | Fully solves the issue |
+| **completeness** | Most DoD items missing | Core impl only, tests/cleanup missing | Most items done, minor gaps | All DoD items addressed |
+| **code_quality** | Hacky, doesn't fit codebase | Works but messy / anti-patterns | Clean with minor nits | Production-ready, idiomatic |
+| **test_quality** | No tests or broken tests | Minimal / superficial tests | Good coverage, minor gaps | Thorough, well-structured, edge cases |
+| **documentation** | None | Minimal comments | Good comments + PR desc | Clear PR desc + inline docs + docstrings |
+
+Binary: `lint_clean` (0/1), `tests_pass` (0/1).
 
 ---
 
@@ -153,10 +187,9 @@ Definition of Done:
 - [ ] All existing tests still pass
 - [ ] Linter passes with no new warnings
 - [ ] Self-review completed — no obvious bugs, edge cases handled, code style consistent
-- [ ] Detailed inline PR description written summarizing the change
+- [ ] Write a PR description to `PR_DESCRIPTION.md` in the repo root summarizing the change
 
 Do not push or create a PR. Just implement locally.
-When you are completely done, say: END_BENCHMARKING_RUN
 ```
 
 ---
@@ -259,10 +292,9 @@ Definition of Done:
 - [ ] All existing tests still pass
 - [ ] Linter passes with no new warnings
 - [ ] Self-review completed — no obvious bugs, edge cases handled, code style consistent
-- [ ] Detailed inline PR description written summarizing the change
+- [ ] Write a PR description to `PR_DESCRIPTION.md` in the repo root summarizing the change
 
 Do not push or create a PR. Just implement locally.
-When you are completely done, say: END_BENCHMARKING_RUN
 ```
 
 ---
@@ -375,10 +407,9 @@ Definition of Done:
 - [ ] All existing tests still pass
 - [ ] Linter passes with no new warnings
 - [ ] Self-review completed — no obvious bugs, edge cases handled, code style consistent
-- [ ] Detailed inline PR description written summarizing the change
+- [ ] Write a PR description to `PR_DESCRIPTION.md` in the repo root summarizing the change
 
 Do not push or create a PR. Just implement locally.
-When you are completely done, say: END_BENCHMARKING_RUN
 ```
 
 ---
@@ -466,10 +497,9 @@ Definition of Done:
 - [ ] All existing tests still pass
 - [ ] Linter passes with no new warnings
 - [ ] Self-review completed — no obvious bugs, edge cases handled, code style consistent
-- [ ] Detailed inline PR description written summarizing the change
+- [ ] Write a PR description to `PR_DESCRIPTION.md` in the repo root summarizing the change
 
 Do not push or create a PR. Just implement locally.
-When you are completely done, say: END_BENCHMARKING_RUN
 ```
 
 ---
@@ -572,10 +602,9 @@ Definition of Done:
 - [ ] All existing tests still pass
 - [ ] Linter passes with no new warnings
 - [ ] Self-review completed — no obvious bugs, edge cases handled, code style consistent
-- [ ] Detailed inline PR description written summarizing the change
+- [ ] Write a PR description to `PR_DESCRIPTION.md` in the repo root summarizing the change
 
 Do not push or create a PR. Just implement locally.
-When you are completely done, say: END_BENCHMARKING_RUN
 ```
 
 ---
@@ -600,7 +629,7 @@ Start with #260 for a quick sanity check, then #233 for focused feature work.
 - [ ] On `main`, confirm clean: `git status && git clean -fd`
 - [ ] CodePlane on/off: `.vscode/mcp.json` present vs renamed to `mcp.json.bak`
 - [ ] Open **new** Agent chat, paste prompt verbatim
-- [ ] Let agent complete (look for `END_BENCHMARKING_RUN`)
+- [ ] Let agent complete
 - [ ] Save debug logs from Copilot output channel to `results/`
 - [ ] Reset: `git checkout main && git clean -fd && git branch -D bench/<N>-*`
 - [ ] Repeat with CodePlane toggled

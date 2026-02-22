@@ -60,7 +60,26 @@ def compute_metrics(trace: dict[str, Any]) -> dict[str, Any]:
     total_prompt_tokens = sum(e.get("prompt_tokens", 0) or 0 for e in agent_llm_events)
     total_completion_tokens = sum(e.get("completion_tokens", 0) or 0 for e in agent_llm_events)
     total_cached_tokens = sum(e.get("cached_tokens", 0) or 0 for e in agent_llm_events)
+    total_reasoning_tokens = sum(e.get("reasoning_tokens", 0) or 0 for e in agent_llm_events)
     total_llm_duration_ms = sum(e.get("duration_ms", 0) or 0 for e in agent_llm_events)
+
+    # Time to first token (TTFT) — average across agent requests
+    ttft_values = [
+        e["time_to_first_token_ms"]
+        for e in agent_llm_events
+        if e.get("time_to_first_token_ms")
+    ]
+    avg_ttft_ms = sum(ttft_values) / len(ttft_values) if ttft_values else None
+
+    # Context growth — track context_message_count per turn
+    context_sizes = [
+        e["context_message_count"]
+        for e in agent_llm_events
+        if e.get("context_message_count") is not None
+    ]
+
+    # Tool thinking — total chars of agent reasoning before tool calls
+    total_thinking_chars = sum(e.get("thinking_length", 0) or 0 for e in tool_events)
 
     # -- Timing --------------------------------------------------------------
     timestamps = []
@@ -78,6 +97,8 @@ def compute_metrics(trace: dict[str, Any]) -> dict[str, Any]:
     turn_count = len(agent_llm_events)
 
     # -- Assemble metrics dict -----------------------------------------------
+    cache_hit_ratio = total_cached_tokens / total_prompt_tokens if total_prompt_tokens else 0.0
+
     return {
         "session_name": trace.get("session_name"),
         "repo": trace.get("repo"),
@@ -97,6 +118,7 @@ def compute_metrics(trace: dict[str, Any]) -> dict[str, Any]:
             "other": len(other_tool_calls),
             "errors": len(error_tool_calls),
             "by_tool": dict(tool_counts.most_common()),
+            "total_thinking_chars": total_thinking_chars,
         },
         "llm_requests": {
             "agent": len(agent_llm_events),
@@ -107,9 +129,18 @@ def compute_metrics(trace: dict[str, Any]) -> dict[str, Any]:
             "prompt": total_prompt_tokens,
             "completion": total_completion_tokens,
             "cached": total_cached_tokens,
+            "reasoning": total_reasoning_tokens,
             "total": total_prompt_tokens + total_completion_tokens,
+            "cache_hit_ratio": round(cache_hit_ratio, 4),
         },
         "llm_duration_ms": total_llm_duration_ms,
+        "avg_ttft_ms": round(avg_ttft_ms) if avg_ttft_ms is not None else None,
+        "context_growth": {
+            "first": context_sizes[0] if context_sizes else None,
+            "last": context_sizes[-1] if context_sizes else None,
+            "max": max(context_sizes) if context_sizes else None,
+            "mean": round(sum(context_sizes) / len(context_sizes)) if context_sizes else None,
+        },
     }
 
 
@@ -165,9 +196,16 @@ def main(argv: list[str] | None = None) -> int:
         f"  Tokens: {metrics['tokens']['total']} "
         f"(prompt={metrics['tokens']['prompt']}, "
         f"completion={metrics['tokens']['completion']}, "
-        f"cached={metrics['tokens']['cached']})"
+        f"cached={metrics['tokens']['cached']}, "
+        f"reasoning={metrics['tokens']['reasoning']})"
     )
+    print(f"  Cache hit ratio: {metrics['tokens']['cache_hit_ratio']:.1%}")
     print(f"  LLM duration: {metrics['llm_duration_ms']}ms")
+    if metrics.get("avg_ttft_ms") is not None:
+        print(f"  Avg TTFT: {metrics['avg_ttft_ms']}ms")
+    cg = metrics.get("context_growth", {})
+    if cg.get("first") is not None:
+        print(f"  Context messages: {cg['first']} → {cg['last']} (max={cg['max']}, mean={cg['mean']})")
 
     return 0
 

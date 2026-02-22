@@ -1,15 +1,13 @@
 """Extract a benchmark trace from a VS Code Copilot chatreplay export.
 
 Usage:
-    python -m benchmarking.extract_trace <chatreplay.json> [--output-dir DIR]
+    python -m benchmarking.extract_trace <chatreplay.json> --repo REPO [--output-dir DIR]
 
 Steps:
-  1. Load the chatreplay JSON.
-  2. Verify START_BENCHMARKING_RUN / END_BENCHMARKING_RUN markers.
-  3. Trim logs to the marker window.
-  4. Auto-detect: repo, issue number, model, codeplane vs native.
-  5. Save trimmed raw JSON as  <output-dir>/<name>_raw.json
-  6. Extract trace events and save as <output-dir>/<name>_trace.json
+  1. Load the chatreplay JSON (each export = one benchmark run).
+  2. Auto-detect: issue number, model, codeplane vs native.
+  3. Save raw JSON as  <output-dir>/<name>_raw.json
+  4. Extract trace events and save as <output-dir>/<name>_trace.json
 
 Naming:  {repo}_{issue}_{model}_{codeplane|native}
 """
@@ -29,7 +27,6 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 START_MARKER = "START_BENCHMARKING_RUN"
-END_MARKER = "END_BENCHMARKING_RUN"
 
 # Models used for internal routing (not the primary agent model)
 _ROUTING_MODELS = frozenset({"gpt-4o-mini", "gpt-3.5-turbo"})
@@ -40,46 +37,31 @@ _ROUTING_MODELS = frozenset({"gpt-4o-mini", "gpt-3.5-turbo"})
 # ---------------------------------------------------------------------------
 
 
-def _detect_repo(data: dict[str, Any]) -> str:
-    """Derive repo name from the codeplane MCP server label.
-
-    Looks for an mcpServers entry with 'codeplane' in the label
-    (e.g. "codeplane-evee" -> "evee").  Falls back to 'unknown'.
-    """
-    for srv in data.get("mcpServers", []):
-        label = srv.get("label", "")
-        if "codeplane" in label.lower():
-            # label format: "codeplane-<repo>"  or  "codeplane-<repo>_copy3" etc.
-            suffix = label.split("codeplane-", 1)[-1]
-            # strip qualifiers like "_copy3"
-            repo = re.sub(r"[_-]copy\d*$", "", suffix)
-            if repo:
-                return repo.lower()
-    return "unknown"
-
 
 def _detect_issue(prompts: list[dict[str, Any]]) -> str:
-    """Extract issue number from the prompt text.
+    """Extract issue number from the first prompt.
 
-    Searches for patterns like:
+    Only looks at prompts[0] (the initial user message containing the
+    benchmark task).  Searches for patterns like:
       - bench/NNN-  (branch name)
       - Issue #NNN / issue #NNN
       - #NNN (standalone)
     """
-    for p in prompts:
-        text = p.get("prompt", "")
-        # branch pattern:  bench/233-early-stop
-        m = re.search(r"bench/(\d+)-", text)
-        if m:
-            return m.group(1)
-        # Issue #NNN
-        m = re.search(r"[Ii]ssue\s*#(\d+)", text)
-        if m:
-            return m.group(1)
-        # standalone #NNN
-        m = re.search(r"#(\d+)", text)
-        if m:
-            return m.group(1)
+    if not prompts:
+        return "unknown"
+    text = prompts[0].get("prompt", "")
+    # branch pattern:  bench/233-early-stop
+    m = re.search(r"bench/(\d+)-", text)
+    if m:
+        return m.group(1)
+    # Issue #NNN
+    m = re.search(r"[Ii]ssue\s*#(\d+)", text)
+    if m:
+        return m.group(1)
+    # standalone #NNN
+    m = re.search(r"#(\d+)", text)
+    if m:
+        return m.group(1)
     return "unknown"
 
 
@@ -125,64 +107,6 @@ def _build_session_name(repo: str, issue: str, model: str, codeplane: bool) -> s
     return f"{repo}_{issue}_{safe_model}_{variant}"
 
 
-# ---------------------------------------------------------------------------
-# Marker trimming
-# ---------------------------------------------------------------------------
-
-
-def _find_marker_window(
-    prompts: list[dict[str, Any]],
-) -> tuple[int, int] | None:
-    """Return (start_prompt_idx, end_prompt_idx) for the marker window.
-
-    START marker must appear in a prompt's text.
-    END marker may appear in either a prompt's text or in a request
-    response message (the agent saying END_BENCHMARKING_RUN).
-
-    Returns None if START is not found.
-    """
-    start_idx: int | None = None
-    end_idx: int | None = None
-
-    for i, p in enumerate(prompts):
-        text = p.get("prompt", "")
-        if START_MARKER in text and start_idx is None:
-            start_idx = i
-        if END_MARKER in text:
-            end_idx = i
-
-        # Also check LLM responses for the END marker
-        for log in p.get("logs", []):
-            if not isinstance(log, dict) or log.get("kind") != "request":
-                continue
-            resp = log.get("response", {})
-            if isinstance(resp, dict):
-                msg = resp.get("message", "")
-                msg_str = json.dumps(msg) if not isinstance(msg, str) else msg
-                if END_MARKER in msg_str:
-                    end_idx = i
-
-    if start_idx is None:
-        return None
-
-    # If no explicit END, treat the last prompt as the end
-    if end_idx is None:
-        end_idx = len(prompts) - 1
-
-    return (start_idx, end_idx)
-
-
-def _trim_to_window(data: dict[str, Any], start_idx: int, end_idx: int) -> dict[str, Any]:
-    """Return a copy of data with only prompts in [start_idx, end_idx]."""
-    trimmed_prompts = data["prompts"][start_idx : end_idx + 1]
-    return {
-        "exportedAt": data.get("exportedAt"),
-        "totalPrompts": len(trimmed_prompts),
-        "totalLogEntries": sum(len(p.get("logs", [])) for p in trimmed_prompts),
-        "prompts": trimmed_prompts,
-        "mcpServers": data.get("mcpServers", []),
-    }
-
 
 # ---------------------------------------------------------------------------
 # Trace extraction
@@ -198,6 +122,7 @@ def _extract_tool_event(log: dict[str, Any]) -> dict[str, Any]:
             args = json.loads(args)
 
     response = log.get("response")
+    thinking = log.get("thinking")
 
     return {
         "type": "tool_call",
@@ -206,7 +131,9 @@ def _extract_tool_event(log: dict[str, Any]) -> dict[str, Any]:
         "args": args,
         "time": log.get("time"),
         "response": response,
-        "thinking": log.get("thinking"),
+        "thinking": thinking,
+        "thinking_length": len(thinking) if isinstance(thinking, str) else 0,
+        "tool_metadata": log.get("toolMetadata"),
     }
 
 
@@ -228,20 +155,36 @@ def _extract_request_event(log: dict[str, Any]) -> dict[str, Any]:
         elif isinstance(msg, str) and msg.strip():
             agent_text = msg
 
+    # Context size: count messages in requestMessages
+    request_messages = log.get("requestMessages", {})
+    if isinstance(request_messages, dict):
+        msgs = request_messages.get("messages", [])
+        context_message_count = len(msgs) if isinstance(msgs, list) else 0
+    else:
+        context_message_count = 0
+
+    # Completion token breakdown
+    ctd = usage.get("completion_tokens_details", {})
+
     return {
         "type": "llm_request",
         "id": log.get("id"),
         "model": meta.get("model"),
+        "request_type": meta.get("requestType"),
         "agent_text": agent_text,
         "start_time": meta.get("startTime"),
         "end_time": meta.get("endTime"),
         "duration_ms": meta.get("duration"),
         "time_to_first_token_ms": meta.get("timeToFirstToken"),
+        "max_prompt_tokens": meta.get("maxPromptTokens"),
+        "max_response_tokens": meta.get("maxResponseTokens"),
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": usage.get("completion_tokens"),
         "total_tokens": usage.get("total_tokens"),
         "cached_tokens": usage.get("prompt_tokens_details", {}).get("cached_tokens"),
+        "reasoning_tokens": ctd.get("reasoning_tokens") if ctd else None,
         "tools_available": len(meta.get("tools", [])),
+        "context_message_count": context_message_count,
     }
 
 
@@ -279,6 +222,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to the chatreplay .json file.",
     )
     parser.add_argument(
+        "--repo",
+        required=True,
+        help="Repository name (e.g. 'evee').",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -300,26 +248,13 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: No prompts found in chatreplay.", file=sys.stderr)
         return 1
 
-    # Markers ----------------------------------------------------------------
-    window = _find_marker_window(prompts)
-    if window is None:
-        print(
-            f"ERROR: {START_MARKER} not found in any prompt text.",
-            file=sys.stderr,
-        )
-        return 1
-
-    start_idx, end_idx = window
-    print(f"Markers found: prompts {start_idx}..{end_idx} (of {len(prompts)} total)")
-
-    trimmed = _trim_to_window(data, start_idx, end_idx)
-    trimmed_prompts = trimmed["prompts"]
+    print(f"Loaded {len(prompts)} prompts")
 
     # Auto-detect metadata ---------------------------------------------------
-    repo = _detect_repo(data)
-    issue = _detect_issue(trimmed_prompts)
-    model = _detect_model(trimmed_prompts)
-    codeplane = _has_codeplane(trimmed_prompts)
+    repo = args.repo
+    issue = _detect_issue(prompts)
+    model = _detect_model(prompts)
+    codeplane = _has_codeplane(prompts)
     session_name = _build_session_name(repo, issue, model, codeplane)
 
     print(f"Detected: repo={repo} issue={issue} model={model} codeplane={codeplane}")
@@ -332,11 +267,11 @@ def main(argv: list[str] | None = None) -> int:
     # Save raw ---------------------------------------------------------------
     raw_path = output_dir / f"{session_name}_raw.json"
     with open(raw_path, "w") as f:
-        json.dump(trimmed, f, indent=2)
-    print(f"Raw (trimmed): {raw_path}")
+        json.dump(data, f, indent=2)
+    print(f"Raw: {raw_path}")
 
     # Extract and save trace -------------------------------------------------
-    events = extract_trace(trimmed_prompts)
+    events = extract_trace(prompts)
     trace = {
         "session_name": session_name,
         "repo": repo,
@@ -344,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
         "model": model,
         "codeplane": codeplane,
         "exported_at": data.get("exportedAt"),
-        "marker_window": {"start_prompt": start_idx, "end_prompt": end_idx},
+        "total_prompts": len(prompts),
         "total_events": len(events),
         "events": events,
     }
