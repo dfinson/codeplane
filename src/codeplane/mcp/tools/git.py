@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastmcp import Context
+from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from codeplane.git._internal.hooks import run_hook
@@ -151,7 +152,16 @@ def _summarize_commit(sha: str, message: str) -> str:
 def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     """Register git tools with FastMCP server."""
 
-    @mcp.tool
+    @mcp.tool(
+        title="Commit: stage → hooks → commit → push",
+        annotations=ToolAnnotations(
+            title="Commit: stage → hooks → commit → push",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=False,
+        ),
+    )
     async def commit(
         ctx: Context,
         message: str = Field(..., description="Commit message"),

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from fastmcp import Context
+from mcp.types import ToolAnnotations
 from pydantic import Field
 
 if TYPE_CHECKING:
@@ -335,7 +336,16 @@ def _summarize_verify(
 def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     """Register verify tool with FastMCP server."""
 
-    @mcp.tool
+    @mcp.tool(
+        title="Verify: lint + affected tests",
+        annotations=ToolAnnotations(
+            title="Verify: lint + affected tests",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=False,
+        ),
+    )
     async def verify(
         ctx: Context,
         changed_files: list[str] = Field(
