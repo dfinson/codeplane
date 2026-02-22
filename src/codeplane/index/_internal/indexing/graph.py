@@ -52,8 +52,13 @@ class FactQueries:
         return list(self._session.exec(stmt).all())
 
     def list_defs_in_file(self, file_id: int, *, limit: int = 1000) -> list[DefFact]:
-        """List all definitions in a file."""
-        stmt = select(DefFact).where(DefFact.file_id == file_id).limit(limit)
+        """List all definitions in a file, ordered by source position."""
+        stmt = (
+            select(DefFact)
+            .where(DefFact.file_id == file_id)
+            .order_by(col(DefFact.start_line), col(DefFact.def_uid))
+            .limit(limit)
+        )
         return list(self._session.exec(stmt).all())
 
     # -------------------------------------------------------------------------
@@ -157,6 +162,7 @@ class FactQueries:
                 RefFact.target_def_uid.is_not(None),  # type: ignore[union-attr]
             )
             .distinct()
+            .order_by(DefFact.def_uid)
             .limit(limit)
         )
         return list(self._session.exec(stmt).all())
@@ -216,8 +222,13 @@ class FactQueries:
     # -------------------------------------------------------------------------
 
     def list_imports(self, file_id: int, *, limit: int = 100) -> list[ImportFact]:
-        """List all imports in a file."""
-        stmt = select(ImportFact).where(ImportFact.file_id == file_id).limit(limit)
+        """List all imports in a file, ordered by source position."""
+        stmt = (
+            select(ImportFact)
+            .where(ImportFact.file_id == file_id)
+            .order_by(col(ImportFact.start_line), col(ImportFact.import_uid))
+            .limit(limit)
+        )
         return list(self._session.exec(stmt).all())
 
     def get_import(self, import_uid: str) -> ImportFact | None:
@@ -294,6 +305,9 @@ class FactQueries:
         Uses SQL LIKE for case-insensitive substring matching directly on
         the structural index — no BM25, no Tantivy.
 
+        Results are ordered by ``def_uid`` for deterministic output across
+        index rebuilds.
+
         Args:
             term: Lowercase search term (minimum 2 chars).
             limit: Maximum results.
@@ -312,6 +326,7 @@ class FactQueries:
                 | (col(DefFact.docstring).ilike(pattern))
                 | (col(DefFact.lexical_path).ilike(pattern))
             )
+            .order_by(DefFact.def_uid)
             .limit(limit)
         )
         return list(self._session.exec(stmt).all())
@@ -334,7 +349,7 @@ class FactQueries:
         if len(term) < 2:
             return []
         pattern = f"%{term}%"
-        stmt = select(File).where(col(File.path).ilike(pattern)).limit(limit)
+        stmt = select(File).where(col(File.path).ilike(pattern)).order_by(File.path).limit(limit)
         return list(self._session.exec(stmt).all())
 
 
