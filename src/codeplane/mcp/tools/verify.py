@@ -1,10 +1,6 @@
 """Verify MCP tool — single "did I break anything?" endpoint.
 
-Replaces lint_check, lint_tools, discover_test_targets,
-inspect_affected_tests, and run_test_targets with one tool call.
-
-Chains:
-  lint (auto-fix by default) → affected tests → combined report
+Chains:  lint (auto-fix by default) → affected tests → combined report
 """
 
 from pathlib import Path
@@ -446,6 +442,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 else:
                     # Validate coverage params
                     if coverage and not coverage_dir:
+                        test_status = "error"
                         result["tests"] = {
                             "status": "error",
                             "reason": "coverage=True requires coverage_dir",
@@ -481,9 +478,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                         )
             else:
                 test_status = "skipped"
+                if not all_targets:
+                    reason = "no test targets discovered"
+                else:
+                    reason = "changed_files is empty — nothing to match against"
                 result["tests"] = {
                     "status": "skipped",
-                    "reason": "no test targets discovered",
+                    "reason": reason,
                 }
 
         # --- Summary ---
@@ -493,13 +494,16 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         has_lint_issues = lint_diagnostics > 0 and lint_status != "clean"
         has_test_failures = test_failed > 0
-        if has_lint_issues or has_test_failures:
+        has_test_error = test_status == "error"
+        if has_lint_issues or has_test_failures or has_test_error:
             result["passed"] = False
             hints: list[str] = []
             if has_lint_issues:
                 hints.append(f"Fix {lint_diagnostics} lint issues.")
             if has_test_failures:
                 hints.append(f"Fix {test_failed} failing test(s).")
+            if has_test_error:
+                hints.append("Test phase errored — check tests section for details.")
             result["agentic_hint"] = " ".join(hints)
         else:
             result["passed"] = True

@@ -328,7 +328,7 @@ class CallPatternDetector:
                 Used by test handler to record ``test_scoped`` which must persist
                 in the window as evidence for the broad-test prerequisite.
             clears_window: Explicitly clear the window after recording.
-                Used for conditional mutations (e.g. lint_check that auto-fixed
+                Used for conditional mutations (e.g. verify that auto-fixed
                 files).  Unconditional mutations use ACTION_CATEGORIES instead.
         """
         category = category_override or categorize_tool(tool_name)

@@ -166,7 +166,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 {
                     "name": "code_review",
                     "description": "Review code changes before commit",
-                    "steps": ["git_status", "git_diff", "lint", "test"],
+                    "steps": ["semantic_diff", "verify"],
                 },
                 {
                     "name": "refactor_symbol",
@@ -194,8 +194,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 },
                 {
                     "name": "fix_and_commit",
-                    "description": "Edit files, lint, test, and commit",
-                    "steps": ["write_source", "lint", "test", "git_commit"],
+                    "description": "Edit files, verify, and commit",
+                    "steps": ["write_source", "verify", "commit"],
                 },
             ]
             return {
