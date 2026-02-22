@@ -70,6 +70,15 @@ Search = find. Scaffold = orient. Read = retrieve. Full = gated.
 `read_source` target format: `[{{"path": "src/foo.py", "start_line": 10, "end_line": 50}}]`
 Response includes `file_sha256` per file — save it for `write_source` span edits.
 
+### CRITICAL: After Every Code Change
+
+After ANY edit via `write_source` or other mutation:
+
+1. **`verify(changed_files=[...])`** — REQUIRED. Runs lint + affected tests. Do NOT use `pytest`, `ruff`, `mypy` in terminal.
+2. **`commit(message=..., all=True, push=True)`** — REQUIRED to save. Do NOT use `git add/commit/push` in terminal.
+
+**Terminal commands for lint, test, or git operations are ALWAYS WRONG in this repo.**
+
 ### First Steps When Starting a Task
 
 1. `describe` — get repo metadata, language, active branch, index status
@@ -78,17 +87,17 @@ Response includes `file_sha256` per file — save it for `write_source` span edi
 4. `read_source` on spans from search results — understand the code you'll modify
 5. After changes: `verify(changed_files=[...])` — lint + affected tests in one call
 6. `semantic_diff` — review structural impact before committing
-7. `commit` — stage, lint, hooks, commit (optionally push)
+7. `commit(message="...", all=True, push=True)` — stage, hooks, commit, push
 
 **Testing rule**: NEVER run the full test suite or use test runners directly.
-Always use `verify(changed_files=[...])` to lint and run affected tests.
-This runs only the tests impacted by your changes — fast, targeted, sufficient.
+Always use `verify(changed_files=[...])` with the files you changed.
+This runs lint + only the tests impacted by your changes — fast, targeted, sufficient.
 
 ### Reviewing Changes (PR Review)
 
 1. `semantic_diff(base="main")` — structural overview of all changes vs main
 2. `read_source` on changed symbols — review each change in context
-3. `verify(changed_files=[...])` — lint + run affected tests
+3. `verify(changed_files=[...])` — lint + affected tests
 
 `semantic_diff` first — NOT `git_diff`. It gives symbol-level changes, not raw patches.
 
@@ -103,10 +112,10 @@ This runs only the tests impacted by your changes — fast, targeted, sufficient
 | List directory | `{tool_prefix}_list_files` | `ls`, `find`, `tree` |
 | Search code | `{tool_prefix}_search` | `grep`, `rg`, `ag`, `ack` |
 | Repository overview | `{tool_prefix}_map_repo` | Manual file traversal |
-| All git operations | `{tool_prefix}_commit` | Raw `git` commands (for commit) |
-| Verify changes | `{tool_prefix}_verify` | Running linters/tests directly |
+| Lint + test | `{tool_prefix}_verify` | Running linters/test runners directly |
 | Rename across files | `{tool_prefix}_refactor_rename` | Find-and-replace, `sed` |
 | Semantic diff | `{tool_prefix}_semantic_diff` | `git_diff` for change review, manual comparison |
+| Commit | `{tool_prefix}_commit` | Raw `git add` + `git commit` |
 
 ### Before You Edit: Decision Gate
 
@@ -133,8 +142,8 @@ STOP before using `read_file_full`:
 Search NEVER returns source text. Use `read_source` with spans from search results.
 
 `search` params: `query` (str), `mode` (definitions|references|lexical|symbol), `enrichment` (none|minimal|standard|function|class).
-`verify` params: `changed_files` (list of paths), `lint` (bool), `autofix` (bool), `tests` (bool).
-`commit` params: `message` (str), `paths` (list), `all` (bool), `push` (bool).
+`verify` params: `changed_files` (list of changed file paths) — runs lint + affected tests.
+`commit` params: `message` (str), `all` (bool), `push` (bool) — stage, hooks, commit, push.
 
 ### Refactor: preview → inspect → apply/cancel
 
@@ -146,11 +155,9 @@ Search NEVER returns source text. Use `read_source` with spans from search resul
 
 `write_source` supports span edits: provide `start_line`, `end_line`, `expected_file_sha256`
 (from `read_source`), and `new_content`. Server validates hash; mismatch → re-read.
-`edits` accepts multiple entries across different files — always batch independent edits
-into a single `write_source` call to minimize round-trips.
-For updates, always include `expected_content` (the old text at the span) — the server
-fuzzy-matches nearby lines if your line numbers are slightly off, auto-correcting
-within a few lines. This is required.
+For updates, always include `expected_content` — the server fuzzy-matches nearby lines.
+
+**Batching**: `edits` accepts multiple files — batch independent edits into one call.
 
 ### CRITICAL: Follow Agentic Hints
 
@@ -172,9 +179,9 @@ avoids wasted round-trips.
 - **DON'T** pass `context:` to search — the parameter is `enrichment`
 - **DON'T** use `read_files` — it's replaced by `read_source` and `read_file_full`
 - **DON'T** use `refactor_rename` with file:line:col — pass the symbol NAME only
-- **DON'T** skip `verify` after `write_source`
+- **DON'T** skip `verify` after `write_source` — always lint + test your changes
 - **DON'T** ignore `agentic_hint` in responses
-- **DON'T** use `target_filter` for post-change testing — use `changed_files` on `verify`
+- **DON'T** use raw `git add` + `git commit` — use `commit` (handles hooks, auto-fix, push)
 <!-- /codeplane-instructions -->
 """
 
@@ -191,10 +198,10 @@ def _inject_agent_instructions(repo_root: Path, tool_prefix: str) -> list[str]:
     modified: list[str] = []
     snippet = _make_codeplane_snippet(tool_prefix)
 
-    # Target files for agent instructions
+    # Target: AGENTS.md only (copilot-instructions.md should reference AGENTS.md,
+    # not duplicate CodePlane tool instructions)
     targets = [
         repo_root / "AGENTS.md",
-        repo_root / ".github" / "copilot-instructions.md",
     ]
 
     for target in targets:
@@ -222,16 +229,10 @@ def _inject_agent_instructions(repo_root: Path, tool_prefix: str) -> list[str]:
         else:
             # Create file with snippet
             target.parent.mkdir(parents=True, exist_ok=True)
-            if target.name == "AGENTS.md":
-                target.write_text(
-                    "# Agent Instructions\n\n"
-                    "Instructions for AI coding agents working in this repository.\n" + snippet
-                )
-            else:  # copilot-instructions.md
-                target.write_text(
-                    "# Copilot Instructions\n\n"
-                    "Project-specific instructions for GitHub Copilot.\n" + snippet
-                )
+            target.write_text(
+                "# Agent Instructions\n\n"
+                "Instructions for AI coding agents working in this repository.\n" + snippet
+            )
             modified.append(str(target.relative_to(repo_root)))
 
     return modified

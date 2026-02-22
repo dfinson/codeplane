@@ -28,6 +28,15 @@ Search = find. Scaffold = orient. Read = retrieve. Full = gated.
 `read_source` target format: `[{"path": "src/foo.py", "start_line": 10, "end_line": 50}]`
 Response includes `file_sha256` per file — save it for `write_source` span edits.
 
+### CRITICAL: After Every Code Change
+
+After ANY edit via `write_source` or other mutation:
+
+1. **`verify(changed_files=[...])`** — REQUIRED. Runs lint + affected tests. Do NOT use `pytest`, `ruff`, `mypy` in terminal.
+2. **`commit(message=..., all=True, push=True)`** — REQUIRED to save. Do NOT use `git add/commit/push` in terminal.
+
+**Terminal commands for lint, test, or git operations are ALWAYS WRONG in this repo.**
+
 ### First Steps When Starting a Task
 
 1. `describe` — get repo metadata, language, active branch, index status
@@ -91,8 +100,8 @@ STOP before using `read_file_full`:
 Search NEVER returns source text. Use `read_source` with spans from search results.
 
 `search` params: `query` (str), `mode` (definitions|references|lexical|symbol), `enrichment` (none|minimal|standard|function|class).
-`lint_check` takes no arguments — always lints the full repo.
-`run_test_targets` params: `affected_by` (list of changed file paths) for post-change testing.
+`verify` params: `changed_files` (list of changed file paths) — runs lint + affected tests.
+`commit` params: `message` (str), `all` (bool), `push` (bool) — stage, hooks, commit, push.
 
 ### Refactor: preview → inspect → apply/cancel
 
@@ -104,14 +113,9 @@ Search NEVER returns source text. Use `read_source` with spans from search resul
 
 `write_source` supports span edits: provide `start_line`, `end_line`, `expected_file_sha256`
 (from `read_source`), and `new_content`. Server validates hash; mismatch → re-read.
-For updates, always include `expected_content` (the old text at the span) — the server
-fuzzy-matches nearby lines if your line numbers are slightly off, auto-correcting
-within a few lines. This is required.
+For updates, always include `expected_content` — the server fuzzy-matches nearby lines.
 
-**Batching**: `edits` accepts multiple entries across different files — always batch
-independent edits into a single `write_source` call. If you need to edit 3 files,
-send all 3 edits in one call, not 3 separate calls. This is the single biggest
-latency win available to you.
+**Batching**: `edits` accepts multiple files — batch independent edits into one call.
 
 ### CRITICAL: Follow Agentic Hints
 
