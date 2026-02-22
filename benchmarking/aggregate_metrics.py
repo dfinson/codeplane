@@ -98,7 +98,7 @@ _METRIC_EXTRACTORS: list[tuple[str, Any]] = [
     ("outcome_documentation", lambda m: _safe_get(m, "outcome", "documentation") if "outcome" in m else None),
     ("outcome_lint_clean", lambda m: _safe_get(m, "outcome", "lint_clean") if "outcome" in m else None),
     ("outcome_tests_pass", lambda m: _safe_get(m, "outcome", "tests_pass") if "outcome" in m else None),
-    ("outcome_total", lambda m: _safe_get(m, "outcome", "total") if "outcome" in m else None),
+    ("outcome_score", lambda m: _safe_get(m, "outcome", "score") if "outcome" in m else None),
 ]
 
 

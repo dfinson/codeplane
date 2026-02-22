@@ -83,8 +83,9 @@ Amend the `_result_metrics.json` with an `"outcome"` block:
     "documentation": 0-3,
     "lint_clean": 0-1,
     "tests_pass": 0-1,
-    "total": "<sum>",
-    "max": 17,
+    "score": "<sum>",
+    "max_score": 17,
+    "scored_by": "<model or 'human'>",
     "review_summary": "<free text>"
   }
 }
@@ -101,6 +102,56 @@ Scoring rubric:
 | **documentation** | None | Minimal comments | Good comments + PR desc | Clear PR desc + inline docs + docstrings |
 
 Binary: `lint_clean` (0/1), `tests_pass` (0/1).
+
+### Code review prompt
+
+Paste this into an agent session in the evee repo to perform code review on a
+benchmark run branch. Replace `<BRANCH>` with the branch name (e.g.,
+`bench/260-disable-progress-bars`).
+
+```
+I need you to review the changes on branch <BRANCH> compared to main.
+
+This is a benchmark run where an AI agent implemented a feature. I need you to
+score the outcome quality.
+
+Please:
+1. Run: git diff main..<BRANCH> to see all changes
+2. Read the changed files to understand context
+3. Run lint: make lint (uses ~/.venvs/evee-core/bin/ruff)
+4. Run tests: ~/.venvs/evee-core/bin/pytest tests -v --tb=short
+5. Check if PR_DESCRIPTION.md exists in the repo root
+
+Then score the result using this rubric:
+
+| Dimension | 0 | 1 | 2 | 3 |
+|-----------|---|---|---|---|
+| correctness | Wrong approach / doesn't work | Partially correct, major gaps | Mostly correct, minor issues | Fully solves the issue |
+| completeness | Most DoD items missing | Core impl only, tests/cleanup missing | Most items done, minor gaps | All DoD items addressed |
+| code_quality | Hacky, doesn't fit codebase | Works but messy / anti-patterns | Clean with minor nits | Production-ready, idiomatic |
+| test_quality | No tests or broken tests | Minimal / superficial tests | Good coverage, minor gaps | Thorough, well-structured, edge cases |
+| documentation | None | Minimal comments | Good comments + PR desc | Clear PR desc + inline docs + docstrings |
+
+Binary: lint_clean (0 if lint errors, 1 if clean), tests_pass (0 if failures, 1 if all pass).
+
+Output ONLY this JSON block (no other text):
+
+{
+  "outcome": {
+    "correctness": <0-3>,
+    "completeness": <0-3>,
+    "code_quality": <0-3>,
+    "test_quality": <0-3>,
+    "documentation": <0-3>,
+    "lint_clean": <0-1>,
+    "tests_pass": <0-1>,
+    "score": <sum>,
+    "max_score": 17,
+    "scored_by": "<model or human>",
+    "review_summary": "<2-4 sentence summary of strengths and weaknesses>"
+  }
+}
+```
 
 ---
 
@@ -172,10 +223,11 @@ You need to:
 4. Write unit tests: bars shown by default, suppressed when flag is set,
    existing suppression paths unaffected.
 5. Update any config.yaml examples or documentation if they exist.
-6. Run lint and tests to confirm everything passes.
-7. Self-review all changes you made — check for correctness, edge cases, and
+6. Commit your changes in sensible, logical chunks as you go — not one giant
+   commit at the end.
+7. Run lint and tests to confirm everything passes.
+8. Self-review all changes you made — check for correctness, edge cases, and
    style consistency.
-8. Write a detailed inline PR description summarizing what was changed and why.
 
 Definition of Done:
 - [ ] A new config field exists for disabling progress bars, defaulting to False (bars shown)
@@ -187,6 +239,7 @@ Definition of Done:
 - [ ] All existing tests still pass
 - [ ] Linter passes with no new warnings
 - [ ] Self-review completed — no obvious bugs, edge cases handled, code style consistent
+- [ ] Changes committed in sensible, logical chunks (not one giant commit)
 - [ ] Write a PR description to `PR_DESCRIPTION.md` in the repo root summarizing the change
 
 Do not push or create a PR. Just implement locally.
@@ -275,10 +328,11 @@ You need to:
    how many errors occurred out of how many total records.
 4. Write unit tests covering: threshold triggers early stop, normal completion
    below threshold, and disabled-by-default behavior.
-5. Run lint and tests to confirm everything passes.
-6. Self-review all changes you made — check for correctness, edge cases, and
+5. Commit your changes in sensible, logical chunks as you go — not one giant
+   commit at the end.
+6. Run lint and tests to confirm everything passes.
+7. Self-review all changes you made — check for correctness, edge cases, and
    style consistency.
-7. Write a detailed inline PR description summarizing what was changed and why.
 
 Definition of Done:
 - [ ] A new config field (e.g. max_error_count) exists in the config schema, defaulting to None (disabled)
@@ -292,6 +346,7 @@ Definition of Done:
 - [ ] All existing tests still pass
 - [ ] Linter passes with no new warnings
 - [ ] Self-review completed — no obvious bugs, edge cases handled, code style consistent
+- [ ] Changes committed in sensible, logical chunks (not one giant commit)
 - [ ] Write a PR description to `PR_DESCRIPTION.md` in the repo root summarizing the change
 
 Do not push or create a PR. Just implement locally.
@@ -391,9 +446,10 @@ You need to:
 5. Assert that output artifacts are generated and contain the expected values.
 6. Ensure zero external network calls — mock everything.
 7. Run the tests to verify they pass.
-8. Self-review all changes you made — check for correctness, edge cases, and
+8. Commit your changes in sensible, logical chunks as you go — not one giant
+   commit at the end.
+9. Self-review all changes you made — check for correctness, edge cases, and
    style consistency.
-9. Write a detailed inline PR description summarizing what was changed and why.
 
 Definition of Done:
 - [ ] A new test file exists at tests/evee/integration/test_mocked_e2e.py (or similar)
@@ -407,6 +463,7 @@ Definition of Done:
 - [ ] All existing tests still pass
 - [ ] Linter passes with no new warnings
 - [ ] Self-review completed — no obvious bugs, edge cases handled, code style consistent
+- [ ] Changes committed in sensible, logical chunks (not one giant commit)
 - [ ] Write a PR description to `PR_DESCRIPTION.md` in the repo root summarizing the change
 
 Do not push or create a PR. Just implement locally.
@@ -478,10 +535,11 @@ You need to:
 3. Add a config option so users can opt in to caching (disabled by default).
 4. Implement the caching logic with support for cache invalidation.
 5. Write unit tests for: cache hit, cache miss, invalidation, and opt-in behavior.
-6. Run lint and tests to confirm everything passes.
-7. Self-review all changes you made — check for correctness, edge cases, and
+6. Commit your changes in sensible, logical chunks as you go — not one giant
+   commit at the end.
+7. Run lint and tests to confirm everything passes.
+8. Self-review all changes you made — check for correctness, edge cases, and
    style consistency.
-8. Write a detailed inline PR description summarizing what was changed and why.
 
 Definition of Done:
 - [ ] A cache module or class exists (e.g., src/evee/core/cache.py or similar)
@@ -497,6 +555,7 @@ Definition of Done:
 - [ ] All existing tests still pass
 - [ ] Linter passes with no new warnings
 - [ ] Self-review completed — no obvious bugs, edge cases handled, code style consistent
+- [ ] Changes committed in sensible, logical chunks (not one giant commit)
 - [ ] Write a PR description to `PR_DESCRIPTION.md` in the repo root summarizing the change
 
 Do not push or create a PR. Just implement locally.
@@ -583,10 +642,11 @@ You need to:
    request body and how the response maps to model output.
 6. Write unit tests with mocked HTTP calls: successful call, error handling,
    config validation, request/response mapping.
-7. Run lint and tests to confirm everything passes.
-8. Self-review all changes you made — check for correctness, edge cases, and
+7. Commit your changes in sensible, logical chunks as you go — not one giant
+   commit at the end.
+8. Run lint and tests to confirm everything passes.
+9. Self-review all changes you made — check for correctness, edge cases, and
    style consistency.
-9. Write a detailed inline PR description summarizing what was changed and why.
 
 Definition of Done:
 - [ ] A RestModel class exists extending BaseModel
@@ -602,6 +662,7 @@ Definition of Done:
 - [ ] All existing tests still pass
 - [ ] Linter passes with no new warnings
 - [ ] Self-review completed — no obvious bugs, edge cases handled, code style consistent
+- [ ] Changes committed in sensible, logical chunks (not one giant commit)
 - [ ] Write a PR description to `PR_DESCRIPTION.md` in the repo root summarizing the change
 
 Do not push or create a PR. Just implement locally.
