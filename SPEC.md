@@ -2960,7 +2960,7 @@ Tools are organized into functional families. Each tool is a standalone MCP tool
 | `lint_check` | Run configured linters on specified files or paths |
 | `lint_tools` | List available lint tools and their configuration |
 
-#### Test Tools (5 tools)
+#### Test Tools (3 tools)
 
 | Tool | Purpose |
 |------|---------|
@@ -2968,7 +2968,7 @@ Tools are organized into functional families. Each tool is a standalone MCP tool
 | `inspect_affected_tests` | Find tests affected by specific file changes |
 | `run_test_targets` | Execute tests with `affected_by` for impact-aware selection |
 
-**Total: 41 tools**
+**Total: 40 tools**
 
 ### 23.5 Progress Reporting
 
@@ -3075,7 +3075,6 @@ Unified search across lexical index, symbols, and references.
   cursor?: string;                  // Continuation token
   include_snippets?: boolean;       // Include code snippets (default true)
   enrichment?: "none" | "minimal" | "standard" | "function" | "class";  // Search enrichment level
-  format?: "json" | "text";         // Response format (default "json")
   session_id?: string;              // Optional session override
 }
 ```
@@ -3119,7 +3118,6 @@ Queries the existing index to build a mental model. Does NOT scan the filesystem
 {
   include?: Array<"structure" | "languages" | "entry_points" | "dependencies" | "test_layout" | "public_api">;
   depth?: number;                   // Directory depth (default 3)
-  format?: "json" | "text";         // Response format (default "json")
   session_id?: string;
 }
 ```
@@ -3605,7 +3603,6 @@ Structural change summary from index facts. Compares definitions between two sta
   base?: string;           // Default "HEAD". Git ref or "epoch:N"
   target?: string | null;  // Default null (working tree). Git ref or "epoch:M"
   paths?: string[] | null; // Limit to specific file paths
-  format?: "json" | "text";  // Response format (default "json")
   cursor?: string | null;  // Pagination cursor from previous response
 }
 ```

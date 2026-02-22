@@ -54,13 +54,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "minimal=just path/kind/name/change"
             ),
         ),
-        format: Literal["json", "text"] = Field(
-            "json",
-            description=(
-                "Response format: 'json' (default, structured dicts) or "
-                "'text' (compact flat lines — same info, ~70%% fewer tokens)"
-            ),
-        ),
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Structural change summary from index facts.
@@ -82,10 +75,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         from codeplane.mcp.delivery import wrap_existing_response
 
-        if format == "text":
-            result_dict = _result_to_text(result)
-        else:
-            result_dict = _result_to_dict(result, verbosity=verbosity)
+        result_dict = _result_to_text(result)
 
         # Track scope usage
         scope_usage = None
