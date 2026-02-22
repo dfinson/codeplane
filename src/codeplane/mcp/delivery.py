@@ -583,21 +583,31 @@ def _extract_jq_commands(
         changes_key = "structural_changes" if "structural_changes" in payload else "changes"
         changes = payload.get(changes_key, [])
         ct: dict[str, int] = {}
+        text_format = changes and isinstance(changes[0], str)
         for c in changes:
-            t = c.get("change", c.get("change_type", "?"))
+            if text_format:
+                # Text format lines start with "{change} {kind} {name}"
+                t = c.split(" ", 1)[0] if c else "?"
+            else:
+                t = c.get("change", c.get("change_type", "?"))
             ct[t] = ct.get(t, 0) + 1
         summary = payload.get("summary", "")
         if not summary:
             summary = f"{len(changes)} change(s): " + ", ".join(f"{v} {k}" for k, v in ct.items())
         cmds = [
             f"jq '.{changes_key} | length' {path}",
-            f"jq '[.{changes_key}[] | .change // .change_type] | group_by(.) | map({{type: .[0], count: length}})' {path}",
         ]
-        # Add targeted filter commands for each change type present
-        for change_type in ct:
+        if text_format:
+            cmds.append(f"jq '.{changes_key}[]' {path}")
+        else:
             cmds.append(
-                f"jq '[.{changes_key}[] | select((.change // .change_type) == \"{change_type}\")] | map({{name: .name, path: .path}})' {path}"
+                f"jq '[.{changes_key}[] | .change // .change_type] | group_by(.) | map({{type: .[0], count: length}})' {path}"
             )
+            # Add targeted filter commands for each change type present
+            for change_type in ct:
+                cmds.append(
+                    f"jq '[.{changes_key}[] | select((.change // .change_type) == \"{change_type}\")] | map({{name: .name, path: .path}})' {path}"
+                )
         return str(summary), cmds
 
     if kind == "diff":
