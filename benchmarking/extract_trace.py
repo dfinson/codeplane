@@ -198,15 +198,6 @@ def _extract_tool_event(log: dict[str, Any]) -> dict[str, Any]:
             args = json.loads(args)
 
     response = log.get("response")
-    # Summarise response: keep first 500 chars if string/list-of-strings
-    if isinstance(response, list):
-        response_summary = []
-        for item in response:
-            if isinstance(item, str) and len(item) > 500:
-                response_summary.append(item[:500] + "...(truncated)")
-            else:
-                response_summary.append(item)
-        response = response_summary
 
     return {
         "type": "tool_call",
@@ -223,10 +214,25 @@ def _extract_request_event(log: dict[str, Any]) -> dict[str, Any]:
     """Convert a request log entry into a trace event."""
     meta = log.get("metadata", {})
     usage = meta.get("usage", {})
+
+    # Extract agent text reasoning from the response message
+    agent_text: str | None = None
+    resp = log.get("response", {})
+    if isinstance(resp, dict):
+        msg = resp.get("message")
+        if isinstance(msg, list):
+            # list of strings — join non-empty ones
+            joined = " ".join(s.strip() for s in msg if isinstance(s, str) and s.strip())
+            if joined:
+                agent_text = joined
+        elif isinstance(msg, str) and msg.strip():
+            agent_text = msg
+
     return {
         "type": "llm_request",
         "id": log.get("id"),
         "model": meta.get("model"),
+        "agent_text": agent_text,
         "start_time": meta.get("startTime"),
         "end_time": meta.get("endTime"),
         "duration_ms": meta.get("duration"),
