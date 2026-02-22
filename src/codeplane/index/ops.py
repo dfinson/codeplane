@@ -65,6 +65,7 @@ from codeplane.index.models import (
     ContextMarker,
     DefFact,
     File,
+    ImportFact,
     IndexedCoverageCapability,
     IndexedLintTool,
     ProbeStatus,
@@ -1538,6 +1539,55 @@ class IndexCoordinator:
         with self.db.session() as session:
             facts = FactQueries(session)
             return facts.list_all_refs_by_def_uid(def_fact.def_uid)
+
+    async def get_callees(
+        self,
+        def_fact: DefFact,
+        *,
+        limit: int = 50,
+    ) -> list[DefFact]:
+        """Get definitions referenced (called/used) by a definition. Thread-safe.
+
+        Args:
+            def_fact: The definition whose callees to find.
+            limit: Maximum callees to return.
+
+        Returns:
+            Deduplicated list of DefFact objects referenced within
+            the definition's span.
+        """
+        await self.wait_for_freshness()
+        with self.db.session() as session:
+            facts = FactQueries(session)
+            return facts.list_callees_in_scope(
+                def_fact.file_id,
+                def_fact.start_line,
+                def_fact.end_line,
+                limit=limit,
+            )
+
+    async def get_file_imports(
+        self,
+        rel_path: str,
+        *,
+        limit: int = 100,
+    ) -> list[ImportFact]:
+        """Get import facts for a file by its repo-relative path. Thread-safe.
+
+        Args:
+            rel_path: Repo-relative file path.
+            limit: Maximum imports to return.
+
+        Returns:
+            List of ImportFact objects for the file.
+        """
+        await self.wait_for_freshness()
+        with self.db.session() as session:
+            facts = FactQueries(session)
+            file_rec = facts.get_file_by_path(rel_path)
+            if file_rec is None or file_rec.id is None:
+                return []
+            return facts.list_imports(file_rec.id, limit=limit)
 
     async def get_file_state(self, file_id: int, context_id: int) -> FileState:
         """Get computed file state for mutation gating."""

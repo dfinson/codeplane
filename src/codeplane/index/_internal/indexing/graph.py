@@ -125,6 +125,52 @@ class FactQueries:
         stmt = select(RefFact).where(RefFact.file_id == file_id).limit(limit)
         return list(self._session.exec(stmt).all())
 
+    def list_callees_in_scope(
+        self,
+        file_id: int,
+        start_line: int,
+        end_line: int,
+        *,
+        limit: int = 100,
+    ) -> list[DefFact]:
+        """List definitions referenced (called/used) within a line range.
+
+        Joins ref_facts → def_facts for refs whose scope falls within
+        the given line range. This answers "what does this function call?"
+
+        Args:
+            file_id: File containing the scope.
+            start_line: Start line of the scope (inclusive).
+            end_line: End line of the scope (inclusive).
+            limit: Maximum results.
+
+        Returns:
+            Deduplicated list of DefFact objects referenced in the scope.
+        """
+        stmt = (
+            select(DefFact)
+            .join(RefFact, onclause=col(RefFact.target_def_uid) == col(DefFact.def_uid))
+            .where(
+                RefFact.file_id == file_id,
+                RefFact.start_line >= start_line,
+                RefFact.start_line <= end_line,
+                RefFact.target_def_uid.is_not(None),  # type: ignore[union-attr]
+            )
+            .distinct()
+            .limit(limit)
+        )
+        return list(self._session.exec(stmt).all())
+
+    def count_callers(self, def_uid: str) -> int:
+        """Count distinct files that reference a definition (hub inbound score)."""
+        from sqlalchemy import func
+
+        stmt = select(func.count(func.distinct(RefFact.file_id))).where(
+            RefFact.target_def_uid == def_uid
+        )
+        result = self._session.exec(stmt).one()
+        return int(result) if result else 0
+
     def list_refs_by_token(
         self, unit_id: int, token_text: str, *, limit: int = 100
     ) -> list[RefFact]:

@@ -260,6 +260,7 @@ TOOL_CATEGORIES: dict[str, str] = {
     "describe": "meta",
     "reset_budget": "meta",
     "checkpoint": "test",
+    "recon": "search",
 }
 
 # Categories that represent mutation (clear pattern window).

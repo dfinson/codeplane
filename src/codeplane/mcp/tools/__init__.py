@@ -7,6 +7,7 @@ from codeplane.mcp.tools import (
     index,
     introspection,
     mutation,
+    recon,
     refactor,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "index",
     "introspection",
     "mutation",
+    "recon",
     "refactor",
 ]

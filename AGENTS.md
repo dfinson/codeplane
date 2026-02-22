@@ -32,20 +32,30 @@ Response includes `file_sha256` per file — save it for `write_source` span edi
 
 After ANY edit via `write_source` or other mutation:
 
-**`checkpoint(changed_files=[...], commit_message="...", push=True)`**
+**`checkpoint(changed_files=[...], commit_message="...", push=True)`** — lint → test → commit → push + semantic diff.
 
-This single tool runs: lint → test → commit → push → semantic diff.
-Do NOT use `pytest`, `ruff`, `mypy`, `git add`, `git commit`, or `git push` in terminal.
+Omit `commit_message` to lint+test only (no commit).
 
-**Terminal commands for lint, test, or git operations are ALWAYS WRONG in this repo.**
+**FORBIDDEN**: `pytest`, `ruff`, `mypy`, `git add`, `git commit`, `git push` in terminal.
 
 ### First Steps When Starting a Task
+
+**Preferred: Use `recon` for task-aware discovery in one call:**
+
+1. `recon(task="<description>")` — BM25 seed selection + structural reranking + graph expansion. Returns seed bodies, callee signatures, caller contexts, and import scaffolds. Includes `file_sha256` for `write_source`.
+2. After changes: `checkpoint(changed_files=[...])` — lint + affected tests in one call
+3. `semantic_diff` — review structural impact before committing
+4. `checkpoint(changed_files=[...], commit_message="...", push=True)` — one-shot
+
+**Alternative: Manual multi-step discovery (when recon misses your targets):**
 
 1. `describe` — get repo metadata, language, active branch, index status
 2. `map_repo(include=["structure", "dependencies", "test_layout"])` — understand repo shape
 3. `search` to find relevant code — definitions, references, or lexical patterns
 4. `read_source` on spans from search results — understand the code you'll modify
-5. After changes: `checkpoint(changed_files=[...], commit_message="...", push=True)` — lint + test + commit + push
+5. After changes: `checkpoint(changed_files=[...])` — lint + affected tests in one call
+6. `semantic_diff` — review structural impact before committing
+7. `checkpoint(changed_files=[...], commit_message="...", push=True)` — one-shot
 
 **Testing rule**: NEVER run the full test suite or use test runners directly.
 Always use `checkpoint(changed_files=[...])` with the files you changed.
@@ -63,6 +73,7 @@ This runs lint + only the tests impacted by your changes — fast, targeted, suf
 
 | Operation | REQUIRED Tool | FORBIDDEN Alternative |
 |-----------|---------------|----------------------|
+| Task-aware discovery | `mcp_codeplane-codeplane_copy3_recon` | Manual search → scaffold → read chains |
 | File scaffold | `mcp_codeplane-codeplane_copy3_read_scaffold` | Manual traversal, `cat` for structure |
 | Read source | `mcp_codeplane-codeplane_copy3_read_source` | `cat`, `head`, `less`, `tail` |
 | Read full file | `mcp_codeplane-codeplane_copy3_read_file_full` | `cat`, `head`, bulk reads |
@@ -70,7 +81,7 @@ This runs lint + only the tests impacted by your changes — fast, targeted, suf
 | List directory | `mcp_codeplane-codeplane_copy3_list_files` | `ls`, `find`, `tree` |
 | Search code | `mcp_codeplane-codeplane_copy3_search` | `grep`, `rg`, `ag`, `ack` |
 | Repository overview | `mcp_codeplane-codeplane_copy3_map_repo` | Manual file traversal |
-| Lint + test + commit + push | `mcp_codeplane-codeplane_copy3_checkpoint` | Running linters/test runners directly, raw git |
+| Lint + test + commit + push | `mcp_codeplane-codeplane_copy3_checkpoint` | Running linters/test runners/git directly |
 | Rename across files | `mcp_codeplane-codeplane_copy3_refactor_rename` | Find-and-replace, `sed` |
 | Semantic diff | `mcp_codeplane-codeplane_copy3_semantic_diff` | `git_diff` for change review, manual comparison |
 
@@ -99,7 +110,8 @@ STOP before using `read_file_full`:
 Search NEVER returns source text. Use `read_source` with spans from search results.
 
 `search` params: `query` (str), `mode` (definitions|references|lexical|symbol), `enrichment` (none|minimal|standard|function|class).
-`checkpoint` params: `changed_files` (list[str]), `commit_message` (str|None), `push` (bool). Lint → test → commit → push → semantic diff.
+`checkpoint` params: `changed_files` (list[str]), `commit_message` (str|None), `push` (bool). Chains lint → test → commit → push + semantic diff.
+`recon` params: `task` (str), `seeds` (list[str]|None), `depth` (0-2, default 1), `budget` (int, default 15000), `max_seeds` (1-10, default 5).
 
 ### Refactor: preview → inspect → apply/cancel
 
@@ -137,5 +149,5 @@ avoids wasted round-trips.
 - **DON'T** use `refactor_rename` with file:line:col — pass the symbol NAME only
 - **DON'T** skip `checkpoint` after `write_source` — always lint + test your changes
 - **DON'T** ignore `agentic_hint` in responses
-- **DON'T** use raw `git add` + `git commit` — use `checkpoint` (handles hooks, auto-fix, push)
+- **DON'T** use raw `git add` + `git commit` — use `checkpoint` with `commit_message`
 <!-- /codeplane-instructions -->

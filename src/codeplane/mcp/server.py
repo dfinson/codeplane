@@ -107,6 +107,7 @@ def create_mcp_server(context: "AppContext") -> "FastMCP":
         index,
         introspection,
         mutation,
+        recon,
         refactor,
     )
 
@@ -134,6 +135,7 @@ def create_mcp_server(context: "AppContext") -> "FastMCP":
     files.register_tools(mcp, context)
     index.register_tools(mcp, context)
     mutation.register_tools(mcp, context)
+    recon.register_tools(mcp, context)
     refactor.register_tools(mcp, context)
     introspection.register_tools(mcp, context)
 
