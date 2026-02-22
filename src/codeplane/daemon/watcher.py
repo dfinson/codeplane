@@ -332,6 +332,7 @@ class FileWatcher:
                     async for changes in awatch(
                         *watch_dirs,
                         recursive=False,
+                        force_polling=False,  # Override WSL auto-detect (watchfiles#187)
                         step=500,  # Check Rust side every 500ms
                         rust_timeout=10_000,
                         stop_event=self._stop_event,
