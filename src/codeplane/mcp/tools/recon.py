@@ -21,7 +21,7 @@ from pydantic import Field
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
-    from codeplane.index.models import DefFact
+    from codeplane.index.models import DefFact, RefFact
     from codeplane.mcp.context import AppContext
 
 log = structlog.get_logger(__name__)
@@ -381,6 +381,7 @@ async def _select_seeds(
     task: str,
     explicit_seeds: list[str] | None,
     max_seeds: int,
+    bm25_file_scores: dict[str, float] | None = None,
 ) -> list[DefFact]:
     """Select seed definitions using path extraction + term-intersection scoring.
 
@@ -392,10 +393,22 @@ async def _select_seeds(
        records, pull their top-level definitions (ranked by hub score),
        and treat them as *priority seeds* that fill the first slots.
     3. Tokenize the task into search terms.  For each term, query DefFact
-       via SQL LIKE + score by hub * 3 + coverage * 5 + name * 3 + path.
+       via SQL LIKE + score.
     4. Fill remaining seed slots from the scored term-intersection results,
        skipping defs already taken by path extraction.
     5. Enforce file diversity (max 2 seeds per file).
+
+    Scoring formula (Phase 2):
+
+        score = min(hub, 5) * 2            # structural importance (capped)
+              + term_coverage * 8           # task-relevance via term matching
+              + name_bonus * 3             # symbol name matches a task term
+              + path_bonus                 # file path matches a task term
+              + bm25_bonus * 4             # BM25 file-level task relevance
+
+    BM25 file scores (if provided) add up to 4 points for files with high
+    textual relevance to the task, ensuring relevant but low-hub files
+    like config/models.py are selected.
     """
     from codeplane.index._internal.indexing.graph import FactQueries
 
@@ -439,7 +452,7 @@ async def _select_seeds(
                         continue
                     hub = min(fq.count_callers(d.def_uid), 30)
                     def_scored.append((d, hub))
-                def_scored.sort(key=lambda x: -x[1])
+                def_scored.sort(key=lambda x: (-x[1], x[0].def_uid))
                 for d, _hub in def_scored[:2]:  # max 2 per file
                     if len(seeds) >= max_seeds:
                         break
@@ -504,25 +517,58 @@ async def _select_seeds(
         log.info("recon.no_candidates", task=task, terms=terms)
         return seeds  # return any path-extracted seeds we already have
 
-    # ---- Score: term coverage + hub score + path boost ----
+    # ---- Score: term coverage + hub score + BM25 + path boost ----
+    #
+    # Formula balances structural importance (hub, capped) with task
+    # relevance (term coverage, BM25, name match).  Hub is capped at 5
+    # to prevent high-connectivity symbols (events, base classes) from
+    # drowning out task-relevant symbols like config models.
     scored: list[tuple[DefFact, float]] = []
+    num_terms = len(terms) if terms else 0
     if def_term_hits:
+        from codeplane.index.models import File as FileModel
+
         with coordinator.db.session() as session:
             fq = FactQueries(session)
+            # Build file_id -> path cache for BM25 lookups
+            _fid_path_cache: dict[int, str] = {}
             for uid, matched_terms in def_term_hits.items():
                 d = def_lookup[uid]
+
+                # Skip single-term matches when task has many terms —
+                # these are usually noise from broad substring matches
+                real_terms = matched_terms - {"__path__"}
+                if len(real_terms) <= 1 and num_terms >= 4:
+                    continue
+
                 term_coverage = len(matched_terms)
                 caller_count = fq.count_callers(uid)
                 path_bonus = 0.5 if d.file_id in path_boost_file_ids else 0.0
                 name_lower = d.name.lower()
-                name_bonus = (
-                    1.0 if any(t in name_lower for t in matched_terms - {"__path__"}) else 0.0
+                name_bonus = 1.0 if any(t in name_lower for t in real_terms) else 0.0
+                hub = min(caller_count, 5)  # cap hub contribution
+
+                # BM25 file-level score: 0-1 normalized, then scaled
+                bm25_bonus = 0.0
+                if bm25_file_scores:
+                    if d.file_id not in _fid_path_cache:
+                        frec = session.get(FileModel, d.file_id)
+                        _fid_path_cache[d.file_id] = frec.path if frec else ""
+                    fpath = _fid_path_cache[d.file_id]
+                    if fpath in bm25_file_scores:
+                        max_bm25 = max(bm25_file_scores.values()) if bm25_file_scores else 1.0
+                        bm25_bonus = bm25_file_scores[fpath] / max_bm25 if max_bm25 > 0 else 0.0
+
+                score = (
+                    hub * 2  # structural importance (max 10)
+                    + term_coverage * 8  # task-relevance via term matching
+                    + name_bonus * 3  # symbol name matches task term
+                    + path_bonus  # file path matches task term
+                    + bm25_bonus * 4  # BM25 file-level relevance (max 4)
                 )
-                hub = min(caller_count, 30)
-                score = hub * 3 + term_coverage * 5 + name_bonus * 3 + path_bonus
                 scored.append((d, score))
 
-        scored.sort(key=lambda x: -x[1])
+        scored.sort(key=lambda x: (-x[1], x[0].def_uid))
 
     log.debug(
         "recon.scored_candidates",
@@ -648,7 +694,10 @@ async def _expand_seed(
         imp for imp in imports if imp.resolved_path and imp.resolved_path != seed_path
     ]
     filtered_imports.sort(
-        key=lambda imp: -len(os.path.commonprefix([seed_dir, imp.resolved_path or ""]))
+        key=lambda imp: (
+            -len(os.path.commonprefix([seed_dir, imp.resolved_path or ""])),
+            imp.resolved_path or "",
+        )
     )
 
     for imp in filtered_imports:
@@ -686,7 +735,7 @@ async def _expand_seed(
                     continue
                 score = ihub * 2 + term_match * 5
                 imp_scored.append((idef, score))
-            imp_scored.sort(key=lambda x: -x[1])
+            imp_scored.sort(key=lambda x: (-x[1], x[0].def_uid))
             for idef, _iscore in imp_scored[:3]:
                 import_defs.append(
                     {
@@ -702,12 +751,18 @@ async def _expand_seed(
 
     # P3: Callers — context snippets around references to this seed
     refs = await coordinator.get_references(seed, _context_id=0, limit=50)
+    # Resolve paths up-front and sort for deterministic order across reindexes
+    resolved_refs: list[tuple[str, RefFact]] = []
+    for ref in refs:
+        ref_path = await _file_path_for_id(app_ctx, ref.file_id)
+        resolved_refs.append((ref_path, ref))
+    resolved_refs.sort(key=lambda x: (x[0], x[1].start_line))
+
     caller_snippets: list[dict[str, Any]] = []
     seen_caller_files: set[str] = set()
-    for ref in refs:
+    for ref_path, ref in resolved_refs:
         if len(caller_snippets) >= _MAX_CALLERS_PER_SEED:
             break
-        ref_path = await _file_path_for_id(app_ctx, ref.file_id)
         # Skip same-file self-references
         if (
             ref_path == seed_path
@@ -965,8 +1020,32 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         coordinator = app_ctx.coordinator
         repo_root = coordinator.repo_root
 
-        # Step 1: Seed selection (BM25 + structural rerank)
-        selected_seeds = await _select_seeds(app_ctx, task, seeds, max_seeds)
+        # Step 1: BM25 scoring — compute BEFORE seed selection so file-level
+        # relevance can inform both seed ranking and expansion gating.
+        raw_bm25 = coordinator.score_files_bm25(task)
+        bm25_threshold = 0.0
+        if raw_bm25:
+            sorted_scores = sorted(raw_bm25.values())
+            # Median (P50) threshold: drop bottom half for expansion gating
+            p50_idx = max(0, len(sorted_scores) // 2 - 1)
+            bm25_threshold = sorted_scores[p50_idx]
+
+        # Build a filtered dict: only files above median for expansion gating
+        bm25_scores: dict[str, float] = {
+            path: score for path, score in raw_bm25.items() if score > bm25_threshold
+        }
+        log.debug(
+            "recon.bm25_scores",
+            total_scored=len(raw_bm25),
+            above_threshold=len(bm25_scores),
+            threshold=round(bm25_threshold, 2),
+            top5=sorted(bm25_scores.items(), key=lambda x: -x[1])[:5],
+        )
+
+        # Step 2: Seed selection (term-intersection + BM25 + structural rerank)
+        selected_seeds = await _select_seeds(
+            app_ctx, task, seeds, max_seeds, bm25_file_scores=raw_bm25
+        )
 
         if not selected_seeds:
             task_preview = task[:40] + "..." if len(task) > 40 else task
@@ -980,32 +1059,6 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                     "(3) rephrase the task with specific symbol names."
                 ),
             }
-
-        # Step 2: BM25 scoring pass — parallel plumbing for expansion gating
-        #
-        # Compute per-file BM25 relevance to the task text.  Use the score
-        # distribution to set a threshold: files below the 25th percentile
-        # are dropped from expansion candidates (callees + import_defs).
-        # This removes the bottom quartile of structurally-connected but
-        # task-irrelevant files.
-        raw_bm25 = coordinator.score_files_bm25(task)
-        bm25_threshold = 0.0
-        if raw_bm25:
-            sorted_scores = sorted(raw_bm25.values())
-            p25_idx = max(0, len(sorted_scores) // 4 - 1)
-            bm25_threshold = sorted_scores[p25_idx]
-
-        # Build a filtered dict: only files above the threshold
-        bm25_scores: dict[str, float] = {
-            path: score for path, score in raw_bm25.items() if score > bm25_threshold
-        }
-        log.debug(
-            "recon.bm25_scores",
-            total_scored=len(raw_bm25),
-            above_threshold=len(bm25_scores),
-            threshold=round(bm25_threshold, 2),
-            top5=sorted(bm25_scores.items(), key=lambda x: -x[1])[:5],
-        )
 
         # Step 3: Expand each seed
         seed_results: list[dict[str, Any]] = []
