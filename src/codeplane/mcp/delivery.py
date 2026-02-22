@@ -673,10 +673,10 @@ def _extract_jq_commands(
         ]
         return summary, cmds
 
-    if kind == "commit":
+    if kind == "checkpoint":
         sha = payload.get("short_sha", payload.get("sha", "?")[:7])
         msg = (payload.get("message", "") or "")[:80]
-        summary = f"Commit {sha}: {msg}"
+        summary = f"Checkpoint {sha}: {msg}"
         cmds = [
             f"jq '{{sha: (.short_sha // .sha), message, author, date}}' {path}",
         ]

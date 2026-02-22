@@ -1,0 +1,65 @@
+{
+  "session_name": "evee_4_claude-opus-4-6-fast_native",
+  "repo": "evee",
+  "issue": "4",
+  "model": "claude-opus-4.6-fast",
+  "codeplane": false,
+  "wall_clock": {
+    "start": "2026-02-22T13:12:39.068Z",
+    "end": "2026-02-22T13:15:48.591Z"
+  },
+  "turns": 29,
+  "tool_calls": {
+    "total": 48,
+    "codeplane": 0,
+    "terminal": 10,
+    "tool_search": 0,
+    "other": 38,
+    "errors": 0,
+    "by_tool": {
+      "read_file": 13,
+      "manage_todo_list": 10,
+      "run_in_terminal": 10,
+      "list_dir": 5,
+      "replace_string_in_file": 5,
+      "create_file": 3,
+      "multi_replace_string_in_file": 1,
+      "grep_search": 1
+    },
+    "total_thinking_chars": 0
+  },
+  "llm_requests": {
+    "agent": 29,
+    "routing": 9,
+    "total": 38
+  },
+  "tokens": {
+    "prompt": 1376800,
+    "completion": 8964,
+    "cached": 1311283,
+    "reasoning": 0,
+    "total": 1385764,
+    "cache_hit_ratio": 0.9524
+  },
+  "llm_duration_ms": 107154,
+  "avg_ttft_ms": 2415,
+  "context_growth": {
+    "first": 12,
+    "last": 95,
+    "max": 95,
+    "mean": 60
+  },
+  "outcome": {
+    "correctness": 3,
+    "completeness": 2,
+    "code_quality": 3,
+    "test_quality": 2,
+    "documentation": 2,
+    "lint_clean": 1,
+    "tests_pass": 1,
+    "score": 14,
+    "max_score": 17,
+    "scored_by": "Claude Opus 4.6 (fast mode) (Preview)",
+    "review_summary": "Solid, well-structured implementation of a file-backed inference cache with clean config integration, proper opt-in behavior, and a thorough PR description. The cache module itself is production-ready with good error handling (corrupt entry recovery, clean invalidation). Tests are well-organized covering key generation, hit/miss, invalidation, and opt-in behavior, but lack integration-level tests against the actual ModelEvaluator (tests only simulate evaluator logic with inline if-statements rather than exercising the real _infer_record path), and miss edge cases like concurrent access or non-JSON-serializable outputs. Missing mandatory configuration.md update for the new cache config section."
+  }
+}

@@ -28,25 +28,34 @@ Search = find. Scaffold = orient. Read = retrieve. Full = gated.
 `read_source` target format: `[{"path": "src/foo.py", "start_line": 10, "end_line": 50}]`
 Response includes `file_sha256` per file — save it for `write_source` span edits.
 
+### CRITICAL: After Every Code Change
+
+After ANY edit via `write_source` or other mutation:
+
+**`checkpoint(changed_files=[...], commit_message="...", push=True)`**
+
+This single tool runs: lint → test → commit → push → semantic diff.
+Do NOT use `pytest`, `ruff`, `mypy`, `git add`, `git commit`, or `git push` in terminal.
+
+**Terminal commands for lint, test, or git operations are ALWAYS WRONG in this repo.**
+
 ### First Steps When Starting a Task
 
 1. `describe` — get repo metadata, language, active branch, index status
 2. `map_repo(include=["structure", "dependencies", "test_layout"])` — understand repo shape
 3. `search` to find relevant code — definitions, references, or lexical patterns
 4. `read_source` on spans from search results — understand the code you'll modify
-5. After changes: `lint_check` → `run_test_targets(affected_by=["changed_file"])` for impact-aware testing
-6. `semantic_diff` — review structural impact before committing
-7. `git_stage_and_commit` — one-step commit with pre-commit hook handling
+5. After changes: `checkpoint(changed_files=[...], commit_message="...", push=True)` — lint + test + commit + push
 
 **Testing rule**: NEVER run the full test suite or use test runners directly.
-Always use `run_test_targets(affected_by=[...])` with the files you changed.
-This runs only the tests impacted by your changes — fast, targeted, sufficient.
+Always use `checkpoint(changed_files=[...])` with the files you changed.
+This runs lint + only the tests impacted by your changes — fast, targeted, sufficient.
 
 ### Reviewing Changes (PR Review)
 
 1. `semantic_diff(base="main")` — structural overview of all changes vs main
 2. `read_source` on changed symbols — review each change in context
-3. `run_test_targets(affected_by=[...])` — verify correctness
+3. `checkpoint(changed_files=[...])` — lint + affected tests
 
 `semantic_diff` first — NOT `git_diff`. It gives symbol-level changes, not raw patches.
 
@@ -61,13 +70,9 @@ This runs only the tests impacted by your changes — fast, targeted, sufficient
 | List directory | `mcp_codeplane-codeplane_copy3_list_files` | `ls`, `find`, `tree` |
 | Search code | `mcp_codeplane-codeplane_copy3_search` | `grep`, `rg`, `ag`, `ack` |
 | Repository overview | `mcp_codeplane-codeplane_copy3_map_repo` | Manual file traversal |
-| All git operations | `mcp_codeplane-codeplane_copy3_git_*` | Raw `git` commands |
-| Run linters | `mcp_codeplane-codeplane_copy3_lint_check` | Running linters directly |
-| Discover tests | `mcp_codeplane-codeplane_copy3_discover_test_targets` | Manual test file search |
-| Run tests | `mcp_codeplane-codeplane_copy3_run_test_targets` | Test runners directly |
+| Lint + test + commit + push | `mcp_codeplane-codeplane_copy3_checkpoint` | Running linters/test runners directly, raw git |
 | Rename across files | `mcp_codeplane-codeplane_copy3_refactor_rename` | Find-and-replace, `sed` |
 | Semantic diff | `mcp_codeplane-codeplane_copy3_semantic_diff` | `git_diff` for change review, manual comparison |
-| Stage and commit | `mcp_codeplane-codeplane_copy3_git_stage_and_commit` | `git_stage` + `git_commit` separately |
 
 ### Before You Edit: Decision Gate
 
@@ -94,8 +99,7 @@ STOP before using `read_file_full`:
 Search NEVER returns source text. Use `read_source` with spans from search results.
 
 `search` params: `query` (str), `mode` (definitions|references|lexical|symbol), `enrichment` (none|minimal|standard|function|class).
-`lint_check` takes no arguments — always lints the full repo.
-`run_test_targets` params: `affected_by` (list of changed file paths) for post-change testing.
+`checkpoint` params: `changed_files` (list[str]), `commit_message` (str|None), `push` (bool). Lint → test → commit → push → semantic diff.
 
 ### Refactor: preview → inspect → apply/cancel
 
@@ -107,14 +111,9 @@ Search NEVER returns source text. Use `read_source` with spans from search resul
 
 `write_source` supports span edits: provide `start_line`, `end_line`, `expected_file_sha256`
 (from `read_source`), and `new_content`. Server validates hash; mismatch → re-read.
-For updates, always include `expected_content` (the old text at the span) — the server
-fuzzy-matches nearby lines if your line numbers are slightly off, auto-correcting
-within a few lines. This is required.
+For updates, always include `expected_content` — the server fuzzy-matches nearby lines.
 
-**Batching**: `edits` accepts multiple entries across different files — always batch
-independent edits into a single `write_source` call. If you need to edit 3 files,
-send all 3 edits in one call, not 3 separate calls. This is the single biggest
-latency win available to you.
+**Batching**: `edits` accepts multiple files — batch independent edits into one call.
 
 ### CRITICAL: Follow Agentic Hints
 
@@ -136,8 +135,7 @@ avoids wasted round-trips.
 - **DON'T** pass `context:` to search — the parameter is `enrichment`
 - **DON'T** use `read_files` — it's replaced by `read_source` and `read_file_full`
 - **DON'T** use `refactor_rename` with file:line:col — pass the symbol NAME only
-- **DON'T** skip `lint_check` after `write_source`
+- **DON'T** skip `checkpoint` after `write_source` — always lint + test your changes
 - **DON'T** ignore `agentic_hint` in responses
-- **DON'T** use `target_filter` for post-change testing — use `affected_by` on `run_test_targets`
-- **DON'T** use `git_stage` + `git_commit` separately — use `git_stage_and_commit`
+- **DON'T** use raw `git add` + `git commit` — use `checkpoint` (handles hooks, auto-fix, push)
 <!-- /codeplane-instructions -->

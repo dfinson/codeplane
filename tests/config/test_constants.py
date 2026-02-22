@@ -11,9 +11,6 @@ from __future__ import annotations
 from codeplane.config.constants import (
     EPOCH_POLL_MS,
     FILES_LIST_MAX,
-    GIT_BLAME_MAX,
-    GIT_LOG_MAX,
-    GIT_REFS_MAX,
     INSPECT_CONTEXT_LINES_DEFAULT,
     LEXICAL_FALLBACK_MAX,
     MAP_DEPTH_MAX,
@@ -43,18 +40,6 @@ class TestMCPToolMaximums:
     def test_files_list_max(self) -> None:
         """Files list max is 1000."""
         assert FILES_LIST_MAX == 1000
-
-    def test_git_log_max(self) -> None:
-        """Git log max is 100."""
-        assert GIT_LOG_MAX == 100
-
-    def test_git_blame_max(self) -> None:
-        """Git blame max is 1000."""
-        assert GIT_BLAME_MAX == 1000
-
-    def test_git_refs_max(self) -> None:
-        """Git refs max is 500."""
-        assert GIT_REFS_MAX == 500
 
     def test_lexical_fallback_max(self) -> None:
         """Lexical fallback max is 500."""

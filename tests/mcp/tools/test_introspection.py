@@ -33,8 +33,8 @@ class TestDeriveFeatures:
         assert features == []
 
     def test_git_tools(self) -> None:
-        """Git tools add git_ops feature."""
-        features = _derive_features(["git_status", "git_commit"])
+        """Git-related tools add git_ops feature."""
+        features = _derive_features(["checkpoint"])
         assert "git_ops" in features
 
     def test_refactor_tools(self) -> None:
@@ -42,15 +42,12 @@ class TestDeriveFeatures:
         features = _derive_features(["refactor_rename", "refactor_move"])
         assert "refactoring" in features
 
-    def test_test_tool(self) -> None:
-        """Test tool adds testing feature."""
-        features = _derive_features(["test"])
+    def test_verify_tool(self) -> None:
+        """Checkpoint tool adds testing, linting, and git_ops features."""
+        features = _derive_features(["checkpoint"])
         assert "testing" in features
-
-    def test_lint_tool(self) -> None:
-        """Lint tool adds linting feature."""
-        features = _derive_features(["lint"])
         assert "linting" in features
+        assert "git_ops" in features
 
     def test_index_tools(self) -> None:
         """Index tools add indexing feature."""
@@ -70,10 +67,8 @@ class TestDeriveFeatures:
     def test_multiple_features(self) -> None:
         """Multiple tool types add multiple features."""
         tools = [
-            "git_status",
+            "checkpoint",
             "refactor_rename",
-            "test",
-            "lint",
             "search",
             "read_source",
             "describe",
@@ -89,12 +84,12 @@ class TestDeriveFeatures:
 
     def test_sorted_output(self) -> None:
         """Features are sorted alphabetically."""
-        tools = ["describe", "git_status", "test"]
+        tools = ["describe", "checkpoint"]
         features = _derive_features(tools)
         assert features == sorted(features)
 
     def test_no_duplicates(self) -> None:
         """Multiple tools of same type don't create duplicates."""
-        tools = ["git_status", "git_commit", "git_diff", "git_log"]
+        tools = ["checkpoint", "checkpoint"]
         features = _derive_features(tools)
         assert features.count("git_ops") == 1

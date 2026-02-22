@@ -108,7 +108,7 @@ class LintOps:
                     tools_run=[],
                     duration_seconds=time.time() - start_time,
                     agentic_hint=f"Unknown tool(s): {', '.join(invalid_tools)}. "
-                    f"Use lint_tools to see available tools.",
+                    f"Use verify to see available lint tools.",
                 )
 
         # Validate categories if specified

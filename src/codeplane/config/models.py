@@ -198,8 +198,6 @@ class LimitsConfig(BaseModel):
         CODEPLANE__LIMITS__MAP_DEPTH_DEFAULT: Default repo map depth
         CODEPLANE__LIMITS__MAP_LIMIT_DEFAULT: Default repo map entries
         CODEPLANE__LIMITS__FILES_LIST_DEFAULT: Default file list entries
-        CODEPLANE__LIMITS__GIT_LOG_DEFAULT: Default git log entries
-        CODEPLANE__LIMITS__GIT_BLAME_DEFAULT: Default git blame lines
     """
 
     search_default: int = Field(
@@ -220,14 +218,6 @@ class LimitsConfig(BaseModel):
     files_list_default: int = Field(
         default=200,
         description="Default file listing limit.",
-    )
-    git_log_default: int = Field(
-        default=50,
-        description="Default git log commit count.",
-    )
-    git_blame_default: int = Field(
-        default=100,
-        description="Default git blame line count.",
     )
     operation_records_max: int = Field(
         default=1000,

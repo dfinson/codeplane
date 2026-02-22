@@ -40,12 +40,7 @@ TOOL_TIMEOUTS: dict[str, float] = {
     "list_files": 30.0,
     "read_files": 30.0,
     "map_repo": 60.0,
-    "git_status": 10.0,
-    "git_log": 10.0,
-    "git_diff": 15.0,
-    "discover_test_targets": 30.0,
-    "lint_tools": 30.0,
-    "lint_check": 60.0,
+    "checkpoint": 60.0,
 }
 
 # MCP protocol headers

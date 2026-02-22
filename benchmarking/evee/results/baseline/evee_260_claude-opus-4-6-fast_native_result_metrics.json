@@ -1,0 +1,65 @@
+{
+  "session_name": "evee_260_claude-opus-4-6-fast_native",
+  "repo": "evee",
+  "issue": "260",
+  "model": "claude-opus-4.6-fast",
+  "codeplane": false,
+  "wall_clock": {
+    "start": "2026-02-22T12:27:12.369Z",
+    "end": "2026-02-22T12:30:08.373Z"
+  },
+  "turns": 27,
+  "tool_calls": {
+    "total": 46,
+    "codeplane": 0,
+    "terminal": 6,
+    "tool_search": 0,
+    "other": 40,
+    "errors": 0,
+    "by_tool": {
+      "read_file": 17,
+      "manage_todo_list": 9,
+      "run_in_terminal": 6,
+      "file_search": 5,
+      "replace_string_in_file": 4,
+      "grep_search": 2,
+      "multi_replace_string_in_file": 2,
+      "create_file": 1
+    },
+    "total_thinking_chars": 0
+  },
+  "llm_requests": {
+    "agent": 27,
+    "routing": 9,
+    "total": 36
+  },
+  "tokens": {
+    "prompt": 1080759,
+    "completion": 6243,
+    "cached": 1037121,
+    "reasoning": 0,
+    "total": 1087002,
+    "cache_hit_ratio": 0.9596
+  },
+  "llm_duration_ms": 81209,
+  "avg_ttft_ms": 2170,
+  "context_growth": {
+    "first": 3,
+    "last": 82,
+    "max": 82,
+    "mean": 45
+  },
+  "outcome": {
+    "correctness": 3,
+    "completeness": 3,
+    "code_quality": 3,
+    "test_quality": 3,
+    "documentation": 3,
+    "lint_clean": 1,
+    "tests_pass": 1,
+    "score": 17,
+    "max_score": 17,
+    "scored_by": "claude-opus-4.6-fast",
+    "review_summary": "Excellent implementation: adds a clean `disable_progress_bars` config flag to ExperimentConfig, threads it through ModelEvaluator into ProgressTracker using simple AND logic with the existing `is_rich_compatible_environment()` check, preserving backward compatibility. Tests are thorough (8 new tests covering default behavior, flag suppression, plain logging for begin/advance/finish, and independence from Azure ML/MCP environment suppression, plus 3 config model tests). Documentation is comprehensive with schema update, reference table entry, and a tip admonition in configuration.md, and the PR description is detailed and well-structured. All 1258 tests pass and lint is clean."
+  }
+}

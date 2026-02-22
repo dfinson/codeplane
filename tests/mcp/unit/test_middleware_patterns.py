@@ -183,13 +183,9 @@ class TestStripToolPrefix:
         """Unknown tool name returned as-is."""
         assert ToolMiddleware._strip_tool_prefix("unknown_tool_xyz") == "unknown_tool_xyz"
 
-    def test_git_tools(self) -> None:
-        """Git tool names are correctly stripped."""
-        assert (
-            ToolMiddleware._strip_tool_prefix("codeplane-cod_git_stage_and_commit")
-            == "git_stage_and_commit"
-        )
-        assert ToolMiddleware._strip_tool_prefix("codeplane-cod_git_status") == "git_status"
+    def test_checkpoint_tool(self) -> None:
+        """Checkpoint tool name is correctly stripped."""
+        assert ToolMiddleware._strip_tool_prefix("codeplane-cod_checkpoint") == "checkpoint"
 
     def test_write_source(self) -> None:
         assert ToolMiddleware._strip_tool_prefix("codeplane-cod_write_source") == "write_source"
@@ -296,11 +292,11 @@ class TestPostCallBookkeeping:
         """Returns PatternMatch when a warn-severity bypass is detected."""
         mw, session, ctx = self._setup_middleware()
         # Fill detector with searches and zero reads,
-        # then evaluate with git_stage_and_commit to trigger terminal_bypass
+        # then evaluate with commit to trigger terminal_bypass
         for _ in range(4):
             session.pattern_detector.record("search")
 
-        result = mw._post_call_bookkeeping(ctx, "git_stage_and_commit", {}, {})
+        result = mw._post_call_bookkeeping(ctx, "checkpoint", {}, {})
         # terminal_bypass_commit should fire
         if result is not None:
             assert isinstance(result, PatternMatch)
@@ -316,32 +312,32 @@ class TestPostCallBookkeeping:
         result = mw._post_call_bookkeeping(ctx, "search", {}, {})
         assert result is None
 
-    def test_lint_check_only_does_not_clear_window(self) -> None:
-        """lint_check with no auto-fixes does NOT clear the pattern window."""
+    def test_verify_no_autofix_does_not_clear_window(self) -> None:
+        """checkpoint with no auto-fixes does NOT clear the pattern window."""
         mw, session, ctx = self._setup_middleware()
         session.pattern_detector.record("search")
         session.pattern_detector.record("search")
-        result_dict = {"status": "clean", "total_files_modified": 0}
-        mw._post_call_bookkeeping(ctx, "lint_check", {}, result_dict)
-        # 2 searches + 1 lint = 3 — not cleared
+        result_dict = {"lint": {"status": "clean", "total_files_modified": 0}}
+        mw._post_call_bookkeeping(ctx, "checkpoint", {}, result_dict)
+        # 2 searches + 1 checkpoint = 3 — not cleared
         assert session.pattern_detector.window_length == 3
 
-    def test_lint_check_autofix_clears_window(self) -> None:
-        """lint_check with auto-fixes DOES clear the pattern window."""
+    def test_verify_autofix_clears_window(self) -> None:
+        """checkpoint with auto-fixes DOES clear the pattern window."""
         mw, session, ctx = self._setup_middleware()
         session.pattern_detector.record("search")
         session.pattern_detector.record("search")
-        result_dict = {"status": "dirty", "total_files_modified": 2}
-        mw._post_call_bookkeeping(ctx, "lint_check", {}, result_dict)
+        result_dict = {"lint": {"status": "dirty", "total_files_modified": 2}}
+        mw._post_call_bookkeeping(ctx, "checkpoint", {}, result_dict)
         assert session.pattern_detector.window_length == 0
 
-    def test_test_run_does_not_clear_window(self) -> None:
-        """run_test_targets does NOT clear the pattern window."""
+    def test_verify_tests_only_does_not_clear_window(self) -> None:
+        """checkpoint with tests only (no lint section) does NOT clear the pattern window."""
         mw, session, ctx = self._setup_middleware()
         session.pattern_detector.record("search")
         session.pattern_detector.record("search")
-        mw._post_call_bookkeeping(ctx, "run_test_targets", {}, {})
-        # 2 searches + 1 test = 3 — not cleared
+        mw._post_call_bookkeeping(ctx, "checkpoint", {}, {})
+        # 2 searches + 1 checkpoint = 3 — not cleared
         assert session.pattern_detector.window_length == 3
 
 

@@ -27,15 +27,6 @@ MAP_LIMIT_MAX = 1000
 FILES_LIST_MAX = 1000
 """Maximum entries for file listing."""
 
-GIT_LOG_MAX = 100
-"""Maximum commits for git log queries."""
-
-GIT_BLAME_MAX = 1000
-"""Maximum lines for git blame queries."""
-
-GIT_REFS_MAX = 500
-"""Maximum refs for git reference queries."""
-
 LEXICAL_FALLBACK_MAX = 500
 """Maximum lexical search results for refactor fallback."""
 

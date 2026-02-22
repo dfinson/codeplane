@@ -1,25 +1,21 @@
 """MCP tool handlers."""
 
 from codeplane.mcp.tools import (
+    checkpoint,
     diff,
     files,
-    git,
     index,
     introspection,
-    lint,
     mutation,
     refactor,
-    testing,
 )
 
 __all__ = [
+    "checkpoint",
     "diff",
     "files",
-    "git",
     "index",
     "introspection",
-    "lint",
     "mutation",
     "refactor",
-    "testing",
 ]

@@ -1,0 +1,64 @@
+{
+  "session_name": "evee_108_claude-opus-4-6-fast_native",
+  "repo": "evee",
+  "issue": "108",
+  "model": "claude-opus-4.6-fast",
+  "codeplane": false,
+  "wall_clock": {
+    "start": "2026-02-22T13:04:33.075Z",
+    "end": "2026-02-22T13:08:49.719Z"
+  },
+  "turns": 28,
+  "tool_calls": {
+    "total": 51,
+    "codeplane": 0,
+    "terminal": 10,
+    "tool_search": 0,
+    "other": 41,
+    "errors": 0,
+    "by_tool": {
+      "read_file": 24,
+      "run_in_terminal": 10,
+      "manage_todo_list": 8,
+      "grep_search": 5,
+      "create_file": 2,
+      "list_dir": 1,
+      "file_search": 1
+    },
+    "total_thinking_chars": 0
+  },
+  "llm_requests": {
+    "agent": 28,
+    "routing": 9,
+    "total": 37
+  },
+  "tokens": {
+    "prompt": 1709672,
+    "completion": 16011,
+    "cached": 1624824,
+    "reasoning": 0,
+    "total": 1725683,
+    "cache_hit_ratio": 0.9504
+  },
+  "llm_duration_ms": 168225,
+  "avg_ttft_ms": 2320,
+  "context_growth": {
+    "first": 27,
+    "last": 110,
+    "max": 110,
+    "mean": 72
+  },
+  "outcome": {
+    "correctness": 3,
+    "completeness": 2,
+    "code_quality": 3,
+    "test_quality": 3,
+    "documentation": 2,
+    "lint_clean": 1,
+    "tests_pass": 1,
+    "score": 15,
+    "max_score": 17,
+    "scored_by": "Claude Opus 4.6 (fast mode)",
+    "review_summary": "The implementation is solid: 9 well-structured mocked E2E tests exercise the full evaluation pipeline (config loading, inference, metrics, aggregation, output artifacts) with deterministic responses and proper registry isolation. Code quality is high, idiomatic, and lint-clean with all 1257 tests passing. Two acceptance criteria are unmet: no CI/workflow changes for automatic PR gating, and no project documentation update explaining how to run the mocked tests (both explicitly required by issue #108)."
+  }
+}

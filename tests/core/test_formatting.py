@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from codeplane.core.formatting import (
     compress_path,
+    format_duration,
     format_path_list,
     pluralize,
     truncate_at_word,
@@ -226,3 +227,36 @@ class TestTruncateQuery:
         query = "search query"
         assert truncate_query(query, max_len=10) == "search ..."
         assert truncate_query(query, max_len=50) == query
+
+
+class TestFormatDuration:
+    """Tests for format_duration function."""
+
+    def test_sub_second(self) -> None:
+        """Sub-second durations show one decimal."""
+        assert format_duration(0.345) == "0.3s"
+        assert format_duration(0.0) == "0.0s"
+
+    def test_seconds(self) -> None:
+        """Durations under 60s show seconds."""
+        assert format_duration(1.0) == "1.0s"
+        assert format_duration(59.9) == "59.9s"
+
+    def test_minutes(self) -> None:
+        """Durations 60s-3599s show minutes + seconds."""
+        assert format_duration(60.0) == "1m 0s"
+        assert format_duration(90.0) == "1m 30s"
+        assert format_duration(3599.0) == "59m 59s"
+
+    def test_hours(self) -> None:
+        """Durations >= 3600s show hours + minutes."""
+        assert format_duration(3600.0) == "1h 0m"
+        assert format_duration(3661.0) == "1h 1m"
+        assert format_duration(7200.0) == "2h 0m"
+
+    def test_negative_raises(self) -> None:
+        """Negative durations raise ValueError."""
+        import pytest
+
+        with pytest.raises(ValueError, match="non-negative"):
+            format_duration(-1.0)

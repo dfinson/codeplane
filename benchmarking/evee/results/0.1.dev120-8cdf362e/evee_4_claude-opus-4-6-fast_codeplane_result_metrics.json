@@ -1,0 +1,67 @@
+{
+  "session_name": "evee_4_claude-opus-4-6-fast_codeplane",
+  "repo": "evee",
+  "issue": "4",
+  "model": "claude-opus-4.6-fast",
+  "codeplane": true,
+  "wall_clock": {
+    "start": "2026-02-22T15:22:59.261Z",
+    "end": "2026-02-22T15:26:51.284Z"
+  },
+  "turns": 41,
+  "tool_calls": {
+    "total": 44,
+    "codeplane": 33,
+    "terminal": 0,
+    "tool_search": 2,
+    "other": 9,
+    "errors": 2,
+    "by_tool": {
+      "mcp_codeplane-eve_write_source": 11,
+      "mcp_codeplane-eve_read_source": 10,
+      "manage_todo_list": 9,
+      "mcp_codeplane-eve_read_scaffold": 3,
+      "mcp_codeplane-eve_git_stage_and_commit": 3,
+      "tool_search_tool_regex [server]": 2,
+      "mcp_codeplane-eve_lint_check": 2,
+      "mcp_codeplane-eve_git_log": 2,
+      "mcp_codeplane-eve_run_test_targets": 1,
+      "mcp_codeplane-eve_semantic_diff": 1
+    },
+    "total_thinking_chars": 0
+  },
+  "llm_requests": {
+    "agent": 41,
+    "routing": 0,
+    "total": 41
+  },
+  "tokens": {
+    "prompt": 2107779,
+    "completion": 18793,
+    "cached": 2065938,
+    "reasoning": 0,
+    "total": 2126572,
+    "cache_hit_ratio": 0.9801
+  },
+  "llm_duration_ms": 184506,
+  "avg_ttft_ms": 2330,
+  "context_growth": {
+    "first": 34,
+    "last": 116,
+    "max": 116,
+    "mean": 76
+  },
+  "outcome": {
+    "correctness": 3,
+    "completeness": 2,
+    "code_quality": 3,
+    "test_quality": 3,
+    "documentation": 2,
+    "lint_clean": 1,
+    "tests_pass": 1,
+    "score": 15,
+    "max_score": 17,
+    "scored_by": "Claude Opus 4.6 (fast mode) (Preview)",
+    "review_summary": "Solid, well-structured implementation of an opt-in inference cache with clean separation (CacheConfig model, InferenceCache class, ModelEvaluator integration). Tests are thorough\u2014unit tests cover both backends plus edge cases (corrupt files), and integration tests verify hit/miss/invalidation/disabled behavior via ModelEvaluator. PR description is clear and detailed. Deducted on completeness because project rules mandate updating docs/user-guide/configuration.md for config changes and no docs/ files were modified; the new cache config section is undocumented for end users."
+  }
+}

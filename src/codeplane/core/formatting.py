@@ -138,3 +138,35 @@ def truncate_query(query: str, max_len: int = 20) -> str:
     if len(query) <= max_len:
         return query
     return query[: max_len - 3] + "..."
+
+
+def format_duration(seconds: float) -> str:
+    """Format a duration in seconds to a human-readable string.
+
+    Args:
+        seconds: Duration in seconds (must be non-negative)
+
+    Returns:
+        Formatted string like "0.3s", "1.5s", "2m 30s", "1h 5m"
+
+    Examples:
+        0.345 -> "0.3s"
+        1.0 -> "1.0s"
+        90.0 -> "1m 30s"
+        3661.0 -> "1h 1m"
+    """
+    if seconds < 0:
+        raise ValueError("Duration must be non-negative")
+
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+
+    minutes = int(seconds // 60)
+    remaining_secs = int(seconds % 60)
+
+    if minutes < 60:
+        return f"{minutes}m {remaining_secs}s"
+
+    hours = minutes // 60
+    remaining_mins = minutes % 60
+    return f"{hours}h {remaining_mins}m"

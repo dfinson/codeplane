@@ -1,9 +1,7 @@
-"""Tests for impact-aware test selection MCP tools.
+"""Tests for impact-aware test selection logic.
 
-Covers the new MCP tool parameters and functions:
-- discover_test_targets with affected_by parameter
-- inspect_affected_tests tool
-- Auto-scoped coverage in _execute_tests
+Covers the underlying impact-selection models and helpers
+used by the verify tool's affected-test filtering.
 """
 
 from __future__ import annotations

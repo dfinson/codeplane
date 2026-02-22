@@ -1,203 +1,193 @@
-"""Comprehensive tests for MCP git tools.
+"""Tests for checkpoint tool helpers (formerly git tools).
+
+After tool consolidation, commit is part of checkpoint.
+All other git operations are handled by the agent via terminal commands.
 
 Covers:
-- git_status
-- git_diff
-- git_commit
-- git_log
-- git_push
-- git_pull
-- git_checkout
-- git_merge
-- git_reset (including hard reset two-phase confirmation)
-- git_stage
-- git_branch
-- git_remote
-- git_stash
-- git_rebase
-- git_inspect
-- git_history
-- git_submodule
-- git_worktree
+- _validate_commit_message helper
+- _validate_paths_exist helper
+- _run_hook_with_retry helper
+- _summarize_commit helper
+- checkpoint tool registration
 """
 
-from dataclasses import dataclass
-from datetime import UTC
-from typing import Any
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 from fastmcp import FastMCP
 
-from codeplane.mcp.tools import git as git_tools
+from codeplane.mcp.tools import checkpoint as checkpoint_tools
+
+# =============================================================================
+# Validation Helper Tests
+# =============================================================================
+
+
+class TestValidateCommitMessage:
+    """Tests for _validate_commit_message helper."""
+
+    def test_valid_message(self) -> None:
+        checkpoint_tools._validate_commit_message("fix: resolve issue")
+
+    def test_empty_string_raises(self) -> None:
+        from codeplane.git.errors import EmptyCommitMessageError
+
+        with pytest.raises(EmptyCommitMessageError):
+            checkpoint_tools._validate_commit_message("")
+
+    def test_whitespace_only_raises(self) -> None:
+        from codeplane.git.errors import EmptyCommitMessageError
+
+        with pytest.raises(EmptyCommitMessageError):
+            checkpoint_tools._validate_commit_message("   \n\t  ")
+
+
+class TestValidatePathsExist:
+    """Tests for _validate_paths_exist helper."""
+
+    def test_empty_paths_ok(self, tmp_path: Path) -> None:
+        checkpoint_tools._validate_paths_exist(tmp_path, [])
+
+    def test_existing_paths_ok(self, tmp_path: Path) -> None:
+        (tmp_path / "a.py").touch()
+        checkpoint_tools._validate_paths_exist(tmp_path, ["a.py"])
+
+    def test_missing_paths_raises(self, tmp_path: Path) -> None:
+        from codeplane.git.errors import PathsNotFoundError
+
+        with pytest.raises(PathsNotFoundError):
+            checkpoint_tools._validate_paths_exist(tmp_path, ["nonexistent.py"])
+
+
+# =============================================================================
+# Hook Helper Tests
+# =============================================================================
+
+
+class TestRunHookWithRetry:
+    """Tests for _run_hook_with_retry helper."""
+
+    def test_success_first_try(self, tmp_path: Path) -> None:
+        """Hook passes on first try — no retry needed."""
+        from unittest.mock import patch
+
+        mock_result = MagicMock()
+        mock_result.success = True
+
+        with patch("codeplane.mcp.tools.checkpoint.run_hook", return_value=mock_result):
+            hook_result, failure = checkpoint_tools._run_hook_with_retry(
+                tmp_path, ["a.py"], MagicMock()
+            )
+
+        assert failure is None
+        assert hook_result.success is True
+
+    def test_failure_no_autofix(self, tmp_path: Path) -> None:
+        """Hook fails with no auto-fixed files — returns failure."""
+        from unittest.mock import patch
+
+        mock_result = MagicMock()
+        mock_result.success = False
+        mock_result.modified_files = []
+        mock_result.exit_code = 1
+        mock_result.stdout = "error output"
+        mock_result.stderr = ""
+
+        with patch("codeplane.mcp.tools.checkpoint.run_hook", return_value=mock_result):
+            _, failure = checkpoint_tools._run_hook_with_retry(tmp_path, ["a.py"], MagicMock())
+
+        assert failure is not None
+        assert failure["hook_failure"]["code"] == "HOOK_FAILED"
+
+    def test_autofix_then_retry_success(self, tmp_path: Path) -> None:
+        """Hook auto-fixes files, retry succeeds."""
+        from unittest.mock import patch
+
+        first_result = MagicMock()
+        first_result.success = False
+        first_result.modified_files = ["a.py"]
+        first_result.exit_code = 1
+        first_result.stdout = "fixed"
+        first_result.stderr = ""
+
+        retry_result = MagicMock()
+        retry_result.success = True
+
+        stage_fn = MagicMock()
+
+        with patch(
+            "codeplane.mcp.tools.checkpoint.run_hook",
+            side_effect=[first_result, retry_result],
+        ):
+            hook_result, failure = checkpoint_tools._run_hook_with_retry(
+                tmp_path, ["a.py"], stage_fn
+            )
+
+        assert failure is None
+        stage_fn.assert_called_once()
+
+    def test_autofix_then_retry_failure(self, tmp_path: Path) -> None:
+        """Hook auto-fixes files, retry also fails."""
+        from unittest.mock import patch
+
+        first_result = MagicMock()
+        first_result.success = False
+        first_result.modified_files = ["a.py"]
+        first_result.exit_code = 1
+        first_result.stdout = "first attempt"
+        first_result.stderr = ""
+
+        retry_result = MagicMock()
+        retry_result.success = False
+        retry_result.exit_code = 1
+        retry_result.stdout = "second attempt"
+        retry_result.stderr = ""
+        retry_result.modified_files = []
+
+        with patch(
+            "codeplane.mcp.tools.checkpoint.run_hook",
+            side_effect=[first_result, retry_result],
+        ):
+            _, failure = checkpoint_tools._run_hook_with_retry(tmp_path, ["a.py"], MagicMock())
+
+        assert failure is not None
+        assert failure["hook_failure"]["code"] == "HOOK_FAILED_AFTER_RETRY"
+        assert len(failure["hook_failure"]["attempts"]) == 2
+
 
 # =============================================================================
 # Summary Helper Tests
 # =============================================================================
 
 
-class TestSummarizeStatus:
-    """Tests for _summarize_status helper."""
-
-    def test_clean_status(self):
-        result = git_tools._summarize_status(
-            branch="main",
-            files={},
-            is_clean=True,
-            state=0,
-        )
-        assert result == "clean, branch: main"
-
-    def test_detached_head(self):
-        result = git_tools._summarize_status(
-            branch=None,
-            files={},
-            is_clean=True,
-            state=0,
-        )
-        assert result == "clean, branch: detached"
-
-    def test_modified_files(self):
-        # Status codes: 256 = modified in worktree
-        files = {"a.py": 256, "b.py": 256}
-        result = git_tools._summarize_status(
-            branch="feature",
-            files=files,
-            is_clean=False,
-            state=0,
-        )
-        assert "2 modified" in result
-        assert "branch: feature" in result
-
-    def test_staged_files(self):
-        # Status codes: 1 = staged new, 2 = staged modified
-        files = {"a.py": 1, "b.py": 2}
-        result = git_tools._summarize_status(
-            branch="main",
-            files=files,
-            is_clean=False,
-            state=0,
-        )
-        assert "2 staged" in result
-
-    def test_conflicted_files(self):
-        # Status code >= 4096 = conflict
-        files = {"a.py": 4096, "b.py": 4097}
-        result = git_tools._summarize_status(
-            branch="main",
-            files=files,
-            is_clean=False,
-            state=0,
-        )
-        assert "2 conflicts" in result
-
-    def test_rebase_in_progress(self):
-        result = git_tools._summarize_status(
-            branch="main",
-            files={"a.py": 256},
-            is_clean=False,
-            state=1,
-        )
-        assert "rebase in progress" in result
-
-    def test_merge_in_progress(self):
-        result = git_tools._summarize_status(
-            branch="main",
-            files={"a.py": 256},
-            is_clean=False,
-            state=2,
-        )
-        assert "merge in progress" in result
-
-
-class TestSummarizeDiff:
-    """Tests for _summarize_diff helper."""
-
-    def test_no_changes(self):
-        result = git_tools._summarize_diff(0, 0, 0, staged=False)
-        assert result == "no changes"
-
-    def test_no_staged_changes(self):
-        result = git_tools._summarize_diff(0, 0, 0, staged=True)
-        assert result == "no staged changes"
-
-    def test_files_changed(self):
-        result = git_tools._summarize_diff(3, 50, 20, staged=False)
-        assert result == "3 files changed (+50/-20)"
-
-    def test_staged_diff(self):
-        result = git_tools._summarize_diff(2, 10, 5, staged=True)
-        assert result == "staged: 2 files changed (+10/-5)"
-
-
 class TestSummarizeCommit:
     """Tests for _summarize_commit helper."""
 
-    def test_short_message(self):
-        result = git_tools._summarize_commit(
+    def test_short_message(self) -> None:
+        result = checkpoint_tools._summarize_commit(
             sha="abc123456789",
             message="Fix bug",
         )
         assert result == 'abc1234 "Fix bug"'
 
-    def test_long_message_truncated(self):
+    def test_long_message_truncated(self) -> None:
         long_msg = "This is a very long commit message that should be truncated to fit"
-        result = git_tools._summarize_commit(
+        result = checkpoint_tools._summarize_commit(
             sha="abc123456789",
             message=long_msg,
         )
         assert result.startswith('abc1234 "')
         assert len(result) < len(long_msg) + 15
 
-    def test_multiline_message(self):
+    def test_multiline_message(self) -> None:
         msg = "First line\nSecond line\nThird line"
-        result = git_tools._summarize_commit(
+        result = checkpoint_tools._summarize_commit(
             sha="abc123456789",
             message=msg,
         )
         assert "Second line" not in result
         assert "First line" in result
-
-
-class TestSummarizeLog:
-    """Tests for _summarize_log helper."""
-
-    def test_no_more(self):
-        result = git_tools._summarize_log(10, has_more=False)
-        assert result == "10 commits"
-
-    def test_has_more(self):
-        result = git_tools._summarize_log(50, has_more=True)
-        assert result == "50 commits (more available)"
-
-
-class TestSummarizeBranches:
-    """Tests for _summarize_branches helper."""
-
-    def test_with_current(self):
-        result = git_tools._summarize_branches(5, current="main")
-        assert result == "5 branches, current: main"
-
-    def test_without_current(self):
-        result = git_tools._summarize_branches(3, current=None)
-        assert result == "3 branches"
-
-
-class TestSummarizePaths:
-    """Tests for _summarize_paths helper."""
-
-    def test_empty_paths(self):
-        result = git_tools._summarize_paths("stage", [])
-        assert result == "nothing to stage"
-
-    def test_single_path(self):
-        result = git_tools._summarize_paths("staged", ["test.py"])
-        assert "staged" in result
-        assert "test.py" in result
-
-    def test_multiple_paths(self):
-        result = git_tools._summarize_paths("unstaged", ["a.py", "b.py", "c.py"])
-        assert "unstaged" in result
 
 
 # =============================================================================
@@ -206,7 +196,7 @@ class TestSummarizePaths:
 
 
 @pytest.fixture
-def mock_app_ctx():
+def mock_app_ctx() -> MagicMock:
     """Create a mock AppContext with all needed attributes."""
     ctx = MagicMock()
     ctx.session_manager = MagicMock()
@@ -223,297 +213,74 @@ def mock_app_ctx():
     return ctx
 
 
-@pytest.fixture
-def mock_mcp_context():
-    """Create a mock FastMCP Context."""
-    ctx = MagicMock()
-    ctx.session_id = "test_session_12345"
-    return ctx
+class TestCheckpointTool:
+    """Tests for the checkpoint tool registration."""
 
-
-class TestGitStatus:
-    """Tests for git_status tool."""
-
-    @pytest.mark.asyncio
-    async def test_clean_repo(self, mock_app_ctx, mock_mcp_context):  # noqa: ARG002
-        mock_app_ctx.git_ops.status.return_value = {}
-        mock_app_ctx.git_ops.head.return_value = MagicMock(
-            target_sha="abc1234567890",
-            is_detached=False,
-        )
-        mock_app_ctx.git_ops.state.return_value = 0
-        mock_app_ctx.git_ops.current_branch.return_value = "main"
-
+    def test_tool_registered(self, mock_app_ctx: MagicMock) -> None:
         mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
-
-        # Get the registered tool
-        from codeplane.mcp._compat import get_tools_sync
-
-        tool = get_tools_sync(mcp).get("git_status")
-        assert tool is not None
-
-    @pytest.mark.asyncio
-    async def test_dirty_repo(self, mock_app_ctx, mock_mcp_context):  # noqa: ARG002
-        mock_app_ctx.git_ops.status.return_value = {
-            "modified.py": 256,
-            "new.py": 1,
-        }
-        mock_app_ctx.git_ops.head.return_value = MagicMock(
-            target_sha="abc1234567890",
-            is_detached=False,
-        )
-        mock_app_ctx.git_ops.state.return_value = 0
-        mock_app_ctx.git_ops.current_branch.return_value = "feature"
-
-        mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
+        checkpoint_tools.register_tools(mcp, mock_app_ctx)
 
         from codeplane.mcp._compat import get_tools_sync
 
-        tool = get_tools_sync(mcp).get("git_status")
+        tool = get_tools_sync(mcp).get("checkpoint")
         assert tool is not None
 
-
-class TestGitDiff:
-    """Tests for git_diff tool."""
-
-    def test_tool_registered(self, mock_app_ctx):
-        @dataclass
-        class MockDiff:
-            files_changed: int = 2
-            total_additions: int = 50
-            total_deletions: int = 20
-            files: list[Any] | None = None
-            patch: str = ""
-
-        mock_app_ctx.git_ops.diff.return_value = MockDiff(files=[])
-
+    def test_no_old_tools_registered(self, mock_app_ctx: MagicMock) -> None:
+        """Verify deleted tools are NOT registered."""
         mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
+        checkpoint_tools.register_tools(mcp, mock_app_ctx)
 
         from codeplane.mcp._compat import get_tools_sync
 
-        tool = get_tools_sync(mcp).get("git_diff")
-        assert tool is not None
+        tools = get_tools_sync(mcp)
+        deleted = [
+            "git_status",
+            "git_diff",
+            "git_commit",
+            "git_log",
+            "git_push",
+            "git_pull",
+            "git_checkout",
+            "git_merge",
+            "git_reset",
+            "git_stage",
+            "git_branch",
+            "git_remote",
+            "git_stash",
+            "git_rebase",
+            "git_inspect",
+            "git_history",
+            "git_submodule",
+            "git_worktree",
+            "git_stage_and_commit",
+            "commit",
+            "verify",
+        ]
+        for name in deleted:
+            assert name not in tools, f"{name} should have been deleted"
 
-
-class TestGitCommit:
-    """Tests for git_commit tool."""
-
-    def test_tool_registered(self, mock_app_ctx):
-        mock_app_ctx.git_ops.commit.return_value = "abc1234567890123456789012345678901234567890"
-
+    def test_checkpoint_has_push_param(self, mock_app_ctx: MagicMock) -> None:
+        """The checkpoint tool has a push parameter."""
         mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
+        checkpoint_tools.register_tools(mcp, mock_app_ctx)
 
         from codeplane.mcp._compat import get_tools_sync
 
-        tool = get_tools_sync(mcp).get("git_commit")
+        tool = get_tools_sync(mcp).get("checkpoint")
         assert tool is not None
+        params_str = str(tool.parameters)
+        assert "push" in params_str
+        assert "commit_message" in params_str
+        assert "changed_files" in params_str
 
-
-class TestGitLog:
-    """Tests for git_log tool."""
-
-    def test_tool_registered(self, mock_app_ctx):
-        mock_app_ctx.git_ops.log.return_value = []
-
+    def test_checkpoint_has_lint_param(self, mock_app_ctx: MagicMock) -> None:
+        """The checkpoint tool has a 'lint' parameter."""
         mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
+        checkpoint_tools.register_tools(mcp, mock_app_ctx)
 
         from codeplane.mcp._compat import get_tools_sync
 
-        tool = get_tools_sync(mcp).get("git_log")
+        tool = get_tools_sync(mcp).get("checkpoint")
         assert tool is not None
-
-
-class TestGitReset:
-    """Tests for git_reset tool including hard reset confirmation."""
-
-    def test_tool_registered(self, mock_app_ctx):
-        mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
-
-        from codeplane.mcp._compat import get_tools_sync
-
-        tool = get_tools_sync(mcp).get("git_reset")
-        assert tool is not None
-        assert "confirmation_token" in str(tool.parameters)
-
-
-class TestGitStage:
-    """Tests for git_stage tool."""
-
-    def test_tool_registered(self, mock_app_ctx):
-        mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
-
-        from codeplane.mcp._compat import get_tools_sync
-
-        tool = get_tools_sync(mcp).get("git_stage")
-        assert tool is not None
-
-
-class TestGitBranch:
-    """Tests for git_branch tool."""
-
-    def test_tool_registered(self, mock_app_ctx):
-        mock_app_ctx.git_ops.branches.return_value = []
-        mock_app_ctx.git_ops.current_branch.return_value = "main"
-
-        mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
-
-        from codeplane.mcp._compat import get_tools_sync
-
-        tool = get_tools_sync(mcp).get("git_branch")
-        assert tool is not None
-
-
-class TestGitRemote:
-    """Tests for git_remote tool."""
-
-    def test_tool_registered(self, mock_app_ctx):
-        mock_app_ctx.git_ops.remotes.return_value = []
-
-        mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
-
-        from codeplane.mcp._compat import get_tools_sync
-
-        tool = get_tools_sync(mcp).get("git_remote")
-        assert tool is not None
-
-
-class TestGitStash:
-    """Tests for git_stash tool."""
-
-    def test_tool_registered(self, mock_app_ctx):
-        mock_app_ctx.git_ops.stash_list.return_value = []
-
-        mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
-
-        from codeplane.mcp._compat import get_tools_sync
-
-        tool = get_tools_sync(mcp).get("git_stash")
-        assert tool is not None
-
-
-class TestGitRebase:
-    """Tests for git_rebase tool."""
-
-    def test_tool_registered(self, mock_app_ctx):
-        mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
-
-        from codeplane.mcp._compat import get_tools_sync
-
-        tool = get_tools_sync(mcp).get("git_rebase")
-        assert tool is not None
-
-
-class TestGitInspect:
-    """Tests for git_inspect tool."""
-
-    def test_tool_registered(self, mock_app_ctx):
-        mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
-
-        from codeplane.mcp._compat import get_tools_sync
-
-        tool = get_tools_sync(mcp).get("git_inspect")
-        assert tool is not None
-
-
-class TestSerializeDatetimes:
-    """Tests for _serialize_datetimes helper."""
-
-    def test_converts_datetime_to_isoformat(self) -> None:
-        from datetime import datetime
-
-        from codeplane.mcp.tools.git import _serialize_datetimes
-
-        dt = datetime(2025, 6, 15, 12, 30, 45, tzinfo=UTC)
-        assert _serialize_datetimes(dt) == "2025-06-15T12:30:45+00:00"
-
-    def test_recurses_into_dicts(self) -> None:
-        from datetime import datetime
-
-        from codeplane.mcp.tools.git import _serialize_datetimes
-
-        dt = datetime(2025, 1, 1, tzinfo=UTC)
-        result = _serialize_datetimes({"author": "alice", "time": dt, "nested": {"ts": dt}})
-        assert result["author"] == "alice"
-        assert result["time"] == "2025-01-01T00:00:00+00:00"
-        assert result["nested"]["ts"] == "2025-01-01T00:00:00+00:00"
-
-    def test_recurses_into_lists(self) -> None:
-        from datetime import datetime
-
-        from codeplane.mcp.tools.git import _serialize_datetimes
-
-        dt = datetime(2025, 3, 20, tzinfo=UTC)
-        result = _serialize_datetimes([dt, "string", 42])
-        assert result == ["2025-03-20T00:00:00+00:00", "string", 42]
-
-    def test_passthrough_non_datetime(self) -> None:
-        from codeplane.mcp.tools.git import _serialize_datetimes
-
-        assert _serialize_datetimes(42) == 42
-        assert _serialize_datetimes("hello") == "hello"
-        assert _serialize_datetimes(None) is None
-
-    def test_handles_tuple(self) -> None:
-        from datetime import datetime
-
-        from codeplane.mcp.tools.git import _serialize_datetimes
-
-        dt = datetime(2025, 1, 1, tzinfo=UTC)
-        result = _serialize_datetimes((dt, "x"))
-        assert isinstance(result, list)
-        assert result[0] == "2025-01-01T00:00:00+00:00"
-
-
-class TestGitHistory:
-    """Tests for git_history tool."""
-
-    def test_tool_registered(self, mock_app_ctx):
-        mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
-
-        from codeplane.mcp._compat import get_tools_sync
-
-        tool = get_tools_sync(mcp).get("git_history")
-        assert tool is not None
-
-
-class TestGitSubmodule:
-    """Tests for git_submodule tool."""
-
-    def test_tool_registered(self, mock_app_ctx):
-        mock_app_ctx.git_ops.submodules.return_value = []
-
-        mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
-
-        from codeplane.mcp._compat import get_tools_sync
-
-        tool = get_tools_sync(mcp).get("git_submodule")
-        assert tool is not None
-
-
-class TestGitWorktree:
-    """Tests for git_worktree tool."""
-
-    def test_tool_registered(self, mock_app_ctx):
-        mock_app_ctx.git_ops.worktrees.return_value = []
-
-        mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
-
-        from codeplane.mcp._compat import get_tools_sync
-
-        tool = get_tools_sync(mcp).get("git_worktree")
-        assert tool is not None
+        params_str = str(tool.parameters)
+        assert "lint" in params_str

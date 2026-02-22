@@ -167,7 +167,6 @@ class TestLimitsConfig:
         config = LimitsConfig()
         assert config.search_default == 20
         assert config.map_depth_default == 3
-        assert config.git_log_default == 50
 
 
 class TestTestingConfig:
