@@ -1213,6 +1213,18 @@ class IndexCoordinator:
             raise RuntimeError(msg)
         await self._fresh_event.wait()
 
+    def score_files_bm25(self, query: str, limit: int = 500) -> dict[str, float]:
+        """Score files by BM25 relevance to *query* using Tantivy.
+
+        Parallel plumbing for recon — does NOT touch the existing search flow.
+        Returns ``{repo-relative-path: bm25_score}`` for files with any
+        lexical overlap with the query.  Files absent from the dict have
+        zero relevance.
+        """
+        if self._lexical is None:
+            return {}
+        return self._lexical.score_files_bm25(query, limit=limit)
+
     async def search(
         self,
         query: str,

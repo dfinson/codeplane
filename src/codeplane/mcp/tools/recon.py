@@ -562,6 +562,7 @@ async def _expand_seed(
     *,
     depth: int = 1,
     task_terms: list[str] | None = None,
+    bm25_scores: dict[str, float] | None = None,
 ) -> dict[str, Any]:
     """Expand a single seed via graph walk.
 
@@ -574,6 +575,10 @@ async def _expand_seed(
     When *task_terms* is provided, import_defs are scored by task relevance
     (term match in def name) + hub score.  Defs with no term match and hub < 3
     are dropped to reduce noise.
+
+    When *bm25_scores* is provided (``{path: score}``), expansion candidates
+    (callees and import_defs) whose files have zero BM25 relevance to the task
+    are dropped.  This is the primary precision lever for expansion.
     """
     coordinator = app_ctx.coordinator
 
@@ -619,6 +624,9 @@ async def _expand_seed(
         # Require at least 2 path segments in common (e.g. "src/evee/")
         if common.count("/") < 2:
             continue
+        # BM25 gate: drop callees whose file has zero task relevance
+        if bm25_scores is not None and c_path not in bm25_scores:
+            continue
         callee_sigs.append(
             {
                 "symbol": _def_signature_text(c),
@@ -648,6 +656,9 @@ async def _expand_seed(
         if imp.resolved_path in seen_import_paths:
             continue
         seen_import_paths.add(imp.resolved_path)
+        # BM25 gate: skip imported files with zero task relevance
+        if bm25_scores is not None and imp.resolved_path not in bm25_scores:
+            continue
         # For each imported file, include its top hub-scored def signature
         imp_full = repo_root / imp.resolved_path
         if not imp_full.exists():
@@ -967,7 +978,15 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                 ),
             }
 
-        # Step 2: Expand each seed
+        # Step 2: BM25 scoring pass — parallel plumbing for expansion gating
+        bm25_scores = coordinator.score_files_bm25(task)
+        log.debug(
+            "recon.bm25_scores",
+            scored_files=len(bm25_scores),
+            top5=sorted(bm25_scores.items(), key=lambda x: -x[1])[:5],
+        )
+
+        # Step 3: Expand each seed
         seed_results: list[dict[str, Any]] = []
         seed_paths: set[str] = set()
         total_callees = 0
@@ -979,7 +998,12 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
 
         for seed_def in selected_seeds:
             expanded = await _expand_seed(
-                app_ctx, seed_def, repo_root, depth=depth, task_terms=terms
+                app_ctx,
+                seed_def,
+                repo_root,
+                depth=depth,
+                task_terms=terms,
+                bm25_scores=bm25_scores,
             )
             seed_results.append(expanded)
             seed_paths.add(expanded["path"])
@@ -987,12 +1011,12 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             total_callers += len(expanded.get("callers", []))
             total_import_defs += len(expanded.get("import_defs", []))
 
-        # Step 3: Import scaffolds for seed files
+        # Step 4: Import scaffolds for seed files
         scaffolds: list[dict[str, Any]] = []
         if depth >= 1:
             scaffolds = await _build_import_scaffolds(app_ctx, seed_paths, repo_root)
 
-        # Step 4: Assemble response
+        # Step 5: Assemble response
         task_preview = task[:40] + "..." if len(task) > 40 else task
         response: dict[str, Any] = {
             "seeds": seed_results,
@@ -1009,7 +1033,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         if scaffolds:
             response["import_scaffolds"] = scaffolds
 
-        # Step 5: Budget trimming
+        # Step 6: Budget trimming
         response = _trim_to_budget(response, budget)
 
         # Agentic hint
