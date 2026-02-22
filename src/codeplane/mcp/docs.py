@@ -148,10 +148,10 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             "When you haven't read the file recently",
         ],
         hints_before="Read the target file first to ensure you have current content.",
-        hints_after="Use commit to commit the change.",
+        hints_after="Use checkpoint to lint, test, and commit your changes.",
         alternatives=["refactor_rename (for symbol renames)"],
         commonly_preceded_by=["read_source"],
-        commonly_followed_by=["commit"],
+        commonly_followed_by=["checkpoint"],
         possible_errors=[
             "FILE_NOT_FOUND",
             "FILE_EXISTS",
@@ -241,62 +241,37 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             },
         ],
     ),
-    "commit": ToolDocumentation(
-        name="commit",
-        description="Stage, lint, run pre-commit hooks, commit, and optionally push.",
-        category=ToolCategory.GIT,
+    "checkpoint": ToolDocumentation(
+        name="checkpoint",
+        description="Lint, test, and optionally commit+push in one call.",
+        category=ToolCategory.TESTING,
         when_to_use=[
-            "Committing changes after edits",
-            "When pre-commit hooks may auto-fix files (formatters, linters)",
-            "Single-step stage + commit + push workflow",
+            "After making code changes — validates and optionally saves",
+            "Quick lint + affected-tests check",
+            "One-shot lint → test → commit → push workflow",
         ],
         when_not_to_use=[
-            "When you only need git status/log/diff/branch — use terminal commands",
+            "When you only need git status/log/diff/branch — use terminal",
         ],
-        hints_before="Verify your changes look correct before committing.",
-        hints_after="For other git operations (status, log, diff, push, pull, branch, checkout, merge, reset, stash, rebase), use terminal commands directly.",
+        hints_before=None,
+        hints_after="Pass commit_message to auto-commit on success.",
         alternatives=[],
-        commonly_preceded_by=["write_source", "verify"],
+        commonly_preceded_by=["write_source"],
         commonly_followed_by=[],
-        behavior=BehaviorFlags(has_side_effects=True, atomic=True),
+        behavior=BehaviorFlags(has_side_effects=True, may_be_slow=True),
         possible_errors=["HOOK_FAILED", "HOOK_FAILED_AFTER_RETRY"],
         examples=[
             {
-                "description": "Stage and commit specific files",
-                "params": {"paths": ["src/foo.py", "src/bar.py"], "message": "feat: add feature"},
-            },
-            {
-                "description": "Stage all and commit",
-                "params": {"all": True, "message": "chore: update files"},
-            },
-            {
-                "description": "Commit and push in one call",
-                "params": {"paths": ["src/foo.py"], "message": "fix: resolve bug", "push": True},
-            },
-        ],
-    ),
-    "verify": ToolDocumentation(
-        name="verify",
-        description="Run lint + affected tests in one call. The 'did I break anything?' check.",
-        category=ToolCategory.TESTING,
-        when_to_use=[
-            "After making code changes, before committing",
-            "Quick validation that nothing is broken",
-        ],
-        when_not_to_use=[
-            "When you need fine-grained control over lint or test options",
-        ],
-        hints_before=None,
-        hints_after="If verify passes, use commit to save your work.",
-        alternatives=[],
-        commonly_preceded_by=["write_source"],
-        commonly_followed_by=["commit"],
-        behavior=BehaviorFlags(has_side_effects=True, may_be_slow=True),
-        possible_errors=[],
-        examples=[
-            {
-                "description": "Verify after editing files",
+                "description": "Check after editing files",
                 "params": {"changed_files": ["src/foo.py", "src/bar.py"]},
+            },
+            {
+                "description": "One-shot: lint, test, commit, push",
+                "params": {
+                    "changed_files": ["src/foo.py"],
+                    "commit_message": "feat: add feature",
+                    "push": True,
+                },
             },
             {
                 "description": "Lint only, skip tests",
@@ -556,17 +531,17 @@ def get_common_workflows() -> list[dict[str, Any]]:
         {
             "name": "modification",
             "description": "Making code changes",
-            "tools": ["read_source", "write_source", "verify", "commit"],
+            "tools": ["read_source", "write_source", "checkpoint"],
         },
         {
             "name": "refactoring",
             "description": "Renaming and restructuring",
-            "tools": ["search", "refactor_rename", "semantic_diff", "commit"],
+            "tools": ["search", "refactor_rename", "semantic_diff", "checkpoint"],
         },
         {
             "name": "review",
             "description": "Reviewing changes",
-            "tools": ["semantic_diff", "verify"],
+            "tools": ["semantic_diff", "checkpoint"],
         },
     ]
 

@@ -183,9 +183,9 @@ class TestStripToolPrefix:
         """Unknown tool name returned as-is."""
         assert ToolMiddleware._strip_tool_prefix("unknown_tool_xyz") == "unknown_tool_xyz"
 
-    def test_git_tools(self) -> None:
-        """Git tool names are correctly stripped."""
-        assert ToolMiddleware._strip_tool_prefix("codeplane-cod_commit") == "commit"
+    def test_checkpoint_tool(self) -> None:
+        """Checkpoint tool name is correctly stripped."""
+        assert ToolMiddleware._strip_tool_prefix("codeplane-cod_checkpoint") == "checkpoint"
 
     def test_write_source(self) -> None:
         assert ToolMiddleware._strip_tool_prefix("codeplane-cod_write_source") == "write_source"
@@ -296,7 +296,7 @@ class TestPostCallBookkeeping:
         for _ in range(4):
             session.pattern_detector.record("search")
 
-        result = mw._post_call_bookkeeping(ctx, "commit", {}, {})
+        result = mw._post_call_bookkeeping(ctx, "checkpoint", {}, {})
         # terminal_bypass_commit should fire
         if result is not None:
             assert isinstance(result, PatternMatch)
@@ -313,31 +313,31 @@ class TestPostCallBookkeeping:
         assert result is None
 
     def test_verify_no_autofix_does_not_clear_window(self) -> None:
-        """verify with no auto-fixes does NOT clear the pattern window."""
+        """checkpoint with no auto-fixes does NOT clear the pattern window."""
         mw, session, ctx = self._setup_middleware()
         session.pattern_detector.record("search")
         session.pattern_detector.record("search")
         result_dict = {"lint": {"status": "clean", "total_files_modified": 0}}
-        mw._post_call_bookkeeping(ctx, "verify", {}, result_dict)
-        # 2 searches + 1 verify = 3 — not cleared
+        mw._post_call_bookkeeping(ctx, "checkpoint", {}, result_dict)
+        # 2 searches + 1 checkpoint = 3 — not cleared
         assert session.pattern_detector.window_length == 3
 
     def test_verify_autofix_clears_window(self) -> None:
-        """verify with auto-fixes DOES clear the pattern window."""
+        """checkpoint with auto-fixes DOES clear the pattern window."""
         mw, session, ctx = self._setup_middleware()
         session.pattern_detector.record("search")
         session.pattern_detector.record("search")
         result_dict = {"lint": {"status": "dirty", "total_files_modified": 2}}
-        mw._post_call_bookkeeping(ctx, "verify", {}, result_dict)
+        mw._post_call_bookkeeping(ctx, "checkpoint", {}, result_dict)
         assert session.pattern_detector.window_length == 0
 
     def test_verify_tests_only_does_not_clear_window(self) -> None:
-        """verify with tests only (no lint section) does NOT clear the pattern window."""
+        """checkpoint with tests only (no lint section) does NOT clear the pattern window."""
         mw, session, ctx = self._setup_middleware()
         session.pattern_detector.record("search")
         session.pattern_detector.record("search")
-        mw._post_call_bookkeeping(ctx, "verify", {}, {})
-        # 2 searches + 1 verify = 3 — not cleared
+        mw._post_call_bookkeeping(ctx, "checkpoint", {}, {})
+        # 2 searches + 1 checkpoint = 3 — not cleared
         assert session.pattern_detector.window_length == 3
 
 

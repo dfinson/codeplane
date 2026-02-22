@@ -2,19 +2,17 @@
 
 Authority: SPEC.md wins. If unsure or there is a spec conflict, stop and ask.
 
-## ⛔ CRITICAL: Use `verify` and `commit` — NEVER Terminal ⛔
+## ⛔ CRITICAL: Use `checkpoint` — NEVER Terminal ⛔
 
 **After ANY code change**, you MUST call:
-- `verify(changed_files=[...])` — lint + affected tests in one call
-- `commit(message=..., all=True, push=True)` — stage, hooks, commit, push
+- `checkpoint(changed_files=[...], commit_message="...", push=True)` — lint + test + commit + push + semantic diff
 
 **FORBIDDEN alternatives** (these are WRONG, do NOT use them):
 - `pytest`, `python -m pytest`, `ruff`, `ruff check`, `ruff format`, `mypy` in terminal
 - `git add`, `git commit`, `git push` in terminal
 - Any test runner or linter invoked via `run_in_terminal`
 
-The `verify` tool runs lint + only the tests affected by your changes.
-The `commit` tool handles staging, pre-commit hooks, auto-fix retry, and push.
+The `checkpoint` tool runs lint + affected tests + commit + push in one call.
 Terminal commands for these operations are ALWAYS wrong in this repo.
 
 ## ⛔ E2E Tests Are OFF-LIMITS ⛔
@@ -28,7 +26,7 @@ E2E tests (`tests/e2e/`) are:
 - **Excluded by default** from `pytest` runs
 - **Resource-intensive**: Clone real GitHub repos, start CodePlane daemons
 - **Slow**: Can take 5-15+ minutes and consume significant CPU
-- **NOT for routine validation**: Use `verify` instead
+- **NOT for routine validation**: Use `checkpoint` instead
 
 **To run E2E tests (ONLY with explicit user confirmation):**
 - `pytest tests/e2e/ --ignore=` (override the default ignore)

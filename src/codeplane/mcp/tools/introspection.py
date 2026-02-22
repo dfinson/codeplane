@@ -33,13 +33,14 @@ def _get_version() -> str:
 def _derive_features(tool_names: list[str]) -> list[str]:
     features: set[str] = set()
     for name in tool_names:
-        if name.startswith("git_") or name == "commit":
+        if name.startswith("git_"):
             features.add("git_ops")
         elif name.startswith("refactor_"):
             features.add("refactoring")
-        elif name == "verify":
+        elif name == "checkpoint":
             features.add("testing")
             features.add("linting")
+            features.add("git_ops")
         elif name in ("search", "map_repo"):
             features.add("indexing")
         elif name in ("read_source", "list_files", "write_source"):
@@ -166,7 +167,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 {
                     "name": "code_review",
                     "description": "Review code changes before commit",
-                    "steps": ["semantic_diff", "verify"],
+                    "steps": ["semantic_diff", "checkpoint"],
                 },
                 {
                     "name": "refactor_symbol",
@@ -195,7 +196,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 {
                     "name": "fix_and_commit",
                     "description": "Edit files, verify, and commit",
-                    "steps": ["write_source", "verify", "commit"],
+                    "steps": ["write_source", "checkpoint"],
                 },
             ]
             return {

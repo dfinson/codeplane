@@ -49,8 +49,7 @@ class TestCategorizeTool:
             ("list_files", "meta"),
             ("describe", "meta"),
             ("reset_budget", "meta"),
-            ("verify", "test"),
-            ("commit", "git"),
+            ("checkpoint", "test"),
         ],
     )
     def test_known_tool_category(self, tool_name: str, expected_category: str) -> None:
@@ -89,6 +88,8 @@ class TestCategorizeTool:
             "run_test_targets",
             "discover_test_targets",
             "inspect_affected_tests",
+            "commit",
+            "verify",
         ]
         for name in deleted:
             assert name not in TOOL_CATEGORIES, f"{name} should be removed"
@@ -131,20 +132,20 @@ class TestWindowClearBehavior:
     """Integration: which tools clear the pattern window and which don't."""
 
     def test_commit_clears_window(self) -> None:
-        """commit (mutating git) clears the pattern window."""
+        """checkpoint with clears_window clears the pattern window."""
         det = CallPatternDetector()
         det.record("search")
         det.record("search")
         det.record("search")
-        det.record("commit")
+        det.record("checkpoint", clears_window=True)
         assert det.window_length == 0
 
     def test_verify_no_clear(self) -> None:
-        """verify (test category) does NOT clear the window."""
+        """checkpoint (test category) does NOT clear the window by default."""
         det = CallPatternDetector()
         det.record("search")
         det.record("search")
-        det.record("verify")
+        det.record("checkpoint")
         assert det.window_length == 3
 
     def test_semantic_diff_no_clear(self) -> None:
@@ -160,7 +161,7 @@ class TestWindowClearBehavior:
         det = CallPatternDetector()
         det.record("search")
         det.record("search")
-        det.record("verify", clears_window=True)
+        det.record("checkpoint", clears_window=True)
         assert det.window_length == 0
 
 
@@ -187,7 +188,7 @@ class TestHasRecentScopedTest:
         window: deque[CallRecord] = deque(
             [
                 CallRecord(category="search", tool_name="search"),
-                CallRecord(category="test_scoped", tool_name="verify"),
+                CallRecord(category="test_scoped", tool_name="checkpoint"),
                 CallRecord(category="read", tool_name="read_source"),
             ]
         )

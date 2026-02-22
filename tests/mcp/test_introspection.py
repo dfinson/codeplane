@@ -31,8 +31,8 @@ class TestDeriveFeatures:
         assert result == []
 
     def test_git_tools(self) -> None:
-        """Git tools derive git_ops feature."""
-        result = _derive_features(["commit"])
+        """Git-related tools derive git_ops feature."""
+        result = _derive_features(["checkpoint"])
         assert "git_ops" in result
 
     def test_refactor_tools(self) -> None:
@@ -47,5 +47,5 @@ class TestDeriveFeatures:
 
     def test_results_sorted(self) -> None:
         """Results are sorted alphabetically."""
-        result = _derive_features(["search", "commit", "describe"])
+        result = _derive_features(["search", "checkpoint", "describe"])
         assert result == sorted(result)

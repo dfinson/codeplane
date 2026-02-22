@@ -1,4 +1,4 @@
-"""Tests for commit auto-restage-on-hook-autofix behavior.
+"""Tests for checkpoint commit auto-restage-on-hook-autofix behavior.
 
 Covers:
 - Hook passes on first try: normal commit
@@ -36,42 +36,42 @@ def _make_hook_result(
 
 
 @pytest.fixture
-def git_commit_tool(
+def checkpoint_commit_tool(
     mock_context: MagicMock,
 ) -> Any:
-    """Register git tools and return the commit function.
+    """Register checkpoint tool and return a wrapper for commit testing.
 
+    Uses checkpoint with lint=False, tests=False to exercise only the commit path.
     Wraps the raw tool function to resolve Pydantic Field defaults,
     since calling tool.fn() directly bypasses FastMCP's parameter parsing.
     """
     from fastmcp import FastMCP
 
     mcp = FastMCP("test")
-    from codeplane.mcp.tools.git import register_tools
+    from codeplane.mcp.tools.checkpoint import register_tools
 
     register_tools(mcp, mock_context)
 
     # Retrieve the registered tool function
     from codeplane.mcp._compat import get_tools_sync
 
-    raw_fn = get_tools_sync(mcp)["commit"].fn
+    raw_fn = get_tools_sync(mcp)["checkpoint"].fn
 
     async def _wrapper(
         ctx: Any,
         *,
         message: str,
         paths: list[str] | None = None,
-        all: bool = False,  # noqa: A002
         push: bool = False,
-        allow_empty: bool = False,
     ) -> Any:
         return await raw_fn(
             ctx,
-            message=message,
-            paths=paths,
-            all=all,
+            changed_files=paths or [],
+            lint=False,
+            autofix=False,
+            tests=False,
+            commit_message=message,
             push=push,
-            allow_empty=allow_empty,
         )
 
     return _wrapper
@@ -87,34 +87,39 @@ def mock_ctx() -> MagicMock:
     return ctx
 
 
-class TestGitCommitHookAutoRetry:
+class TestCheckpointCommitHookAutoRetry:
     """Tests for auto-restage and retry on pre-commit hook auto-fixes."""
 
     @pytest.mark.asyncio
     async def test_hook_passes_first_try(
-        self, git_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock
+        self, checkpoint_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock
     ) -> None:
         """When hook passes on first attempt, commit succeeds normally."""
         mock_context.git_ops.commit.return_value = "abc1234567890"
+        mock_context.git_ops.repo.workdir = "/tmp/repo"
 
         with patch(
-            "codeplane.mcp.tools.git.run_hook",
+            "codeplane.mcp.tools.checkpoint.run_hook",
             return_value=_make_hook_result(success=True),
         ):
-            result = await git_commit_tool(mock_ctx, message="test commit")
+            result = await checkpoint_commit_tool(mock_ctx, message="test commit")
 
-        assert "oid" in result
-        assert result["short_oid"] == "abc1234"
-        assert "hook_failure" not in result
-        assert "hook_warning" not in result
+        assert result["passed"] is True
+        assert "commit" in result
+        assert result["commit"]["oid"] == "abc1234567890"
+        assert result["commit"]["short_oid"] == "abc1234"
+        assert "hook_failure" not in result["commit"]
+        assert "hook_warning" not in result["commit"]
 
     @pytest.mark.asyncio
     async def test_hook_fails_no_autofix(
-        self, git_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock
+        self, checkpoint_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock
     ) -> None:
-        """Hook fails with no auto-fixed files: returns failure, no retry."""
+        """Hook fails with no auto-fixed files: returns failure in commit section."""
+        mock_context.git_ops.repo.workdir = "/tmp/repo"
+
         with patch(
-            "codeplane.mcp.tools.git.run_hook",
+            "codeplane.mcp.tools.checkpoint.run_hook",
             return_value=_make_hook_result(
                 success=False,
                 exit_code=1,
@@ -122,21 +127,24 @@ class TestGitCommitHookAutoRetry:
                 modified_files=[],
             ),
         ) as mock_run:
-            result = await git_commit_tool(mock_ctx, message="test commit")
+            result = await checkpoint_commit_tool(mock_ctx, message="test commit")
 
-        assert result["hook_failure"]["code"] == "HOOK_FAILED"
-        assert result["hook_failure"]["exit_code"] == 1
-        assert "unused import" in result["hook_failure"]["stderr"]
+        # Checkpoint passed checks but commit failed due to hooks
+        assert result["passed"] is True
+        assert result["commit"]["hook_failure"]["code"] == "HOOK_FAILED"
+        assert result["commit"]["hook_failure"]["exit_code"] == 1
+        assert "unused import" in result["commit"]["hook_failure"]["stderr"]
         # Should NOT have retried
         mock_run.assert_called_once()
         mock_context.git_ops.commit.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_hook_autofix_retry_succeeds(
-        self, git_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock
+        self, checkpoint_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock
     ) -> None:
         """Hook auto-fixes files, re-stage + retry passes: commit succeeds with warning."""
         mock_context.git_ops.commit.return_value = "def5678901234"
+        mock_context.git_ops.repo.workdir = "/tmp/repo"
 
         call_count = 0
 
@@ -152,28 +160,27 @@ class TestGitCommitHookAutoRetry:
                 )
             return _make_hook_result(success=True)
 
-        with patch("codeplane.mcp.tools.git.run_hook", side_effect=side_effect):
-            result = await git_commit_tool(mock_ctx, message="test commit")
+        with patch("codeplane.mcp.tools.checkpoint.run_hook", side_effect=side_effect):
+            result = await checkpoint_commit_tool(mock_ctx, message="test commit")
 
         # Commit succeeded
-        assert result["oid"] == "def5678901234"
-        assert result["short_oid"] == "def5678"
+        assert result["passed"] is True
+        assert result["commit"]["oid"] == "def5678901234"
+        assert result["commit"]["short_oid"] == "def5678"
         # Warning about auto-fixes included
-        assert "hook_warning" in result
-        assert result["hook_warning"]["code"] == "HOOK_AUTO_FIXED"
-        assert set(result["hook_warning"]["auto_fixed_files"]) == {"src/a.py", "src/b.py"}
+        assert "hook_warning" in result["commit"]
+        assert result["commit"]["hook_warning"]["code"] == "HOOK_AUTO_FIXED"
+        assert set(result["commit"]["hook_warning"]["auto_fixed_files"]) == {"src/a.py", "src/b.py"}
         # Re-staged the auto-fixed files
         mock_context.git_ops.stage.assert_called()
-        stage_calls = mock_context.git_ops.stage.call_args_list
-        restaged_paths = stage_calls[-1][0][0]  # last call, first positional arg
-        assert "src/a.py" in restaged_paths
-        assert "src/b.py" in restaged_paths
 
     @pytest.mark.asyncio
     async def test_hook_autofix_retry_also_fails(
-        self, git_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock
+        self, checkpoint_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock
     ) -> None:
         """Hook auto-fixes but retry also fails: returns combined logs from both attempts."""
+        mock_context.git_ops.repo.workdir = "/tmp/repo"
+
         call_count = 0
 
         def side_effect(*_args: Any, **_kwargs: Any) -> HookResult:
@@ -194,11 +201,12 @@ class TestGitCommitHookAutoRetry:
                 stderr="mypy: error in types (still)\n",
             )
 
-        with patch("codeplane.mcp.tools.git.run_hook", side_effect=side_effect):
-            result = await git_commit_tool(mock_ctx, message="test commit")
+        with patch("codeplane.mcp.tools.checkpoint.run_hook", side_effect=side_effect):
+            result = await checkpoint_commit_tool(mock_ctx, message="test commit")
 
-        assert result["hook_failure"]["code"] == "HOOK_FAILED_AFTER_RETRY"
-        attempts = result["hook_failure"]["attempts"]
+        assert result["passed"] is True
+        assert result["commit"]["hook_failure"]["code"] == "HOOK_FAILED_AFTER_RETRY"
+        attempts = result["commit"]["hook_failure"]["attempts"]
         assert len(attempts) == 2
         # Attempt 1
         assert attempts[0]["attempt"] == 1
@@ -211,109 +219,44 @@ class TestGitCommitHookAutoRetry:
         mock_context.git_ops.commit.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_paths_staged_before_hook(
-        self, git_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock, tmp_path: Any
+    async def test_stage_all_called_before_hooks(
+        self, checkpoint_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock
     ) -> None:
-        """When paths are provided, they are staged before running hooks."""
+        """Checkpoint calls stage_all before running hooks."""
         mock_context.git_ops.commit.return_value = "abc1234567890"
-        mock_context.git_ops.repo.workdir = str(tmp_path)
-
-        # Create the files that will be staged
-        (tmp_path / "file1.py").write_text("# file1")
-        (tmp_path / "file2.py").write_text("# file2")
+        mock_context.git_ops.repo.workdir = "/tmp/repo"
 
         with patch(
-            "codeplane.mcp.tools.git.run_hook",
+            "codeplane.mcp.tools.checkpoint.run_hook",
             return_value=_make_hook_result(success=True),
         ):
-            result = await git_commit_tool(mock_ctx, message="test", paths=["file1.py", "file2.py"])
+            result = await checkpoint_commit_tool(mock_ctx, message="test")
 
-        assert "oid" in result
-        mock_context.git_ops.stage.assert_called_once_with(["file1.py", "file2.py"])
-
-    @pytest.mark.asyncio
-    async def test_autofix_restages_both_fixed_and_original_paths(
-        self, git_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock, tmp_path: Any
-    ) -> None:
-        """On retry, both auto-fixed files AND original paths are re-staged."""
-        mock_context.git_ops.commit.return_value = "abc1234567890"
-        mock_context.git_ops.repo.workdir = str(tmp_path)
-
-        # Create the file that will be staged
-        src_dir = tmp_path / "src"
-        src_dir.mkdir()
-        (src_dir / "my_file.py").write_text("# my_file")
-
-        call_count = 0
-
-        def side_effect(*_args: Any, **_kwargs: Any) -> HookResult:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return _make_hook_result(
-                    success=False,
-                    exit_code=1,
-                    modified_files=["src/formatted.py"],
-                )
-            return _make_hook_result(success=True)
-
-        with patch("codeplane.mcp.tools.git.run_hook", side_effect=side_effect):
-            await git_commit_tool(mock_ctx, message="test", paths=["src/my_file.py"])
-
-        # First call: stage original paths
-        # Second call: re-stage both auto-fixed + original
-        stage_calls = mock_context.git_ops.stage.call_args_list
-        assert len(stage_calls) == 2
-        restaged = set(stage_calls[1][0][0])
-        assert "src/formatted.py" in restaged
-        assert "src/my_file.py" in restaged
+        assert result["passed"] is True
+        assert "commit" in result
+        mock_context.git_ops.stage_all.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_no_paths_no_stage_call(
-        self, git_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock
+    async def test_empty_string_skips_commit(
+        self, checkpoint_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock
     ) -> None:
-        """When no paths provided and hook passes, stage is not called."""
-        mock_context.git_ops.commit.return_value = "abc1234567890"
-
-        with patch(
-            "codeplane.mcp.tools.git.run_hook",
-            return_value=_make_hook_result(success=True),
-        ):
-            await git_commit_tool(mock_ctx, message="test")
-
-        mock_context.git_ops.stage.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_rejects_empty_message(
-        self, git_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock
-    ) -> None:
-        """Rejects empty or whitespace-only commit messages."""
-        from codeplane.git.errors import EmptyCommitMessageError
-
-        with pytest.raises(EmptyCommitMessageError):
-            await git_commit_tool(mock_ctx, message="")
-
-        with pytest.raises(EmptyCommitMessageError):
-            await git_commit_tool(mock_ctx, message="   ")
-
-        with pytest.raises(EmptyCommitMessageError):
-            await git_commit_tool(mock_ctx, message="\n\t")
-
-        mock_context.git_ops.stage.assert_not_called()
+        """Empty string is falsy — checkpoint skips commit (same as no message)."""
+        result = await checkpoint_commit_tool(mock_ctx, message="")
+        assert result["passed"] is True
+        assert "commit" not in result
         mock_context.git_ops.commit.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_rejects_nonexistent_paths(
-        self, git_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock, tmp_path: Any
+    async def test_rejects_whitespace_only_message(
+        self, checkpoint_commit_tool: Any, mock_ctx: MagicMock, mock_context: MagicMock
     ) -> None:
-        """Rejects paths that don't exist with detailed error."""
-        from codeplane.git.errors import PathsNotFoundError
+        """Whitespace-only strings are truthy but semantically empty — raises."""
+        from codeplane.git.errors import EmptyCommitMessageError
 
-        mock_context.git_ops.repo.workdir = str(tmp_path)
+        with pytest.raises(EmptyCommitMessageError):
+            await checkpoint_commit_tool(mock_ctx, message="   ")
 
-        with pytest.raises(PathsNotFoundError) as exc_info:
-            await git_commit_tool(mock_ctx, message="test", paths=["missing.py"])
-        assert exc_info.value.missing_paths == ["missing.py"]
+        with pytest.raises(EmptyCommitMessageError):
+            await checkpoint_commit_tool(mock_ctx, message="\n\t")
 
-        mock_context.git_ops.stage.assert_not_called()
         mock_context.git_ops.commit.assert_not_called()

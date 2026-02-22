@@ -74,10 +74,11 @@ Response includes `file_sha256` per file — save it for `write_source` span edi
 
 After ANY edit via `write_source` or other mutation:
 
-1. **`verify(changed_files=[...])`** — REQUIRED. Runs lint + affected tests. Do NOT use `pytest`, `ruff`, `mypy` in terminal.
-2. **`commit(message=..., all=True, push=True)`** — REQUIRED to save. Do NOT use `git add/commit/push` in terminal.
+**`checkpoint(changed_files=[...], commit_message="...", push=True)`** — lint → test → commit → push + semantic diff.
 
-**Terminal commands for lint, test, or git operations are ALWAYS WRONG in this repo.**
+Omit `commit_message` to lint+test only (no commit).
+
+**FORBIDDEN**: `pytest`, `ruff`, `mypy`, `git add`, `git commit`, `git push` in terminal.
 
 ### First Steps When Starting a Task
 
@@ -85,19 +86,19 @@ After ANY edit via `write_source` or other mutation:
 2. `map_repo(include=["structure", "dependencies", "test_layout"])` — understand repo shape
 3. `search` to find relevant code — definitions, references, or lexical patterns
 4. `read_source` on spans from search results — understand the code you'll modify
-5. After changes: `verify(changed_files=[...])` — lint + affected tests in one call
+5. After changes: `checkpoint(changed_files=[...])` — lint + affected tests in one call
 6. `semantic_diff` — review structural impact before committing
-7. `commit(message="...", all=True, push=True)` — stage, hooks, commit, push
+7. `checkpoint(changed_files=[...], commit_message="...", push=True)` — one-shot
 
 **Testing rule**: NEVER run the full test suite or use test runners directly.
-Always use `verify(changed_files=[...])` with the files you changed.
+Always use `checkpoint(changed_files=[...])` with the files you changed.
 This runs lint + only the tests impacted by your changes — fast, targeted, sufficient.
 
 ### Reviewing Changes (PR Review)
 
 1. `semantic_diff(base="main")` — structural overview of all changes vs main
 2. `read_source` on changed symbols — review each change in context
-3. `verify(changed_files=[...])` — lint + affected tests
+3. `checkpoint(changed_files=[...])` — lint + affected tests
 
 `semantic_diff` first — NOT `git_diff`. It gives symbol-level changes, not raw patches.
 
@@ -112,10 +113,9 @@ This runs lint + only the tests impacted by your changes — fast, targeted, suf
 | List directory | `{tool_prefix}_list_files` | `ls`, `find`, `tree` |
 | Search code | `{tool_prefix}_search` | `grep`, `rg`, `ag`, `ack` |
 | Repository overview | `{tool_prefix}_map_repo` | Manual file traversal |
-| Lint + test | `{tool_prefix}_verify` | Running linters/test runners directly |
+| Lint + test + commit + push | `{tool_prefix}_checkpoint` | Running linters/test runners/git directly |
 | Rename across files | `{tool_prefix}_refactor_rename` | Find-and-replace, `sed` |
 | Semantic diff | `{tool_prefix}_semantic_diff` | `git_diff` for change review, manual comparison |
-| Commit | `{tool_prefix}_commit` | Raw `git add` + `git commit` |
 
 ### Before You Edit: Decision Gate
 
@@ -142,8 +142,7 @@ STOP before using `read_file_full`:
 Search NEVER returns source text. Use `read_source` with spans from search results.
 
 `search` params: `query` (str), `mode` (definitions|references|lexical|symbol), `enrichment` (none|minimal|standard|function|class).
-`verify` params: `changed_files` (list of changed file paths) — runs lint + affected tests.
-`commit` params: `message` (str), `all` (bool), `push` (bool) — stage, hooks, commit, push.
+`checkpoint` params: `changed_files` (list[str]), `commit_message` (str|None), `push` (bool). Chains lint → test → commit → push + semantic diff.
 
 ### Refactor: preview → inspect → apply/cancel
 
@@ -179,9 +178,9 @@ avoids wasted round-trips.
 - **DON'T** pass `context:` to search — the parameter is `enrichment`
 - **DON'T** use `read_files` — it's replaced by `read_source` and `read_file_full`
 - **DON'T** use `refactor_rename` with file:line:col — pass the symbol NAME only
-- **DON'T** skip `verify` after `write_source` — always lint + test your changes
+- **DON'T** skip `checkpoint` after `write_source` — always lint + test your changes
 - **DON'T** ignore `agentic_hint` in responses
-- **DON'T** use raw `git add` + `git commit` — use `commit` (handles hooks, auto-fix, push)
+- **DON'T** use raw `git add` + `git commit` — use `checkpoint` with `commit_message`
 <!-- /codeplane-instructions -->
 """
 

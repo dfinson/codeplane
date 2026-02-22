@@ -89,7 +89,7 @@ class TestRecordActionClear:
     def test_action_preserves_test_scoped(self) -> None:
         """Action-category clear preserves test_scoped records."""
         det = CallPatternDetector()
-        det.record("verify", category_override="test_scoped")
+        det.record("checkpoint", category_override="test_scoped")
         det.record("search")
         det.record("read_source")
         assert det.window_length == 3
@@ -102,9 +102,9 @@ class TestRecordActionClear:
     def test_multiple_test_scoped_preserved(self) -> None:
         """Multiple test_scoped records all survive an action clear."""
         det = CallPatternDetector()
-        det.record("verify", category_override="test_scoped")
+        det.record("checkpoint", category_override="test_scoped")
         det.record("search")
-        det.record("verify", category_override="test_scoped")
+        det.record("checkpoint", category_override="test_scoped")
         det.record("read_source")
         assert det.window_length == 4
 
@@ -125,7 +125,6 @@ class TestRecordActionClear:
         [
             ("write_source", "write"),
             ("refactor_rename", "refactor"),
-            ("commit", "git"),
         ],
     )
     def test_all_action_categories_clear(self, tool_name: str, expected_cat: str) -> None:
@@ -139,19 +138,19 @@ class TestRecordActionClear:
         assert det.window_length == 0
 
     def test_verify_does_not_clear(self) -> None:
-        """verify (test/lint) does NOT clear the window (verification, not mutation)."""
+        """checkpoint (test/lint) does NOT clear the window (verification, not mutation)."""
         det = CallPatternDetector()
         det.record("search")
         det.record("search")
-        det.record("verify")
+        det.record("checkpoint")
         assert det.window_length == 3
 
     def test_verify_clears_when_explicit(self) -> None:
-        """verify with clears_window=True DOES clear (auto-fixed files)."""
+        """checkpoint with clears_window=True DOES clear (auto-fixed files)."""
         det = CallPatternDetector()
         det.record("search")
         det.record("search")
-        det.record("verify", clears_window=True)
+        det.record("checkpoint", clears_window=True)
         assert det.window_length == 0
 
     def test_unknown_tool_does_not_clear(self) -> None:

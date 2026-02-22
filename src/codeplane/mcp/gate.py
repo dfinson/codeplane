@@ -214,7 +214,7 @@ BROAD_FILTER_TEST_GATE = GateSpec(
     expires_calls=3,
     message=(
         "Broad test run via target_filter requires justification. "
-        "Prefer verify(changed_files=[...]) for impact-aware selection."
+        "Prefer checkpoint(changed_files=[...]) for impact-aware selection."
     ),
 )
 
@@ -259,8 +259,7 @@ TOOL_CATEGORIES: dict[str, str] = {
     "list_files": "meta",
     "describe": "meta",
     "reset_budget": "meta",
-    "verify": "test",
-    "commit": "git",
+    "checkpoint": "test",
 }
 
 # Categories that represent mutation (clear pattern window).
@@ -409,7 +408,7 @@ _SEARCH_WORKFLOW: dict[str, str] = {
         "one call gets callers with full function bodies"
     ),
     "if_reading_code": ("Switch to read_source with multiple targets per call (up to 20)"),
-    "if_ready_to_act": ("Proceed to write_source, refactor_rename, verify, or commit"),
+    "if_ready_to_act": ("Proceed to write_source, refactor_rename, or checkpoint"),
 }
 
 _READ_WORKFLOW: dict[str, str] = {
@@ -422,7 +421,7 @@ _READ_WORKFLOW: dict[str, str] = {
         "Use search(mode='definitions', enrichment='function') for edit-ready code"
     ),
     "if_reading_multiple_spans": ("Batch up to 20 targets in one read_source call"),
-    "if_ready_to_act": ("Proceed to write_source, refactor_rename, verify, or commit"),
+    "if_ready_to_act": ("Proceed to write_source, refactor_rename, or checkpoint"),
 }
 
 

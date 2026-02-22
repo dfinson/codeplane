@@ -33,8 +33,8 @@ class TestDeriveFeatures:
         assert features == []
 
     def test_git_tools(self) -> None:
-        """Git tools add git_ops feature."""
-        features = _derive_features(["commit"])
+        """Git-related tools add git_ops feature."""
+        features = _derive_features(["checkpoint"])
         assert "git_ops" in features
 
     def test_refactor_tools(self) -> None:
@@ -43,10 +43,11 @@ class TestDeriveFeatures:
         assert "refactoring" in features
 
     def test_verify_tool(self) -> None:
-        """Verify tool adds both testing and linting features."""
-        features = _derive_features(["verify"])
+        """Checkpoint tool adds testing, linting, and git_ops features."""
+        features = _derive_features(["checkpoint"])
         assert "testing" in features
         assert "linting" in features
+        assert "git_ops" in features
 
     def test_index_tools(self) -> None:
         """Index tools add indexing feature."""
@@ -66,9 +67,8 @@ class TestDeriveFeatures:
     def test_multiple_features(self) -> None:
         """Multiple tool types add multiple features."""
         tools = [
-            "commit",
+            "checkpoint",
             "refactor_rename",
-            "verify",
             "search",
             "read_source",
             "describe",
@@ -84,12 +84,12 @@ class TestDeriveFeatures:
 
     def test_sorted_output(self) -> None:
         """Features are sorted alphabetically."""
-        tools = ["describe", "commit", "verify"]
+        tools = ["describe", "checkpoint"]
         features = _derive_features(tools)
         assert features == sorted(features)
 
     def test_no_duplicates(self) -> None:
         """Multiple tools of same type don't create duplicates."""
-        tools = ["commit", "commit"]
+        tools = ["checkpoint", "checkpoint"]
         features = _derive_features(tools)
         assert features.count("git_ops") == 1

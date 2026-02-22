@@ -376,8 +376,8 @@ class TestFetchHints:
         # Low-certainty match triggers additional filter
         assert "low" in hint or "medium" in hint
 
-    def test_commit_hint(self) -> None:
-        """Commit hint shows sha/message and jq for details."""
+    def test_checkpoint_hint(self) -> None:
+        """Checkpoint hint shows sha/message and jq for details."""
         from codeplane.mcp.delivery import _build_fetch_hint
 
         payload = {
@@ -386,7 +386,7 @@ class TestFetchHints:
             "author": "alice",
             "files": [{"path": "src/x.py"}, {"path": "src/y.py"}],
         }
-        hint = _build_fetch_hint("abc123", 2000, "commit", payload)
+        hint = _build_fetch_hint("abc123", 2000, "checkpoint", payload)
         assert "abc1234" in hint
         assert "fix regression" in hint
         assert "jq" in hint

@@ -40,8 +40,7 @@ TOOL_TIMEOUTS: dict[str, float] = {
     "list_files": 30.0,
     "read_files": 30.0,
     "map_repo": 60.0,
-    "commit": 15.0,
-    "verify": 60.0,
+    "checkpoint": 60.0,
 }
 
 # MCP protocol headers

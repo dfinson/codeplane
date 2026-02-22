@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from codeplane.mcp.tools.verify import (
+from codeplane.mcp.tools.checkpoint import (
     _display_run,
     _normalize_selector,
     _summarize_run,

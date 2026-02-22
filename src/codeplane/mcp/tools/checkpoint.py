@@ -1,20 +1,138 @@
-"""Verify MCP tool — single "did I break anything?" endpoint.
+"""Checkpoint MCP tool — lint, test, commit in one call.
 
-Chains:  lint (auto-fix by default) → affected tests → combined report
+Chains:  lint (auto-fix) → affected tests → stage → hooks → commit → push → semantic diff
 """
 
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import structlog
 from fastmcp import Context
 from mcp.types import ToolAnnotations
 from pydantic import Field
+
+from codeplane.git._internal.hooks import run_hook
+from codeplane.git.errors import EmptyCommitMessageError, PathsNotFoundError
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from codeplane.mcp.context import AppContext
     from codeplane.testing.models import TestResult
+
+log = structlog.get_logger(__name__)
+
+
+# =============================================================================
+# Commit Helpers
+# =============================================================================
+
+
+def _validate_commit_message(message: str) -> None:
+    """Validate commit message is not empty or whitespace-only."""
+    if not message or not message.strip():
+        raise EmptyCommitMessageError()
+
+
+def _validate_paths_exist(repo_path: Path, paths: list[str]) -> None:
+    """Validate all paths exist in the repository or working tree.
+
+    Raises PathsNotFoundError with details about which paths are missing.
+    """
+    if not paths:
+        return
+
+    missing: list[str] = []
+    for p in paths:
+        full_path = repo_path / p
+        if not full_path.exists():
+            missing.append(p)
+
+    if missing:
+        raise PathsNotFoundError(missing)
+
+
+def _run_hook_with_retry(
+    repo_path: Path,
+    paths_to_restage: list[str],
+    stage_fn: Any,
+) -> tuple[Any, dict[str, Any] | None]:
+    """Run pre-commit hooks with auto-fix retry logic.
+
+    Returns:
+        Tuple of (hook_result, failure_response).
+        If failure_response is None, hooks passed and commit can proceed.
+    """
+    hook_result = run_hook(repo_path, "pre-commit")
+
+    if hook_result.success:
+        return hook_result, None
+
+    auto_fixed = hook_result.modified_files or []
+
+    if not auto_fixed:
+        return hook_result, {
+            "hook_failure": {
+                "code": "HOOK_FAILED",
+                "hook_type": "pre-commit",
+                "exit_code": hook_result.exit_code,
+                "stdout": hook_result.stdout,
+                "stderr": hook_result.stderr,
+                "modified_files": [],
+            },
+            "summary": f"pre-commit hook failed (exit {hook_result.exit_code})",
+            "agentic_hint": (
+                "Hook failed with errors that require manual fixing. "
+                "Review the output above and fix the reported issues, then retry."
+            ),
+        }
+
+    # Hook auto-fixed files — re-stage and retry
+    restage_paths = list(set(auto_fixed + paths_to_restage))
+    stage_fn(restage_paths)
+
+    retry_result = run_hook(repo_path, "pre-commit")
+
+    if not retry_result.success:
+        return hook_result, {
+            "hook_failure": {
+                "code": "HOOK_FAILED_AFTER_RETRY",
+                "hook_type": "pre-commit",
+                "exit_code": retry_result.exit_code,
+                "attempts": [
+                    {
+                        "attempt": 1,
+                        "exit_code": hook_result.exit_code,
+                        "stdout": hook_result.stdout,
+                        "stderr": hook_result.stderr,
+                        "auto_fixed_files": auto_fixed,
+                    },
+                    {
+                        "attempt": 2,
+                        "exit_code": retry_result.exit_code,
+                        "stdout": retry_result.stdout,
+                        "stderr": retry_result.stderr,
+                        "auto_fixed_files": retry_result.modified_files or [],
+                    },
+                ],
+            },
+            "summary": "pre-commit hook failed after auto-fix retry",
+            "agentic_hint": (
+                "Hook auto-fixed files on the first attempt but still failed on retry. "
+                "This requires manual fixing."
+            ),
+        }
+
+    return hook_result, None
+
+
+def _summarize_commit(sha: str, message: str) -> str:
+    from codeplane.core.formatting import truncate_at_word
+
+    short_sha = sha[:7]
+    first_line = message.split("\n")[0]
+    truncated = truncate_at_word(first_line, 45)
+    return f'{short_sha} "{truncated}"'
 
 
 # =============================================================================
@@ -334,19 +452,19 @@ def _summarize_verify(
 
 
 def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
-    """Register verify tool with FastMCP server."""
+    """Register checkpoint tool with FastMCP server."""
 
     @mcp.tool(
-        title="Verify: lint + affected tests",
+        title="Checkpoint: lint, test, commit, push",
         annotations=ToolAnnotations(
-            title="Verify: lint + affected tests",
+            title="Checkpoint: lint, test, commit, push",
             readOnlyHint=False,
             destructiveHint=False,
-            idempotentHint=True,
+            idempotentHint=False,
             openWorldHint=False,
         ),
     )
-    async def verify(
+    async def checkpoint(
         ctx: Context,
         changed_files: list[str] = Field(
             ...,
@@ -365,12 +483,23 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             None,
             description="Directory for coverage artifacts (required when coverage=True).",
         ),
+        commit_message: str | None = Field(
+            None,
+            description="If set and checks pass, auto-commit with this message. "
+            "Skips commit on failure.",
+        ),
+        push: bool = Field(
+            False,
+            description="Push to origin after auto-commit (only used with commit_message).",
+        ),
     ) -> dict[str, Any]:
-        """Run lint + affected tests in one call. The "did I break anything?" check.
+        """Lint, test, and optionally commit+push in one call.
 
         Chains:
         1. lint (full repo, auto-fix by default) — reports and fixes issues
         2. discover + run tests affected by changed_files (via import graph)
+        3. (optional) if commit_message is set and all checks pass:
+           stage changed_files → pre-commit hooks → commit → push → lean semantic diff
 
         Returns combined results with pass/fail verdict.
         """
@@ -380,7 +509,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         total_phases = int(lint) + int(tests) * 3  # tests = discover + filter + run
         phase = 0
 
-        result: dict[str, Any] = {"action": "verify", "changed_files": changed_files}
+        result: dict[str, Any] = {"action": "checkpoint", "changed_files": changed_files}
         lint_status = "skipped"
         lint_diagnostics = 0
         test_passed = 0
@@ -515,7 +644,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                         # Track scoped test for pattern detection
                         session = app_ctx.session_manager.get_or_create(ctx.session_id)
                         session.pattern_detector.record(
-                            tool_name="verify",
+                            tool_name="checkpoint",
                             category_override="test_scoped",
                         )
             else:
@@ -540,7 +669,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         has_test_error = test_status == "error"
         if has_lint_issues or has_test_failures or has_test_error:
             result["passed"] = False
-            await ctx.report_progress(total_phases, total_phases, "Verify FAILED")
+            await ctx.report_progress(total_phases, total_phases, "Checkpoint FAILED")
             hints: list[str] = []
             if has_lint_issues:
                 hints.append(f"Fix {lint_diagnostics} lint issues.")
@@ -551,9 +680,82 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             result["agentic_hint"] = " ".join(hints)
         else:
             result["passed"] = True
-            await ctx.report_progress(total_phases, total_phases, "Verify passed")
-            result["agentic_hint"] = (
-                "All checks passed. Use commit(message=..., all=True) to commit your changes."
-            )
+            await ctx.report_progress(total_phases, total_phases, "Checks passed")
+
+            # --- Optional: Auto-commit ---
+            if commit_message:
+                _validate_commit_message(commit_message)
+                repo_path = Path(app_ctx.git_ops.repo.workdir)
+
+                await ctx.report_progress(total_phases, total_phases + 2, "Staging changes")
+                if changed_files:
+                    _validate_paths_exist(repo_path, changed_files)
+                staged_paths = (
+                    app_ctx.git_ops.stage(changed_files)
+                    if changed_files
+                    else app_ctx.git_ops.stage_all()
+                )
+
+                await ctx.report_progress(
+                    total_phases + 1, total_phases + 2, "Running pre-commit hooks"
+                )
+                _hook_result, failure = _run_hook_with_retry(
+                    repo_path, staged_paths, app_ctx.git_ops.stage
+                )
+                if failure:
+                    await ctx.warning("Pre-commit hooks failed — skipping commit")
+                    result["commit"] = failure
+                else:
+                    sha = app_ctx.git_ops.commit(commit_message)
+                    commit_result: dict[str, Any] = {
+                        "oid": sha,
+                        "short_oid": sha[:7],
+                        "summary": _summarize_commit(sha, commit_message),
+                    }
+                    if _hook_result and not _hook_result.success:
+                        commit_result["hook_warning"] = {
+                            "code": "HOOK_AUTO_FIXED",
+                            "auto_fixed_files": _hook_result.modified_files or [],
+                        }
+                    if push:
+                        app_ctx.git_ops.push(remote="origin", force=False)
+                        commit_result["pushed"] = "origin"
+                        commit_result["summary"] += " → pushed to origin"
+                    result["commit"] = commit_result
+                    await ctx.report_progress(
+                        total_phases + 2,
+                        total_phases + 2,
+                        f"Committed {sha[:7]}",
+                    )
+
+                    # --- Lean semantic diff for the new commit ---
+                    try:
+                        from codeplane.mcp.tools.diff import (
+                            _result_to_dict,
+                            _run_git_diff,
+                        )
+
+                        diff_result = _run_git_diff(
+                            app_ctx, base="HEAD~1", target="HEAD", paths=None
+                        )
+                        minimal = _result_to_dict(diff_result, verbosity="minimal")
+                        commit_result["semantic_diff"] = {
+                            "summary": minimal.get("summary"),
+                            "structural_changes": minimal.get("structural_changes", []),
+                            "non_structural_changes": minimal.get("non_structural_changes", []),
+                        }
+                    except Exception:
+                        log.debug("post-commit semantic diff skipped", exc_info=True)
+
+                result["agentic_hint"] = (
+                    "All checks passed and changes committed."
+                    if "oid" in result.get("commit", {})
+                    else "All checks passed but commit failed — see commit section."
+                )
+            else:
+                result["agentic_hint"] = (
+                    "All checks passed. Call checkpoint again with commit_message=\"...\" "
+                    "to commit your changes."
+                )
 
         return result

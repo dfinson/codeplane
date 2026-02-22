@@ -50,8 +50,7 @@ class TestCreateMcpServer:
         tool_names = set(get_tools_sync(mcp).keys())
         assert "read_source" in tool_names
         assert "search" in tool_names
-        assert "commit" in tool_names
-        assert "verify" in tool_names
+        assert "checkpoint" in tool_names
 
 
 class TestPatchFastmcpDocket:

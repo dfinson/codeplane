@@ -1,16 +1,14 @@
-"""Tests for MCP git tools (consolidated).
+"""Tests for checkpoint tool helpers (formerly git tools).
 
-After git tool consolidation, only `commit` remains as an MCP tool.
-All other git operations (status, log, diff, push, pull, branch, checkout,
-merge, reset, stash, rebase, inspect, history, submodule, worktree) are
-handled by the agent via terminal commands.
+After tool consolidation, commit is part of checkpoint.
+All other git operations are handled by the agent via terminal commands.
 
 Covers:
 - _validate_commit_message helper
 - _validate_paths_exist helper
 - _run_hook_with_retry helper
 - _summarize_commit helper
-- commit tool registration
+- checkpoint tool registration
 """
 
 from pathlib import Path
@@ -19,7 +17,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastmcp import FastMCP
 
-from codeplane.mcp.tools import git as git_tools
+from codeplane.mcp.tools import checkpoint as checkpoint_tools
 
 # =============================================================================
 # Validation Helper Tests
@@ -30,36 +28,36 @@ class TestValidateCommitMessage:
     """Tests for _validate_commit_message helper."""
 
     def test_valid_message(self) -> None:
-        git_tools._validate_commit_message("fix: resolve issue")
+        checkpoint_tools._validate_commit_message("fix: resolve issue")
 
     def test_empty_string_raises(self) -> None:
         from codeplane.git.errors import EmptyCommitMessageError
 
         with pytest.raises(EmptyCommitMessageError):
-            git_tools._validate_commit_message("")
+            checkpoint_tools._validate_commit_message("")
 
     def test_whitespace_only_raises(self) -> None:
         from codeplane.git.errors import EmptyCommitMessageError
 
         with pytest.raises(EmptyCommitMessageError):
-            git_tools._validate_commit_message("   \n\t  ")
+            checkpoint_tools._validate_commit_message("   \n\t  ")
 
 
 class TestValidatePathsExist:
     """Tests for _validate_paths_exist helper."""
 
     def test_empty_paths_ok(self, tmp_path: Path) -> None:
-        git_tools._validate_paths_exist(tmp_path, [])
+        checkpoint_tools._validate_paths_exist(tmp_path, [])
 
     def test_existing_paths_ok(self, tmp_path: Path) -> None:
         (tmp_path / "a.py").touch()
-        git_tools._validate_paths_exist(tmp_path, ["a.py"])
+        checkpoint_tools._validate_paths_exist(tmp_path, ["a.py"])
 
     def test_missing_paths_raises(self, tmp_path: Path) -> None:
         from codeplane.git.errors import PathsNotFoundError
 
         with pytest.raises(PathsNotFoundError):
-            git_tools._validate_paths_exist(tmp_path, ["nonexistent.py"])
+            checkpoint_tools._validate_paths_exist(tmp_path, ["nonexistent.py"])
 
 
 # =============================================================================
@@ -77,8 +75,8 @@ class TestRunHookWithRetry:
         mock_result = MagicMock()
         mock_result.success = True
 
-        with patch("codeplane.mcp.tools.git.run_hook", return_value=mock_result):
-            hook_result, failure = git_tools._run_hook_with_retry(tmp_path, ["a.py"], MagicMock())
+        with patch("codeplane.mcp.tools.checkpoint.run_hook", return_value=mock_result):
+            hook_result, failure = checkpoint_tools._run_hook_with_retry(tmp_path, ["a.py"], MagicMock())
 
         assert failure is None
         assert hook_result.success is True
@@ -94,8 +92,8 @@ class TestRunHookWithRetry:
         mock_result.stdout = "error output"
         mock_result.stderr = ""
 
-        with patch("codeplane.mcp.tools.git.run_hook", return_value=mock_result):
-            _, failure = git_tools._run_hook_with_retry(tmp_path, ["a.py"], MagicMock())
+        with patch("codeplane.mcp.tools.checkpoint.run_hook", return_value=mock_result):
+            _, failure = checkpoint_tools._run_hook_with_retry(tmp_path, ["a.py"], MagicMock())
 
         assert failure is not None
         assert failure["hook_failure"]["code"] == "HOOK_FAILED"
@@ -117,10 +115,10 @@ class TestRunHookWithRetry:
         stage_fn = MagicMock()
 
         with patch(
-            "codeplane.mcp.tools.git.run_hook",
+            "codeplane.mcp.tools.checkpoint.run_hook",
             side_effect=[first_result, retry_result],
         ):
-            hook_result, failure = git_tools._run_hook_with_retry(tmp_path, ["a.py"], stage_fn)
+            hook_result, failure = checkpoint_tools._run_hook_with_retry(tmp_path, ["a.py"], stage_fn)
 
         assert failure is None
         stage_fn.assert_called_once()
@@ -144,10 +142,10 @@ class TestRunHookWithRetry:
         retry_result.modified_files = []
 
         with patch(
-            "codeplane.mcp.tools.git.run_hook",
+            "codeplane.mcp.tools.checkpoint.run_hook",
             side_effect=[first_result, retry_result],
         ):
-            _, failure = git_tools._run_hook_with_retry(tmp_path, ["a.py"], MagicMock())
+            _, failure = checkpoint_tools._run_hook_with_retry(tmp_path, ["a.py"], MagicMock())
 
         assert failure is not None
         assert failure["hook_failure"]["code"] == "HOOK_FAILED_AFTER_RETRY"
@@ -163,7 +161,7 @@ class TestSummarizeCommit:
     """Tests for _summarize_commit helper."""
 
     def test_short_message(self) -> None:
-        result = git_tools._summarize_commit(
+        result = checkpoint_tools._summarize_commit(
             sha="abc123456789",
             message="Fix bug",
         )
@@ -171,7 +169,7 @@ class TestSummarizeCommit:
 
     def test_long_message_truncated(self) -> None:
         long_msg = "This is a very long commit message that should be truncated to fit"
-        result = git_tools._summarize_commit(
+        result = checkpoint_tools._summarize_commit(
             sha="abc123456789",
             message=long_msg,
         )
@@ -180,7 +178,7 @@ class TestSummarizeCommit:
 
     def test_multiline_message(self) -> None:
         msg = "First line\nSecond line\nThird line"
-        result = git_tools._summarize_commit(
+        result = checkpoint_tools._summarize_commit(
             sha="abc123456789",
             message=msg,
         )
@@ -211,22 +209,22 @@ def mock_app_ctx() -> MagicMock:
     return ctx
 
 
-class TestCommitTool:
-    """Tests for the consolidated commit tool."""
+class TestCheckpointTool:
+    """Tests for the checkpoint tool registration."""
 
     def test_tool_registered(self, mock_app_ctx: MagicMock) -> None:
         mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
+        checkpoint_tools.register_tools(mcp, mock_app_ctx)
 
         from codeplane.mcp._compat import get_tools_sync
 
-        tool = get_tools_sync(mcp).get("commit")
+        tool = get_tools_sync(mcp).get("checkpoint")
         assert tool is not None
 
     def test_no_old_tools_registered(self, mock_app_ctx: MagicMock) -> None:
         """Verify deleted tools are NOT registered."""
         mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
+        checkpoint_tools.register_tools(mcp, mock_app_ctx)
 
         from codeplane.mcp._compat import get_tools_sync
 
@@ -251,32 +249,34 @@ class TestCommitTool:
             "git_submodule",
             "git_worktree",
             "git_stage_and_commit",
+            "commit",
+            "verify",
         ]
         for name in deleted:
             assert name not in tools, f"{name} should have been deleted"
 
-    def test_commit_has_push_param(self, mock_app_ctx: MagicMock) -> None:
-        """The commit tool has a push parameter."""
+    def test_checkpoint_has_push_param(self, mock_app_ctx: MagicMock) -> None:
+        """The checkpoint tool has a push parameter."""
         mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
+        checkpoint_tools.register_tools(mcp, mock_app_ctx)
 
         from codeplane.mcp._compat import get_tools_sync
 
-        tool = get_tools_sync(mcp).get("commit")
+        tool = get_tools_sync(mcp).get("checkpoint")
         assert tool is not None
         params_str = str(tool.parameters)
         assert "push" in params_str
-        assert "message" in params_str
-        assert "paths" in params_str
+        assert "commit_message" in params_str
+        assert "changed_files" in params_str
 
-    def test_commit_has_all_param(self, mock_app_ctx: MagicMock) -> None:
-        """The commit tool has an 'all' parameter for git commit -a style staging."""
+    def test_checkpoint_has_lint_param(self, mock_app_ctx: MagicMock) -> None:
+        """The checkpoint tool has a 'lint' parameter."""
         mcp = FastMCP("test")
-        git_tools.register_tools(mcp, mock_app_ctx)
+        checkpoint_tools.register_tools(mcp, mock_app_ctx)
 
         from codeplane.mcp._compat import get_tools_sync
 
-        tool = get_tools_sync(mcp).get("commit")
+        tool = get_tools_sync(mcp).get("checkpoint")
         assert tool is not None
         params_str = str(tool.parameters)
-        assert "all" in params_str
+        assert "lint" in params_str
