@@ -33,6 +33,7 @@ dependencies = [
     # Index
     "sqlmodel>=0.0.24",
     "tantivy>=0.25.0",
+    "fastembed>=0.5.0",
     # Tree-sitter core runtime only - grammars installed dynamically per-repo
     "tree-sitter>=0.24.0",
     # Git

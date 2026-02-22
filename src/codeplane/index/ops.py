@@ -56,6 +56,7 @@ from codeplane.index._internal.indexing import (
     resolve_type_traced,
     run_pass_1_5,
 )
+from codeplane.index._internal.indexing.embedding import EmbeddingIndex
 from codeplane.index._internal.parsing import TreeSitterParser
 from codeplane.index._internal.state import FileStateService
 from codeplane.index.models import (
@@ -327,6 +328,7 @@ class IndexCoordinator:
 
         # Components (initialized lazily in initialize())
         self._lexical: LexicalIndex | None = None
+        self._embedding: EmbeddingIndex | None = None
         self._parser: TreeSitterParser | None = None
         self._router: ContextRouter | None = None
         self._structural: StructuralIndexer | None = None
@@ -377,6 +379,7 @@ class IndexCoordinator:
         # Initialize components
         self._parser = TreeSitterParser()
         self._lexical = LexicalIndex(self.tantivy_path)
+        self._embedding = EmbeddingIndex(self.repo_root / ".codeplane" / "embedding")
         self._epoch_manager = EpochManager(self.db, self._lexical)
 
         # Step 3: Discover contexts
@@ -555,6 +558,8 @@ class IndexCoordinator:
         # Initialize components
         self._parser = TreeSitterParser()
         self._lexical = LexicalIndex(self.tantivy_path)
+        self._embedding = EmbeddingIndex(self.repo_root / ".codeplane" / "embedding")
+        self._embedding.load()
         self._epoch_manager = EpochManager(self.db, self._lexical)
 
         # Initialize router from existing contexts
@@ -791,6 +796,11 @@ class IndexCoordinator:
                                 file_id=fid,
                                 symbols=extraction.symbol_names,
                             )
+
+                            # Stage defs for embedding (old defs auto-replaced by uid)
+                            if self._embedding is not None and extraction.defs:
+                                self._embedding.stage_defs(extraction.defs)
+
                             if extraction.file_path in existing_set:
                                 files_updated += 1
                             symbols_indexed += len(extraction.symbol_names)
@@ -811,13 +821,30 @@ class IndexCoordinator:
                         if failed_paths:
                             self._remove_structural_facts_for_paths(failed_paths)
 
-                    # Stage removals
+                    # Stage removals (lexical + embedding)
                     for path in removed_paths:
                         self._lexical.stage_remove(str(path))
                         files_removed += 1
 
+                    # Stage embedding removals for deleted files
+                    if self._embedding is not None and removed_paths:
+                        with self.db.session() as session:
+                            fq = FactQueries(session)
+                            remove_uids: set[str] = set()
+                            for path in removed_paths:
+                                frec = fq.get_file_by_path(str(path))
+                                if frec and frec.id is not None:
+                                    for d in fq.list_defs_in_file(frec.id):
+                                        remove_uids.add(d.def_uid)
+                            if remove_uids:
+                                self._embedding.stage_remove(remove_uids)
+
                     # Commit all staged changes atomically
                     self._lexical.commit_staged()
+
+                    # Commit embedding changes
+                    if self._embedding is not None and self._embedding.has_staged_changes():
+                        self._embedding.commit_staged()
 
                 # Reload searcher to see committed changes
                 self._lexical.reload()
@@ -846,8 +873,24 @@ class IndexCoordinator:
                         if self._lexical is not None:
                             self._lexical.stage_remove(str(path))
                         files_removed += 1
+
+                    # Stage embedding removals for deleted files
+                    if self._embedding is not None and removed_paths:
+                        with self.db.session() as session:
+                            fq = FactQueries(session)
+                            remove_uids_alt: set[str] = set()
+                            for path in removed_paths:
+                                frec = fq.get_file_by_path(str(path))
+                                if frec and frec.id is not None:
+                                    for d in fq.list_defs_in_file(frec.id):
+                                        remove_uids_alt.add(d.def_uid)
+                            if remove_uids_alt:
+                                self._embedding.stage_remove(remove_uids_alt)
+
                     if self._lexical is not None:
                         self._lexical.commit_staged()
+                    if self._embedding is not None and self._embedding.has_staged_changes():
+                        self._embedding.commit_staged()
                 if self._lexical is not None:
                     self._lexical.reload()
 
@@ -2500,6 +2543,11 @@ class IndexCoordinator:
                                 context_id=ctx_id,
                                 symbols=extraction.symbol_names,
                             )
+
+                            # Stage defs for embedding
+                            if self._embedding is not None and extraction.defs:
+                                self._embedding.stage_defs(extraction.defs)
+
                             count += 1
                             indexed_paths.append(extraction.file_path)
 
@@ -2517,6 +2565,10 @@ class IndexCoordinator:
 
                 # Commit all Tantivy changes in one batch (1 commit, not N)
                 self._lexical.commit_staged()
+
+                # Commit all embedding changes
+                if self._embedding is not None and self._embedding.has_staged_changes():
+                    self._embedding.commit_staged()
 
                 # Re-resolve any import paths that couldn't resolve during
                 # batched indexing (e.g. batch 1 imports targeting batch 2 files).
@@ -2542,11 +2594,21 @@ class IndexCoordinator:
 
         return count, indexed_paths, files_by_ext
 
+    def query_similar_defs(self, text: str, top_k: int = 50) -> list[tuple[str, float]]:
+        """Semantic search over def embeddings.  Used by recon."""
+        if self._embedding is None or self._embedding.count == 0:
+            return []
+        return self._embedding.query(text, top_k=top_k)
+
     def _clear_all_structural_facts(self) -> None:
         """Clear all structural facts from the database.
 
         Used before full reindex to avoid duplicate key violations.
         """
+        # Clear embedding index alongside structural facts
+        if self._embedding is not None:
+            self._embedding.clear()
+
         with self.db.session() as session:
             # Clear all fact tables
             session.exec(text("DELETE FROM def_facts"))  # type: ignore[call-overload]

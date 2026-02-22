@@ -482,19 +482,31 @@ async def _select_seeds(
         return seeds
 
     # ==================================================================
-    # Phase 2: Term-intersection scoring (fills remaining slots)
+    # Phase 2: Embedding similarity + lexical fallback
     # ==================================================================
 
-    # ---- Tokenize task ----
+    # ---- Step A: Semantic candidates via embedding similarity (primary) ----
+    embedding_scores: dict[str, float] = {}
+    similar = coordinator.query_similar_defs(task, top_k=100)
+    for uid, sim in similar:
+        if uid not in used_uids:
+            embedding_scores[uid] = sim
+
+    log.debug(
+        "recon.embedding_candidates",
+        count=len(embedding_scores),
+        top5=[(uid.split("::")[-1], round(s, 3)) for uid, s in similar[:5]],
+    )
+
+    # ---- Step B: Lexical candidates via LIKE (secondary/fallback) ----
     terms = _tokenize_task(task)
-    if not terms and not seeds:
+    if not terms and not embedding_scores and not seeds:
         log.warning("recon.no_terms", task=task)
         return []
 
     if terms:
         log.debug("recon.terms", terms=terms, count=len(terms))
 
-    # ---- Per-term SQLite LIKE queries ----
     def_term_hits: dict[str, set[str]] = {}
     def_lookup: dict[str, DefFact] = {}
     path_boost_file_ids: set[int] = set()
@@ -532,55 +544,80 @@ async def _select_seeds(
                             def_lookup[uid] = d
                         def_term_hits[uid].add("__path__")
 
-    if not def_term_hits and not seeds:
-        log.info("recon.no_candidates", task=task, terms=terms)
-        return seeds  # return any path-extracted seeds we already have
+    # ---- Step C: Merge candidates (union of embedding + lexical) ----
+    all_candidate_uids = set(embedding_scores.keys()) | set(def_term_hits.keys())
 
-    # ---- Score: hub * 3 + coverage * 5 + BM25 * 3 + name * 3 + path - test ----
+    if not all_candidate_uids and not seeds:
+        log.info("recon.no_candidates", task=task, terms=terms)
+        return seeds
+
+    # ---- Step D: Score with embedding as primary signal ----
     #
-    # Hub (capped at 20, max 60 pts) is the primary discriminator —
-    # core implementation classes like ModelEvaluator score far above
-    # noise (CLI stubs, event dataclasses).  Term coverage and BM25
-    # provide task-relevance signal.  Test files get a -10 penalty.
+    # Formula:
+    #   score = hub * 3 (cap 20, max 60)
+    #         + embedding_sim * 40      # PRIMARY (0-1 → 0-40)
+    #         + term_coverage * 5       # lexical backup
+    #         + name_bonus * 3
+    #         + path_bonus
+    #         + bm25_bonus * 3
+    #         - test_penalty (10)
+    #
+    # embedding_sim * 40 dominates when available:
+    #   A 0.7 sim → 28 pts (beats everything except hub=10+)
+    #   A 0.3 sim → 12 pts (still competitive with pure lexical)
     scored: list[tuple[DefFact, float]] = []
-    if def_term_hits:
+    if all_candidate_uids:
         from codeplane.index.models import File as FileModel
+
+        # Resolve embedding-only candidates to DefFact objects
+        embedding_only_uids = set(embedding_scores.keys()) - set(def_lookup.keys())
+        if embedding_only_uids:
+            with coordinator.db.session() as session:
+                fq = FactQueries(session)
+                for uid in embedding_only_uids:
+                    d = fq.get_def(uid)
+                    if d is not None:
+                        def_lookup[uid] = d
 
         with coordinator.db.session() as session:
             fq = FactQueries(session)
-            # Build file_id -> path cache for BM25 lookups
             _fid_path_cache: dict[int, str] = {}
-            for uid, matched_terms in def_term_hits.items():
-                d = def_lookup[uid]
 
+            for uid in all_candidate_uids:
+                d = def_lookup.get(uid)
+                if d is None:
+                    continue
+
+                matched_terms = def_term_hits.get(uid, set())
                 real_terms = matched_terms - {"__path__"}
                 term_coverage = len(matched_terms)
                 caller_count = fq.count_callers(uid)
                 path_bonus = 0.5 if d.file_id in path_boost_file_ids else 0.0
                 name_lower = d.name.lower()
                 name_bonus = 1.0 if any(t in name_lower for t in real_terms) else 0.0
-                hub = min(caller_count, 20)  # cap at 20 (max 60 points)
+                hub = min(caller_count, 20)
 
-                # Resolve file path (cached) for test detection + BM25
+                # Resolve file path (cached)
                 if d.file_id not in _fid_path_cache:
                     frec = session.get(FileModel, d.file_id)
                     _fid_path_cache[d.file_id] = frec.path if frec else ""
                 fpath = _fid_path_cache[d.file_id]
 
-                # Test file penalty: test functions match many terms
-                # (via imports) but aren't useful implementation starting
-                # points.  The penalty offsets their term-coverage advantage.
                 test_penalty = 10 if _is_test_file(fpath) else 0
 
-                # BM25 file-level score: 0-1 normalized, then scaled
+                # BM25 file-level score
                 bm25_bonus = 0.0
                 if bm25_file_scores and fpath in bm25_file_scores:
                     max_bm25 = max(bm25_file_scores.values()) if bm25_file_scores else 1.0
                     bm25_bonus = bm25_file_scores[fpath] / max_bm25 if max_bm25 > 0 else 0.0
 
+                # Embedding similarity score (0 if not in embedding results)
+                emb_sim = embedding_scores.get(uid, 0.0)
+
                 score = (
                     hub * 3  # structural importance (max 60)
-                    + term_coverage * 5  # task-relevance via term matching
+                    + emb_sim * 40  # semantic similarity (max 40)
+                    + term_coverage * 5  # lexical term matching
                     + name_bonus * 3  # symbol name matches task term
                     + path_bonus  # file path matches task term
                     + bm25_bonus * 3  # BM25 file-level relevance (max 3)
