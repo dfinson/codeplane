@@ -533,7 +533,6 @@ class TestTestOpsRun:
             assert result.run_status is not None
 
 
-
 # =============================================================================
 # TestOps._persist_result() and _load_result()
 # =============================================================================

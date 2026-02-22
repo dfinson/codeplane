@@ -411,8 +411,8 @@ def _try_paginate(
 
     cursor_id = uuid.uuid4().hex[:12]
     extra = {k: v for k, v in payload.items() if k != items_key}
-    if inline_summary:
-        extra["inline_summary"] = inline_summary
+    if inline_summary and "summary" not in extra:
+        extra["summary"] = inline_summary
 
     cursor = PendingCursor(
         cursor_id=cursor_id,
@@ -852,8 +852,6 @@ def build_envelope(
         envelope.update(payload)
         envelope["inline_budget_bytes_used"] = payload_bytes
         envelope["inline_budget_bytes_limit"] = inline_cap
-        if inline_summary:
-            envelope["inline_summary"] = inline_summary
     else:
         # Try cursor pagination first for supported kinds
         # Subtract post-overhead (scope_id/scope_usage added after pagination)
@@ -884,7 +882,7 @@ def build_envelope(
         resource_id, byte_size = _resource_cache.store(payload, resource_kind)
         envelope["delivery"] = "resource"
         if inline_summary:
-            envelope["inline_summary"] = inline_summary
+            envelope["summary"] = inline_summary
         envelope["inline_budget_bytes_used"] = len(
             json.dumps(envelope, indent=2, default=str).encode("utf-8")
         )
@@ -933,8 +931,6 @@ def wrap_existing_response(
         result["delivery"] = "inline"
         result["inline_budget_bytes_used"] = payload_bytes
         result["inline_budget_bytes_limit"] = inline_cap
-        if inline_summary:
-            result["inline_summary"] = inline_summary
     else:
         # Try cursor pagination first for supported kinds
         # Subtract post-overhead (scope_id/scope_usage added after pagination)
@@ -966,7 +962,7 @@ def wrap_existing_response(
             "delivery": "resource",
         }
         if inline_summary:
-            envelope["inline_summary"] = inline_summary
+            envelope["summary"] = inline_summary
         envelope["inline_budget_bytes_used"] = len(
             json.dumps(envelope, indent=2, default=str).encode("utf-8")
         )

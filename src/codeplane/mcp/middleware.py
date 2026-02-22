@@ -41,6 +41,10 @@ _REJOINDERS = (
 )
 _REJOINDER_ROTATION = (0, 1, 0)
 
+# How often to include the full suggested_workflow dict in pattern hints.
+# First detection always includes it; subsequent detections include it every Nth.
+_WORKFLOW_HINT_INTERVAL = 3
+
 
 def _timestamp() -> str:
     """Return current time as HH:MM:SS for log prefix."""
@@ -137,6 +141,18 @@ class ToolMiddleware(Middleware):
                         hint_fields["agentic_hint"] = (
                             existing_hint + "\n\n" + hint_fields["agentic_hint"]
                         )
+
+                    # Throttle suggested_workflow: include on first detection
+                    # and every _WORKFLOW_HINT_INTERVAL-th detection after.
+                    if context.fastmcp_context and self._session_manager:
+                        session = self._session_manager.get_or_create(
+                            context.fastmcp_context.session_id,
+                        )
+                        n = session.counters.get("pattern_detections", 0) + 1
+                        session.counters["pattern_detections"] = n
+                        if n > 1 and n % _WORKFLOW_HINT_INTERVAL != 1:
+                            hint_fields.pop("suggested_workflow", None)
+
                     result_dict.update(hint_fields)
                     needs_repack = True
 
@@ -207,8 +223,8 @@ class ToolMiddleware(Middleware):
                     },
                     "tool_schema": tool_schema,
                     "agentic_hint": (
-                        f"Use 'describe' with action='tool' and name='{tool_name}' for full documentation. "
-                        "For other tools you're unsure about, call describe to see correct usage."
+                        "Correct parameter schema is in tool_schema above. "
+                        "Fix the parameters and retry."
                     ),
                     "summary": f"error: validation failed for {tool_name}",
                 }
@@ -258,8 +274,8 @@ class ToolMiddleware(Middleware):
                         "error_type": type(e).__name__,
                     },
                     "agentic_hint": (
-                        "This is an internal error. Check the log file for details. "
-                        f"Use 'describe' with action='tool' and name='{tool_name}' to verify correct usage."
+                        "Internal error — verify your parameters are correct and retry. "
+                        "If the error persists, it may be a server-side issue."
                     ),
                     "summary": f"error: internal error in {tool_name}",
                 }
