@@ -1,0 +1,40 @@
+{
+  "session_name": "unknown_260_claude-opus-4-6-fast_native",
+  "repo": "unknown",
+  "issue": "260",
+  "model": "claude-opus-4.6-fast",
+  "codeplane": false,
+  "wall_clock": {
+    "start": "2026-02-22T10:16:16.577Z",
+    "end": "2026-02-22T10:19:07.800Z"
+  },
+  "turns": 34,
+  "tool_calls": {
+    "total": 43,
+    "codeplane": 0,
+    "terminal": 12,
+    "tool_search": 0,
+    "other": 31,
+    "errors": 1,
+    "by_tool": {
+      "read_file": 14,
+      "run_in_terminal": 12,
+      "manage_todo_list": 8,
+      "replace_string_in_file": 5,
+      "grep_search": 2,
+      "multi_replace_string_in_file": 2
+    }
+  },
+  "llm_requests": {
+    "agent": 34,
+    "routing": 9,
+    "total": 43
+  },
+  "tokens": {
+    "prompt": 1212340,
+    "completion": 9049,
+    "cached": 1189539,
+    "total": 1221389
+  },
+  "llm_duration_ms": 110602
+}
