@@ -43,10 +43,9 @@ def _collect_watch_dirs(
 ) -> list[Path]:
     """Walk the repo tree and collect all directories to watch.
 
-    Respects the tiered pruning model:
+    Respects the directory pruning model implemented by IgnoreChecker.should_prune_dir():
     - Tier 0 (HARDCODED_DIRS): Always pruned, never watched
-    - Tier 1 (DEFAULT_PRUNABLE_DIRS): Pruned unless negated in .cplignore
-    - .gitignore patterns: Pruned via IgnoreChecker
+    - Tier 1 (DEFAULT_PRUNABLE_DIRS): Pruned unless negated in .cplignore at the repo root
 
     Returns a flat list of directories. The repo_root itself is always included.
     Each directory gets a single non-recursive inotify watch.
