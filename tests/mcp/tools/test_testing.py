@@ -6,7 +6,6 @@ Verifies summary helpers and serialization.
 from unittest.mock import MagicMock
 
 from codeplane.mcp.tools.testing import (
-    _build_logs_hint,
     _display_discover,
     _display_run_start,
     _display_run_status,
@@ -208,98 +207,6 @@ class TestDisplayRunStatus:
         display = _display_run_status(result)
         assert display is not None
         assert "cancelled" in display.lower()
-
-
-class TestBuildLogsHint:
-    """Tests for _build_logs_hint helper."""
-
-    def test_no_artifact_dir(self) -> None:
-        """Should return None if no artifact_dir."""
-        hint = _build_logs_hint(None, "running")
-        assert hint is None
-
-    def test_running_status_without_targets(self) -> None:
-        """Should show generic hint for running tests without target info."""
-        hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "running")
-        assert hint is not None
-        assert ".codeplane/artifacts/tests/abc123" in hint
-        assert "read_source" in hint
-
-    def test_running_status_with_targets(self) -> None:
-        """Should show actual target file names for running tests."""
-        hint = _build_logs_hint(
-            ".codeplane/artifacts/tests/abc123",
-            "running",
-            target_selectors=["tests/test_foo.py", "tests/test_bar.py"],
-        )
-        assert hint is not None
-        assert ".codeplane/artifacts/tests/abc123" in hint
-        # Should contain actual file names, not <target_id> placeholder
-        assert "test_tests_test_foo.py.stdout.txt" in hint
-        assert "test_tests_test_bar.py.stdout.txt" in hint
-        assert "<target_id>" not in hint
-        assert "read_source" in hint
-
-    def test_completed_status_without_targets(self) -> None:
-        """Should show generic hint for completed tests without target info."""
-        hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "completed")
-        assert hint is not None
-        assert ".codeplane/artifacts/tests/abc123" in hint
-        assert "result.json" in hint
-        assert "read_source" in hint
-
-    def test_completed_status_with_targets(self) -> None:
-        """Should show actual target file names for completed tests."""
-        hint = _build_logs_hint(
-            ".codeplane/artifacts/tests/abc123",
-            "completed",
-            target_selectors=["tests/test_foo.py"],
-        )
-        assert hint is not None
-        assert "test_tests_test_foo.py.stdout.txt" in hint
-        assert "<target_id>" not in hint
-        assert "result.json" in hint
-        assert "read_source" in hint
-
-    def test_failed_status(self) -> None:
-        """Should show hint for failed tests."""
-        hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "failed")
-        assert hint is not None
-        assert "result.json" in hint
-
-    def test_cancelled_status(self) -> None:
-        """Should show hint for cancelled tests."""
-        hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "cancelled")
-        assert hint is not None
-        assert "result.json" in hint
-
-    def test_not_found_status(self) -> None:
-        """Should return None for not_found status."""
-        hint = _build_logs_hint(".codeplane/artifacts/tests/abc123", "not_found")
-        assert hint is None
-
-    def test_many_targets_shows_ellipsis(self) -> None:
-        """Should show ellipsis for many targets."""
-        hint = _build_logs_hint(
-            ".codeplane/artifacts/tests/abc123",
-            "completed",
-            target_selectors=[
-                "tests/test_one.py",
-                "tests/test_two.py",
-                "tests/test_three.py",
-                "tests/test_four.py",
-                "tests/test_five.py",
-            ],
-        )
-        assert hint is not None
-        # Should show first 3
-        assert "test_tests_test_one.py.stdout.txt" in hint
-        assert "test_tests_test_two.py.stdout.txt" in hint
-        assert "test_tests_test_three.py.stdout.txt" in hint
-        # Should indicate more
-        assert "2 more targets" in hint
-        # Should NOT show the last ones
-        assert "test_tests_test_four.py" not in hint
 
 
 class TestSerializeTestResult:

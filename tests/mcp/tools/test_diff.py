@@ -17,6 +17,7 @@ from codeplane.index._internal.diff.models import (
 from codeplane.mcp.tools.diff import (
     _build_agentic_hint,
     _result_to_dict,
+    _result_to_text,
 )
 
 # ============================================================================
@@ -424,3 +425,83 @@ class TestSchemaInvariants:
         )
         d = _result_to_dict(_result([c]))
         assert d["structural_changes"][0]["lines_changed"] == 42
+
+
+# ============================================================================
+# Tests: Text Format Serialization
+# ============================================================================
+
+
+class TestResultToText:
+    """Tests for _result_to_text."""
+
+    def test_empty_result(self) -> None:
+        d = _result_to_text(_result())
+        assert d["summary"] == "test"
+        assert d["structural_changes"] == []
+        assert d["non_structural_changes"] == []
+        assert d["files_analyzed"] == 0
+        assert d["base"] == "HEAD"
+        assert d["target"] == "working tree"
+
+    def test_structural_changes_as_text_lines(self) -> None:
+        c = _change(change="added", name="new_func", kind="function")
+        d = _result_to_text(_result([c]))
+        lines = d["structural_changes"]
+        assert isinstance(lines, list)
+        assert len(lines) == 1
+        assert "added function new_func" in lines[0]
+
+    def test_non_structural_changes_as_text(self) -> None:
+        fc = _file_change(path="data/config.json", status="modified", category="config")
+        d = _result_to_text(_result(non_structural=[fc]))
+        lines = d["non_structural_changes"]
+        assert len(lines) == 1
+        assert "modified data/config.json" in lines[0]
+        assert "config" in lines[0]
+
+    def test_non_structural_with_language(self) -> None:
+        fc = FileChangeInfo(path="a.rs", status="added", category="prod", language="rust")
+        d = _result_to_text(_result(non_structural=[fc]))
+        assert "rust" in d["non_structural_changes"][0]
+
+    def test_breaking_summary(self) -> None:
+        d = _result_to_text(_result(breaking="2 breaking: foo, bar"))
+        assert d["breaking_summary"] == "2 breaking: foo, bar"
+
+    def test_scope_included(self) -> None:
+        r = _result()
+        r.scope = AnalysisScope(base_sha="abc123", mode="git")
+        d = _result_to_text(r)
+        assert "scope" in d
+        assert d["scope"]["base_sha"] == "abc123"
+
+    def test_scope_drops_none_values(self) -> None:
+        r = _result()
+        r.scope = AnalysisScope(base_sha="abc", target_sha=None)
+        d = _result_to_text(r)
+        assert "target_sha" not in d["scope"]
+
+    def test_scope_omitted_when_none(self) -> None:
+        d = _result_to_text(_result())
+        assert "scope" not in d
+
+    def test_agentic_hint_present(self) -> None:
+        d = _result_to_text(_result())
+        assert "agentic_hint" in d
+
+    def test_multiple_structural_changes(self) -> None:
+        changes = [
+            _change(change="added", name="a"),
+            _change(change="removed", name="b"),
+            _change(change="body_changed", name="c"),
+        ]
+        d = _result_to_text(_result(changes))
+        assert len(d["structural_changes"]) == 3
+
+    def test_signature_change_shows_sigs(self) -> None:
+        c = _change(change="signature_changed", name="func")
+        d = _result_to_text(_result([c]))
+        line = d["structural_changes"][0]
+        assert "old:" in line
+        assert "new:" in line

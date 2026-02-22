@@ -528,13 +528,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             False,
             description="Return one result per file (like rg -l). Includes match_count per file.",
         ),
-        format: Literal["json", "text"] = Field(
-            "json",
-            description=(
-                "Response format: 'json' (default, structured dicts) or "
-                "'text' (compact flat lines — same info, ~60%% fewer tokens)"
-            ),
-        ),
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
         confirmation_token: str | None = Field(
             None, description="Token from a previous pattern-break gate."
@@ -692,8 +685,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "query_time_ms": 0,
                 "summary": _summarize_search(1, "definitions", query),
             }
-            if format == "text":
-                def_result["results"] = _search_results_to_text(def_result["results"])
+            def_result["results"] = _search_results_to_text(def_result["results"])
             if pattern_extras:
                 def_result.update(pattern_extras)
 
@@ -806,8 +798,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     len(items), "references", query, file_count=len(ref_files)
                 ),
             }
-            if format == "text":
-                ref_result["results"] = _search_results_to_text(ref_result["results"])
+            ref_result["results"] = _search_results_to_text(ref_result["results"])
             if pattern_extras:
                 ref_result.update(pattern_extras)
 
@@ -942,8 +933,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         if search_response.fallback_reason:
             result["fallback_reason"] = search_response.fallback_reason
 
-        if format == "text":
-            result["results"] = _search_results_to_text(result["results"])
+        result["results"] = _search_results_to_text(result["results"])
 
         from codeplane.mcp.delivery import wrap_existing_response
 
@@ -1011,13 +1001,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "standard=tree without line counts, minimal=counts only (no tree)"
             ),
         ),
-        format: Literal["json", "text"] = Field(
-            "json",
-            description=(
-                "Response format: 'json' (default, structured dicts) or "
-                "'text' (compact flat lines — same info, ~50%% fewer tokens)"
-            ),
-        ),
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Get repository mental model."""
@@ -1037,35 +1020,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         # Build overview
         overview = _build_overview(result)
 
-        if format == "text":
-            sections_output = _map_repo_sections_to_text(
-                result, include_line_counts=include_line_counts
-            )
-        else:
-            # JSON: Serialize all sections at full detail
-            sections_output = {}
-            if result.languages:
-                sections_output["languages"] = _serialize_languages(result.languages)
-            if result.structure:
-                sections_output["structure"] = _serialize_structure_tiered(
-                    result.structure, _TIER_FULL, include_line_counts
-                )
-            if result.dependencies:
-                sections_output["dependencies"] = _serialize_dependencies_tiered(
-                    result.dependencies, _TIER_FULL
-                )
-            if result.test_layout:
-                sections_output["test_layout"] = _serialize_test_layout_tiered(
-                    result.test_layout, _TIER_FULL
-                )
-            if result.entry_points:
-                sections_output["entry_points"] = _serialize_entry_points_tiered(
-                    result.entry_points, _TIER_FULL
-                )
-            if result.public_api:
-                sections_output["public_api"] = _serialize_public_api_tiered(
-                    result.public_api, _TIER_FULL
-                )
+        sections_output = _map_repo_sections_to_text(
+            result, include_line_counts=include_line_counts
+        )
 
         # Build output
         output: dict[str, Any] = {

@@ -426,6 +426,40 @@ class TestFetchHints:
         assert "cached at" in hint
         assert "jq" not in hint
 
+    def test_semantic_diff_text_format(self) -> None:
+        """Text format structural_changes (list[str]) must not crash."""
+        from codeplane.mcp.delivery import _build_fetch_hint
+
+        payload = {
+            "structural_changes": [
+                "added function foo  src/a.py:10-20  Δ5",
+                "added function bar  src/a.py:30-40  Δ8",
+                "removed class Baz  src/b.py:1-50  Δ50",
+            ],
+            "summary": "2 added, 1 removed",
+        }
+        hint = _build_fetch_hint("abc123", 4000, "semantic_diff", payload)
+        assert "2 added, 1 removed" in hint
+        assert "jq" in hint
+        # Text format should NOT produce dict-based jq filters
+        assert ".change //" not in hint
+        assert ".structural_changes[]" in hint
+
+    def test_semantic_diff_text_format_no_summary(self) -> None:
+        """Text format without summary tallies change types from line prefixes."""
+        from codeplane.mcp.delivery import _build_fetch_hint
+
+        payload = {
+            "structural_changes": [
+                "added function foo  src/a.py:10-20",
+                "removed class Bar  src/b.py:1-50",
+            ],
+        }
+        hint = _build_fetch_hint("abc123", 4000, "semantic_diff", payload)
+        assert "2 change(s)" in hint
+        assert "1 added" in hint
+        assert "1 removed" in hint
+
 
 class TestCursorPagination:
     """Tests for cursor-based pagination of oversized responses."""
@@ -572,7 +606,7 @@ class TestCursorPagination:
         page1 = _try_paginate(payload, "source", 5000, "3 files")
         assert page1 is not None
         assert page1.get("not_found") == ["missing.py"]
-        assert page1.get("inline_summary") == "3 files"
+        assert page1.get("summary") == "3 files"
 
         if page1.get("has_more"):
             page2 = resume_cursor(page1["cursor"])

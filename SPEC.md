@@ -2960,17 +2960,15 @@ Tools are organized into functional families. Each tool is a standalone MCP tool
 | `lint_check` | Run configured linters on specified files or paths |
 | `lint_tools` | List available lint tools and their configuration |
 
-#### Test Tools (5 tools)
+#### Test Tools (3 tools)
 
 | Tool | Purpose |
 |------|---------|
 | `discover_test_targets` | Discover test targets in the codebase |
 | `inspect_affected_tests` | Find tests affected by specific file changes |
 | `run_test_targets` | Execute tests with `affected_by` for impact-aware selection |
-| `get_test_run_status` | Check status of an async test run |
-| `cancel_test_run` | Cancel a running test execution |
 
-**Total: 43 tools**
+**Total: 40 tools**
 
 ### 23.5 Progress Reporting
 
@@ -3076,6 +3074,7 @@ Unified search across lexical index, symbols, and references.
   limit?: number;                   // Max results (default 20, max 100)
   cursor?: string;                  // Continuation token
   include_snippets?: boolean;       // Include code snippets (default true)
+  enrichment?: "none" | "minimal" | "standard" | "function" | "class";  // Search enrichment level
   session_id?: string;              // Optional session override
 }
 ```
@@ -3295,7 +3294,6 @@ Atomic file edits with structured delta response.
         original: { start_line: number; end_line: number };
         corrected: { start_line: number; end_line: number };
       }>;
-      verification_context?: string; // Surrounding lines for human review
     }>;
   };
   summary: string;
@@ -3586,24 +3584,6 @@ Execute tests with impact-aware selection via `affected_by`.
   fail_fast?: boolean;
   timeout_sec?: number;
 }
-```
-
-##### `get_test_run_status`
-
-Check status of an async test run.
-
-```typescript
-// Parameters
-{ run_id: string }
-```
-
-##### `cancel_test_run`
-
-Cancel a running test execution.
-
-```typescript
-// Parameters
-{ run_id: string }
 ```
 
 ---
