@@ -9,6 +9,7 @@ scaffolds, and metadata in one response.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -34,8 +35,8 @@ _MAX_SEEDS = 5  # Seeds after structural reranking
 _DEFAULT_DEPTH = 1  # Graph expansion depth
 
 # Budget defaults (bytes)
-_DEFAULT_BUDGET_BYTES = 15_000
-_MAX_BUDGET_BYTES = 30_000
+_DEFAULT_BUDGET_BYTES = 30_000
+_MAX_BUDGET_BYTES = 60_000
 
 # Per-tier line caps
 _SEED_BODY_MAX_LINES = 120
@@ -45,6 +46,19 @@ _MAX_CALLERS_PER_SEED = 5
 _MAX_CALLEES_PER_SEED = 15
 _MAX_IMPORT_SCAFFOLDS = 5
 _MAX_IMPORT_DEFS_PER_SEED = 10  # Max imported-file defs surfaced per seed
+
+# Barrel / index files (language-agnostic re-export patterns)
+_BARREL_FILENAMES = frozenset(
+    {
+        "__init__.py",
+        "index.js",
+        "index.ts",
+        "index.tsx",
+        "index.jsx",
+        "index.mjs",
+        "mod.rs",
+    }
+)
 
 # Priority tiers for budget allocation
 _P1_SEED_BODIES = 1
@@ -602,9 +616,18 @@ async def _expand_seed(
     imports = await coordinator.get_file_imports(seed_path, limit=50)
     import_defs: list[dict[str, str]] = []
     seen_import_paths: set[str] = set()
-    for imp in imports:
-        if not imp.resolved_path or imp.resolved_path == seed_path:
-            continue
+
+    # Sort imports by path proximity to seed (same-package first)
+    seed_dir = str(Path(seed_path).parent) + "/"
+    filtered_imports = [
+        imp for imp in imports if imp.resolved_path and imp.resolved_path != seed_path
+    ]
+    filtered_imports.sort(
+        key=lambda imp: -len(os.path.commonprefix([seed_dir, imp.resolved_path or ""]))
+    )
+
+    for imp in filtered_imports:
+        assert imp.resolved_path is not None  # filtered above
         if imp.resolved_path in seen_import_paths:
             continue
         seen_import_paths.add(imp.resolved_path)
@@ -679,28 +702,65 @@ async def _expand_seed(
     return result
 
 
+def _collect_barrel_paths(seed_paths: set[str], repo_root: Path) -> set[str]:
+    """Find barrel/index files for directories containing seed files.
+
+    Language-agnostic: checks for __init__.py, index.{js,ts,tsx}, mod.rs, etc.
+    Only returns paths not already covered as seeds.
+    """
+    barrel_paths: set[str] = set()
+    seen_dirs: set[str] = set()
+    for spath in seed_paths:
+        parent = str(Path(spath).parent)
+        if parent in seen_dirs:
+            continue
+        seen_dirs.add(parent)
+        for barrel_name in _BARREL_FILENAMES:
+            candidate = f"{parent}/{barrel_name}" if parent != "." else barrel_name
+            if candidate not in seed_paths and (repo_root / candidate).exists():
+                barrel_paths.add(candidate)
+                break  # one barrel per directory
+    return barrel_paths
+
+
 async def _build_import_scaffolds(
     app_ctx: AppContext,
     seed_paths: set[str],
     repo_root: Path,
 ) -> list[dict[str, Any]]:
-    """Build lightweight scaffolds for files imported by seed files.
+    """Build lightweight scaffolds for barrel files and imported files.
 
-    Only includes files not already covered as seeds.
+    Barrel files (e.g. __init__.py, index.ts) for seed directories are always
+    included first. Remaining slots are filled with imported files not already
+    covered as seeds.
     """
     from codeplane.mcp.tools.files import _build_scaffold
 
     coordinator = app_ctx.coordinator
-    imported_paths: set[str] = set()
 
+    # Priority 1: barrel/index files for seed directories
+    barrel_paths = _collect_barrel_paths(seed_paths, repo_root)
+    scaffolds: list[dict[str, Any]] = []
+    for bp in sorted(barrel_paths):
+        full = repo_root / bp
+        if full.exists():
+            scaffold = await _build_scaffold(app_ctx, bp, full)
+            scaffolds.append(scaffold)
+
+    # Priority 2: imported files (excluding seeds and already-scaffolded barrels)
+    imported_paths: set[str] = set()
     for spath in seed_paths:
         imports = await coordinator.get_file_imports(spath, limit=50)
         for imp in imports:
-            if imp.resolved_path and imp.resolved_path not in seed_paths:
+            if (
+                imp.resolved_path
+                and imp.resolved_path not in seed_paths
+                and imp.resolved_path not in barrel_paths
+            ):
                 imported_paths.add(imp.resolved_path)
 
-    scaffolds: list[dict[str, Any]] = []
-    for imp_path in sorted(imported_paths)[:_MAX_IMPORT_SCAFFOLDS]:
+    remaining_slots = _MAX_IMPORT_SCAFFOLDS - len(scaffolds)
+    for imp_path in sorted(imported_paths)[:remaining_slots]:
         full = repo_root / imp_path
         if full.exists():
             scaffold = await _build_scaffold(app_ctx, imp_path, full)
