@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -83,8 +84,14 @@ class EmbeddingIndex:
         """True if there are uncommitted staged changes."""
         return bool(self._staged_defs) or bool(self._staged_removals)
 
-    def commit_staged(self) -> int:
+    def commit_staged(
+        self,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> int:
         """Compute embeddings for all staged defs and persist.
+
+        Args:
+            on_progress: Optional callback(embedded_so_far, total) for progress.
 
         Returns count of defs embedded in this commit.
         """
@@ -149,14 +156,19 @@ class EmbeddingIndex:
                 texts.append(self._def_to_text(d))
                 new_uids.append(uid)
 
-            # Batch embed via fastembed
+            # Batch embed via fastembed (consume generator for progress)
             assert self._model is not None  # guaranteed by _ensure_model
+            total = len(texts)
             start = time.monotonic()
-            embeddings_list = list(self._model.embed(texts))
+            embeddings_list: list[Any] = []
+            for i, vec in enumerate(self._model.embed(texts)):
+                embeddings_list.append(vec)
+                if on_progress is not None and (i % 50 == 0 or i == total - 1):
+                    on_progress(i + 1, total)
             elapsed = time.monotonic() - start
             log.info(
                 "embedding.commit",
-                count=len(texts),
+                count=total,
                 elapsed_ms=round(elapsed * 1000),
             )
 

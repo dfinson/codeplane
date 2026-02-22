@@ -541,6 +541,8 @@ def initialize_repo(
     }
     # Track resolution phase box and task IDs
     resolution_phase: PhaseBox | None = None
+    embedding_phase: PhaseBox | None = None
+    embedding_task_id: Any = None
     refs_task_id: Any = None
     types_task_id: Any = None
     indexing_elapsed = 0.0
@@ -558,7 +560,8 @@ def initialize_repo(
         def on_index_progress(
             indexed: int, total: int, files_by_ext: dict[str, int], progress_phase: str
         ) -> None:
-            nonlocal resolution_phase, refs_task_id, types_task_id, indexing_elapsed
+            nonlocal resolution_phase, embedding_phase, embedding_task_id
+            nonlocal refs_task_id, types_task_id, indexing_elapsed
 
             if progress_phase == "indexing":
                 # Update indexing phase box
@@ -574,8 +577,8 @@ def initialize_repo(
                 indexing_state["files_indexed"] = indexed
                 indexing_state["files_by_ext"] = files_by_ext
 
-            elif progress_phase in ("resolving_cross_file", "resolving_refs", "resolving_types"):
-                # First resolution callback — close indexing box, open resolution box
+            elif progress_phase == "computing_embeddings":
+                # First embedding callback — close indexing box, open embedding box
                 if not indexing_state["indexing_done"]:
                     indexing_state["indexing_done"] = True
                     indexing_elapsed = time.time() - start_time
@@ -590,6 +593,40 @@ def initialize_repo(
                         indexing_phase.add_table(ext_table)
                     indexing_phase.__exit__(None, None, None)
 
+                if embedding_phase is None:
+                    embedding_phase = phase_box("Embeddings", width=60)
+                    embedding_phase.__enter__()
+                    embedding_task_id = embedding_phase.add_progress(
+                        "Computing embeddings", total=100
+                    )
+
+                pct = int(indexed / total * 100) if total > 0 else 0
+                embedding_phase._progress.update(embedding_task_id, completed=pct)  # type: ignore[union-attr]
+                embedding_phase._update()
+
+            elif progress_phase in ("resolving_cross_file", "resolving_refs", "resolving_types"):
+                # First resolution callback — close indexing/embedding boxes, open resolution box
+                if not indexing_state["indexing_done"]:
+                    indexing_state["indexing_done"] = True
+                    indexing_elapsed = time.time() - start_time
+
+                    # Finalize indexing box
+                    indexing_phase.set_live_table(None)
+                    files = indexing_state["files_indexed"]
+                    indexing_phase.complete(f"{files} files ({indexing_elapsed:.1f}s)")
+                    if indexing_state["files_by_ext"]:
+                        indexing_phase.add_text("")
+                        ext_table = _make_init_extension_table(indexing_state["files_by_ext"])  # type: ignore[arg-type]
+                        indexing_phase.add_table(ext_table)
+                    indexing_phase.__exit__(None, None, None)
+
+                # Close embedding phase if it was open
+                if embedding_phase is not None:
+                    embedding_phase.complete(f"{total} definitions embedded")
+                    embedding_phase.__exit__(None, None, None)
+                    embedding_phase = None
+
+                if resolution_phase is None:
                     # Open resolution phase box
                     resolution_phase = phase_box("Resolution", width=60)
                     resolution_phase.__enter__()
@@ -627,6 +664,11 @@ def initialize_repo(
                 ext_table = _make_init_extension_table(result.files_by_ext)
                 indexing_phase.add_table(ext_table)
             indexing_phase.__exit__(None, None, None)
+
+        # Close embedding phase box if it was opened but resolution didn't close it
+        if embedding_phase is not None:
+            embedding_phase.complete("Done")
+            embedding_phase.__exit__(None, None, None)
 
         # Close resolution phase box if it was opened
         if resolution_phase is not None:

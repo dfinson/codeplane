@@ -2566,9 +2566,14 @@ class IndexCoordinator:
                 # Commit all Tantivy changes in one batch (1 commit, not N)
                 self._lexical.commit_staged()
 
-                # Commit all embedding changes
+                # Commit all embedding changes (with progress reporting)
                 if self._embedding is not None and self._embedding.has_staged_changes():
-                    self._embedding.commit_staged()
+
+                    def _emb_progress(done: int, total: int) -> None:
+                        on_progress(done, total, files_by_ext, "computing_embeddings")
+
+                    on_progress(0, 1, files_by_ext, "computing_embeddings")
+                    self._embedding.commit_staged(on_progress=_emb_progress)
 
                 # Re-resolve any import paths that couldn't resolve during
                 # batched indexing (e.g. batch 1 imports targeting batch 2 files).
