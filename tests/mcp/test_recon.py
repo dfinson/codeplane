@@ -7,6 +7,11 @@ Tests:
 - _trim_to_budget: budget assembly
 - _summarize_recon: summary generation
 - register_tools: tool wiring
+- ArtifactKind: artifact classification
+- TaskIntent: intent extraction
+- EvidenceRecord: structured evidence
+- _apply_filters: intent-aware filter pipeline
+- _score_candidates: bounded scoring model
 """
 
 from __future__ import annotations
@@ -17,13 +22,22 @@ from unittest.mock import MagicMock
 import pytest
 
 from codeplane.mcp.tools.recon import (
+    ArtifactKind,
+    EvidenceRecord,
+    HarvestCandidate,
+    TaskIntent,
+    _classify_artifact,
     _def_signature_text,
     _estimate_bytes,
+    _extract_intent,
     _extract_paths,
     _read_lines,
+    _score_candidates,
     _summarize_recon,
     _tokenize_task,
     _trim_to_budget,
+    find_elbow,
+    parse_task,
 )
 
 # ---------------------------------------------------------------------------
@@ -326,3 +340,301 @@ class TestReconInToolsInit:
         from codeplane.mcp.tools import recon
 
         assert hasattr(recon, "register_tools")
+
+
+# ---------------------------------------------------------------------------
+# ArtifactKind classification tests
+# ---------------------------------------------------------------------------
+
+
+class TestArtifactKind:
+    """Tests for _classify_artifact."""
+
+    @pytest.mark.parametrize(
+        ("path", "expected"),
+        [
+            ("src/core/handler.py", ArtifactKind.code),
+            ("src/utils.js", ArtifactKind.code),
+            ("tests/test_handler.py", ArtifactKind.test),
+            ("test/unit/test_core.py", ArtifactKind.test),
+            ("src/core/handler_test.py", ArtifactKind.test),
+            ("config/settings.yaml", ArtifactKind.config),
+            ("app.json", ArtifactKind.config),
+            ("pyproject.toml", ArtifactKind.build),
+            ("Makefile", ArtifactKind.build),
+            ("Dockerfile", ArtifactKind.build),
+            ("docs/README.md", ArtifactKind.doc),
+            ("CHANGELOG.rst", ArtifactKind.doc),
+        ],
+    )
+    def test_classification(self, path: str, expected: ArtifactKind) -> None:
+        assert _classify_artifact(path) == expected
+
+
+# ---------------------------------------------------------------------------
+# TaskIntent tests
+# ---------------------------------------------------------------------------
+
+
+class TestTaskIntent:
+    """Tests for _extract_intent."""
+
+    @pytest.mark.parametrize(
+        ("task", "expected"),
+        [
+            ("fix the bug in search handler", TaskIntent.debug),
+            ("debug the crash in IndexCoordinator", TaskIntent.debug),
+            ("add caching to the search tool", TaskIntent.implement),
+            ("implement a new endpoint for users", TaskIntent.implement),
+            ("refactor the recon pipeline", TaskIntent.refactor),
+            ("rename IndexCoordinator to Coordinator", TaskIntent.refactor),
+            ("how does the checkpoint tool work", TaskIntent.understand),
+            ("explain the search pipeline", TaskIntent.understand),
+            ("add tests for the recon tool", TaskIntent.implement),  # "add" -> implement
+            ("write unit tests with pytest for search", TaskIntent.test),
+            ("increase test coverage for search", TaskIntent.test),
+            ("FactQueries", TaskIntent.unknown),
+        ],
+    )
+    def test_intent_extraction(self, task: str, expected: TaskIntent) -> None:
+        assert _extract_intent(task) == expected
+
+    def test_parse_task_includes_intent(self) -> None:
+        parsed = parse_task("fix the bug in search handler")
+        assert parsed.intent == TaskIntent.debug
+
+    def test_parse_task_unknown_intent(self) -> None:
+        parsed = parse_task("IndexCoordinator")
+        assert parsed.intent == TaskIntent.unknown
+
+
+# ---------------------------------------------------------------------------
+# EvidenceRecord tests
+# ---------------------------------------------------------------------------
+
+
+class TestEvidenceRecord:
+    """Tests for EvidenceRecord dataclass."""
+
+    def test_creation(self) -> None:
+        e = EvidenceRecord(
+            category="embedding",
+            detail="semantic similarity 0.850",
+            score=0.85,
+        )
+        assert e.category == "embedding"
+        assert e.score == 0.85
+
+    def test_default_score(self) -> None:
+        e = EvidenceRecord(category="explicit", detail="agent seed")
+        assert e.score == 0.0
+
+
+# ---------------------------------------------------------------------------
+# HarvestCandidate with new fields tests
+# ---------------------------------------------------------------------------
+
+
+class TestHarvestCandidateNew:
+    """Tests for new HarvestCandidate fields."""
+
+    def test_artifact_kind_default(self) -> None:
+        c = HarvestCandidate(def_uid="test::func")
+        assert c.artifact_kind == ArtifactKind.code
+
+    def test_relevance_score_default(self) -> None:
+        c = HarvestCandidate(def_uid="test::func")
+        assert c.relevance_score == 0.0
+        assert c.seed_score == 0.0
+
+    def test_evidence_accumulation(self) -> None:
+        c = HarvestCandidate(
+            def_uid="test::func",
+            evidence=[
+                EvidenceRecord(category="embedding", detail="sim 0.9", score=0.9),
+                EvidenceRecord(category="term_match", detail="name match", score=0.5),
+            ],
+        )
+        assert len(c.evidence) == 2
+        assert c.evidence[0].category == "embedding"
+
+    def test_evidence_axes_unchanged(self) -> None:
+        c = HarvestCandidate(
+            def_uid="test::func",
+            from_embedding=True,
+            from_term_match=True,
+        )
+        assert c.evidence_axes == 2
+
+
+# ---------------------------------------------------------------------------
+# Scoring model tests
+# ---------------------------------------------------------------------------
+
+
+class TestBoundedScoring:
+    """Tests for bounded scoring model."""
+
+    def _make_candidate(
+        self,
+        uid: str = "test::func",
+        *,
+        emb_sim: float = 0.0,
+        hub: int = 0,
+        terms: int = 0,
+        from_embedding: bool = False,
+        from_explicit: bool = False,
+        is_test: bool = False,
+        name: str = "func",
+        file_path: str = "src/core.py",
+    ) -> HarvestCandidate:
+        d = MagicMock()
+        d.name = name
+        d.kind = "function"
+        return HarvestCandidate(
+            def_uid=uid,
+            def_fact=d,
+            embedding_similarity=emb_sim,
+            hub_score=hub,
+            matched_terms={f"t{i}" for i in range(terms)},
+            from_embedding=from_embedding,
+            from_explicit=from_explicit,
+            is_test=is_test,
+            file_path=file_path,
+            artifact_kind=_classify_artifact(file_path),
+        )
+
+    def test_scores_are_bounded(self) -> None:
+        """All scores should be in reasonable bounded range."""
+        c = self._make_candidate(
+            emb_sim=1.0, hub=100, terms=10,
+            from_embedding=True, from_explicit=True,
+        )
+        parsed = parse_task("test task")
+        scored = _score_candidates({"test::func": c}, parsed)
+        assert len(scored) == 1
+        _, score = scored[0]
+        # Bounded scoring means score shouldn't explode
+        assert 0 <= score <= 2.0
+
+    def test_explicit_beats_embedding_only(self) -> None:
+        """Explicit mentions should score higher than embedding-only."""
+        c_explicit = self._make_candidate(
+            uid="a", from_explicit=True, emb_sim=0.5,
+        )
+        c_embed = self._make_candidate(
+            uid="b", from_embedding=True, emb_sim=0.5,
+        )
+        parsed = parse_task("test task")
+        scored = _score_candidates(
+            {"a": c_explicit, "b": c_embed}, parsed
+        )
+        scores = dict(scored)
+        assert scores["a"] > scores["b"]
+
+    def test_hub_score_affects_seed_score(self) -> None:
+        """Higher hub score should increase seed_score."""
+        c_hub = self._make_candidate(uid="a", hub=20, from_embedding=True, emb_sim=0.5)
+        c_leaf = self._make_candidate(uid="b", hub=0, from_embedding=True, emb_sim=0.5)
+        parsed = parse_task("test task")
+        _score_candidates({"a": c_hub, "b": c_leaf}, parsed)
+        assert c_hub.seed_score > c_leaf.seed_score
+
+    def test_test_file_downranked_for_implement(self) -> None:
+        """Test files should be lower-ranked for implementation tasks."""
+        c_code = self._make_candidate(
+            uid="a", from_embedding=True, emb_sim=0.6,
+            file_path="src/handler.py",
+        )
+        c_test = self._make_candidate(
+            uid="b", from_embedding=True, emb_sim=0.6,
+            file_path="tests/test_handler.py", is_test=True,
+        )
+        parsed = parse_task("implement caching in handler")
+        scored = _score_candidates({"a": c_code, "b": c_test}, parsed)
+        scores = dict(scored)
+        assert scores["a"] > scores["b"]
+
+    def test_separated_relevance_and_seed_scores(self) -> None:
+        """relevance_score and seed_score should be set on candidates."""
+        c = self._make_candidate(
+            from_embedding=True, emb_sim=0.7, hub=5,
+        )
+        parsed = parse_task("test task")
+        _score_candidates({"test::func": c}, parsed)
+        assert c.relevance_score > 0
+        assert c.seed_score > 0
+        # seed_score incorporates hub-based multiplier
+        assert c.seed_score != c.relevance_score
+
+
+# ---------------------------------------------------------------------------
+# Filter pipeline tests
+# ---------------------------------------------------------------------------
+
+
+class TestFilterPipeline:
+    """Tests for intent-aware filter pipeline."""
+
+    def test_legacy_dual_gate_still_works(self) -> None:
+        """The legacy _apply_dual_gate wrapper should still function."""
+        from codeplane.mcp.tools.recon import _apply_dual_gate
+
+        c = HarvestCandidate(
+            def_uid="test::func",
+            from_embedding=True,
+            embedding_similarity=0.5,
+            hub_score=5,
+        )
+        result = _apply_dual_gate({"test::func": c})
+        # With unknown intent, falls back to dual-gate behavior
+        # This candidate has both semantic and structural evidence
+        assert "test::func" in result
+
+    def test_explicit_always_passes(self) -> None:
+        from codeplane.mcp.tools.recon import _apply_filters
+
+        c = HarvestCandidate(
+            def_uid="test::func",
+            from_explicit=True,
+        )
+        result = _apply_filters({"test::func": c}, TaskIntent.unknown)
+        assert "test::func" in result
+
+
+# ---------------------------------------------------------------------------
+# Elbow detection tests (existing + new)
+# ---------------------------------------------------------------------------
+
+
+class TestFindElbow:
+    """Tests for find_elbow."""
+
+    def test_small_list(self) -> None:
+        assert find_elbow([10, 5, 1]) == 3
+
+    def test_clear_elbow(self) -> None:
+        scores = [100, 95, 90, 85, 80, 10, 5, 3, 2, 1]
+        k = find_elbow(scores)
+        assert 3 <= k <= 6
+
+    def test_flat_distribution(self) -> None:
+        scores = [10, 10, 10, 10, 10]
+        k = find_elbow(scores)
+        assert k == len(scores)
+
+    def test_empty(self) -> None:
+        assert find_elbow([]) == 0
+
+    def test_single(self) -> None:
+        assert find_elbow([5]) == 1
+
+    def test_respects_min_seeds(self) -> None:
+        scores = [100, 1, 1, 1, 1]
+        k = find_elbow(scores, min_seeds=3)
+        assert k >= 3
+
+    def test_respects_max_seeds(self) -> None:
+        scores = list(range(100, 0, -1))
+        k = find_elbow(scores, max_seeds=10)
+        assert k <= 10
