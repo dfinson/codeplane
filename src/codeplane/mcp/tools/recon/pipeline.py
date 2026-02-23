@@ -16,6 +16,7 @@ v4 design: ONE call, ALL context.
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -245,34 +246,72 @@ async def _select_seeds(
 
     # 8c. Saturation pass — extend inclusion while files contribute seeds
     #     Anchor case: gate on floor_score (anchor-calibrated band).
-    #     No-anchor case: gate on file-score median.  This uses the
-    #     correct granularity (file scores, not def scores) so the
-    #     threshold doesn't collapse to the noise floor of the
-    #     heavy-tailed def-score distribution.
+    #     No-anchor case: evidence-gain patience.  Instead of thresholding
+    #     on any score statistic (median, gap, etc.) we check whether each
+    #     successive file actually contributes an accepted def.  We stop
+    #     once we have enough accepted defs AND we've gone `patience`
+    #     consecutive files without gaining any.
+    #
+    #     patience = ceil(log2(1 + n_candidates)) — grows slowly with
+    #     problem size, is not tuned per repo, and is defined on evidence
+    #     gain rather than score geometry.
     all_def_scores = sorted((s for _, s in scored), reverse=True)
     def_score_median = all_def_scores[len(all_def_scores) // 2] if all_def_scores else 0.0
 
-    # File-score median — local to this query's candidate files
-    file_score_median = file_score_values[len(file_score_values) // 2] if file_score_values else 0.0
+    _K_SATURATE = 3  # anchor-case consecutive-miss limit
+    _patience = math.ceil(math.log2(1 + len(scored)))  # no-anchor patience window
 
-    _K_SATURATE = 3
-    consecutive_empty = 0
-    for idx in range(n_files, len(file_ranked)):
-        _fid, _fscore, fdefs = file_ranked[idx]
-        if floor_score > 0:
-            # Anchor case: file must meet the anchor-calibrated floor
-            has_contribution = _fscore >= floor_score
-        else:
-            # No-anchor: file score must be at or above the file-score
-            # median of this query's candidate set.
-            has_contribution = _fscore >= file_score_median
-        if has_contribution:
-            n_files = idx + 1
-            consecutive_empty = 0
-        else:
-            consecutive_empty += 1
-            if consecutive_empty >= _K_SATURATE:
-                break
+    if floor_score > 0:
+        # ── Anchor case: gate on floor_score (unchanged) ──
+        consecutive_empty = 0
+        for idx in range(n_files, len(file_ranked)):
+            _fid, _fscore, fdefs = file_ranked[idx]
+            if _fscore >= floor_score:
+                n_files = idx + 1
+                consecutive_empty = 0
+            else:
+                consecutive_empty += 1
+                if consecutive_empty >= _K_SATURATE:
+                    break
+    else:
+        # ── No-anchor case: evidence-gain patience ──
+        # Without anchors, there's nothing to calibrate a score floor
+        # against.  Instead, we stop based on *evidence gain*: does
+        # each successive file contribute a def with genuine structural
+        # corroboration?
+        #
+        # Acceptance test: file's best def must have been graph-
+        # discovered (from_graph) — meaning it was found by walking
+        # call/import edges from already-relevant defs.  This is a
+        # true structural dependency signal that embedding similarity
+        # and term matching alone cannot provide.
+        #
+        # The initial window (top min_seeds files) is unconditionally
+        # accepted — their ranking quality justifies inclusion.
+        # Beyond that, gain requires structural evidence.
+
+        # Initial window: all counted as contributing
+        accepted_seed_count = n_files
+
+        last_gain_rank = n_files - 1  # rank of last file that added a seed
+        for idx in range(n_files, len(file_ranked)):
+            _fid, _fscore, fdefs = file_ranked[idx]
+            # Does this file contribute any graph-corroborated def?
+            file_contributes = False
+            for uid, _dscore in fdefs:
+                cand = gated.get(uid)
+                if cand is not None and cand.def_fact is not None and cand.from_graph:
+                    file_contributes = True
+                    break
+
+            if file_contributes:
+                n_files = idx + 1
+                accepted_seed_count += 1
+                last_gain_rank = idx
+            else:
+                # Check stop: enough seeds AND exhausted patience
+                if accepted_seed_count >= min_seeds and (idx - last_gain_rank) >= _patience:
+                    break
 
     log.info(
         "recon.file_inclusion",

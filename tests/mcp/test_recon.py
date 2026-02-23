@@ -846,146 +846,144 @@ class TestComputeAnchorFloor:
 
 
 class TestNoAnchorSaturation:
-    """Verify no-anchor saturation uses file-score median, not def-score median.
+    """Verify no-anchor saturation uses evidence-gain patience.
 
-    When no anchors exist (floor_score == 0), the saturation loop should
-    gate on the file-score median of the candidate set.  This prevents
-    explosion into the long tail that plagued the old def-score-median gate.
+    When no anchors exist, the saturation loop must stop based on whether
+    files actually contribute accepted defs — not on any file-score or
+    def-score threshold.  This prevents explosion on slowly-decaying
+    score tails.
 
-    The file-score median keeps roughly the top half of sorted candidates
-    (plus 3-consecutive-miss stopping).  This is materially better than the
-    def-score median (~0.05) which let through nearly all files.
+    Stop condition:
+      - accepted_seed_count >= min_seeds, AND
+      - (current_rank - last_gain_rank) >= patience
+
+    patience = ceil(log2(1 + n_candidates))
     """
 
     @staticmethod
     def _simulate_saturation(
-        file_scores: list[float],
+        file_contributes: list[bool],
         *,
         min_seeds: int = 3,
     ) -> int:
-        """Reproduce the pipeline's no-anchor saturation logic."""
-        n_files = min(min_seeds, len(file_scores))
-        file_score_median = file_scores[len(file_scores) // 2] if file_scores else 0.0
-        _K_SATURATE = 3  # noqa: N806
-        consecutive_empty = 0
-        for idx in range(n_files, len(file_scores)):
-            if file_scores[idx] >= file_score_median:
-                n_files = idx + 1
-                consecutive_empty = 0
-            else:
-                consecutive_empty += 1
-                if consecutive_empty >= _K_SATURATE:
-                    break
-        return n_files
+        """Reproduce the pipeline's no-anchor evidence-gain patience logic.
 
-    @staticmethod
-    def _simulate_old_saturation(
-        file_scores: list[float],
-        def_score_median: float = 0.05,
-        *,
-        min_seeds: int = 3,
-    ) -> int:
-        """Simulate the OLD (broken) def-score-median gating for comparison."""
-        n_files = min(min_seeds, len(file_scores))
-        _K_SATURATE = 3  # noqa: N806
-        consecutive_empty = 0
-        for idx in range(n_files, len(file_scores)):
-            # Old: used def_score_median (~0.05) — any nonzero file passes
-            if file_scores[idx] >= def_score_median:
+        Args:
+            file_contributes: For each file (ranked by score, descending),
+                whether it contributes at least one accepted def.
+            min_seeds: Minimum accepted defs before patience can stop.
+
+        Returns:
+            Number of files included.
+        """
+        import math
+
+        n_candidates = len(file_contributes)
+        n_files = min(min_seeds, n_candidates)
+        patience = math.ceil(math.log2(1 + n_candidates))
+
+        # Count accepted seeds in the initial window
+        accepted = sum(1 for c in file_contributes[:n_files] if c)
+        last_gain_rank = n_files - 1
+
+        for idx in range(n_files, n_candidates):
+            if file_contributes[idx]:
                 n_files = idx + 1
-                consecutive_empty = 0
+                accepted += 1
+                last_gain_rank = idx
             else:
-                consecutive_empty += 1
-                if consecutive_empty >= _K_SATURATE:
+                if accepted >= min_seeds and (idx - last_gain_rank) >= patience:
                     break
         return n_files
 
     def test_long_tail_bounded(self) -> None:
-        """100-file distribution: file-score median keeps roughly half, not all.
+        """100 files, only top 5 contribute real defs — stops early."""
+        contributes = [True] * 5 + [False] * 95
+        n = self._simulate_saturation(contributes)
+        # patience = ceil(log2(101)) = 7.  After 5 gains, we need 7
+        # consecutive misses to stop.  So n_files = 5 + 7 = 12 max.
+        assert n <= 13
+        assert n >= 5
 
-        The file-score median sits near the middle of the sorted list, so
-        the algorithm includes scores above the median and stops 3 below it.
-        This is far better than the old def-score-median gate which would
-        pass nearly all 100 files.
-        """
-        scores = [0.9, 0.85, 0.8, 0.75, 0.7]
-        scores += [0.1 - i * 0.001 for i in range(95)]
-        n_new = self._simulate_saturation(scores)
-        n_old = self._simulate_old_saturation(scores)
-        # New: roughly half the files (median-based)
-        assert n_new <= len(scores) * 0.6
-        assert n_new >= 3
-        # Old: nearly all files would pass (def_score_median ≈ 0.05)
-        assert n_old > n_new, "new gate must be strictly tighter than old"
+    def test_patience_grows_with_size(self) -> None:
+        """Larger candidate sets get more patience, finding later gains."""
+        # Both have 3 initial gains, then a gap, then a gain at rank 8.
+        # Small set (20): patience = ceil(log2(21)) = 5 → stops at rank 7
+        #   (gap 7-2 = 5 >= 5) before reaching the gain at rank 8.
+        # Large set (200): patience = ceil(log2(201)) = 8 → survives the
+        #   gap and reaches the gain at rank 8.
+        pattern = [True] * 3 + [False] * 5 + [True]  # gain at rank 8
 
-    def test_flat_scores_keeps_above_median(self) -> None:
-        """When scores are relatively flat, keep roughly the top half."""
-        scores = [1.0 - i * 0.01 for i in range(20)]
-        # Median at index 10 = 0.90.  Scores 0-9 are >= 0.90 (1.0..0.91).
-        n = self._simulate_saturation(scores)
-        assert n >= 10
-        assert n <= 15
+        small = pattern + [False] * 11  # 20 total
+        n_small = self._simulate_saturation(small)
 
-    def test_clear_cliff_stops_early(self) -> None:
-        """When there's a genuine cliff, saturation stops at the cliff."""
-        scores = [5.0, 4.8, 4.5, 0.1, 0.05, 0.01]
-        # Median of 6 scores = scores[3] = 0.1
-        # min_seeds=3, then idx 3 has 0.1 >= 0.1 → n=4
-        # idx 4 has 0.05 < 0.1 → consecutive_empty=1
-        # idx 5 has 0.01 < 0.1 → consecutive_empty=2, but only 6 items
-        n = self._simulate_saturation(scores)
-        assert n == 4
+        large = pattern + [False] * 191  # 200 total
+        n_large = self._simulate_saturation(large)
+
+        assert n_large > n_small, "larger patience window finds later gain"
+
+    def test_continuous_gains_keep_going(self) -> None:
+        """When files keep contributing defs, the loop continues."""
+        # 30 files all contribute — loop never stops early
+        contributes = [True] * 30
+        n = self._simulate_saturation(contributes)
+        assert n == 30
+
+    def test_scattered_gains_extend_window(self) -> None:
+        """Scattered gains reset the patience counter."""
+        # 5 gains, then 3 misses, then 1 gain, then 20 misses
+        contributes = (
+            [True] * 5
+            + [False] * 3
+            + [True]  # resets patience at rank 8
+            + [False] * 20
+        )
+        n = self._simulate_saturation(contributes)
+        # patience = ceil(log2(30)) = 5
+        # After last gain at rank 8, need 5 misses → stop at rank 13
+        assert n <= 15  # bounded
+        assert n >= 9  # includes up to the last gain
 
     def test_vague_task_bounded(self) -> None:
-        """Simulate a vague no-anchor task with ~150 files.
+        """150 files, top 4 contribute, rest are noise — must not explode."""
+        contributes = [True] * 4 + [False] * 146
+        n = self._simulate_saturation(contributes)
+        # patience = ceil(log2(151)) = 8
+        # Stops at 4 + 8 = 12 files, not 150
+        assert n <= 15
+        assert n >= 4
 
-        The file-score median gate keeps roughly half — much better than
-        the old def-score-median which would pass nearly all 150.
+    def test_min_seeds_delays_stop(self) -> None:
+        """If fewer than min_seeds accepted, patience doesn't trigger stop.
+
+        When accepted < min_seeds, the patience check never fires.
+        The loop scans the entire candidate list looking for more gains.
+        But since non-contributing files don't increase n_files, the
+        result is still just the initial window.
         """
-        scores = [0.8, 0.7, 0.6, 0.5, 0.4]
-        scores += [0.15 - i * 0.0008 for i in range(145)]
-        n_new = self._simulate_saturation(scores)
-        n_old = self._simulate_old_saturation(scores)
-        # New: materially bounded (not 150)
-        assert n_new <= len(scores) * 0.6
-        assert n_new >= 3
-        # Old: nearly all pass
-        assert n_old > n_new
+        # Only 2 gains in first 2 files, then all misses — scans fully
+        # but n_files stays at min_seeds (initial window).
+        contributes = [True, True] + [False] * 50
+        n = self._simulate_saturation(contributes, min_seeds=3)
+        assert n == 3  # initial window, no new gains found
+
+    def test_min_seeds_with_late_gain(self) -> None:
+        """Late gain after initial shortfall extends inclusion."""
+        # 2 gains initially, then misses, then a 3rd gain at rank 10.
+        # Since accepted < 3 until rank 10, patience never fires early.
+        contributes = [True, True] + [False] * 8 + [True] + [False] * 40
+        n = self._simulate_saturation(contributes, min_seeds=3)
+        # Now accepted=3 at rank 10, patience kicks in after that
+        # patience = ceil(log2(52)) = 6, so stops at rank 10 + 6 = 16
+        assert n >= 11  # must include up to rank 10 at minimum
+        assert n <= 20  # bounded by patience
 
     def test_bimodal_stops_in_gap(self) -> None:
-        """Bimodal distribution: tight cluster + distant noise → stops in gap."""
-        # 4 relevant files, then a large gap, then 20 noise files
-        scores = [
-            2.0,
-            1.8,
-            1.5,
-            1.2,
-            0.01,
-            0.009,
-            0.008,
-            0.007,
-            0.006,
-            0.005,
-            0.004,
-            0.003,
-            0.002,
-            0.001,
-            0.001,
-            0.001,
-            0.001,
-            0.001,
-            0.001,
-            0.001,
-            0.001,
-            0.001,
-            0.001,
-            0.001,
-        ]
-        n = self._simulate_saturation(scores)
-        # Median is around index 12 → score ~0.002.  Scores down to
-        # ~0.002 still pass, then consecutive miss stops.
-        # Keeps top cluster + noise down to the median, not all 24.
-        assert n <= 15
+        """Cluster of 4 contributors, then gap, then noise — stops in gap."""
+        contributes = [True] * 4 + [False] * 20
+        n = self._simulate_saturation(contributes)
+        # patience = ceil(log2(25)) = 5
+        assert n <= 10
         assert n >= 4
 
 
