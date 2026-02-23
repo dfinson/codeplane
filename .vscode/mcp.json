@@ -3,6 +3,10 @@
     "codeplane-codeplane_copy3": {
       "type": "http",
       "url": "http://127.0.0.1:7654/mcp"
+    },
+    "codeplane-evee": {
+      "type": "http",
+      "url": "http://127.0.0.1:7777/mcp"
     }
   }
 }

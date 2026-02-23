@@ -40,15 +40,6 @@ Omit `commit_message` to lint+test only (no commit).
 
 ### First Steps When Starting a Task
 
-**Preferred: Use `recon` for task-aware discovery in one call:**
-
-1. `recon(task="<description>")` — BM25 seed selection + structural reranking + graph expansion. Returns seed bodies, callee signatures, caller contexts, and import scaffolds. Includes `file_sha256` for `write_source`.
-2. After changes: `checkpoint(changed_files=[...])` — lint + affected tests in one call
-3. `semantic_diff` — review structural impact before committing
-4. `checkpoint(changed_files=[...], commit_message="...", push=True)` — one-shot
-
-**Alternative: Manual multi-step discovery (when recon misses your targets):**
-
 1. `describe` — get repo metadata, language, active branch, index status
 2. `map_repo(include=["structure", "dependencies", "test_layout"])` — understand repo shape
 3. `search` to find relevant code — definitions, references, or lexical patterns
@@ -73,7 +64,6 @@ This runs lint + only the tests impacted by your changes — fast, targeted, suf
 
 | Operation | REQUIRED Tool | FORBIDDEN Alternative |
 |-----------|---------------|----------------------|
-| Task-aware discovery | `mcp_codeplane-codeplane_copy3_recon` | Manual search → scaffold → read chains |
 | File scaffold | `mcp_codeplane-codeplane_copy3_read_scaffold` | Manual traversal, `cat` for structure |
 | Read source | `mcp_codeplane-codeplane_copy3_read_source` | `cat`, `head`, `less`, `tail` |
 | Read full file | `mcp_codeplane-codeplane_copy3_read_file_full` | `cat`, `head`, bulk reads |
@@ -111,7 +101,6 @@ Search NEVER returns source text. Use `read_source` with spans from search resul
 
 `search` params: `query` (str), `mode` (definitions|references|lexical|symbol), `enrichment` (none|minimal|standard|function|class).
 `checkpoint` params: `changed_files` (list[str]), `commit_message` (str|None), `push` (bool). Chains lint → test → commit → push + semantic diff.
-`recon` params: `task` (str), `seeds` (list[str]|None), `depth` (0-2, default 1), `budget` (int, default 15000), `max_seeds` (1-10, default 5).
 
 ### Refactor: preview → inspect → apply/cancel
 

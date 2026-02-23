@@ -799,7 +799,10 @@ class IndexCoordinator:
 
                             # Stage defs for embedding (old defs auto-replaced by uid)
                             if self._embedding is not None and extraction.defs:
-                                self._embedding.stage_defs(extraction.defs)
+                                self._embedding.stage_defs(
+                                    extraction.defs,
+                                    file_path=extraction.file_path,
+                                )
 
                             if extraction.file_path in existing_set:
                                 files_updated += 1
@@ -843,8 +846,36 @@ class IndexCoordinator:
                     self._lexical.commit_staged()
 
                     # Commit embedding changes
+                    # CTX_USAGE uses refs from previous index cycles (if any).
+                    # On cold start, refs may not be resolved yet — CTX_USAGE
+                    # records are simply omitted and populated on next reindex.
                     if self._embedding is not None and self._embedding.has_staged_changes():
-                        self._embedding.commit_staged()
+
+                        def _usage_lookup(def_uid: str) -> list[str]:
+                            """Return caller def names for CTX_USAGE records."""
+                            try:
+                                with self.db.session() as sess:
+                                    fq = FactQueries(sess)
+                                    refs = fq.list_refs_by_def_uid(
+                                        def_uid, limit=30
+                                    )
+                                    names: list[str] = []
+                                    seen: set[str] = set()
+                                    for ref in refs:
+                                        # Skip definition-role refs (self-ref)
+                                        if ref.role == "definition":
+                                            continue
+                                        tok = ref.token_text
+                                        if tok and tok not in seen:
+                                            seen.add(tok)
+                                            names.append(tok)
+                                    return names
+                            except Exception:
+                                return []
+
+                        self._embedding.commit_staged(
+                            usage_lookup=_usage_lookup,
+                        )
 
                 # Reload searcher to see committed changes
                 self._lexical.reload()
@@ -2604,6 +2635,37 @@ class IndexCoordinator:
         if self._embedding is None or self._embedding.count == 0:
             return []
         return self._embedding.query(text, top_k=top_k)
+
+    def query_similar_defs_batch(
+        self,
+        texts: list[str],
+        *,
+        top_k: int = 50,
+    ) -> list[list[tuple[str, float]]]:
+        """Batch semantic search — one ONNX forward pass for multiple queries.
+
+        Returns one result list per input text.  Used by recon multi-view
+        embedding pipeline.
+        """
+        if self._embedding is None or self._embedding.count == 0:
+            return [[] for _ in texts]
+        return self._embedding.query_batch(texts, top_k=top_k)
+
+    def query_similar_defs_multiview(
+        self,
+        views: list[str],
+        *,
+        top_k: int = 50,
+    ) -> list[tuple[str, float]]:
+        """Multi-view semantic search with distribution-aware retrieval.
+
+        Uses evidence-record architecture: ratio gate, per-record→per-uid
+        aggregation, and tiered acceptance rules (SPEC §16.4).
+        Returns pre-fused results — no external merge needed.
+        """
+        if self._embedding is None or self._embedding.count == 0:
+            return []
+        return self._embedding.query_multiview(views, top_k=top_k)
 
     def _clear_all_structural_facts(self) -> None:
         """Clear all structural facts from the database.

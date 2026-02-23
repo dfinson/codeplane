@@ -544,6 +544,7 @@ def initialize_repo(
     resolution_phase: PhaseBox | None = None
     embedding_phase: PhaseBox | None = None
     embedding_task_id: Any = None
+    embedding_total: int = 0  # track actual embedding count for display
     refs_task_id: Any = None
     types_task_id: Any = None
     indexing_elapsed = 0.0
@@ -562,6 +563,7 @@ def initialize_repo(
             indexed: int, total: int, files_by_ext: dict[str, int], progress_phase: str
         ) -> None:
             nonlocal resolution_phase, embedding_phase, embedding_task_id
+            nonlocal embedding_total
             nonlocal refs_task_id, types_task_id, indexing_elapsed
 
             if progress_phase == "indexing":
@@ -604,6 +606,7 @@ def initialize_repo(
                 pct = int(indexed / total * 100) if total > 0 else 0
                 embedding_phase._progress.update(embedding_task_id, completed=pct)  # type: ignore[union-attr]
                 embedding_phase._update()
+                embedding_total = total  # remember for completion message
 
             elif progress_phase in ("resolving_cross_file", "resolving_refs", "resolving_types"):
                 # First resolution callback — close indexing/embedding boxes, open resolution box
@@ -623,7 +626,7 @@ def initialize_repo(
 
                 # Close embedding phase if it was open
                 if embedding_phase is not None:
-                    embedding_phase.complete(f"{total} definitions embedded")
+                    embedding_phase.complete(f"{embedding_total} definitions embedded")
                     embedding_phase.__exit__(None, None, None)
                     embedding_phase = None
 

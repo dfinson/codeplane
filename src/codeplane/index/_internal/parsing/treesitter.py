@@ -137,6 +137,7 @@ class ParseResult:
     error_count: int
     total_nodes: int
     root_node: Any  # Tree-sitter Node
+    ts_language: Any = None  # tree-sitter Language object for grammar introspection
 
 
 # C# preprocessor wrapper node types that may contain declarations.
@@ -411,6 +412,7 @@ class TreeSitterParser:
             error_count=error_count,
             total_nodes=total_nodes,
             root_node=tree.root_node,
+            ts_language=ts_lang,
         )
 
     def extract_symbols(self, result: ParseResult) -> list[SyntacticSymbol]:

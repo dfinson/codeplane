@@ -47,20 +47,18 @@ async def _harvest_embedding(
     """Harvester A: Multi-view dense vector similarity search.
 
     Builds multiple query views (natural-language, code-style,
-    keyword-focused) from the parsed task and embeds them in a single
-    batch call.  Results are merged by max-similarity per def_uid,
-    improving recall without extra latency.
+    keyword-focused) from the parsed task and uses the evidence-record
+    multiview retrieval pipeline (SPEC §16.4).  The embedding index
+    handles ratio gate, per-record→per-uid aggregation, and tiered
+    acceptance — no external threshold or merge needed.
     """
     coordinator = app_ctx.coordinator
 
     views = _build_query_views(parsed)
-    per_view = coordinator.query_similar_defs_batch(views, top_k=top_k)
-    similar = _merge_multi_view_results(per_view)
+    similar = coordinator.query_similar_defs_multiview(views, top_k=top_k)
 
     candidates: dict[str, HarvestCandidate] = {}
     for uid, sim in similar:
-        if sim < 0.15:
-            continue
         candidates[uid] = HarvestCandidate(
             def_uid=uid,
             from_embedding=True,
@@ -68,7 +66,7 @@ async def _harvest_embedding(
             evidence=[
                 EvidenceRecord(
                     category="embedding",
-                    detail=f"semantic similarity {sim:.3f} (multi-view)",
+                    detail=f"semantic similarity {sim:.3f} (multiview-fused)",
                     score=min(sim, 1.0),
                 )
             ],
