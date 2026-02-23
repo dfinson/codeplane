@@ -84,7 +84,7 @@ from codeplane.mcp.tools.recon.scoring import (
     _apply_filters,
     _score_candidates,
     find_elbow,
-    find_gap_cutoff,
+    compute_anchor_floor,
 )
 
 __all__ = [
@@ -118,7 +118,7 @@ __all__ = [
     "_apply_filters",
     "_score_candidates",
     "find_elbow",
-    "find_gap_cutoff",
+    "compute_anchor_floor",
     # Expansion
     "_compute_sha256",
     "_read_lines",

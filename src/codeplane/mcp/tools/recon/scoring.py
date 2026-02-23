@@ -178,57 +178,71 @@ def find_elbow(scores: list[float], *, min_seeds: int = 3, max_seeds: int = 15) 
     return max(min_seeds, min(result, max_seeds))
 
 
-def find_gap_cutoff(
+def compute_anchor_floor(
     scores: list[float],
+    anchor_indices: list[int],
     *,
-    min_keep: int = 2,
-) -> int:
-    """Distribution-relative cutoff for sorted-descending scores.
+    window_half: int = 3,
+) -> float:
+    """Compute floor score for anchor-calibrated file inclusion.
 
-    Walks top-down looking for the first gap between consecutive scores
-    that exceeds ``median_gap * 2``.  If no significant gap is found,
-    keeps everything above the global median.  No arbitrary upper bound.
+    Uses the **Median Absolute Deviation** (MAD) of scores in a local
+    window around anchor positions to estimate natural score variation
+    near known-relevant files.
 
-    Returns the count of items to keep (>= *min_keep*).
+    The inclusion floor is::
+
+        min(anchor_scores) - MAD(window)
+
+    This is a structural signal, not a tuned threshold: anchors
+    (explicit paths / pinned files) are ground-truth relevance, and
+    the MAD measures how tightly clustered scores are in that region.
+
+    Args:
+        scores: File scores, sorted descending.
+        anchor_indices: 0-based indices of anchor files in the sorted
+            score list.
+        window_half: Half-width of the window around each anchor
+            position.  Default 3 gives a 7-file window per anchor.
+
+    Returns:
+        Floor score.  Files with ``score >= floor`` should be included.
+        Returns ``0.0`` if *anchor_indices* is empty (no anchor signal).
     """
+    if not anchor_indices or not scores:
+        return 0.0
+
     n = len(scores)
-    if n <= min_keep:
-        return n
+    s_anchor_min = min(scores[i] for i in anchor_indices if i < n)
 
-    # Compute consecutive gaps
-    gaps = [scores[i] - scores[i + 1] for i in range(n - 1)]
-    if not gaps:
-        return n
+    # Build window: union of [r − w, r + w] for each anchor rank
+    window_indices: set[int] = set()
+    for r in anchor_indices:
+        lo = max(0, r - window_half)
+        hi = min(n, r + window_half + 1)
+        for j in range(lo, hi):
+            window_indices.add(j)
 
-    # Median gap as baseline
-    sorted_gaps = sorted(gaps)
-    median_gap = sorted_gaps[len(sorted_gaps) // 2]
-    threshold = max(median_gap * 2.0, 1e-6)
+    window_scores = sorted(scores[j] for j in window_indices)
+    if not window_scores:
+        return s_anchor_min
 
-    # Walk top-down: cut at first significant gap (after min_keep)
-    for i in range(min_keep - 1, len(gaps)):
-        if gaps[i] > threshold:
-            cutoff = i + 1
-            log.debug(
-                "recon.gap_cutoff",
-                n_total=n,
-                cutoff=cutoff,
-                gap=round(gaps[i], 5),
-                threshold=round(threshold, 5),
-            )
-            return max(min_keep, cutoff)
+    # MAD = Median Absolute Deviation
+    window_median = window_scores[len(window_scores) // 2]
+    abs_devs = sorted(abs(s - window_median) for s in window_scores)
+    mad = abs_devs[len(abs_devs) // 2] if abs_devs else 0.0
 
-    # No significant gap — keep everything above global median
-    global_median = scores[n // 2]
-    above_median = sum(1 for s in scores if s >= global_median)
-    result = max(min_keep, above_median)
+    floor_score = s_anchor_min - mad
+
     log.debug(
-        "recon.gap_cutoff_median_fallback",
-        n_total=n,
-        result=result,
-        global_median=round(global_median, 5),
+        "recon.anchor_floor",
+        s_anchor_min=round(s_anchor_min, 4),
+        mad=round(mad, 4),
+        floor=round(floor_score, 4),
+        window_size=len(window_scores),
     )
-    return result
+
+    return floor_score
 
 
 # ===================================================================

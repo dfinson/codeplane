@@ -52,7 +52,7 @@ from codeplane.mcp.tools.recon.scoring import (
     _aggregate_to_files,
     _apply_filters,
     _score_candidates,
-    find_gap_cutoff,
+    compute_anchor_floor,
 )
 
 if TYPE_CHECKING:
@@ -88,7 +88,7 @@ async def _select_seeds(
     6. Apply query-conditioned filter pipeline
     7. Score with bounded features + artifact-kind weights
     8. Aggregate to file level
-    9. Gap-based file cutoff (distribution-relative, no upper bound)
+    9. Anchor-calibrated file inclusion (MAD-based band + saturation)
     10. Multi-seed per file: all defs above global def-score median
 
     Args:
@@ -200,16 +200,12 @@ async def _select_seeds(
             _diag_ranking.append({"rank": i + 1, "path": fpath, "score": round(fs, 4), "n_defs": len(fdefs)})
         diagnostics["_file_ranking_top20"] = _diag_ranking
 
-    # 8. Gap-based file cutoff (distribution-relative, NO upper bound)
-    file_score_values = [fs for _, fs, _ in file_ranked]
-    n_files = find_gap_cutoff(
-        file_score_values,
-        min_keep=min(min_seeds, len(file_ranked)),
-    )
+    # 8. File inclusion: anchor-calibrated band + def-level saturation
+    #    File ranking is a candidate generator, not a classifier.
+    #    No gap-based cutoff — inclusion is driven by anchor calibration
+    #    and downstream seed contribution.
 
-    # 8b. Anchor pinned + explicit-path files past the cutoff.
-    #     If the user named a file path in the task, or the agent pinned
-    #     a file, it survives regardless of score.
+    # 8a. Identify anchor files (explicit paths + pinned)
     anchor_fids: set[int] = set()
     _all_anchor_paths = list(parsed.explicit_paths or [])
     if pinned_paths:
@@ -225,22 +221,66 @@ async def _select_seeds(
                 if frec is not None and frec.id is not None:
                     anchor_fids.add(frec.id)
 
-    surviving_fids = {fid for fid, _, _ in file_ranked[:n_files]}
-    anchored = 0
+    # 8b. Anchor-calibrated relevance band
+    #     Uses MAD (median absolute deviation) around anchor scores to
+    #     define the floor.  Files scoring >= (min_anchor - MAD) survive.
+    file_score_values = [fs for _, fs, _ in file_ranked]
+    anchor_indices = [
+        i for i, (fid, _, _) in enumerate(file_ranked) if fid in anchor_fids
+    ]
+    floor_score = compute_anchor_floor(file_score_values, anchor_indices)
+    n_band = (
+        sum(1 for fs in file_score_values if fs >= floor_score) if floor_score > 0 else 0
+    )
+    n_files = max(min(min_seeds, len(file_ranked)), n_band)
+
+    # Safety net: ensure ALL anchor files are in the surviving window
+    # (normally already inside the band, but handles edge cases)
     for idx in range(n_files, len(file_ranked)):
-        fid, _fs, _fdefs = file_ranked[idx]
-        if fid in anchor_fids and fid not in surviving_fids:
-            # Swap this file into the surviving window
-            file_ranked[n_files + anchored], file_ranked[idx] = (
+        fid, _, _ = file_ranked[idx]
+        if fid in anchor_fids:
+            file_ranked[n_files], file_ranked[idx] = (
                 file_ranked[idx],
-                file_ranked[n_files + anchored],
+                file_ranked[n_files],
             )
-            surviving_fids.add(fid)
-            anchored += 1
-    n_files += anchored
-    if anchored:
-        log.info("recon.anchor", anchored=anchored, n_files=n_files)
-        diagnostics["anchored"] = anchored
+            n_files += 1
+
+    # 8c. Saturation pass — extend inclusion while files contribute seeds
+    #     When anchors exist the band already captured the calibrated
+    #     region; saturation gates on floor_score so only files that
+    #     genuinely belong to the anchor band can extend the window.
+    #     Without anchors, fall back to the global def-score median.
+    all_def_scores = sorted((s for _, s in scored), reverse=True)
+    def_score_median = all_def_scores[len(all_def_scores) // 2] if all_def_scores else 0.0
+
+    _K_SATURATE = 3
+    consecutive_empty = 0
+    for idx in range(n_files, len(file_ranked)):
+        _fid, _fscore, fdefs = file_ranked[idx]
+        if floor_score > 0:
+            # Anchor case: file must meet the anchor-calibrated floor
+            has_contribution = _fscore >= floor_score
+        else:
+            # No-anchor fallback: at least one def above global median
+            has_contribution = any(dscore >= def_score_median for _, dscore in fdefs)
+        if has_contribution:
+            n_files = idx + 1
+            consecutive_empty = 0
+        else:
+            consecutive_empty += 1
+            if consecutive_empty >= _K_SATURATE:
+                break
+
+    log.info(
+        "recon.file_inclusion",
+        n_files=n_files,
+        n_anchors=len(anchor_fids),
+        n_band=n_band,
+        floor_score=round(floor_score, 4) if floor_score > 0 else None,
+    )
+    diagnostics["n_files"] = n_files
+    diagnostics["n_anchors"] = len(anchor_fids)
+    diagnostics["anchor_floor"] = round(floor_score, 4) if floor_score > 0 else None
 
     # 9. Multi-seed per file selection
     #    Phase 1: best def per surviving file (file diversity)
@@ -252,9 +292,7 @@ async def _select_seeds(
     # Test seeds: uncapped if test-driven, otherwise 1/3 of total (no hard max)
     max_test_ratio = 1.0 if parsed.is_test_driven else 0.33
 
-    # Global def-score median for phase 2 threshold
-    all_def_scores = sorted((s for _, s in scored), reverse=True)
-    def_score_median = all_def_scores[len(all_def_scores) // 2] if all_def_scores else 0.0
+    # def_score_median already computed in step 8c
 
     # Phase 1: one seed per file (diversity)
     for _fid, _fscore, fdefs in file_ranked[:n_files]:
@@ -291,14 +329,13 @@ async def _select_seeds(
 
     diagnostics["total_ms"] = round((time.monotonic() - t0) * 1000)
     diagnostics["seeds_selected"] = len(seeds)
-    diagnostics["gap_cutoff_files"] = n_files
     diagnostics["file_ranked"] = len(file_ranked)
     diagnostics["def_score_median"] = round(def_score_median, 4)
 
     log.info(
         "recon.seeds_selected",
         count=len(seeds),
-        gap_files=n_files,
+        n_files=n_files,
         scored_total=len(scored),
         names=[s.name for s in seeds],
         intent=parsed.intent.value,
@@ -379,9 +416,9 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             description=(
                 "Optional file paths to pin as high-confidence "
                 "anchors (e.g., ['src/core/base_model.py']). "
-                "Pinned files always survive gap-based cutoff and receive "
-                "a scoring boost.  Use when you know specific files "
-                "are relevant."
+                "Pinned files calibrate the inclusion band and "
+                "always survive selection.  Use when you know "
+                "specific files are relevant."
             ),
         ),
     ) -> dict[str, Any]:
@@ -392,7 +429,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         No follow-up calls needed.
 
         Pipeline: parse_task -> 5 harvesters -> filter -> score ->
-        file aggregation -> gap-based cutoff -> expand with source ->
+        file aggregation -> anchor band + saturation -> expand ->
         compress -> deliver.
         """
         recon_id = uuid.uuid4().hex[:12]
@@ -484,7 +521,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
 
         # Scoring summary (always included — no verbosity knob)
         response["scoring_summary"] = {
-            "pipeline": "harvest->filter->score->file_aggregate->gap_cutoff->expand",
+            "pipeline": "harvest->filter->score->file_aggregate->anchor_band->saturate->expand",
             "intent": parsed_task.intent.value,
             "candidates_harvested": len(scored_all),
             "seeds_selected": n_seeds,

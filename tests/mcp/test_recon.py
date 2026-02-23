@@ -44,7 +44,7 @@ from codeplane.mcp.tools.recon import (
     _summarize_recon,
     _trim_to_budget,
     find_elbow,
-    find_gap_cutoff,
+    compute_anchor_floor,
     parse_task,
 )
 
@@ -785,40 +785,49 @@ class TestFindElbow:
         assert k <= 10
 
 
-class TestFindGapCutoff:
-    """Tests for find_gap_cutoff — distribution-relative cutoff."""
+class TestComputeAnchorFloor:
+    """Tests for compute_anchor_floor — MAD-based anchor band."""
 
     def test_empty(self) -> None:
-        assert find_gap_cutoff([]) == 0
+        assert compute_anchor_floor([], []) == 0.0
 
-    def test_single(self) -> None:
-        assert find_gap_cutoff([5.0]) == 1
+    def test_no_anchors(self) -> None:
+        assert compute_anchor_floor([10.0, 5.0, 3.0], []) == 0.0
 
-    def test_small_list(self) -> None:
-        assert find_gap_cutoff([10.0, 5.0]) == 2
+    def test_single_anchor(self) -> None:
+        # Anchor at rank 1 (score 5.0), window [10, 5, 3]
+        # Sorted window: [3, 5, 10], median=5
+        # Abs devs: [2, 0, 5] → sorted [0, 2, 5] → MAD=2
+        # floor = 5 - 2 = 3.0
+        floor = compute_anchor_floor([10.0, 5.0, 3.0], [1])
+        assert floor == 3.0
 
-    def test_clear_gap(self) -> None:
-        # Big gap between 80 and 10
-        scores = [100.0, 95.0, 90.0, 85.0, 80.0, 10.0, 5.0, 3.0]
-        k = find_gap_cutoff(scores, min_keep=2)
-        assert k == 5  # Cut at the gap between 80 and 10
+    def test_anchor_band_includes_nearby(self) -> None:
+        """Simulates #108-like distribution: anchor at rank 4 (0-indexed)."""
+        scores = [1.33, 1.02, 0.84, 0.83, 0.81, 0.74, 0.67, 0.59]
+        floor = compute_anchor_floor(scores, [4])
+        assert floor <= 0.74  # base_model.py score should be above floor
 
-    def test_flat_distribution_keeps_all_above_median(self) -> None:
-        scores = [10.0, 10.0, 10.0, 10.0, 10.0]
-        k = find_gap_cutoff(scores)
-        assert k == len(scores)  # No gaps, median fallback keeps all
+    def test_multiple_anchors(self) -> None:
+        scores = [10.0, 8.0, 6.0, 4.0, 2.0]
+        floor = compute_anchor_floor(scores, [1, 3])
+        # min anchor score = 4.0, MAD of window should keep floor <= 4.0
+        assert floor <= 4.0
 
-    def test_no_upper_bound(self) -> None:
-        """Gap cutoff has no arbitrary upper limit."""
-        # 30 items with consistent scores, then a gap
-        scores = [50.0 - i * 0.5 for i in range(30)] + [5.0, 4.0, 3.0]
-        k = find_gap_cutoff(scores, min_keep=2)
-        assert k >= 20  # Should keep most of the 30 consistent items
+    def test_anchor_at_top(self) -> None:
+        """Anchor at rank 0 — floor should still be sensible."""
+        scores = [10.0, 9.0, 8.0, 1.0]
+        floor = compute_anchor_floor(scores, [0])
+        assert floor <= 10.0
+        assert floor > 0.0
 
-    def test_respects_min_keep(self) -> None:
-        scores = [100.0, 1.0, 1.0, 1.0]
-        k = find_gap_cutoff(scores, min_keep=3)
-        assert k >= 3
+    def test_consistent_scores_tight_band(self) -> None:
+        """When scores are very similar, MAD is small, band is tight."""
+        scores = [5.0, 4.9, 4.8, 4.7, 4.6]
+        floor = compute_anchor_floor(scores, [2])
+        # MAD should be small, floor close to 4.8
+        assert floor >= 4.5
+        assert floor <= 4.8
 
 
 class TestBuildEvidenceString:
