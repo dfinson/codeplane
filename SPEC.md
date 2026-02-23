@@ -2469,22 +2469,82 @@ All refactors:
 
 ---
 
-## 16. Embeddings Policy
+## 16. Embeddings — Evidence-Record Multiview Architecture
 
-Embeddings are intentionally excluded from the core design.
+### 16.1 Design
 
-Rationale:
+Embeddings provide dense vector similarity for recon (Harvester A).
+Model: BAAI/bge-small-en-v1.5 (384-dim, 67 MB ONNX, 512-token context).
 
-- Agents can explore structure deterministically.
-- Embedding lifecycle cost is high.
-- Core value is indexing + structure + execution.
+Each definition produces 1–7 **evidence records**, each embedded independently:
 
-If added later:
+| Kind | Content | Condition |
+|------|---------|-----------|
+| NAME | Def name split on camelCase/snake_case → natural words | Unless frequency-filtered |
+| DOC | First paragraph of docstring (≤ 200 chars) | If docstring exists and > 10 chars |
+| CTX_PATH | File path segments as natural phrase | Always |
+| CTX_USAGE | Names of defs that reference this def | If refs exist |
+| LIT_HINTS | String literals from def body (≤ 120 chars) | Only if DOC absent |
+| SEM_FACTS | Calls, field assigns, returns, raises, key literals (structured tags) | If semantic facts exist |
+| BLOCK | Aggregated config block (grouped by prefix) | Config files only |
 
-- Optional
-- Gated
-- Partial
-- Never foundational
+### 16.2 Config Block Aggregation
+
+Files where ≥ 80% of defs have body ≤ 3 lines (and ≥ 10 total defs) are
+config files.  Individual defs are grouped by name prefix into BLOCK records.
+Individual NAME records are suppressed for config atoms.
+
+### 16.3 Frequency Filtering
+
+Word-level document frequency across all def names.  Threshold scales with
+repo size: `0.05 * sqrt(N / 1000)`, clamped to [0.02, 0.15].  Defs whose
+name is dominated by high-frequency words have their NAME record suppressed.
+
+### 16.4 Query-Time Retrieval
+
+Multi-view queries with distribution-aware filtering:
+- **Ratio gate**: view valid if `topK[0] / topK[-1] >= 1.10`
+- **Tiered acceptance**: DOC/BLOCK records (Tier A) pass at top-10%;
+  NAME + context (Tier B) pass at median; NAME alone (Tier C) at P75;
+  LIT_HINTS alone (Tier D) always rejected.
+- **strong_cutoff**: `topK[floor(0.10 * K) - 1]` clamped to valid index range.
+- **topK_best**: scores from the single highest-quality valid view (highest ratio).
+
+### 16.5 LIT_HINTS String Discovery
+
+String literal node types discovered from tree-sitter Language metadata
+at grammar load time (`node_kind_for_id` + name matching `.*string.*`).
+Falls back to regex over source slice when grammar metadata unavailable.
+
+### 16.6 SEM_FACTS Structured Tags
+
+Semantic facts extracted from def bodies via per-language tree-sitter queries
+(`_sem_queries.py`).  Each query captures identifiers in five categories:
+
+- **calls** — function/method names at call sites
+- **assigns** — member field names in assignments (e.g. `self.x = ...`)
+- **returns** — identifiers in return statements
+- **raises** — exception/error types in throw/raise
+- **literals** — key literals in dict/map/object construction
+
+Normalization: word-split identifiers, deduplicate, cap tokens (30 per def,
+200 chars).  Rendered as English-structured tags:
+`"calls X Y assigns Z returns W raises E literals L"`.
+
+Languages without a query definition in `_sem_queries.py` gracefully produce
+no SEM_FACTS records.  New languages are added by inserting a tree-sitter
+S-expression query keyed by the tree-sitter language name.
+
+Tiered acceptance: SEM_FACTS counts as context signal (Tier B with NAME,
+Tier C alone).
+
+### 16.7 Invariants
+
+- No absolute score thresholds — all relative to query distribution
+- No language-specific heuristics — grammar-metadata-driven
+- No repo layout assumptions — corpus-derived statistics
+- Deterministic: same input → same records → same vectors
+- Optional: gracefully disabled when fastembed not installed
 
 ---
 
