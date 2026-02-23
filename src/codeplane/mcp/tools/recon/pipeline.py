@@ -16,7 +16,6 @@ v4 design: ONE call, ALL context.
 from __future__ import annotations
 
 import asyncio
-import math
 import time
 import uuid
 from typing import TYPE_CHECKING, Any
@@ -60,6 +59,7 @@ from codeplane.mcp.tools.recon.scoring import (
     _compute_edit_likelihood,
     _score_candidates,
     compute_anchor_floor,
+    find_elbow,
 )
 
 if TYPE_CHECKING:
@@ -194,7 +194,7 @@ async def _select_seeds(
         gated = {
             uid: cand
             for uid, cand in merged.items()
-            if cand.from_embedding and cand.embedding_similarity >= 0.3
+            if cand.from_embedding and cand.embedding_similarity >= 0.15
         }
         if not gated:
             diagnostics["total_ms"] = round((time.monotonic() - t0) * 1000)
@@ -289,7 +289,6 @@ async def _select_seeds(
     def_score_median = all_def_scores[len(all_def_scores) // 2] if all_def_scores else 0.0
 
     _K_SATURATE = 3  # anchor-case consecutive-miss limit
-    _patience = math.ceil(math.log2(1 + len(scored)))  # no-anchor patience window
 
     if floor_score > 0:
         # ── Anchor case: gate on floor_score (unchanged) ──
@@ -304,24 +303,17 @@ async def _select_seeds(
                 if consecutive_empty >= _K_SATURATE:
                     break
     else:
-        # ── No-anchor case: score-decay patience ──
-        # Include files while their score is within a reasonable fraction
-        # of the top file's score.  Any surviving file with a meaningful
-        # score should be included — not just graph-discovered ones.
-        top_score = file_ranked_dual[0][1] if file_ranked_dual else 0.0
-        # Floor: 15% of top score — below this the file is unlikely relevant.
-        score_floor = top_score * 0.15
-        consecutive_below = 0
-        for idx in range(n_files, len(file_ranked_dual)):
-            _fid, _fscore, _, _, fdefs = file_ranked_dual[idx]
-
-            if _fscore >= score_floor:
-                n_files = idx + 1
-                consecutive_below = 0
-            else:
-                consecutive_below += 1
-                if consecutive_below >= _patience:
-                    break
+        # ── No-anchor case: elbow detection on file scores ──
+        # Use the score distribution's natural break to determine
+        # how many files are above the noise floor.  No arbitrary
+        # fraction of top_score — the elbow adapts to the shape.
+        file_scores = [fs for _, fs, _, _, _ in file_ranked_dual]
+        elbow_n = find_elbow(
+            file_scores,
+            min_seeds=max(n_files, 3),
+            max_seeds=min(len(file_scores), 40),
+        )
+        n_files = max(n_files, elbow_n)
 
     log.info(
         "recon.file_inclusion",

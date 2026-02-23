@@ -26,6 +26,67 @@ log = structlog.get_logger(__name__)
 # ===================================================================
 
 
+def _compute_embedding_floor(candidates: dict[str, HarvestCandidate]) -> float:
+    """Adaptive floor for embedding similarity via elbow detection.
+
+    Computes the natural break in the embedding similarity distribution
+    using the maximum-distance-to-chord method.  The floor is the
+    similarity value at the elbow — candidates below this lack
+    meaningful embedding signal for this specific query.
+
+    Returns 0.0 if there aren't enough embedding candidates or the
+    distribution is too flat (no natural break).
+    """
+    sims = sorted(
+        [
+            c.embedding_similarity
+            for c in candidates.values()
+            if c.from_embedding and c.embedding_similarity > 0
+        ],
+        reverse=True,
+    )
+    if len(sims) < 4:
+        return 0.0
+
+    n = min(len(sims), 50)
+    analysis = sims[:n]
+
+    top, bottom = analysis[0], analysis[-1]
+
+    # Flat distribution (< 10% relative spread) → no useful break
+    if top > 0 and (top - bottom) / top < 0.10:
+        return 0.0
+
+    # Chord from first to last point
+    x2 = n - 1
+    dx = float(x2)
+    dy = bottom - top  # negative
+    chord_len = (dx * dx + dy * dy) ** 0.5
+
+    if chord_len < 1e-10:
+        return 0.0
+
+    max_dist = 0.0
+    elbow_idx = 0
+
+    for i in range(n):
+        dist = abs(dy * i - dx * analysis[i] + x2 * top) / chord_len
+        if dist > max_dist:
+            max_dist = dist
+            elbow_idx = i
+
+    floor = analysis[elbow_idx]
+    log.debug(
+        "recon.embedding_floor",
+        n_sims=len(sims),
+        top=round(top, 4),
+        bottom=round(bottom, 4),
+        elbow_idx=elbow_idx,
+        floor=round(floor, 4),
+    )
+    return floor
+
+
 def _apply_dual_gate(
     candidates: dict[str, HarvestCandidate],
 ) -> dict[str, HarvestCandidate]:
@@ -60,6 +121,10 @@ def _apply_filters(
     filtered: dict[str, HarvestCandidate] = {}
     stats = {"bypassed": 0, "passed": 0, "filtered": 0, "negated": 0}
 
+    # Adaptive embedding floor: replaces arbitrary per-intent thresholds
+    # with a data-driven elbow from the similarity distribution.
+    emb_floor = _compute_embedding_floor(candidates)
+
     for uid, cand in candidates.items():
         # Stage 1: Negative gating
         if cand.matches_negative(parsed.negative_mentions):
@@ -87,45 +152,27 @@ def _apply_filters(
             stats["filtered"] += 1
             continue
 
-        # Stage 5: Intent-aware artifact filtering
-        if intent in (TaskIntent.debug, TaskIntent.implement, TaskIntent.refactor):
-            # For action intents: require structural evidence for code without
-            # strong embedding, but do NOT penalize tests here (Section 5)
-            if cand.artifact_kind == ArtifactKind.code:
-                if not cand.has_structural_evidence and cand.embedding_similarity < 0.4:
-                    stats["filtered"] += 1
-                    continue
-            elif (
-                cand.artifact_kind in (ArtifactKind.config, ArtifactKind.doc)
-                and cand.embedding_similarity < 0.45
-            ):
-                stats["filtered"] += 1
-                continue
-        elif intent == TaskIntent.test:
-            # For test intent: keep tests easily, require more from code
-            if (
-                cand.artifact_kind == ArtifactKind.code
-                and not cand.has_structural_evidence
-                and cand.embedding_similarity < 0.35
-            ):
-                stats["filtered"] += 1
-                continue
-        elif intent == TaskIntent.understand:
-            # Understanding intent: keep anything with reasonable evidence
-            if cand.evidence_axes < 1 and cand.embedding_similarity < 0.3:
-                stats["filtered"] += 1
-                continue
-        else:
-            # Unknown intent: still use OR gate (already handled above),
-            # fall back to requiring semantic evidence (already checked above)
-            if not cand.has_structural_evidence:
-                stats["filtered"] += 1
-                continue
-
-        # Stage 6: Barrel exclusion
-        if cand.is_barrel and not cand.from_explicit:
+        # Stage 5: Adaptive quality gate (elbow-based)
+        #
+        # Replaces per-intent hardcoded thresholds with a single
+        # data-adaptive check.  The embedding floor is derived from
+        # the distribution's elbow — it adapts to each query's signal
+        # quality rather than using fixed constants.
+        #
+        # Candidates with structural evidence pass regardless (they
+        # have graph / hub / co-location support independent of
+        # embedding).  Candidates relying on embedding must be above
+        # the elbow to survive.
+        if not cand.has_structural_evidence and cand.embedding_similarity < emb_floor:
             stats["filtered"] += 1
             continue
+
+        # Stage 6: Barrel soft-pass
+        #
+        # Barrel files (__init__.py re-exports) were previously excluded
+        # outright, but many __init__.py files ARE ground-truth edit/context
+        # targets (e.g. package-level API surfaces).  We now let them
+        # through; the scoring layer handles their rank appropriately.
 
         filtered[uid] = cand
         stats["passed"] += 1

@@ -512,11 +512,17 @@ class HarvestCandidate:
 
     @property
     def has_semantic_evidence(self) -> bool:
-        """Semantic axis: embedding sim >= 0.3, OR matched >= 2 terms,
+        """Semantic axis: embedding sim >= 0.15, OR matched >= 2 terms,
         OR single term with hub support, OR lexical hit, OR explicit mention,
-        OR graph-discovered."""
+        OR graph-discovered.
+
+        The embedding threshold is deliberately low (0.15) — it only
+        gates whether embedding produced any signal at all.  The
+        elbow-based adaptive floor in ``_apply_filters`` handles the
+        real precision cut downstream.
+        """
         return (
-            (self.from_embedding and self.embedding_similarity >= 0.3)
+            (self.from_embedding and self.embedding_similarity >= 0.15)
             or len(self.matched_terms) >= 2
             or (len(self.matched_terms) == 1 and self.hub_score >= 3)
             or self.from_lexical

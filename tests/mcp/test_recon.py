@@ -38,6 +38,7 @@ from codeplane.mcp.tools.recon import (
     _classify_artifact,
     _compute_context_value,
     _compute_edit_likelihood,
+    _compute_embedding_floor,
     _def_signature_text,
     _detect_stacktrace_driven,
     _detect_test_driven,
@@ -850,146 +851,108 @@ class TestComputeAnchorFloor:
         assert floor == pytest.approx(0.67)
 
 
-class TestNoAnchorSaturation:
-    """Verify no-anchor saturation uses evidence-gain patience.
+class TestComputeEmbeddingFloor:
+    """Tests for _compute_embedding_floor — adaptive elbow detection."""
 
-    When no anchors exist, the saturation loop must stop based on whether
-    files actually contribute accepted defs — not on any file-score or
-    def-score threshold.  This prevents explosion on slowly-decaying
-    score tails.
+    def test_too_few_candidates(self) -> None:
+        """With < 4 embedding candidates, returns 0.0 (no filtering)."""
+        cands = {
+            f"c{i}": HarvestCandidate(
+                def_uid=f"c{i}",
+                from_embedding=True,
+                embedding_similarity=0.5 + i * 0.1,
+            )
+            for i in range(3)
+        }
+        assert _compute_embedding_floor(cands) == 0.0
 
-    Stop condition:
-      - accepted_seed_count >= min_seeds, AND
-      - (current_rank - last_gain_rank) >= patience
+    def test_clear_elbow(self) -> None:
+        """Distribution with a clear drop → floor at the elbow."""
+        sims = [0.85, 0.80, 0.75, 0.70, 0.65, 0.30, 0.25, 0.20, 0.15, 0.10]
+        cands = {
+            f"c{i}": HarvestCandidate(
+                def_uid=f"c{i}",
+                from_embedding=True,
+                embedding_similarity=s,
+            )
+            for i, s in enumerate(sims)
+        }
+        floor = _compute_embedding_floor(cands)
+        # Elbow should be around where the sharp drop happens
+        assert 0.25 <= floor <= 0.70
 
-    patience = ceil(log2(1 + n_candidates))
+    def test_flat_distribution_no_floor(self) -> None:
+        """All similarities similar → returns 0.0 (keep everything)."""
+        cands = {
+            f"c{i}": HarvestCandidate(
+                def_uid=f"c{i}",
+                from_embedding=True,
+                embedding_similarity=0.50 + i * 0.005,
+            )
+            for i in range(10)
+        }
+        floor = _compute_embedding_floor(cands)
+        assert floor == 0.0  # < 10% relative spread
+
+    def test_non_embedding_candidates_ignored(self) -> None:
+        """Candidates without from_embedding=True are not in the distribution."""
+        cands = {
+            "e1": HarvestCandidate(def_uid="e1", from_embedding=True, embedding_similarity=0.8),
+            "e2": HarvestCandidate(def_uid="e2", from_embedding=True, embedding_similarity=0.7),
+            "e3": HarvestCandidate(def_uid="e3", from_embedding=True, embedding_similarity=0.6),
+            "e4": HarvestCandidate(def_uid="e4", from_embedding=True, embedding_similarity=0.5),
+            "t1": HarvestCandidate(def_uid="t1", from_term_match=True, embedding_similarity=0.0),
+            "t2": HarvestCandidate(def_uid="t2", from_graph=True, embedding_similarity=0.0),
+        }
+        # Only 4 embedding candidates considered — exactly the minimum
+        floor = _compute_embedding_floor(cands)
+        assert isinstance(floor, float)
+
+
+class TestElbowBasedFileInclusion:
+    """Verify no-anchor file inclusion uses elbow detection.
+
+    When no anchors exist, the pipeline uses ``find_elbow`` on file
+    scores to determine the natural cutoff — no arbitrary score-floor
+    fractions or patience windows.  This adapts to the score distribution's
+    shape rather than using fixed constants.
     """
 
-    @staticmethod
-    def _simulate_saturation(
-        file_contributes: list[bool],
-        *,
-        min_seeds: int = 3,
-    ) -> int:
-        """Reproduce the pipeline's no-anchor evidence-gain patience logic.
+    def test_clear_elbow_cuts_noise(self) -> None:
+        """A sharp drop in scores → elbow catches it."""
+        scores = [10.0, 9.0, 8.5, 8.0, 7.5, 2.0, 1.5, 1.0, 0.5, 0.2]
+        k = find_elbow(scores, min_seeds=3, max_seeds=10)
+        assert 3 <= k <= 6
 
-        Args:
-            file_contributes: For each file (ranked by score, descending),
-                whether it contributes at least one accepted def.
-            min_seeds: Minimum accepted defs before patience can stop.
+    def test_flat_distribution_keeps_all(self) -> None:
+        """All scores similar → no natural break → keep all."""
+        scores = [5.0, 5.0, 5.0, 5.0, 5.0, 5.0]
+        k = find_elbow(scores, min_seeds=3, max_seeds=6)
+        assert k == 6
 
-        Returns:
-            Number of files included.
-        """
-        import math
+    def test_steep_drop_includes_few(self) -> None:
+        """One dominant file, rest noise → few files included."""
+        scores = [20.0, 1.0, 0.5, 0.3, 0.2, 0.1]
+        k = find_elbow(scores, min_seeds=3, max_seeds=6)
+        assert k >= 3  # min_seeds enforced
 
-        n_candidates = len(file_contributes)
-        n_files = min(min_seeds, n_candidates)
-        patience = math.ceil(math.log2(1 + n_candidates))
+    def test_gradual_decay_includes_more(self) -> None:
+        """Gradual score decay without sharp break → more included."""
+        scores = [float(x) for x in range(20, 0, -1)]
+        k = find_elbow(scores, min_seeds=3, max_seeds=15)
+        assert k >= 3
 
-        # Count accepted seeds in the initial window
-        accepted = sum(1 for c in file_contributes[:n_files] if c)
-        last_gain_rank = n_files - 1
+    def test_min_seeds_respected(self) -> None:
+        """Even with a steep drop, min_seeds is honoured."""
+        scores = [100.0, 1.0, 0.5, 0.3, 0.2]
+        k = find_elbow(scores, min_seeds=3, max_seeds=5)
+        assert k >= 3
 
-        for idx in range(n_files, n_candidates):
-            if file_contributes[idx]:
-                n_files = idx + 1
-                accepted += 1
-                last_gain_rank = idx
-            else:
-                if accepted >= min_seeds and (idx - last_gain_rank) >= patience:
-                    break
-        return n_files
-
-    def test_long_tail_bounded(self) -> None:
-        """100 files, only top 5 contribute real defs — stops early."""
-        contributes = [True] * 5 + [False] * 95
-        n = self._simulate_saturation(contributes)
-        # patience = ceil(log2(101)) = 7.  After 5 gains, we need 7
-        # consecutive misses to stop.  So n_files = 5 + 7 = 12 max.
-        assert n <= 13
-        assert n >= 5
-
-    def test_patience_grows_with_size(self) -> None:
-        """Larger candidate sets get more patience, finding later gains."""
-        # Both have 3 initial gains, then a gap, then a gain at rank 8.
-        # Small set (20): patience = ceil(log2(21)) = 5 → stops at rank 7
-        #   (gap 7-2 = 5 >= 5) before reaching the gain at rank 8.
-        # Large set (200): patience = ceil(log2(201)) = 8 → survives the
-        #   gap and reaches the gain at rank 8.
-        pattern = [True] * 3 + [False] * 5 + [True]  # gain at rank 8
-
-        small = pattern + [False] * 11  # 20 total
-        n_small = self._simulate_saturation(small)
-
-        large = pattern + [False] * 191  # 200 total
-        n_large = self._simulate_saturation(large)
-
-        assert n_large > n_small, "larger patience window finds later gain"
-
-    def test_continuous_gains_keep_going(self) -> None:
-        """When files keep contributing defs, the loop continues."""
-        # 30 files all contribute — loop never stops early
-        contributes = [True] * 30
-        n = self._simulate_saturation(contributes)
-        assert n == 30
-
-    def test_scattered_gains_extend_window(self) -> None:
-        """Scattered gains reset the patience counter."""
-        # 5 gains, then 3 misses, then 1 gain, then 20 misses
-        contributes = (
-            [True] * 5
-            + [False] * 3
-            + [True]  # resets patience at rank 8
-            + [False] * 20
-        )
-        n = self._simulate_saturation(contributes)
-        # patience = ceil(log2(30)) = 5
-        # After last gain at rank 8, need 5 misses → stop at rank 13
-        assert n <= 15  # bounded
-        assert n >= 9  # includes up to the last gain
-
-    def test_vague_task_bounded(self) -> None:
-        """150 files, top 4 contribute, rest are noise — must not explode."""
-        contributes = [True] * 4 + [False] * 146
-        n = self._simulate_saturation(contributes)
-        # patience = ceil(log2(151)) = 8
-        # Stops at 4 + 8 = 12 files, not 150
-        assert n <= 15
-        assert n >= 4
-
-    def test_min_seeds_delays_stop(self) -> None:
-        """If fewer than min_seeds accepted, patience doesn't trigger stop.
-
-        When accepted < min_seeds, the patience check never fires.
-        The loop scans the entire candidate list looking for more gains.
-        But since non-contributing files don't increase n_files, the
-        result is still just the initial window.
-        """
-        # Only 2 gains in first 2 files, then all misses — scans fully
-        # but n_files stays at min_seeds (initial window).
-        contributes = [True, True] + [False] * 50
-        n = self._simulate_saturation(contributes, min_seeds=3)
-        assert n == 3  # initial window, no new gains found
-
-    def test_min_seeds_with_late_gain(self) -> None:
-        """Late gain after initial shortfall extends inclusion."""
-        # 2 gains initially, then misses, then a 3rd gain at rank 10.
-        # Since accepted < 3 until rank 10, patience never fires early.
-        contributes = [True, True] + [False] * 8 + [True] + [False] * 40
-        n = self._simulate_saturation(contributes, min_seeds=3)
-        # Now accepted=3 at rank 10, patience kicks in after that
-        # patience = ceil(log2(52)) = 6, so stops at rank 10 + 6 = 16
-        assert n >= 11  # must include up to rank 10 at minimum
-        assert n <= 20  # bounded by patience
-
-    def test_bimodal_stops_in_gap(self) -> None:
-        """Cluster of 4 contributors, then gap, then noise — stops in gap."""
-        contributes = [True] * 4 + [False] * 20
-        n = self._simulate_saturation(contributes)
-        # patience = ceil(log2(25)) = 5
-        assert n <= 10
-        assert n >= 4
+    def test_max_seeds_caps(self) -> None:
+        """Elbow can't exceed max_seeds."""
+        scores = [float(x) for x in range(100, 0, -1)]
+        k = find_elbow(scores, min_seeds=3, max_seeds=10)
+        assert k <= 10
 
 
 class TestBuildEvidenceString:

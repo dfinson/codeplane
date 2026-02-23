@@ -87,9 +87,10 @@ from codeplane.mcp.tools.recon.scoring import (
     _assign_buckets,
     _compute_context_value,
     _compute_edit_likelihood,
+    _compute_embedding_floor,
     _score_candidates,
-    find_elbow,
     compute_anchor_floor,
+    find_elbow,
 )
 
 __all__ = [
@@ -126,6 +127,7 @@ __all__ = [
     "_assign_buckets",
     "_compute_context_value",
     "_compute_edit_likelihood",
+    "_compute_embedding_floor",
     "_score_candidates",
     "find_elbow",
     "compute_anchor_floor",
