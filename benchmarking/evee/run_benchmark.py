@@ -103,8 +103,12 @@ def _parse_gt_table(section: str) -> list[dict]:
         cat_map = {"Edit": "E", "Context/Test": "C", "Supp/Docs": "S"}
         category = cat_map.get(cat_raw, "C")
 
-        # Detect new files
-        is_new = "**New**" in rm.group(2) or "**New" in rm.group(2)
+        # Detect new files — marker can appear in path OR relevance column
+        is_new = (
+            "**New**" in rm.group(2)
+            or "**New" in rm.group(2)
+            or "**New**" in relevance
+        )
 
         files.append({
             "path": path,
