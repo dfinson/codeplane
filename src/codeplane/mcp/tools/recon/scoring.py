@@ -181,29 +181,24 @@ def find_elbow(scores: list[float], *, min_seeds: int = 3, max_seeds: int = 15) 
 def compute_anchor_floor(
     scores: list[float],
     anchor_indices: list[int],
-    *,
-    window_half: int = 3,
 ) -> float:
     """Compute floor score for anchor-calibrated file inclusion.
 
-    Uses the **Median Absolute Deviation** (MAD) of scores in a local
-    window around anchor positions to estimate natural score variation
-    near known-relevant files.
+    Uses the **Median Absolute Deviation** (MAD) of anchor scores only
+    to estimate natural score variation among known-relevant files.
 
     The inclusion floor is::
 
-        min(anchor_scores) - MAD(window)
+        min(anchor_scores) - MAD(anchor_scores)
 
-    This is a structural signal, not a tuned threshold: anchors
-    (explicit paths / pinned files) are ground-truth relevance, and
-    the MAD measures how tightly clustered scores are in that region.
+    Non-anchor files are excluded from the MAD computation to prevent
+    high-scoring false positives (e.g., cross-cutting utility modules)
+    from inflating the variation estimate and widening the band.
 
     Args:
         scores: File scores, sorted descending.
         anchor_indices: 0-based indices of anchor files in the sorted
             score list.
-        window_half: Half-width of the window around each anchor
-            position.  Default 3 gives a 7-file window per anchor.
 
     Returns:
         Floor score.  Files with ``score >= floor`` should be included.
@@ -213,23 +208,15 @@ def compute_anchor_floor(
         return 0.0
 
     n = len(scores)
-    s_anchor_min = min(scores[i] for i in anchor_indices if i < n)
+    anchor_scores = sorted(scores[i] for i in anchor_indices if i < n)
+    if not anchor_scores:
+        return 0.0
 
-    # Build window: union of [r − w, r + w] for each anchor rank
-    window_indices: set[int] = set()
-    for r in anchor_indices:
-        lo = max(0, r - window_half)
-        hi = min(n, r + window_half + 1)
-        for j in range(lo, hi):
-            window_indices.add(j)
+    s_anchor_min = anchor_scores[0]
 
-    window_scores = sorted(scores[j] for j in window_indices)
-    if not window_scores:
-        return s_anchor_min
-
-    # MAD = Median Absolute Deviation
-    window_median = window_scores[len(window_scores) // 2]
-    abs_devs = sorted(abs(s - window_median) for s in window_scores)
+    # MAD = Median Absolute Deviation of anchor scores only
+    anchor_median = anchor_scores[len(anchor_scores) // 2]
+    abs_devs = sorted(abs(s - anchor_median) for s in anchor_scores)
     mad = abs_devs[len(abs_devs) // 2] if abs_devs else 0.0
 
     floor_score = s_anchor_min - mad
@@ -239,7 +226,7 @@ def compute_anchor_floor(
         s_anchor_min=round(s_anchor_min, 4),
         mad=round(mad, 4),
         floor=round(floor_score, 4),
-        window_size=len(window_scores),
+        n_anchors=len(anchor_scores),
     )
 
     return floor_score

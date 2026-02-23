@@ -786,7 +786,7 @@ class TestFindElbow:
 
 
 class TestComputeAnchorFloor:
-    """Tests for compute_anchor_floor — MAD-based anchor band."""
+    """Tests for compute_anchor_floor — anchor-only MAD band."""
 
     def test_empty(self) -> None:
         assert compute_anchor_floor([], []) == 0.0
@@ -795,39 +795,52 @@ class TestComputeAnchorFloor:
         assert compute_anchor_floor([10.0, 5.0, 3.0], []) == 0.0
 
     def test_single_anchor(self) -> None:
-        # Anchor at rank 1 (score 5.0), window [10, 5, 3]
-        # Sorted window: [3, 5, 10], median=5
-        # Abs devs: [2, 0, 5] → sorted [0, 2, 5] → MAD=2
-        # floor = 5 - 2 = 3.0
+        # Single anchor at rank 1 (score 5.0)
+        # Anchor scores: [5.0], median=5.0, MAD=0.0
+        # floor = 5.0 - 0.0 = 5.0
         floor = compute_anchor_floor([10.0, 5.0, 3.0], [1])
-        assert floor == 3.0
+        assert floor == 5.0
 
     def test_anchor_band_includes_nearby(self) -> None:
         """Simulates #108-like distribution: anchor at rank 4 (0-indexed)."""
         scores = [1.33, 1.02, 0.84, 0.83, 0.81, 0.74, 0.67, 0.59]
         floor = compute_anchor_floor(scores, [4])
-        assert floor <= 0.74  # base_model.py score should be above floor
+        # Single anchor → MAD=0, floor=0.81
+        assert floor == scores[4]
 
     def test_multiple_anchors(self) -> None:
         scores = [10.0, 8.0, 6.0, 4.0, 2.0]
         floor = compute_anchor_floor(scores, [1, 3])
-        # min anchor score = 4.0, MAD of window should keep floor <= 4.0
-        assert floor <= 4.0
+        # Anchor scores: [4.0, 8.0], sorted → [4, 8], median=8
+        # Abs devs: [4, 0] → sorted [0, 4] → MAD=4
+        # floor = 4.0 - 4.0 = 0.0
+        assert floor == 0.0
 
     def test_anchor_at_top(self) -> None:
         """Anchor at rank 0 — floor should still be sensible."""
         scores = [10.0, 9.0, 8.0, 1.0]
         floor = compute_anchor_floor(scores, [0])
-        assert floor <= 10.0
-        assert floor > 0.0
+        # Single anchor → MAD=0, floor=10.0
+        assert floor == 10.0
 
     def test_consistent_scores_tight_band(self) -> None:
-        """When scores are very similar, MAD is small, band is tight."""
+        """When anchor scores are very similar, MAD is small, band is tight."""
         scores = [5.0, 4.9, 4.8, 4.7, 4.6]
-        floor = compute_anchor_floor(scores, [2])
-        # MAD should be small, floor close to 4.8
-        assert floor >= 4.5
-        assert floor <= 4.8
+        floor = compute_anchor_floor(scores, [1, 2, 3])
+        # Anchor scores: [4.7, 4.8, 4.9], median=4.8
+        # Abs devs: [0.1, 0.0, 0.1] → sorted [0, 0.1, 0.1] → MAD=0.1
+        # floor = 4.7 - 0.1 = 4.6
+        assert floor == pytest.approx(4.6)
+
+    def test_three_anchors_realistic(self) -> None:
+        """Three anchors spread across ranking — typical benchmark case."""
+        scores = [1.33, 1.02, 0.84, 0.83, 0.81, 0.74, 0.67, 0.59]
+        # Anchors at ranks 1, 4, 5 (scores 1.02, 0.81, 0.74)
+        floor = compute_anchor_floor(scores, [1, 4, 5])
+        # Anchor scores: [0.74, 0.81, 1.02], median=0.81
+        # Abs devs: [0.07, 0.0, 0.21] → sorted [0.0, 0.07, 0.21] → MAD=0.07
+        # floor = 0.74 - 0.07 = 0.67
+        assert floor == pytest.approx(0.67)
 
 
 class TestBuildEvidenceString:
