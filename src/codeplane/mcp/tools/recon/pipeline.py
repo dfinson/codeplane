@@ -178,7 +178,7 @@ async def _select_seeds(
     diagnostics["post_filter"] = len(gated)
 
     # 6. Score
-    scored = _score_candidates(gated, parsed, pinned_paths=pinned_paths)
+    scored = _score_candidates(gated, parsed)
 
     if not scored:
         diagnostics["total_ms"] = round((time.monotonic() - t0) * 1000)
@@ -186,6 +186,19 @@ async def _select_seeds(
 
     # 7. Aggregate to file level
     file_ranked = _aggregate_to_files(scored, gated)
+
+    # Diagnostics: file ranking with paths (for debugging gap cutoff)
+    coordinator = app_ctx.coordinator
+    with coordinator.db.session() as session:
+        from codeplane.index._internal.indexing.graph import FactQueries
+
+        fq = FactQueries(session)
+        _diag_ranking = []
+        for i, (fid, fs, fdefs) in enumerate(file_ranked[:20]):
+            frec = fq.get_file(fid)
+            fpath = frec.path if frec else f"?{fid}"
+            _diag_ranking.append({"rank": i + 1, "path": fpath, "score": round(fs, 4), "n_defs": len(fdefs)})
+        diagnostics["_file_ranking_top20"] = _diag_ranking
 
     # 8. Gap-based file cutoff (distribution-relative, NO upper bound)
     file_score_values = [fs for _, fs, _ in file_ranked]

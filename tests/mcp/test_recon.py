@@ -528,8 +528,13 @@ class TestBoundedScoring:
         # Bounded scoring means score shouldn't explode
         assert 0 <= score <= 2.0
 
-    def test_explicit_beats_embedding_only(self) -> None:
-        """Explicit mentions should score higher than embedding-only."""
+    def test_explicit_does_not_inflate_relevance(self) -> None:
+        """Explicit mentions should NOT inflate relevance score.
+
+        Explicit files survive via anchoring, not scoring.  Including
+        f_explicit in relevance creates an artificial cluster boundary
+        that distorts the gap cutoff.
+        """
         c_explicit = self._make_candidate(
             uid="a",
             from_explicit=True,
@@ -541,9 +546,9 @@ class TestBoundedScoring:
             emb_sim=0.5,
         )
         parsed = parse_task("test task")
-        scored = _score_candidates({"a": c_explicit, "b": c_embed}, parsed)
-        scores = dict(scored)
-        assert scores["a"] > scores["b"]
+        _score_candidates({"a": c_explicit, "b": c_embed}, parsed)
+        # Same embedding → same relevance (explicit doesn't inflate)
+        assert abs(c_explicit.relevance_score - c_embed.relevance_score) < 0.01
 
     def test_hub_score_affects_seed_score(self) -> None:
         """Higher hub score should increase seed_score."""
@@ -1081,77 +1086,6 @@ class TestFailureActions:
     def test_always_has_map_repo(self) -> None:
         actions = _build_failure_actions([], [])
         assert any(a["action"] == "map_repo" for a in actions)
-
-
-# ---------------------------------------------------------------------------
-# f_pinned scoring tests
-# ---------------------------------------------------------------------------
-
-
-class TestPinnedScoring:
-    """Tests for f_pinned feature in scoring."""
-
-    def _make_candidate(
-        self,
-        uid: str = "test::func",
-        *,
-        emb_sim: float = 0.5,
-        name: str = "func",
-        file_path: str = "src/core.py",
-        from_embedding: bool = True,
-    ) -> HarvestCandidate:
-        d = MagicMock()
-        d.name = name
-        d.kind = "function"
-        return HarvestCandidate(
-            def_uid=uid,
-            def_fact=d,
-            embedding_similarity=emb_sim,
-            from_embedding=from_embedding,
-            file_path=file_path,
-            artifact_kind=_classify_artifact(file_path),
-        )
-
-    def test_pinned_file_increases_score(self) -> None:
-        """Candidate in a pinned file should score higher."""
-        c_pinned = self._make_candidate(uid="a", file_path="src/evee/core/base.py")
-        c_other = self._make_candidate(uid="b", file_path="src/evee/other/thing.py")
-        parsed = parse_task("test task")
-
-        scored = _score_candidates(
-            {"a": c_pinned, "b": c_other},
-            parsed,
-            pinned_paths=["src/evee/core/base.py"],
-        )
-        scores = dict(scored)
-        assert scores["a"] > scores["b"]
-
-    def test_no_pins_no_boost(self) -> None:
-        """Without pinned_paths, f_pinned should be 0."""
-        c = self._make_candidate(uid="a", file_path="src/evee/core/base.py")
-        parsed = parse_task("test task")
-        _score_candidates({"a": c}, parsed, pinned_paths=None)
-        score_without = c.relevance_score
-
-        c2 = self._make_candidate(uid="b", file_path="src/evee/core/base.py")
-        _score_candidates({"b": c2}, parsed, pinned_paths=["src/evee/core/base.py"])
-        score_with = c2.relevance_score
-
-        assert score_with > score_without
-
-    def test_dir_path_not_matched(self) -> None:
-        """Directory paths should not match file candidates (files only)."""
-        c = self._make_candidate(uid="a", file_path="src/evee/core/base.py")
-        parsed = parse_task("test task")
-        _score_candidates({"a": c}, parsed, pinned_paths=["src/evee/core/"])
-        score_dir = c.relevance_score
-
-        c2 = self._make_candidate(uid="b", file_path="src/evee/core/base.py")
-        _score_candidates({"b": c2}, parsed, pinned_paths=None)
-        score_none = c2.relevance_score
-
-        # Dir pin should NOT boost — same as no pin
-        assert score_dir == score_none
 
 
 # ---------------------------------------------------------------------------

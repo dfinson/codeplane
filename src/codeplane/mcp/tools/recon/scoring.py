@@ -347,7 +347,6 @@ def _aggregate_to_files(
 def _score_candidates(
     candidates: dict[str, HarvestCandidate],
     parsed: ParsedTask,
-    pinned_paths: list[str] | None = None,
 ) -> list[tuple[str, float]]:
     """Score candidates with bounded features and separated scores.
 
@@ -359,67 +358,66 @@ def _score_candidates(
       f_name:     Name contains primary term (binary).
       f_path:     Path contains primary term (binary).
       f_lexical:  Lexical hit presence (binary, avoids double-counting with term).
-      f_explicit: Explicit mention (binary).
       f_graph:    Graph-discovered (binary, structural adjacency).
-      f_pinned:   In agent-pinned file or directory (binary).
       f_artifact: Intent-aware artifact weight [0, 1].
 
-    Relevance score = weighted sum of all features (how relevant to task).
-    Seed score = relevance * seed_multiplier (how good as entry point).
-      - seed_multiplier boosts hub score and penalizes leaf nodes.
+    Explicit-path and pinned-file signals are deliberately EXCLUDED from
+    the relevance score.  They inflate scores and create an artificial
+    cluster boundary that the gap cutoff misinterprets as a real semantic
+    gap.  Those files are already guaranteed to survive via anchoring
+    (step 8b) — including them here would be double-dipping.
+
+    Relevance score = weighted sum of semantic features.
+    Seed score = relevance * seed_multiplier (hub-based).
 
     Args:
         candidates: Candidate defs to score.
         parsed: Parsed task description.
         pinned_paths: Explicit file paths the agent pinned as
             high-confidence.  ``None`` when the agent didn't pin anything.
+            Used only for anchor survival (step 8b), not for scoring.
 
     Returns [(def_uid, seed_score)] sorted descending by seed_score.
     """
     scored: list[tuple[str, float]] = []
-    _pinned_files: set[str] = set(pinned_paths) if pinned_paths else set()
 
     for uid, cand in candidates.items():
         if cand.def_fact is None:
             continue
 
-        # --- Bounded features ---
+        # --- Bounded features (semantic / structural only) ---
         f_emb = _clamp(cand.embedding_similarity)
         f_hub = _clamp(math.log1p(min(cand.hub_score, 30)) / math.log1p(30))
         f_terms = _clamp(len(cand.matched_terms) / 5.0)
         f_axes = _clamp((cand.evidence_axes - 1) / 3.0)
         f_lexical = _clamp(min(cand.lexical_hit_count, 5) / 5.0)
-        f_explicit = 1.0 if cand.from_explicit else 0.0
         f_graph = 0.5 if cand.from_graph else 0.0
 
         name_lower = cand.def_fact.name.lower()
         f_name = 1.0 if any(t in name_lower for t in parsed.primary_terms) else 0.0
         f_path = 1.0 if any(t in cand.file_path.lower() for t in parsed.primary_terms) else 0.0
 
-        # Pinned: agent explicitly marked this file
-        f_pinned = 1.0 if cand.file_path in _pinned_files else 0.0
-
         # Artifact-kind weight based on intent
         kind_weights = _ARTIFACT_WEIGHTS.get(cand.artifact_kind, {})
         f_artifact = kind_weights.get(parsed.intent, 0.5)
 
-        # --- Relevance score (how relevant to the task) ---
+        # --- Relevance score (pure semantic + structural) ---
+        # f_explicit and f_pinned are intentionally excluded — they create
+        # artificial score cliffs that distort the gap cutoff.  Those files
+        # survive via anchoring (step 8b), not via scoring.
         relevance = (
-            f_emb * 0.26
-            + f_hub * 0.09
-            + f_terms * 0.13
-            + f_axes * 0.09
-            + f_name * 0.11
-            + f_path * 0.05
+            f_emb * 0.30
+            + f_hub * 0.08
+            + f_terms * 0.15
+            + f_axes * 0.12
+            + f_name * 0.13
+            + f_path * 0.06
             + f_lexical * 0.06
-            + f_explicit * 0.08
-            + f_graph * 0.05
-            + f_pinned * 0.08
+            + f_graph * 0.10
         ) * f_artifact
 
         # --- Seed score (how good as graph expansion entry) ---
-        # Hub score matters more for seed selection (central = better root)
-        seed_multiplier = 0.5 + f_hub * 0.3 + f_explicit * 0.2
+        seed_multiplier = 0.5 + f_hub * 0.5
         seed_sc = relevance * seed_multiplier
 
         cand.relevance_score = relevance
