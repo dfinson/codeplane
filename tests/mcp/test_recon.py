@@ -1,7 +1,7 @@
 """Tests for the recon MCP tool.
 
 Tests:
-- parse_task: task description parsing (keywords, paths, dirs, symbols)
+- parse_task: task description parsing (keywords, paths, symbols)
 - _select_seeds: term-intersection + hub-score reranking
 - _expand_seed: graph expansion
 - _trim_to_budget: budget assembly
@@ -1084,57 +1084,12 @@ class TestFailureActions:
 
 
 # ---------------------------------------------------------------------------
-# Directory extraction tests
+# f_pinned scoring tests
 # ---------------------------------------------------------------------------
 
 
-class TestExtractDirs:
-    """Tests for parse_task directory extraction."""
-
-    def test_trailing_slash_dir(self) -> None:
-        parsed = parse_task("Base classes in src/evee/core/")
-        assert "src/evee/core/" in parsed.explicit_dirs
-
-    def test_backtick_dir(self) -> None:
-        parsed = parse_task("Check `src/evee/core/` for models")
-        assert "src/evee/core/" in parsed.explicit_dirs
-
-    def test_no_dir_from_file_path(self) -> None:
-        """File paths with extensions should not appear in explicit_dirs."""
-        parsed = parse_task("Fix src/evee/core/base_model.py")
-        assert parsed.explicit_dirs == [] or all(
-            not d.endswith(".py/") for d in parsed.explicit_dirs
-        )
-
-    def test_multi_segment_without_extension(self) -> None:
-        parsed = parse_task("Look at tests/evee/integration for patterns")
-        assert "tests/evee/integration/" in parsed.explicit_dirs
-
-    def test_dedup(self) -> None:
-        parsed = parse_task("Check src/core/ and also src/core/ again")
-        assert parsed.explicit_dirs.count("src/core/") == 1
-
-    def test_no_dirs_from_plain_text(self) -> None:
-        parsed = parse_task("add caching to the model abstraction")
-        assert parsed.explicit_dirs == []
-
-    def test_strip_leading_dot_slash(self) -> None:
-        parsed = parse_task("Look at ./src/evee/core/ for base classes")
-        assert "src/evee/core/" in parsed.explicit_dirs
-
-    def test_dir_not_in_file_paths(self) -> None:
-        """Directories should not leak into explicit_paths."""
-        parsed = parse_task("Base classes in src/evee/core/")
-        assert "src/evee/core/" not in parsed.explicit_paths
-
-
-# ---------------------------------------------------------------------------
-# f_in_dir scoring tests
-# ---------------------------------------------------------------------------
-
-
-class TestDirScoring:
-    """Tests for f_in_dir feature in scoring."""
+class TestPinnedScoring:
+    """Tests for f_pinned feature in scoring."""
 
     def _make_candidate(
         self,
@@ -1157,48 +1112,111 @@ class TestDirScoring:
             artifact_kind=_classify_artifact(file_path),
         )
 
-    def test_dir_boost_increases_score(self) -> None:
-        """Candidate in a mentioned directory should score higher."""
-        c_in = self._make_candidate(uid="a", file_path="src/evee/core/base.py")
-        c_out = self._make_candidate(uid="b", file_path="src/evee/other/thing.py")
+    def test_pinned_file_increases_score(self) -> None:
+        """Candidate in a pinned file should score higher."""
+        c_pinned = self._make_candidate(uid="a", file_path="src/evee/core/base.py")
+        c_other = self._make_candidate(uid="b", file_path="src/evee/other/thing.py")
         parsed = parse_task("test task")
-        dir_sizes = {"src/evee/core/": 5}
 
-        scored_with = _score_candidates(
-            {"a": c_in, "b": c_out}, parsed, explicit_dir_sizes=dir_sizes
+        scored = _score_candidates(
+            {"a": c_pinned, "b": c_other},
+            parsed,
+            pinned_paths=["src/evee/core/base.py"],
         )
-        scores = dict(scored_with)
+        scores = dict(scored)
         assert scores["a"] > scores["b"]
 
-    def test_large_dir_dampens_boost(self) -> None:
-        """Larger directories should give smaller boost (self-dampening)."""
-        c_small = self._make_candidate(uid="a", file_path="src/evee/core/base.py")
-        parsed = parse_task("test task")
-
-        # Score with small dir
-        _score_candidates(
-            {"a": c_small}, parsed, explicit_dir_sizes={"src/evee/core/": 3}
-        )
-        score_small_dir = c_small.relevance_score
-
-        # Reset and score with large dir
-        c_large2 = self._make_candidate(uid="c", file_path="src/evee/core/base.py")
-        _score_candidates(
-            {"c": c_large2}, parsed, explicit_dir_sizes={"src/evee/core/": 50}
-        )
-        score_large_dir = c_large2.relevance_score
-
-        assert score_small_dir > score_large_dir
-
-    def test_no_dir_sizes_no_boost(self) -> None:
-        """Without dir sizes, f_in_dir should be 0."""
+    def test_no_pins_no_boost(self) -> None:
+        """Without pinned_paths, f_pinned should be 0."""
         c = self._make_candidate(uid="a", file_path="src/evee/core/base.py")
         parsed = parse_task("test task")
-        _score_candidates({"a": c}, parsed, explicit_dir_sizes=None)
+        _score_candidates({"a": c}, parsed, pinned_paths=None)
         score_without = c.relevance_score
 
         c2 = self._make_candidate(uid="b", file_path="src/evee/core/base.py")
-        _score_candidates({"b": c2}, parsed, explicit_dir_sizes={"src/evee/core/": 3})
+        _score_candidates({"b": c2}, parsed, pinned_paths=["src/evee/core/base.py"])
         score_with = c2.relevance_score
 
         assert score_with > score_without
+
+    def test_dir_path_not_matched(self) -> None:
+        """Directory paths should not match file candidates (files only)."""
+        c = self._make_candidate(uid="a", file_path="src/evee/core/base.py")
+        parsed = parse_task("test task")
+        _score_candidates({"a": c}, parsed, pinned_paths=["src/evee/core/"])
+        score_dir = c.relevance_score
+
+        c2 = self._make_candidate(uid="b", file_path="src/evee/core/base.py")
+        _score_candidates({"b": c2}, parsed, pinned_paths=None)
+        score_none = c2.relevance_score
+
+        # Dir pin should NOT boost — same as no pin
+        assert score_dir == score_none
+
+
+# ---------------------------------------------------------------------------
+# Graph evidence boosting tests
+# ---------------------------------------------------------------------------
+
+
+class TestGraphEvidenceBoosting:
+    """Tests that graph harvester adds evidence to already-merged candidates."""
+
+    def test_callee_already_merged_gets_graph_flag(self) -> None:
+        """When a callee is already in merged, from_graph should become True."""
+        # Simulate: a candidate found by embedding, then graph harvester
+        # discovers it's a callee of a seed
+        c = HarvestCandidate(
+            def_uid="mod::BaseModel",
+            from_embedding=True,
+            embedding_similarity=0.7,
+            evidence=[
+                EvidenceRecord(category="embedding", detail="sim=0.70", score=0.7),
+            ],
+        )
+        assert c.from_graph is False
+        assert c.evidence_axes == 1
+
+        # Simulate what graph harvester now does
+        c.from_graph = True
+        c.evidence.append(
+            EvidenceRecord(category="graph", detail="callee of evaluate", score=0.4)
+        )
+        assert c.from_graph is True
+        assert c.evidence_axes == 2
+
+    def test_graph_evidence_increases_score(self) -> None:
+        """Adding graph evidence to a merged candidate should increase its score."""
+        d = MagicMock()
+        d.name = "BaseModel"
+        d.kind = "class"
+
+        c_no_graph = HarvestCandidate(
+            def_uid="a",
+            def_fact=d,
+            from_embedding=True,
+            embedding_similarity=0.7,
+            file_path="src/base_model.py",
+            artifact_kind=_classify_artifact("src/base_model.py"),
+        )
+        c_with_graph = HarvestCandidate(
+            def_uid="b",
+            def_fact=d,
+            from_embedding=True,
+            from_graph=True,
+            embedding_similarity=0.7,
+            file_path="src/base_model.py",
+            artifact_kind=_classify_artifact("src/base_model.py"),
+            evidence=[
+                EvidenceRecord(category="embedding", detail="sim=0.70", score=0.7),
+                EvidenceRecord(category="graph", detail="callee of evaluate", score=0.4),
+            ],
+        )
+        parsed = parse_task("test model evaluation")
+        _score_candidates({"a": c_no_graph}, parsed)
+        _score_candidates({"b": c_with_graph}, parsed)
+
+        assert c_with_graph.relevance_score > c_no_graph.relevance_score
+
+
+

@@ -26,20 +26,6 @@ _PATH_REGEX = re.compile(
     re.IGNORECASE,
 )
 
-# Regex for directory paths in task text.
-# Matches paths with at least one "/" that end in "/" (explicit dir),
-# or multi-segment paths (a/b/c) that lack a file extension (implicit dir).
-# Only word chars and hyphens in segments (no dots — prevents grabbing sentence-end periods).
-# Optional leading "./" is allowed (common relative path prefix).
-_DIR_REGEX = re.compile(
-    r"(?:^|[\s`\"'(,;])"
-    r"(?:\./)?"  # optional leading ./
-    r"((?:[\w-]+/){1,}[\w-]*/?"  # capture: segments of word chars + hyphens, trailing / optional
-    r")"
-    r"(?:[\s`\"'),;:.]|$)",
-    re.IGNORECASE,
-)
-
 # Regex for symbol-like identifiers (PascalCase or snake_case, 3+ chars)
 _SYMBOL_REGEX = re.compile(
     r"\b([A-Z][a-zA-Z0-9]{2,}(?:[A-Z][a-z]+)*"  # PascalCase
@@ -172,31 +158,6 @@ def parse_task(task: str) -> ParsedTask:
             path_seen.add(p)
             explicit_paths.append(p)
 
-    # --- Step 2b: Extract directory paths ---
-    # Candidate dirs are extracted purely from text (no I/O).
-    # OS-level validation happens in the pipeline.
-    explicit_dirs: list[str] = []
-    dir_seen: set[str] = set()
-    for match in _DIR_REGEX.finditer(task):
-        raw_dir = match.group(1).lstrip("./")
-        if not raw_dir:
-            continue
-        # Normalize: ensure trailing slash
-        normalized = raw_dir.rstrip("/") + "/"
-        # Skip if this is a truncated file path.  The dir regex excludes dots
-        # so "src/foo/bar.py" captures as "src/foo/bar" — check if any known
-        # file path starts with the candidate stem.
-        stem = raw_dir.rstrip("/")
-        if any(fp.startswith(stem) and fp != stem for fp in path_seen):
-            continue
-        if normalized not in dir_seen and normalized != "/":
-            dir_seen.add(normalized)
-            explicit_dirs.append(normalized)
-        normalized = raw_dir.rstrip("/") + "/"
-        if normalized not in dir_seen and normalized != "/":
-            dir_seen.add(normalized)
-            explicit_dirs.append(normalized)
-
     # --- Step 3: Extract symbol-like identifiers ---
     explicit_symbols: list[str] = []
     symbol_seen: set[str] = set()
@@ -275,7 +236,6 @@ def parse_task(task: str) -> ParsedTask:
         primary_terms=primary_terms,
         secondary_terms=secondary_terms,
         explicit_paths=explicit_paths,
-        explicit_dirs=explicit_dirs,
         explicit_symbols=explicit_symbols,
         keywords=keywords,
         query_text=query_text,

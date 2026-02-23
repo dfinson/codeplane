@@ -581,9 +581,22 @@ async def _harvest_graph(
                 limit=_GRAPH_MAX_CALLEES_PER_SEED,
             )
             for callee in callees:
-                if callee.def_uid in merged or callee.def_uid in candidates:
-                    continue
                 if callee.def_uid == seed_uid:
+                    continue
+                # If callee is already merged, reinforce with graph evidence
+                if callee.def_uid in merged:
+                    existing = merged[callee.def_uid]
+                    if not existing.from_graph:
+                        existing.from_graph = True
+                        existing.evidence.append(
+                            EvidenceRecord(
+                                category="graph",
+                                detail=f"callee of {seed_def.name}",
+                                score=0.4,
+                            )
+                        )
+                    continue
+                if callee.def_uid in candidates:
                     continue
                 candidates[callee.def_uid] = HarvestCandidate(
                     def_uid=callee.def_uid,
@@ -615,9 +628,22 @@ async def _harvest_graph(
                     if (
                         ref.start_line is not None
                         and cd.start_line <= ref.start_line <= cd.end_line
-                        and cd.def_uid not in merged
-                        and cd.def_uid not in candidates
                     ):
+                        # If caller is already merged, reinforce with graph evidence
+                        if cd.def_uid in merged:
+                            existing = merged[cd.def_uid]
+                            if not existing.from_graph:
+                                existing.from_graph = True
+                                existing.evidence.append(
+                                    EvidenceRecord(
+                                        category="graph",
+                                        detail=f"caller of {seed_def.name}",
+                                        score=0.35,
+                                    )
+                                )
+                            break
+                        if cd.def_uid in candidates:
+                            break
                         candidates[cd.def_uid] = HarvestCandidate(
                             def_uid=cd.def_uid,
                             def_fact=cd,
@@ -642,9 +668,23 @@ async def _harvest_graph(
                         break
                     if sd.def_uid == seed_uid:
                         continue
-                    if sd.def_uid in merged or sd.def_uid in candidates:
-                        continue
                     if sd.kind not in ("function", "method", "class"):
+                        continue
+                    # If sibling is already merged, reinforce with graph evidence
+                    if sd.def_uid in merged:
+                        existing = merged[sd.def_uid]
+                        if not existing.from_graph:
+                            existing.from_graph = True
+                            existing.evidence.append(
+                                EvidenceRecord(
+                                    category="graph",
+                                    detail=f"sibling of {seed_def.name} in {frec.path}",
+                                    score=0.3,
+                                )
+                            )
+                        sib_count += 1
+                        continue
+                    if sd.def_uid in candidates:
                         continue
                     candidates[sd.def_uid] = HarvestCandidate(
                         def_uid=sd.def_uid,
