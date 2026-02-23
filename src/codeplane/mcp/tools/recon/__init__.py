@@ -4,8 +4,8 @@ Package layout (SOLID decomposition):
 
     models.py      — Enums, dataclasses, constants, classifiers  (S: types only)
     parsing.py     — Task parsing, query views                   (S: text analysis)
-    harvesters.py  — Four independent candidate harvesters       (O: extensible)
-    scoring.py     — Filter pipeline, scoring, elbow detection   (S: evaluation)
+    harvesters.py  — Five independent candidate harvesters       (O: extensible)
+    scoring.py     — Filter pipeline, scoring, cutoff detection  (S: evaluation)
     expansion.py   — Graph expansion, IO helpers, scaffolds      (S: context build)
     assembly.py    — Budget trimming, summary generation         (S: response shape)
     pipeline.py    — Select-seeds orchestrator + register_tools  (D: composition)
@@ -74,6 +74,7 @@ from codeplane.mcp.tools.recon.parsing import (
 
 # --- pipeline (orchestrator + tool registration) ---
 from codeplane.mcp.tools.recon.pipeline import (
+    _build_evidence_string,
     _select_seeds,
     register_tools,
 )
@@ -85,6 +86,7 @@ from codeplane.mcp.tools.recon.scoring import (
     _apply_filters,
     _score_candidates,
     find_elbow,
+    find_gap_cutoff,
 )
 
 __all__ = [
@@ -120,6 +122,7 @@ __all__ = [
     "_apply_filters",
     "_score_candidates",
     "find_elbow",
+    "find_gap_cutoff",
     # Expansion
     "_compute_sha256",
     "_read_lines",
@@ -134,6 +137,7 @@ __all__ = [
     "_trim_to_budget",
     "_summarize_recon",
     # Pipeline
+    "_build_evidence_string",
     "_select_seeds",
     "register_tools",
 ]

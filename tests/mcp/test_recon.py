@@ -30,6 +30,7 @@ from codeplane.mcp.tools.recon import (
     ParsedTask,
     TaskIntent,
     _aggregate_to_files,
+    _build_evidence_string,
     _build_failure_actions,
     _classify_artifact,
     _def_signature_text,
@@ -45,6 +46,7 @@ from codeplane.mcp.tools.recon import (
     _tokenize_task,
     _trim_to_budget,
     find_elbow,
+    find_gap_cutoff,
     parse_task,
 )
 
@@ -293,8 +295,8 @@ class TestTrimToBudget:
             "seeds": [
                 {
                     "source": "x" * 50,
-                    "callees": [{"symbol": "a"}, {"symbol": "b"}],
-                    "callers": [{"context": "c" * 200}, {"context": "d" * 200}],
+                    "callees": ["func_a [a.py:1-10]", "func_b [b.py:5-20]"],
+                    "callers": ["c.py:" + "c" * 200, "d.py:" + "d" * 200],
                 }
             ],
             "summary": "test",
@@ -778,6 +780,77 @@ class TestFindElbow:
         scores = [float(x) for x in range(100, 0, -1)]
         k = find_elbow(scores, max_seeds=10)
         assert k <= 10
+
+
+class TestFindGapCutoff:
+    """Tests for find_gap_cutoff — distribution-relative cutoff."""
+
+    def test_empty(self) -> None:
+        assert find_gap_cutoff([]) == 0
+
+    def test_single(self) -> None:
+        assert find_gap_cutoff([5.0]) == 1
+
+    def test_small_list(self) -> None:
+        assert find_gap_cutoff([10.0, 5.0]) == 2
+
+    def test_clear_gap(self) -> None:
+        # Big gap between 80 and 10
+        scores = [100.0, 95.0, 90.0, 85.0, 80.0, 10.0, 5.0, 3.0]
+        k = find_gap_cutoff(scores, min_keep=2)
+        assert k == 5  # Cut at the gap between 80 and 10
+
+    def test_flat_distribution_keeps_all_above_median(self) -> None:
+        scores = [10.0, 10.0, 10.0, 10.0, 10.0]
+        k = find_gap_cutoff(scores)
+        assert k == len(scores)  # No gaps, median fallback keeps all
+
+    def test_no_upper_bound(self) -> None:
+        """Gap cutoff has no arbitrary upper limit."""
+        # 30 items with consistent scores, then a gap
+        scores = [50.0 - i * 0.5 for i in range(30)] + [5.0, 4.0, 3.0]
+        k = find_gap_cutoff(scores, min_keep=2)
+        assert k >= 20  # Should keep most of the 30 consistent items
+
+    def test_respects_min_keep(self) -> None:
+        scores = [100.0, 1.0, 1.0, 1.0]
+        k = find_gap_cutoff(scores, min_keep=3)
+        assert k >= 3
+
+
+class TestBuildEvidenceString:
+    """Tests for _build_evidence_string — compact evidence format."""
+
+    def test_embedding_only(self) -> None:
+        cand = HarvestCandidate(def_uid="a::f1")
+        cand.from_embedding = True
+        cand.embedding_similarity = 0.82
+        result = _build_evidence_string(cand)
+        assert result == "emb(0.82)"
+
+    def test_multiple_sources(self) -> None:
+        cand = HarvestCandidate(def_uid="a::f1")
+        cand.from_embedding = True
+        cand.embedding_similarity = 0.75
+        cand.from_term_match = True
+        cand.matched_terms = {"config", "model"}
+        cand.from_lexical = True
+        cand.lexical_hit_count = 3
+        result = _build_evidence_string(cand)
+        assert "emb(0.75)" in result
+        assert "term(" in result
+        assert "lex(3)" in result
+
+    def test_explicit(self) -> None:
+        cand = HarvestCandidate(def_uid="a::f1")
+        cand.from_explicit = True
+        result = _build_evidence_string(cand)
+        assert result == "explicit"
+
+    def test_no_sources(self) -> None:
+        cand = HarvestCandidate(def_uid="a::f1")
+        result = _build_evidence_string(cand)
+        assert result == ""
 
 
 # ---------------------------------------------------------------------------

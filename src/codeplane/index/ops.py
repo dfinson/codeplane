@@ -2604,7 +2604,9 @@ class IndexCoordinator:
                         on_progress(done, total, files_by_ext, "computing_embeddings")
 
                     on_progress(0, 1, files_by_ext, "computing_embeddings")
-                    self._embedding.commit_staged(on_progress=_emb_progress)
+                    emb_count = self._embedding.commit_staged(on_progress=_emb_progress)
+                    # Send final signal with actual def count (not record count)
+                    on_progress(emb_count, emb_count, files_by_ext, "embeddings_done")
 
                 # Re-resolve any import paths that couldn't resolve during
                 # batched indexing (e.g. batch 1 imports targeting batch 2 files).

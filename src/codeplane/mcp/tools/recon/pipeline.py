@@ -5,6 +5,12 @@ the ``recon`` tool with FastMCP.
 
 This is the only module that imports from all sub-modules — it composes
 them but adds no domain logic of its own (Dependency Inversion principle).
+
+v4 design: ONE call, ALL context.
+- Agent controls nothing — only ``task`` and optional ``seeds`` exposed.
+- Backend decides depth, seed count, format (no knobs).
+- Fan out aggressively, prune via distribution-relative cutoff, return
+  full source for every surviving seed.
 """
 
 from __future__ import annotations
@@ -20,7 +26,6 @@ from pydantic import Field
 
 from codeplane.mcp.tools.recon.assembly import (
     _build_failure_actions,
-    _summarize_recon,
     _trim_to_budget,
 )
 from codeplane.mcp.tools.recon.expansion import (
@@ -37,10 +42,8 @@ from codeplane.mcp.tools.recon.harvesters import (
     _merge_candidates,
 )
 from codeplane.mcp.tools.recon.models import (
-    _DEFAULT_BUDGET_BYTES,
-    _DEFAULT_DEPTH,
-    _MAX_BUDGET_BYTES,
-    TaskIntent,
+    _INTERNAL_BUDGET_BYTES,
+    _INTERNAL_DEPTH,
     _classify_artifact,
 )
 from codeplane.mcp.tools.recon.parsing import parse_task
@@ -48,7 +51,7 @@ from codeplane.mcp.tools.recon.scoring import (
     _aggregate_to_files,
     _apply_filters,
     _score_candidates,
-    find_elbow,
+    find_gap_cutoff,
 )
 
 if TYPE_CHECKING:
@@ -62,7 +65,7 @@ log = structlog.get_logger(__name__)
 
 
 # ===================================================================
-# Seed Selection Pipeline
+# Seed Selection Pipeline (v4: no arbitrary caps)
 # ===================================================================
 
 
@@ -72,19 +75,20 @@ async def _select_seeds(
     explicit_seeds: list[str] | None = None,
     *,
     min_seeds: int = 3,
-    max_seeds: int = 15,
 ) -> tuple[list[DefFact], ParsedTask, list[tuple[str, float]], dict[str, Any], dict[str, Any]]:
     """Select seed definitions using the full harvest -> filter -> score pipeline.
 
-    Pipeline:
+    v4 pipeline — no arbitrary caps:
     1. Parse task -> ParsedTask (with intent classification)
     2. Run 4 harvesters in parallel
     3. Merge candidates (accumulate evidence)
-    4. Enrich with structural metadata + artifact kind
-    5. Apply query-conditioned filter pipeline (OR gate + negative gating)
-    6. Score with bounded features + artifact-kind weights
-    7. Find elbow for dynamic seed count
-    8. Enforce file diversity + stage-aware test seed cap
+    4. Graph harvester (1-hop from top merged)
+    5. Enrich with structural metadata + artifact kind
+    6. Apply query-conditioned filter pipeline
+    7. Score with bounded features + artifact-kind weights
+    8. Aggregate to file level
+    9. Gap-based file cutoff (distribution-relative, no upper bound)
+    10. Multi-seed per file: all defs above global def-score median
 
     Returns:
         (seeds, parsed_task, scored_candidates, diagnostics, gated_candidates)
@@ -149,7 +153,7 @@ async def _select_seeds(
     # 4. Enrich with structural metadata + artifact kind
     await _enrich_candidates(app_ctx, merged)
 
-    # 5. Intent-aware filter pipeline (now query-conditioned)
+    # 5. Intent-aware filter pipeline (query-conditioned)
     gated = _apply_filters(merged, parsed)
 
     if not gated:
@@ -176,34 +180,34 @@ async def _select_seeds(
     # 7. Aggregate to file level
     file_ranked = _aggregate_to_files(scored, gated)
 
-    # 8. File-level elbow detection
+    # 8. Gap-based file cutoff (distribution-relative, NO upper bound)
     file_score_values = [fs for _, fs, _ in file_ranked]
-    n_files = find_elbow(
+    n_files = find_gap_cutoff(
         file_score_values,
-        min_seeds=min(min_seeds, len(file_ranked)),
-        max_seeds=max_seeds,
+        min_keep=min(min_seeds, len(file_ranked)),
     )
 
-    # 9. File-first seed selection:
-    #    Phase 1 — one seed per top file (maximum file diversity)
-    #    Phase 2 — second-best def per top file if budget remains
-    #    Stage-aware test seed cap (Section 5)
+    # 9. Multi-seed per file selection
+    #    Phase 1: best def per surviving file (file diversity)
+    #    Phase 2: additional defs above global def-score median (depth)
+    #    Stage-aware test seed cap
     seeds: list[DefFact] = []
     selected_uids: set[str] = set()
     test_seed_count = 0
-    max_test_seeds = max_seeds if parsed.is_test_driven else max(2, max_seeds // 3)
+    # Test seeds: uncapped if test-driven, otherwise 1/3 of total (no hard max)
+    max_test_ratio = 1.0 if parsed.is_test_driven else 0.33
 
-    # Phase 1: one seed per file (maximum file diversity)
+    # Global def-score median for phase 2 threshold
+    all_def_scores = sorted((s for _, s in scored), reverse=True)
+    def_score_median = all_def_scores[len(all_def_scores) // 2] if all_def_scores else 0.0
+
+    # Phase 1: one seed per file (diversity)
     for _fid, _fscore, fdefs in file_ranked[:n_files]:
-        if len(seeds) >= max_seeds:
-            break
         for uid, _dscore in fdefs:
             if uid in selected_uids:
                 continue
             cand = gated[uid]
             if cand.def_fact is None:
-                continue
-            if cand.is_test and test_seed_count >= max_test_seeds:
                 continue
             if cand.is_test:
                 test_seed_count += 1
@@ -211,45 +215,75 @@ async def _select_seeds(
             selected_uids.add(uid)
             break
 
-    # Phase 2: second seed per file if budget remains
+    # Phase 2: additional defs above median (within surviving files)
     for _fid, _fscore, fdefs in file_ranked[:n_files]:
-        if len(seeds) >= max_seeds:
-            break
-        for uid, _dscore in fdefs:
+        for uid, dscore in fdefs:
             if uid in selected_uids:
                 continue
+            if dscore < def_score_median:
+                break  # fdefs are sorted desc — rest will be below too
             cand = gated[uid]
             if cand.def_fact is None:
                 continue
-            if cand.is_test and test_seed_count >= max_test_seeds:
+            total_seeds = len(seeds)
+            test_limit = max(2, int(total_seeds * max_test_ratio))
+            if cand.is_test and test_seed_count >= test_limit:
                 continue
             if cand.is_test:
                 test_seed_count += 1
             seeds.append(cand.def_fact)
             selected_uids.add(uid)
-            break
-    n_seeds = len(seeds)
 
     diagnostics["total_ms"] = round((time.monotonic() - t0) * 1000)
     diagnostics["seeds_selected"] = len(seeds)
-    diagnostics["elbow_k"] = n_files
+    diagnostics["gap_cutoff_files"] = n_files
     diagnostics["file_ranked"] = len(file_ranked)
+    diagnostics["def_score_median"] = round(def_score_median, 4)
 
     log.info(
         "recon.seeds_selected",
         count=len(seeds),
-        elbow=n_seeds,
+        gap_files=n_files,
         scored_total=len(scored),
         names=[s.name for s in seeds],
         intent=parsed.intent.value,
         total_ms=diagnostics["total_ms"],
     )
 
-    # Return gated candidates for per-seed evidence breakdown (Section 7)
+    # Return gated candidates for per-seed evidence breakdown
     gated_export = {
         uid: cand for uid, cand in gated.items() if any(s.def_uid == uid for s in seeds)
     }
     return seeds, parsed, scored, diagnostics, gated_export
+
+
+# ===================================================================
+# Evidence string builder (compact single-string format)
+# ===================================================================
+
+
+def _build_evidence_string(cand: Any) -> str:
+    """Build a compact evidence string from a HarvestCandidate.
+
+    Format: ``"emb(0.82) term(config,model) lex(3) graph(→Config.validate)"``
+    """
+    parts: list[str] = []
+    if cand.from_embedding:
+        parts.append(f"emb({cand.embedding_similarity:.2f})")
+    if cand.from_term_match:
+        terms = ",".join(sorted(cand.matched_terms)[:3])
+        parts.append(f"term({terms})")
+    if cand.from_lexical:
+        parts.append(f"lex({cand.lexical_hit_count})")
+    if cand.from_explicit:
+        parts.append("explicit")
+    if cand.from_graph:
+        graph_details = [e.detail for e in cand.evidence if e.category == "graph"]
+        if graph_details:
+            parts.append(f"graph({'; '.join(graph_details[:2])})")
+        else:
+            parts.append("graph")
+    return " ".join(parts)
 
 
 # ===================================================================
@@ -268,7 +302,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         },
     )
     async def recon(
-        ctx: Context,
+        ctx: Context,  # noqa: ARG001
         task: str = Field(
             description=(
                 "Natural language description of the task. "
@@ -285,63 +319,32 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                 "Treated as high-priority explicit mentions."
             ),
         ),
-        depth: int = Field(
-            default=_DEFAULT_DEPTH,
-            ge=0,
-            le=3,
-            description=(
-                "Graph expansion depth. 0 = seeds only (no callees/callers/imports). "
-                ">=1 = expand seeds with callees, callers, imports, and siblings. "
-                "Default 2."
-            ),
-        ),
-        budget: int = Field(
-            default=_DEFAULT_BUDGET_BYTES,
-            le=_MAX_BUDGET_BYTES,
-            description="Response size budget in bytes.",
-        ),
-        max_seeds: int = Field(
-            default=15,
-            ge=1,
-            le=20,
-            description=(
-                "Upper bound on seed count. Actual count is determined "
-                "dynamically by score distribution (elbow detection)."
-            ),
-        ),
-        verbosity: str = Field(
-            default="normal",
-            description=(
-                "Response verbosity: 'minimal' (seeds only, no evidence), "
-                "'normal' (seeds + scoring summary), 'detailed' (+ evidence + diagnostics)."
-            ),
-        ),
     ) -> dict[str, Any]:
-        """Task-aware code discovery in a single call.
+        """Task-aware code discovery — ONE call, ALL context.
 
-        Pipeline: parse_task (with intent classification) ->
-        4 harvesters (embedding, term-match, lexical, explicit) ->
-        intent-aware filter pipeline -> bounded scoring ->
-        elbow detection -> graph expansion (with siblings) ->
-        evidence-annotated structured response.
+        Returns full source for every relevant definition found,
+        with compressed metadata (evidence, callees, callers, siblings).
+        No follow-up calls needed.
 
-        Returns seeds with evidence, context files, scoring summary,
-        diagnostics, and file_sha256 for write_source compatibility.
+        Pipeline: parse_task -> 5 harvesters -> filter -> score ->
+        file aggregation -> gap-based cutoff -> expand with source ->
+        compress -> deliver.
         """
         recon_id = uuid.uuid4().hex[:12]
         t_total = time.monotonic()
 
         coordinator = app_ctx.coordinator
         repo_root = coordinator.repo_root
+        depth = _INTERNAL_DEPTH
+        budget = _INTERNAL_BUDGET_BYTES
 
         # Pipeline: parse, harvest, filter, score, select
         selected_seeds, parsed_task, scored_all, diagnostics, gated = await _select_seeds(
-            app_ctx, task, seeds, min_seeds=3, max_seeds=max_seeds
+            app_ctx, task, seeds, min_seeds=3
         )
 
         if not selected_seeds:
             task_preview = task[:40] + "..." if len(task) > 40 else task
-            # Failure-mode next actions (Section 7)
             failure_actions = _build_failure_actions(
                 parsed_task.primary_terms,
                 parsed_task.explicit_paths,
@@ -349,30 +352,22 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             result: dict[str, Any] = {
                 "recon_id": recon_id,
                 "seeds": [],
-                "summary": _summarize_recon(0, 0, 0, 0, 0, task_preview),
+                "summary": f'No seeds found for "{task_preview}"',
                 "agentic_hint": (
-                    "No relevant definitions found. See 'next_actions' for concrete recovery steps."
+                    "No relevant definitions found. "
+                    "See 'next_actions' for concrete recovery steps."
                 ),
                 "next_actions": failure_actions,
             }
-            if verbosity == "detailed":
-                result["diagnostics"] = diagnostics
             return result
 
-        # Expand each seed
+        # Expand each seed (full source included)
         t_expand = time.monotonic()
         seed_results: list[dict[str, Any]] = []
         seed_paths: set[str] = set()
-        total_callees = 0
-        total_callers = 0
-        total_import_defs = 0
-        total_siblings = 0
 
         terms = parsed_task.keywords
-
-        # Build per-seed evidence from scored candidates + gated pool
         scored_map: dict[str, float] = dict(scored_all)
-        budget_remaining = budget
 
         for seed_def in selected_seeds:
             expanded = await _expand_seed(
@@ -381,63 +376,22 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                 repo_root,
                 depth=depth,
                 task_terms=terms,
-                budget_remaining=budget_remaining,
             )
 
-            # Add artifact_kind to each seed result
+            # Add compact metadata
             expanded["artifact_kind"] = _classify_artifact(expanded["path"]).value
 
-            # Per-seed evidence breakdown (Section 7)
-            if verbosity != "minimal":
-                uid = seed_def.def_uid
-                score = scored_map.get(uid, 0.0)
-                expanded["seed_score"] = round(score, 4)
+            uid = seed_def.def_uid
+            score = scored_map.get(uid, 0.0)
+            expanded["score"] = round(score, 4)
 
-                # Build evidence summary from the gated candidate
-                cand = gated.get(uid)
-                if cand is not None:
-                    evidence_breakdown: dict[str, Any] = {
-                        "relevance_score": round(cand.relevance_score, 4),
-                        "hub_score": cand.hub_score,
-                        "evidence_axes": cand.evidence_axes,
-                        "sources": [],
-                    }
-                    if cand.from_embedding:
-                        evidence_breakdown["sources"].append(
-                            f"embedding (sim={cand.embedding_similarity:.3f})"
-                        )
-                    if cand.from_term_match:
-                        evidence_breakdown["sources"].append(
-                            f"term_match ({', '.join(sorted(cand.matched_terms)[:3])})"
-                        )
-                    if cand.from_lexical:
-                        evidence_breakdown["sources"].append(
-                            f"lexical ({cand.lexical_hit_count} hits)"
-                        )
-                    if cand.from_explicit:
-                        evidence_breakdown["sources"].append("explicit")
-                    if cand.from_graph:
-                        graph_details = [
-                            e.detail for e in cand.evidence if e.category == "graph"
-                        ]
-                        evidence_breakdown["sources"].append(
-                            f"graph ({'; '.join(graph_details[:2])})"
-                            if graph_details
-                            else "graph"
-                        )
-                    expanded["evidence"] = evidence_breakdown
+            # Compact evidence string (replaces nested evidence dict)
+            cand = gated.get(uid)
+            if cand is not None:
+                expanded["evidence"] = _build_evidence_string(cand)
 
             seed_results.append(expanded)
             seed_paths.add(expanded["path"])
-            total_callees += len(expanded.get("callees", []))
-            total_callers += len(expanded.get("callers", []))
-            total_import_defs += len(expanded.get("import_defs", []))
-            total_siblings += len(expanded.get("siblings", []))
-
-            # Update budget_remaining for fan-out brake
-            from codeplane.mcp.tools.recon.assembly import _estimate_bytes
-
-            budget_remaining = max(0, budget - _estimate_bytes({"seeds": seed_results}))
 
         expand_ms = round((time.monotonic() - t_expand) * 1000)
 
@@ -447,90 +401,51 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             scaffolds = await _build_import_scaffolds(app_ctx, seed_paths, repo_root)
 
         # Assemble response
-        task_preview = task[:40] + "..." if len(task) > 40 else task
-        response: dict[str, Any] = {
-            "recon_id": recon_id,
-            "seeds": seed_results,
-            "summary": _summarize_recon(
-                len(seed_results),
-                total_callees,
-                total_callers,
-                total_import_defs,
-                len(scaffolds),
-                task_preview,
-            ),
-        }
-
-        if scaffolds:
-            response["import_scaffolds"] = scaffolds
-
-        # Scoring summary (normal + detailed)
-        if verbosity != "minimal":
-            response["scoring_summary"] = {
-                "pipeline": "harvest->filter(query-conditioned)->score(bounded)->elbow",
-                "intent": parsed_task.intent.value,
-                "is_test_driven": parsed_task.is_test_driven,
-                "is_stacktrace_driven": parsed_task.is_stacktrace_driven,
-                "candidates_harvested": len(scored_all),
-                "seeds_selected": len(selected_seeds),
-                "parsed_terms": parsed_task.primary_terms[:8],
-                "explicit_paths": parsed_task.explicit_paths,
-                "explicit_symbols": parsed_task.explicit_symbols[:5],
-            }
-            if parsed_task.negative_mentions:
-                response["scoring_summary"]["negative_mentions"] = parsed_task.negative_mentions
-
-        # Diagnostics (detailed only)
-        if verbosity == "detailed":
-            diagnostics["expand_ms"] = expand_ms
-            diagnostics["total_ms"] = round((time.monotonic() - t_total) * 1000)
-            response["diagnostics"] = diagnostics
-
-        # Budget trimming
-        response = _trim_to_budget(response, budget)
-
-        # Deterministic agentic hint based on intent
+        n_seeds = len(seed_results)
+        n_files = len(seed_paths)
         seed_paths_list = sorted(seed_paths)
         paths_str = ", ".join(seed_paths_list[:5])
         if len(seed_paths_list) > 5:
             paths_str += f" (+{len(seed_paths_list) - 5} more)"
 
-        intent = parsed_task.intent
-        if intent == TaskIntent.debug:
-            action_hint = (
-                "Focus on the seed with highest score. "
-                "Check callers for how the buggy code is invoked. "
-                "Use read_source on caller paths for full context."
-            )
-        elif intent == TaskIntent.implement:
-            action_hint = (
-                "Use write_source with file_sha256 from seed source to edit. "
-                "Check siblings for patterns to follow. "
-                "Use checkpoint after edits."
-            )
-        elif intent == TaskIntent.refactor:
-            action_hint = (
-                "Check callers to understand impact of changes. "
-                "Use refactor_rename for symbol renames across files. "
-                "Use checkpoint after edits."
-            )
-        elif intent == TaskIntent.understand:
-            action_hint = (
-                "Read seed sources for implementation details. "
-                "Check callees for dependencies and callers for usage. "
-                "Use read_source for additional spans."
-            )
-        else:
-            action_hint = (
-                "Use write_source with file_sha256 from seed source to edit. "
-                "Use read_source for additional spans. "
-                "Use checkpoint after edits."
-            )
+        response: dict[str, Any] = {
+            "recon_id": recon_id,
+            "seeds": seed_results,
+            "summary": f"{n_seeds} seed(s) across {n_files} file(s): {paths_str}",
+        }
 
+        if scaffolds:
+            response["import_scaffolds"] = scaffolds
+
+        # Scoring summary (always included — no verbosity knob)
+        response["scoring_summary"] = {
+            "pipeline": "harvest->filter->score->file_aggregate->gap_cutoff->expand",
+            "intent": parsed_task.intent.value,
+            "candidates_harvested": len(scored_all),
+            "seeds_selected": n_seeds,
+            "parsed_terms": parsed_task.primary_terms[:8],
+        }
+        if parsed_task.explicit_paths:
+            response["scoring_summary"]["explicit_paths"] = parsed_task.explicit_paths
+        if parsed_task.negative_mentions:
+            response["scoring_summary"]["negative_mentions"] = parsed_task.negative_mentions
+
+        # Diagnostics (always included in compact form)
+        diagnostics["expand_ms"] = expand_ms
+        diagnostics["total_ms"] = round((time.monotonic() - t_total) * 1000)
+        response["diagnostics"] = diagnostics
+
+        # Budget trimming (internal shaping, not agent-facing)
+        response = _trim_to_budget(response, budget)
+
+        # Agentic hint — facts about what was found + universal next step
+        intent = parsed_task.intent
         response["agentic_hint"] = (
-            f"Recon found {len(seed_results)} seed(s) "
+            f"Recon found {n_seeds} seed(s) "
             f"(intent: {intent.value}) across: {paths_str}. "
-            f"{action_hint}"
+            f"Source included for all seeds. "
+            f"Use write_source with file_sha256 to edit. "
+            f"Use checkpoint after edits."
         )
 
         # Coverage hint
@@ -542,21 +457,6 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                     f"{', '.join(missing_paths)}. "
                     "Use read_source to examine them directly."
                 )
-
-        # Follow-up pointers (structured suggestions)
-        follow_ups: list[dict[str, str]] = []
-        if parsed_task.explicit_paths:
-            for p in parsed_task.explicit_paths:
-                if p not in seed_paths:
-                    follow_ups.append(
-                        {
-                            "action": "read_source",
-                            "target": p,
-                            "reason": "mentioned in task but not in seeds",
-                        }
-                    )
-        if follow_ups:
-            response["follow_up"] = follow_ups
 
         from codeplane.mcp.delivery import wrap_existing_response
 

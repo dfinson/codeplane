@@ -606,7 +606,10 @@ def initialize_repo(
                 pct = int(indexed / total * 100) if total > 0 else 0
                 embedding_phase._progress.update(embedding_task_id, completed=pct)  # type: ignore[union-attr]
                 embedding_phase._update()
-                embedding_total = total  # remember for completion message
+
+            elif progress_phase == "embeddings_done":
+                # Final signal with actual def count (indexed == total == def count)
+                embedding_total = indexed
 
             elif progress_phase in ("resolving_cross_file", "resolving_refs", "resolving_types"):
                 # First resolution callback — close indexing/embedding boxes, open resolution box

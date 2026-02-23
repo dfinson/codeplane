@@ -705,6 +705,40 @@ def _extract_jq_commands(
             cmds.append(f"jq '.{section}' {path}")
         return summary, cmds
 
+    if kind == "recon_result":
+        seeds = payload.get("seeds", [])
+        n_seeds = len(seeds)
+        files = sorted({s.get("path", "") for s in seeds})
+        n_files = len(files)
+        summary = f"{n_seeds} seed(s) across {n_files} file(s)"
+        cmds = [
+            f"jq '[.seeds[] | {{symbol: .symbol, path: .path, score: .score, span: .span}}]' {path}",
+            f"jq '[.seeds[] | .path] | unique' {path}",
+        ]
+        # Per-file filter commands (dynamic, from actual data)
+        for file_path in files[:6]:
+            cmds.append(
+                f"jq '[.seeds[] | select(.path == \"{file_path}\")"
+                f" | {{symbol: .symbol, score: .score, span: .span}}]' {path}"
+            )
+        # High-score filter for large result sets
+        if n_seeds > 8:
+            scores = sorted((s.get("score", 0) for s in seeds), reverse=True)
+            median_score = scores[n_seeds // 2]
+            cmds.append(
+                f"jq '[.seeds[] | select(.score > {median_score:.3f})"
+                f" | {{symbol: .symbol, path: .path, source: .source}}]' {path}"
+            )
+        # Source extraction for top seed
+        if seeds:
+            top_seed = max(seeds, key=lambda s: s.get("score", 0))
+            top_symbol = top_seed.get("symbol", "?")[:40]
+            cmds.append(
+                f"jq '.seeds[] | select(.symbol | startswith(\"{top_symbol[:20]}\"))"
+                f" | .source' {path}"
+            )
+        return summary, cmds
+
     return "", []
 
 

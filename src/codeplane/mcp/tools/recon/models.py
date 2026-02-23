@@ -16,14 +16,15 @@ if TYPE_CHECKING:
     from codeplane.index.models import DefFact
 
 # ---------------------------------------------------------------------------
-# Constants
+# Constants (all internal — not exposed to agents)
 # ---------------------------------------------------------------------------
 
-_DEFAULT_DEPTH = 2  # Graph expansion depth
+_INTERNAL_DEPTH = 2  # Graph expansion depth (backend-decided, not agent-facing)
 
-# Budget defaults (bytes)
-_DEFAULT_BUDGET_BYTES = 30_000
-_MAX_BUDGET_BYTES = 60_000
+# Internal budget for pre-delivery response shaping (bytes).
+# This is NOT the MCP inline cap — it's a generous ceiling to avoid
+# pathologically huge payloads before the delivery layer applies its own cap.
+_INTERNAL_BUDGET_BYTES = 120_000
 
 # Per-tier line caps
 _SEED_BODY_MAX_LINES = 80

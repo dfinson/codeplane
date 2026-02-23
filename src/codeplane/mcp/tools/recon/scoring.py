@@ -178,6 +178,59 @@ def find_elbow(scores: list[float], *, min_seeds: int = 3, max_seeds: int = 15) 
     return max(min_seeds, min(result, max_seeds))
 
 
+def find_gap_cutoff(
+    scores: list[float],
+    *,
+    min_keep: int = 2,
+) -> int:
+    """Distribution-relative cutoff for sorted-descending scores.
+
+    Walks top-down looking for the first gap between consecutive scores
+    that exceeds ``median_gap * 2``.  If no significant gap is found,
+    keeps everything above the global median.  No arbitrary upper bound.
+
+    Returns the count of items to keep (>= *min_keep*).
+    """
+    n = len(scores)
+    if n <= min_keep:
+        return n
+
+    # Compute consecutive gaps
+    gaps = [scores[i] - scores[i + 1] for i in range(n - 1)]
+    if not gaps:
+        return n
+
+    # Median gap as baseline
+    sorted_gaps = sorted(gaps)
+    median_gap = sorted_gaps[len(sorted_gaps) // 2]
+    threshold = max(median_gap * 2.0, 1e-6)
+
+    # Walk top-down: cut at first significant gap (after min_keep)
+    for i in range(min_keep - 1, len(gaps)):
+        if gaps[i] > threshold:
+            cutoff = i + 1
+            log.debug(
+                "recon.gap_cutoff",
+                n_total=n,
+                cutoff=cutoff,
+                gap=round(gaps[i], 5),
+                threshold=round(threshold, 5),
+            )
+            return max(min_keep, cutoff)
+
+    # No significant gap — keep everything above global median
+    global_median = scores[n // 2]
+    above_median = sum(1 for s in scores if s >= global_median)
+    result = max(min_keep, above_median)
+    log.debug(
+        "recon.gap_cutoff_median_fallback",
+        n_total=n,
+        result=result,
+        global_median=round(global_median, 5),
+    )
+    return result
+
+
 # ===================================================================
 # Scoring — bounded features with separated relevance/seed scores
 # ===================================================================
