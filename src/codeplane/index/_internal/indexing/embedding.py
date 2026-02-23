@@ -879,8 +879,8 @@ class EmbeddingIndex:
                 accepted.append((uid, best_score))
                 continue
 
-            # Rule (c): NAME or CTX_PATH alone, best_score >= P75
-            if (has_name or KIND_CTX_PATH in kind_scores) and not only_lit and best_score >= p75_score:
+            # Rule (c): NAME, CTX_PATH, or SEM_FACTS alone, best_score >= P75
+            if (has_name or KIND_CTX_PATH in kind_scores or KIND_SEM_FACTS in kind_scores) and not only_lit and best_score >= p75_score:
                 accepted.append((uid, best_score))
                 continue
 
