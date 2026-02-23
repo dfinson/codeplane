@@ -411,17 +411,40 @@ async def _select_seeds(
                 if consecutive_empty >= _K_SATURATE:
                     break
     else:
-        # ── No-anchor case: elbow detection on file scores ──
-        # Use the score distribution's natural break to determine
-        # how many files are above the noise floor.  No arbitrary
-        # fraction of top_score — the elbow adapts to the shape.
+        # ── No-anchor case: two-phase adaptive inclusion ──
+        # Phase 1 — elbow detection on file scores.
+        # Phase 2 — tail extension using MAD-derived floor from the
+        #           elbow-selected files (mirrors the anchor-case MAD
+        #           approach, fully data-adaptive).
         file_scores = [fs for _, fs, _, _, _ in file_ranked_dual]
+        n_candidates = len(file_scores)
+        # Adaptive minimum: at least 20 % of candidates (capped at 12)
+        # so broad queries don't get starved.
+        adaptive_min = max(n_files, 5, min(n_candidates // 5, 12))
         elbow_n = find_elbow(
             file_scores,
-            min_seeds=max(n_files, 3),
-            max_seeds=min(len(file_scores), 40),
+            min_seeds=adaptive_min,
+            max_seeds=min(n_candidates, 40),
         )
         n_files = max(n_files, elbow_n)
+
+        # Phase 2: MAD-based tail extension
+        # Compute median & MAD of elbow-included scores, then set a
+        # tail floor = median - 1.5 * MAD.  Files below the elbow but
+        # above this floor are "second-tier relevant" — include them.
+        if n_files < n_candidates:
+            included = file_scores[:n_files]
+            inc_sorted = sorted(included)
+            inc_median = inc_sorted[len(inc_sorted) // 2]
+            abs_devs = sorted(abs(s - inc_median) for s in included)
+            inc_mad = abs_devs[len(abs_devs) // 2] if abs_devs else 0.0
+            tail_floor = inc_median - 1.5 * inc_mad
+            # Extend inclusion to files above tail_floor
+            for idx in range(n_files, min(n_candidates, 40)):
+                if file_scores[idx] >= tail_floor:
+                    n_files = idx + 1
+                else:
+                    break
 
     log.info(
         "recon.file_inclusion",
@@ -446,9 +469,7 @@ async def _select_seeds(
     diagnostics["buckets"] = {
         "edit_target": sum(1 for b in file_buckets.values() if b == ReconBucket.edit_target),
         "context": sum(1 for b in file_buckets.values() if b == ReconBucket.context),
-        "supplementary": sum(
-            1 for b in file_buckets.values() if b == ReconBucket.supplementary
-        ),
+        "supplementary": sum(1 for b in file_buckets.values() if b == ReconBucket.supplementary),
     }
 
     # 10. Multi-seed per file selection
@@ -607,11 +628,14 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         budget = _INTERNAL_BUDGET_BYTES
 
         # Pipeline: parse, harvest, filter, score, select, bucket
-        selected_seeds, parsed_task, scored_all, diagnostics, gated, file_buckets = (
-            await _select_seeds(
-                app_ctx, task, seeds, pinned_paths=pinned_paths, min_seeds=3
-            )
-        )
+        (
+            selected_seeds,
+            parsed_task,
+            scored_all,
+            diagnostics,
+            gated,
+            file_buckets,
+        ) = await _select_seeds(app_ctx, task, seeds, pinned_paths=pinned_paths, min_seeds=3)
 
         if not selected_seeds:
             task_preview = task[:40] + "..." if len(task) > 40 else task
@@ -669,7 +693,11 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
 
             # Bucket assignment
             fid = _file_id_by_uid.get(uid)
-            bucket = file_buckets.get(fid, ReconBucket.supplementary) if fid else ReconBucket.supplementary
+            bucket = (
+                file_buckets.get(fid, ReconBucket.supplementary)
+                if fid
+                else ReconBucket.supplementary
+            )
             expanded["bucket"] = bucket.value
 
             seed_results.append(expanded)
