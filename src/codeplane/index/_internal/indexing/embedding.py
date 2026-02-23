@@ -751,18 +751,19 @@ class EmbeddingIndex:
                 # config_uids, so they fall through to the normal record
                 # builder below and keep their NAME/DOC/SEM_FACTS records.
 
-        # Build FILE_SCAFFOLD records — one per file, keyed to the first def.
-        # Captures the compositional role of the file (what it defines, how
-        # symbols relate) for embedding queries about architectural intent.
+        # Build FILE_SCAFFOLD records — one per def in the file.
+        # Every def gets the same scaffold text so that file-level
+        # architectural context surfaces in tiered acceptance for
+        # ALL symbols, not just the arbitrary first one.
         for fp, defs_in_file in file_defs.items():
             if not fp or not defs_in_file:
                 continue
             scaffold_text = _build_file_scaffold(fp, defs_in_file)
             if scaffold_text:
-                # Key to first def_uid in the file (arbitrary but stable)
-                anchor_uid = defs_in_file[0].get("def_uid", "")
-                if anchor_uid:
-                    records.append((anchor_uid, KIND_FILE_SCAFFOLD, scaffold_text))
+                for d in defs_in_file:
+                    uid = d.get("def_uid", "")
+                    if uid:
+                        records.append((uid, KIND_FILE_SCAFFOLD, scaffold_text))
 
         # Build records for non-config defs
         for uid, d in uid_to_def.items():
@@ -1030,6 +1031,7 @@ class EmbeddingIndex:
                 KIND_CTX_PATH in kind_scores
                 or KIND_CTX_USAGE in kind_scores
                 or KIND_SEM_FACTS in kind_scores
+                or KIND_FILE_SCAFFOLD in kind_scores
             )
             only_lit = set(kind_scores.keys()) == {KIND_LIT_HINTS}
 
