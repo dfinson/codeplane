@@ -604,23 +604,40 @@ class EmbeddingIndex:
             file_defs[fp].append(d)
 
         # Detect config files → BLOCK records
+        # Only truly simple defs (assignments, small bodies) are aggregated
+        # into BLOCK records. Classes and functions keep individual NAME/DOC
+        # records so they remain discoverable by embedding search.
         config_uids: set[str] = set()
+        _BLOCK_ONLY_KINDS = frozenset({"variable", "assignment", "constant", "pair", "key", "table"})
         for fp, defs_in_file in file_defs.items():
             if _detect_config_file(defs_in_file):
-                block_records, block_members = _aggregate_config_blocks(
-                    defs_in_file, fp
-                )
-                records.extend(block_records)
-                self._block_members.update(block_members)
-                config_uids.update(d.get("def_uid", "") for d in defs_in_file)
-                # Config defs still get CTX_PATH
-                for d in defs_in_file:
+                # Split: simple defs → BLOCK, classes/functions → individual records
+                block_defs = [
+                    d for d in defs_in_file
+                    if d.get("kind", "") in _BLOCK_ONLY_KINDS
+                    or (d.get("end_line", 0) - d.get("start_line", 0)) <= 3
+                ]
+
+                if block_defs:
+                    block_records, block_members = _aggregate_config_blocks(
+                        block_defs, fp
+                    )
+                    records.extend(block_records)
+                    self._block_members.update(block_members)
+                    config_uids.update(d.get("def_uid", "") for d in block_defs)
+
+                # Blocked config defs get CTX_PATH here (they're skipped below)
+                for d in block_defs:
                     uid = d.get("def_uid", "")
                     fp_val = d.get("_file_path", "")
                     if fp_val:
                         phrase = _path_to_phrase(fp_val)
                         if phrase:
                             records.append((uid, KIND_CTX_PATH, phrase))
+
+                # Preserved defs (classes, functions) are NOT added to
+                # config_uids, so they fall through to the normal record
+                # builder below and keep their NAME/DOC/SEM_FACTS records.
 
         # Build records for non-config defs
         for uid, d in uid_to_def.items():

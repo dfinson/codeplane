@@ -31,6 +31,7 @@ from codeplane.mcp.tools.recon.harvesters import (
     _enrich_candidates,
     _harvest_embedding,
     _harvest_explicit,
+    _harvest_graph,
     _harvest_lexical,
     _harvest_term_match,
     _merge_candidates,
@@ -135,6 +136,14 @@ async def _select_seeds(
     if not merged:
         diagnostics["total_ms"] = round((time.monotonic() - t0) * 1000)
         return [], parsed, [], diagnostics, {}
+
+    # 3.5. Graph harvester — walk 1-hop edges from top merged candidates
+    graph_candidates = await _harvest_graph(app_ctx, merged, parsed)
+    if graph_candidates:
+        merged = _merge_candidates(merged, graph_candidates)
+        diagnostics["harvested"]["graph"] = len(graph_candidates)
+        diagnostics["harvested"]["merged_with_graph"] = len(merged)
+        log.debug("recon.graph_merged", graph=len(graph_candidates), total=len(merged))
 
     # 4. Enrich with structural metadata + artifact kind
     await _enrich_candidates(app_ctx, merged)
@@ -380,6 +389,15 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                         )
                     if cand.from_explicit:
                         evidence_breakdown["sources"].append("explicit")
+                    if cand.from_graph:
+                        graph_details = [
+                            e.detail for e in cand.evidence if e.category == "graph"
+                        ]
+                        evidence_breakdown["sources"].append(
+                            f"graph ({'; '.join(graph_details[:2])})"
+                            if graph_details
+                            else "graph"
+                        )
                     expanded["evidence"] = evidence_breakdown
 
             seed_results.append(expanded)

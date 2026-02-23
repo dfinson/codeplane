@@ -248,6 +248,7 @@ def _score_candidates(
       f_path:   Path contains primary term (binary).
       f_lexical: Lexical hit presence (binary, avoids double-counting with term).
       f_explicit: Explicit mention (binary).
+      f_graph:  Graph-discovered (binary, structural adjacency).
       f_artifact: Intent-aware artifact weight [0, 1].
 
     Relevance score = weighted sum of all features (how relevant to task).
@@ -269,6 +270,7 @@ def _score_candidates(
         f_axes = _clamp((cand.evidence_axes - 1) / 3.0)
         f_lexical = _clamp(min(cand.lexical_hit_count, 5) / 5.0)
         f_explicit = 1.0 if cand.from_explicit else 0.0
+        f_graph = 0.5 if cand.from_graph else 0.0
 
         name_lower = cand.def_fact.name.lower()
         f_name = 1.0 if any(t in name_lower for t in parsed.primary_terms) else 0.0
@@ -280,14 +282,15 @@ def _score_candidates(
 
         # --- Relevance score (how relevant to the task) ---
         relevance = (
-            f_emb * 0.30
+            f_emb * 0.28
             + f_hub * 0.10
-            + f_terms * 0.15
+            + f_terms * 0.14
             + f_axes * 0.10
             + f_name * 0.12
             + f_path * 0.05
-            + f_lexical * 0.08
-            + f_explicit * 0.10
+            + f_lexical * 0.07
+            + f_explicit * 0.08
+            + f_graph * 0.06
         ) * f_artifact
 
         # --- Seed score (how good as graph expansion entry) ---

@@ -450,6 +450,7 @@ class HarvestCandidate:
     from_term_match: bool = False
     from_lexical: bool = False
     from_explicit: bool = False
+    from_graph: bool = False
 
     # Harvester-specific scores
     embedding_similarity: float = 0.0
@@ -481,18 +482,22 @@ class HarvestCandidate:
                 self.from_term_match,
                 self.from_lexical,
                 self.from_explicit,
+                self.from_graph,
             ]
         )
 
     @property
     def has_semantic_evidence(self) -> bool:
         """Semantic axis: embedding sim >= 0.3, OR matched >= 2 terms,
-        OR lexical hit, OR explicit mention."""
+        OR single term with hub support, OR lexical hit, OR explicit mention,
+        OR graph-discovered."""
         return (
             (self.from_embedding and self.embedding_similarity >= 0.3)
             or len(self.matched_terms) >= 2
+            or (len(self.matched_terms) == 1 and self.hub_score >= 3)
             or self.from_lexical
             or self.from_explicit
+            or self.from_graph
         )
 
     @property
