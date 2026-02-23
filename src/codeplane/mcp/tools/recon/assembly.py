@@ -34,11 +34,28 @@ def _trim_to_budget(result: dict[str, Any], budget: int) -> dict[str, Any]:
     if current <= budget:
         return result
 
-    # Tier 0: Trim supplementary bucket seeds first (lowest priority)
+    # Tier 0: Slim supplementary seeds to path-only stubs (keep file awareness)
     if "supplementary" in result:
+        for i, seed in enumerate(result["supplementary"]):
+            # Strip source/callers/callees/import_defs — keep path+bucket+evidence
+            stub = {
+                k: seed[k]
+                for k in ("def_uid", "path", "symbol", "kind", "span",
+                          "bucket", "bucket_rank", "score", "evidence",
+                          "edit_score", "context_score")
+                if k in seed
+            }
+            result["supplementary"][i] = stub
+            # Also slim the flat seeds list counterpart
+            if "seeds" in result:
+                for j, s in enumerate(result["seeds"]):
+                    if s.get("def_uid") == seed.get("def_uid") and s.get("path") == seed.get("path"):
+                        result["seeds"][j] = stub
+                        break
+
+        # If still over budget, drop supplementary seeds from back
         while result["supplementary"] and _estimate_bytes(result) > budget:
             removed = result["supplementary"].pop()
-            # Also remove from flat seeds list
             if "seeds" in result:
                 result["seeds"] = [
                     s for s in result["seeds"]

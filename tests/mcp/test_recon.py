@@ -1597,7 +1597,7 @@ class TestAggregateToFilesDual:
 
 
 class TestBucketing:
-    """Tests for _assign_buckets — rank-based bucket assignment."""
+    """Tests for _assign_buckets — score-based bucket assignment."""
 
     def _make_file_entry(
         self,
@@ -1613,60 +1613,76 @@ class TestBucketing:
         assert _assign_buckets([], {}) == {}
 
     def test_top_edit_files_become_edit_targets(self) -> None:
-        """Files with highest edit scores should be in edit_target bucket."""
+        """Files with edit_score >= 0.10 and edit > ctx should be edit_target."""
         files = [
             self._make_file_entry(1, edit_score=0.9),
             self._make_file_entry(2, edit_score=0.7),
-            self._make_file_entry(3, edit_score=0.1),
+            self._make_file_entry(3, edit_score=0.15, context_score=0.04),
         ]
-        buckets = _assign_buckets(files, {}, edit_budget=2)
+        buckets = _assign_buckets(files, {})
         assert buckets[1] == ReconBucket.edit_target
         assert buckets[2] == ReconBucket.edit_target
-        assert buckets[3] != ReconBucket.edit_target
+        assert buckets[3] == ReconBucket.edit_target  # edit > ctx and >= 0.10
 
     def test_high_context_files_become_context(self) -> None:
-        """Files with high context scores should be in context bucket."""
+        """Files with context_score >= 0.05 and ctx >= edit should be context."""
         files = [
             self._make_file_entry(1, edit_score=0.9, context_score=0.3),
-            self._make_file_entry(2, edit_score=0.1, context_score=0.8),
-            self._make_file_entry(3, edit_score=0.1, context_score=0.7),
+            self._make_file_entry(2, edit_score=0.04, context_score=0.8),
+            self._make_file_entry(3, edit_score=0.03, context_score=0.7),
         ]
-        buckets = _assign_buckets(files, {}, edit_budget=1, context_budget=2)
+        buckets = _assign_buckets(files, {})
         assert buckets[1] == ReconBucket.edit_target
         assert buckets[2] == ReconBucket.context
         assert buckets[3] == ReconBucket.context
 
     def test_remainder_is_supplementary(self) -> None:
-        """Files not in edit or context should be supplementary."""
+        """Files weak on both axes should be supplementary."""
         files = [
             self._make_file_entry(1, edit_score=0.9),
-            self._make_file_entry(2, edit_score=0.1, context_score=0.1),
+            self._make_file_entry(2, edit_score=0.03, context_score=0.04),
             self._make_file_entry(3, edit_score=0.01, context_score=0.01),
         ]
-        buckets = _assign_buckets(files, {}, edit_budget=1, context_budget=1)
+        buckets = _assign_buckets(files, {})
         assert buckets[1] == ReconBucket.edit_target
-        assert buckets[2] == ReconBucket.context
+        assert buckets[2] == ReconBucket.supplementary
         assert buckets[3] == ReconBucket.supplementary
 
-    def test_edit_budget_respected(self) -> None:
-        """Should not exceed edit_budget."""
+    def test_no_hard_cap_on_edit_targets(self) -> None:
+        """All qualifying files should become edit_target — no artificial limit."""
         files = [
             self._make_file_entry(i, edit_score=0.9 - i * 0.01)
             for i in range(10)
         ]
-        buckets = _assign_buckets(files, {}, edit_budget=3)
+        buckets = _assign_buckets(files, {})
         edit_count = sum(1 for b in buckets.values() if b == ReconBucket.edit_target)
-        assert edit_count == 3
+        # All 10 have edit_score >= 0.10 and ctx=0, so all should be edit_target
+        assert edit_count == 10
 
-    def test_context_budget_respected(self) -> None:
-        """Should not exceed context_budget."""
+    def test_no_hard_cap_on_context(self) -> None:
+        """All qualifying context files should remain context — no artificial limit."""
         files = [
-            self._make_file_entry(i, edit_score=0.01, context_score=0.9 - i * 0.01)
+            self._make_file_entry(i, edit_score=0.01, context_score=0.9 - i * 0.05)
             for i in range(10)
         ]
-        buckets = _assign_buckets(files, {}, edit_budget=0, context_budget=5)
+        buckets = _assign_buckets(files, {})
         ctx_count = sum(1 for b in buckets.values() if b == ReconBucket.context)
-        assert ctx_count <= 5
+        # All 10 have ctx_score >= 0.05 and ctx > edit, so all qualify for context.
+        # But safety net promotes the top by edit_score to edit_target → 9 ctx.
+        assert ctx_count == 9
+        edit_count = sum(1 for b in buckets.values() if b == ReconBucket.edit_target)
+        assert edit_count == 1  # safety net
+
+    def test_safety_net_promotes_top_edit(self) -> None:
+        """If no file qualifies for edit_target, the top by edit_score is promoted."""
+        files = [
+            self._make_file_entry(1, edit_score=0.08, context_score=0.2),
+            self._make_file_entry(2, edit_score=0.05, context_score=0.3),
+        ]
+        buckets = _assign_buckets(files, {})
+        # Neither qualifies (edit < 0.10), but fid=1 should be promoted
+        assert buckets[1] == ReconBucket.edit_target
+        assert buckets[2] == ReconBucket.context
 
     def test_propagates_to_candidates(self) -> None:
         """Bucket assignment should propagate to candidate objects."""
@@ -1676,7 +1692,7 @@ class TestBucketing:
         d.file_id = 1
         cand = HarvestCandidate(def_uid="a", def_fact=d)
         files = [self._make_file_entry(1, edit_score=0.9)]
-        _assign_buckets(files, {"a": cand}, edit_budget=1)
+        _assign_buckets(files, {"a": cand})
         assert cand.bucket == ReconBucket.edit_target
 
 

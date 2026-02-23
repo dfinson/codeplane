@@ -295,24 +295,23 @@ async def _select_seeds(
                 if consecutive_empty >= _K_SATURATE:
                     break
     else:
-        # ── No-anchor case: evidence-gain patience ──
-        accepted_seed_count = n_files
-        last_gain_rank = n_files - 1
+        # ── No-anchor case: score-decay patience ──
+        # Include files while their score is within a reasonable fraction
+        # of the top file's score.  Any surviving file with a meaningful
+        # score should be included — not just graph-discovered ones.
+        top_score = file_ranked_dual[0][1] if file_ranked_dual else 0.0
+        # Floor: 15% of top score — below this the file is unlikely relevant.
+        score_floor = top_score * 0.15
+        consecutive_below = 0
         for idx in range(n_files, len(file_ranked_dual)):
             _fid, _fscore, _, _, fdefs = file_ranked_dual[idx]
-            file_contributes = False
-            for uid, _dscore in fdefs:
-                cand = gated.get(uid)
-                if cand is not None and cand.def_fact is not None and cand.from_graph:
-                    file_contributes = True
-                    break
 
-            if file_contributes:
+            if _fscore >= score_floor:
                 n_files = idx + 1
-                accepted_seed_count += 1
-                last_gain_rank = idx
+                consecutive_below = 0
             else:
-                if accepted_seed_count >= min_seeds and (idx - last_gain_rank) >= _patience:
+                consecutive_below += 1
+                if consecutive_below >= _patience:
                     break
 
     log.info(

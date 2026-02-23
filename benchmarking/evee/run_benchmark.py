@@ -279,17 +279,27 @@ def compute_query_metrics(
     )
     noise_ratio = len(returned_paths - gt) / len(returned_paths) if returned_paths else 0.0
 
-    # Bucket alignment
+    # Bucket alignment — A2: track both "found anywhere" and "correctly bucketed"
     def bucket_align(gt_set: set[str], expected_bucket: str) -> float | None:
         if not gt_set:
             return None
         matched = sum(1 for f in gt_set if returned_buckets.get(f) == expected_bucket)
         return matched / len(gt_set)
 
+    def found_rate(gt_set: set[str]) -> float | None:
+        """Fraction of GT set found in ANY bucket."""
+        if not gt_set:
+            return None
+        return len(gt_set & returned_paths) / len(gt_set)
+
     bucket_alignment = {
         "edit_to_edit_target": bucket_align(gt_edit, "edit_target"),
         "ctx_to_context": bucket_align(gt_ctx, "context"),
         "supp_to_supplementary": bucket_align(gt_supp, "supplementary"),
+        # A2: found-anywhere rates (were they retrieved at all, regardless of bucket?)
+        "edit_found_any": found_rate(gt_edit),
+        "ctx_found_any": found_rate(gt_ctx),
+        "supp_found_any": found_rate(gt_supp),
     }
 
     return {
@@ -299,6 +309,8 @@ def compute_query_metrics(
         "edit_recall": round(edit_recall, 4) if edit_recall is not None else None,
         "noise_ratio": round(noise_ratio, 4),
         "returned_files": sorted(returned_paths),
+        "returned_count": len(returned_paths),
+        "gt_existing_count": len(gt),
         "bucket_alignment": bucket_alignment,
         "new_file_count": len(gt_new),
         "_detail": {
@@ -308,6 +320,9 @@ def compute_query_metrics(
             "gt_total": len(gt_files),
             "gt_existing": len(gt),
             "gt_new": len(gt_new),
+            "gt_edit_count": len(gt_edit),
+            "gt_ctx_count": len(gt_ctx),
+            "gt_supp_count": len(gt_supp),
             "hits": sorted(returned_paths & gt),
             "misses": sorted(gt - returned_paths),
             "extras": sorted(returned_paths - gt),
@@ -345,6 +360,18 @@ def compute_aggregates(
                 4,
             ),
             "avg_noise_ratio": round(_mean([r["noise_ratio"] for r in results]), 4),
+            "avg_returned_count": round(_mean([r.get("returned_count", len(r["returned_files"])) for r in results]), 1),
+            # A2: found-anywhere averages
+            "avg_edit_found_any": round(
+                _mean([r["bucket_alignment"]["edit_found_any"] for r in results
+                       if r["bucket_alignment"].get("edit_found_any") is not None]),
+                4,
+            ),
+            "avg_edit_to_edit_target": round(
+                _mean([r["bucket_alignment"]["edit_to_edit_target"] for r in results
+                       if r["bucket_alignment"].get("edit_to_edit_target") is not None]),
+                4,
+            ),
         }
 
     # Overall
@@ -656,6 +683,8 @@ def main() -> None:
                 "edit_recall": metrics["edit_recall"],
                 "noise_ratio": metrics["noise_ratio"],
                 "returned_files": metrics["returned_files"],
+                "returned_count": metrics.get("returned_count", len(metrics["returned_files"])),
+                "gt_existing_count": metrics.get("gt_existing_count", 0),
                 "bucket_alignment": metrics["bucket_alignment"],
             }
             if "new_file_count" in metrics:

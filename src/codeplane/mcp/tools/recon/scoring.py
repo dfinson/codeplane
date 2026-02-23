@@ -662,24 +662,21 @@ def _aggregate_to_files_dual(
 def _assign_buckets(
     file_ranked: list[tuple[int, float, float, float, list[tuple[str, float]]]],
     candidates: dict[str, HarvestCandidate],
-    *,
-    edit_budget: int = 5,
-    context_budget: int = 12,
 ) -> dict[int, ReconBucket]:
-    """Assign each file to a bucket using rank-based selection.
+    """Assign each file to a bucket using score-based classification.
 
-    Strategy (from design spec):
-    - Edit core = top N by file_edit_score (budget ~5)
-    - Context = high context-value within surviving files (budget ~10-15)
-    - Supplementary = remainder
+    Strategy: each file goes to the bucket matching its dominant signal.
+    - edit_target: file_edit_score > file_context_score AND edit_score >= 0.10
+    - context: file_context_score >= file_edit_score AND context_score >= 0.05
+    - supplementary: everything else (weak on both axes)
 
-    No score thresholds — purely rank-based with product budgets.
+    No hard caps — all qualifying files get the correct bucket.
+    If no file qualifies for edit_target, the top file by edit_score is promoted
+    (at least one edit_target ensures agents have somewhere to start).
 
     Args:
         file_ranked: Output of _aggregate_to_files_dual.
         candidates: Candidate defs (for updating bucket field).
-        edit_budget: Max files in edit_target bucket.
-        context_budget: Max files in context bucket.
 
     Returns:
         Dict mapping file_id to its assigned ReconBucket.
@@ -687,48 +684,35 @@ def _assign_buckets(
     if not file_ranked:
         return {}
 
-    # Sort by edit_score descending for edit target selection
-    by_edit = sorted(file_ranked, key=lambda x: (-x[2], x[0]))
-
-    # Sort by context_score descending for context selection
-    by_context = sorted(file_ranked, key=lambda x: (-x[3], x[0]))
-
     buckets: dict[int, ReconBucket] = {}
     edit_count = 0
     context_count = 0
 
-    # Phase 1: Assign edit targets (top N by edit score)
-    for fid, _fs, f_edit, _fc, _defs in by_edit:
-        if edit_count >= edit_budget:
-            break
-        # Minimum edit score to be an edit target: must have *some* signal
-        if f_edit < 0.05:
-            break
-        buckets[fid] = ReconBucket.edit_target
-        edit_count += 1
-
-    # Phase 2: Assign context (top M by context score, excluding edit targets)
-    for fid, _fs, _fe, f_ctx, _defs in by_context:
-        if context_count >= context_budget:
-            break
-        if fid in buckets:
-            continue  # Already an edit target
-        if f_ctx < 0.03:
-            break
-        buckets[fid] = ReconBucket.context
-        context_count += 1
-
-    # Phase 3: Everything else is supplementary
-    for fid, _fs, _fe, _fc, _defs in file_ranked:
-        if fid not in buckets:
+    for fid, _fs, f_edit, f_ctx, _defs in file_ranked:
+        if f_edit >= 0.10 and f_edit > f_ctx:
+            buckets[fid] = ReconBucket.edit_target
+            edit_count += 1
+        elif f_ctx >= 0.05:
+            buckets[fid] = ReconBucket.context
+            context_count += 1
+        else:
             buckets[fid] = ReconBucket.supplementary
 
+    # Safety net: if nothing qualified as edit_target, promote the top file
+    if edit_count == 0 and file_ranked:
+        top_fid = max(file_ranked, key=lambda x: x[2])[0]  # highest edit score
+        if top_fid in buckets:
+            old_bucket = buckets[top_fid]
+            buckets[top_fid] = ReconBucket.edit_target
+            edit_count = 1
+            if old_bucket == ReconBucket.context:
+                context_count -= 1
+
     # Propagate bucket to candidates
-    file_id_to_bucket = buckets
     for cand in candidates.values():
         if cand.def_fact is not None:
             fid = cand.def_fact.file_id
-            cand.bucket = file_id_to_bucket.get(fid, ReconBucket.supplementary)
+            cand.bucket = buckets.get(fid, ReconBucket.supplementary)
 
     log.debug(
         "recon.bucketing",
