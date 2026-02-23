@@ -1,0 +1,2093 @@
+{
+  "meta": {
+    "pipeline_version": "v5",
+    "date": "2026-02-23",
+    "started_at": "2026-02-23T194232Z",
+    "recon_commit": "c13539630149",
+    "evee_commit": "0efef495a5bb",
+    "total_issues": 24,
+    "total_queries": 72,
+    "elapsed_seconds": 165.7
+  },
+  "issues": {
+    "4": {
+      "Q1": {
+        "precision": 0.8,
+        "recall": 0.3077,
+        "f1": 0.4444,
+        "edit_recall": 0.6667,
+        "noise_ratio": 0.2,
+        "returned_files": [
+          "src/evee/config/models.py",
+          "src/evee/core/base_model.py",
+          "src/evee/core/models/inference_output.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/tracking/events.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.6666666666666666,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.3333,
+        "recall": 0.0769,
+        "f1": 0.125,
+        "edit_recall": 0.3333,
+        "noise_ratio": 0.6667,
+        "returned_files": [
+          "packages/evee-mlflow/src/evee_mlflow/tracking.py",
+          "src/evee/config/models.py",
+          "src/evee/tracking/events.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.3333333333333333,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.3333,
+        "recall": 0.0769,
+        "f1": 0.125,
+        "edit_recall": 0.3333,
+        "noise_ratio": 0.6667,
+        "returned_files": [
+          "docs/user-guide/cli.md",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/tracking/events.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.3333333333333333,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "38": {
+      "Q1": {
+        "precision": 0.5333,
+        "recall": 0.2667,
+        "f1": 0.3556,
+        "edit_recall": 0.3636,
+        "noise_ratio": 0.4667,
+        "returned_files": [
+          "packages/evee-azureml/src/evee_azureml/config.py",
+          "src/evee/cli/commands/list.py",
+          "src/evee/cli/commands/view.py",
+          "src/evee/config/models.py",
+          "src/evee/core/decorator_discovery.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/runner.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/resources/evaluators.py",
+          "src/evee/mcp/server.py",
+          "src/evee/mcp/tools/discovery.py",
+          "src/evee/mcp/tools/validation.py",
+          "src/evee/tracking/events.py",
+          "src/evee/ui/results-viewer/src/app.tsx"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.13636363636363635,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.5294,
+        "recall": 0.3,
+        "f1": 0.383,
+        "edit_recall": 0.3182,
+        "noise_ratio": 0.4706,
+        "returned_files": [
+          ".github/copilot-skills/evee-mcp-app/SKILL.md",
+          ".github/copilot-skills/evee-mcp-server/SKILL.md",
+          ".github/skills/docs-updater/SKILL.md",
+          "CONTRIBUTING.md",
+          "docs/design/mcp-server.md",
+          "docs/user-guide/configuration.md",
+          "docs/user-guide/mcp-server.md",
+          "src/evee/config/models.py",
+          "src/evee/mcp/README.md",
+          "src/evee/mcp/constants.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/resources/config.py",
+          "src/evee/mcp/server.py",
+          "src/evee/mcp/tools/base.py",
+          "src/evee/mcp/tools/view_results.py",
+          "src/evee/tracking/events.py",
+          "src/evee/ui/results-viewer/README.md"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.22727272727272727,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.6471,
+        "recall": 0.3667,
+        "f1": 0.4681,
+        "edit_recall": 0.3636,
+        "noise_ratio": 0.3529,
+        "returned_files": [
+          ".github/copilot-skills/evee-mcp-app/SKILL.md",
+          ".github/copilot-skills/evee-mcp-server/SKILL.md",
+          "CLAUDE.md",
+          "CONTRIBUTING.md",
+          "docs/design/mcp-server.md",
+          "docs/user-guide/cli.md",
+          "docs/user-guide/mcp-server.md",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/execution/environment.py",
+          "src/evee/mcp/README.md",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/resources/metric_patterns.py",
+          "src/evee/mcp/resources/model_patterns.py",
+          "src/evee/mcp/resources/patterns.py",
+          "src/evee/mcp/server.py",
+          "src/evee/mcp/tools/base.py",
+          "tests/mcp/test_e2e.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.22727272727272727,
+          "ctx_to_context": 0.2,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "57": {
+      "Q1": {
+        "precision": 0.1111,
+        "recall": 0.1538,
+        "f1": 0.129,
+        "edit_recall": 0.2,
+        "noise_ratio": 0.8889,
+        "returned_files": [
+          ".claude/commands/docs-updater.md",
+          ".devcontainer/devcontainer.json",
+          ".github/instructions/src.instructions.md",
+          ".github/skills/docs-updater/SKILL.md",
+          "CONTRIBUTING.md",
+          "docs/design/mcp-server.md",
+          "docs/development/contributing.md",
+          "pyproject.toml",
+          "src/evee/cli/commands/new.py",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/config/models.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/runner.py",
+          "src/evee/tracking/constants.py",
+          "tests/evee/cli/test_new_command.py",
+          "tests/evee/compute/utils/test_wheels_provisioner.py",
+          "tests/evee/execution/test_preflight.py",
+          "tests/evee/integration/test_cli.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.125,
+          "supp_to_supplementary": null
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.1667,
+        "recall": 0.2308,
+        "f1": 0.1935,
+        "edit_recall": 0.4,
+        "noise_ratio": 0.8333,
+        "returned_files": [
+          ".github/workflows/ci.yml",
+          ".github/workflows/docs.yml",
+          ".github/workflows/integration-tests.yml",
+          "CONTRIBUTING.md",
+          "docs/backends/custom-backends.md",
+          "docs/backends/mlflow.md",
+          "docs/getting-started/installation.md",
+          "example/experiment/config.azureml.yaml",
+          "pyproject.toml",
+          "src/evee/cli/commands/new.py",
+          "src/evee/cli/commands/view.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/cli/utils/model_operations.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/preflight.py",
+          "tests/evee/cli/test_new_command.py",
+          "tests/evee/execution/test_preflight.py",
+          "tests/evee/test_init.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.125,
+          "supp_to_supplementary": null
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.1111,
+        "recall": 0.0769,
+        "f1": 0.0909,
+        "edit_recall": 0.2,
+        "noise_ratio": 0.8889,
+        "returned_files": [
+          ".github/workflows/ci.yml",
+          "docs/user-guide/cli.md",
+          "src/evee/cli/commands/new.py",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/runner.py",
+          "src/evee/tracking/events.py",
+          "tests/evee/cli/test_new_command.py",
+          "tests/evee/integration/test_cli.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": null
+        },
+        "new_file_count": 0
+      }
+    },
+    "63": {
+      "Q1": {
+        "precision": 0.2941,
+        "recall": 0.2174,
+        "f1": 0.25,
+        "edit_recall": 0.0,
+        "noise_ratio": 0.7059,
+        "returned_files": [
+          "src/evee/core/base_dataset.py",
+          "src/evee/datasets/dataset_factory.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/tracking/events.py",
+          "tests/evee/cli/test_list_command.py",
+          "tests/evee/core/test_base_model.py",
+          "tests/evee/datasets/test_dataset_factory.py",
+          "tests/evee/datasets/test_model_evaluator_dataset_loading.py",
+          "tests/evee/evaluation/test_metrics_aggregator.py",
+          "tests/evee/evaluation/test_model_evaluator_evaluation.py",
+          "tests/evee/evaluation/test_model_evaluator_init.py",
+          "tests/evee/evaluation/test_model_evaluator_metrics.py",
+          "tests/evee/integration/helpers.py",
+          "tests/evee/integration/test_cli.py",
+          "tests/evee/integration/test_model_cleanup.py",
+          "tests/mcp/conftest.py",
+          "tests/mcp/test_e2e.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.13333333333333333,
+          "supp_to_supplementary": null
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.3077,
+        "recall": 0.1739,
+        "f1": 0.2222,
+        "edit_recall": 0.0,
+        "noise_ratio": 0.6923,
+        "returned_files": [
+          "docs/user-guide/cli.md",
+          "docs/user-guide/datasets.md",
+          "example/README.md",
+          "src/evee/cli/utils/dataset_operations.py",
+          "src/evee/config/models.py",
+          "src/evee/core/base_dataset.py",
+          "src/evee/datasets/dataset_factory.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/runner.py",
+          "src/evee/mcp/constants.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/server.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.06666666666666667,
+          "supp_to_supplementary": null
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.2857,
+        "recall": 0.087,
+        "f1": 0.1333,
+        "edit_recall": 0.0,
+        "noise_ratio": 0.7143,
+        "returned_files": [
+          "docs/user-guide/cli.md",
+          "example/README.md",
+          "src/evee/cli/utils/dataset_operations.py",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/config/models.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/execution/environment.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": null
+        },
+        "new_file_count": 0
+      }
+    },
+    "72": {
+      "Q1": {
+        "precision": 0.75,
+        "recall": 0.0714,
+        "f1": 0.1304,
+        "edit_recall": 0.0667,
+        "noise_ratio": 0.25,
+        "returned_files": [
+          "packages/evee-azureml/src/evee_azureml/config.py",
+          "src/evee/cli/commands/compute.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/config/models.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.06666666666666667,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.6429,
+        "recall": 0.2143,
+        "f1": 0.3214,
+        "edit_recall": 0.1333,
+        "noise_ratio": 0.3571,
+        "returned_files": [
+          ".claude/commands/docs-updater.md",
+          ".github/skills/docs-updater/SKILL.md",
+          "docs/advanced/infrastructure.md",
+          "docs/backends/azureml.md",
+          "docs/user-guide/configuration.md",
+          "docs/user-guide/metrics.md",
+          "infra/terraform/README.md",
+          "packages/evee-azureml/src/evee_azureml/compute.py",
+          "packages/evee-azureml/src/evee_azureml/config.py",
+          "packages/evee-azureml/src/evee_azureml/tracking.py",
+          "src/evee/cli/commands/compute.py",
+          "src/evee/cli/commands/tracking.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/config/models.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.13333333333333333,
+          "ctx_to_context": 0.08333333333333333,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.5882,
+        "recall": 0.2381,
+        "f1": 0.339,
+        "edit_recall": 0.1333,
+        "noise_ratio": 0.4118,
+        "returned_files": [
+          "docs/backends/azureml.md",
+          "docs/backends/custom-backends.md",
+          "docs/backends/overview.md",
+          "docs/troubleshooting.md",
+          "docs/user-guide/configuration.md",
+          "docs/user-guide/metrics.md",
+          "packages/evee-azureml/src/evee_azureml/compute.py",
+          "packages/evee-azureml/src/evee_azureml/config.py",
+          "packages/evee-azureml/src/evee_azureml/tracking.py",
+          "packages/evee-azureml/tests/test_azureml_backend_pkg.py",
+          "packages/evee-azureml/tests/test_tracking.py",
+          "src/evee/cli/commands/compute.py",
+          "src/evee/cli/commands/tracking.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/config/models.py",
+          "tests/evee/cli/test_compute_commands.py",
+          "tests/evee/cli/test_metric_commands.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.13333333333333333,
+          "ctx_to_context": 0.16666666666666666,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "108": {
+      "Q1": {
+        "precision": 0.6,
+        "recall": 0.1071,
+        "f1": 0.1818,
+        "edit_recall": 0.0,
+        "noise_ratio": 0.4,
+        "returned_files": [
+          "src/evee/config/models.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/execution/experiment_runner.py",
+          "src/evee/mcp/server.py",
+          "src/evee/tracking/events.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.25,
+        "recall": 0.0357,
+        "f1": 0.0625,
+        "edit_recall": 0.0,
+        "noise_ratio": 0.75,
+        "returned_files": [
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/config/models.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/runner.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.0909,
+        "recall": 0.0357,
+        "f1": 0.0513,
+        "edit_recall": 0.0,
+        "noise_ratio": 0.9091,
+        "returned_files": [
+          ".claude/commands/testing.md",
+          ".github/copilot-skills/evee-mcp-server/SKILL.md",
+          ".github/skills/testing/SKILL.md",
+          "CONTRIBUTING.md",
+          "docs/design/mcp-server.md",
+          "docs/development/contributing.md",
+          "docs/user-guide/cli.md",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/execution/environment.py",
+          "tests/evee/evaluation/test_model_evaluator_evaluation.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "172": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "edit_recall": 0.0,
+        "noise_ratio": 1.0,
+        "returned_files": [
+          "packages/evee-mlflow/tests/test_mlflow_backend.py",
+          "tests/evee/cli/test_backend_integration.py",
+          "tests/evee/cli/test_e2e_project_workflow.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.6471,
+        "recall": 0.3143,
+        "f1": 0.4231,
+        "edit_recall": 0.4615,
+        "noise_ratio": 0.3529,
+        "returned_files": [
+          ".github/copilot-skills/evee-mcp-app/SKILL.md",
+          ".github/instructions/docs.instructions.md",
+          ".github/skills/docs-updater/SKILL.md",
+          "CONTRIBUTING.md",
+          "README.md",
+          "docs/design/mcp-server.md",
+          "docs/development/contributing.md",
+          "docs/user-guide/cli.md",
+          "docs/user-guide/mcp-server.md",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/runner.py",
+          "src/evee/mcp/README.md",
+          "src/evee/mcp/constants.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/tools/base.py",
+          "tests/mcp/test_resources.py",
+          "tests/test_mcp_server.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.6471,
+        "recall": 0.3143,
+        "f1": 0.4231,
+        "edit_recall": 0.3846,
+        "noise_ratio": 0.3529,
+        "returned_files": [
+          ".github/copilot-skills/evee-mcp-app/SKILL.md",
+          ".github/copilot-skills/evee-mcp-server/SKILL.md",
+          ".github/skills/docs-updater/SKILL.md",
+          "docs/design/mcp-server.md",
+          "docs/user-guide/mcp-server.md",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/config/models.py",
+          "src/evee/execution/environment.py",
+          "src/evee/mcp/README.md",
+          "src/evee/mcp/constants.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/server.py",
+          "src/evee/mcp/tools/base.py",
+          "src/evee/mcp/tools/validation.py",
+          "tests/evee/evaluation/test_progress_tracker.py",
+          "tests/mcp/test_e2e.py",
+          "tests/test_mcp_server.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.047619047619047616,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "191": {
+      "Q1": {
+        "precision": 0.6471,
+        "recall": 0.2444,
+        "f1": 0.3548,
+        "edit_recall": 0.1176,
+        "noise_ratio": 0.3529,
+        "returned_files": [
+          "packages/evee-azureml/src/evee_azureml/compute.py",
+          "packages/evee-azureml/src/evee_azureml/config.py",
+          "packages/evee-azureml/src/evee_azureml/tracking.py",
+          "packages/evee-azureml/tests/test_tracking.py",
+          "src/evee/cli/commands/compute.py",
+          "src/evee/cli/commands/metric.py",
+          "src/evee/cli/commands/tracking.py",
+          "src/evee/cli/main.py",
+          "src/evee/compute/backend.py",
+          "src/evee/compute/local_compute_backend.py",
+          "src/evee/config/models.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/execution/environment.py",
+          "src/evee/tracking/backend.py",
+          "src/evee/tracking/events.py",
+          "src/evee/tracking/factory.py",
+          "tests/evee/cli/test_compute_commands.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.058823529411764705,
+          "ctx_to_context": 0.375,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.5294,
+        "recall": 0.2,
+        "f1": 0.2903,
+        "edit_recall": 0.0588,
+        "noise_ratio": 0.4706,
+        "returned_files": [
+          ".claude/commands/docs-updater.md",
+          ".github/skills/docs-updater/SKILL.md",
+          "docs/advanced/infrastructure.md",
+          "docs/backends/azureml.md",
+          "docs/user-guide/configuration.md",
+          "docs/user-guide/metrics.md",
+          "infra/terraform/README.md",
+          "packages/evee-azureml/pyproject.toml",
+          "packages/evee-azureml/src/evee_azureml/compute.py",
+          "packages/evee-azureml/src/evee_azureml/config.py",
+          "packages/evee-azureml/tests/test_azureml_backend_pkg.py",
+          "packages/evee-azureml/tests/test_tracking.py",
+          "src/evee/cli/commands/compute.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/config/models.py",
+          "src/evee/tracking/factory.py",
+          "tests/evee/cli/test_compute_commands.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.1875,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.5294,
+        "recall": 0.2,
+        "f1": 0.2903,
+        "edit_recall": 0.1176,
+        "noise_ratio": 0.4706,
+        "returned_files": [
+          "docs/advanced/infrastructure.md",
+          "docs/backends/azureml.md",
+          "docs/user-guide/configuration.md",
+          "docs/user-guide/metrics.md",
+          "packages/evee-azureml/src/evee_azureml/config.py",
+          "packages/evee-azureml/src/evee_azureml/tracking.py",
+          "packages/evee-azureml/tests/test_azureml_backend_pkg.py",
+          "packages/evee-azureml/tests/test_tracking.py",
+          "src/evee/cli/commands/compute.py",
+          "src/evee/cli/commands/metric.py",
+          "src/evee/cli/commands/tracking.py",
+          "src/evee/cli/utils/metric_operations.py",
+          "src/evee/config/models.py",
+          "src/evee/mcp/resources/evaluators.py",
+          "src/evee/mcp/server.py",
+          "src/evee/tracking/backend.py",
+          "tests/evee/cli/test_metric_commands.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.1875,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "192": {
+      "Q1": {
+        "precision": 0.2353,
+        "recall": 0.25,
+        "f1": 0.2424,
+        "edit_recall": 0.0,
+        "noise_ratio": 0.7647,
+        "returned_files": [
+          "packages/evee-azureml/src/evee_azureml/compute.py",
+          "packages/evee-azureml/src/evee_azureml/config.py",
+          "packages/evee-azureml/src/evee_azureml/tracking.py",
+          "packages/evee-azureml/tests/test_azureml_backend_pkg.py",
+          "src/evee/cli/commands/compute.py",
+          "src/evee/cli/commands/metric.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/cli/utils/metric_operations.py",
+          "src/evee/cli/utils/model_operations.py",
+          "src/evee/config/models.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/mcp/resources/evaluators.py",
+          "src/evee/mcp/server.py",
+          "src/evee/tracking/events.py",
+          "tests/evee/cli/test_backend_integration.py",
+          "tests/evee/cli/test_compute_commands.py",
+          "tests/evee/cli/test_metric_commands.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.2,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.2353,
+        "recall": 0.25,
+        "f1": 0.2424,
+        "edit_recall": 0.0,
+        "noise_ratio": 0.7647,
+        "returned_files": [
+          "CONTRIBUTING.md",
+          "docs/design/mcp-server.md",
+          "docs/development/contributing.md",
+          "docs/user-guide/metrics.md",
+          "packages/evee-azureml/pyproject.toml",
+          "packages/evee-azureml/src/evee_azureml/compute.py",
+          "packages/evee-azureml/src/evee_azureml/config.py",
+          "packages/evee-azureml/tests/test_azureml_backend_pkg.py",
+          "src/evee/cli/commands/compute.py",
+          "src/evee/config/models.py",
+          "src/evee/execution/environment.py",
+          "src/evee/mcp/README.md",
+          "src/evee/mcp/resources/evaluators.py",
+          "tests/evee/cli/test_backend_integration.py",
+          "tests/evee/cli/test_compute_commands.py",
+          "tests/evee/cli/test_e2e_project_workflow.py",
+          "tests/evee/cli/test_metric_commands.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.1,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.1765,
+        "recall": 0.1875,
+        "f1": 0.1818,
+        "edit_recall": 0.0,
+        "noise_ratio": 0.8235,
+        "returned_files": [
+          ".claude/commands/docs-updater.md",
+          ".github/skills/docs-updater/SKILL.md",
+          ".github/workflows/ci.yml",
+          "CONTRIBUTING.md",
+          "docs/advanced/infrastructure.md",
+          "docs/development/contributing.md",
+          "docs/getting-started/glossary.md",
+          "docs/user-guide/configuration.md",
+          "docs/user-guide/metrics.md",
+          "packages/evee-azureml/pyproject.toml",
+          "packages/evee-azureml/src/evee_azureml/config.py",
+          "samples/agent-sample/experiment/config.yaml",
+          "src/evee/cli/commands/compute.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/config/models.py",
+          "src/evee/tracking/factory.py",
+          "tests/evee/cli/test_metric_commands.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.1,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "193": {
+      "Q1": {
+        "precision": 0.2222,
+        "recall": 0.2857,
+        "f1": 0.25,
+        "edit_recall": 0.2857,
+        "noise_ratio": 0.7778,
+        "returned_files": [
+          ".github/instructions/src.instructions.md",
+          "pyproject.toml",
+          "src/evee/cli/main.py",
+          "src/evee/cli/utils/clear_operations.py",
+          "src/evee/cli/utils/new_project_operations.py",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/execution/environment.py",
+          "src/evee/mcp/resources/config.py",
+          "src/evee/mcp/server.py",
+          "src/evee/ui/results-viewer/package-lock.json",
+          "src/evee/ui/results-viewer/package.json",
+          "tests/evee/cli/test_clear.py",
+          "tests/evee/cli/test_list_command.py",
+          "tests/evee/cli/test_main.py",
+          "tests/evee/cli/test_new_command.py",
+          "tests/evee/compute/utils/test_wheels_provisioner.py",
+          "tests/evee/integration/test_wheels_provisioner.py",
+          "tests/mcp/test_e2e.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.14285714285714285,
+          "ctx_to_context": 0.5,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.2778,
+        "recall": 0.3571,
+        "f1": 0.3125,
+        "edit_recall": 0.2857,
+        "noise_ratio": 0.7222,
+        "returned_files": [
+          ".github/instructions/src.instructions.md",
+          "docs/backends/custom-backends.md",
+          "docs/design/mcp-server.md",
+          "docs/troubleshooting.md",
+          "docs/user-guide/cli.md",
+          "example/experiment/config.azureml.yaml",
+          "pyproject.toml",
+          "src/evee/cli/commands/new.py",
+          "src/evee/cli/main.py",
+          "src/evee/cli/utils/backend_helpers.py",
+          "src/evee/cli/utils/new_project_operations.py",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/preflight.py",
+          "tests/evee/compute/utils/test_wheels_provisioner.py",
+          "tests/evee/execution/test_preflight.py",
+          "tests/evee/integration/test_cli.py",
+          "tests/evee/integration/test_wheels_provisioner.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.14285714285714285,
+          "ctx_to_context": 0.5,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "edit_recall": 0.0,
+        "noise_ratio": 1.0,
+        "returned_files": [
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/runner.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "201": {
+      "Q1": {
+        "precision": 0.2778,
+        "recall": 0.1163,
+        "f1": 0.1639,
+        "edit_recall": 0.5,
+        "noise_ratio": 0.7222,
+        "returned_files": [
+          "CONTRIBUTING.md",
+          "docs/backends/custom-backends.md",
+          "example/experiment/config.azureml.yaml",
+          "pyproject.toml",
+          "src/evee/cli/commands/compute.py",
+          "src/evee/cli/utils/clear_operations.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/tracking/events.py",
+          "tests/evee/cli/test_compute_commands.py",
+          "tests/evee/cli/test_validate_command.py",
+          "tests/evee/compute/utils/test_wheels_provisioner.py",
+          "tests/evee/evaluation/test_model_evaluator_output.py",
+          "tests/evee/evaluation/test_progress_tracker.py",
+          "tests/evee/integration/helpers.py",
+          "tests/mcp/conftest.py",
+          "tests/mcp/test_e2e.py",
+          "tests/mcp/test_tools.py",
+          "tests/test_mcp_server.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.16666666666666666,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.1429,
+        "recall": 0.0233,
+        "f1": 0.04,
+        "edit_recall": 0.1667,
+        "noise_ratio": 0.8571,
+        "returned_files": [
+          "tests/evee/cli/test_clear.py",
+          "tests/evee/cli/test_e2e_project_workflow.py",
+          "tests/evee/cli/utils/test_init_file_manager.py",
+          "tests/evee/config/test_models.py",
+          "tests/evee/conftest.py",
+          "tests/mcp/conftest.py",
+          "tests/mcp/test_e2e.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.16666666666666666,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.1667,
+        "recall": 0.0233,
+        "f1": 0.0408,
+        "edit_recall": 0.1667,
+        "noise_ratio": 0.8333,
+        "returned_files": [
+          "tests/evee/cli/test_compute_commands.py",
+          "tests/evee/cli/test_new_command.py",
+          "tests/evee/cli/test_validators.py",
+          "tests/evee/conftest.py",
+          "tests/evee/execution/test_environment.py",
+          "tests/mcp/conftest.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "210": {
+      "Q1": {
+        "precision": 0.2778,
+        "recall": 0.2273,
+        "f1": 0.25,
+        "edit_recall": null,
+        "noise_ratio": 0.7222,
+        "returned_files": [
+          ".devcontainer/devcontainer.json",
+          ".github/instructions/packages.instructions.md",
+          "CONTRIBUTING.md",
+          "docs/development/contributing.md",
+          "packages/evee-azureml/pyproject.toml",
+          "pyproject.toml",
+          "src/evee/cli/commands/metric.py",
+          "src/evee/cli/main.py",
+          "src/evee/cli/utils/backend_helpers.py",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/config/models.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/runner.py",
+          "src/evee/tracking/events.py",
+          "src/evee/ui/results-viewer/package-lock.json",
+          "tests/evee/cli/test_compute_commands.py",
+          "tests/evee/compute/utils/test_wheels_provisioner.py",
+          "tests/evee/integration/test_wheels_provisioner.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": null,
+          "ctx_to_context": 0.125,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.2143,
+        "recall": 0.1364,
+        "f1": 0.1667,
+        "edit_recall": null,
+        "noise_ratio": 0.7857,
+        "returned_files": [
+          "CONTRIBUTING.md",
+          "docs/development/contributing.md",
+          "docs/user-guide/cli.md",
+          "src/evee/cli/utils/model_operations.py",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/execution/environment.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/resources/config.py",
+          "src/evee/mcp/resources/connections.py",
+          "src/evee/mcp/resources/evaluators.py",
+          "src/evee/mcp/resources/metric_patterns.py",
+          "src/evee/mcp/server.py",
+          "src/evee/mcp/tools/base.py",
+          "src/evee/tracking/events.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": null,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.3333,
+        "recall": 0.0455,
+        "f1": 0.08,
+        "edit_recall": null,
+        "noise_ratio": 0.6667,
+        "returned_files": [
+          "CONTRIBUTING.md",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/execution/environment.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": null,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "226": {
+      "Q1": {
+        "precision": 0.4118,
+        "recall": 0.3333,
+        "f1": 0.3684,
+        "edit_recall": 0.6667,
+        "noise_ratio": 0.5882,
+        "returned_files": [
+          "packages/evee-azureml/tests/test_tracking.py",
+          "packages/evee-mlflow/src/evee_mlflow/config.py",
+          "packages/evee-mlflow/src/evee_mlflow/tracking.py",
+          "packages/evee-mlflow/tests/test_integration.py",
+          "packages/evee-mlflow/tests/test_mlflow_autolog.py",
+          "packages/evee-mlflow/tests/test_mlflow_backend.py",
+          "src/evee/cli/commands/tracking.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/config/models.py",
+          "src/evee/tracking/backend.py",
+          "tests/evee/cli/test_backend_template_compatibility.py",
+          "tests/evee/cli/test_e2e_project_workflow.py",
+          "tests/evee/cli/test_metric_commands.py",
+          "tests/evee/cli/test_tracking_commands.py",
+          "tests/evee/config/test_models.py",
+          "tests/evee/tracking/test_tracking_factory.py",
+          "tests/mcp/conftest.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.6666666666666666,
+          "ctx_to_context": 0.6666666666666666,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.4286,
+        "recall": 0.1429,
+        "f1": 0.2143,
+        "edit_recall": 0.3333,
+        "noise_ratio": 0.5714,
+        "returned_files": [
+          "docs/user-guide/configuration.md",
+          "packages/evee-mlflow/src/evee_mlflow/tracking.py",
+          "packages/evee-mlflow/tests/test_mlflow_backend.py",
+          "src/evee/cli/commands/new.py",
+          "src/evee/cli/commands/tracking.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/mcp/constants.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.3333333333333333,
+          "ctx_to_context": 0.16666666666666666,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.3333,
+        "recall": 0.0476,
+        "f1": 0.0833,
+        "edit_recall": 0.3333,
+        "noise_ratio": 0.6667,
+        "returned_files": [
+          "packages/evee-mlflow/src/evee_mlflow/tracking.py",
+          "src/evee/tracking/backend.py",
+          "tests/evee/cli/test_tracking_commands.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.3333333333333333,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "233": {
+      "Q1": {
+        "precision": 0.5333,
+        "recall": 0.3478,
+        "f1": 0.4211,
+        "edit_recall": 0.8333,
+        "noise_ratio": 0.4667,
+        "returned_files": [
+          "src/evee/cli/utils/metric_operations.py",
+          "src/evee/cli/utils/model_operations.py",
+          "src/evee/config/models.py",
+          "src/evee/core/base_metric.py",
+          "src/evee/evaluation/metrics_aggregator.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/execution/environment.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/server.py",
+          "src/evee/tracking/backend.py",
+          "src/evee/tracking/events.py",
+          "tests/evee/cli/utils/test_metric_operations.py",
+          "tests/evee/config/test_models.py",
+          "tests/evee/conftest.py",
+          "tests/evee/evaluation/test_model_evaluator_evaluation.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.5,
+          "ctx_to_context": 0.14285714285714285,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.4118,
+        "recall": 0.3043,
+        "f1": 0.35,
+        "edit_recall": 0.6667,
+        "noise_ratio": 0.5882,
+        "returned_files": [
+          "packages/evee-azureml/src/evee_azureml/tracking.py",
+          "src/evee/config/models.py",
+          "src/evee/core/models/inference_output.py",
+          "src/evee/evaluation/metrics_aggregator.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/evaluation/progress_tracker.py",
+          "src/evee/execution/environment.py",
+          "src/evee/logging/local_metrics_logger.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/tools/base.py",
+          "src/evee/tracking/backend.py",
+          "src/evee/tracking/events.py",
+          "tests/evee/cli/test_dataset_commands.py",
+          "tests/evee/cli/test_tracking_commands.py",
+          "tests/evee/evaluation/test_progress_tracker.py",
+          "tests/evee/integration/helpers.py",
+          "tests/evee/integration/test_cli.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.3333333333333333,
+          "ctx_to_context": 0.14285714285714285,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.3333,
+        "recall": 0.1304,
+        "f1": 0.1875,
+        "edit_recall": 0.1667,
+        "noise_ratio": 0.6667,
+        "returned_files": [
+          "docs/design/mcp-server.md",
+          "docs/troubleshooting.md",
+          "docs/user-guide/cli.md",
+          "docs/user-guide/metrics.md",
+          "example/README.md",
+          "src/evee/evaluation/metrics_aggregator.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/execution/environment.py",
+          "src/evee/mcp/resources/base.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.16666666666666666,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "234": {
+      "Q1": {
+        "precision": 0.5294,
+        "recall": 0.3333,
+        "f1": 0.4091,
+        "edit_recall": 0.0,
+        "noise_ratio": 0.4706,
+        "returned_files": [
+          "src/evee/cli/commands/list.py",
+          "src/evee/config/models.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/runner.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/server.py",
+          "src/evee/mcp/tools/base.py",
+          "src/evee/mcp/tools/discovery.py",
+          "src/evee/mcp/tools/experiment.py",
+          "src/evee/mcp/tools/validation.py",
+          "src/evee/tracking/events.py",
+          "tests/evee/cli/test_list_command.py",
+          "tests/evee/cli/test_model_commands.py",
+          "tests/evee/integration/helpers.py",
+          "tests/mcp/conftest.py",
+          "tests/mcp/test_e2e.py",
+          "tests/mcp/test_tools.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.2631578947368421,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.5,
+        "recall": 0.2222,
+        "f1": 0.3077,
+        "edit_recall": 1.0,
+        "noise_ratio": 0.5,
+        "returned_files": [
+          ".github/copilot-skills/evee-mcp-app/SKILL.md",
+          ".github/copilot-skills/evee-mcp-server/SKILL.md",
+          "CONTRIBUTING.md",
+          "docs/design/mcp-server.md",
+          "docs/user-guide/cli.md",
+          "docs/user-guide/mcp-server.md",
+          "samples/agent-sample/README.md",
+          "src/evee/execution/environment.py",
+          "src/evee/mcp/README.md",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/server.py",
+          "src/evee/mcp/tools/base.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.3333,
+        "recall": 0.1481,
+        "f1": 0.2051,
+        "edit_recall": 1.0,
+        "noise_ratio": 0.6667,
+        "returned_files": [
+          ".github/copilot-skills/evee-mcp-app/SKILL.md",
+          "CONTRIBUTING.md",
+          "docs/design/mcp-server.md",
+          "docs/getting-started/quickstart.md",
+          "docs/user-guide/cli.md",
+          "src/evee/cli/commands/new.py",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/runner.py",
+          "src/evee/mcp/README.md",
+          "src/evee/mcp/server.py",
+          "tests/test_mcp_server.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "236": {
+      "Q1": {
+        "precision": 0.3529,
+        "recall": 0.3529,
+        "f1": 0.3529,
+        "edit_recall": 0.3333,
+        "noise_ratio": 0.6471,
+        "returned_files": [
+          "packages/evee-mlflow/src/evee_mlflow/tracking.py",
+          "src/evee/cli/commands/view.py",
+          "src/evee/cli/utils/clear_operations.py",
+          "src/evee/core/base_dataset.py",
+          "src/evee/evaluation/metrics_aggregator.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/mcp/constants.py",
+          "src/evee/mcp/resources/app_viewer.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/tools/base.py",
+          "src/evee/mcp/tools/experiment.py",
+          "src/evee/mcp/tools/validation.py",
+          "src/evee/mcp/tools/view_results.py",
+          "src/evee/tracking/backend.py",
+          "src/evee/tracking/events.py",
+          "src/evee/ui/results-viewer/src/app.tsx",
+          "tests/mcp/test_tools.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.2,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.4118,
+        "recall": 0.4118,
+        "f1": 0.4118,
+        "edit_recall": 0.3333,
+        "noise_ratio": 0.5882,
+        "returned_files": [
+          ".github/copilot-skills/evee-mcp-app/SKILL.md",
+          ".github/copilot-skills/evee-mcp-server/SKILL.md",
+          "CONTRIBUTING.md",
+          "docs/design/architecture.md",
+          "docs/design/mcp-server.md",
+          "docs/user-guide/mcp-server.md",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/server.py",
+          "src/evee/mcp/tools/base.py",
+          "src/evee/mcp/tools/experiment.py",
+          "src/evee/mcp/tools/validation.py",
+          "src/evee/mcp/tools/view_results.py",
+          "src/evee/tracking/events.py",
+          "tests/evee/core/test_base_model.py",
+          "tests/mcp/conftest.py",
+          "tests/mcp/test_tools.py",
+          "tests/test_mcp_server.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.16666666666666666,
+          "ctx_to_context": 0.2,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.1429,
+        "recall": 0.0588,
+        "f1": 0.0833,
+        "edit_recall": 0.1667,
+        "noise_ratio": 0.8571,
+        "returned_files": [
+          ".github/copilot-skills/evee-mcp-app/SKILL.md",
+          "docs/design/mcp-server.md",
+          "docs/user-guide/cli.md",
+          "src/evee/evaluation/metrics_aggregator.py",
+          "src/evee/mcp/server.py",
+          "src/evee/tracking/events.py",
+          "src/evee/ui/results-viewer/src/app.tsx"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.16666666666666666,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "240": {
+      "Q1": {
+        "precision": 0.3529,
+        "recall": 0.1935,
+        "f1": 0.25,
+        "edit_recall": 0.0833,
+        "noise_ratio": 0.6471,
+        "returned_files": [
+          "packages/evee-azureml/src/evee_azureml/compute.py",
+          "packages/evee-azureml/src/evee_azureml/tracking.py",
+          "pyproject.toml",
+          "src/evee/cli/commands/compute.py",
+          "src/evee/cli/commands/new.py",
+          "src/evee/cli/commands/tracking.py",
+          "src/evee/cli/main.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/cli/utils/new_project_operations.py",
+          "src/evee/compute/backend.py",
+          "src/evee/compute/local_compute_backend.py",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/runner.py",
+          "src/evee/mcp/server.py",
+          "src/evee/tracking/backend.py",
+          "src/evee/tracking/events.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.08333333333333333,
+          "ctx_to_context": 0.07142857142857142,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.5333,
+        "recall": 0.2581,
+        "f1": 0.3478,
+        "edit_recall": 0.1667,
+        "noise_ratio": 0.4667,
+        "returned_files": [
+          "packages/evee-azureml/src/evee_azureml/compute.py",
+          "packages/evee-azureml/src/evee_azureml/config.py",
+          "packages/evee-azureml/src/evee_azureml/tracking.py",
+          "src/evee/cli/commands/compute.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/compute/backend.py",
+          "src/evee/compute/local_compute_backend.py",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/config/models.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/runner.py",
+          "src/evee/mcp/resources/evaluators.py",
+          "src/evee/mcp/server.py",
+          "tests/evee/cli/test_compute_commands.py",
+          "tests/evee/config/test_models.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.08333333333333333,
+          "ctx_to_context": 0.21428571428571427,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.5294,
+        "recall": 0.2903,
+        "f1": 0.375,
+        "edit_recall": 0.1667,
+        "noise_ratio": 0.4706,
+        "returned_files": [
+          ".github/instructions/packages.instructions.md",
+          "CONTRIBUTING.md",
+          "docs/backends/azureml.md",
+          "docs/design/architecture.md",
+          "docs/design/mcp-server.md",
+          "docs/getting-started/glossary.md",
+          "docs/user-guide/configuration.md",
+          "packages/evee-azureml/pyproject.toml",
+          "packages/evee-azureml/src/evee_azureml/compute.py",
+          "packages/evee-azureml/src/evee_azureml/config.py",
+          "src/evee/cli/commands/compute.py",
+          "src/evee/compute/backend.py",
+          "src/evee/config/models.py",
+          "src/evee/mcp/README.md",
+          "src/evee/mcp/server.py",
+          "tests/evee/cli/test_compute_commands.py",
+          "tests/evee/config/test_models.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.08333333333333333,
+          "ctx_to_context": 0.14285714285714285,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "259": {
+      "Q1": {
+        "precision": 0.75,
+        "recall": 0.15,
+        "f1": 0.25,
+        "edit_recall": 0.1,
+        "noise_ratio": 0.25,
+        "returned_files": [
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/runner.py",
+          "src/evee/mcp/server.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.1,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.4118,
+        "recall": 0.35,
+        "f1": 0.3784,
+        "edit_recall": 0.4,
+        "noise_ratio": 0.5882,
+        "returned_files": [
+          "CONTRIBUTING.md",
+          "docs/troubleshooting.md",
+          "docs/user-guide/cli.md",
+          "src/evee/cli/commands/new.py",
+          "src/evee/cli/commands/validate.py",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/config/models.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/preflight.py",
+          "src/evee/execution/runner.py",
+          "src/evee/mcp/constants.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/tools/base.py",
+          "tests/evee/cli/test_validate_command.py",
+          "tests/evee/config/test_models.py",
+          "tests/evee/execution/test_preflight.py",
+          "tests/evee/integration/test_cli.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.1,
+          "ctx_to_context": 0.14285714285714285,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.2857,
+        "recall": 0.1,
+        "f1": 0.1481,
+        "edit_recall": 0.1,
+        "noise_ratio": 0.7143,
+        "returned_files": [
+          "src/evee/cli/main.py",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/core/decorator_helpers.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/runner.py",
+          "tests/evee/execution/test_environment.py",
+          "tests/evee/integration/test_cli.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.1,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "260": {
+      "Q1": {
+        "precision": 0.75,
+        "recall": 0.2143,
+        "f1": 0.3333,
+        "edit_recall": 0.4286,
+        "noise_ratio": 0.25,
+        "returned_files": [
+          "src/evee/cli/utils/metric_operations.py",
+          "src/evee/config/models.py",
+          "src/evee/evaluation/progress_tracker.py",
+          "src/evee/utils/environment.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.42857142857142855,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.4118,
+        "recall": 0.5,
+        "f1": 0.4516,
+        "edit_recall": 0.7143,
+        "noise_ratio": 0.5882,
+        "returned_files": [
+          "docs/troubleshooting.md",
+          "docs/user-guide/cli.md",
+          "docs/user-guide/configuration.md",
+          "packages/evee-azureml/src/evee_azureml/config.py",
+          "packages/evee-azureml/tests/test_tracking.py",
+          "src/evee/cli/commands/tracking.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/config/models.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/evaluation/progress_tracker.py",
+          "src/evee/execution/environment.py",
+          "src/evee/tracking/events.py",
+          "src/evee/utils/environment.py",
+          "tests/evee/cli/test_compute_commands.py",
+          "tests/evee/cli/test_tracking_commands.py",
+          "tests/evee/evaluation/test_model_evaluator_evaluation.py",
+          "tests/evee/evaluation/test_progress_tracker.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.2857142857142857,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.4615,
+        "recall": 0.4286,
+        "f1": 0.4444,
+        "edit_recall": 0.5714,
+        "noise_ratio": 0.5385,
+        "returned_files": [
+          "docs/user-guide/cli.md",
+          "docs/user-guide/configuration.md",
+          "src/evee/cli/commands/compute.py",
+          "src/evee/cli/commands/tracking.py",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/config/models.py",
+          "src/evee/evaluation/progress_tracker.py",
+          "src/evee/execution/environment.py",
+          "src/evee/logging/local_metrics_logger.py",
+          "src/evee/logging/logger.py",
+          "src/evee/tracking/factory.py",
+          "src/evee/utils/environment.py",
+          "tests/evee/evaluation/test_progress_tracker.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.42857142857142855,
+          "ctx_to_context": 0.2,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "261": {
+      "Q1": {
+        "precision": 0.3333,
+        "recall": 0.375,
+        "f1": 0.3529,
+        "edit_recall": 0.1429,
+        "noise_ratio": 0.6667,
+        "returned_files": [
+          "docs/user-guide/mcp-server.md",
+          "pyproject.toml",
+          "src/evee/cli/commands/validate.py",
+          "src/evee/config/models.py",
+          "src/evee/core/execution_context.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/execution/environment.py",
+          "src/evee/mcp/resources/config.py",
+          "src/evee/mcp/server.py",
+          "src/evee/mcp/tools/experiment.py",
+          "tests/evee/cli/test_model_commands.py",
+          "tests/evee/cli/test_validate_command.py",
+          "tests/evee/cli/test_validators.py",
+          "tests/evee/compute/utils/test_wheels_provisioner.py",
+          "tests/mcp/conftest.py",
+          "tests/mcp/test_e2e.py",
+          "tests/mcp/test_tools.py",
+          "tests/test_mcp_server.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.25,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.25,
+        "recall": 0.25,
+        "f1": 0.25,
+        "edit_recall": 0.0,
+        "noise_ratio": 0.75,
+        "returned_files": [
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/execution/environment.py",
+          "src/evee/mcp/constants.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/server.py",
+          "src/evee/mcp/tools/base.py",
+          "tests/evee/cli/test_backend_integration.py",
+          "tests/evee/cli/test_list_command.py",
+          "tests/evee/cli/test_main.py",
+          "tests/evee/cli/test_model_commands.py",
+          "tests/evee/cli/test_validate_command.py",
+          "tests/evee/evaluation/test_progress_tracker.py",
+          "tests/mcp/test_e2e.py",
+          "tests/mcp/test_tools.py",
+          "tests/scripts/test_generate_azure_evaluators.py",
+          "tests/test_mcp_server.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.375,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.3571,
+        "recall": 0.3125,
+        "f1": 0.3333,
+        "edit_recall": 0.1429,
+        "noise_ratio": 0.6429,
+        "returned_files": [
+          "docs/design/mcp-server.md",
+          "docs/user-guide/cli.md",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/execution/environment.py",
+          "src/evee/mcp/constants.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/tools/base.py",
+          "src/evee/mcp/tools/discovery.py",
+          "src/evee/mcp/tools/experiment.py",
+          "src/evee/mcp/tools/validation.py",
+          "src/evee/ui/results-viewer/src/app.tsx",
+          "src/evee/utils/environment.py",
+          "tests/evee/evaluation/test_progress_tracker.py",
+          "tests/mcp/test_e2e.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.0,
+          "ctx_to_context": 0.25,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "262": {
+      "Q1": {
+        "precision": 0.8,
+        "recall": 0.1905,
+        "f1": 0.3077,
+        "edit_recall": 0.2727,
+        "noise_ratio": 0.2,
+        "returned_files": [
+          "src/evee/cli/utils/model_operations.py",
+          "src/evee/config/models.py",
+          "src/evee/core/base_model.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/mcp/server.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.2727272727272727,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.4118,
+        "recall": 0.3333,
+        "f1": 0.3684,
+        "edit_recall": 0.3636,
+        "noise_ratio": 0.5882,
+        "returned_files": [
+          "docs/design/mcp-server.md",
+          "docs/user-guide/cli.md",
+          "docs/user-guide/configuration.md",
+          "docs/user-guide/models.md",
+          "src/evee/cli/commands/model.py",
+          "src/evee/cli/main.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/cli/utils/model_operations.py",
+          "src/evee/config/models.py",
+          "src/evee/core/base_model.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/execution/environment.py",
+          "src/evee/mcp/README.md",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/server.py",
+          "src/evee/mcp/tools/base.py",
+          "src/evee/tracking/events.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.18181818181818182,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.5294,
+        "recall": 0.4286,
+        "f1": 0.4737,
+        "edit_recall": 0.4545,
+        "noise_ratio": 0.4706,
+        "returned_files": [
+          "docs/getting-started/quickstart.md",
+          "docs/user-guide/cli.md",
+          "docs/user-guide/configuration.md",
+          "docs/user-guide/models.md",
+          "src/evee/cli/commands/list.py",
+          "src/evee/cli/commands/model.py",
+          "src/evee/cli/utils/model_operations.py",
+          "src/evee/config/models.py",
+          "src/evee/core/base_model.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/execution/runner.py",
+          "src/evee/mcp/README.md",
+          "src/evee/mcp/resources/model_patterns.py",
+          "tests/evee/cli/test_main.py",
+          "tests/evee/cli/test_model_commands.py",
+          "tests/evee/cli/utils/test_config_manager.py",
+          "tests/evee/integration/test_cli.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.36363636363636365,
+          "ctx_to_context": 0.14285714285714285,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "263": {
+      "Q1": {
+        "precision": 0.7778,
+        "recall": 0.35,
+        "f1": 0.4828,
+        "edit_recall": 0.5714,
+        "noise_ratio": 0.2222,
+        "returned_files": [
+          "example/metrics/f1score_metric.py",
+          "scripts/generate_azure_evaluators.py",
+          "src/evee/cli/commands/metric.py",
+          "src/evee/cli/utils/metric_operations.py",
+          "src/evee/core/base_metric.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/mcp/resources/evaluators.py",
+          "src/evee/mcp/server.py",
+          "tests/evee/cli/test_metric_commands.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.2857142857142857,
+          "ctx_to_context": 0.1111111111111111,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.6667,
+        "recall": 0.4,
+        "f1": 0.5,
+        "edit_recall": 0.7143,
+        "noise_ratio": 0.3333,
+        "returned_files": [
+          "scripts/generate_azure_evaluators.py",
+          "src/evee/cli/commands/metric.py",
+          "src/evee/cli/main.py",
+          "src/evee/cli/utils/metric_operations.py",
+          "src/evee/core/base_metric.py",
+          "src/evee/evaluation/metrics_aggregator.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/mcp/resources/evaluators.py",
+          "src/evee/mcp/server.py",
+          "tests/evee/cli/test_metric_commands.py",
+          "tests/evee/cli/utils/test_metric_operations.py",
+          "tests/scripts/test_generate_azure_evaluators.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.2857142857142857,
+          "ctx_to_context": 0.2222222222222222,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 1.0,
+        "recall": 0.2,
+        "f1": 0.3333,
+        "edit_recall": 0.4286,
+        "noise_ratio": 0.0,
+        "returned_files": [
+          "src/evee/cli/commands/metric.py",
+          "src/evee/cli/utils/metric_operations.py",
+          "src/evee/core/base_metric.py",
+          "tests/evee/cli/test_metric_commands.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.42857142857142855,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "268": {
+      "Q1": {
+        "precision": 0.5882,
+        "recall": 0.3846,
+        "f1": 0.4651,
+        "edit_recall": 0.4118,
+        "noise_ratio": 0.4118,
+        "returned_files": [
+          "src/evee/cli/commands/metric.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/cli/utils/metric_operations.py",
+          "src/evee/cli/utils/model_operations.py",
+          "src/evee/config/models.py",
+          "src/evee/core/base_metric.py",
+          "src/evee/core/decorator_discovery.py",
+          "src/evee/evaluation/metrics_aggregator.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/execution/environment.py",
+          "src/evee/execution/runner.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/resources/config.py",
+          "src/evee/mcp/resources/evaluators.py",
+          "src/evee/mcp/server.py",
+          "src/evee/mcp/tools/base.py",
+          "src/evee/tracking/events.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.29411764705882354,
+          "ctx_to_context": 0.6,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.5882,
+        "recall": 0.3846,
+        "f1": 0.4651,
+        "edit_recall": 0.3529,
+        "noise_ratio": 0.4118,
+        "returned_files": [
+          ".claude/commands/docs-updater.md",
+          "docs/user-guide/cli.md",
+          "docs/user-guide/configuration.md",
+          "src/evee/cli/main.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/cli/utils/metric_operations.py",
+          "src/evee/compute/utils/wheels_provisioner.py",
+          "src/evee/config/models.py",
+          "src/evee/core/base_metric.py",
+          "src/evee/evaluation/metrics_aggregator.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/execution/environment.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/resources/config.py",
+          "src/evee/mcp/resources/evaluators.py",
+          "src/evee/mcp/server.py",
+          "src/evee/mcp/tools/base.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.17647058823529413,
+          "ctx_to_context": 0.2,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.875,
+        "recall": 0.2692,
+        "f1": 0.4118,
+        "edit_recall": 0.2941,
+        "noise_ratio": 0.125,
+        "returned_files": [
+          "src/evee/cli/commands/metric.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/cli/utils/metric_operations.py",
+          "src/evee/config/models.py",
+          "src/evee/core/base_metric.py",
+          "src/evee/evaluation/metrics_aggregator.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/execution/environment.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.17647058823529413,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    },
+    "275": {
+      "Q1": {
+        "precision": 0.4286,
+        "recall": 0.2308,
+        "f1": 0.3,
+        "edit_recall": 0.3077,
+        "noise_ratio": 0.5714,
+        "returned_files": [
+          "src/evee/cli/commands/metric.py",
+          "src/evee/cli/commands/model.py",
+          "src/evee/cli/main.py",
+          "src/evee/cli/utils/metric_operations.py",
+          "src/evee/cli/utils/model_operations.py",
+          "src/evee/config/models.py",
+          "src/evee/core/base_metric.py",
+          "src/evee/core/base_model.py",
+          "src/evee/evaluation/metrics_aggregator.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/mcp/resources/base.py",
+          "src/evee/mcp/server.py",
+          "src/evee/mcp/tools/base.py",
+          "src/evee/ui/results-viewer/src/app.tsx"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.23076923076923078,
+          "ctx_to_context": 0.0,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q2": {
+        "precision": 0.5882,
+        "recall": 0.3846,
+        "f1": 0.4651,
+        "edit_recall": 0.2308,
+        "noise_ratio": 0.4118,
+        "returned_files": [
+          "docs/troubleshooting.md",
+          "docs/user-guide/cli.md",
+          "docs/user-guide/configuration.md",
+          "docs/user-guide/metrics.md",
+          "src/evee/cli/main.py",
+          "src/evee/cli/templates/base/metrics/custom_metric.py",
+          "src/evee/cli/utils/config_manager.py",
+          "src/evee/cli/utils/metric_operations.py",
+          "src/evee/config/models.py",
+          "src/evee/core/base_metric.py",
+          "src/evee/core/decorator_discovery.py",
+          "src/evee/core/decorator_helpers.py",
+          "src/evee/core/models/evaluation_output.py",
+          "src/evee/evaluation/metrics_aggregator.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "tests/evee/cli/utils/test_config_manager.py",
+          "tests/evee/integration/test_cli.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.15384615384615385,
+          "ctx_to_context": 0.2727272727272727,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      },
+      "Q3": {
+        "precision": 0.7273,
+        "recall": 0.3077,
+        "f1": 0.4324,
+        "edit_recall": 0.3077,
+        "noise_ratio": 0.2727,
+        "returned_files": [
+          "docs/user-guide/cli.md",
+          "docs/user-guide/configuration.md",
+          "src/evee/cli/commands/metric.py",
+          "src/evee/cli/utils/metric_operations.py",
+          "src/evee/config/models.py",
+          "src/evee/core/base_metric.py",
+          "src/evee/evaluation/metrics_aggregator.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/execution/environment.py",
+          "src/evee/ui/results-viewer/src/app.tsx",
+          "tests/evee/core/test_base_metric.py"
+        ],
+        "bucket_alignment": {
+          "edit_to_edit_target": 0.23076923076923078,
+          "ctx_to_context": 0.09090909090909091,
+          "supp_to_supplementary": 0.0
+        },
+        "new_file_count": 0
+      }
+    }
+  },
+  "aggregates": {
+    "by_query_level": {
+      "Q1": {
+        "avg_precision": 0.4732,
+        "avg_recall": 0.2377,
+        "avg_f1": 0.2936,
+        "avg_edit_recall": 0.2762,
+        "avg_noise_ratio": 0.5268
+      },
+      "Q2": {
+        "avg_precision": 0.4121,
+        "avg_recall": 0.2606,
+        "avg_f1": 0.3039,
+        "avg_edit_recall": 0.3232,
+        "avg_noise_ratio": 0.5879
+      },
+      "Q3": {
+        "avg_precision": 0.4091,
+        "avg_recall": 0.1822,
+        "avg_f1": 0.2389,
+        "avg_edit_recall": 0.2536,
+        "avg_noise_ratio": 0.5909
+      }
+    },
+    "overall": {
+      "mean_f1": 0.2788,
+      "median_f1": 0.3038,
+      "min_f1": 0.0,
+      "max_f1": 0.5,
+      "perfect_edit_recall_count": {
+        "Q1": 0,
+        "Q2": 1,
+        "Q3": 1
+      }
+    },
+    "by_difficulty": {
+      "simple": {
+        "count": 0,
+        "avg_f1": 0.0,
+        "avg_edit_recall": 0.0
+      },
+      "medium": {
+        "count": 14,
+        "avg_f1": 0.2695,
+        "avg_edit_recall": 0.3062
+      },
+      "complex": {
+        "count": 10,
+        "avg_f1": 0.2918,
+        "avg_edit_recall": 0.2558
+      }
+    }
+  }
+}
