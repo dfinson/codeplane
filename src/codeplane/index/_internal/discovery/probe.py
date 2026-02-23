@@ -72,7 +72,7 @@ class ContextProbe:
         self.parser = parser or TreeSitterParser()
         self._family_to_ext = self._build_extension_map()
         # Shared ignore checker - loads .cplignore automatically
-        self._ignore_checker = IgnoreChecker(self.repo_path, respect_gitignore=True)
+        self._ignore_checker = IgnoreChecker(self.repo_path, respect_gitignore=False)
 
     def _build_extension_map(self) -> dict[LanguageFamily, set[str]]:
         """Map language families to file extensions."""

@@ -803,6 +803,49 @@ class IndexCoordinator:
                                     extraction.defs,
                                     file_path=extraction.file_path,
                                 )
+                            elif (
+                                self._embedding is not None
+                                and not extraction.defs
+                                and extraction.imports
+                                and not extraction.skipped_no_grammar
+                            ):
+                                # Import-only files (e.g. __init__.py barrel
+                                # exports) still deserve an embedding so they
+                                # surface in semantic search.  Synthesise a
+                                # single virtual "module" def whose scaffold
+                                # captures the import structure.
+                                import hashlib as _hl
+
+                                _fp = extraction.file_path
+                                _vuid = "vmod:" + _hl.sha256(
+                                    _fp.encode()
+                                ).hexdigest()[:16]
+                                _mod_name = (
+                                    _fp.replace("/", ".")
+                                    .removesuffix(".py")
+                                    .removesuffix(".__init__")
+                                )
+                                _import_names = " ".join(
+                                    d.get("module_path", "")
+                                    for d in extraction.imports
+                                    if d.get("module_path")
+                                )
+                                virtual_def = {
+                                    "def_uid": _vuid,
+                                    "unit_id": 0,
+                                    "kind": "module",
+                                    "name": _mod_name,
+                                    "lexical_path": _mod_name,
+                                    "start_line": 1,
+                                    "start_col": 0,
+                                    "end_line": extraction.line_count or 1,
+                                    "end_col": 0,
+                                    "docstring": _import_names,
+                                }
+                                self._embedding.stage_defs(
+                                    [virtual_def],
+                                    file_path=extraction.file_path,
+                                )
 
                             if extraction.file_path in existing_set:
                                 files_updated += 1

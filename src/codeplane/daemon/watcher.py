@@ -184,7 +184,7 @@ class FileWatcher:
 
     def __post_init__(self) -> None:
         """Initialize ignore checker and detect cross-filesystem."""
-        self._ignore_checker = IgnoreChecker(self.repo_root, respect_gitignore=True)
+        self._ignore_checker = IgnoreChecker(self.repo_root, respect_gitignore=False)
         self._is_cross_fs = _is_cross_filesystem(self.repo_root)
         # Capture initial cplignore content for diff
         cplignore_path = self.repo_root / ".codeplane" / ".cplignore"

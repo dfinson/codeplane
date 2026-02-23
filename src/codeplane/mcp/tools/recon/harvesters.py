@@ -708,6 +708,274 @@ async def _harvest_graph(
     return candidates
 
 
+# ===================================================================
+# Harvester F: Import-chain discovery (dependency + dependent tracing)
+# ===================================================================
+
+# Budget constants for import harvester
+_IMPORT_MAX_SEEDS = 15
+_IMPORT_MAX_DEPS_PER_SEED = 10  # Forward imports (dependencies)
+_IMPORT_MAX_DEPENDENTS_PER_SEED = 8  # Reverse imports (files importing seed)
+_IMPORT_MAX_TOTAL = 80
+
+
+async def _harvest_imports(
+    app_ctx: AppContext,
+    merged: dict[str, HarvestCandidate],
+    parsed: ParsedTask,
+) -> dict[str, HarvestCandidate]:
+    """Harvester F: Import-chain discovery from top merged candidates.
+
+    Traces *resolved* import edges in both directions from seed files:
+
+    (a) Forward deps  — files that the seed file imports
+    (b) Reverse deps  — files whose ``resolved_path`` points at the seed
+    (c) ``__init__.py`` barrels in each seed's package directory
+    (d) Test file pattern matching (``src/X.py`` → ``tests/test_X.py``)
+
+    These candidates capture the "structural neighbourhood" that embedding
+    search and term-match cannot reach — configuration files, re-export
+    barrels, and cross-cut infrastructure modules.
+
+    Runs AFTER graph harvester (E) so that callee / caller edges are already
+    covered; this harvester fills the remaining import-only gaps.
+    """
+    from codeplane.index._internal.indexing.graph import FactQueries
+    from codeplane.index.models import File as FileModel
+    from codeplane.index.models import ImportFact
+
+    coordinator = app_ctx.coordinator
+    candidates: dict[str, HarvestCandidate] = {}
+
+    if not merged:
+        return candidates
+
+    # Select seeds: top candidates by score (reuse graph-seed logic)
+    seed_uids = _select_graph_seeds(merged)[:_IMPORT_MAX_SEEDS]
+    if not seed_uids:
+        return candidates
+
+    with coordinator.db.session() as session:
+        fq = FactQueries(session)
+
+        # Resolve seed file paths
+        seed_file_paths: dict[int, str] = {}   # file_id → path
+        seed_file_ids: set[int] = set()
+        for uid in seed_uids:
+            cand = merged[uid]
+            if cand.def_fact is None:
+                d = fq.get_def(uid)
+                if d is not None:
+                    cand.def_fact = d
+            if cand.def_fact is None:
+                continue
+            fid = cand.def_fact.file_id
+            if fid not in seed_file_paths:
+                frec = session.get(FileModel, fid)
+                if frec is not None:
+                    seed_file_paths[fid] = frec.path
+                    seed_file_ids.add(fid)
+
+        if not seed_file_ids:
+            return candidates
+
+        # Collect unique seed file paths for reverse lookup
+        seed_paths_set = set(seed_file_paths.values())
+
+        # (a) Forward deps: files imported by seed files
+        seen_import_fids: set[int] = set()
+        for fid in seed_file_ids:
+            if len(candidates) >= _IMPORT_MAX_TOTAL:
+                break
+            imports = fq.list_imports(fid, limit=_IMPORT_MAX_DEPS_PER_SEED)
+            for imp in imports:
+                if not imp.resolved_path:
+                    continue
+                imp_file = fq.get_file_by_path(imp.resolved_path)
+                if imp_file is None or imp_file.id is None:
+                    continue
+                if imp_file.id in seed_file_ids or imp_file.id in seen_import_fids:
+                    continue
+                seen_import_fids.add(imp_file.id)
+                _add_file_defs_as_candidates(
+                    fq, imp_file, candidates, merged,
+                    category="import_forward",
+                    detail=f"imported by {seed_file_paths.get(fid, '?')}",
+                    score=0.45,
+                    limit=5,
+                )
+
+        # (b) Reverse deps: files that import seed files
+        if seed_paths_set:
+            from sqlmodel import col, select
+
+            reverse_stmt = (
+                select(ImportFact.file_id)
+                .where(col(ImportFact.resolved_path).in_(list(seed_paths_set)))
+                .distinct()
+            )
+            reverse_fids = list(session.exec(reverse_stmt).all())
+            for rfid in reverse_fids[:_IMPORT_MAX_DEPENDENTS_PER_SEED * len(seed_file_ids)]:
+                if len(candidates) >= _IMPORT_MAX_TOTAL:
+                    break
+                if rfid in seed_file_ids:
+                    continue
+                rfile = session.get(FileModel, rfid)
+                if rfile is None:
+                    continue
+                _add_file_defs_as_candidates(
+                    fq, rfile, candidates, merged,
+                    category="import_reverse",
+                    detail=f"imports a seed file ({rfile.path})",
+                    score=0.40,
+                    limit=3,
+                )
+
+        # (c) __init__.py barrels + conftest.py in seed directories
+        seen_dirs: set[str] = set()
+        for seed_path in seed_paths_set:
+            import os
+
+            dir_path = os.path.dirname(seed_path)
+            if not dir_path or dir_path in seen_dirs:
+                continue
+            seen_dirs.add(dir_path)
+            for special_name in ("__init__.py", "conftest.py"):
+                barrel_path = f"{dir_path}/{special_name}"
+                if barrel_path in seed_paths_set:
+                    continue
+                barrel_file = fq.get_file_by_path(barrel_path)
+                if barrel_file is None or barrel_file.id is None:
+                    continue
+                _add_file_defs_as_candidates(
+                    fq, barrel_file, candidates, merged,
+                    category="import_barrel",
+                    detail=f"package init/conftest in {dir_path}",
+                    score=0.35,
+                    limit=3,
+                )
+
+        # (d) Test file pattern matching
+        for seed_path in seed_paths_set:
+            if len(candidates) >= _IMPORT_MAX_TOTAL:
+                break
+            test_paths = _infer_test_paths(seed_path)
+            for tp in test_paths:
+                tf = fq.get_file_by_path(tp)
+                if tf is not None and tf.id is not None:
+                    _add_file_defs_as_candidates(
+                        fq, tf, candidates, merged,
+                        category="import_test",
+                        detail=f"test file for {seed_path}",
+                        score=0.35,
+                        limit=3,
+                    )
+
+    log.debug(
+        "recon.harvest.imports",
+        count=len(candidates),
+        seed_files=len(seed_file_ids),
+    )
+    return candidates
+
+
+def _add_file_defs_as_candidates(
+    fq: object,  # FactQueries
+    file_rec: object,  # File model
+    candidates: dict[str, HarvestCandidate],
+    merged: dict[str, HarvestCandidate],
+    *,
+    category: str,
+    detail: str,
+    score: float,
+    limit: int = 5,
+) -> None:
+    """Add top defs from a file as import-discovered candidates."""
+    from codeplane.index._internal.indexing.graph import FactQueries as _FQ
+
+    fq_typed: _FQ = fq  # type: ignore[assignment]
+    file_id = getattr(file_rec, "id", None)
+    if file_id is None:
+        return
+
+    defs = fq_typed.list_defs_in_file(file_id, limit=50)
+    # Prefer functions/classes/methods over variables
+    important = [d for d in defs if d.kind in ("function", "method", "class", "module")]
+    rest = [d for d in defs if d.kind not in ("function", "method", "class", "module")]
+    selected = (important + rest)[:limit]
+
+    for d in selected:
+        if d.def_uid in merged:
+            # Reinforce existing candidate
+            existing = merged[d.def_uid]
+            if not existing.from_graph:
+                existing.from_graph = True
+                existing.evidence.append(
+                    EvidenceRecord(
+                        category=category,
+                        detail=detail,
+                        score=score,
+                    )
+                )
+            continue
+        if d.def_uid in candidates:
+            continue
+        candidates[d.def_uid] = HarvestCandidate(
+            def_uid=d.def_uid,
+            def_fact=d,
+            from_graph=True,
+            evidence=[
+                EvidenceRecord(
+                    category=category,
+                    detail=detail,
+                    score=score,
+                )
+            ],
+        )
+
+
+def _infer_test_paths(source_path: str) -> list[str]:
+    """Infer candidate test file paths from a source file path.
+
+    Handles common patterns:
+    - src/foo/bar.py → tests/foo/test_bar.py
+    - src/foo/bar.py → tests/test_bar.py
+    - lib/foo.py → tests/test_foo.py
+    """
+    import os
+
+    parts = source_path.split("/")
+    basename = parts[-1]
+
+    # Skip if already a test file
+    if basename.startswith("test_") or basename == "conftest.py":
+        return []
+
+    # Strip .py extension
+    if not basename.endswith(".py"):
+        return []
+    name_stem = basename[:-3]
+    test_name = f"test_{name_stem}.py"
+
+    candidates: list[str] = []
+
+    # Pattern 1: mirror path under tests/
+    # src/foo/bar.py → tests/foo/test_bar.py
+    if len(parts) >= 2:
+        # Try dropping first dir (src/) and placing under tests/
+        sub_path = "/".join(parts[1:-1])
+        if sub_path:
+            candidates.append(f"tests/{sub_path}/{test_name}")
+        candidates.append(f"tests/{test_name}")
+
+    # Pattern 2: same directory
+    dir_path = os.path.dirname(source_path)
+    if dir_path:
+        candidates.append(f"{dir_path}/{test_name}")
+
+    return candidates
+
+
 def _select_graph_seeds(
     merged: dict[str, HarvestCandidate],
 ) -> list[str]:

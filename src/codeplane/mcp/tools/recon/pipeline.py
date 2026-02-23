@@ -38,6 +38,7 @@ from codeplane.mcp.tools.recon.harvesters import (
     _harvest_embedding,
     _harvest_explicit,
     _harvest_graph,
+    _harvest_imports,
     _harvest_lexical,
     _harvest_term_match,
     _merge_candidates,
@@ -173,6 +174,14 @@ async def _select_seeds(
         diagnostics["harvested"]["merged_with_graph"] = len(merged)
         log.debug("recon.graph_merged", graph=len(graph_candidates), total=len(merged))
 
+    # 3.6. Import-chain harvester — trace resolved imports from top seeds
+    import_candidates = await _harvest_imports(app_ctx, merged, parsed)
+    if import_candidates:
+        merged = _merge_candidates(merged, import_candidates)
+        diagnostics["harvested"]["imports"] = len(import_candidates)
+        diagnostics["harvested"]["merged_with_imports"] = len(merged)
+        log.debug("recon.import_merged", imports=len(import_candidates), total=len(merged))
+
     # 4. Enrich with structural metadata + artifact kind
     await _enrich_candidates(app_ctx, merged)
 
@@ -201,7 +210,7 @@ async def _select_seeds(
         return [], parsed, [], diagnostics, {}, {}
 
     # 7. Aggregate to file level (legacy — still used for file_score)
-    file_ranked = _aggregate_to_files(scored, gated)
+    _aggregate_to_files(scored, gated)
 
     # 7b. Compute dual scores (edit-likelihood + context-value)
     _compute_edit_likelihood(gated, parsed)

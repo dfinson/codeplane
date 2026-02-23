@@ -383,6 +383,10 @@ class TreeSitterParser:
         ext = path.suffix.lower().lstrip(".")
         language = self._detect_language_from_ext(ext)
 
+        # Fallback: detect from filename (Makefile, Dockerfile, etc.)
+        if language is None:
+            language = self._detect_language_from_filename(path.name)
+
         if language is None:
             raise ValueError(f"Unsupported file extension: {ext}")
 
@@ -2780,6 +2784,29 @@ class TreeSitterParser:
             "regex": "regex",
         }
         return ext_map.get(ext)
+
+    def _detect_language_from_filename(self, filename: str) -> str | None:
+        """Detect language from filename when extension is absent or ambiguous."""
+        name_lower = filename.lower()
+        filename_map: dict[str, str] = {
+            "makefile": "makefile",
+            "gnumakefile": "makefile",
+            "dockerfile": "dockerfile",
+            "vagrantfile": "ruby",
+            "rakefile": "ruby",
+            "gemfile": "ruby",
+            "guardfile": "ruby",
+            "cmakelists.txt": "cmake",
+            "justfile": "makefile",
+        }
+        # Exact match
+        lang = filename_map.get(name_lower)
+        if lang is not None:
+            return lang
+        # Prefix match: Dockerfile.dev, Dockerfile.prod, etc.
+        if name_lower.startswith("dockerfile"):
+            return "dockerfile"
+        return None
 
     def _has_meaningful_nodes(self, node: Any) -> bool:
         """Check if tree has meaningful (non-comment, non-whitespace) nodes."""

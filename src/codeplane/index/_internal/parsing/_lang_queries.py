@@ -806,6 +806,96 @@ JSON_QUERIES = LanguageQueryConfig(
 
 
 # ---------------------------------------------------------------------------
+# Bash / Shell
+# ---------------------------------------------------------------------------
+BASH_QUERIES = LanguageQueryConfig(
+    query_text="""
+        (function_definition
+            name: (word) @name) @node
+        (variable_assignment
+            name: (variable_name) @name) @node
+    """,
+    patterns=(
+        SymbolPattern(kind="function"),
+        SymbolPattern(kind="variable"),
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# HCL / Terraform
+# ---------------------------------------------------------------------------
+# HCL blocks: `block` node → first child is `identifier` (type), then
+# one or two `string_lit` children whose `template_literal` gives the name.
+# We capture the block type via @kind_hint and the first label as @name.
+# The extraction post-processor joins them: "resource.azurerm_rg.example".
+#
+# We cannot use field names (HCL grammar does not define them for block
+# label positions), so we use positional `string_lit` captures.
+HCL_QUERIES = LanguageQueryConfig(
+    query_text="""
+        (block
+            (identifier) @name) @node
+        (attribute
+            (identifier) @name) @node
+    """,
+    patterns=(
+        SymbolPattern(kind="block"),
+        SymbolPattern(kind="attribute"),
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Makefile
+# ---------------------------------------------------------------------------
+MAKEFILE_QUERIES = LanguageQueryConfig(
+    query_text="""
+        (rule
+            (targets) @name) @node
+        (variable_assignment
+            (word) @name) @node
+    """,
+    patterns=(
+        SymbolPattern(kind="target"),
+        SymbolPattern(kind="variable"),
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
+# Dockerfile
+# ---------------------------------------------------------------------------
+DOCKERFILE_QUERIES = LanguageQueryConfig(
+    query_text="""
+        (from_instruction
+            (image_spec) @name) @node
+        (run_instruction
+            (shell_command) @name) @node
+        (env_instruction
+            (env_pair) @name) @node
+        (copy_instruction) @node
+        (workdir_instruction
+            (path) @name) @node
+        (expose_instruction
+            (expose_port) @name) @node
+        (cmd_instruction) @node
+        (entrypoint_instruction) @node
+    """,
+    patterns=(
+        SymbolPattern(kind="from"),
+        SymbolPattern(kind="run"),
+        SymbolPattern(kind="env"),
+        SymbolPattern(kind="copy"),
+        SymbolPattern(kind="workdir"),
+        SymbolPattern(kind="expose"),
+        SymbolPattern(kind="cmd"),
+        SymbolPattern(kind="entrypoint"),
+    ),
+)
+
+
+# ---------------------------------------------------------------------------
 # Language -> Config mapping
 # ---------------------------------------------------------------------------
 # Keys match the language names used in extract_symbols() dispatch
@@ -836,4 +926,12 @@ LANGUAGE_QUERY_CONFIGS: dict[str, LanguageQueryConfig] = {
     "toml": TOML_QUERIES,
     "yaml": YAML_QUERIES,
     "json": JSON_QUERIES,
+    # Shell / Infra / Build
+    "bash": BASH_QUERIES,
+    "shell": BASH_QUERIES,
+    "terraform": HCL_QUERIES,
+    "hcl": HCL_QUERIES,
+    "makefile": MAKEFILE_QUERIES,
+    "make": MAKEFILE_QUERIES,
+    "dockerfile": DOCKERFILE_QUERIES,
 }
