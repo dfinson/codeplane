@@ -57,6 +57,7 @@ KIND_CTX_USAGE = "CTX_USAGE"
 KIND_LIT_HINTS = "LIT_HINTS"
 KIND_SEM_FACTS = "SEM_FACTS"
 KIND_BLOCK = "BLOCK"
+KIND_FILE_SCAFFOLD = "FILE_SCAFFOLD"
 
 # Config block detection
 _CONFIG_RATIO_THRESH = 0.80
@@ -70,6 +71,9 @@ _DOC_MAX_CHARS = 200
 # SEM_FACTS rendering budget
 _SEM_FACTS_BUDGET = 200
 _SEM_FACTS_TOKEN_CAP = 30
+
+# FILE_SCAFFOLD budget
+_SCAFFOLD_BUDGET = 600
 
 # Frequency filtering
 _FREQ_BASE = 0.05
@@ -125,6 +129,114 @@ def _path_to_phrase(file_path: str) -> str:
     for segment in p.split("/"):
         parts.extend(_word_split(segment))
     return " ".join(parts)
+
+
+def _build_file_scaffold(
+    file_path: str,
+    defs: list[dict[str, Any]],
+) -> str:
+    """Build an English-language scaffold summary for a file.
+
+    Produces a natural-language description of the file's structure suitable
+    for embedding.  Uses def names, kinds, signatures, and docstrings to
+    create a compositional summary that captures the file's role in the
+    codebase.
+
+    Example output::
+
+        base_model.py defines abstract class BaseModel with methods
+        run(input_data, parameters) returning ModelOutput,
+        validate_input(data) returning bool. Base class for model
+        implementations used in evaluation.
+
+    Returns empty string if no meaningful scaffold can be built.
+    """
+    if not defs:
+        return ""
+
+    # File name as context
+    fname = file_path.replace("\\", "/").rsplit("/", 1)[-1]
+    dot = fname.rfind(".")
+    if dot > 0:
+        fname = fname[:dot]
+    file_words = " ".join(_word_split(fname))
+
+    parts: list[str] = [f"{file_words} defines"]
+
+    # Sort defs by kind priority: classes first, then functions, then others
+    kind_order = {"class": 0, "interface": 0, "struct": 0, "enum": 1,
+                  "function": 2, "method": 3, "variable": 4}
+    sorted_defs = sorted(defs, key=lambda d: kind_order.get(d.get("kind", ""), 5))
+
+    # Track classes for parent info
+    class_names: list[str] = []
+    method_summaries: list[str] = []
+    func_summaries: list[str] = []
+
+    for d in sorted_defs:
+        kind = d.get("kind", "")
+        name = d.get("name", "")
+        sig = d.get("signature_text", "") or ""
+        doc = (d.get("docstring") or "").strip()
+        first_doc_sentence = ""
+        if doc and len(doc) > 10:
+            # First sentence only
+            for sep in (".", "\n"):
+                idx = doc.find(sep)
+                if idx > 0:
+                    first_doc_sentence = doc[:idx].strip()
+                    break
+            if not first_doc_sentence:
+                first_doc_sentence = doc[:80].strip()
+
+        if kind == "class":
+            desc = f"class {name}"
+            if first_doc_sentence:
+                desc += f" ({first_doc_sentence})"
+            class_names.append(name)
+            parts.append(desc)
+        elif kind in ("function",):
+            summary = name
+            if sig:
+                # Compact signature: just params, no self
+                compact = sig.replace("self, ", "").replace("self,", "").replace("self", "")
+                if compact and compact != "()":
+                    summary += compact
+            func_summaries.append(summary)
+        elif kind == "method":
+            summary = name
+            if sig:
+                compact = sig.replace("self, ", "").replace("self,", "").replace("self", "")
+                if compact and compact != "()":
+                    summary += compact
+            method_summaries.append(summary)
+
+    # Add method list for classes
+    if method_summaries:
+        methods_text = ", ".join(method_summaries[:8])
+        if len(method_summaries) > 8:
+            methods_text += f" and {len(method_summaries) - 8} more"
+        parts.append(f"methods {methods_text}")
+
+    # Add function list
+    if func_summaries:
+        funcs_text = ", ".join(func_summaries[:6])
+        if len(func_summaries) > 6:
+            funcs_text += f" and {len(func_summaries) - 6} more"
+        parts.append(f"functions {funcs_text}")
+
+    # Add first class docstring as context
+    for d in sorted_defs:
+        if d.get("kind") == "class":
+            doc = (d.get("docstring") or "").strip()
+            if doc and len(doc) > 20:
+                first_sentence = doc.split(".")[0].strip() if "." in doc else doc[:100]
+                if first_sentence and first_sentence not in " ".join(parts):
+                    parts.append(first_sentence)
+                break
+
+    scaffold = ". ".join(parts)
+    return scaffold[:_SCAFFOLD_BUDGET]
 
 
 def _render_sem_facts(
@@ -638,6 +750,19 @@ class EmbeddingIndex:
                 # Preserved defs (classes, functions) are NOT added to
                 # config_uids, so they fall through to the normal record
                 # builder below and keep their NAME/DOC/SEM_FACTS records.
+
+        # Build FILE_SCAFFOLD records — one per file, keyed to the first def.
+        # Captures the compositional role of the file (what it defines, how
+        # symbols relate) for embedding queries about architectural intent.
+        for fp, defs_in_file in file_defs.items():
+            if not fp or not defs_in_file:
+                continue
+            scaffold_text = _build_file_scaffold(fp, defs_in_file)
+            if scaffold_text:
+                # Key to first def_uid in the file (arbitrary but stable)
+                anchor_uid = defs_in_file[0].get("def_uid", "")
+                if anchor_uid:
+                    records.append((anchor_uid, KIND_FILE_SCAFFOLD, scaffold_text))
 
         # Build records for non-config defs
         for uid, d in uid_to_def.items():

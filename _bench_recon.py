@@ -100,7 +100,7 @@ GROUND_TRUTH: dict[str, dict] = {
 }
 
 
-def call_recon(task: str, verbosity: str = "detailed") -> dict:
+def call_recon(task: str) -> dict:
     """Call the recon MCP tool via JSON-RPC over HTTP."""
     payload = {
         "jsonrpc": "2.0",
@@ -110,9 +110,6 @@ def call_recon(task: str, verbosity: str = "detailed") -> dict:
             "name": "recon",
             "arguments": {
                 "task": task,
-                "verbosity": verbosity,
-                "max_seeds": 15,
-                "depth": 0,  # seeds only — we're measuring retrieval, not expansion
             },
         },
     }

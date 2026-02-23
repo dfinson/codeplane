@@ -386,17 +386,18 @@ class ReferenceResolver:
         if not importing_path:
             return None
 
+        # --- JS/TS path-relative imports (check BEFORE Python dot-relative) ---
+        # ``import { X } from './foo'`` → source_literal = "./foo"
+        # ``import { X } from '../bar/baz'`` → source_literal = "../bar/baz"
+        # Must come first: "../foo" starts with "." but is JS, not Python.
+        if source_literal.startswith("./") or source_literal.startswith("../"):
+            return self._resolve_js_relative(source_literal, importing_path)
+
         # --- Python dot-relative imports ---
         # ``from .foo import X`` → source_literal = ".foo"
         # ``from ..core.bar import X`` → source_literal = "..core.bar"
         if source_literal.startswith(".") and not source_literal.startswith("./"):
             return self._resolve_python_relative(source_literal, importing_path)
-
-        # --- JS/TS path-relative imports ---
-        # ``import { X } from './foo'`` → source_literal = "./foo"
-        # ``import { X } from '../bar/baz'`` → source_literal = "../bar/baz"
-        if source_literal.startswith("./") or source_literal.startswith("../"):
-            return self._resolve_js_relative(source_literal, importing_path)
 
         # --- Rust super:: relative imports ---
         # ``use super::foo`` → source_literal = "super::foo"
@@ -517,11 +518,20 @@ class ReferenceResolver:
             else:
                 remainder.append(seg)
 
-        # Get base directory
+        # Get base directory (stripping the filename already moves us
+        # to the parent module for normal files like baz.rs).
         base_dir = importing_path.rsplit("/", 1)[0] if "/" in importing_path else ""
+        filename = importing_path.rsplit("/", 1)[-1] if "/" in importing_path else importing_path
 
-        # Go up super_count levels
-        for _ in range(super_count):
+        # For mod.rs / lib.rs / main.rs, the directory IS the module itself,
+        # so super requires an additional level up.  For regular files like
+        # baz.rs the directory is already the parent module, so the first
+        # super is "free".
+        stem = filename.rsplit(".", 1)[0]
+        is_module_file = stem in ("mod", "lib", "main")
+        ups = super_count if is_module_file else max(0, super_count - 1)
+
+        for _ in range(ups):
             if "/" in base_dir:
                 base_dir = base_dir.rsplit("/", 1)[0]
             else:
@@ -568,9 +578,7 @@ class ReferenceResolver:
         # Rust: src/foo/bar.rs -> src::foo::bar (uses :: separator)
         if path.endswith(".rs"):
             module = path[:-3]
-            if module.endswith("/mod"):
-                module = module[:-4]
-            elif module.endswith("/lib"):
+            if module.endswith("/mod") or module.endswith("/lib"):
                 module = module[:-4]
             module = module.replace("/", "::").replace("\\", "::")
             module = module.lstrip(":")

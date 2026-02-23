@@ -845,10 +845,18 @@ class IndexCoordinator:
                     # Commit all staged changes atomically
                     self._lexical.commit_staged()
 
-                    # Commit embedding changes
-                    # CTX_USAGE uses refs from previous index cycles (if any).
-                    # On cold start, refs may not be resolved yet — CTX_USAGE
-                    # records are simply omitted and populated on next reindex.
+                # Reload searcher to see committed changes
+                self._lexical.reload()
+
+                # Pass 1.5 / 2 / 3: cross-file resolution (scoped to changed files)
+                # Run BEFORE embedding commit so CTX_USAGE records have resolved refs.
+                if changed_file_ids:
+                    run_pass_1_5(self.db, None, file_ids=changed_file_ids)
+                    resolve_references(self.db, file_ids=changed_file_ids)
+                    resolve_type_traced(self.db, file_ids=changed_file_ids)
+
+                # Commit embedding changes (after resolver so CTX_USAGE is populated)
+                with self._tantivy_write_lock:
                     if self._embedding is not None and self._embedding.has_staged_changes():
 
                         def _usage_lookup(def_uid: str) -> list[str]:
@@ -876,15 +884,6 @@ class IndexCoordinator:
                         self._embedding.commit_staged(
                             usage_lookup=_usage_lookup,
                         )
-
-                # Reload searcher to see committed changes
-                self._lexical.reload()
-
-                # Pass 1.5 / 2 / 3: cross-file resolution (scoped to changed files)
-                if changed_file_ids:
-                    run_pass_1_5(self.db, None, file_ids=changed_file_ids)
-                    resolve_references(self.db, file_ids=changed_file_ids)
-                    resolve_type_traced(self.db, file_ids=changed_file_ids)
 
                 # Mark successfully indexed files as indexed
                 if changed_file_ids:
@@ -2597,17 +2596,6 @@ class IndexCoordinator:
                 # Commit all Tantivy changes in one batch (1 commit, not N)
                 self._lexical.commit_staged()
 
-                # Commit all embedding changes (with progress reporting)
-                if self._embedding is not None and self._embedding.has_staged_changes():
-
-                    def _emb_progress(done: int, total: int) -> None:
-                        on_progress(done, total, files_by_ext, "computing_embeddings")
-
-                    on_progress(0, 1, files_by_ext, "computing_embeddings")
-                    emb_count = self._embedding.commit_staged(on_progress=_emb_progress)
-                    # Send final signal with actual def count (not record count)
-                    on_progress(emb_count, emb_count, files_by_ext, "embeddings_done")
-
                 # Re-resolve any import paths that couldn't resolve during
                 # batched indexing (e.g. batch 1 imports targeting batch 2 files).
                 self._structural.resolve_all_imports()
@@ -2629,6 +2617,42 @@ class IndexCoordinator:
 
                 on_progress(0, 1, files_by_ext, "resolving_types")
                 resolve_type_traced(self.db, on_progress=pass3_progress)
+
+                # Commit all embedding changes AFTER resolver so CTX_USAGE
+                # records benefit from resolved cross-file references.
+                if self._embedding is not None and self._embedding.has_staged_changes():
+
+                    def _usage_lookup_init(def_uid: str) -> list[str]:
+                        """Return caller def names for CTX_USAGE records."""
+                        try:
+                            with self.db.session() as sess:
+                                fq = FactQueries(sess)
+                                refs = fq.list_refs_by_def_uid(
+                                    def_uid, limit=30
+                                )
+                                names: list[str] = []
+                                seen: set[str] = set()
+                                for ref in refs:
+                                    if ref.role == "definition":
+                                        continue
+                                    tok = ref.token_text
+                                    if tok and tok not in seen:
+                                        seen.add(tok)
+                                        names.append(tok)
+                                return names
+                        except Exception:
+                            return []
+
+                    def _emb_progress(done: int, total: int) -> None:
+                        on_progress(done, total, files_by_ext, "computing_embeddings")
+
+                    on_progress(0, 1, files_by_ext, "computing_embeddings")
+                    emb_count = self._embedding.commit_staged(
+                        on_progress=_emb_progress,
+                        usage_lookup=_usage_lookup_init,
+                    )
+                    # Send final signal with actual def count (not record count)
+                    on_progress(emb_count, emb_count, files_by_ext, "embeddings_done")
 
         return count, indexed_paths, files_by_ext
 
