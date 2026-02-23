@@ -45,6 +45,7 @@ from codeplane.mcp.tools.recon.models import (
 )
 from codeplane.mcp.tools.recon.parsing import parse_task
 from codeplane.mcp.tools.recon.scoring import (
+    _aggregate_to_files,
     _apply_filters,
     _score_candidates,
     find_elbow,
@@ -172,41 +173,67 @@ async def _select_seeds(
         diagnostics["total_ms"] = round((time.monotonic() - t0) * 1000)
         return [], parsed, [], diagnostics, {}
 
-    # 7. Elbow detection
-    score_values = [s for _, s in scored]
-    n_seeds = find_elbow(score_values, min_seeds=min_seeds, max_seeds=max_seeds)
+    # 7. Aggregate to file level
+    file_ranked = _aggregate_to_files(scored, gated)
 
-    # 8. File diversity: max 2 seeds per file
-    #    Stage-aware test seed selection (Section 5):
-    #    - Cap test seeds unless task is test-driven
-    #    - Tests pass the filter pipeline but are capped at seed selection
+    # 8. File-level elbow detection
+    file_score_values = [fs for _, fs, _ in file_ranked]
+    n_files = find_elbow(
+        file_score_values,
+        min_seeds=min(min_seeds, len(file_ranked)),
+        max_seeds=max_seeds,
+    )
+
+    # 9. File-first seed selection:
+    #    Phase 1 — one seed per top file (maximum file diversity)
+    #    Phase 2 — second-best def per top file if budget remains
+    #    Stage-aware test seed cap (Section 5)
     seeds: list[DefFact] = []
-    file_counts: dict[int, int] = {}
+    selected_uids: set[str] = set()
     test_seed_count = 0
-    max_test_seeds = n_seeds if parsed.is_test_driven else max(2, n_seeds // 3)
+    max_test_seeds = max_seeds if parsed.is_test_driven else max(2, max_seeds // 3)
 
-    for uid, _score in scored:
-        if len(seeds) >= n_seeds:
+    # Phase 1: one seed per file (maximum file diversity)
+    for _fid, _fscore, fdefs in file_ranked[:n_files]:
+        if len(seeds) >= max_seeds:
             break
-        cand = gated[uid]
-        if cand.def_fact is None:
-            continue
+        for uid, _dscore in fdefs:
+            if uid in selected_uids:
+                continue
+            cand = gated[uid]
+            if cand.def_fact is None:
+                continue
+            if cand.is_test and test_seed_count >= max_test_seeds:
+                continue
+            if cand.is_test:
+                test_seed_count += 1
+            seeds.append(cand.def_fact)
+            selected_uids.add(uid)
+            break
 
-        # Test seed cap (Section 5: stage-aware, not global penalty)
-        if cand.is_test and test_seed_count >= max_test_seeds:
-            continue
-
-        fid = cand.def_fact.file_id
-        if file_counts.get(fid, 0) >= 2:
-            continue
-        file_counts[fid] = file_counts.get(fid, 0) + 1
-        if cand.is_test:
-            test_seed_count += 1
-        seeds.append(cand.def_fact)
+    # Phase 2: second seed per file if budget remains
+    for _fid, _fscore, fdefs in file_ranked[:n_files]:
+        if len(seeds) >= max_seeds:
+            break
+        for uid, _dscore in fdefs:
+            if uid in selected_uids:
+                continue
+            cand = gated[uid]
+            if cand.def_fact is None:
+                continue
+            if cand.is_test and test_seed_count >= max_test_seeds:
+                continue
+            if cand.is_test:
+                test_seed_count += 1
+            seeds.append(cand.def_fact)
+            selected_uids.add(uid)
+            break
+    n_seeds = len(seeds)
 
     diagnostics["total_ms"] = round((time.monotonic() - t0) * 1000)
     diagnostics["seeds_selected"] = len(seeds)
-    diagnostics["elbow_k"] = n_seeds
+    diagnostics["elbow_k"] = n_files
+    diagnostics["file_ranked"] = len(file_ranked)
 
     log.info(
         "recon.seeds_selected",

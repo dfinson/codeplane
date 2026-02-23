@@ -80,6 +80,7 @@ from codeplane.mcp.tools.recon.pipeline import (
 
 # --- scoring ---
 from codeplane.mcp.tools.recon.scoring import (
+    _aggregate_to_files,
     _apply_dual_gate,
     _apply_filters,
     _score_candidates,
@@ -114,6 +115,7 @@ __all__ = [
     "_merge_candidates",
     "_enrich_candidates",
     # Scoring
+    "_aggregate_to_files",
     "_apply_dual_gate",
     "_apply_filters",
     "_score_candidates",

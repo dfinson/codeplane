@@ -29,6 +29,7 @@ from codeplane.mcp.tools.recon import (
     HarvestCandidate,
     ParsedTask,
     TaskIntent,
+    _aggregate_to_files,
     _build_failure_actions,
     _classify_artifact,
     _def_signature_text,
@@ -585,6 +586,125 @@ class TestBoundedScoring:
         assert c.seed_score > 0
         # seed_score incorporates hub-based multiplier
         assert c.seed_score != c.relevance_score
+
+
+# ---------------------------------------------------------------------------
+# File-level aggregation tests
+# ---------------------------------------------------------------------------
+
+
+class TestAggregateToFiles:
+    """Tests for _aggregate_to_files — distribution-relative file scoring."""
+
+    def _make_candidate(
+        self,
+        uid: str,
+        file_id: int,
+        name: str = "func",
+    ) -> HarvestCandidate:
+        d = MagicMock()
+        d.name = name
+        d.file_id = file_id
+        d.kind = "function"
+        return HarvestCandidate(def_uid=uid, def_fact=d)
+
+    def test_empty_input(self) -> None:
+        assert _aggregate_to_files([], {}) == []
+
+    def test_single_file_single_def(self) -> None:
+        c = self._make_candidate("a::f1", file_id=1)
+        scored = [("a::f1", 0.5)]
+        result = _aggregate_to_files(scored, {"a::f1": c})
+        assert len(result) == 1
+        fid, fscore, defs = result[0]
+        assert fid == 1
+        assert fscore == 0.5
+        assert len(defs) == 1
+
+    def test_file_with_many_defs_above_median(self) -> None:
+        """File with many defs above global median should accumulate more signal."""
+        # File A: 1 def with high score
+        ca = self._make_candidate("a::f1", file_id=1)
+        # File B: 3 defs with moderate scores (all above what will be median)
+        cb1 = self._make_candidate("b::f1", file_id=2)
+        cb2 = self._make_candidate("b::f2", file_id=2)
+        cb3 = self._make_candidate("b::f3", file_id=2)
+        # File C: 2 defs with low scores (below median)
+        cc1 = self._make_candidate("c::f1", file_id=3)
+        cc2 = self._make_candidate("c::f2", file_id=3)
+
+        candidates = {
+            "a::f1": ca,
+            "b::f1": cb1,
+            "b::f2": cb2,
+            "b::f3": cb3,
+            "c::f1": cc1,
+            "c::f2": cc2,
+        }
+        # Scores: median of [0.30, 0.20, 0.19, 0.18, 0.05, 0.04] = 0.19
+        scored = [
+            ("a::f1", 0.30),
+            ("b::f1", 0.20),
+            ("b::f2", 0.19),
+            ("b::f3", 0.18),
+            ("c::f1", 0.05),
+            ("c::f2", 0.04),
+        ]
+        result = _aggregate_to_files(scored, candidates)
+
+        # File B has 2 defs above median (0.20, 0.19 >= 0.19) → m=2 → score=0.39
+        # File A has 1 def above median (0.30 >= 0.19) → m=1 → score=0.30
+        # File C has 0 defs above median → m=1 → score=0.05
+        assert result[0][0] == 2  # File B first (breadth wins)
+        assert result[1][0] == 1  # File A second
+        assert result[2][0] == 3  # File C last
+
+    def test_m_capped_at_three(self) -> None:
+        """m should not exceed 3 even with many qualifying defs."""
+        cands = {}
+        scored = []
+        # File with 5 defs, all above median
+        for i in range(5):
+            uid = f"a::f{i}"
+            c = self._make_candidate(uid, file_id=1)
+            cands[uid] = c
+            scored.append((uid, 0.5 - i * 0.01))
+
+        result = _aggregate_to_files(scored, cands)
+        assert len(result) == 1
+        fid, fscore, defs = result[0]
+        # m=3 (capped), so score = 0.50 + 0.49 + 0.48 = 1.47
+        assert abs(fscore - (0.50 + 0.49 + 0.48)) < 0.001
+
+    def test_sorting_is_stable_on_file_id(self) -> None:
+        """Files with equal scores sort by file_id (deterministic)."""
+        c1 = self._make_candidate("a::f1", file_id=10)
+        c2 = self._make_candidate("b::f1", file_id=5)
+        scored = [("a::f1", 0.3), ("b::f1", 0.3)]
+        result = _aggregate_to_files(scored, {"a::f1": c1, "b::f1": c2})
+        assert result[0][0] == 5  # Lower file_id first on tie
+        assert result[1][0] == 10
+
+    def test_no_additive_constants(self) -> None:
+        """File score is purely sum of top-m def scores — no additive bumps."""
+        c = self._make_candidate("a::f1", file_id=1)
+        scored = [("a::f1", 0.42)]
+        result = _aggregate_to_files(scored, {"a::f1": c})
+        _, fscore, _ = result[0]
+        # Must be exactly the def score — no additive constant
+        assert fscore == 0.42
+
+    def test_defs_sorted_descending_in_result(self) -> None:
+        """Within each file, defs should be sorted by score descending."""
+        c1 = self._make_candidate("a::f1", file_id=1)
+        c2 = self._make_candidate("a::f2", file_id=1)
+        c3 = self._make_candidate("a::f3", file_id=1)
+        cands = {"a::f1": c1, "a::f2": c2, "a::f3": c3}
+        scored = [("a::f1", 0.1), ("a::f2", 0.5), ("a::f3", 0.3)]
+        result = _aggregate_to_files(scored, cands)
+        _, _, defs = result[0]
+        scores = [s for _, s in defs]
+        assert scores == sorted(scores, reverse=True)
 
 
 # ---------------------------------------------------------------------------

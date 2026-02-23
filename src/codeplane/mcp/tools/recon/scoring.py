@@ -233,6 +233,64 @@ _ARTIFACT_WEIGHTS: dict[ArtifactKind, dict[TaskIntent, float]] = {
 }
 
 
+def _aggregate_to_files(
+    scored: list[tuple[str, float]],
+    candidates: dict[str, HarvestCandidate],
+) -> list[tuple[int, float, list[tuple[str, float]]]]:
+    """Aggregate def-level scores to file-level using rank statistics.
+
+    Each file contributes a multiset of its defs' scores.  The file score
+    is the sum of the top *m* def scores, where *m* is derived from the
+    global score distribution — specifically, the count of this file's
+    defs that exceed the global median, clamped to [1, 3].
+
+    This is distribution-relative: no invented additive constants.
+    Files with multiple defs above the global median accumulate more
+    signal, rewarding broad consistent relevance over a single spike.
+
+    Returns:
+        List of ``(file_id, file_score, [(def_uid, score), ...])``
+        sorted descending by file_score (stable on file_id for ties).
+    """
+    if not scored:
+        return []
+
+    # Global median score (distribution anchor)
+    all_scores = sorted((s for _, s in scored), reverse=True)
+    global_median = all_scores[len(all_scores) // 2]
+
+    # Group by file_id
+    file_defs: dict[int, list[tuple[str, float]]] = {}
+    for uid, score in scored:
+        cand = candidates.get(uid)
+        if cand is None or cand.def_fact is None:
+            continue
+        fid = cand.def_fact.file_id
+        if fid not in file_defs:
+            file_defs[fid] = []
+        file_defs[fid].append((uid, score))
+
+    # Score each file
+    result: list[tuple[int, float, list[tuple[str, float]]]] = []
+    for fid, defs in file_defs.items():
+        defs.sort(key=lambda x: -x[1])
+        # m = count of this file's defs above the global median, clamped to [1, 3]
+        n_above_median = sum(1 for _, s in defs if s >= global_median)
+        m = max(1, min(n_above_median, 3))
+        file_score = sum(s for _, s in defs[:m])
+        result.append((fid, file_score, defs))
+
+    result.sort(key=lambda x: (-x[1], x[0]))
+
+    log.debug(
+        "recon.file_aggregation",
+        n_files=len(result),
+        global_median=round(global_median, 4),
+        top5=[(fid, round(fs, 4), len(ds)) for fid, fs, ds in result[:5]],
+    )
+    return result
+
+
 def _score_candidates(
     candidates: dict[str, HarvestCandidate],
     parsed: ParsedTask,
