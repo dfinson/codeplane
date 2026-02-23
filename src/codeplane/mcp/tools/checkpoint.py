@@ -677,6 +677,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 hints.append(f"Fix {test_failed} failing test(s).")
             if has_test_error:
                 hints.append("Test phase errored — check tests section for details.")
+            hints.append(
+                "Think VERY carefully before concluding that an issue is "
+                "'pre-existing' or 'not your problem' — fix ALL issues."
+            )
             result["agentic_hint"] = " ".join(hints)
         else:
             result["passed"] = True

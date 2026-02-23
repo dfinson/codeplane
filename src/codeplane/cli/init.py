@@ -181,6 +181,7 @@ avoids wasted round-trips.
 - **DON'T** skip `checkpoint` after `write_source` — always lint + test your changes
 - **DON'T** ignore `agentic_hint` in responses
 - **DON'T** use raw `git add` + `git commit` — use `checkpoint` with `commit_message`
+- **DON'T** dismiss lint/test failures as "pre-existing" or "not your problem" — fix ALL issues
 <!-- /codeplane-instructions -->
 """
 
