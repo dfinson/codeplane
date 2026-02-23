@@ -33,6 +33,99 @@ _SYMBOL_REGEX = re.compile(
     r"\b"
 )
 
+# Negative mention patterns — "not X", "exclude Y", "except Z", "without Y"
+_NEGATIVE_REGEX = re.compile(
+    r"\b(?:not|exclude|except|without|ignore|skip|excluding|except for)\s+"
+    r"(\S+)",
+    re.IGNORECASE,
+)
+
+# Stacktrace / error indicators
+_STACKTRACE_TOKENS = frozenset(
+    {
+        "traceback",
+        "stacktrace",
+        "stack trace",
+        "exception",
+        "error",
+        "raise",
+        "raised",
+        "traceback:",
+        "errno",
+        "oserror",
+        "typeerror",
+        "valueerror",
+        "keyerror",
+        "attributeerror",
+        "importerror",
+        "runtimeerror",
+        "indexerror",
+        "filenotfounderror",
+        "nameerror",
+        "zerodivisionerror",
+        "assertionerror",
+        "notimplementederror",
+        "connectionerror",
+        "timeouterror",
+        "permissionerror",
+    }
+)
+
+# Test-driven task indicators — the task itself is about tests
+_TEST_DRIVEN_TOKENS = frozenset(
+    {
+        "write tests",
+        "add tests",
+        "test coverage",
+        "missing tests",
+        "increase coverage",
+        "unit tests",
+        "test cases",
+        "integration tests",
+        "parametrize",
+        "pytest",
+        "fixture",
+        "mock",
+        "assert",
+    }
+)
+
+
+def _extract_negative_mentions(task: str) -> list[str]:
+    """Extract terms that the user explicitly wants excluded.
+
+    Patterns: "not X", "exclude Y", "except Z", "without Y"
+    """
+    mentions: list[str] = []
+    seen: set[str] = set()
+    for match in _NEGATIVE_REGEX.finditer(task):
+        term = match.group(1).lower().strip(".,;:!?")
+        if term and term not in seen and len(term) >= 2:
+            seen.add(term)
+            mentions.append(term)
+    return mentions
+
+
+def _detect_stacktrace_driven(task: str) -> bool:
+    """Detect if the task involves error/stacktrace investigation."""
+    lower = task.lower()
+    # Check for multi-word tokens first
+    for token in ("stack trace", "traceback:"):
+        if token in lower:
+            return True
+    # Check for single-word tokens
+    words = set(re.split(r"[^a-zA-Z]+", lower))
+    hits = words & _STACKTRACE_TOKENS
+    return len(hits) >= 2  # Require 2+ indicators to avoid false positives
+
+
+def _detect_test_driven(task: str, intent: TaskIntent) -> bool:
+    """Detect if the task is primarily about writing/fixing tests."""
+    if intent == TaskIntent.test:
+        return True
+    lower = task.lower()
+    return any(phrase in lower for phrase in _TEST_DRIVEN_TOKENS)
+
 
 def parse_task(task: str) -> ParsedTask:
     """Parse a free-text task description into structured fields.
@@ -116,12 +209,7 @@ def parse_task(task: str) -> ParsedTask:
         if "_" in word:
             for part in word.split("_"):
                 p = part.lower()
-                if (
-                    p
-                    and p not in seen_terms
-                    and p not in _STOP_WORDS
-                    and len(p) >= 2
-                ):
+                if p and p not in seen_terms and p not in _STOP_WORDS and len(p) >= 2:
                     seen_terms.add(p)
                     if len(p) >= 4:
                         primary_terms.append(p)
@@ -135,6 +223,13 @@ def parse_task(task: str) -> ParsedTask:
     keywords = primary_terms + secondary_terms
     intent = _extract_intent(task)
 
+    # --- Step 5: Extract negative mentions ---
+    negative_mentions = _extract_negative_mentions(task)
+
+    # --- Step 6: Detect stacktrace-driven and test-driven ---
+    is_stacktrace = _detect_stacktrace_driven(task)
+    is_test = _detect_test_driven(task, intent)
+
     return ParsedTask(
         raw=task,
         intent=intent,
@@ -144,6 +239,9 @@ def parse_task(task: str) -> ParsedTask:
         explicit_symbols=explicit_symbols,
         keywords=keywords,
         query_text=query_text,
+        negative_mentions=negative_mentions,
+        is_stacktrace_driven=is_stacktrace,
+        is_test_driven=is_test,
     )
 
 

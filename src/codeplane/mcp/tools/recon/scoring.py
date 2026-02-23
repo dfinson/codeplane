@@ -21,7 +21,7 @@ log = structlog.get_logger(__name__)
 
 
 # ===================================================================
-# Filter Pipeline — configurable, intent-aware (replaces dual-gate)
+# Filter Pipeline — query-conditioned, with OR gate + negative gating
 # ===================================================================
 
 
@@ -29,64 +29,84 @@ def _apply_dual_gate(
     candidates: dict[str, HarvestCandidate],
 ) -> dict[str, HarvestCandidate]:
     """Legacy dual-gate wrapper — delegates to ``_apply_filters``."""
-    return _apply_filters(candidates, TaskIntent.unknown)
+    return _apply_filters(
+        candidates,
+        ParsedTask(raw="", intent=TaskIntent.unknown),
+    )
 
 
 def _apply_filters(
     candidates: dict[str, HarvestCandidate],
-    intent: TaskIntent,
+    parsed: ParsedTask,
 ) -> dict[str, HarvestCandidate]:
-    """Apply intent-aware filter pipeline.
+    """Apply query-conditioned filter pipeline with OR gate and negative gating.
 
     Filter stages:
-    1. Explicit bypass — always pass (trusted input).
-    2. Evidence minimum — require at least one strong signal.
-    3. Intent-aware artifact filtering:
-       - ``debug`` / ``implement`` / ``refactor`` → prefer code, include tests
-       - ``test`` → prefer tests, include code
-       - ``understand`` → include everything
-       - ``unknown`` → require dual evidence (semantic AND structural)
-    4. Barrel exclusion — barrel files are low-signal re-exports.
+    1. Negative gating — exclude candidates matching negative_mentions.
+    2. Explicit bypass — always pass (trusted input).
+    3. OR gate — any *strong* single axis can pass alone.
+    4. Minimum evidence — require at least one signal.
+    5. Intent-aware artifact filtering.
+    6. Barrel exclusion — barrel files are low-signal re-exports.
 
-    Compared to the old dual-gate, this:
-    - Is intent-aware (debugging includes tests, understanding includes docs)
-    - Has per-artifact-kind thresholds instead of one-size-fits-all
-    - Keeps evidence requirements but relaxes them for strong signals
+    Compared to the old dual-gate:
+    - Accepts ``ParsedTask`` for full query context (not just intent)
+    - OR gate: strong single-axis evidence passes without corroboration
+    - Negative gating: user-excluded terms are respected
+    - Test files are NOT globally penalized here (Section 5: handled in pipeline)
     """
+    intent = parsed.intent
     filtered: dict[str, HarvestCandidate] = {}
-    stats = {"bypassed": 0, "passed": 0, "filtered": 0}
+    stats = {"bypassed": 0, "passed": 0, "filtered": 0, "negated": 0}
 
     for uid, cand in candidates.items():
-        # Stage 1: Explicit bypass
+        # Stage 1: Negative gating
+        if cand.matches_negative(parsed.negative_mentions):
+            stats["negated"] += 1
+            continue
+
+        # Stage 2: Explicit bypass
         if cand.from_explicit:
             filtered[uid] = cand
             stats["bypassed"] += 1
             continue
 
-        # Stage 2: Minimum evidence gate
+        # Stage 3: OR gate — strong single-axis evidence passes alone
+        if cand.has_strong_single_axis:
+            # Still exclude barrels even with strong signal
+            if cand.is_barrel and not cand.from_explicit:
+                stats["filtered"] += 1
+                continue
+            filtered[uid] = cand
+            stats["passed"] += 1
+            continue
+
+        # Stage 4: Minimum evidence gate
         if not cand.has_semantic_evidence:
             stats["filtered"] += 1
             continue
 
-        # Stage 3: Intent-aware artifact filtering
+        # Stage 5: Intent-aware artifact filtering
         if intent in (TaskIntent.debug, TaskIntent.implement, TaskIntent.refactor):
-            # For action intents: require structural evidence for non-test code
-            # but relax for tests (they're often relevant for debugging)
-            if cand.artifact_kind == ArtifactKind.test:
-                if cand.embedding_similarity < 0.35:
-                    stats["filtered"] += 1
-                    continue
-            elif cand.artifact_kind == ArtifactKind.code:
+            # For action intents: require structural evidence for code without
+            # strong embedding, but do NOT penalize tests here (Section 5)
+            if cand.artifact_kind == ArtifactKind.code:
                 if not cand.has_structural_evidence and cand.embedding_similarity < 0.4:
                     stats["filtered"] += 1
                     continue
-            elif cand.artifact_kind in (ArtifactKind.config, ArtifactKind.doc) and cand.embedding_similarity < 0.45:
-                # Config/doc only if strong embedding match
+            elif (
+                cand.artifact_kind in (ArtifactKind.config, ArtifactKind.doc)
+                and cand.embedding_similarity < 0.45
+            ):
                 stats["filtered"] += 1
                 continue
         elif intent == TaskIntent.test:
             # For test intent: keep tests easily, require more from code
-            if cand.artifact_kind == ArtifactKind.code and not cand.has_structural_evidence and cand.embedding_similarity < 0.35:
+            if (
+                cand.artifact_kind == ArtifactKind.code
+                and not cand.has_structural_evidence
+                and cand.embedding_similarity < 0.35
+            ):
                 stats["filtered"] += 1
                 continue
         elif intent == TaskIntent.understand:
@@ -95,12 +115,13 @@ def _apply_filters(
                 stats["filtered"] += 1
                 continue
         else:
-            # Unknown intent: fall back to dual-gate (require both)
-            if not (cand.has_semantic_evidence and cand.has_structural_evidence):
+            # Unknown intent: still use OR gate (already handled above),
+            # fall back to requiring semantic evidence (already checked above)
+            if not cand.has_structural_evidence:
                 stats["filtered"] += 1
                 continue
 
-        # Stage 4: Barrel exclusion
+        # Stage 6: Barrel exclusion
         if cand.is_barrel and not cand.from_explicit:
             stats["filtered"] += 1
             continue
@@ -117,9 +138,7 @@ def _apply_filters(
 # ===================================================================
 
 
-def find_elbow(
-    scores: list[float], *, min_seeds: int = 3, max_seeds: int = 15
-) -> int:
+def find_elbow(scores: list[float], *, min_seeds: int = 3, max_seeds: int = 15) -> int:
     """Find the natural cutoff in a sorted-descending score list.
 
     Uses the "maximum distance to chord" method.
@@ -172,29 +191,44 @@ def _clamp(value: float, lo: float = 0.0, hi: float = 1.0) -> float:
 # Artifact-kind weights: how much to boost/penalize each kind
 _ARTIFACT_WEIGHTS: dict[ArtifactKind, dict[TaskIntent, float]] = {
     ArtifactKind.code: {
-        TaskIntent.debug: 1.0, TaskIntent.implement: 1.0,
-        TaskIntent.refactor: 1.0, TaskIntent.understand: 1.0,
-        TaskIntent.test: 0.7, TaskIntent.unknown: 1.0,
+        TaskIntent.debug: 1.0,
+        TaskIntent.implement: 1.0,
+        TaskIntent.refactor: 1.0,
+        TaskIntent.understand: 1.0,
+        TaskIntent.test: 0.7,
+        TaskIntent.unknown: 1.0,
     },
     ArtifactKind.test: {
-        TaskIntent.debug: 0.6, TaskIntent.implement: 0.3,
-        TaskIntent.refactor: 0.3, TaskIntent.understand: 0.5,
-        TaskIntent.test: 1.0, TaskIntent.unknown: 0.3,
+        TaskIntent.debug: 0.6,
+        TaskIntent.implement: 0.3,
+        TaskIntent.refactor: 0.3,
+        TaskIntent.understand: 0.5,
+        TaskIntent.test: 1.0,
+        TaskIntent.unknown: 0.3,
     },
     ArtifactKind.config: {
-        TaskIntent.debug: 0.3, TaskIntent.implement: 0.4,
-        TaskIntent.refactor: 0.2, TaskIntent.understand: 0.6,
-        TaskIntent.test: 0.1, TaskIntent.unknown: 0.3,
+        TaskIntent.debug: 0.3,
+        TaskIntent.implement: 0.4,
+        TaskIntent.refactor: 0.2,
+        TaskIntent.understand: 0.6,
+        TaskIntent.test: 0.1,
+        TaskIntent.unknown: 0.3,
     },
     ArtifactKind.doc: {
-        TaskIntent.debug: 0.2, TaskIntent.implement: 0.3,
-        TaskIntent.refactor: 0.1, TaskIntent.understand: 0.8,
-        TaskIntent.test: 0.1, TaskIntent.unknown: 0.2,
+        TaskIntent.debug: 0.2,
+        TaskIntent.implement: 0.3,
+        TaskIntent.refactor: 0.1,
+        TaskIntent.understand: 0.8,
+        TaskIntent.test: 0.1,
+        TaskIntent.unknown: 0.2,
     },
     ArtifactKind.build: {
-        TaskIntent.debug: 0.1, TaskIntent.implement: 0.2,
-        TaskIntent.refactor: 0.1, TaskIntent.understand: 0.3,
-        TaskIntent.test: 0.1, TaskIntent.unknown: 0.1,
+        TaskIntent.debug: 0.1,
+        TaskIntent.implement: 0.2,
+        TaskIntent.refactor: 0.1,
+        TaskIntent.understand: 0.3,
+        TaskIntent.test: 0.1,
+        TaskIntent.unknown: 0.1,
     },
 }
 
@@ -237,14 +271,8 @@ def _score_candidates(
         f_explicit = 1.0 if cand.from_explicit else 0.0
 
         name_lower = cand.def_fact.name.lower()
-        f_name = (
-            1.0 if any(t in name_lower for t in parsed.primary_terms) else 0.0
-        )
-        f_path = (
-            1.0
-            if any(t in cand.file_path.lower() for t in parsed.primary_terms)
-            else 0.0
-        )
+        f_name = 1.0 if any(t in name_lower for t in parsed.primary_terms) else 0.0
+        f_path = 1.0 if any(t in cand.file_path.lower() for t in parsed.primary_terms) else 0.0
 
         # Artifact-kind weight based on intent
         kind_weights = _ARTIFACT_WEIGHTS.get(cand.artifact_kind, {})

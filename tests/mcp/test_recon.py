@@ -10,8 +10,10 @@ Tests:
 - ArtifactKind: artifact classification
 - TaskIntent: intent extraction
 - EvidenceRecord: structured evidence
-- _apply_filters: intent-aware filter pipeline
+- _apply_filters: query-conditioned filter pipeline (OR gate + negative gating)
 - _score_candidates: bounded scoring model
+- Negative mentions, stacktrace detection, test-driven detection
+- Failure-mode next actions
 """
 
 from __future__ import annotations
@@ -25,11 +27,16 @@ from codeplane.mcp.tools.recon import (
     ArtifactKind,
     EvidenceRecord,
     HarvestCandidate,
+    ParsedTask,
     TaskIntent,
+    _build_failure_actions,
     _classify_artifact,
     _def_signature_text,
+    _detect_stacktrace_driven,
+    _detect_test_driven,
     _estimate_bytes,
     _extract_intent,
+    _extract_negative_mentions,
     _extract_paths,
     _read_lines,
     _score_candidates,
@@ -507,8 +514,11 @@ class TestBoundedScoring:
     def test_scores_are_bounded(self) -> None:
         """All scores should be in reasonable bounded range."""
         c = self._make_candidate(
-            emb_sim=1.0, hub=100, terms=10,
-            from_embedding=True, from_explicit=True,
+            emb_sim=1.0,
+            hub=100,
+            terms=10,
+            from_embedding=True,
+            from_explicit=True,
         )
         parsed = parse_task("test task")
         scored = _score_candidates({"test::func": c}, parsed)
@@ -520,15 +530,17 @@ class TestBoundedScoring:
     def test_explicit_beats_embedding_only(self) -> None:
         """Explicit mentions should score higher than embedding-only."""
         c_explicit = self._make_candidate(
-            uid="a", from_explicit=True, emb_sim=0.5,
+            uid="a",
+            from_explicit=True,
+            emb_sim=0.5,
         )
         c_embed = self._make_candidate(
-            uid="b", from_embedding=True, emb_sim=0.5,
+            uid="b",
+            from_embedding=True,
+            emb_sim=0.5,
         )
         parsed = parse_task("test task")
-        scored = _score_candidates(
-            {"a": c_explicit, "b": c_embed}, parsed
-        )
+        scored = _score_candidates({"a": c_explicit, "b": c_embed}, parsed)
         scores = dict(scored)
         assert scores["a"] > scores["b"]
 
@@ -543,12 +555,17 @@ class TestBoundedScoring:
     def test_test_file_downranked_for_implement(self) -> None:
         """Test files should be lower-ranked for implementation tasks."""
         c_code = self._make_candidate(
-            uid="a", from_embedding=True, emb_sim=0.6,
+            uid="a",
+            from_embedding=True,
+            emb_sim=0.6,
             file_path="src/handler.py",
         )
         c_test = self._make_candidate(
-            uid="b", from_embedding=True, emb_sim=0.6,
-            file_path="tests/test_handler.py", is_test=True,
+            uid="b",
+            from_embedding=True,
+            emb_sim=0.6,
+            file_path="tests/test_handler.py",
+            is_test=True,
         )
         parsed = parse_task("implement caching in handler")
         scored = _score_candidates({"a": c_code, "b": c_test}, parsed)
@@ -558,7 +575,9 @@ class TestBoundedScoring:
     def test_separated_relevance_and_seed_scores(self) -> None:
         """relevance_score and seed_score should be set on candidates."""
         c = self._make_candidate(
-            from_embedding=True, emb_sim=0.7, hub=5,
+            from_embedding=True,
+            emb_sim=0.7,
+            hub=5,
         )
         parsed = parse_task("test task")
         _score_candidates({"test::func": c}, parsed)
@@ -598,7 +617,8 @@ class TestFilterPipeline:
             def_uid="test::func",
             from_explicit=True,
         )
-        result = _apply_filters({"test::func": c}, TaskIntent.unknown)
+        parsed = ParsedTask(raw="", intent=TaskIntent.unknown)
+        result = _apply_filters({"test::func": c}, parsed)
         assert "test::func" in result
 
 
@@ -611,15 +631,15 @@ class TestFindElbow:
     """Tests for find_elbow."""
 
     def test_small_list(self) -> None:
-        assert find_elbow([10, 5, 1]) == 3
+        assert find_elbow([10.0, 5.0, 1.0]) == 3
 
     def test_clear_elbow(self) -> None:
-        scores = [100, 95, 90, 85, 80, 10, 5, 3, 2, 1]
+        scores = [100.0, 95.0, 90.0, 85.0, 80.0, 10.0, 5.0, 3.0, 2.0, 1.0]
         k = find_elbow(scores)
         assert 3 <= k <= 6
 
     def test_flat_distribution(self) -> None:
-        scores = [10, 10, 10, 10, 10]
+        scores = [10.0, 10.0, 10.0, 10.0, 10.0]
         k = find_elbow(scores)
         assert k == len(scores)
 
@@ -627,14 +647,246 @@ class TestFindElbow:
         assert find_elbow([]) == 0
 
     def test_single(self) -> None:
-        assert find_elbow([5]) == 1
+        assert find_elbow([5.0]) == 1
 
     def test_respects_min_seeds(self) -> None:
-        scores = [100, 1, 1, 1, 1]
+        scores = [100.0, 1.0, 1.0, 1.0, 1.0]
         k = find_elbow(scores, min_seeds=3)
         assert k >= 3
 
     def test_respects_max_seeds(self) -> None:
-        scores = list(range(100, 0, -1))
+        scores = [float(x) for x in range(100, 0, -1)]
         k = find_elbow(scores, max_seeds=10)
         assert k <= 10
+
+
+# ---------------------------------------------------------------------------
+# Negative mention extraction tests
+# ---------------------------------------------------------------------------
+
+
+class TestNegativeMentions:
+    """Tests for _extract_negative_mentions."""
+
+    def test_not_pattern(self) -> None:
+        mentions = _extract_negative_mentions("fix the bug not tests")
+        assert "tests" in mentions
+
+    def test_exclude_pattern(self) -> None:
+        mentions = _extract_negative_mentions("refactor handler exclude logging")
+        assert "logging" in mentions
+
+    def test_without_pattern(self) -> None:
+        mentions = _extract_negative_mentions("implement feature without caching")
+        assert "caching" in mentions
+
+    def test_no_negatives(self) -> None:
+        mentions = _extract_negative_mentions("add caching to search")
+        assert mentions == []
+
+    def test_multiple_negatives(self) -> None:
+        mentions = _extract_negative_mentions("fix handler not tests exclude config")
+        assert "tests" in mentions
+        assert "config" in mentions
+
+    def test_parse_task_populates_negatives(self) -> None:
+        parsed = parse_task("refactor handler not tests")
+        assert "tests" in parsed.negative_mentions
+
+
+# ---------------------------------------------------------------------------
+# Stacktrace detection tests
+# ---------------------------------------------------------------------------
+
+
+class TestStacktraceDetection:
+    """Tests for _detect_stacktrace_driven."""
+
+    def test_traceback_error(self) -> None:
+        assert _detect_stacktrace_driven("fix the traceback error in handler")
+
+    def test_exception_raise(self) -> None:
+        assert _detect_stacktrace_driven("ValueError raised in parse_task")
+
+    def test_no_stacktrace(self) -> None:
+        assert not _detect_stacktrace_driven("add caching to search")
+
+    def test_single_error_word_insufficient(self) -> None:
+        # Single indicator not enough (need 2+)
+        assert not _detect_stacktrace_driven("fix the error")
+
+    def test_parse_task_populates_stacktrace(self) -> None:
+        parsed = parse_task("fix the traceback error in handler")
+        assert parsed.is_stacktrace_driven
+
+
+# ---------------------------------------------------------------------------
+# Test-driven detection tests
+# ---------------------------------------------------------------------------
+
+
+class TestTestDrivenDetection:
+    """Tests for _detect_test_driven."""
+
+    def test_write_tests(self) -> None:
+        assert _detect_test_driven("write tests for handler", TaskIntent.implement)
+
+    def test_test_intent(self) -> None:
+        assert _detect_test_driven("anything", TaskIntent.test)
+
+    def test_not_test_driven(self) -> None:
+        assert not _detect_test_driven("add caching", TaskIntent.implement)
+
+    def test_parse_task_populates_test_driven(self) -> None:
+        parsed = parse_task("write unit tests for the search tool")
+        assert parsed.is_test_driven
+
+
+# ---------------------------------------------------------------------------
+# OR gate tests
+# ---------------------------------------------------------------------------
+
+
+class TestORGate:
+    """Tests for has_strong_single_axis and OR gate in filter pipeline."""
+
+    def test_high_embedding_passes(self) -> None:
+        c = HarvestCandidate(
+            def_uid="test::func",
+            from_embedding=True,
+            embedding_similarity=0.6,
+            file_path="src/handler.py",
+        )
+        assert c.has_strong_single_axis
+
+    def test_explicit_passes(self) -> None:
+        c = HarvestCandidate(
+            def_uid="test::func",
+            from_explicit=True,
+        )
+        assert c.has_strong_single_axis
+
+    def test_high_hub_passes(self) -> None:
+        c = HarvestCandidate(
+            def_uid="test::func",
+            hub_score=10,
+        )
+        assert c.has_strong_single_axis
+
+    def test_many_terms_passes(self) -> None:
+        c = HarvestCandidate(
+            def_uid="test::func",
+            matched_terms={"search", "handler", "query"},
+        )
+        assert c.has_strong_single_axis
+
+    def test_weak_signal_does_not_pass(self) -> None:
+        c = HarvestCandidate(
+            def_uid="test::func",
+            from_embedding=True,
+            embedding_similarity=0.3,
+            hub_score=2,
+        )
+        assert not c.has_strong_single_axis
+
+    def test_or_gate_in_filter(self) -> None:
+        """Strong single-axis candidates pass filter without structural evidence."""
+        from codeplane.mcp.tools.recon import _apply_filters
+
+        c = HarvestCandidate(
+            def_uid="test::func",
+            from_embedding=True,
+            embedding_similarity=0.6,
+            hub_score=0,  # No structural evidence
+            file_path="src/handler.py",
+            artifact_kind=ArtifactKind.code,
+        )
+        parsed = ParsedTask(raw="fix handler", intent=TaskIntent.debug)
+        result = _apply_filters({"test::func": c}, parsed)
+        assert "test::func" in result
+
+
+# ---------------------------------------------------------------------------
+# Negative gating tests
+# ---------------------------------------------------------------------------
+
+
+class TestNegativeGating:
+    """Tests for matches_negative and negative gating in filter pipeline."""
+
+    def test_name_match(self) -> None:
+        d = MagicMock()
+        d.name = "test_handler"
+        c = HarvestCandidate(
+            def_uid="test::func",
+            def_fact=d,
+            file_path="tests/test_handler.py",
+        )
+        assert c.matches_negative(["test_handler"])
+
+    def test_path_match(self) -> None:
+        d = MagicMock()
+        d.name = "func"
+        c = HarvestCandidate(
+            def_uid="test::func",
+            def_fact=d,
+            file_path="src/logging/handler.py",
+        )
+        assert c.matches_negative(["logging"])
+
+    def test_no_match(self) -> None:
+        d = MagicMock()
+        d.name = "func"
+        c = HarvestCandidate(
+            def_uid="test::func",
+            def_fact=d,
+            file_path="src/handler.py",
+        )
+        assert not c.matches_negative(["logging"])
+
+    def test_negative_gating_in_filter(self) -> None:
+        """Candidates matching negative mentions are excluded."""
+        from codeplane.mcp.tools.recon import _apply_filters
+
+        d = MagicMock()
+        d.name = "logging_handler"
+        c = HarvestCandidate(
+            def_uid="test::func",
+            def_fact=d,
+            from_embedding=True,
+            embedding_similarity=0.8,
+            hub_score=10,
+            file_path="src/handler.py",
+        )
+        parsed = ParsedTask(
+            raw="fix handler not logging",
+            intent=TaskIntent.debug,
+            negative_mentions=["logging"],
+        )
+        result = _apply_filters({"test::func": c}, parsed)
+        assert "test::func" not in result
+
+
+# ---------------------------------------------------------------------------
+# Failure-mode next actions tests
+# ---------------------------------------------------------------------------
+
+
+class TestFailureActions:
+    """Tests for _build_failure_actions."""
+
+    def test_with_terms(self) -> None:
+        actions = _build_failure_actions(["search", "handler"], [])
+        assert any(a["action"] == "search" for a in actions)
+
+    def test_with_paths(self) -> None:
+        actions = _build_failure_actions([], ["src/handler.py"])
+        assert any(a["action"] == "read_source" for a in actions)
+
+    def test_always_has_recon_retry(self) -> None:
+        actions = _build_failure_actions([], [])
+        assert any(a["action"] == "recon" for a in actions)
+
+    def test_always_has_map_repo(self) -> None:
+        actions = _build_failure_actions([], [])
+        assert any(a["action"] == "map_repo" for a in actions)

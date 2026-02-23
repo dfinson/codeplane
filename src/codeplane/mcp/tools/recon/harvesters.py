@@ -65,11 +65,13 @@ async def _harvest_embedding(
             def_uid=uid,
             from_embedding=True,
             embedding_similarity=sim,
-            evidence=[EvidenceRecord(
-                category="embedding",
-                detail=f"semantic similarity {sim:.3f} (multi-view)",
-                score=min(sim, 1.0),
-            )],
+            evidence=[
+                EvidenceRecord(
+                    category="embedding",
+                    detail=f"semantic similarity {sim:.3f} (multi-view)",
+                    score=min(sim, 1.0),
+                )
+            ],
         )
 
     log.debug(
@@ -117,11 +119,13 @@ async def _harvest_term_match(
                     if candidates[uid].def_fact is None:
                         candidates[uid].def_fact = d
                 candidates[uid].matched_terms.add(term)
-                candidates[uid].evidence.append(EvidenceRecord(
-                    category="term_match",
-                    detail=f"name matches term '{term}'",
-                    score=0.5,
-                ))
+                candidates[uid].evidence.append(
+                    EvidenceRecord(
+                        category="term_match",
+                        detail=f"name matches term '{term}'",
+                        score=0.5,
+                    )
+                )
 
     log.debug(
         "recon.harvest.term_match",
@@ -193,11 +197,13 @@ async def _harvest_lexical(
                                 def_fact=d,
                                 from_lexical=True,
                                 lexical_hit_count=1,
-                                evidence=[EvidenceRecord(
-                                    category="lexical",
-                                    detail=f"full-text hit in {file_path}:{line}",
-                                    score=0.4,
-                                )],
+                                evidence=[
+                                    EvidenceRecord(
+                                        category="lexical",
+                                        detail=f"full-text hit in {file_path}:{line}",
+                                        score=0.4,
+                                    )
+                                ],
                             )
                         else:
                             candidates[uid].from_lexical = True
@@ -243,11 +249,13 @@ async def _harvest_explicit(
                     def_uid=d.def_uid,
                     def_fact=d,
                     from_explicit=True,
-                    evidence=[EvidenceRecord(
-                        category="explicit",
-                        detail=f"agent-provided seed '{name}'",
-                        score=1.0,
-                    )],
+                    evidence=[
+                        EvidenceRecord(
+                            category="explicit",
+                            detail=f"agent-provided seed '{name}'",
+                            score=1.0,
+                        )
+                    ],
                 )
 
     # D2: File paths mentioned in the task text
@@ -270,39 +278,63 @@ async def _harvest_explicit(
                             def_uid=d.def_uid,
                             def_fact=d,
                             from_explicit=True,
-                            evidence=[EvidenceRecord(
-                                category="explicit",
-                                detail=f"in mentioned path '{epath}'",
-                                score=0.9,
-                            )],
+                            evidence=[
+                                EvidenceRecord(
+                                    category="explicit",
+                                    detail=f"in mentioned path '{epath}'",
+                                    score=0.9,
+                                )
+                            ],
                         )
                     else:
                         candidates[d.def_uid].from_explicit = True
 
     # D3: Symbol names mentioned in the task text
     if parsed.explicit_symbols:
-        with coordinator.db.session() as session:
-            fq = FactQueries(session)
-            for sym in parsed.explicit_symbols:
-                matching = fq.find_defs_matching_term(sym, limit=10)
-                for d in matching:
-                    if sym.lower() in d.name.lower() or (
-                        d.qualified_name
-                        and sym.lower() in d.qualified_name.lower()
-                    ):
-                        if d.def_uid not in candidates:
-                            candidates[d.def_uid] = HarvestCandidate(
-                                def_uid=d.def_uid,
-                                def_fact=d,
-                                from_explicit=True,
-                                evidence=[EvidenceRecord(
-                                    category="explicit",
-                                    detail=f"name matches symbol '{sym}'",
-                                    score=0.8,
-                                )],
+        for sym in parsed.explicit_symbols:
+            # Exact match first via symbol table (Section 1: use the index)
+            exact_defs = await coordinator.get_all_defs(sym, limit=10)
+            for d in exact_defs:
+                if d.def_uid not in candidates:
+                    candidates[d.def_uid] = HarvestCandidate(
+                        def_uid=d.def_uid,
+                        def_fact=d,
+                        from_explicit=True,
+                        evidence=[
+                            EvidenceRecord(
+                                category="explicit",
+                                detail=f"exact symbol match '{sym}'",
+                                score=1.0,
                             )
-                        else:
-                            candidates[d.def_uid].from_explicit = True
+                        ],
+                    )
+                else:
+                    candidates[d.def_uid].from_explicit = True
+
+            # LIKE fallback only for symbols not found by exact match
+            if not exact_defs:
+                with coordinator.db.session() as session:
+                    fq = FactQueries(session)
+                    matching = fq.find_defs_matching_term(sym, limit=10)
+                    for d in matching:
+                        if sym.lower() in d.name.lower() or (
+                            d.qualified_name and sym.lower() in d.qualified_name.lower()
+                        ):
+                            if d.def_uid not in candidates:
+                                candidates[d.def_uid] = HarvestCandidate(
+                                    def_uid=d.def_uid,
+                                    def_fact=d,
+                                    from_explicit=True,
+                                    evidence=[
+                                        EvidenceRecord(
+                                            category="explicit",
+                                            detail=f"fuzzy symbol match '{sym}'",
+                                            score=0.7,
+                                        )
+                                    ],
+                                )
+                            else:
+                                candidates[d.def_uid].from_explicit = True
 
     log.debug(
         "recon.harvest.explicit",
@@ -330,18 +362,10 @@ def _merge_candidates(
                 merged[uid] = cand
             else:
                 existing = merged[uid]
-                existing.from_embedding = (
-                    existing.from_embedding or cand.from_embedding
-                )
-                existing.from_term_match = (
-                    existing.from_term_match or cand.from_term_match
-                )
-                existing.from_lexical = (
-                    existing.from_lexical or cand.from_lexical
-                )
-                existing.from_explicit = (
-                    existing.from_explicit or cand.from_explicit
-                )
+                existing.from_embedding = existing.from_embedding or cand.from_embedding
+                existing.from_term_match = existing.from_term_match or cand.from_term_match
+                existing.from_lexical = existing.from_lexical or cand.from_lexical
+                existing.from_explicit = existing.from_explicit or cand.from_explicit
                 existing.embedding_similarity = max(
                     existing.embedding_similarity, cand.embedding_similarity
                 )
@@ -361,13 +385,16 @@ async def _enrich_candidates(
     """Resolve missing DefFact objects and populate structural metadata.
 
     Mutates candidates in-place.
+
+    Performance: Uses batch file path resolution and hub score caching
+    to minimize repeated queries (Section 8).
     """
     from codeplane.index._internal.indexing.graph import FactQueries
     from codeplane.index.models import File as FileModel
 
     coordinator = app_ctx.coordinator
 
-    # Resolve missing DefFacts
+    # Resolve missing DefFacts in one session
     missing_uids = [uid for uid, c in candidates.items() if c.def_fact is None]
     if missing_uids:
         with coordinator.db.session() as session:
@@ -382,22 +409,31 @@ async def _enrich_candidates(
     for uid in dead:
         del candidates[uid]
 
-    # Populate structural metadata
+    # Populate structural metadata with caching
     fid_path_cache: dict[int, str] = {}
+    hub_score_cache: dict[str, int] = {}  # Cache within this recon call
+
     with coordinator.db.session() as session:
         fq = FactQueries(session)
+
+        # Batch resolve all unique file_ids to paths
+        unique_fids = {c.def_fact.file_id for c in candidates.values() if c.def_fact}
+        for fid in unique_fids:
+            if fid not in fid_path_cache:
+                frec = session.get(FileModel, fid)
+                fid_path_cache[fid] = frec.path if frec else ""
+
         for uid, cand in list(candidates.items()):
             if cand.def_fact is None:
                 continue
             d = cand.def_fact
 
-            cand.hub_score = fq.count_callers(uid)
+            # Hub score with caching (Section 8)
+            if uid not in hub_score_cache:
+                hub_score_cache[uid] = fq.count_callers(uid)
+            cand.hub_score = hub_score_cache[uid]
 
-            if d.file_id not in fid_path_cache:
-                frec = session.get(FileModel, d.file_id)
-                fid_path_cache[d.file_id] = frec.path if frec else ""
-            cand.file_path = fid_path_cache[d.file_id]
-
+            cand.file_path = fid_path_cache.get(d.file_id, "")
             cand.is_test = _is_test_file(cand.file_path)
             cand.is_barrel = _is_barrel_file(cand.file_path)
             cand.artifact_kind = _classify_artifact(cand.file_path)

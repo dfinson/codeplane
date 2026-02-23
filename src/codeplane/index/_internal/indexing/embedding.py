@@ -35,6 +35,27 @@ _MAX_TEXT_CHARS = 2000
 _METADATA_VERSION = 1
 
 
+def _detect_providers() -> list[str]:
+    """Detect available ONNX Runtime execution providers.
+
+    Returns a provider list suitable for ``fastembed.TextEmbedding(providers=...)``.
+    Prefers GPU (CUDA) when available, falls back to CPU.
+    """
+    try:
+        import onnxruntime as ort  # type: ignore[import-not-found]
+
+        available = set(ort.get_available_providers())
+    except Exception:  # onnxruntime not importable or provider query fails
+        return []
+
+    providers: list[str] = []
+    if "CUDAExecutionProvider" in available:
+        providers.append("CUDAExecutionProvider")
+    # Always include CPU as fallback
+    providers.append("CPUExecutionProvider")
+    return providers
+
+
 class EmbeddingIndex:
     """Dense vector index for definition embeddings.
 
@@ -208,33 +229,62 @@ class EmbeddingIndex:
 
         Returns [(def_uid, similarity), ...] sorted descending.
         """
-        if self._matrix is None or len(self._uids) == 0:
+        results = self.query_batch([text], top_k=top_k)
+        return results[0] if results else []
+
+    def query_batch(
+        self,
+        texts: list[str],
+        *,
+        top_k: int = 50,
+    ) -> list[list[tuple[str, float]]]:
+        """Batch cosine similarity search across multiple query texts.
+
+        Embeds all *texts* in a single ``model.embed()`` call (one ONNX
+        forward pass) and runs each resulting vector against the index
+        matrix.  Significantly faster than calling :meth:`query` in a
+        loop when multiple views are needed.
+
+        Returns one ``[(def_uid, similarity)]`` list per input text,
+        each sorted descending.
+        """
+        if not texts:
             return []
 
+        if self._matrix is None or len(self._uids) == 0:
+            return [[] for _ in texts]
+
         if self._disabled:
-            return []
+            return [[] for _ in texts]
 
         self._ensure_model()
         if self._disabled:
-            return []
+            return [[] for _ in texts]
 
-        # Embed query
+        # Embed all queries in one batch
         assert self._model is not None  # guaranteed by _ensure_model
-        query_vec = np.array(list(self._model.embed([text]))[0], dtype=np.float32)
-        norm = np.linalg.norm(query_vec)
-        if norm > 0:
-            query_vec = query_vec / norm
+        raw_vecs = list(self._model.embed(texts))
+        query_matrix = np.array(raw_vecs, dtype=np.float32)
 
-        # Cosine similarity = dot product (both L2-normed)
+        # L2 normalize
+        norms = np.linalg.norm(query_matrix, axis=1, keepdims=True)
+        norms = np.maximum(norms, 1e-10)
+        query_matrix = query_matrix / norms
+
+        # Cosine similarity = dot product (index matrix is L2-normed)
         matrix_f32 = self._matrix.astype(np.float32)
-        scores = matrix_f32 @ query_vec
+        all_scores = query_matrix @ matrix_f32.T  # (n_queries, n_defs)
 
-        # Top-k
-        k = min(top_k, len(scores))
-        top_indices = np.argpartition(scores, -k)[-k:]
-        top_indices = top_indices[np.argsort(scores[top_indices])[::-1]]
+        # Top-k per query
+        results: list[list[tuple[str, float]]] = []
+        for row_idx in range(all_scores.shape[0]):
+            scores = all_scores[row_idx]
+            k = min(top_k, len(scores))
+            top_indices = np.argpartition(scores, -k)[-k:]
+            top_indices = top_indices[np.argsort(scores[top_indices])[::-1]]
+            results.append([(self._uids[i], float(scores[i])) for i in top_indices])
 
-        return [(self._uids[i], float(scores[i])) for i in top_indices]
+        return results
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -307,17 +357,31 @@ class EmbeddingIndex:
     # ------------------------------------------------------------------
 
     def _ensure_model(self) -> None:
-        """Lazy-load fastembed TextEmbedding model."""
+        """Lazy-load fastembed TextEmbedding model with GPU auto-detect.
+
+        Probes ONNX Runtime execution providers and prefers CUDA when
+        available, falling back to CPU.  The selected provider is logged
+        so operators can confirm GPU acceleration is active.
+        """
         if self._model is not None or self._disabled:
             return
 
         try:
-            from fastembed import TextEmbedding
+            from fastembed import TextEmbedding  # type: ignore[import-not-found]
 
+            providers = _detect_providers()
             start = time.monotonic()
-            self._model = TextEmbedding(model_name=_MODEL_NAME)
+            kwargs: dict[str, Any] = {"model_name": _MODEL_NAME}
+            if providers:
+                kwargs["providers"] = providers
+            self._model = TextEmbedding(**kwargs)
             elapsed = time.monotonic() - start
-            log.info("embedding.model_loaded", model=_MODEL_NAME, elapsed_s=round(elapsed, 2))
+            log.info(
+                "embedding.model_loaded",
+                model=_MODEL_NAME,
+                providers=providers or ["CPUExecutionProvider"],
+                elapsed_s=round(elapsed, 2),
+            )
         except ImportError:
             log.warning(
                 "embedding.fastembed_not_installed",

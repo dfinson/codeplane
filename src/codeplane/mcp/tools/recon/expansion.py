@@ -3,6 +3,10 @@
 Single Responsibility: Take a seed DefFact and produce a rich context dict
 with source, callees, callers, imports, and siblings.
 
+Uses semantic spans (full DefFact span) instead of arbitrary line caps.
+Progressive disclosure: signature+docstring tier for large defs,
+full span for normal ones.  Fan-out brake limits total expansion cost.
+
 Depends on: models (constants, classifiers), AppContext (I/O).
 """
 
@@ -16,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 from codeplane.mcp.tools.recon.models import (
     _BARREL_FILENAMES,
     _CALLER_CONTEXT_LINES,
+    _LARGE_DEF_THRESHOLD_LINES,
     _MAX_CALLEES_PER_SEED,
     _MAX_CALLERS_PER_SEED,
     _MAX_IMPORT_DEFS_PER_SEED,
@@ -54,11 +59,7 @@ def _def_signature_text(d: DefFact) -> str:
     """Build a compact one-line signature for a DefFact."""
     parts = [f"{d.kind} {d.name}"]
     if d.signature_text:
-        sig = (
-            d.signature_text
-            if d.signature_text.startswith("(")
-            else f"({d.signature_text})"
-        )
+        sig = d.signature_text if d.signature_text.startswith("(") else f"({d.signature_text})"
         parts.append(sig)
     if d.return_type:
         parts.append(f" -> {d.return_type}")
@@ -86,175 +87,192 @@ async def _expand_seed(
     *,
     depth: int = 1,
     task_terms: list[str] | None = None,
+    budget_remaining: int | None = None,
 ) -> dict[str, Any]:
-    """Expand a single seed via graph walk.
+    """Expand a single seed via graph walk with semantic spans.
 
-    Returns a dict with:
-      - seed_body: source text of the seed definition
-      - callee_sigs: signatures of symbols it calls
-      - callers: context snippets around call sites
-      - imports: scaffold of files the seed's file imports from
+    Uses the full DefFact span as the retrieval unit (Section 2: semantic
+    scoping).  For definitions larger than _LARGE_DEF_THRESHOLD_LINES,
+    applies progressive disclosure: signature + docstring first, with a
+    ``full_span`` pointer for the agent to fetch on demand.
 
-    When *task_terms* is provided, import_defs are scored by task relevance
-    (term match in def name) + hub score.
+    Canonical def_uid is included in all output entries (Section 7).
+
+    When *task_terms* is provided, callees and import_defs are scored by
+    task relevance (term match in def name) + hub score (Section 6).
+
+    The *budget_remaining* parameter enables fan-out braking: expansion
+    stops accumulating callers/imports when the seed's output approaches
+    its fair share of the budget.
     """
     coordinator = app_ctx.coordinator
 
     seed_path = await _file_path_for_id(app_ctx, seed.file_id)
     full_path = repo_root / seed_path
+    seed_line_count = seed.end_line - seed.start_line + 1
 
     result: dict[str, Any] = {
+        "def_uid": seed.def_uid,  # Canonical ID (Section 7)
         "path": seed_path,
         "symbol": _def_signature_text(seed),
         "kind": seed.kind,
         "span": {"start_line": seed.start_line, "end_line": seed.end_line},
     }
 
-    # P1: Seed body (source text)
+    # P1: Seed body — semantic span with progressive disclosure (Section 2)
     if full_path.exists():
-        body_end = min(
-            seed.end_line, seed.start_line + _SEED_BODY_MAX_LINES - 1
-        )
-        result["source"] = _read_lines(full_path, seed.start_line, body_end)
+        if seed_line_count > _LARGE_DEF_THRESHOLD_LINES:
+            # Progressive disclosure: signature + docstring tier
+            sig_end = min(seed.end_line, seed.start_line + _SEED_BODY_MAX_LINES - 1)
+            result["source"] = _read_lines(full_path, seed.start_line, sig_end)
+            result["disclosure"] = "partial"
+            result["total_lines"] = seed_line_count
+        else:
+            # Full semantic span — use the DefFact boundaries directly
+            result["source"] = _read_lines(full_path, seed.start_line, seed.end_line)
+            if seed_line_count > _SEED_BODY_MAX_LINES:
+                result["disclosure"] = "full"
         result["file_sha256"] = _compute_sha256(full_path)
-        if seed.end_line > body_end:
-            result["truncated"] = True
-            result["total_lines"] = seed.end_line - seed.start_line + 1
 
     if depth < 1:
         return result
 
+    # Fan-out brake: estimate per-seed budget share
+    per_seed_budget = (budget_remaining or 15_000) // 2
+    accumulated_bytes = len(result.get("source", "").encode("utf-8"))
+
     # P2: Callees — signatures of symbols this seed references
-    callees = await coordinator.get_callees(
-        seed, limit=_MAX_CALLEES_PER_SEED * 2
-    )
+    # Relevance-scored: task-relevant callees ranked first (Section 6)
+    callees = await coordinator.get_callees(seed, limit=_MAX_CALLEES_PER_SEED * 2)
     callee_sigs: list[dict[str, str]] = []
     _terms = task_terms or []
+    callee_scored: list[tuple[dict[str, str], float]] = []
     for c in callees:
-        if len(callee_sigs) >= _MAX_CALLEES_PER_SEED:
-            break
         if c.def_uid == seed.def_uid:
             continue
         c_path = await _file_path_for_id(app_ctx, c.file_id)
-        # Relaxed filter: include all callees from the same repo
-        # (old filter required 2+ shared path segments, dropping cross-package)
-        # Prioritize task-relevant callees
         c_name_lower = c.name.lower()
-        is_relevant = any(t in c_name_lower for t in _terms) if _terms else False
-        callee_sigs.append(
-            {
-                "symbol": _def_signature_text(c),
-                "path": c_path,
-                "span": f"{c.start_line}-{c.end_line}",
-                **({"task_relevant": True} if is_relevant else {}),
-            }
-        )
-    # Sort: task-relevant callees first
-    callee_sigs.sort(key=lambda x: (0 if x.get("task_relevant") else 1))
+        relevance = (1.0 if any(t in c_name_lower for t in _terms) else 0.0) if _terms else 0.5
+        entry: dict[str, str] = {
+            "def_uid": c.def_uid,  # Canonical ID
+            "symbol": _def_signature_text(c),
+            "path": c_path,
+            "span": f"{c.start_line}-{c.end_line}",
+        }
+        if relevance > 0:
+            entry["task_relevant"] = "true"
+        callee_scored.append((entry, relevance))
+
+    # Sort by relevance descending, take top N
+    callee_scored.sort(key=lambda x: -x[1])
+    for entry, _rel in callee_scored[:_MAX_CALLEES_PER_SEED]:
+        callee_sigs.append(entry)
+        accumulated_bytes += 120  # Estimate per callee entry
     if callee_sigs:
         result["callees"] = callee_sigs
 
     # P2.5: Imports — top defs from files imported by this seed's file
+    # Fan-out brake: skip imports if already over budget (Section 6)
     imports = await coordinator.get_file_imports(seed_path, limit=50)
     import_defs: list[dict[str, str]] = []
     seen_import_paths: set[str] = set()
 
-    seed_dir = str(Path(seed_path).parent) + "/"
-    filtered_imports = [
-        imp
-        for imp in imports
-        if imp.resolved_path and imp.resolved_path != seed_path
-    ]
-    filtered_imports.sort(
-        key=lambda imp: (
-            -len(
-                os.path.commonprefix([seed_dir, imp.resolved_path or ""])
-            ),
-            imp.resolved_path or "",
+    if accumulated_bytes < per_seed_budget:
+        seed_dir = str(Path(seed_path).parent) + "/"
+        filtered_imports = [
+            imp for imp in imports if imp.resolved_path and imp.resolved_path != seed_path
+        ]
+        filtered_imports.sort(
+            key=lambda imp: (
+                -len(os.path.commonprefix([seed_dir, imp.resolved_path or ""])),
+                imp.resolved_path or "",
+            )
         )
-    )
 
-    for imp in filtered_imports:
-        assert imp.resolved_path is not None  # filtered above
-        if imp.resolved_path in seen_import_paths:
-            continue
-        seen_import_paths.add(imp.resolved_path)
-        imp_full = repo_root / imp.resolved_path
-        if not imp_full.exists():
-            continue
-        with coordinator.db.session() as _session:
-            from codeplane.index._internal.indexing.graph import FactQueries
-
-            _fq = FactQueries(_session)
-            imp_file = _fq.get_file_by_path(imp.resolved_path)
-            if imp_file is None or imp_file.id is None:
+        for imp in filtered_imports:
+            assert imp.resolved_path is not None  # filtered above
+            if imp.resolved_path in seen_import_paths:
                 continue
-            imp_file_defs = _fq.list_defs_in_file(imp_file.id, limit=20)
-            imp_scored: list[tuple[DefFact, float]] = []
-            _terms = task_terms or []
-            for idef in imp_file_defs:
-                if idef.def_uid == seed.def_uid:
+            seen_import_paths.add(imp.resolved_path)
+            imp_full = repo_root / imp.resolved_path
+            if not imp_full.exists():
+                continue
+            with coordinator.db.session() as _session:
+                from codeplane.index._internal.indexing.graph import FactQueries
+
+                _fq = FactQueries(_session)
+                imp_file = _fq.get_file_by_path(imp.resolved_path)
+                if imp_file is None or imp_file.id is None:
                     continue
-                ihub = min(_fq.count_callers(idef.def_uid), 30)
-                iname_lower = idef.name.lower()
-                term_match = (
-                    1.0
-                    if any(t in iname_lower for t in _terms)
-                    else 0.0
-                )
-                if term_match == 0 and ihub < 3 and _terms:
-                    continue
-                score = ihub * 2 + term_match * 5
-                imp_scored.append((idef, score))
-            imp_scored.sort(key=lambda x: (-x[1], x[0].def_uid))
-            for idef, _iscore in imp_scored[:3]:
-                import_defs.append(
-                    {
-                        "symbol": _def_signature_text(idef),
-                        "path": imp.resolved_path,
-                        "span": f"{idef.start_line}-{idef.end_line}",
-                    }
-                )
-        if len(import_defs) >= _MAX_IMPORT_DEFS_PER_SEED:
-            break
+                imp_file_defs = _fq.list_defs_in_file(imp_file.id, limit=20)
+                imp_scored: list[tuple[DefFact, float]] = []
+                _terms = task_terms or []
+                for idef in imp_file_defs:
+                    if idef.def_uid == seed.def_uid:
+                        continue
+                    ihub = min(_fq.count_callers(idef.def_uid), 30)
+                    iname_lower = idef.name.lower()
+                    term_match = 1.0 if any(t in iname_lower for t in _terms) else 0.0
+                    if term_match == 0 and ihub < 3 and _terms:
+                        continue
+                    score = ihub * 2 + term_match * 5
+                    imp_scored.append((idef, score))
+                imp_scored.sort(key=lambda x: (-x[1], x[0].def_uid))
+                for idef, _iscore in imp_scored[:3]:
+                    import_defs.append(
+                        {
+                            "def_uid": idef.def_uid,  # Canonical ID
+                            "symbol": _def_signature_text(idef),
+                            "path": imp.resolved_path,
+                            "span": f"{idef.start_line}-{idef.end_line}",
+                        }
+                    )
+                    accumulated_bytes += 120
+            if len(import_defs) >= _MAX_IMPORT_DEFS_PER_SEED:
+                break
     if import_defs:
         result["import_defs"] = import_defs
 
     # P3: Callers — context snippets around references to this seed
-    refs = await coordinator.get_references(seed, _context_id=0, limit=50)
-    resolved_refs: list[tuple[str, RefFact]] = []
-    for ref in refs:
-        ref_path = await _file_path_for_id(app_ctx, ref.file_id)
-        resolved_refs.append((ref_path, ref))
-    resolved_refs.sort(key=lambda x: (x[0], x[1].start_line))
-
+    # Fan-out brake: skip callers if already over budget (Section 6)
     caller_snippets: list[dict[str, Any]] = []
-    seen_caller_files: set[str] = set()
-    for ref_path, ref in resolved_refs:
-        if len(caller_snippets) >= _MAX_CALLERS_PER_SEED:
-            break
-        if (
-            ref_path == seed_path
-            and ref.start_line >= seed.start_line
-            and ref.start_line <= seed.end_line
-        ):
-            continue
-        if ref_path in seen_caller_files:
-            continue
-        seen_caller_files.add(ref_path)
+    if accumulated_bytes < per_seed_budget:
+        refs = await coordinator.get_references(seed, _context_id=0, limit=50)
+        resolved_refs: list[tuple[str, RefFact]] = []
+        for ref in refs:
+            ref_path = await _file_path_for_id(app_ctx, ref.file_id)
+            resolved_refs.append((ref_path, ref))
+        resolved_refs.sort(key=lambda x: (x[0], x[1].start_line))
 
-        ref_full = repo_root / ref_path
-        if ref_full.exists():
-            ctx_start = max(1, ref.start_line - _CALLER_CONTEXT_LINES // 2)
-            ctx_end = ref.start_line + _CALLER_CONTEXT_LINES // 2
-            snippet = _read_lines(ref_full, ctx_start, ctx_end)
-            caller_snippets.append(
-                {
-                    "path": ref_path,
-                    "line": ref.start_line,
-                    "context": snippet,
-                }
-            )
+        seen_caller_files: set[str] = set()
+        for ref_path, ref in resolved_refs:
+            if len(caller_snippets) >= _MAX_CALLERS_PER_SEED:
+                break
+            if accumulated_bytes >= per_seed_budget:
+                break
+            if (
+                ref_path == seed_path
+                and ref.start_line >= seed.start_line
+                and ref.start_line <= seed.end_line
+            ):
+                continue
+            if ref_path in seen_caller_files:
+                continue
+            seen_caller_files.add(ref_path)
+
+            ref_full = repo_root / ref_path
+            if ref_full.exists():
+                ctx_start = max(1, ref.start_line - _CALLER_CONTEXT_LINES // 2)
+                ctx_end = ref.start_line + _CALLER_CONTEXT_LINES // 2
+                snippet = _read_lines(ref_full, ctx_start, ctx_end)
+                caller_snippets.append(
+                    {
+                        "path": ref_path,
+                        "line": ref.start_line,
+                        "context": snippet,
+                    }
+                )
+                accumulated_bytes += len(snippet.encode("utf-8"))
     if caller_snippets:
         result["callers"] = caller_snippets
 
@@ -275,11 +293,14 @@ async def _expand_seed(
                     break
                 # Only include substantial siblings (classes, functions, not variables)
                 if sd.kind in ("function", "method", "class"):
-                    siblings.append({
-                        "symbol": _def_signature_text(sd),
-                        "kind": sd.kind,
-                        "span": f"{sd.start_line}-{sd.end_line}",
-                    })
+                    siblings.append(
+                        {
+                            "def_uid": sd.def_uid,  # Canonical ID
+                            "symbol": _def_signature_text(sd),
+                            "kind": sd.kind,
+                            "span": f"{sd.start_line}-{sd.end_line}",
+                        }
+                    )
             if siblings:
                 result["siblings"] = siblings
 
@@ -291,9 +312,7 @@ async def _expand_seed(
 # ===================================================================
 
 
-def _collect_barrel_paths(
-    seed_paths: set[str], repo_root: Path
-) -> set[str]:
+def _collect_barrel_paths(seed_paths: set[str], repo_root: Path) -> set[str]:
     """Find barrel/index files for directories containing seed files."""
     barrel_paths: set[str] = set()
     seen_dirs: set[str] = set()
@@ -303,12 +322,8 @@ def _collect_barrel_paths(
             continue
         seen_dirs.add(parent)
         for barrel_name in _BARREL_FILENAMES:
-            candidate = (
-                f"{parent}/{barrel_name}" if parent != "." else barrel_name
-            )
-            if candidate not in seed_paths and (
-                repo_root / candidate
-            ).exists():
+            candidate = f"{parent}/{barrel_name}" if parent != "." else barrel_name
+            if candidate not in seed_paths and (repo_root / candidate).exists():
                 barrel_paths.add(candidate)
                 break
     return barrel_paths

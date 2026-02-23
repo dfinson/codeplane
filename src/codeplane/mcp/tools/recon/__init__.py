@@ -20,6 +20,7 @@ from __future__ import annotations
 
 # --- assembly ---
 from codeplane.mcp.tools.recon.assembly import (
+    _build_failure_actions,
     _estimate_bytes,
     _summarize_recon,
     _trim_to_budget,
@@ -62,6 +63,9 @@ from codeplane.mcp.tools.recon.models import (
 # --- parsing ---
 from codeplane.mcp.tools.recon.parsing import (
     _build_query_views,
+    _detect_stacktrace_driven,
+    _detect_test_driven,
+    _extract_negative_mentions,
     _extract_paths,
     _merge_multi_view_results,
     _tokenize_task,
@@ -93,6 +97,9 @@ __all__ = [
     "parse_task",
     "_tokenize_task",
     "_extract_paths",
+    "_extract_negative_mentions",
+    "_detect_stacktrace_driven",
+    "_detect_test_driven",
     "_build_query_views",
     "_merge_multi_view_results",
     "_extract_intent",
@@ -120,6 +127,7 @@ __all__ = [
     "_collect_barrel_paths",
     "_build_import_scaffolds",
     # Assembly
+    "_build_failure_actions",
     "_estimate_bytes",
     "_trim_to_budget",
     "_summarize_recon",

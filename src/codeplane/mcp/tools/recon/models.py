@@ -27,6 +27,7 @@ _MAX_BUDGET_BYTES = 60_000
 
 # Per-tier line caps
 _SEED_BODY_MAX_LINES = 80
+_LARGE_DEF_THRESHOLD_LINES = 200  # Defs above this get progressive disclosure
 _CALLEE_SIG_MAX_LINES = 5
 _CALLER_CONTEXT_LINES = 8  # lines around each caller ref
 _MAX_CALLERS_PER_SEED = 5
@@ -51,52 +52,207 @@ _BARREL_FILENAMES = frozenset(
 _STOP_WORDS = frozenset(
     {
         # English grammar
-        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "will", "would", "could",
-        "should", "may", "might", "shall", "can", "need", "must",
+        "a",
+        "an",
+        "the",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "shall",
+        "can",
+        "need",
+        "must",
         # Prepositions
-        "in", "on", "at", "to", "for", "of", "with", "by", "from", "as",
-        "into", "through", "during", "before", "after", "above", "below",
-        "between", "under", "over",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "of",
+        "with",
+        "by",
+        "from",
+        "as",
+        "into",
+        "through",
+        "during",
+        "before",
+        "after",
+        "above",
+        "below",
+        "between",
+        "under",
+        "over",
         # Conjunctions
-        "and", "or", "but", "not", "no", "nor", "so", "yet", "both", "either",
+        "and",
+        "or",
+        "but",
+        "not",
+        "no",
+        "nor",
+        "so",
+        "yet",
+        "both",
+        "either",
         # Pronouns & determiners
-        "if", "then", "else", "when", "where", "how", "what", "which", "who",
-        "that", "this", "these", "those", "it", "its", "i", "we", "you",
-        "they", "me", "my", "our", "your", "his", "her",
+        "if",
+        "then",
+        "else",
+        "when",
+        "where",
+        "how",
+        "what",
+        "which",
+        "who",
+        "that",
+        "this",
+        "these",
+        "those",
+        "it",
+        "its",
+        "i",
+        "we",
+        "you",
+        "they",
+        "me",
+        "my",
+        "our",
+        "your",
+        "his",
+        "her",
         # Quantifiers
-        "all", "each", "every", "any", "some", "such", "only", "also", "very",
-        "just", "more",
+        "all",
+        "each",
+        "every",
+        "any",
+        "some",
+        "such",
+        "only",
+        "also",
+        "very",
+        "just",
+        "more",
         # Task-description noise (generic action verbs)
-        "add", "fix", "implement", "change", "update", "modify", "create",
-        "make", "use", "get", "set", "new", "code", "file", "method",
-        "function", "class", "module", "test", "check", "ensure", "want",
-        "like", "about", "etc", "using", "way", "thing", "tool", "run",
+        "add",
+        "fix",
+        "implement",
+        "change",
+        "update",
+        "modify",
+        "create",
+        "make",
+        "use",
+        "get",
+        "set",
+        "new",
+        "code",
+        "file",
+        "method",
+        "function",
+        "class",
+        "module",
+        "test",
+        "check",
+        "ensure",
+        "want",
+        "like",
+        "about",
+        "etc",
+        "using",
+        "way",
+        "thing",
+        "tool",
+        "run",
     }
 )
 
 # File extensions for path extraction
 _PATH_EXTENSIONS = frozenset(
     {
-        ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs",
-        ".c", ".cpp", ".h", ".hpp", ".rb", ".php", ".cs", ".swift",
-        ".kt", ".scala", ".lua", ".r", ".m", ".mm", ".sh", ".bash",
-        ".zsh", ".yaml", ".yml", ".json", ".toml", ".cfg", ".ini", ".xml",
+        ".py",
+        ".js",
+        ".ts",
+        ".jsx",
+        ".tsx",
+        ".java",
+        ".go",
+        ".rs",
+        ".c",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".rb",
+        ".php",
+        ".cs",
+        ".swift",
+        ".kt",
+        ".scala",
+        ".lua",
+        ".r",
+        ".m",
+        ".mm",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".yaml",
+        ".yml",
+        ".json",
+        ".toml",
+        ".cfg",
+        ".ini",
+        ".xml",
     }
 )
 
 # Config/doc file extensions
-_CONFIG_EXTENSIONS = frozenset({
-    ".yaml", ".yml", ".json", ".toml", ".cfg", ".ini", ".xml",
-    ".env", ".properties",
-})
-_DOC_EXTENSIONS = frozenset({
-    ".md", ".rst", ".txt", ".adoc",
-})
-_BUILD_FILES = frozenset({
-    "Makefile", "CMakeLists.txt", "Dockerfile", "docker-compose.yml",
-    "docker-compose.yaml", "Jenkinsfile", "Taskfile.yml",
-})
+_CONFIG_EXTENSIONS = frozenset(
+    {
+        ".yaml",
+        ".yml",
+        ".json",
+        ".toml",
+        ".cfg",
+        ".ini",
+        ".xml",
+        ".env",
+        ".properties",
+    }
+)
+_DOC_EXTENSIONS = frozenset(
+    {
+        ".md",
+        ".rst",
+        ".txt",
+        ".adoc",
+    }
+)
+_BUILD_FILES = frozenset(
+    {
+        "Makefile",
+        "CMakeLists.txt",
+        "Dockerfile",
+        "docker-compose.yml",
+        "docker-compose.yaml",
+        "Jenkinsfile",
+        "Taskfile.yml",
+    }
+)
 
 
 # ===================================================================
@@ -106,6 +262,7 @@ _BUILD_FILES = frozenset({
 
 class ArtifactKind(StrEnum):
     """Classification of what kind of artifact a definition belongs to."""
+
     code = "code"
     test = "test"
     config = "config"
@@ -136,6 +293,7 @@ def _classify_artifact(path: str) -> ArtifactKind:
 
 class TaskIntent(StrEnum):
     """High-level classification of what the user wants to do."""
+
     debug = "debug"
     implement = "implement"
     refactor = "refactor"
@@ -145,31 +303,91 @@ class TaskIntent(StrEnum):
 
 
 _INTENT_KEYWORDS: dict[TaskIntent, frozenset[str]] = {
-    TaskIntent.debug: frozenset({
-        "bug", "fix", "error", "crash", "broken", "fail", "failing",
-        "wrong", "issue", "debug", "trace", "traceback", "exception",
-        "stacktrace", "investigate", "diagnose",
-    }),
-    TaskIntent.implement: frozenset({
-        "add", "implement", "create", "build", "introduce", "support",
-        "feature", "extend", "enable", "integrate", "wire",
-    }),
-    TaskIntent.refactor: frozenset({
-        "refactor", "rename", "move", "extract", "split", "merge",
-        "consolidate", "simplify", "clean", "reorganize", "restructure",
-        "decouple", "inline",
-    }),
-    TaskIntent.understand: frozenset({
-        "understand", "explain", "how", "what", "where", "why",
-        "find", "locate", "show", "describe", "document", "reads",
-        "overview", "architecture",
-    }),
-    TaskIntent.test: frozenset({
-        "test", "tests", "testing", "coverage", "spec", "assertion",
-        "mock", "fixture", "pytest", "unittest",
-    }),
+    TaskIntent.debug: frozenset(
+        {
+            "bug",
+            "fix",
+            "error",
+            "crash",
+            "broken",
+            "fail",
+            "failing",
+            "wrong",
+            "issue",
+            "debug",
+            "trace",
+            "traceback",
+            "exception",
+            "stacktrace",
+            "investigate",
+            "diagnose",
+        }
+    ),
+    TaskIntent.implement: frozenset(
+        {
+            "add",
+            "implement",
+            "create",
+            "build",
+            "introduce",
+            "support",
+            "feature",
+            "extend",
+            "enable",
+            "integrate",
+            "wire",
+        }
+    ),
+    TaskIntent.refactor: frozenset(
+        {
+            "refactor",
+            "rename",
+            "move",
+            "extract",
+            "split",
+            "merge",
+            "consolidate",
+            "simplify",
+            "clean",
+            "reorganize",
+            "restructure",
+            "decouple",
+            "inline",
+        }
+    ),
+    TaskIntent.understand: frozenset(
+        {
+            "understand",
+            "explain",
+            "how",
+            "what",
+            "where",
+            "why",
+            "find",
+            "locate",
+            "show",
+            "describe",
+            "document",
+            "reads",
+            "overview",
+            "architecture",
+        }
+    ),
+    TaskIntent.test: frozenset(
+        {
+            "test",
+            "tests",
+            "testing",
+            "coverage",
+            "spec",
+            "assertion",
+            "mock",
+            "fixture",
+            "pytest",
+            "unittest",
+        }
+    ),
 }
-
 
 
 def _extract_intent(task: str) -> TaskIntent:
@@ -201,7 +419,7 @@ class EvidenceRecord:
     """A single piece of evidence supporting a candidate's relevance."""
 
     category: str  # "embedding", "term_match", "lexical", "explicit"
-    detail: str    # Human-readable description
+    detail: str  # Human-readable description
     score: float = 0.0  # Normalized [0, 1] contribution
 
 
@@ -257,12 +475,14 @@ class HarvestCandidate:
     @property
     def evidence_axes(self) -> int:
         """Count of independent harvester sources that found this candidate."""
-        return sum([
-            self.from_embedding,
-            self.from_term_match,
-            self.from_lexical,
-            self.from_explicit,
-        ])
+        return sum(
+            [
+                self.from_embedding,
+                self.from_term_match,
+                self.from_lexical,
+                self.from_explicit,
+            ]
+        )
 
     @property
     def has_semantic_evidence(self) -> bool:
@@ -284,6 +504,28 @@ class HarvestCandidate:
             or self.shares_file_with_seed
             or self.is_callee_of_top
             or self.is_imported_by_top
+        )
+
+    def matches_negative(self, negative_mentions: list[str]) -> bool:
+        """Return True if this candidate's name/path matches a negated term."""
+        if not negative_mentions:
+            return False
+        name_lower = self.def_fact.name.lower() if self.def_fact else ""
+        path_lower = self.file_path.lower()
+        return any(neg in name_lower or neg in path_lower for neg in negative_mentions)
+
+    @property
+    def has_strong_single_axis(self) -> bool:
+        """True if any one axis is strong enough to pass alone (OR gate).
+
+        Used to let high-confidence candidates through even when they
+        lack evidence on other axes.
+        """
+        return (
+            (self.from_embedding and self.embedding_similarity >= 0.55)
+            or self.from_explicit
+            or self.hub_score >= 8
+            or len(self.matched_terms) >= 3
         )
 
 
@@ -308,6 +550,9 @@ class ParsedTask:
         explicit_symbols: Symbol-like identifiers mentioned in the task.
         keywords:         Union of primary + secondary for broad matching.
         query_text:       Synthesized embedding query (for dense retrieval).
+        negative_mentions: Terms the user explicitly excludes ("not X", "except Y").
+        is_stacktrace_driven: True if task contains error/traceback patterns.
+        is_test_driven:   True if the primary goal is writing/fixing tests.
     """
 
     raw: str
@@ -318,6 +563,9 @@ class ParsedTask:
     explicit_symbols: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     query_text: str = ""
+    negative_mentions: list[str] = field(default_factory=list)
+    is_stacktrace_driven: bool = False
+    is_test_driven: bool = False
 
 
 # ===================================================================
