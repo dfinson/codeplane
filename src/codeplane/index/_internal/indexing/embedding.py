@@ -45,9 +45,9 @@ log = structlog.get_logger()
 
 _MODEL_NAME = "BAAI/bge-small-en-v1.5"
 _EMBEDDING_DIM = 384
-_MAX_TEXT_CHARS = 1500  # 512-token context window
+_MAX_TEXT_CHARS = 800  # 512-token context window; 800 chars ≈ 250 tokens
 _METADATA_VERSION = 3  # v3: evidence-record architecture
-_EMBED_BATCH_SIZE = 256
+_EMBED_BATCH_SIZE = 32  # small batches minimise padding waste on CPU
 
 # Evidence record kind constants
 KIND_NAME = "NAME"
@@ -507,22 +507,49 @@ class EmbeddingIndex:
             texts = [text for _uid, _kind, text in records]
             record_kinds = [(uid, kind) for uid, kind, _text in records]
 
-            # Batch embed
+            # --- Deduplicate texts ----------------------------------------
+            # Many records share identical text (e.g. CTX_PATH for every def
+            # in the same file).  Embed each unique text once, then replicate
+            # vectors for duplicates.  Zero data loss, fewer ONNX calls.
             assert self._model is not None
             total = len(texts)
+            text_to_uniq: dict[str, int] = {}
+            unique_texts: list[str] = []
+            record_to_uniq: list[int] = []
+            for text in texts:
+                idx = text_to_uniq.get(text)
+                if idx is None:
+                    idx = len(unique_texts)
+                    text_to_uniq[text] = idx
+                    unique_texts.append(text)
+                record_to_uniq.append(idx)
+            n_unique = len(unique_texts)
+            n_deduped = total - n_unique
+
+            # --- Sort unique texts by length for minimal padding waste -----
+            sort_idx = sorted(range(n_unique), key=lambda i: len(unique_texts[i]))
+            sorted_unique = [unique_texts[i] for i in sort_idx]
+
             start = time.monotonic()
-            embeddings_list: list[Any] = []
-            for i, vec in enumerate(
-                self._model.embed(texts, batch_size=_EMBED_BATCH_SIZE)
+            sorted_vecs: list[Any] = [None] * n_unique
+            for pos, vec in enumerate(
+                self._model.embed(sorted_unique, batch_size=_EMBED_BATCH_SIZE)
             ):
-                embeddings_list.append(vec)
-                if on_progress is not None and (i % 50 == 0 or i == total - 1):
-                    on_progress(i + 1, total)
+                sorted_vecs[sort_idx[pos]] = vec
+                if on_progress is not None and (pos % 50 == 0 or pos == n_unique - 1):
+                    # Scale progress to total for UX consistency
+                    scaled = int((pos + 1) / n_unique * total)
+                    on_progress(scaled, total)
+
+            # Expand back: map each record → its unique-text vector
+            embeddings_list = [sorted_vecs[record_to_uniq[i]] for i in range(total)]
             elapsed = time.monotonic() - start
             log.info(
                 "embedding.commit",
                 defs=len(uid_to_def),
                 records=total,
+                unique_texts=n_unique,
+                deduped=n_deduped,
                 elapsed_ms=round(elapsed * 1000),
             )
 
