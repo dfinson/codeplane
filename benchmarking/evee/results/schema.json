@@ -1,0 +1,119 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Recon Evaluation Results",
+  "description": "Versioned results from running Recon against the Evee benchmark ground truth.",
+  "type": "object",
+  "required": ["meta", "issues", "aggregates"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["pipeline_version", "date", "recon_commit", "evee_commit"],
+      "properties": {
+        "pipeline_version": { "type": "string", "description": "Recon pipeline version, e.g. v5" },
+        "date": { "type": "string", "format": "date", "description": "ISO date of the run" },
+        "recon_commit": { "type": "string", "description": "Git SHA of the CodePlane repo" },
+        "evee_commit": { "type": "string", "description": "Git SHA of the Evee repo" },
+        "total_issues": { "type": "integer" },
+        "total_queries": { "type": "integer" }
+      }
+    },
+    "issues": {
+      "type": "object",
+      "description": "Keyed by issue number (string).",
+      "additionalProperties": {
+        "$ref": "#/definitions/issue_result"
+      }
+    },
+    "aggregates": {
+      "type": "object",
+      "properties": {
+        "by_query_level": {
+          "type": "object",
+          "properties": {
+            "Q1": { "$ref": "#/definitions/aggregate_stats" },
+            "Q2": { "$ref": "#/definitions/aggregate_stats" },
+            "Q3": { "$ref": "#/definitions/aggregate_stats" }
+          }
+        },
+        "overall": {
+          "type": "object",
+          "properties": {
+            "mean_f1": { "type": "number" },
+            "median_f1": { "type": "number" },
+            "min_f1": { "type": "number" },
+            "max_f1": { "type": "number" },
+            "perfect_edit_recall_count": {
+              "type": "object",
+              "properties": {
+                "Q1": { "type": "integer" },
+                "Q2": { "type": "integer" },
+                "Q3": { "type": "integer" }
+              }
+            }
+          }
+        },
+        "by_difficulty": {
+          "type": "object",
+          "properties": {
+            "simple": { "$ref": "#/definitions/difficulty_stats" },
+            "medium": { "$ref": "#/definitions/difficulty_stats" },
+            "complex": { "$ref": "#/definitions/difficulty_stats" }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "query_result": {
+      "type": "object",
+      "required": ["precision", "recall", "f1", "edit_recall", "noise_ratio", "returned_files", "bucket_alignment"],
+      "properties": {
+        "precision": { "type": "number", "minimum": 0, "maximum": 1 },
+        "recall": { "type": "number", "minimum": 0, "maximum": 1 },
+        "f1": { "type": "number", "minimum": 0, "maximum": 1 },
+        "edit_recall": { "type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "null when issue has zero Edit GT files" },
+        "noise_ratio": { "type": "number", "minimum": 0, "maximum": 1 },
+        "returned_files": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "File paths returned by Recon"
+        },
+        "bucket_alignment": {
+          "type": "object",
+          "properties": {
+            "edit_to_edit_target": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+            "ctx_to_context": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+            "supp_to_supplementary": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+          }
+        }
+      }
+    },
+    "issue_result": {
+      "type": "object",
+      "required": ["Q1", "Q2", "Q3"],
+      "properties": {
+        "Q1": { "$ref": "#/definitions/query_result" },
+        "Q2": { "$ref": "#/definitions/query_result" },
+        "Q3": { "$ref": "#/definitions/query_result" }
+      }
+    },
+    "aggregate_stats": {
+      "type": "object",
+      "properties": {
+        "avg_precision": { "type": "number" },
+        "avg_recall": { "type": "number" },
+        "avg_f1": { "type": "number" },
+        "avg_edit_recall": { "type": "number" },
+        "avg_noise_ratio": { "type": "number" }
+      }
+    },
+    "difficulty_stats": {
+      "type": "object",
+      "properties": {
+        "count": { "type": "integer" },
+        "avg_f1": { "type": "number" },
+        "avg_edit_recall": { "type": "number" }
+      }
+    }
+  }
+}
