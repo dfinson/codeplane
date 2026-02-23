@@ -16,8 +16,11 @@ v4 design: ONE call, ALL context.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import re
 import time
 import uuid
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -69,6 +72,111 @@ if TYPE_CHECKING:
     from codeplane.mcp.context import AppContext
 
 log = structlog.get_logger(__name__)
+
+# Max content bytes to include for unindexed files
+_UNINDEXED_MAX_BYTES = 8192
+_UNINDEXED_MAX_FILES = 15
+
+
+# ===================================================================
+# Unindexed file discovery (path-based)
+# ===================================================================
+
+
+def _find_unindexed_files(
+    app_ctx: Any,
+    parsed: ParsedTask,
+    indexed_paths: set[str],
+) -> list[tuple[str, float]]:
+    """Find git-tracked files NOT in the structural index whose paths match query terms.
+
+    This catches .yaml, .md, .toml, .json, dotfiles, Makefiles, etc. that
+    the tree-sitter-based index never processes.  Uses the same terms the
+    harvesters use so the query drives inclusion.
+
+    Returns:
+        List of ``(repo_relative_path, match_score)`` sorted descending
+        by score, capped at ``_UNINDEXED_MAX_FILES``.
+    """
+    # Collect terms to match against file paths
+    terms: set[str] = set()
+    for t in parsed.primary_terms:
+        if len(t) >= 3:
+            terms.add(t.lower())
+    for t in parsed.secondary_terms:
+        if len(t) >= 3:
+            terms.add(t.lower())
+    for sym in parsed.explicit_symbols or []:
+        if len(sym) >= 3:
+            terms.add(sym.lower())
+    # Path fragments from explicit mentions
+    for p in parsed.explicit_paths or []:
+        for component in re.split(r"[/._\-]", p):
+            if len(component) >= 3:
+                terms.add(component.lower())
+
+    if not terms:
+        return []
+
+    # Get all git-tracked files
+    try:
+        all_files = app_ctx.git_ops.tracked_files()
+    except Exception:  # noqa: BLE001
+        log.debug("recon.unindexed_files.git_error")
+        return []
+
+    # Filter to files NOT in the structural index
+    unindexed = [f for f in all_files if f not in indexed_paths]
+
+    matches: list[tuple[str, float]] = []
+    for fpath in unindexed:
+        # Tokenize path components
+        fpath_lower = fpath.lower()
+        path_tokens = set(re.split(r"[/._\-]", fpath_lower))
+        path_tokens = {t for t in path_tokens if len(t) >= 2}
+
+        # Token overlap
+        hits = terms & path_tokens
+
+        # Also substring match (catches partial matches like "mlflow" in path)
+        if not hits:
+            hits = {t for t in terms if t in fpath_lower}
+
+        if hits:
+            # Score: fraction of query terms that match + bonus for
+            # filename (leaf) matches
+            fname = PurePosixPath(fpath).name.lower()
+            fname_tokens = set(re.split(r"[._\-]", fname))
+            leaf_hits = terms & fname_tokens
+            score = (len(hits) + len(leaf_hits) * 0.5) / max(len(terms), 1)
+            matches.append((fpath, score))
+
+    # Sort by score desc, cap
+    matches.sort(key=lambda x: (-x[1], x[0]))
+    return matches[:_UNINDEXED_MAX_FILES]
+
+
+def _read_unindexed_content(repo_root: Path, rel_path: str) -> str | None:
+    """Read content of a non-indexed file, capped for budget."""
+    full = repo_root / rel_path
+    if not full.exists() or not full.is_file():
+        return None
+    try:
+        raw = full.read_bytes()
+        # Skip binary files
+        if b"\x00" in raw[:512]:
+            return None
+        text = raw.decode("utf-8", errors="replace")
+        if len(text) > _UNINDEXED_MAX_BYTES:
+            text = text[:_UNINDEXED_MAX_BYTES] + "\n... (truncated)"
+        return text
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _compute_sha256(path: Path) -> str:
+    """Compute file SHA-256 for write_source compatibility."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 # ===================================================================
@@ -566,6 +674,52 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
 
             seed_results.append(expanded)
             seed_paths.add(expanded["path"])
+
+        # ── Unindexed file discovery ──
+        # Find non-indexed files (.yaml, .md, .toml, .json, etc.)
+        # matching query terms and add as supplementary seeds.
+        indexed_paths: set[str] = set()
+        with coordinator.db.session() as session:
+            from codeplane.index._internal.indexing.graph import FactQueries
+
+            fq = FactQueries(session)
+            for frec in fq.list_files(limit=50000):
+                indexed_paths.add(frec.path)
+
+        unindexed_matches = _find_unindexed_files(app_ctx, parsed_task, indexed_paths)
+
+        for upath, uscore in unindexed_matches:
+            if upath in seed_paths:
+                continue  # already included via def-level pipeline
+            content = _read_unindexed_content(repo_root, upath)
+            if content is None:
+                continue
+            full_path = repo_root / upath
+            fname = PurePosixPath(upath).name
+            u_entry: dict[str, Any] = {
+                "def_uid": f"__file__{upath}",
+                "path": upath,
+                "symbol": f"file: {fname}",
+                "kind": "file",
+                "span": "1-*",
+                "source": content,
+                "artifact_kind": _classify_artifact(upath).value,
+                "score": round(uscore, 4),
+                "evidence": f"path_match({uscore:.2f})",
+                "edit_score": 0.0,
+                "context_score": round(uscore, 4),
+                "bucket": ReconBucket.supplementary.value,
+            }
+            if full_path.exists():
+                u_entry["file_sha256"] = _compute_sha256(full_path)
+            seed_results.append(u_entry)
+            seed_paths.add(upath)
+
+        log.info(
+            "recon.unindexed_files",
+            matched=len(unindexed_matches),
+            added=len([m for m in unindexed_matches if m[0] in seed_paths]),
+        )
 
         expand_ms = round((time.monotonic() - t_expand) * 1000)
 

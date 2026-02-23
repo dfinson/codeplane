@@ -53,6 +53,7 @@ from codeplane.mcp.tools.recon import (
     find_elbow,
     parse_task,
 )
+from codeplane.mcp.tools.recon.pipeline import _find_unindexed_files
 
 # ---------------------------------------------------------------------------
 # Tokenization tests
@@ -1676,3 +1677,99 @@ class TestReconBucket:
         """HarvestCandidate default bucket should be supplementary."""
         c = HarvestCandidate(def_uid="test")
         assert c.bucket == ReconBucket.supplementary
+
+
+# ---------------------------------------------------------------------------
+# Unindexed file discovery tests
+# ---------------------------------------------------------------------------
+
+
+class TestFindUnindexedFiles:
+    """Tests for _find_unindexed_files — path-based discovery of non-indexed files."""
+
+    @staticmethod
+    def _make_app_ctx(tracked: list[str]) -> MagicMock:
+        ctx = MagicMock()
+        ctx.git_ops.tracked_files.return_value = tracked
+        return ctx
+
+    def test_matches_yaml_by_term(self) -> None:
+        """YAML file with matching path component is found."""
+        parsed = ParsedTask(
+            raw="",
+            primary_terms=["config", "mlflow"],
+            secondary_terms=[],
+        )
+        ctx = self._make_app_ctx([
+            "src/app.py",
+            "config/mlflow.yaml",
+            "README.md",
+        ])
+        indexed = {"src/app.py"}
+        result = _find_unindexed_files(ctx, parsed, indexed)
+        paths = [p for p, _ in result]
+        assert "config/mlflow.yaml" in paths
+
+    def test_excludes_indexed_files(self) -> None:
+        """Files already in the structural index are excluded."""
+        parsed = ParsedTask(
+            raw="",
+            primary_terms=["config"],
+            secondary_terms=[],
+        )
+        ctx = self._make_app_ctx(["src/config.py", "config.yaml"])
+        indexed = {"src/config.py"}
+        result = _find_unindexed_files(ctx, parsed, indexed)
+        paths = [p for p, _ in result]
+        assert "src/config.py" not in paths
+        assert "config.yaml" in paths
+
+    def test_no_terms_returns_empty(self) -> None:
+        """No terms to match → empty result."""
+        parsed = ParsedTask(raw="", primary_terms=[], secondary_terms=[])
+        ctx = self._make_app_ctx(["config.yaml"])
+        result = _find_unindexed_files(ctx, parsed, set())
+        assert result == []
+
+    def test_sorted_by_score_desc(self) -> None:
+        """Results sorted by score descending."""
+        parsed = ParsedTask(
+            raw="",
+            primary_terms=["config", "mlflow", "tracking"],
+            secondary_terms=[],
+        )
+        ctx = self._make_app_ctx([
+            "config.yaml",                     # matches "config"
+            "config/mlflow/tracking.yaml",     # matches all 3
+            "README.md",
+        ])
+        result = _find_unindexed_files(ctx, parsed, set())
+        if len(result) >= 2:
+            assert result[0][1] >= result[1][1]
+
+    def test_caps_at_limit(self) -> None:
+        """Results capped at _UNINDEXED_MAX_FILES."""
+        parsed = ParsedTask(
+            raw="",
+            primary_terms=["test"],
+            secondary_terms=[],
+        )
+        files = [f"test/file{i}.yaml" for i in range(30)]
+        ctx = self._make_app_ctx(files)
+        result = _find_unindexed_files(ctx, parsed, set())
+        assert len(result) <= 15
+
+    def test_substring_match(self) -> None:
+        """Terms match as substrings in path."""
+        parsed = ParsedTask(
+            raw="",
+            primary_terms=["integration"],
+            secondary_terms=[],
+        )
+        ctx = self._make_app_ctx([
+            ".github/workflows/integration-tests.yml",
+            "README.md",
+        ])
+        result = _find_unindexed_files(ctx, parsed, set())
+        paths = [p for p, _ in result]
+        assert ".github/workflows/integration-tests.yml" in paths
