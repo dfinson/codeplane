@@ -257,6 +257,24 @@ _BUILD_FILES = frozenset(
 
 
 # ===================================================================
+# ReconBucket — output bucket for bucketed recon response
+# ===================================================================
+
+
+class ReconBucket(StrEnum):
+    """Output bucket for a file in the recon response.
+
+    edit_target:    Files the agent will almost certainly edit.
+    context:        Files needed for understanding (tests, config, types).
+    supplementary:  Nice-to-have reference material.
+    """
+
+    edit_target = "edit_target"
+    context = "context"
+    supplementary = "supplementary"
+
+
+# ===================================================================
 # ArtifactKind — classify what kind of artifact a definition lives in
 # ===================================================================
 
@@ -464,6 +482,11 @@ class HarvestCandidate:
     # Separated scores (populated during scoring phase)
     relevance_score: float = 0.0
     seed_score: float = 0.0
+
+    # Dual scores for bucketed output (populated during dual scoring phase)
+    edit_score: float = 0.0
+    context_score: float = 0.0
+    bucket: ReconBucket = ReconBucket.supplementary
 
     # Structural metadata (populated during enrichment)
     hub_score: int = 0

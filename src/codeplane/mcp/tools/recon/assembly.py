@@ -24,7 +24,8 @@ def _trim_to_budget(result: dict[str, Any], budget: int) -> dict[str, Any]:
     Instead of a fixed priority order, estimates value-per-byte for each
     trimable section and removes the lowest-value content first.
 
-    Priority (keep order): seeds > callees > import_defs > callers > scaffolds
+    Bucket-aware: supplementary seeds are trimmed before context,
+    and context before edit_targets.
 
     Within each tier, items are removed from the back (lowest-scored first,
     since expansion already sorts by relevance).
@@ -32,6 +33,21 @@ def _trim_to_budget(result: dict[str, Any], budget: int) -> dict[str, Any]:
     current = _estimate_bytes(result)
     if current <= budget:
         return result
+
+    # Tier 0: Trim supplementary bucket seeds first (lowest priority)
+    if "supplementary" in result:
+        while result["supplementary"] and _estimate_bytes(result) > budget:
+            removed = result["supplementary"].pop()
+            # Also remove from flat seeds list
+            if "seeds" in result:
+                result["seeds"] = [
+                    s for s in result["seeds"]
+                    if s.get("def_uid") != removed.get("def_uid")
+                    or s.get("path") != removed.get("path")
+                    or s is not removed
+                ]
+        if _estimate_bytes(result) <= budget:
+            return result
 
     # Tier 1: Trim import scaffolds (lowest information density)
     if "import_scaffolds" in result:

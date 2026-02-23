@@ -28,11 +28,16 @@ from codeplane.mcp.tools.recon import (
     EvidenceRecord,
     HarvestCandidate,
     ParsedTask,
+    ReconBucket,
     TaskIntent,
     _aggregate_to_files,
+    _aggregate_to_files_dual,
+    _assign_buckets,
     _build_evidence_string,
     _build_failure_actions,
     _classify_artifact,
+    _compute_context_value,
+    _compute_edit_likelihood,
     _def_signature_text,
     _detect_stacktrace_driven,
     _detect_test_driven,
@@ -1315,3 +1320,380 @@ class TestGraphEvidenceBoosting:
         _score_candidates({"b": c_with_graph}, parsed)
 
         assert c_with_graph.relevance_score > c_no_graph.relevance_score
+
+
+# ---------------------------------------------------------------------------
+# Dual scoring tests
+# ---------------------------------------------------------------------------
+
+
+class TestEditLikelihood:
+    """Tests for _compute_edit_likelihood — def-level edit-likelihood scoring."""
+
+    def _make_candidate(
+        self,
+        uid: str = "test::func",
+        *,
+        emb_sim: float = 0.0,
+        hub: int = 0,
+        terms: int = 0,
+        from_embedding: bool = False,
+        from_graph: bool = False,
+        is_test: bool = False,
+        is_callee_of_top: bool = False,
+        is_imported_by_top: bool = False,
+        shares_file: bool = False,
+        name: str = "func",
+        file_path: str = "src/core.py",
+        kind: str = "function",
+    ) -> HarvestCandidate:
+        d = MagicMock()
+        d.name = name
+        d.kind = kind
+        d.file_id = 1
+        return HarvestCandidate(
+            def_uid=uid,
+            def_fact=d,
+            embedding_similarity=emb_sim,
+            hub_score=hub,
+            matched_terms={f"t{i}" for i in range(terms)},
+            from_embedding=from_embedding,
+            from_graph=from_graph,
+            is_test=is_test,
+            is_callee_of_top=is_callee_of_top,
+            is_imported_by_top=is_imported_by_top,
+            shares_file_with_seed=shares_file,
+            file_path=file_path,
+            artifact_kind=_classify_artifact(file_path),
+        )
+
+    def test_high_embedding_code_gets_high_edit_score(self) -> None:
+        """Code with high embedding similarity should have high edit-likelihood."""
+        c = self._make_candidate(
+            emb_sim=0.9,
+            from_embedding=True,
+            name="handle_request",
+        )
+        parsed = parse_task("fix handle_request error")
+        _compute_edit_likelihood({"test::func": c}, parsed)
+        assert c.edit_score > 0.3
+
+    def test_name_match_boosts_edit_score(self) -> None:
+        """Name matching task terms should boost edit-likelihood."""
+        c_match = self._make_candidate(uid="a", name="handle_request", emb_sim=0.5)
+        c_no_match = self._make_candidate(uid="b", name="other_func", emb_sim=0.5)
+        parsed = parse_task("fix handle_request error")
+        _compute_edit_likelihood({"a": c_match, "b": c_no_match}, parsed)
+        assert c_match.edit_score > c_no_match.edit_score
+
+    def test_graph_centrality_boosts_edit_score(self) -> None:
+        """Graph-connected defs should have higher edit-likelihood."""
+        c_graph = self._make_candidate(
+            uid="a", emb_sim=0.5, from_graph=True, is_callee_of_top=True
+        )
+        c_isolated = self._make_candidate(uid="b", emb_sim=0.5)
+        parsed = parse_task("fix something")
+        _compute_edit_likelihood({"a": c_graph, "b": c_isolated}, parsed)
+        assert c_graph.edit_score > c_isolated.edit_score
+
+    def test_test_files_downranked_for_edit(self) -> None:
+        """Test files should have low edit-likelihood (unless test-driven)."""
+        c_code = self._make_candidate(
+            uid="a", emb_sim=0.6, file_path="src/handler.py"
+        )
+        c_test = self._make_candidate(
+            uid="b", emb_sim=0.6, file_path="tests/test_handler.py", is_test=True
+        )
+        parsed = parse_task("implement caching")
+        _compute_edit_likelihood({"a": c_code, "b": c_test}, parsed)
+        assert c_code.edit_score > c_test.edit_score
+
+    def test_test_files_not_downranked_for_test_task(self) -> None:
+        """Test files should NOT be downranked when task is test-driven."""
+        c_test = self._make_candidate(
+            uid="a", emb_sim=0.6, file_path="tests/test_handler.py",
+            is_test=True, name="test_handler",
+        )
+        parsed = ParsedTask(
+            raw="write tests for handler",
+            intent=TaskIntent.test,
+            primary_terms=["handler"],
+            keywords=["handler"],
+            is_test_driven=True,
+        )
+        _compute_edit_likelihood({"a": c_test}, parsed)
+        # Should not be heavily penalized
+        assert c_test.edit_score > 0.1
+
+    def test_variable_kind_gets_lower_score(self) -> None:
+        """Variable defs should have lower edit-likelihood than functions."""
+        c_func = self._make_candidate(uid="a", emb_sim=0.5, kind="function")
+        c_var = self._make_candidate(uid="b", emb_sim=0.5, kind="variable")
+        parsed = parse_task("fix something")
+        _compute_edit_likelihood({"a": c_func, "b": c_var}, parsed)
+        assert c_func.edit_score > c_var.edit_score
+
+    def test_doc_files_heavily_downranked(self) -> None:
+        """Doc files should have very low edit-likelihood."""
+        c_code = self._make_candidate(uid="a", emb_sim=0.5, file_path="src/core.py")
+        c_doc = self._make_candidate(uid="b", emb_sim=0.5, file_path="README.md")
+        parsed = parse_task("fix the API")
+        _compute_edit_likelihood({"a": c_code, "b": c_doc}, parsed)
+        assert c_code.edit_score > c_doc.edit_score * 3
+
+
+class TestContextValue:
+    """Tests for _compute_context_value — context-value scoring."""
+
+    def _make_candidate(
+        self,
+        uid: str = "test::func",
+        *,
+        emb_sim: float = 0.0,
+        hub: int = 0,
+        terms: int = 0,
+        from_graph: bool = False,
+        is_test: bool = False,
+        is_callee_of_top: bool = False,
+        is_imported_by_top: bool = False,
+        shares_file: bool = False,
+        name: str = "func",
+        file_path: str = "src/core.py",
+    ) -> HarvestCandidate:
+        d = MagicMock()
+        d.name = name
+        d.kind = "function"
+        d.file_id = 1
+        return HarvestCandidate(
+            def_uid=uid,
+            def_fact=d,
+            embedding_similarity=emb_sim,
+            hub_score=hub,
+            matched_terms={f"t{i}" for i in range(terms)},
+            from_graph=from_graph,
+            is_test=is_test,
+            is_callee_of_top=is_callee_of_top,
+            is_imported_by_top=is_imported_by_top,
+            shares_file_with_seed=shares_file,
+            file_path=file_path,
+            artifact_kind=_classify_artifact(file_path),
+        )
+
+    def test_graph_connected_test_has_high_context(self) -> None:
+        """Tests that are graph-connected should have high context-value."""
+        c_test = self._make_candidate(
+            uid="a", emb_sim=0.5, is_test=True,
+            from_graph=True, file_path="tests/test_core.py",
+        )
+        parsed = parse_task("fix core module")
+        _compute_context_value({"a": c_test}, parsed)
+        assert c_test.context_score > 0.3
+
+    def test_disconnected_test_has_lower_context(self) -> None:
+        """Tests not graph-connected should have lower context-value."""
+        c_connected = self._make_candidate(
+            uid="a", emb_sim=0.5, is_test=True, from_graph=True,
+            file_path="tests/test_core.py",
+        )
+        c_disconnected = self._make_candidate(
+            uid="b", emb_sim=0.5, is_test=True,
+            file_path="tests/test_other.py",
+        )
+        parsed = parse_task("fix core module")
+        _compute_context_value({"a": c_connected, "b": c_disconnected}, parsed)
+        assert c_connected.context_score > c_disconnected.context_score
+
+    def test_doc_with_term_overlap_has_context(self) -> None:
+        """Docs matching task terms should have decent context-value."""
+        c_doc = self._make_candidate(
+            uid="a", emb_sim=0.6, terms=3, file_path="docs/api.md",
+        )
+        parsed = parse_task("fix the API")
+        _compute_context_value({"a": c_doc}, parsed)
+        assert c_doc.context_score > 0.15
+
+    def test_structurally_coupled_code_has_context(self) -> None:
+        """Code that is graph-connected should have context-value."""
+        c_coupled = self._make_candidate(
+            uid="a", emb_sim=0.4, from_graph=True,
+            is_imported_by_top=True,
+        )
+        c_isolated = self._make_candidate(uid="b", emb_sim=0.4)
+        parsed = parse_task("fix something")
+        _compute_context_value({"a": c_coupled, "b": c_isolated}, parsed)
+        assert c_coupled.context_score > c_isolated.context_score
+
+    def test_edit_and_context_scores_are_bounded(self) -> None:
+        """Both scores should be in [0, 1]."""
+        c = self._make_candidate(emb_sim=1.0, terms=10, from_graph=True)
+        parsed = parse_task("test task")
+        _compute_edit_likelihood({"test::func": c}, parsed)
+        _compute_context_value({"test::func": c}, parsed)
+        assert 0.0 <= c.edit_score <= 1.0
+        assert 0.0 <= c.context_score <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Dual file aggregation tests
+# ---------------------------------------------------------------------------
+
+
+class TestAggregateToFilesDual:
+    """Tests for _aggregate_to_files_dual — dual-score file aggregation."""
+
+    def _make_candidate(
+        self,
+        uid: str,
+        file_id: int,
+        *,
+        name: str = "func",
+        edit_score: float = 0.0,
+        context_score: float = 0.0,
+    ) -> HarvestCandidate:
+        d = MagicMock()
+        d.name = name
+        d.file_id = file_id
+        d.kind = "function"
+        return HarvestCandidate(
+            def_uid=uid,
+            def_fact=d,
+            edit_score=edit_score,
+            context_score=context_score,
+        )
+
+    def test_empty_input(self) -> None:
+        assert _aggregate_to_files_dual([], {}) == []
+
+    def test_single_file_returns_dual_scores(self) -> None:
+        c = self._make_candidate("a::f1", file_id=1, edit_score=0.8, context_score=0.3)
+        scored = [("a::f1", 0.5)]
+        result = _aggregate_to_files_dual(scored, {"a::f1": c})
+        assert len(result) == 1
+        fid, fscore, fedit, fctx, defs = result[0]
+        assert fid == 1
+        assert fscore == 0.5
+        assert fedit == 0.8
+        assert fctx == 0.3
+
+    def test_multi_def_file_averages_top2(self) -> None:
+        """File with multiple defs should average top-2 edit/context scores."""
+        c1 = self._make_candidate("a::f1", file_id=1, edit_score=0.9, context_score=0.2)
+        c2 = self._make_candidate("a::f2", file_id=1, edit_score=0.6, context_score=0.8)
+        c3 = self._make_candidate("a::f3", file_id=1, edit_score=0.3, context_score=0.1)
+        cands = {"a::f1": c1, "a::f2": c2, "a::f3": c3}
+        scored = [("a::f1", 0.5), ("a::f2", 0.4), ("a::f3", 0.3)]
+        result = _aggregate_to_files_dual(scored, cands)
+        assert len(result) == 1
+        _fid, _fs, fedit, fctx, _defs = result[0]
+        # Top-2 edit: (0.9 + 0.6) / 2 = 0.75
+        assert abs(fedit - 0.75) < 0.01
+        # Top-2 context: (0.8 + 0.2) / 2 = 0.50
+        assert abs(fctx - 0.50) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# Bucketing tests
+# ---------------------------------------------------------------------------
+
+
+class TestBucketing:
+    """Tests for _assign_buckets — rank-based bucket assignment."""
+
+    def _make_file_entry(
+        self,
+        fid: int,
+        *,
+        file_score: float = 0.5,
+        edit_score: float = 0.0,
+        context_score: float = 0.0,
+    ) -> tuple[int, float, float, float, list[tuple[str, float]]]:
+        return (fid, file_score, edit_score, context_score, [(f"def::{fid}", file_score)])
+
+    def test_empty_input(self) -> None:
+        assert _assign_buckets([], {}) == {}
+
+    def test_top_edit_files_become_edit_targets(self) -> None:
+        """Files with highest edit scores should be in edit_target bucket."""
+        files = [
+            self._make_file_entry(1, edit_score=0.9),
+            self._make_file_entry(2, edit_score=0.7),
+            self._make_file_entry(3, edit_score=0.1),
+        ]
+        buckets = _assign_buckets(files, {}, edit_budget=2)
+        assert buckets[1] == ReconBucket.edit_target
+        assert buckets[2] == ReconBucket.edit_target
+        assert buckets[3] != ReconBucket.edit_target
+
+    def test_high_context_files_become_context(self) -> None:
+        """Files with high context scores should be in context bucket."""
+        files = [
+            self._make_file_entry(1, edit_score=0.9, context_score=0.3),
+            self._make_file_entry(2, edit_score=0.1, context_score=0.8),
+            self._make_file_entry(3, edit_score=0.1, context_score=0.7),
+        ]
+        buckets = _assign_buckets(files, {}, edit_budget=1, context_budget=2)
+        assert buckets[1] == ReconBucket.edit_target
+        assert buckets[2] == ReconBucket.context
+        assert buckets[3] == ReconBucket.context
+
+    def test_remainder_is_supplementary(self) -> None:
+        """Files not in edit or context should be supplementary."""
+        files = [
+            self._make_file_entry(1, edit_score=0.9),
+            self._make_file_entry(2, edit_score=0.1, context_score=0.1),
+            self._make_file_entry(3, edit_score=0.01, context_score=0.01),
+        ]
+        buckets = _assign_buckets(files, {}, edit_budget=1, context_budget=1)
+        assert buckets[1] == ReconBucket.edit_target
+        assert buckets[2] == ReconBucket.context
+        assert buckets[3] == ReconBucket.supplementary
+
+    def test_edit_budget_respected(self) -> None:
+        """Should not exceed edit_budget."""
+        files = [
+            self._make_file_entry(i, edit_score=0.9 - i * 0.01)
+            for i in range(10)
+        ]
+        buckets = _assign_buckets(files, {}, edit_budget=3)
+        edit_count = sum(1 for b in buckets.values() if b == ReconBucket.edit_target)
+        assert edit_count == 3
+
+    def test_context_budget_respected(self) -> None:
+        """Should not exceed context_budget."""
+        files = [
+            self._make_file_entry(i, edit_score=0.01, context_score=0.9 - i * 0.01)
+            for i in range(10)
+        ]
+        buckets = _assign_buckets(files, {}, edit_budget=0, context_budget=5)
+        ctx_count = sum(1 for b in buckets.values() if b == ReconBucket.context)
+        assert ctx_count <= 5
+
+    def test_propagates_to_candidates(self) -> None:
+        """Bucket assignment should propagate to candidate objects."""
+        d = MagicMock()
+        d.name = "func"
+        d.kind = "function"
+        d.file_id = 1
+        cand = HarvestCandidate(def_uid="a", def_fact=d)
+        files = [self._make_file_entry(1, edit_score=0.9)]
+        _assign_buckets(files, {"a": cand}, edit_budget=1)
+        assert cand.bucket == ReconBucket.edit_target
+
+
+# ---------------------------------------------------------------------------
+# ReconBucket enum tests
+# ---------------------------------------------------------------------------
+
+
+class TestReconBucket:
+    """Tests for ReconBucket enum."""
+
+    def test_values(self) -> None:
+        assert ReconBucket.edit_target.value == "edit_target"
+        assert ReconBucket.context.value == "context"
+        assert ReconBucket.supplementary.value == "supplementary"
+
+    def test_default_bucket_is_supplementary(self) -> None:
+        """HarvestCandidate default bucket should be supplementary."""
+        c = HarvestCandidate(def_uid="test")
+        assert c.bucket == ReconBucket.supplementary

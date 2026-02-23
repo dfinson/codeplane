@@ -46,12 +46,17 @@ from codeplane.mcp.tools.recon.models import (
     _INTERNAL_BUDGET_BYTES,
     _INTERNAL_DEPTH,
     ParsedTask,
+    ReconBucket,
     _classify_artifact,
 )
 from codeplane.mcp.tools.recon.parsing import parse_task
 from codeplane.mcp.tools.recon.scoring import (
     _aggregate_to_files,
+    _aggregate_to_files_dual,
     _apply_filters,
+    _assign_buckets,
+    _compute_context_value,
+    _compute_edit_likelihood,
     _score_candidates,
     compute_anchor_floor,
 )
@@ -77,10 +82,17 @@ async def _select_seeds(
     *,
     pinned_paths: list[str] | None = None,
     min_seeds: int = 3,
-) -> tuple[list[DefFact], ParsedTask, list[tuple[str, float]], dict[str, Any], dict[str, Any]]:
+) -> tuple[
+    list[DefFact],
+    ParsedTask,
+    list[tuple[str, float]],
+    dict[str, Any],
+    dict[str, Any],
+    dict[int, ReconBucket],
+]:
     """Select seed definitions using the full harvest -> filter -> score pipeline.
 
-    v4 pipeline — no arbitrary caps:
+    v5 pipeline — dual-score bucketed output:
     1. Parse task -> ParsedTask (with intent classification)
     2. Run 4 harvesters in parallel
     3. Merge candidates (accumulate evidence)
@@ -88,9 +100,11 @@ async def _select_seeds(
     5. Enrich with structural metadata + artifact kind
     6. Apply query-conditioned filter pipeline
     7. Score with bounded features + artifact-kind weights
-    8. Aggregate to file level
+    7b. Compute dual scores (edit-likelihood + context-value)
+    8. Aggregate to file level (dual: file_score, edit_score, context_score)
     9. Anchor-calibrated file inclusion (MAD-based band + saturation)
-    10. Multi-seed per file: all defs above global def-score median
+    10. Bucket assignment (edit_target / context / supplementary)
+    11. Multi-seed per file: all defs above global def-score median
 
     Args:
         pinned_paths: Explicit file paths supplied by the agent as
@@ -98,7 +112,8 @@ async def _select_seeds(
             passes.  Files only, not directories.
 
     Returns:
-        (seeds, parsed_task, scored_candidates, diagnostics, gated_candidates)
+        (seeds, parsed_task, scored_candidates, diagnostics,
+         gated_candidates, file_buckets)
     """
     diagnostics: dict[str, Any] = {}
     t0 = time.monotonic()
@@ -148,7 +163,7 @@ async def _select_seeds(
 
     if not merged:
         diagnostics["total_ms"] = round((time.monotonic() - t0) * 1000)
-        return [], parsed, [], diagnostics, {}
+        return [], parsed, [], diagnostics, {}, {}
 
     # 3.5. Graph harvester — walk 1-hop edges from top merged candidates
     graph_candidates = await _harvest_graph(app_ctx, merged, parsed)
@@ -174,7 +189,7 @@ async def _select_seeds(
         }
         if not gated:
             diagnostics["total_ms"] = round((time.monotonic() - t0) * 1000)
-            return [], parsed, [], diagnostics, {}
+            return [], parsed, [], diagnostics, {}, {}
 
     diagnostics["post_filter"] = len(gated)
 
@@ -183,23 +198,37 @@ async def _select_seeds(
 
     if not scored:
         diagnostics["total_ms"] = round((time.monotonic() - t0) * 1000)
-        return [], parsed, [], diagnostics, {}
+        return [], parsed, [], diagnostics, {}, {}
 
-    # 7. Aggregate to file level
+    # 7. Aggregate to file level (legacy — still used for file_score)
     file_ranked = _aggregate_to_files(scored, gated)
 
-    # Diagnostics: file ranking with paths (for debugging gap cutoff)
+    # 7b. Compute dual scores (edit-likelihood + context-value)
+    _compute_edit_likelihood(gated, parsed)
+    _compute_context_value(gated, parsed)
+
+    # 7c. Aggregate to file level with dual scores
+    file_ranked_dual = _aggregate_to_files_dual(scored, gated)
+
+    # Diagnostics: file ranking with paths (for debugging)
     coordinator = app_ctx.coordinator
     with coordinator.db.session() as session:
         from codeplane.index._internal.indexing.graph import FactQueries
 
         fq = FactQueries(session)
         _diag_ranking = []
-        for i, (fid, fs, fdefs) in enumerate(file_ranked[:20]):
+        for i, (fid, fs, fe, fc, fdefs) in enumerate(file_ranked_dual[:20]):
             frec = fq.get_file(fid)
             fpath = frec.path if frec else f"?{fid}"
             _diag_ranking.append(
-                {"rank": i + 1, "path": fpath, "score": round(fs, 4), "n_defs": len(fdefs)}
+                {
+                    "rank": i + 1,
+                    "path": fpath,
+                    "score": round(fs, 4),
+                    "edit": round(fe, 4),
+                    "ctx": round(fc, 4),
+                    "n_defs": len(fdefs),
+                }
             )
         diagnostics["_file_ranking_top20"] = _diag_ranking
 
@@ -227,34 +256,26 @@ async def _select_seeds(
     # 8b. Anchor-calibrated relevance band
     #     Uses MAD (median absolute deviation) around anchor scores to
     #     define the floor.  Files scoring >= (min_anchor - MAD) survive.
-    file_score_values = [fs for _, fs, _ in file_ranked]
-    anchor_indices = [i for i, (fid, _, _) in enumerate(file_ranked) if fid in anchor_fids]
+    file_score_values = [fs for _, fs, _, _, _ in file_ranked_dual]
+    anchor_indices = [
+        i for i, (fid, _, _, _, _) in enumerate(file_ranked_dual) if fid in anchor_fids
+    ]
     floor_score = compute_anchor_floor(file_score_values, anchor_indices)
     n_band = sum(1 for fs in file_score_values if fs >= floor_score) if floor_score > 0 else 0
-    n_files = max(min(min_seeds, len(file_ranked)), n_band)
+    n_files = max(min(min_seeds, len(file_ranked_dual)), n_band)
 
     # Safety net: ensure ALL anchor files are in the surviving window
     # (normally already inside the band, but handles edge cases)
-    for idx in range(n_files, len(file_ranked)):
-        fid, _, _ = file_ranked[idx]
+    for idx in range(n_files, len(file_ranked_dual)):
+        fid, _, _, _, _ = file_ranked_dual[idx]
         if fid in anchor_fids:
-            file_ranked[n_files], file_ranked[idx] = (
-                file_ranked[idx],
-                file_ranked[n_files],
+            file_ranked_dual[n_files], file_ranked_dual[idx] = (
+                file_ranked_dual[idx],
+                file_ranked_dual[n_files],
             )
             n_files += 1
 
     # 8c. Saturation pass — extend inclusion while files contribute seeds
-    #     Anchor case: gate on floor_score (anchor-calibrated band).
-    #     No-anchor case: evidence-gain patience.  Instead of thresholding
-    #     on any score statistic (median, gap, etc.) we check whether each
-    #     successive file actually contributes an accepted def.  We stop
-    #     once we have enough accepted defs AND we've gone `patience`
-    #     consecutive files without gaining any.
-    #
-    #     patience = ceil(log2(1 + n_candidates)) — grows slowly with
-    #     problem size, is not tuned per repo, and is defined on evidence
-    #     gain rather than score geometry.
     all_def_scores = sorted((s for _, s in scored), reverse=True)
     def_score_median = all_def_scores[len(all_def_scores) // 2] if all_def_scores else 0.0
 
@@ -264,8 +285,8 @@ async def _select_seeds(
     if floor_score > 0:
         # ── Anchor case: gate on floor_score (unchanged) ──
         consecutive_empty = 0
-        for idx in range(n_files, len(file_ranked)):
-            _fid, _fscore, fdefs = file_ranked[idx]
+        for idx in range(n_files, len(file_ranked_dual)):
+            _fid, _fscore, _, _, fdefs = file_ranked_dual[idx]
             if _fscore >= floor_score:
                 n_files = idx + 1
                 consecutive_empty = 0
@@ -275,28 +296,10 @@ async def _select_seeds(
                     break
     else:
         # ── No-anchor case: evidence-gain patience ──
-        # Without anchors, there's nothing to calibrate a score floor
-        # against.  Instead, we stop based on *evidence gain*: does
-        # each successive file contribute a def with genuine structural
-        # corroboration?
-        #
-        # Acceptance test: file's best def must have been graph-
-        # discovered (from_graph) — meaning it was found by walking
-        # call/import edges from already-relevant defs.  This is a
-        # true structural dependency signal that embedding similarity
-        # and term matching alone cannot provide.
-        #
-        # The initial window (top min_seeds files) is unconditionally
-        # accepted — their ranking quality justifies inclusion.
-        # Beyond that, gain requires structural evidence.
-
-        # Initial window: all counted as contributing
         accepted_seed_count = n_files
-
-        last_gain_rank = n_files - 1  # rank of last file that added a seed
-        for idx in range(n_files, len(file_ranked)):
-            _fid, _fscore, fdefs = file_ranked[idx]
-            # Does this file contribute any graph-corroborated def?
+        last_gain_rank = n_files - 1
+        for idx in range(n_files, len(file_ranked_dual)):
+            _fid, _fscore, _, _, fdefs = file_ranked_dual[idx]
             file_contributes = False
             for uid, _dscore in fdefs:
                 cand = gated.get(uid)
@@ -309,7 +312,6 @@ async def _select_seeds(
                 accepted_seed_count += 1
                 last_gain_rank = idx
             else:
-                # Check stop: enough seeds AND exhausted patience
                 if accepted_seed_count >= min_seeds and (idx - last_gain_rank) >= _patience:
                     break
 
@@ -324,20 +326,34 @@ async def _select_seeds(
     diagnostics["n_anchors"] = len(anchor_fids)
     diagnostics["anchor_floor"] = round(floor_score, 4) if floor_score > 0 else None
 
-    # 9. Multi-seed per file selection
+    # 9. Bucket assignment (edit_target / context / supplementary)
+    surviving_files = file_ranked_dual[:n_files]
+    file_buckets = _assign_buckets(surviving_files, gated)
+
+    # Ensure anchor files are at least in the context bucket
+    for fid in anchor_fids:
+        if fid in file_buckets and file_buckets[fid] == ReconBucket.supplementary:
+            file_buckets[fid] = ReconBucket.context
+
+    diagnostics["buckets"] = {
+        "edit_target": sum(1 for b in file_buckets.values() if b == ReconBucket.edit_target),
+        "context": sum(1 for b in file_buckets.values() if b == ReconBucket.context),
+        "supplementary": sum(
+            1 for b in file_buckets.values() if b == ReconBucket.supplementary
+        ),
+    }
+
+    # 10. Multi-seed per file selection
     #    Phase 1: best def per surviving file (file diversity)
     #    Phase 2: additional defs above global def-score median (depth)
     #    Stage-aware test seed cap
     seeds: list[DefFact] = []
     selected_uids: set[str] = set()
     test_seed_count = 0
-    # Test seeds: uncapped if test-driven, otherwise 1/3 of total (no hard max)
     max_test_ratio = 1.0 if parsed.is_test_driven else 0.33
 
-    # def_score_median already computed in step 8c
-
     # Phase 1: one seed per file (diversity)
-    for _fid, _fscore, fdefs in file_ranked[:n_files]:
+    for _fid, _fscore, _, _, fdefs in file_ranked_dual[:n_files]:
         for uid, _dscore in fdefs:
             if uid in selected_uids:
                 continue
@@ -351,7 +367,7 @@ async def _select_seeds(
             break
 
     # Phase 2: additional defs above median (within surviving files)
-    for _fid, _fscore, fdefs in file_ranked[:n_files]:
+    for _fid, _fscore, _, _, fdefs in file_ranked_dual[:n_files]:
         for uid, dscore in fdefs:
             if uid in selected_uids:
                 continue
@@ -371,7 +387,7 @@ async def _select_seeds(
 
     diagnostics["total_ms"] = round((time.monotonic() - t0) * 1000)
     diagnostics["seeds_selected"] = len(seeds)
-    diagnostics["file_ranked"] = len(file_ranked)
+    diagnostics["file_ranked"] = len(file_ranked_dual)
     diagnostics["def_score_median"] = round(def_score_median, 4)
 
     log.info(
@@ -388,7 +404,7 @@ async def _select_seeds(
     gated_export = {
         uid: cand for uid, cand in gated.items() if any(s.def_uid == uid for s in seeds)
     }
-    return seeds, parsed, scored, diagnostics, gated_export
+    return seeds, parsed, scored, diagnostics, gated_export, file_buckets
 
 
 # ===================================================================
@@ -471,7 +487,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         No follow-up calls needed.
 
         Pipeline: parse_task -> 5 harvesters -> filter -> score ->
-        file aggregation -> anchor band + saturation -> expand ->
+        file aggregation -> dual scoring -> bucketing -> expand ->
         compress -> deliver.
         """
         recon_id = uuid.uuid4().hex[:12]
@@ -482,9 +498,11 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         depth = _INTERNAL_DEPTH
         budget = _INTERNAL_BUDGET_BYTES
 
-        # Pipeline: parse, harvest, filter, score, select
-        selected_seeds, parsed_task, scored_all, diagnostics, gated = await _select_seeds(
-            app_ctx, task, seeds, pinned_paths=pinned_paths, min_seeds=3
+        # Pipeline: parse, harvest, filter, score, select, bucket
+        selected_seeds, parsed_task, scored_all, diagnostics, gated, file_buckets = (
+            await _select_seeds(
+                app_ctx, task, seeds, pinned_paths=pinned_paths, min_seeds=3
+            )
         )
 
         if not selected_seeds:
@@ -512,6 +530,12 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         terms = parsed_task.keywords
         scored_map: dict[str, float] = dict(scored_all)
 
+        # Build file_id lookup for bucket assignment
+        _file_id_by_uid: dict[str, int] = {}
+        for uid, cand_obj in gated.items():
+            if cand_obj.def_fact is not None:
+                _file_id_by_uid[uid] = cand_obj.def_fact.file_id
+
         for seed_def in selected_seeds:
             expanded = await _expand_seed(
                 app_ctx,
@@ -532,6 +556,13 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             cand = gated.get(uid)
             if cand is not None:
                 expanded["evidence"] = _build_evidence_string(cand)
+                expanded["edit_score"] = round(cand.edit_score, 4)
+                expanded["context_score"] = round(cand.context_score, 4)
+
+            # Bucket assignment
+            fid = _file_id_by_uid.get(uid)
+            bucket = file_buckets.get(fid, ReconBucket.supplementary) if fid else ReconBucket.supplementary
+            expanded["bucket"] = bucket.value
 
             seed_results.append(expanded)
             seed_paths.add(expanded["path"])
@@ -543,6 +574,16 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         if depth >= 1:
             scaffolds = await _build_import_scaffolds(app_ctx, seed_paths, repo_root)
 
+        # Group seeds by bucket for structured output
+        edit_targets = [s for s in seed_results if s.get("bucket") == "edit_target"]
+        context_seeds = [s for s in seed_results if s.get("bucket") == "context"]
+        supplementary = [s for s in seed_results if s.get("bucket") == "supplementary"]
+
+        # Assign within-bucket rank
+        for group in (edit_targets, context_seeds, supplementary):
+            for rank, seed_data in enumerate(group, 1):
+                seed_data["bucket_rank"] = rank
+
         # Assemble response
         n_seeds = len(seed_results)
         n_files = len(seed_paths)
@@ -553,8 +594,18 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
 
         response: dict[str, Any] = {
             "recon_id": recon_id,
+            # Bucketed output — primary structure
+            "edit_targets": edit_targets,
+            "context": context_seeds,
+            "supplementary": supplementary,
+            # Flat seeds list kept for backward compatibility
             "seeds": seed_results,
-            "summary": f"{n_seeds} seed(s) across {n_files} file(s): {paths_str}",
+            "summary": (
+                f"{len(edit_targets)} edit target(s), "
+                f"{len(context_seeds)} context, "
+                f"{len(supplementary)} supplementary "
+                f"across {n_files} file(s): {paths_str}"
+            ),
         }
 
         if scaffolds:
@@ -562,11 +613,19 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
 
         # Scoring summary (always included — no verbosity knob)
         response["scoring_summary"] = {
-            "pipeline": "harvest->filter->score->file_aggregate->anchor_band->saturate->expand",
+            "pipeline": (
+                "harvest->filter->score->dual_score->"
+                "file_aggregate->anchor_band->saturate->bucket->expand"
+            ),
             "intent": parsed_task.intent.value,
             "candidates_harvested": len(scored_all),
             "seeds_selected": n_seeds,
             "parsed_terms": parsed_task.primary_terms[:8],
+            "buckets": {
+                "edit_targets": len(edit_targets),
+                "context": len(context_seeds),
+                "supplementary": len(supplementary),
+            },
         }
         if parsed_task.explicit_paths:
             response["scoring_summary"]["explicit_paths"] = parsed_task.explicit_paths
@@ -581,12 +640,16 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         # Budget trimming (internal shaping, not agent-facing)
         response = _trim_to_budget(response, budget)
 
-        # Agentic hint — facts about what was found + universal next step
+        # Agentic hint — facts about what was found + bucket-aware guidance
         intent = parsed_task.intent
+        edit_paths = [s["path"] for s in edit_targets[:3]]
+        edit_paths_str = ", ".join(edit_paths) if edit_paths else "(none)"
         response["agentic_hint"] = (
             f"Recon found {n_seeds} seed(s) "
-            f"(intent: {intent.value}) across: {paths_str}. "
-            f"Source included for all seeds. "
+            f"(intent: {intent.value}). "
+            f"Edit targets ({len(edit_targets)}): {edit_paths_str}. "
+            f"Context ({len(context_seeds)}), Supplementary ({len(supplementary)}). "
+            f"Start with edit_targets — these are the files to modify. "
             f"Use write_source with file_sha256 to edit. "
             f"Use checkpoint after edits."
         )

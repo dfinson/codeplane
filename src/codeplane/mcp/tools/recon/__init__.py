@@ -53,6 +53,7 @@ from codeplane.mcp.tools.recon.models import (
     EvidenceRecord,
     HarvestCandidate,
     ParsedTask,
+    ReconBucket,
     TaskIntent,
     _classify_artifact,
     _extract_intent,
@@ -80,8 +81,12 @@ from codeplane.mcp.tools.recon.pipeline import (
 # --- scoring ---
 from codeplane.mcp.tools.recon.scoring import (
     _aggregate_to_files,
+    _aggregate_to_files_dual,
     _apply_dual_gate,
     _apply_filters,
+    _assign_buckets,
+    _compute_context_value,
+    _compute_edit_likelihood,
     _score_candidates,
     find_elbow,
     compute_anchor_floor,
@@ -93,6 +98,7 @@ __all__ = [
     "EvidenceRecord",
     "HarvestCandidate",
     "ParsedTask",
+    "ReconBucket",
     "TaskIntent",
     # Parsing
     "parse_task",
@@ -114,8 +120,12 @@ __all__ = [
     "_enrich_candidates",
     # Scoring
     "_aggregate_to_files",
+    "_aggregate_to_files_dual",
     "_apply_dual_gate",
     "_apply_filters",
+    "_assign_buckets",
+    "_compute_context_value",
+    "_compute_edit_likelihood",
     "_score_candidates",
     "find_elbow",
     "compute_anchor_floor",

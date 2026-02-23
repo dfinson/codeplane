@@ -14,6 +14,7 @@ from codeplane.mcp.tools.recon.models import (
     ArtifactKind,
     HarvestCandidate,
     ParsedTask,
+    ReconBucket,
     TaskIntent,
 )
 
@@ -428,3 +429,313 @@ def _score_candidates(
 
     scored.sort(key=lambda x: (-x[1], x[0]))
     return scored
+
+
+# ===================================================================
+# Dual Scoring — edit-likelihood and context-value
+# ===================================================================
+
+# Executable def kinds: definitions that contain logic the agent would edit.
+# Headings, keys, and type aliases are structural but not typically edit targets.
+_EXECUTABLE_KINDS: frozenset[str] = frozenset(
+    {"function", "method", "class", "async_function", "async_method"}
+)
+
+
+def _compute_edit_likelihood(
+    candidates: dict[str, HarvestCandidate],
+    parsed: ParsedTask,
+) -> None:
+    """Compute per-candidate edit-likelihood score.
+
+    This score estimates how likely a def's containing file is to be
+    edited by the agent.  It combines three independent signals:
+
+    1. **Def-level intent alignment** — how well the def's name aligns
+       with the task, using embedding similarity and term overlap.
+       Aggregated to file via max(top-2 def scores).
+
+    2. **Task-local graph centrality** — how many edges connect this def
+       to other candidates in the task-local subgraph.  Uses from_graph,
+       is_callee_of_top, is_imported_by_top.
+
+    3. **Change-surface prior** — whether the def is executable code
+       (function/class/method) vs structural-only (variable, heading).
+
+    The score is written to ``cand.edit_score``.
+    """
+    for cand in candidates.values():
+        if cand.def_fact is None:
+            cand.edit_score = 0.0
+            continue
+
+        # Signal 1: Def-level intent alignment
+        f_emb = _clamp(cand.embedding_similarity)
+        name_lower = cand.def_fact.name.lower()
+        f_name_hit = 1.0 if any(t in name_lower for t in parsed.primary_terms) else 0.0
+        f_terms = _clamp(len(cand.matched_terms) / 5.0)
+        intent_alignment = f_emb * 0.50 + f_name_hit * 0.30 + f_terms * 0.20
+
+        # Signal 2: Task-local graph centrality
+        # Each graph relationship (from_graph, callee-of-top, imported-by-top)
+        # provides evidence of structural coupling to the edit neighbourhood.
+        graph_edges = sum([
+            cand.from_graph,
+            cand.is_callee_of_top,
+            cand.is_imported_by_top,
+            cand.shares_file_with_seed,
+        ])
+        f_centrality = _clamp(graph_edges / 3.0)
+
+        # Signal 3: Change-surface prior
+        kind = cand.def_fact.kind.lower() if cand.def_fact.kind else ""
+        f_executable = 1.0 if kind in _EXECUTABLE_KINDS else 0.3
+
+        # Combine (no artifact weight — edit-likelihood is artifact-agnostic
+        # except for the executable prior)
+        edit_score = intent_alignment * 0.55 + f_centrality * 0.25 + f_executable * 0.20
+
+        # Down-weight test files for edit-likelihood (tests are context,
+        # not edit targets — unless the task is explicitly about tests)
+        if cand.is_test and not parsed.is_test_driven:
+            edit_score *= 0.3
+
+        # Down-weight docs and config (they're context by nature)
+        if cand.artifact_kind in (ArtifactKind.doc, ArtifactKind.config, ArtifactKind.build):
+            edit_score *= 0.15
+
+        cand.edit_score = _clamp(edit_score)
+
+
+def _compute_context_value(
+    candidates: dict[str, HarvestCandidate],
+    parsed: ParsedTask,
+) -> None:
+    """Compute per-candidate context-value score.
+
+    This score estimates how useful a def is as *background context* for
+    the agent — even if it won't be edited.  It combines:
+
+    1. **Test adjacency** — graph edges to edit-likely defs.  Tests of
+       the code being edited are high-value context.
+
+    2. **Config/doc adjacency** — usage evidence (symbol mentions in
+       config/docs, not just keyword matches).
+
+    3. **Semantic proximity** — embedding similarity provides general
+       topic relevance even without structural links.
+
+    The score is written to ``cand.context_score``.
+    """
+    for cand in candidates.values():
+        if cand.def_fact is None:
+            cand.context_score = 0.0
+            continue
+
+        # Signal 1: Test adjacency (high value for test files, lower for code)
+        f_test_adj = 0.0
+        if cand.is_test:
+            # Tests are valuable context if they're graph-connected or
+            # semantically close to the task
+            graph_link = cand.from_graph or cand.is_callee_of_top or cand.is_imported_by_top
+            f_test_adj = 0.8 if graph_link else 0.3 * _clamp(cand.embedding_similarity)
+
+        # Signal 2: Config/doc adjacency — symbol-level mentions
+        f_doc_adj = 0.0
+        if cand.artifact_kind in (ArtifactKind.config, ArtifactKind.doc):
+            # Docs/configs are valuable when they mention task symbols
+            term_overlap = _clamp(len(cand.matched_terms) / 3.0)
+            f_doc_adj = term_overlap * 0.5 + _clamp(cand.embedding_similarity) * 0.5
+
+        # Signal 3: Semantic proximity (general topic relevance)
+        f_semantic = _clamp(cand.embedding_similarity) * 0.4 + _clamp(
+            len(cand.matched_terms) / 5.0
+        ) * 0.3
+
+        # Signal 4: Structural coupling (any graph evidence)
+        f_structural = 0.0
+        if cand.from_graph or cand.is_callee_of_top or cand.is_imported_by_top:
+            f_structural = 0.5
+        if cand.shares_file_with_seed:
+            f_structural = max(f_structural, 0.3)
+
+        # Combine with artifact-aware weighting
+        if cand.is_test:
+            context_score = f_test_adj * 0.50 + f_semantic * 0.30 + f_structural * 0.20
+        elif cand.artifact_kind in (ArtifactKind.config, ArtifactKind.doc):
+            context_score = f_doc_adj * 0.50 + f_semantic * 0.30 + f_structural * 0.20
+        else:
+            # Code files: context value comes from structural coupling
+            # (e.g., type definitions, utility modules)
+            context_score = f_semantic * 0.40 + f_structural * 0.40 + (
+                _clamp(math.log1p(min(cand.hub_score, 30)) / math.log1p(30)) * 0.20
+            )
+
+        cand.context_score = _clamp(context_score)
+
+
+# ===================================================================
+# File-level Dual Aggregation
+# ===================================================================
+
+
+def _aggregate_to_files_dual(
+    scored: list[tuple[str, float]],
+    candidates: dict[str, HarvestCandidate],
+) -> list[tuple[int, float, float, float, list[tuple[str, float]]]]:
+    """Aggregate def-level scores to file-level with dual scores.
+
+    Per file, computes:
+    - file_score: same as _aggregate_to_files (sum of top-m def relevance scores)
+    - file_edit_score: max(top-2 def edit_scores) — edit-likelihood at file level
+    - file_context_score: max(top-2 def context_scores) — context-value at file level
+
+    Returns:
+        List of ``(file_id, file_score, file_edit_score, file_context_score,
+        [(def_uid, score), ...])`` sorted descending by file_score
+        (stable on file_id for ties).
+    """
+    if not scored:
+        return []
+
+    # Global median score (distribution anchor)
+    all_scores = sorted((s for _, s in scored), reverse=True)
+    global_median = all_scores[len(all_scores) // 2]
+
+    # Group by file_id
+    file_defs: dict[int, list[tuple[str, float]]] = {}
+    for uid, score in scored:
+        cand = candidates.get(uid)
+        if cand is None or cand.def_fact is None:
+            continue
+        fid = cand.def_fact.file_id
+        if fid not in file_defs:
+            file_defs[fid] = []
+        file_defs[fid].append((uid, score))
+
+    # Score each file
+    result: list[tuple[int, float, float, float, list[tuple[str, float]]]] = []
+    for fid, defs in file_defs.items():
+        defs.sort(key=lambda x: -x[1])
+        # m = count of this file's defs above the global median, clamped to [1, 3]
+        n_above_median = sum(1 for _, s in defs if s >= global_median)
+        m = max(1, min(n_above_median, 3))
+        file_score = sum(s for _, s in defs[:m])
+
+        # Dual scores: aggregate def-level edit/context to file-level
+        # Use mean of top-2 (or top-1 if only one def) — captures breadth
+        edit_scores_sorted = sorted(
+            (candidates[uid].edit_score for uid, _ in defs if uid in candidates),
+            reverse=True,
+        )
+        context_scores_sorted = sorted(
+            (candidates[uid].context_score for uid, _ in defs if uid in candidates),
+            reverse=True,
+        )
+
+        top_n = min(2, len(edit_scores_sorted))
+        file_edit = sum(edit_scores_sorted[:top_n]) / top_n if top_n > 0 else 0.0
+        top_n_c = min(2, len(context_scores_sorted))
+        file_ctx = sum(context_scores_sorted[:top_n_c]) / top_n_c if top_n_c > 0 else 0.0
+
+        result.append((fid, file_score, file_edit, file_ctx, defs))
+
+    result.sort(key=lambda x: (-x[1], x[0]))
+
+    log.debug(
+        "recon.file_aggregation_dual",
+        n_files=len(result),
+        global_median=round(global_median, 4),
+        top5=[
+            (fid, round(fs, 4), round(fe, 4), round(fc, 4), len(ds))
+            for fid, fs, fe, fc, ds in result[:5]
+        ],
+    )
+    return result
+
+
+# ===================================================================
+# Bucketing — rank-based assignment with product budgets
+# ===================================================================
+
+
+def _assign_buckets(
+    file_ranked: list[tuple[int, float, float, float, list[tuple[str, float]]]],
+    candidates: dict[str, HarvestCandidate],
+    *,
+    edit_budget: int = 5,
+    context_budget: int = 12,
+) -> dict[int, ReconBucket]:
+    """Assign each file to a bucket using rank-based selection.
+
+    Strategy (from design spec):
+    - Edit core = top N by file_edit_score (budget ~5)
+    - Context = high context-value within surviving files (budget ~10-15)
+    - Supplementary = remainder
+
+    No score thresholds — purely rank-based with product budgets.
+
+    Args:
+        file_ranked: Output of _aggregate_to_files_dual.
+        candidates: Candidate defs (for updating bucket field).
+        edit_budget: Max files in edit_target bucket.
+        context_budget: Max files in context bucket.
+
+    Returns:
+        Dict mapping file_id to its assigned ReconBucket.
+    """
+    if not file_ranked:
+        return {}
+
+    # Sort by edit_score descending for edit target selection
+    by_edit = sorted(file_ranked, key=lambda x: (-x[2], x[0]))
+
+    # Sort by context_score descending for context selection
+    by_context = sorted(file_ranked, key=lambda x: (-x[3], x[0]))
+
+    buckets: dict[int, ReconBucket] = {}
+    edit_count = 0
+    context_count = 0
+
+    # Phase 1: Assign edit targets (top N by edit score)
+    for fid, _fs, f_edit, _fc, _defs in by_edit:
+        if edit_count >= edit_budget:
+            break
+        # Minimum edit score to be an edit target: must have *some* signal
+        if f_edit < 0.05:
+            break
+        buckets[fid] = ReconBucket.edit_target
+        edit_count += 1
+
+    # Phase 2: Assign context (top M by context score, excluding edit targets)
+    for fid, _fs, _fe, f_ctx, _defs in by_context:
+        if context_count >= context_budget:
+            break
+        if fid in buckets:
+            continue  # Already an edit target
+        if f_ctx < 0.03:
+            break
+        buckets[fid] = ReconBucket.context
+        context_count += 1
+
+    # Phase 3: Everything else is supplementary
+    for fid, _fs, _fe, _fc, _defs in file_ranked:
+        if fid not in buckets:
+            buckets[fid] = ReconBucket.supplementary
+
+    # Propagate bucket to candidates
+    file_id_to_bucket = buckets
+    for cand in candidates.values():
+        if cand.def_fact is not None:
+            fid = cand.def_fact.file_id
+            cand.bucket = file_id_to_bucket.get(fid, ReconBucket.supplementary)
+
+    log.debug(
+        "recon.bucketing",
+        edit_targets=edit_count,
+        context=context_count,
+        supplementary=len(file_ranked) - edit_count - context_count,
+        total=len(file_ranked),
+    )
+
+    return buckets
