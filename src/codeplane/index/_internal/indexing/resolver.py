@@ -68,6 +68,8 @@ class ReferenceResolver:
         self._db = db
         # Cache module path -> file_id mapping
         self._module_to_file: dict[str, int] = {}
+        # Cache file_id -> file path
+        self._file_paths: dict[int, str] = {}
         # Cache file_id -> exported symbols
         self._file_exports: dict[int, dict[str, str]] = {}  # name -> def_uid
 
@@ -211,8 +213,8 @@ class ReferenceResolver:
         if not source_literal:
             return False
 
-        # Look up the target file
-        target_file_id = self._find_module_file(source_literal)
+        # Look up the target file (pass importing file_id for relative import resolution)
+        target_file_id = self._find_module_file(source_literal, importing_file_id=imp.file_id)
         if target_file_id is None:
             return False
 
@@ -233,8 +235,9 @@ class ReferenceResolver:
         return False
 
     def _build_module_cache(self, session: object) -> None:
-        """Build mapping from module path to file_id."""
-        self._module_to_file = {}
+        """Build mapping from module path to file_id, and file_id to path."""
+        self._module_to_file: dict[str, int] = {}
+        self._file_paths: dict[int, str] = {}
 
         stmt = select(File.id, File.path)
         files = session.exec(stmt).all()  # type: ignore[attr-defined]
@@ -242,10 +245,18 @@ class ReferenceResolver:
         for file_id, path in files:
             if file_id is None:
                 continue
+            self._file_paths[file_id] = path
             # Convert path to module path (e.g., src/foo/bar.py -> src.foo.bar)
             module_path = self._path_to_module(path)
             if module_path:
                 self._module_to_file[module_path] = file_id
+
+        # Add Rust crate:: aliases for src:: paths
+        crate_aliases: dict[str, int] = {}
+        for mod_path, fid in self._module_to_file.items():
+            if mod_path.startswith("src::"):
+                crate_aliases[f"crate::{mod_path[5:]}"] = fid
+        self._module_to_file.update(crate_aliases)
 
     def _build_export_cache(self, session: object) -> None:
         """Build mapping from file_id to exported symbols.
@@ -289,8 +300,11 @@ class ReferenceResolver:
                 continue
 
             # Find the actual definition in the source module
+            # Pass importing file_id for relative import resolution
             source_file_id = (
-                self._find_module_file(imp.source_literal) if imp.source_literal else None
+                self._find_module_file(imp.source_literal, importing_file_id=imp.file_id)
+                if imp.source_literal
+                else None
             )
             if source_file_id is None:
                 continue
@@ -304,8 +318,29 @@ class ReferenceResolver:
                     self._file_exports[bind.file_id] = {}
                 self._file_exports[bind.file_id][bind.name] = def_uid
 
-    def _find_module_file(self, source_literal: str) -> int | None:
-        """Find file_id for a module import path."""
+    def _find_module_file(
+        self,
+        source_literal: str,
+        importing_file_id: int | None = None,
+    ) -> int | None:
+        """Find file_id for a module import path.
+
+        Handles both absolute and relative imports across languages:
+        - Python: ``from ..core.base_model import X`` (dot-relative)
+        - JS/TS: ``import { X } from './foo'`` or ``'../foo'`` (path-relative)
+        - Rust: ``use super::foo`` (super::-relative)
+
+        Args:
+            source_literal: The import source as stored in ImportFact.
+            importing_file_id: The file_id of the file containing the import.
+                Required for relative import resolution.
+        """
+        # Try resolving relative imports first (they can't match absolute cache)
+        if importing_file_id is not None:
+            resolved = self._resolve_relative_source(source_literal, importing_file_id)
+            if resolved is not None:
+                return resolved
+
         # Direct match
         if source_literal in self._module_to_file:
             return self._module_to_file[source_literal]
@@ -328,25 +363,220 @@ class ReferenceResolver:
 
         return None
 
-    def _path_to_module(self, path: str) -> str | None:
-        """Convert file path to Python module path."""
-        if not path.endswith(".py"):
+    def _resolve_relative_source(
+        self,
+        source_literal: str,
+        importing_file_id: int,
+    ) -> int | None:
+        """Resolve a relative import source_literal to a file_id.
+
+        Supports:
+        - Python dot-relative: ``.foo``, ``..core.bar``
+        - JS/TS path-relative: ``./foo``, ``../bar/baz``
+        - Rust super-relative: ``super::foo``, ``super::super::foo``
+
+        Args:
+            source_literal: The relative import path.
+            importing_file_id: File that contains the import statement.
+
+        Returns:
+            Resolved file_id, or None if not found.
+        """
+        importing_path = self._file_paths.get(importing_file_id)
+        if not importing_path:
             return None
 
-        # Remove .py extension
-        module = path[:-3]
+        # --- Python dot-relative imports ---
+        # ``from .foo import X`` → source_literal = ".foo"
+        # ``from ..core.bar import X`` → source_literal = "..core.bar"
+        if source_literal.startswith(".") and not source_literal.startswith("./"):
+            return self._resolve_python_relative(source_literal, importing_path)
 
-        # Handle __init__.py
-        if module.endswith("/__init__"):
-            module = module[:-9]
+        # --- JS/TS path-relative imports ---
+        # ``import { X } from './foo'`` → source_literal = "./foo"
+        # ``import { X } from '../bar/baz'`` → source_literal = "../bar/baz"
+        if source_literal.startswith("./") or source_literal.startswith("../"):
+            return self._resolve_js_relative(source_literal, importing_path)
 
-        # Convert / to .
-        module = module.replace("/", ".").replace("\\", ".")
+        # --- Rust super:: relative imports ---
+        # ``use super::foo`` → source_literal = "super::foo"
+        if source_literal.startswith("super::"):
+            return self._resolve_rust_relative(source_literal, importing_path)
 
-        # Remove leading . if any
-        module = module.lstrip(".")
+        return None
 
-        return module
+    def _resolve_python_relative(self, source_literal: str, importing_path: str) -> int | None:
+        """Resolve Python dot-relative import to file_id.
+
+        ``from .foo import X`` in ``src/pkg/sub/mod.py`` →
+        source_literal=".foo", base_dir="src/pkg/sub" →
+        target module = "src.pkg.sub.foo"
+
+        ``from ..core.bar import X`` in ``src/pkg/eval/mod.py`` →
+        source_literal="..core.bar", base_dir="src/pkg/eval" →
+        up 2 → "src/pkg" → target = "src.pkg.core.bar"
+        """
+        # Count leading dots and extract module suffix
+        dots = 0
+        for ch in source_literal:
+            if ch == ".":
+                dots += 1
+            else:
+                break
+        module_suffix = source_literal[dots:]  # e.g., "core.bar" or ""
+
+        # Get the package directory of the importing file
+        # For src/pkg/eval/mod.py → "src/pkg/eval"
+        base_dir = importing_path.rsplit("/", 1)[0] if "/" in importing_path else ""
+
+        # Go up (dots - 1) additional directories. One dot = same package.
+        levels_up = dots - 1
+        for _ in range(levels_up):
+            if "/" in base_dir:
+                base_dir = base_dir.rsplit("/", 1)[0]
+            else:
+                # Can't go above root
+                return None
+
+        # Build absolute module path
+        base_module = base_dir.replace("/", ".").replace("\\", ".")
+        if module_suffix:
+            abs_module = f"{base_module}.{module_suffix}" if base_module else module_suffix
+        else:
+            abs_module = base_module
+
+        # Look up in module cache
+        if abs_module in self._module_to_file:
+            return self._module_to_file[abs_module]
+
+        return None
+
+    def _resolve_js_relative(self, source_literal: str, importing_path: str) -> int | None:
+        """Resolve JS/TS path-relative import to file_id.
+
+        ``import { X } from './foo'`` in ``src/components/bar.ts`` →
+        target path = "src/components/foo" → try .ts, .js, /index.ts, etc.
+        """
+        base_dir = importing_path.rsplit("/", 1)[0] if "/" in importing_path else ""
+
+        # Normalize the relative path
+        parts = source_literal.split("/")
+        resolved_parts = base_dir.split("/") if base_dir else []
+
+        for part in parts:
+            if part == ".":
+                continue
+            elif part == "..":
+                if resolved_parts:
+                    resolved_parts.pop()
+            else:
+                resolved_parts.append(part)
+
+        resolved_base = "/".join(resolved_parts)
+        # Module cache uses dot-separated paths — convert
+        resolved_module = resolved_base.replace("/", ".").replace("\\", ".")
+
+        # Try direct match and common extensions
+        for candidate in [
+            resolved_module,
+            f"{resolved_module}.index",  # ./foo → foo/index.ts
+        ]:
+            if candidate in self._module_to_file:
+                return self._module_to_file[candidate]
+
+        # JS/TS files may not be in the Python-centric module cache.
+        # Also try path-based lookup against raw file paths.
+        js_exts = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+        for ext in js_exts:
+            candidate_path = f"{resolved_base}{ext}"
+            # Search _file_paths values
+            for fid, fpath in self._file_paths.items():
+                if fpath == candidate_path:
+                    return fid
+        for ext in js_exts:
+            candidate_path = f"{resolved_base}/index{ext}"
+            for fid, fpath in self._file_paths.items():
+                if fpath == candidate_path:
+                    return fid
+
+        return None
+
+    def _resolve_rust_relative(self, source_literal: str, importing_path: str) -> int | None:
+        """Resolve Rust super:: relative import to file_id.
+
+        ``use super::foo`` in ``src/bar/baz.rs`` →
+        target module = "src.bar.foo"
+        """
+        # Split on :: and count super levels
+        segments = source_literal.split("::")
+        super_count = 0
+        remainder: list[str] = []
+        for seg in segments:
+            if seg == "super":
+                super_count += 1
+            else:
+                remainder.append(seg)
+
+        # Get base directory
+        base_dir = importing_path.rsplit("/", 1)[0] if "/" in importing_path else ""
+
+        # Go up super_count levels
+        for _ in range(super_count):
+            if "/" in base_dir:
+                base_dir = base_dir.rsplit("/", 1)[0]
+            else:
+                return None
+
+        # Build module path
+        base_module = base_dir.replace("/", "::").replace("\\", "::")
+        suffix = "::".join(remainder)
+        if suffix:
+            abs_module = f"{base_module}::{suffix}" if base_module else suffix
+        else:
+            abs_module = base_module
+
+        if abs_module in self._module_to_file:
+            return self._module_to_file[abs_module]
+
+        return None
+
+    def _path_to_module(self, path: str) -> str | None:
+        """Convert file path to module path.
+
+        Supports Python, JS/TS, and Rust files.
+        """
+        # Python: src/foo/bar.py -> src.foo.bar
+        if path.endswith(".py"):
+            module = path[:-3]
+            if module.endswith("/__init__"):
+                module = module[:-9]
+            module = module.replace("/", ".").replace("\\", ".")
+            module = module.lstrip(".")
+            return module
+
+        # JS/TS: src/foo/bar.ts -> src.foo.bar
+        js_exts = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+        for ext in js_exts:
+            if path.endswith(ext):
+                module = path[: -len(ext)]
+                if module.endswith("/index"):
+                    module = module[:-6]
+                module = module.replace("/", ".").replace("\\", ".")
+                module = module.lstrip(".")
+                return module
+
+        # Rust: src/foo/bar.rs -> src::foo::bar (uses :: separator)
+        if path.endswith(".rs"):
+            module = path[:-3]
+            if module.endswith("/mod"):
+                module = module[:-4]
+            elif module.endswith("/lib"):
+                module = module[:-4]
+            module = module.replace("/", "::").replace("\\", "::")
+            module = module.lstrip(":")
+            return module
+
+        return None
 
 
 def resolve_references(

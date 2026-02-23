@@ -101,6 +101,32 @@ class TestReferenceResolver:
         assert resolver._path_to_module("src/foo.txt") is None
         assert resolver._path_to_module("README.md") is None
 
+    def test_path_to_module_js_ts(self, mock_db: MagicMock) -> None:
+        """Converts JS/TS file paths to module."""
+        resolver = ReferenceResolver(mock_db)
+
+        assert resolver._path_to_module("src/foo.ts") == "src.foo"
+        assert resolver._path_to_module("src/foo.tsx") == "src.foo"
+        assert resolver._path_to_module("src/foo.js") == "src.foo"
+        assert resolver._path_to_module("src/foo.jsx") == "src.foo"
+        assert resolver._path_to_module("src/foo.mjs") == "src.foo"
+        assert resolver._path_to_module("src/foo.cjs") == "src.foo"
+
+    def test_path_to_module_js_index(self, mock_db: MagicMock) -> None:
+        """Handles JS index.ts files."""
+        resolver = ReferenceResolver(mock_db)
+
+        assert resolver._path_to_module("src/foo/index.ts") == "src.foo"
+        assert resolver._path_to_module("src/foo/index.js") == "src.foo"
+
+    def test_path_to_module_rust(self, mock_db: MagicMock) -> None:
+        """Converts Rust file paths to module."""
+        resolver = ReferenceResolver(mock_db)
+
+        assert resolver._path_to_module("src/foo/bar.rs") == "src::foo::bar"
+        assert resolver._path_to_module("src/foo/mod.rs") == "src::foo"
+        assert resolver._path_to_module("src/foo/lib.rs") == "src::foo"
+
     def test_path_to_module_windows_path(self, mock_db: MagicMock) -> None:
         """Handles Windows-style paths."""
         resolver = ReferenceResolver(mock_db)
@@ -112,6 +138,7 @@ class TestReferenceResolver:
         """Finds file with direct module path match."""
         resolver = ReferenceResolver(mock_db)
         resolver._module_to_file = {"foo.bar": 42}
+        resolver._file_paths = {}
 
         result = resolver._find_module_file("foo.bar")
         assert result == 42
@@ -120,9 +147,67 @@ class TestReferenceResolver:
         """Returns None when module not found."""
         resolver = ReferenceResolver(mock_db)
         resolver._module_to_file = {}
+        resolver._file_paths = {}
 
         result = resolver._find_module_file("nonexistent.module")
         assert result is None
+
+    def test_find_module_file_python_relative_single_dot(self, mock_db: MagicMock) -> None:
+        """Resolves Python single-dot relative import."""
+        resolver = ReferenceResolver(mock_db)
+        resolver._module_to_file = {"src.pkg.utils": 10}
+        resolver._file_paths = {5: "src/pkg/main.py"}
+
+        # from .utils import X in src/pkg/main.py → src.pkg.utils
+        result = resolver._find_module_file(".utils", importing_file_id=5)
+        assert result == 10
+
+    def test_find_module_file_python_relative_double_dot(self, mock_db: MagicMock) -> None:
+        """Resolves Python double-dot relative import."""
+        resolver = ReferenceResolver(mock_db)
+        resolver._module_to_file = {"src.pkg.core.base_model": 20}
+        resolver._file_paths = {15: "src/pkg/eval/model_evaluator.py"}
+
+        # from ..core.base_model import X in src/pkg/eval/model_evaluator.py
+        result = resolver._find_module_file("..core.base_model", importing_file_id=15)
+        assert result == 20
+
+    def test_find_module_file_python_relative_package(self, mock_db: MagicMock) -> None:
+        """Resolves Python relative import to package __init__."""
+        resolver = ReferenceResolver(mock_db)
+        resolver._module_to_file = {"src.pkg.config": 30}
+        resolver._file_paths = {15: "src/pkg/eval/model_evaluator.py"}
+
+        # from ..config import Config → src.pkg.config
+        result = resolver._find_module_file("..config", importing_file_id=15)
+        assert result == 30
+
+    def test_find_module_file_js_relative(self, mock_db: MagicMock) -> None:
+        """Resolves JS/TS path-relative import."""
+        resolver = ReferenceResolver(mock_db)
+        resolver._module_to_file = {"src.components.button": 40}
+        resolver._file_paths = {35: "src/components/app.ts"}
+
+        result = resolver._find_module_file("./button", importing_file_id=35)
+        assert result == 40
+
+    def test_find_module_file_js_relative_parent(self, mock_db: MagicMock) -> None:
+        """Resolves JS/TS parent-directory relative import."""
+        resolver = ReferenceResolver(mock_db)
+        resolver._module_to_file = {"src.utils.helpers": 50}
+        resolver._file_paths = {45: "src/components/app.ts"}
+
+        result = resolver._find_module_file("../utils/helpers", importing_file_id=45)
+        assert result == 50
+
+    def test_find_module_file_rust_super(self, mock_db: MagicMock) -> None:
+        """Resolves Rust super:: relative import."""
+        resolver = ReferenceResolver(mock_db)
+        resolver._module_to_file = {"src::bar::utils": 60}
+        resolver._file_paths = {55: "src/bar/baz.rs"}
+
+        result = resolver._find_module_file("super::utils", importing_file_id=55)
+        assert result == 60
 
 
 class TestResolveReferencesFunction:

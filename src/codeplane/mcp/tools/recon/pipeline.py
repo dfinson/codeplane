@@ -187,6 +187,39 @@ async def _select_seeds(
         min_keep=min(min_seeds, len(file_ranked)),
     )
 
+    # 8b. Anchor explicit-path files past the cutoff.
+    #     If the user named a file path in the task, it survives regardless
+    #     of score.  Resolve parsed.explicit_paths → file_ids directly
+    #     (NOT from_explicit, which is too broad — includes symbol matches).
+    explicit_fids: set[int] = set()
+    if parsed.explicit_paths:
+        coordinator = app_ctx.coordinator
+        with coordinator.db.session() as session:
+            from codeplane.index._internal.indexing.graph import FactQueries
+
+            fq = FactQueries(session)
+            for epath in parsed.explicit_paths:
+                frec = fq.get_file_by_path(epath)
+                if frec is not None and frec.id is not None:
+                    explicit_fids.add(frec.id)
+
+    surviving_fids = {fid for fid, _, _ in file_ranked[:n_files]}
+    anchored = 0
+    for idx in range(n_files, len(file_ranked)):
+        fid, _fs, _fdefs = file_ranked[idx]
+        if fid in explicit_fids and fid not in surviving_fids:
+            # Swap this file into the surviving window
+            file_ranked[n_files + anchored], file_ranked[idx] = (
+                file_ranked[idx],
+                file_ranked[n_files + anchored],
+            )
+            surviving_fids.add(fid)
+            anchored += 1
+    n_files += anchored
+    if anchored:
+        log.info("recon.explicit_anchor", anchored=anchored, n_files=n_files)
+        diagnostics["explicit_anchored"] = anchored
+
     # 9. Multi-seed per file selection
     #    Phase 1: best def per surviving file (file diversity)
     #    Phase 2: additional defs above global def-score median (depth)
