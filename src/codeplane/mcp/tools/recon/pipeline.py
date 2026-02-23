@@ -197,7 +197,9 @@ async def _select_seeds(
         for i, (fid, fs, fdefs) in enumerate(file_ranked[:20]):
             frec = fq.get_file(fid)
             fpath = frec.path if frec else f"?{fid}"
-            _diag_ranking.append({"rank": i + 1, "path": fpath, "score": round(fs, 4), "n_defs": len(fdefs)})
+            _diag_ranking.append(
+                {"rank": i + 1, "path": fpath, "score": round(fs, 4), "n_defs": len(fdefs)}
+            )
         diagnostics["_file_ranking_top20"] = _diag_ranking
 
     # 8. File inclusion: anchor-calibrated band + def-level saturation
@@ -225,13 +227,9 @@ async def _select_seeds(
     #     Uses MAD (median absolute deviation) around anchor scores to
     #     define the floor.  Files scoring >= (min_anchor - MAD) survive.
     file_score_values = [fs for _, fs, _ in file_ranked]
-    anchor_indices = [
-        i for i, (fid, _, _) in enumerate(file_ranked) if fid in anchor_fids
-    ]
+    anchor_indices = [i for i, (fid, _, _) in enumerate(file_ranked) if fid in anchor_fids]
     floor_score = compute_anchor_floor(file_score_values, anchor_indices)
-    n_band = (
-        sum(1 for fs in file_score_values if fs >= floor_score) if floor_score > 0 else 0
-    )
+    n_band = sum(1 for fs in file_score_values if fs >= floor_score) if floor_score > 0 else 0
     n_files = max(min(min_seeds, len(file_ranked)), n_band)
 
     # Safety net: ensure ALL anchor files are in the surviving window
@@ -246,12 +244,16 @@ async def _select_seeds(
             n_files += 1
 
     # 8c. Saturation pass — extend inclusion while files contribute seeds
-    #     When anchors exist the band already captured the calibrated
-    #     region; saturation gates on floor_score so only files that
-    #     genuinely belong to the anchor band can extend the window.
-    #     Without anchors, fall back to the global def-score median.
+    #     Anchor case: gate on floor_score (anchor-calibrated band).
+    #     No-anchor case: gate on file-score median.  This uses the
+    #     correct granularity (file scores, not def scores) so the
+    #     threshold doesn't collapse to the noise floor of the
+    #     heavy-tailed def-score distribution.
     all_def_scores = sorted((s for _, s in scored), reverse=True)
     def_score_median = all_def_scores[len(all_def_scores) // 2] if all_def_scores else 0.0
+
+    # File-score median — local to this query's candidate files
+    file_score_median = file_score_values[len(file_score_values) // 2] if file_score_values else 0.0
 
     _K_SATURATE = 3
     consecutive_empty = 0
@@ -261,8 +263,9 @@ async def _select_seeds(
             # Anchor case: file must meet the anchor-calibrated floor
             has_contribution = _fscore >= floor_score
         else:
-            # No-anchor fallback: at least one def above global median
-            has_contribution = any(dscore >= def_score_median for _, dscore in fdefs)
+            # No-anchor: file score must be at or above the file-score
+            # median of this query's candidate set.
+            has_contribution = _fscore >= file_score_median
         if has_contribution:
             n_files = idx + 1
             consecutive_empty = 0
@@ -456,8 +459,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                 "seeds": [],
                 "summary": f'No seeds found for "{task_preview}"',
                 "agentic_hint": (
-                    "No relevant definitions found. "
-                    "See 'next_actions' for concrete recovery steps."
+                    "No relevant definitions found. See 'next_actions' for concrete recovery steps."
                 ),
                 "next_actions": failure_actions,
             }

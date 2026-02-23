@@ -43,8 +43,8 @@ from codeplane.mcp.tools.recon import (
     _score_candidates,
     _summarize_recon,
     _trim_to_budget,
-    find_elbow,
     compute_anchor_floor,
+    find_elbow,
     parse_task,
 )
 
@@ -141,7 +141,9 @@ class TestExtractPaths:
     """Tests for parse_task path extraction."""
 
     def test_backtick_path(self) -> None:
-        paths = parse_task("Fix the model in `src/evee/core/base_model.py` to add caching").explicit_paths
+        paths = parse_task(
+            "Fix the model in `src/evee/core/base_model.py` to add caching"
+        ).explicit_paths
         assert "src/evee/core/base_model.py" in paths
 
     def test_quoted_path(self) -> None:
@@ -843,6 +845,150 @@ class TestComputeAnchorFloor:
         assert floor == pytest.approx(0.67)
 
 
+class TestNoAnchorSaturation:
+    """Verify no-anchor saturation uses file-score median, not def-score median.
+
+    When no anchors exist (floor_score == 0), the saturation loop should
+    gate on the file-score median of the candidate set.  This prevents
+    explosion into the long tail that plagued the old def-score-median gate.
+
+    The file-score median keeps roughly the top half of sorted candidates
+    (plus 3-consecutive-miss stopping).  This is materially better than the
+    def-score median (~0.05) which let through nearly all files.
+    """
+
+    @staticmethod
+    def _simulate_saturation(
+        file_scores: list[float],
+        *,
+        min_seeds: int = 3,
+    ) -> int:
+        """Reproduce the pipeline's no-anchor saturation logic."""
+        n_files = min(min_seeds, len(file_scores))
+        file_score_median = file_scores[len(file_scores) // 2] if file_scores else 0.0
+        _K_SATURATE = 3  # noqa: N806
+        consecutive_empty = 0
+        for idx in range(n_files, len(file_scores)):
+            if file_scores[idx] >= file_score_median:
+                n_files = idx + 1
+                consecutive_empty = 0
+            else:
+                consecutive_empty += 1
+                if consecutive_empty >= _K_SATURATE:
+                    break
+        return n_files
+
+    @staticmethod
+    def _simulate_old_saturation(
+        file_scores: list[float],
+        def_score_median: float = 0.05,
+        *,
+        min_seeds: int = 3,
+    ) -> int:
+        """Simulate the OLD (broken) def-score-median gating for comparison."""
+        n_files = min(min_seeds, len(file_scores))
+        _K_SATURATE = 3  # noqa: N806
+        consecutive_empty = 0
+        for idx in range(n_files, len(file_scores)):
+            # Old: used def_score_median (~0.05) — any nonzero file passes
+            if file_scores[idx] >= def_score_median:
+                n_files = idx + 1
+                consecutive_empty = 0
+            else:
+                consecutive_empty += 1
+                if consecutive_empty >= _K_SATURATE:
+                    break
+        return n_files
+
+    def test_long_tail_bounded(self) -> None:
+        """100-file distribution: file-score median keeps roughly half, not all.
+
+        The file-score median sits near the middle of the sorted list, so
+        the algorithm includes scores above the median and stops 3 below it.
+        This is far better than the old def-score-median gate which would
+        pass nearly all 100 files.
+        """
+        scores = [0.9, 0.85, 0.8, 0.75, 0.7]
+        scores += [0.1 - i * 0.001 for i in range(95)]
+        n_new = self._simulate_saturation(scores)
+        n_old = self._simulate_old_saturation(scores)
+        # New: roughly half the files (median-based)
+        assert n_new <= len(scores) * 0.6
+        assert n_new >= 3
+        # Old: nearly all files would pass (def_score_median ≈ 0.05)
+        assert n_old > n_new, "new gate must be strictly tighter than old"
+
+    def test_flat_scores_keeps_above_median(self) -> None:
+        """When scores are relatively flat, keep roughly the top half."""
+        scores = [1.0 - i * 0.01 for i in range(20)]
+        # Median at index 10 = 0.90.  Scores 0-9 are >= 0.90 (1.0..0.91).
+        n = self._simulate_saturation(scores)
+        assert n >= 10
+        assert n <= 15
+
+    def test_clear_cliff_stops_early(self) -> None:
+        """When there's a genuine cliff, saturation stops at the cliff."""
+        scores = [5.0, 4.8, 4.5, 0.1, 0.05, 0.01]
+        # Median of 6 scores = scores[3] = 0.1
+        # min_seeds=3, then idx 3 has 0.1 >= 0.1 → n=4
+        # idx 4 has 0.05 < 0.1 → consecutive_empty=1
+        # idx 5 has 0.01 < 0.1 → consecutive_empty=2, but only 6 items
+        n = self._simulate_saturation(scores)
+        assert n == 4
+
+    def test_vague_task_bounded(self) -> None:
+        """Simulate a vague no-anchor task with ~150 files.
+
+        The file-score median gate keeps roughly half — much better than
+        the old def-score-median which would pass nearly all 150.
+        """
+        scores = [0.8, 0.7, 0.6, 0.5, 0.4]
+        scores += [0.15 - i * 0.0008 for i in range(145)]
+        n_new = self._simulate_saturation(scores)
+        n_old = self._simulate_old_saturation(scores)
+        # New: materially bounded (not 150)
+        assert n_new <= len(scores) * 0.6
+        assert n_new >= 3
+        # Old: nearly all pass
+        assert n_old > n_new
+
+    def test_bimodal_stops_in_gap(self) -> None:
+        """Bimodal distribution: tight cluster + distant noise → stops in gap."""
+        # 4 relevant files, then a large gap, then 20 noise files
+        scores = [
+            2.0,
+            1.8,
+            1.5,
+            1.2,
+            0.01,
+            0.009,
+            0.008,
+            0.007,
+            0.006,
+            0.005,
+            0.004,
+            0.003,
+            0.002,
+            0.001,
+            0.001,
+            0.001,
+            0.001,
+            0.001,
+            0.001,
+            0.001,
+            0.001,
+            0.001,
+            0.001,
+            0.001,
+        ]
+        n = self._simulate_saturation(scores)
+        # Median is around index 12 → score ~0.002.  Scores down to
+        # ~0.002 still pass, then consecutive miss stops.
+        # Keeps top cluster + noise down to the median, not all 24.
+        assert n <= 15
+        assert n >= 4
+
+
 class TestBuildEvidenceString:
     """Tests for _build_evidence_string — compact evidence format."""
 
@@ -1135,9 +1281,7 @@ class TestGraphEvidenceBoosting:
 
         # Simulate what graph harvester now does
         c.from_graph = True
-        c.evidence.append(
-            EvidenceRecord(category="graph", detail="callee of evaluate", score=0.4)
-        )
+        c.evidence.append(EvidenceRecord(category="graph", detail="callee of evaluate", score=0.4))
         assert c.from_graph is True
         assert c.evidence_axes == 2
 
@@ -1173,6 +1317,3 @@ class TestGraphEvidenceBoosting:
         _score_candidates({"b": c_with_graph}, parsed)
 
         assert c_with_graph.relevance_score > c_no_graph.relevance_score
-
-
-
