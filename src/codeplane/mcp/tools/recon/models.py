@@ -553,6 +553,7 @@ class ParsedTask:
         primary_terms:    High-signal search terms (longest first).
         secondary_terms:  Lower-signal terms (short, generic, or from camelCase splits).
         explicit_paths:   File paths mentioned in the task text.
+        explicit_dirs:    Directory paths mentioned in the task text (validated later).
         explicit_symbols: Symbol-like identifiers mentioned in the task.
         keywords:         Union of primary + secondary for broad matching.
         query_text:       Synthesized embedding query (for dense retrieval).
@@ -566,6 +567,7 @@ class ParsedTask:
     primary_terms: list[str] = field(default_factory=list)
     secondary_terms: list[str] = field(default_factory=list)
     explicit_paths: list[str] = field(default_factory=list)
+    explicit_dirs: list[str] = field(default_factory=list)
     explicit_symbols: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     query_text: str = ""

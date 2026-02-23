@@ -1,7 +1,7 @@
 """Tests for the recon MCP tool.
 
 Tests:
-- _tokenize_task: task description tokenization
+- parse_task: task description parsing (keywords, paths, dirs, symbols)
 - _select_seeds: term-intersection + hub-score reranking
 - _expand_seed: graph expansion
 - _trim_to_budget: budget assembly
@@ -39,11 +39,9 @@ from codeplane.mcp.tools.recon import (
     _estimate_bytes,
     _extract_intent,
     _extract_negative_mentions,
-    _extract_paths,
     _read_lines,
     _score_candidates,
     _summarize_recon,
-    _tokenize_task,
     _trim_to_budget,
     find_elbow,
     find_gap_cutoff,
@@ -56,14 +54,14 @@ from codeplane.mcp.tools.recon import (
 
 
 class TestTokenizeTask:
-    """Tests for _tokenize_task."""
+    """Tests for parse_task keyword extraction."""
 
     def test_single_word(self) -> None:
-        terms = _tokenize_task("FactQueries")
+        terms = parse_task("FactQueries").keywords
         assert "factqueries" in terms
 
     def test_multi_word(self) -> None:
-        terms = _tokenize_task("add validation to the search tool")
+        terms = parse_task("add validation to the search tool").keywords
         assert "validation" in terms
         assert "search" in terms
         # "add", "to", "the", "tool" are stop words → excluded
@@ -73,49 +71,49 @@ class TestTokenizeTask:
         assert "tool" not in terms
 
     def test_camelcase_split(self) -> None:
-        terms = _tokenize_task("IndexCoordinator")
+        terms = parse_task("IndexCoordinator").keywords
         assert "indexcoordinator" in terms
         # camelCase parts also extracted
         assert "index" in terms
         assert "coordinator" in terms
 
     def test_snake_case_split(self) -> None:
-        terms = _tokenize_task("get_callees")
+        terms = parse_task("get_callees").keywords
         assert "get_callees" in terms
         assert "callees" in terms
 
     def test_quoted_terms_preserved(self) -> None:
-        terms = _tokenize_task('fix "read_source" tool')
+        terms = parse_task('fix "read_source" tool').keywords
         assert "read_source" in terms
 
     def test_stop_words_filtered(self) -> None:
-        terms = _tokenize_task("how does the checkpoint tool run tests")
+        terms = parse_task("how does the checkpoint tool run tests").keywords
         assert "checkpoint" in terms
         assert "how" not in terms
         assert "does" not in terms
         assert "the" not in terms
 
     def test_short_terms_filtered(self) -> None:
-        terms = _tokenize_task("a b cd ef")
+        terms = parse_task("a b cd ef").keywords
         assert "a" not in terms
         assert "b" not in terms
         assert "cd" in terms
         assert "ef" in terms
 
     def test_empty_task(self) -> None:
-        assert _tokenize_task("") == []
+        assert parse_task("").keywords == []
 
     def test_all_stop_words(self) -> None:
-        assert _tokenize_task("the is and or") == []
+        assert parse_task("the is and or").keywords == []
 
     def test_dedup(self) -> None:
-        terms = _tokenize_task("search search search")
+        terms = parse_task("search search search").keywords
         assert terms.count("search") == 1
 
     def test_sorted_by_length_descending(self) -> None:
-        terms = _tokenize_task("IndexCoordinator search lint")
-        # Longer terms should come first
-        lengths = [len(t) for t in terms]
+        parsed = parse_task("IndexCoordinator search lint")
+        # primary_terms sorted longest first; secondary may follow
+        lengths = [len(t) for t in parsed.primary_terms]
         assert lengths == sorted(lengths, reverse=True)
 
     @pytest.mark.parametrize(
@@ -130,7 +128,7 @@ class TestTokenizeTask:
         ],
     )
     def test_common_tasks(self, task: str, expected_term: str) -> None:
-        terms = _tokenize_task(task)
+        terms = parse_task(task).keywords
         assert expected_term in terms
 
 
@@ -140,45 +138,45 @@ class TestTokenizeTask:
 
 
 class TestExtractPaths:
-    """Tests for _extract_paths."""
+    """Tests for parse_task path extraction."""
 
     def test_backtick_path(self) -> None:
-        paths = _extract_paths("Fix the model in `src/evee/core/base_model.py` to add caching")
+        paths = parse_task("Fix the model in `src/evee/core/base_model.py` to add caching").explicit_paths
         assert "src/evee/core/base_model.py" in paths
 
     def test_quoted_path(self) -> None:
-        paths = _extract_paths('Look at "config/models.py" for settings')
+        paths = parse_task('Look at "config/models.py" for settings').explicit_paths
         assert "config/models.py" in paths
 
     def test_bare_path(self) -> None:
-        paths = _extract_paths("The evaluator is in evaluation/model_evaluator.py")
+        paths = parse_task("The evaluator is in evaluation/model_evaluator.py").explicit_paths
         assert "evaluation/model_evaluator.py" in paths
 
     def test_multiple_paths(self) -> None:
         task = "Modify `src/core/base_model.py` and `src/config/models.py` to support caching"
-        paths = _extract_paths(task)
+        paths = parse_task(task).explicit_paths
         assert "src/core/base_model.py" in paths
         assert "src/config/models.py" in paths
 
     def test_no_paths(self) -> None:
-        paths = _extract_paths("add caching to the model abstraction")
+        paths = parse_task("add caching to the model abstraction").explicit_paths
         assert paths == []
 
     def test_dotted_but_not_path(self) -> None:
         # Version numbers, URLs etc should not match as paths
-        paths = _extract_paths("upgrade to version 3.12")
+        paths = parse_task("upgrade to version 3.12").explicit_paths
         assert paths == []
 
     def test_strip_leading_dot_slash(self) -> None:
-        paths = _extract_paths("Fix `./src/main.py` please")
+        paths = parse_task("Fix `./src/main.py` please").explicit_paths
         assert "src/main.py" in paths
 
     def test_dedup(self) -> None:
-        paths = _extract_paths("`config/models.py` and also config/models.py again")
+        paths = parse_task("`config/models.py` and also config/models.py again").explicit_paths
         assert paths.count("config/models.py") == 1
 
     def test_various_extensions(self) -> None:
-        paths = _extract_paths("Check `src/app.ts` and `lib/utils.js` and `main.go`")
+        paths = parse_task("Check `src/app.ts` and `lib/utils.js` and `main.go`").explicit_paths
         assert "src/app.ts" in paths
         assert "lib/utils.js" in paths
         assert "main.go" in paths
@@ -1083,3 +1081,124 @@ class TestFailureActions:
     def test_always_has_map_repo(self) -> None:
         actions = _build_failure_actions([], [])
         assert any(a["action"] == "map_repo" for a in actions)
+
+
+# ---------------------------------------------------------------------------
+# Directory extraction tests
+# ---------------------------------------------------------------------------
+
+
+class TestExtractDirs:
+    """Tests for parse_task directory extraction."""
+
+    def test_trailing_slash_dir(self) -> None:
+        parsed = parse_task("Base classes in src/evee/core/")
+        assert "src/evee/core/" in parsed.explicit_dirs
+
+    def test_backtick_dir(self) -> None:
+        parsed = parse_task("Check `src/evee/core/` for models")
+        assert "src/evee/core/" in parsed.explicit_dirs
+
+    def test_no_dir_from_file_path(self) -> None:
+        """File paths with extensions should not appear in explicit_dirs."""
+        parsed = parse_task("Fix src/evee/core/base_model.py")
+        assert parsed.explicit_dirs == [] or all(
+            not d.endswith(".py/") for d in parsed.explicit_dirs
+        )
+
+    def test_multi_segment_without_extension(self) -> None:
+        parsed = parse_task("Look at tests/evee/integration for patterns")
+        assert "tests/evee/integration/" in parsed.explicit_dirs
+
+    def test_dedup(self) -> None:
+        parsed = parse_task("Check src/core/ and also src/core/ again")
+        assert parsed.explicit_dirs.count("src/core/") == 1
+
+    def test_no_dirs_from_plain_text(self) -> None:
+        parsed = parse_task("add caching to the model abstraction")
+        assert parsed.explicit_dirs == []
+
+    def test_strip_leading_dot_slash(self) -> None:
+        parsed = parse_task("Look at ./src/evee/core/ for base classes")
+        assert "src/evee/core/" in parsed.explicit_dirs
+
+    def test_dir_not_in_file_paths(self) -> None:
+        """Directories should not leak into explicit_paths."""
+        parsed = parse_task("Base classes in src/evee/core/")
+        assert "src/evee/core/" not in parsed.explicit_paths
+
+
+# ---------------------------------------------------------------------------
+# f_in_dir scoring tests
+# ---------------------------------------------------------------------------
+
+
+class TestDirScoring:
+    """Tests for f_in_dir feature in scoring."""
+
+    def _make_candidate(
+        self,
+        uid: str = "test::func",
+        *,
+        emb_sim: float = 0.5,
+        name: str = "func",
+        file_path: str = "src/core.py",
+        from_embedding: bool = True,
+    ) -> HarvestCandidate:
+        d = MagicMock()
+        d.name = name
+        d.kind = "function"
+        return HarvestCandidate(
+            def_uid=uid,
+            def_fact=d,
+            embedding_similarity=emb_sim,
+            from_embedding=from_embedding,
+            file_path=file_path,
+            artifact_kind=_classify_artifact(file_path),
+        )
+
+    def test_dir_boost_increases_score(self) -> None:
+        """Candidate in a mentioned directory should score higher."""
+        c_in = self._make_candidate(uid="a", file_path="src/evee/core/base.py")
+        c_out = self._make_candidate(uid="b", file_path="src/evee/other/thing.py")
+        parsed = parse_task("test task")
+        dir_sizes = {"src/evee/core/": 5}
+
+        scored_with = _score_candidates(
+            {"a": c_in, "b": c_out}, parsed, explicit_dir_sizes=dir_sizes
+        )
+        scores = dict(scored_with)
+        assert scores["a"] > scores["b"]
+
+    def test_large_dir_dampens_boost(self) -> None:
+        """Larger directories should give smaller boost (self-dampening)."""
+        c_small = self._make_candidate(uid="a", file_path="src/evee/core/base.py")
+        parsed = parse_task("test task")
+
+        # Score with small dir
+        _score_candidates(
+            {"a": c_small}, parsed, explicit_dir_sizes={"src/evee/core/": 3}
+        )
+        score_small_dir = c_small.relevance_score
+
+        # Reset and score with large dir
+        c_large2 = self._make_candidate(uid="c", file_path="src/evee/core/base.py")
+        _score_candidates(
+            {"c": c_large2}, parsed, explicit_dir_sizes={"src/evee/core/": 50}
+        )
+        score_large_dir = c_large2.relevance_score
+
+        assert score_small_dir > score_large_dir
+
+    def test_no_dir_sizes_no_boost(self) -> None:
+        """Without dir sizes, f_in_dir should be 0."""
+        c = self._make_candidate(uid="a", file_path="src/evee/core/base.py")
+        parsed = parse_task("test task")
+        _score_candidates({"a": c}, parsed, explicit_dir_sizes=None)
+        score_without = c.relevance_score
+
+        c2 = self._make_candidate(uid="b", file_path="src/evee/core/base.py")
+        _score_candidates({"b": c2}, parsed, explicit_dir_sizes={"src/evee/core/": 3})
+        score_with = c2.relevance_score
+
+        assert score_with > score_without

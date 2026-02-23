@@ -347,6 +347,7 @@ def _aggregate_to_files(
 def _score_candidates(
     candidates: dict[str, HarvestCandidate],
     parsed: ParsedTask,
+    explicit_dir_sizes: dict[str, int] | None = None,
 ) -> list[tuple[str, float]]:
     """Score candidates with bounded features and separated scores.
 
@@ -360,15 +361,24 @@ def _score_candidates(
       f_lexical: Lexical hit presence (binary, avoids double-counting with term).
       f_explicit: Explicit mention (binary).
       f_graph:  Graph-discovered (binary, structural adjacency).
+      f_in_dir: In explicitly mentioned directory, size-scaled (1/n_files).
       f_artifact: Intent-aware artifact weight [0, 1].
 
     Relevance score = weighted sum of all features (how relevant to task).
     Seed score = relevance * seed_multiplier (how good as entry point).
       - seed_multiplier boosts hub score and penalizes leaf nodes.
 
+    Args:
+        candidates: Candidate defs to score.
+        parsed: Parsed task description.
+        explicit_dir_sizes: Mapping of validated directory paths (with trailing
+            slash) to the count of indexed files in that directory.  ``None``
+            when no directories were mentioned in the task.
+
     Returns [(def_uid, seed_score)] sorted descending by seed_score.
     """
     scored: list[tuple[str, float]] = []
+    _dir_sizes = explicit_dir_sizes or {}
 
     for uid, cand in candidates.items():
         if cand.def_fact is None:
@@ -387,21 +397,29 @@ def _score_candidates(
         f_name = 1.0 if any(t in name_lower for t in parsed.primary_terms) else 0.0
         f_path = 1.0 if any(t in cand.file_path.lower() for t in parsed.primary_terms) else 0.0
 
+        # Directory membership — size-scaled: 1/n_files for small dirs,
+        # negligible for large dirs.  Self-dampening prevents FP flooding.
+        f_in_dir = 0.0
+        for dir_path, n_files in _dir_sizes.items():
+            if cand.file_path.startswith(dir_path.rstrip("/")):
+                f_in_dir = max(f_in_dir, _clamp(1.0 / max(n_files, 1)))
+
         # Artifact-kind weight based on intent
         kind_weights = _ARTIFACT_WEIGHTS.get(cand.artifact_kind, {})
         f_artifact = kind_weights.get(parsed.intent, 0.5)
 
         # --- Relevance score (how relevant to the task) ---
         relevance = (
-            f_emb * 0.28
-            + f_hub * 0.10
-            + f_terms * 0.14
-            + f_axes * 0.10
-            + f_name * 0.12
+            f_emb * 0.26
+            + f_hub * 0.09
+            + f_terms * 0.13
+            + f_axes * 0.09
+            + f_name * 0.11
             + f_path * 0.05
-            + f_lexical * 0.07
+            + f_lexical * 0.06
             + f_explicit * 0.08
-            + f_graph * 0.06
+            + f_graph * 0.05
+            + f_in_dir * 0.08
         ) * f_artifact
 
         # --- Seed score (how good as graph expansion entry) ---

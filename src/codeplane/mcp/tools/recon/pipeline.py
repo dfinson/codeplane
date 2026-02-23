@@ -44,6 +44,7 @@ from codeplane.mcp.tools.recon.harvesters import (
 from codeplane.mcp.tools.recon.models import (
     _INTERNAL_BUDGET_BYTES,
     _INTERNAL_DEPTH,
+    ParsedTask,
     _classify_artifact,
 )
 from codeplane.mcp.tools.recon.parsing import parse_task
@@ -59,7 +60,6 @@ if TYPE_CHECKING:
 
     from codeplane.index.models import DefFact
     from codeplane.mcp.context import AppContext
-    from codeplane.mcp.tools.recon.models import ParsedTask
 
 log = structlog.get_logger(__name__)
 
@@ -99,12 +99,39 @@ async def _select_seeds(
     # 1. Parse task
     parsed = parse_task(task)
     diagnostics["intent"] = parsed.intent.value
+
+    # 1b. Validate candidate directory paths against the filesystem.
+    #     Parsing is pure (no I/O); OS validation happens here.
+    validated_dirs: list[str] = []
+    if parsed.explicit_dirs:
+        repo_root_for_dirs = app_ctx.coordinator.repo_root
+        for d in parsed.explicit_dirs:
+            if (repo_root_for_dirs / d.rstrip("/")).is_dir():
+                validated_dirs.append(d)
+        # Replace with validated subset (frozen dataclass → rebuild)
+        if len(validated_dirs) != len(parsed.explicit_dirs):
+            parsed = ParsedTask(
+                raw=parsed.raw,
+                intent=parsed.intent,
+                primary_terms=parsed.primary_terms,
+                secondary_terms=parsed.secondary_terms,
+                explicit_paths=parsed.explicit_paths,
+                explicit_dirs=validated_dirs,
+                explicit_symbols=parsed.explicit_symbols,
+                keywords=parsed.keywords,
+                query_text=parsed.query_text,
+                negative_mentions=parsed.negative_mentions,
+                is_stacktrace_driven=parsed.is_stacktrace_driven,
+                is_test_driven=parsed.is_test_driven,
+            )
+
     log.debug(
         "recon.parsed_task",
         intent=parsed.intent.value,
         primary=parsed.primary_terms[:5],
         secondary=parsed.secondary_terms[:3],
         paths=parsed.explicit_paths,
+        dirs=parsed.explicit_dirs,
         symbols=parsed.explicit_symbols[:5],
     )
 
@@ -170,8 +197,24 @@ async def _select_seeds(
 
     diagnostics["post_filter"] = len(gated)
 
+    # 5b. Compute directory file counts for scoring (size-scaled boost).
+    explicit_dir_sizes: dict[str, int] | None = None
+    if parsed.explicit_dirs:
+        coordinator = app_ctx.coordinator
+        with coordinator.db.session() as session:
+            from codeplane.index._internal.indexing.graph import FactQueries
+
+            fq = FactQueries(session)
+            explicit_dir_sizes = {}
+            for d in parsed.explicit_dirs:
+                n = fq.count_files_in_dir(d)
+                if n > 0:
+                    explicit_dir_sizes[d] = n
+        if explicit_dir_sizes:
+            log.debug("recon.dir_sizes", dirs=explicit_dir_sizes)
+
     # 6. Score
-    scored = _score_candidates(gated, parsed)
+    scored = _score_candidates(gated, parsed, explicit_dir_sizes=explicit_dir_sizes)
 
     if not scored:
         diagnostics["total_ms"] = round((time.monotonic() - t0) * 1000)
@@ -219,6 +262,44 @@ async def _select_seeds(
     if anchored:
         log.info("recon.explicit_anchor", anchored=anchored, n_files=n_files)
         diagnostics["explicit_anchored"] = anchored
+
+    # 8c. Anchor directory files past the cutoff (threshold-based).
+    #     Unlike explicit-path anchoring (unconditional), directory anchoring
+    #     is softened: only files scoring >= 80% of the cutoff score survive.
+    #     This avoids flooding from large directories.
+    dir_anchored = 0
+    if explicit_dir_sizes:
+        cutoff_score = file_ranked[n_files - 1][1] if n_files > 0 else 0.0
+        dir_threshold = cutoff_score * 0.8
+
+        dir_fids: set[int] = set()
+        coordinator = app_ctx.coordinator
+        with coordinator.db.session() as session:
+            from codeplane.index._internal.indexing.graph import FactQueries
+
+            fq = FactQueries(session)
+            for d in explicit_dir_sizes:
+                for fid in fq.list_file_ids_in_dir(d):
+                    dir_fids.add(fid)
+
+        for idx in range(n_files, len(file_ranked)):
+            fid, fs, _fdefs = file_ranked[idx]
+            if fid in dir_fids and fid not in surviving_fids and fs >= dir_threshold:
+                file_ranked[n_files + dir_anchored], file_ranked[idx] = (
+                    file_ranked[idx],
+                    file_ranked[n_files + dir_anchored],
+                )
+                surviving_fids.add(fid)
+                dir_anchored += 1
+        n_files += dir_anchored
+        if dir_anchored:
+            log.info(
+                "recon.dir_anchor",
+                anchored=dir_anchored,
+                n_files=n_files,
+                threshold=round(dir_threshold, 4),
+            )
+            diagnostics["dir_anchored"] = dir_anchored
 
     # 9. Multi-seed per file selection
     #    Phase 1: best def per surviving file (file diversity)

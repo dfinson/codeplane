@@ -290,6 +290,27 @@ class FactQueries:
         stmt = select(File).limit(limit)
         return list(self._session.exec(stmt).all())
 
+    def count_files_in_dir(self, dir_prefix: str) -> int:
+        """Count indexed files whose path starts with *dir_prefix*.
+
+        ``dir_prefix`` should include a trailing ``/`` (e.g. ``src/evee/core/``).
+        """
+        from sqlmodel import func
+
+        stmt = select(func.count()).select_from(File).where(
+            File.path.startswith(dir_prefix)  # type: ignore[union-attr]
+        )
+        return self._session.exec(stmt).one()
+
+    def list_file_ids_in_dir(self, dir_prefix: str, *, limit: int = 200) -> list[int]:
+        """Return file IDs whose path starts with *dir_prefix*."""
+        stmt = (
+            select(File.id)
+            .where(File.path.startswith(dir_prefix))  # type: ignore[union-attr]
+            .limit(limit)
+        )
+        return [fid for fid in self._session.exec(stmt).all() if fid is not None]
+
     # -------------------------------------------------------------------------
     # Seed finding (recon-dedicated)
     # -------------------------------------------------------------------------

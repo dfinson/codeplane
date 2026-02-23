@@ -66,9 +66,7 @@ from codeplane.mcp.tools.recon.parsing import (
     _detect_stacktrace_driven,
     _detect_test_driven,
     _extract_negative_mentions,
-    _extract_paths,
     _merge_multi_view_results,
-    _tokenize_task,
     parse_task,
 )
 
@@ -98,8 +96,6 @@ __all__ = [
     "TaskIntent",
     # Parsing
     "parse_task",
-    "_tokenize_task",
-    "_extract_paths",
     "_extract_negative_mentions",
     "_detect_stacktrace_driven",
     "_detect_test_driven",
