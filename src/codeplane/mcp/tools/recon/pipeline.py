@@ -55,6 +55,7 @@ from codeplane.mcp.tools.recon.models import (
     ParsedTask,
     ReconBucket,
     _classify_artifact,
+    _is_test_file,
 )
 from codeplane.mcp.tools.recon.parsing import parse_task
 from codeplane.mcp.tools.recon.scoring import (
@@ -687,6 +688,53 @@ async def _file_centric_pipeline(
                 )
             )
 
+    # 4.5. Deterministic test co-retrieval via reverse import graph
+    #       For each source file in the candidate set, find test files
+    #       that import it and add them if not already present.
+    t_test_disco = time.monotonic()
+    source_paths = [
+        fc.path for fc in file_candidates if not _is_test_file(fc.path) and fc.combined_score > 0
+    ]
+    test_co_count = 0
+    if source_paths:
+        from codeplane.index._internal.indexing.import_graph import ImportGraph
+
+        with coordinator.db.session() as session:
+            graph = ImportGraph(session)
+            impact = graph.affected_tests(source_paths)
+
+        existing_paths = {fc.path for fc in file_candidates}
+        # Use floor score from median of existing candidates so test
+        # files land in the inclusion band (not at the bottom).
+        candidate_scores = sorted(
+            (fc.combined_score for fc in file_candidates if fc.combined_score > 0),
+            reverse=True,
+        )
+        test_floor = (
+            candidate_scores[len(candidate_scores) // 2] if candidate_scores else pin_floor * 0.5
+        )
+        for match in impact.matches:
+            if match.test_file not in existing_paths:
+                # High-confidence matches get median score,
+                # low-confidence get half that.
+                score = test_floor if match.confidence == "high" else test_floor * 0.5
+                file_candidates.append(
+                    FileCandidate(
+                        path=match.test_file,
+                        similarity=0.0,
+                        combined_score=score,
+                        graph_connected=True,
+                        artifact_kind=_classify_artifact(match.test_file),
+                    )
+                )
+                test_co_count += 1
+                existing_paths.add(match.test_file)
+
+    diagnostics["test_co_retrieval_ms"] = round((time.monotonic() - t_test_disco) * 1000)
+    diagnostics["test_co_retrieved"] = test_co_count
+    if test_co_count > 0:
+        log.info("recon.test_co_retrieval", added=test_co_count, source_files=len(source_paths))
+
     # 5. Two-elbow tier assignment
     file_candidates = assign_tiers(file_candidates)
 
@@ -1043,7 +1091,8 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
 
         if not gate_bypass:
             gate_block = _check_recon_gate(
-                app_ctx, ctx,
+                app_ctx,
+                ctx,
                 expand_reason=expand_reason,
                 pinned_paths=pinned_paths,
                 gate_token=gate_token,
@@ -1055,9 +1104,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         # Increment consecutive recon counter
         try:
             session = app_ctx.session_manager.get_or_create(ctx.session_id)
-            session.counters["recon_consecutive"] = (
-                session.counters.get("recon_consecutive", 0) + 1
-            )
+            session.counters["recon_consecutive"] = session.counters.get("recon_consecutive", 0) + 1
         except Exception:  # noqa: BLE001
             pass
 
