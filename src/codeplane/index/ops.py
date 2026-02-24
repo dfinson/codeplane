@@ -2588,7 +2588,21 @@ class IndexCoordinator:
 
                 # Commit file-level embeddings
                 if self._file_embedding is not None:
-                    self._file_embedding.commit_staged()
+                    staged_count = len(self._file_embedding._staged_files)
+                    if staged_count > 0:
+                        on_progress(0, staged_count, files_by_ext, "computing_embeddings")
+
+                        def _embed_progress(done: int, total: int) -> None:
+                            on_progress(done, total, files_by_ext, "computing_embeddings")
+
+                        embedded = self._file_embedding.commit_staged(
+                            on_progress=_embed_progress,
+                        )
+                        on_progress(
+                            embedded, embedded, files_by_ext, "embeddings_done"
+                        )
+                    else:
+                        self._file_embedding.commit_staged()
 
         return count, indexed_paths, files_by_ext
 

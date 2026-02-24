@@ -31,6 +31,7 @@ import json
 import os
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -396,8 +397,15 @@ class FileEmbeddingIndex:
 
     # --- Commit ---
 
-    def commit_staged(self) -> int:
+    def commit_staged(
+        self,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> int:
         """Compute embeddings for staged files and persist.
+
+        Args:
+            on_progress: Optional callback(embedded_so_far, total_to_embed)
+                called after each batch during embedding computation.
 
         Returns number of files newly embedded.
         """
@@ -442,7 +450,7 @@ class FileEmbeddingIndex:
             texts = [self._staged_files[p] for p in paths_to_embed]
 
             self._ensure_model()
-            vectors = self._embed_batch(texts)
+            vectors = self._embed_batch(texts, on_progress=on_progress)
 
             if self._matrix is not None and len(self._paths) > 0:
                 self._matrix = np.vstack([self._matrix, vectors])
@@ -602,16 +610,23 @@ class FileEmbeddingIndex:
             vec /= norm
         return vec
 
-    def _embed_batch(self, texts: list[str]) -> np.ndarray:
+    def _embed_batch(
+        self,
+        texts: list[str],
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> np.ndarray:
         """Embed a batch of texts, return L2-normalized float16 matrix."""
         if not texts:
             return np.empty((0, FILE_EMBED_DIM), dtype=np.float16)
 
+        total = len(texts)
         all_vecs: list[np.ndarray] = []
-        for i in range(0, len(texts), FILE_EMBED_BATCH_SIZE):
+        for i in range(0, total, FILE_EMBED_BATCH_SIZE):
             batch = texts[i : i + FILE_EMBED_BATCH_SIZE]
             vecs = list(self._model.embed(batch, batch_size=len(batch)))
             all_vecs.extend(vecs)
+            if on_progress is not None:
+                on_progress(min(i + len(batch), total), total)
 
         matrix = np.array(all_vecs, dtype=np.float32)
         # L2-normalize each row
