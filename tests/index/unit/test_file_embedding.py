@@ -129,7 +129,11 @@ class TestBuildFileScaffold:
     def test_scaffold_includes_all_extraction_data(self) -> None:
         """Scaffold includes all defs and imports — no arbitrary truncation."""
         defs = [
-            {"kind": "function", "name": f"very_long_function_name_{i}", "signature_text": "(a, b, c)"}
+            {
+                "kind": "function",
+                "name": f"very_long_function_name_{i}",
+                "signature_text": "(a, b, c)",
+            }
             for i in range(50)
         ]
         imports = [
@@ -255,6 +259,7 @@ class TestBuildEmbedText:
         scaffold = "module test\n" + "defines function x\n" * 500
         result = _build_embed_text(scaffold, "")
         from codeplane.index._internal.indexing.file_embedding import FILE_EMBED_MAX_CHARS
+
         assert len(result) <= FILE_EMBED_MAX_CHARS
 
 

@@ -118,7 +118,7 @@ def _path_to_phrase(file_path: str) -> str:
     p = file_path.replace("\\", "/")
     for prefix in ("src/", "lib/", "app/", "pkg/", "internal/"):
         if p.startswith(prefix):
-            p = p[len(prefix):]
+            p = p[len(prefix) :]
             break
     dot = p.rfind(".")
     if dot > 0:
@@ -181,12 +181,15 @@ def build_file_scaffold(
     # Defines line from defs (tree-sitter extraction)
     if defs:
         kind_order = {
-            "class": 0, "interface": 0, "struct": 0, "enum": 1,
-            "function": 2, "method": 3, "variable": 4,
+            "class": 0,
+            "interface": 0,
+            "struct": 0,
+            "enum": 1,
+            "function": 2,
+            "method": 3,
+            "variable": 4,
         }
-        sorted_defs = sorted(
-            defs, key=lambda d: kind_order.get(d.get("kind", ""), 5)
-        )
+        sorted_defs = sorted(defs, key=lambda d: kind_order.get(d.get("kind", ""), 5))
 
         class_names: list[str] = []
         method_parts: list[str] = []
@@ -232,9 +235,7 @@ def build_file_scaffold(
                     name = d.get("name", "")
                     prefix = " ".join(_word_split(name)) if name else ""
                     if prefix:
-                        lines.append(
-                            f"describes {prefix}: {first_sentence[:_DOC_BUDGET_CHARS]}"
-                        )
+                        lines.append(f"describes {prefix}: {first_sentence[:_DOC_BUDGET_CHARS]}")
                     else:
                         lines.append(f"describes {first_sentence[:_DOC_BUDGET_CHARS]}")
                     doc_count += 1
@@ -252,11 +253,7 @@ def _compact_sig(name: str, sig: str) -> str:
     """
     words = " ".join(_word_split(name))
     if sig:
-        compact = (
-            sig.replace("self, ", "")
-            .replace("self,", "")
-            .replace("self", "")
-        )
+        compact = sig.replace("self, ", "").replace("self,", "").replace("self", "")
         if compact and compact != "()":
             return f"{words}{compact}"
     return words
@@ -318,9 +315,7 @@ def _truncate_semantic(
         # Use def end_lines to find the last complete semantic unit
         # that fits within budget.  Defs are sorted by position so
         # we greedily include from the top of the file.
-        end_lines = sorted(
-            {d.get("end_line", 0) for d in defs if d.get("end_line", 0) > 0}
-        )
+        end_lines = sorted({d.get("end_line", 0) for d in defs if d.get("end_line", 0) > 0})
         last_included = 0
         for end_line in end_lines:
             # end_line is 1-indexed; slice is 0-indexed
