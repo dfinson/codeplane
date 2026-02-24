@@ -1193,7 +1193,7 @@ class IndexCoordinator:
             to_remove = indexed_paths - should_index
             to_add = should_index - indexed_paths
 
-            # Process removals and additions
+            # Process removals
             with self._tantivy_write_lock:
                 # Remove files that no longer exist or are now ignored
                 for rel_path in to_remove:
@@ -1201,7 +1201,7 @@ class IndexCoordinator:
                         self._lexical.remove_file(rel_path)
                     files_removed += 1
 
-                # Add new files
+                # Add new files via lexical index
                 for rel_path in to_add:
                     full_path = self.repo_root / rel_path
                     if full_path.exists():
@@ -1213,32 +1213,18 @@ class IndexCoordinator:
                                 self._lexical.add_file(
                                     rel_path, content, context_id=ctx_id, symbols=symbols
                                 )
-
-                            # Stage file embedding (content-only; no extraction data
-                            # available in this path — graceful degradation)
-                            if self._file_embedding is not None and content:
-                                self._file_embedding.stage_file(
-                                    rel_path, content,
-                                )
-
                             files_added += 1
                             symbols_indexed += len(symbols)
                         except (OSError, UnicodeDecodeError):
                             continue
 
-            # Stage file embedding removals
-            if self._file_embedding is not None and to_remove:
-                self._file_embedding.stage_remove(list(to_remove))
-
-            # Commit file embeddings (additions + removals)
-            if self._file_embedding is not None and self._file_embedding.has_staged_changes():
-                self._file_embedding.commit_staged()
-
-            # Reload index
+            # Reload lexical index
             if self._lexical is not None:
                 self._lexical.reload()
 
-            # Create File records for added files
+            # Pre-create File records for added files before structural indexing
+            # (flush to get IDs for FK constraints in structural facts)
+            file_id_map: dict[str, int] = {}
             if to_add:
                 with self.db.session() as session:
                     for rel_path in to_add:
@@ -1246,7 +1232,6 @@ class IndexCoordinator:
                         if not full_path.exists():
                             continue
                         content_hash = hashlib.sha256(full_path.read_bytes()).hexdigest()
-                        # Use canonical language detection
                         lang = detect_language_family(full_path)
 
                         file_record = File(
@@ -1256,7 +1241,54 @@ class IndexCoordinator:
                             indexed_at=time.time(),
                         )
                         session.add(file_record)
+                        session.flush()
+                        if file_record.id is not None:
+                            file_id_map[rel_path] = file_record.id
                     session.commit()
+
+            # Structural indexing + file embeddings for added files
+            if to_add and self._structural is not None:
+                # Group files by context_id
+                by_context: dict[int, list[str]] = {}
+                for rel_path in to_add:
+                    ctx_id = file_to_context.get(rel_path, 1)
+                    by_context.setdefault(ctx_id, []).append(rel_path)
+
+                for ctx_id, paths in by_context.items():
+                    # Extract facts (tree-sitter parse + structural extraction)
+                    extractions = self._structural.extract_files(paths, ctx_id)
+                    self._structural.index_files(
+                        paths, context_id=ctx_id, file_id_map=file_id_map,
+                        _extractions=extractions,
+                    )
+
+                    # Stage file embeddings from extraction data
+                    if self._file_embedding is not None:
+                        for extraction in extractions:
+                            if extraction.content_text:
+                                self._file_embedding.stage_file(
+                                    extraction.file_path,
+                                    extraction.content_text,
+                                    defs=extraction.defs,
+                                    imports=extraction.imports,
+                                )
+
+                # Cross-file resolution passes
+                run_pass_1_5(self.db, None)
+                resolve_references(self.db)
+                resolve_type_traced(self.db)
+
+            # Stage file embedding removals
+            if self._file_embedding is not None and to_remove:
+                self._file_embedding.stage_remove(list(to_remove))
+
+            # Commit file embeddings (additions + removals)
+            if self._file_embedding is not None and self._file_embedding.has_staged_changes():
+                self._file_embedding.commit_staged()
+
+            # Remove structural facts for removed files
+            if to_remove:
+                self._remove_structural_facts_for_paths(list(to_remove))
 
             # Remove File records for removed paths
             if to_remove:
