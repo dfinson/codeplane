@@ -521,6 +521,12 @@ def initialize_repo(
             else:
                 phase.complete("Grammars ready")
 
+    # === Model Download Phase ===
+    from codeplane.cli.models import ensure_models
+
+    if not ensure_models(interactive=True):
+        return False
+
     # === Lexical Indexing Phase ===
     from codeplane.index.ops import IndexCoordinator
 

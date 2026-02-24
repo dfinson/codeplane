@@ -155,6 +155,14 @@ def up_command(path: Path | None, port: int | None, reindex: bool) -> None:
     ):
         raise click.ClickException("Failed to initialize repository")
 
+    # Ensure embedding models are cached before starting the server.
+    # (initialize_repo already calls this, but `cpl up` on an existing repo
+    # skips init, so we check here too — it's a no-op if already cached.)
+    from codeplane.cli.models import ensure_models
+
+    if not ensure_models(interactive=True):
+        raise click.ClickException("Required embedding models not available")
+
     # Get index paths from config AFTER init (so we read the created config)
     from codeplane.config.loader import get_index_paths
 
