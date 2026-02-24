@@ -83,7 +83,13 @@ async def _harvest_term_match(
     app_ctx: AppContext,
     parsed: ParsedTask,
 ) -> dict[str, HarvestCandidate]:
-    """Harvester B: DefFact term matching via SQL LIKE."""
+    """Harvester B: DefFact term matching via SQL LIKE with IDF weighting.
+
+    Terms that match many definitions get lower weight (low IDF), while
+    specific terms that match few definitions get higher weight.
+    """
+    import math
+
     from codeplane.index._internal.indexing.graph import FactQueries
 
     coordinator = app_ctx.coordinator
@@ -97,6 +103,8 @@ async def _harvest_term_match(
         fq = FactQueries(session)
         for term in all_terms:
             matching_defs = fq.find_defs_matching_term(term, limit=200)
+            # IDF weight: rare terms score higher, ubiquitous terms score lower
+            idf = 1.0 / math.log1p(len(matching_defs)) if matching_defs else 0.0
             for d in matching_defs:
                 uid = d.def_uid
                 if uid not in candidates:
@@ -104,9 +112,11 @@ async def _harvest_term_match(
                         def_uid=uid,
                         def_fact=d,
                         from_term_match=True,
+                        term_idf_score=idf,
                     )
                 else:
                     candidates[uid].from_term_match = True
+                    candidates[uid].term_idf_score += idf
                     if candidates[uid].def_fact is None:
                         candidates[uid].def_fact = d
                 candidates[uid].matched_terms.add(term)
@@ -114,7 +124,7 @@ async def _harvest_term_match(
                     EvidenceRecord(
                         category="term_match",
                         detail=f"name matches term '{term}'",
-                        score=0.5,
+                        score=0.5 * idf,
                     )
                 )
 
@@ -457,12 +467,14 @@ async def _enrich_candidates(
 # Harvester E: Graph walk (structural adjacency from top candidates)
 # ===================================================================
 
-# Budget constants for graph harvester
-_GRAPH_MAX_SEEDS = 10  # Max candidates to use as graph seeds
-_GRAPH_MAX_CALLEES_PER_SEED = 8
-_GRAPH_MAX_CALLERS_PER_SEED = 5
-_GRAPH_MAX_SIBLINGS_PER_SEED = 5
-_GRAPH_MAX_TOTAL = 100  # Hard cap on graph-discovered candidates
+# Edge weights for graph quality scoring — callee > caller > sibling.
+# Quality = edge_weight / seed_rank, so seed #1 callee = 1.0, seed #2 caller = 0.425, etc.
+_EDGE_WEIGHT_CALLEE = 1.0
+_EDGE_WEIGHT_CALLER = 0.85
+_EDGE_WEIGHT_SIBLING = 0.7
+
+# Single performance budget — how many graph-discovered candidates to keep.
+_GRAPH_BUDGET = 60
 
 
 async def _harvest_graph(
@@ -476,9 +488,10 @@ async def _harvest_graph(
     similarity) as graph seeds, then discovers structurally adjacent defs
     via callees, callers (as references), and same-file siblings.
 
-    These candidates are new — they were NOT found by embedding, term,
-    lexical, or explicit search.  Graph-discovered candidates get moderate
-    base evidence and rely on the filter/scoring pipeline for final selection.
+    All discovered edges compete in a single ranked pool scored by
+    edge_type × (1 / seed_position).  The top ``_GRAPH_BUDGET`` edges
+    are kept — no per-category caps.  High-degree hub symbols naturally
+    produce many low-quality edges that fall below the cutoff.
 
     Runs AFTER merge of A-D harvesters but BEFORE enrichment and filtering.
     """
@@ -511,14 +524,15 @@ async def _harvest_graph(
     if not seeds_with_facts:
         return candidates
 
-    # Walk graph edges from each seed
+    # Collect all edges into one ranked pool: (def_uid, def_fact, quality, edge_type, detail)
+    EdgeInfo = tuple[str, object, float, str, str]  # uid, DefFact|None, quality, type, detail
+    raw_edges: list[EdgeInfo] = []
+
     with coordinator.db.session() as session:
         fq = FactQueries(session)
         from codeplane.index.models import File as FileModel
 
-        for seed_uid, seed_cand in seeds_with_facts:
-            if len(candidates) >= _GRAPH_MAX_TOTAL:
-                break
+        for seed_idx, (seed_uid, seed_cand) in enumerate(seeds_with_facts, 1):
             seed_def = seed_cand.def_fact
             assert seed_def is not None
 
@@ -527,127 +541,90 @@ async def _harvest_graph(
                 seed_def.file_id,
                 seed_def.start_line,
                 seed_def.end_line,
-                limit=_GRAPH_MAX_CALLEES_PER_SEED,
+                limit=30,
             )
             for callee in callees:
                 if callee.def_uid == seed_uid:
                     continue
-                # If callee is already merged, reinforce with graph evidence
-                if callee.def_uid in merged:
-                    existing = merged[callee.def_uid]
-                    if not existing.from_graph:
-                        existing.from_graph = True
-                        existing.evidence.append(
-                            EvidenceRecord(
-                                category="graph",
-                                detail=f"callee of {seed_def.name}",
-                                score=0.4,
-                            )
-                        )
-                    continue
-                if callee.def_uid in candidates:
-                    continue
-                candidates[callee.def_uid] = HarvestCandidate(
-                    def_uid=callee.def_uid,
-                    def_fact=callee,
-                    from_graph=True,
-                    evidence=[
-                        EvidenceRecord(
-                            category="graph",
-                            detail=f"callee of {seed_def.name}",
-                            score=0.4,
-                        )
-                    ],
-                )
+                quality = _EDGE_WEIGHT_CALLEE / seed_idx
+                raw_edges.append((
+                    callee.def_uid, callee, quality,
+                    "graph", f"callee of {seed_def.name}",
+                ))
 
             # (b) Callers: defs that reference this seed (via RefFact)
-            refs = fq.list_refs_by_def_uid(seed_uid, limit=_GRAPH_MAX_CALLERS_PER_SEED * 3)
+            refs = fq.list_refs_by_def_uid(seed_uid, limit=30)
             caller_file_ids: set[int] = set()
             for ref in refs:
-                if len(caller_file_ids) >= _GRAPH_MAX_CALLERS_PER_SEED:
-                    break
                 if ref.file_id == seed_def.file_id:
                     continue
                 if ref.file_id in caller_file_ids:
                     continue
                 caller_file_ids.add(ref.file_id)
-                # Find the enclosing def at the reference site
                 caller_defs = fq.list_defs_in_file(ref.file_id, limit=200)
                 for cd in caller_defs:
                     if (
                         ref.start_line is not None
                         and cd.start_line <= ref.start_line <= cd.end_line
                     ):
-                        # If caller is already merged, reinforce with graph evidence
-                        if cd.def_uid in merged:
-                            existing = merged[cd.def_uid]
-                            if not existing.from_graph:
-                                existing.from_graph = True
-                                existing.evidence.append(
-                                    EvidenceRecord(
-                                        category="graph",
-                                        detail=f"caller of {seed_def.name}",
-                                        score=0.35,
-                                    )
-                                )
-                            break
-                        if cd.def_uid in candidates:
-                            break
-                        candidates[cd.def_uid] = HarvestCandidate(
-                            def_uid=cd.def_uid,
-                            def_fact=cd,
-                            from_graph=True,
-                            evidence=[
-                                EvidenceRecord(
-                                    category="graph",
-                                    detail=f"caller of {seed_def.name}",
-                                    score=0.35,
-                                )
-                            ],
-                        )
+                        quality = _EDGE_WEIGHT_CALLER / seed_idx
+                        raw_edges.append((
+                            cd.def_uid, cd, quality,
+                            "graph", f"caller of {seed_def.name}",
+                        ))
                         break
 
             # (c) Same-file siblings: other key defs in seed's file
             frec = session.get(FileModel, seed_def.file_id)
             if frec is not None and frec.id is not None:
                 sibling_defs = fq.list_defs_in_file(frec.id, limit=50)
-                sib_count = 0
                 for sd in sibling_defs:
-                    if sib_count >= _GRAPH_MAX_SIBLINGS_PER_SEED:
-                        break
                     if sd.def_uid == seed_uid:
                         continue
                     if sd.kind not in ("function", "method", "class"):
                         continue
-                    # If sibling is already merged, reinforce with graph evidence
-                    if sd.def_uid in merged:
-                        existing = merged[sd.def_uid]
-                        if not existing.from_graph:
-                            existing.from_graph = True
-                            existing.evidence.append(
-                                EvidenceRecord(
-                                    category="graph",
-                                    detail=f"sibling of {seed_def.name} in {frec.path}",
-                                    score=0.3,
-                                )
-                            )
-                        sib_count += 1
-                        continue
-                    if sd.def_uid in candidates:
-                        continue
-                    candidates[sd.def_uid] = HarvestCandidate(
-                        def_uid=sd.def_uid,
-                        def_fact=sd,
-                        from_graph=True,
-                        evidence=[
-                            EvidenceRecord(
-                                category="graph",
-                                detail=f"sibling of {seed_def.name} in {frec.path}",
-                                score=0.3,
-                            )
-                        ],
-                    )
-                    sib_count += 1
+                    quality = _EDGE_WEIGHT_SIBLING / seed_idx
+                    raw_edges.append((
+                        sd.def_uid, sd, quality,
+                        "graph", f"sibling of {seed_def.name} in {frec.path}",
+                    ))
+
+    # Deduplicate: keep max quality per uid
+    best_edges: dict[str, EdgeInfo] = {}
+    for edge in raw_edges:
+        uid = edge[0]
+        if uid not in best_edges or edge[2] > best_edges[uid][2]:
+            best_edges[uid] = edge
+
+    # Sort by quality, take top BUDGET
+    ranked = sorted(best_edges.values(), key=lambda e: -e[2])[:_GRAPH_BUDGET]
+
+    # Convert to HarvestCandidate or reinforce merged
+    for uid, def_fact, quality, category, detail in ranked:
+        if uid in merged:
+            existing = merged[uid]
+            existing.from_graph = True
+            existing.graph_quality = max(existing.graph_quality, quality)
+            # Only add evidence once
+            if not any(e.category == "graph" for e in existing.evidence):
+                existing.evidence.append(
+                    EvidenceRecord(category=category, detail=detail, score=quality)
+                )
+            continue
+        if uid in candidates:
+            # Keep the higher quality
+            if quality > candidates[uid].graph_quality:
+                candidates[uid].graph_quality = quality
+            continue
+        candidates[uid] = HarvestCandidate(
+            def_uid=uid,
+            def_fact=def_fact,  # type: ignore[arg-type]
+            from_graph=True,
+            graph_quality=quality,
+            evidence=[
+                EvidenceRecord(category=category, detail=detail, score=quality)
+            ],
+        )
 
     log.debug(
         "recon.harvest.graph",
@@ -754,6 +731,7 @@ async def _harvest_imports(
                     category="import_forward",
                     detail=f"imported by {seed_file_paths.get(fid, '?')}",
                     score=0.45,
+                    graph_quality=0.5,
                     limit=5,
                 )
 
@@ -783,6 +761,7 @@ async def _harvest_imports(
                     category="import_reverse",
                     detail=f"imports a seed file ({rfile.path})",
                     score=0.40,
+                    graph_quality=0.4,
                     limit=3,
                 )
 
@@ -810,6 +789,7 @@ async def _harvest_imports(
                     category="import_barrel",
                     detail=f"package init/conftest in {dir_path}",
                     score=0.35,
+                    graph_quality=0.3,
                     limit=3,
                 )
 
@@ -829,6 +809,7 @@ async def _harvest_imports(
                         category="import_test",
                         detail=f"test file for {seed_path}",
                         score=0.35,
+                        graph_quality=0.35,
                         limit=3,
                     )
 
@@ -849,6 +830,7 @@ def _add_file_defs_as_candidates(
     category: str,
     detail: str,
     score: float,
+    graph_quality: float = 0.0,
     limit: int = 5,
 ) -> None:
     """Add top defs from a file as import-discovered candidates."""
@@ -871,6 +853,7 @@ def _add_file_defs_as_candidates(
             existing = merged[d.def_uid]
             if not existing.from_graph:
                 existing.from_graph = True
+                existing.graph_quality = max(existing.graph_quality, graph_quality)
                 existing.evidence.append(
                     EvidenceRecord(
                         category=category,
@@ -880,11 +863,16 @@ def _add_file_defs_as_candidates(
                 )
             continue
         if d.def_uid in candidates:
+            # Keep higher quality
+            candidates[d.def_uid].graph_quality = max(
+                candidates[d.def_uid].graph_quality, graph_quality
+            )
             continue
         candidates[d.def_uid] = HarvestCandidate(
             def_uid=d.def_uid,
             def_fact=d,
             from_graph=True,
+            graph_quality=graph_quality,
             evidence=[
                 EvidenceRecord(
                     category=category,
@@ -942,6 +930,9 @@ def _select_graph_seeds(
 ) -> list[str]:
     """Select the best candidates from merged pool to use as graph seeds.
 
+    Returns up to 15 seeds.  This limits DB query count (performance),
+    not semantic quality — the single ``_GRAPH_BUDGET`` controls output.
+
     Prioritizes candidates with:
     1. Multiple evidence axes (found by multiple harvesters)
     2. Explicit mentions
@@ -956,7 +947,7 @@ def _select_graph_seeds(
         scored.append((uid, score))
 
     scored.sort(key=lambda x: -x[1])
-    return [uid for uid, _ in scored[:_GRAPH_MAX_SEEDS]]
+    return [uid for uid, _ in scored[:15]]
 
 
 # ===================================================================
@@ -976,22 +967,32 @@ def _enrich_file_candidates(
     a file ranked high by *any* source gets a fair shot, and files found
     by multiple sources are naturally boosted.
 
-    RRF(d) = sum over sources of 1 / (k + rank_s(d))
+    RRF(d) = sum over sources of weight_s / (k + rank_s(d))
 
     where k=60 (standard constant, dampens the influence of very high
     individual ranks).
 
-    Sources:
-      1. Embedding  — file_candidates ranked by similarity
-      2. Term match — files ranked by aggregated term match count
+    Sources (with weights):
+      1. Embedding  — file_candidates ranked by similarity (weight 2.0×)
+      2. Term match — files ranked by IDF-weighted term score
       3. Lexical    — files ranked by aggregated lexical hit count
-      4. Graph      — files that appear via graph walk (binary → rank 1)
+      4. Graph      — files ranked by graded edge quality
       5. Explicit   — agent-mentioned paths (always rank 1)
+
+    Embedding gets 2× weight because it is the only true semantic signal —
+    it compares meaning, not just lexical overlap.
+
+    Graph is graded (ranked by edge quality = edge_type × 1/seed_rank)
+    rather than binary (all graph files at rank 1).
+
+    Term ranking uses IDF-weighted scores so that rare, specific terms
+    rank higher than ubiquitous terms like "config" or "test".
 
     Mutates candidates in-place (sets combined_score, signal fields).
     Also appends files found only by secondary sources.
     """
     _RRF_K = 60
+    _EMBEDDING_WEIGHT = 2.0
 
     # ── Aggregate def-level signals by file path ──
     path_signals: dict[str, dict] = {}
@@ -1002,15 +1003,19 @@ def _enrich_file_candidates(
         if fp not in path_signals:
             path_signals[fp] = {
                 "term_count": 0,
+                "term_idf": 0.0,
                 "lex_count": 0,
                 "explicit": False,
                 "graph": False,
+                "graph_quality": 0.0,
             }
         sig = path_signals[fp]
         sig["term_count"] += len(cand.matched_terms)
+        sig["term_idf"] += cand.term_idf_score
         sig["lex_count"] += cand.lexical_hit_count
         sig["explicit"] = sig["explicit"] or cand.from_explicit
         sig["graph"] = sig["graph"] or cand.from_graph
+        sig["graph_quality"] = max(sig["graph_quality"], cand.graph_quality)
 
     explicit_paths = set(parsed.explicit_paths or [])
 
@@ -1021,6 +1026,7 @@ def _enrich_file_candidates(
         fc.lexical_hit_count = sig.get("lex_count", 0)
         fc.has_explicit_mention = sig.get("explicit", False) or fc.path in explicit_paths
         fc.graph_connected = sig.get("graph", False)
+        fc.graph_quality = sig.get("graph_quality", 0.0)
 
     # ── Append files found ONLY by def-level harvesters ──
     existing_paths = {fc.path for fc in file_candidates}
@@ -1031,6 +1037,7 @@ def _enrich_file_candidates(
         lex_count = sig.get("lex_count", 0)
         is_explicit = sig.get("explicit", False) or fp in explicit_paths
         is_graph = sig.get("graph", False)
+        gq = sig.get("graph_quality", 0.0)
 
         # Only include if there's a concrete signal (not noise)
         if term_count > 0 or lex_count > 0 or is_explicit or is_graph:
@@ -1042,6 +1049,7 @@ def _enrich_file_candidates(
                 lexical_hit_count=lex_count,
                 has_explicit_mention=is_explicit,
                 graph_connected=is_graph,
+                graph_quality=gq,
                 artifact_kind=_classify_artifact(fp),
             )
             file_candidates.append(fc)
@@ -1050,7 +1058,7 @@ def _enrich_file_candidates(
     # Each list is sorted descending by the source's score.
     # rank is 1-based (rank 1 = best).
 
-    # Source 1: Embedding similarity
+    # Source 1: Embedding similarity (weight 2.0×)
     embedding_ranked = sorted(
         [(fc.path, fc.similarity) for fc in file_candidates if fc.similarity > 0],
         key=lambda x: -x[1],
@@ -1059,11 +1067,13 @@ def _enrich_file_candidates(
         path: rank for rank, (path, _) in enumerate(embedding_ranked, 1)
     }
 
-    # Source 2: Term match count
-    term_ranked = sorted(
-        [(fc.path, fc.term_match_count) for fc in file_candidates if fc.term_match_count > 0],
-        key=lambda x: -x[1],
-    )
+    # Source 2: Term match — ranked by IDF-weighted score
+    term_idf_by_path: dict[str, float] = {}
+    for fp, sig in path_signals.items():
+        idf_val = sig.get("term_idf", 0.0)
+        if idf_val > 0:
+            term_idf_by_path[fp] = idf_val
+    term_ranked = sorted(term_idf_by_path.items(), key=lambda x: -x[1])
     term_rank: dict[str, int] = {
         path: rank for rank, (path, _) in enumerate(term_ranked, 1)
     }
@@ -1077,8 +1087,14 @@ def _enrich_file_candidates(
         path: rank for rank, (path, _) in enumerate(lex_ranked, 1)
     }
 
-    # Source 4: Graph connected (binary — all connected files share rank 1)
-    graph_paths = {fc.path for fc in file_candidates if fc.graph_connected}
+    # Source 4: Graph — ranked by graded edge quality (not binary)
+    graph_ranked = sorted(
+        [(fc.path, fc.graph_quality) for fc in file_candidates if fc.graph_quality > 0],
+        key=lambda x: -x[1],
+    )
+    graph_rank: dict[str, int] = {
+        path: rank for rank, (path, _) in enumerate(graph_ranked, 1)
+    }
 
     # Source 5: Explicit mention (binary — rank 1 for all explicit)
     explicit_all = {fc.path for fc in file_candidates if fc.has_explicit_mention}
@@ -1087,13 +1103,13 @@ def _enrich_file_candidates(
     for fc in file_candidates:
         rrf = 0.0
         if fc.path in embedding_rank:
-            rrf += 1.0 / (_RRF_K + embedding_rank[fc.path])
+            rrf += _EMBEDDING_WEIGHT / (_RRF_K + embedding_rank[fc.path])
         if fc.path in term_rank:
             rrf += 1.0 / (_RRF_K + term_rank[fc.path])
         if fc.path in lex_rank:
             rrf += 1.0 / (_RRF_K + lex_rank[fc.path])
-        if fc.path in graph_paths:
-            rrf += 1.0 / (_RRF_K + 1)  # rank 1 for all graph-connected
+        if fc.path in graph_rank:
+            rrf += 1.0 / (_RRF_K + graph_rank[fc.path])
         if fc.path in explicit_all:
             rrf += 1.0 / (_RRF_K + 1)  # rank 1 for all explicit mentions
         fc.combined_score = rrf

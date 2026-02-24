@@ -491,6 +491,8 @@ class HarvestCandidate:
     # Harvester-specific scores
     matched_terms: set[str] = field(default_factory=set)
     lexical_hit_count: int = 0
+    term_idf_score: float = 0.0  # IDF-weighted term relevance
+    graph_quality: float = 0.0  # Graded edge quality (0-1)
 
     # Structured evidence trail
     evidence: list[EvidenceRecord] = field(default_factory=list)
@@ -638,6 +640,7 @@ class FileCandidate:
     lexical_hit_count: int = 0  # Tantivy full-text hits in this file
     has_explicit_mention: bool = False  # Agent mentioned this file
     graph_connected: bool = False  # Connected via graph walk
+    graph_quality: float = 0.0  # Graded edge quality for RRF ranking
     artifact_kind: ArtifactKind = ArtifactKind.code
 
     # Composite score (similarity + secondary signals)

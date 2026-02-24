@@ -1602,6 +1602,7 @@ class TestEnrichFileCandidatesRRF:
     """Test _enrich_file_candidates with Reciprocal Rank Fusion scoring."""
 
     _RRF_K = 60  # must match the constant in harvesters.py
+    _EMB_W = 2.0  # embedding weight multiplier
 
     @staticmethod
     def _parsed(explicit_paths: list[str] | None = None) -> ParsedTask:
@@ -1614,9 +1615,9 @@ class TestEnrichFileCandidatesRRF:
             FileCandidate(path="b.py", similarity=0.7),
         ]
         result = _enrich_file_candidates(fcs, {}, self._parsed())
-        # a.py is rank 1, b.py is rank 2
-        assert result[0].combined_score == pytest.approx(1.0 / (self._RRF_K + 1))
-        assert result[1].combined_score == pytest.approx(1.0 / (self._RRF_K + 2))
+        # a.py is rank 1, b.py is rank 2 — embedding has 2× weight
+        assert result[0].combined_score == pytest.approx(self._EMB_W / (self._RRF_K + 1))
+        assert result[1].combined_score == pytest.approx(self._EMB_W / (self._RRF_K + 2))
 
     def test_multi_source_boosts_score(self) -> None:
         """A file with both embedding and term_match signals gets higher RRF."""
@@ -1630,14 +1631,13 @@ class TestEnrichFileCandidatesRRF:
                 file_path="b.py",
                 matched_terms=["foo", "bar"],
                 from_term_match=True,
+                term_idf_score=1.5,
             ),
         }
         result = _enrich_file_candidates(fcs, def_cands, self._parsed())
         score_a = result[0].combined_score
         score_b = result[1].combined_score
-        # b.py has two sources (embedding rank 2 + term rank 1) vs a.py (embedding rank 1)
-        # b.py: 1/(60+2) + 1/(60+1) = ~0.0161 + ~0.0164 = ~0.0325
-        # a.py: 1/(60+1) = ~0.0164
+        # b.py has two sources (embedding rank 2 + term rank 1) vs a.py (embedding rank 1 only)
         assert score_b > score_a
 
     def test_explicit_mention_gives_rrf_contribution(self) -> None:
@@ -1648,13 +1648,13 @@ class TestEnrichFileCandidatesRRF:
         ]
         result = _enrich_file_candidates(fcs, {}, self._parsed(explicit_paths=["b.py"]))
         score_b = next(fc for fc in result if fc.path == "b.py")
-        # b.py: embedding rank 2 + explicit rank 1
-        expected = 1.0 / (self._RRF_K + 2) + 1.0 / (self._RRF_K + 1)
+        # b.py: embedding rank 2 (2× weight) + explicit rank 1
+        expected = self._EMB_W / (self._RRF_K + 2) + 1.0 / (self._RRF_K + 1)
         assert score_b.combined_score == pytest.approx(expected)
         assert score_b.has_explicit_mention is True
 
-    def test_graph_connected_gives_rrf_contribution(self) -> None:
-        """Graph connection adds an RRF source contribution at rank 1."""
+    def test_graph_connected_gives_graded_rrf(self) -> None:
+        """Graph connection adds a graded RRF contribution based on edge quality."""
         fcs = [
             FileCandidate(path="a.py", similarity=0.9),
         ]
@@ -1663,14 +1663,36 @@ class TestEnrichFileCandidatesRRF:
                 def_uid="a.py::cls",
                 file_path="a.py",
                 from_graph=True,
+                graph_quality=0.8,
             ),
         }
         result = _enrich_file_candidates(fcs, def_cands, self._parsed())
         score = result[0].combined_score
-        # embedding rank 1 + graph rank 1
-        expected = 1.0 / (self._RRF_K + 1) + 1.0 / (self._RRF_K + 1)
+        # embedding rank 1 (2× weight) + graph rank 1
+        expected = self._EMB_W / (self._RRF_K + 1) + 1.0 / (self._RRF_K + 1)
         assert score == pytest.approx(expected)
         assert result[0].graph_connected is True
+
+    def test_graph_quality_affects_rank(self) -> None:
+        """Files with higher graph_quality rank higher in graph source."""
+        fcs = [
+            FileCandidate(path="a.py", similarity=0.5),
+            FileCandidate(path="b.py", similarity=0.5),
+        ]
+        def_cands = {
+            "a.py::f": HarvestCandidate(
+                def_uid="a.py::f", file_path="a.py",
+                from_graph=True, graph_quality=1.0,
+            ),
+            "b.py::f": HarvestCandidate(
+                def_uid="b.py::f", file_path="b.py",
+                from_graph=True, graph_quality=0.3,
+            ),
+        }
+        result = _enrich_file_candidates(fcs, def_cands, self._parsed())
+        scores = {fc.path: fc.combined_score for fc in result}
+        # a.py has graph rank 1 (quality 1.0), b.py has graph rank 2 (quality 0.3)
+        assert scores["a.py"] > scores["b.py"]
 
     def test_secondary_only_file_added(self) -> None:
         """A file found only by secondary harvesters gets added with RRF score."""
@@ -1683,6 +1705,7 @@ class TestEnrichFileCandidatesRRF:
                 file_path="new.py",
                 matched_terms=["baz"],
                 from_term_match=True,
+                term_idf_score=1.0,
             ),
         }
         result = _enrich_file_candidates(fcs, def_cands, self._parsed())
@@ -1708,34 +1731,25 @@ class TestEnrichFileCandidatesRRF:
                 from_graph=True,
                 from_term_match=True,
                 from_lexical=True,
+                term_idf_score=1.0,
+                graph_quality=0.9,
             ),
         }
         result = _enrich_file_candidates(fcs, def_cands, self._parsed())
         score = result[0].combined_score
-        # All 5 sources at rank 1
-        expected = 5.0 / (self._RRF_K + 1)
+        # embedding(2×) + term + lex + graph + explicit, all at rank 1
+        expected = (self._EMB_W + 1.0 + 1.0 + 1.0 + 1.0) / (self._RRF_K + 1)
         assert score == pytest.approx(expected)
 
-    def test_no_cap_on_rrf(self) -> None:
-        """RRF has no artificial cap — unlike the old 0.30 bonus cap."""
+    def test_embedding_weight_dominates(self) -> None:
+        """Embedding 2× weight means embedding rank 1 outscores other rank 1s."""
         fcs = [
             FileCandidate(path="a.py", similarity=0.9),
         ]
-        def_cands = {
-            "a.py::f1": HarvestCandidate(
-                def_uid="a.py::f1",
-                file_path="a.py",
-                matched_terms=["x"],
-                lexical_hit_count=1,
-                from_explicit=True,
-                from_graph=True,
-                from_term_match=True,
-                from_lexical=True,
-            ),
-        }
-        result = _enrich_file_candidates(fcs, def_cands, self._parsed())
-        # 5 sources = 5/(k+1) ≈ 0.082 — no cap applied
-        assert result[0].combined_score == pytest.approx(5.0 / (self._RRF_K + 1))
+        result = _enrich_file_candidates(fcs, {}, self._parsed())
+        # Embedding-only rank 1 = 2/(60+1) ≈ 0.0328
+        # Compare with what a single non-embedding source would give: 1/(60+1) ≈ 0.0164
+        assert result[0].combined_score > 1.0 / (self._RRF_K + 1)
 
     def test_signal_fields_populated(self) -> None:
         """Signal display fields (term_match_count etc.) are still populated."""
@@ -1752,6 +1766,7 @@ class TestEnrichFileCandidatesRRF:
                 from_graph=True,
                 from_term_match=True,
                 from_lexical=True,
+                graph_quality=0.5,
             ),
         }
         result = _enrich_file_candidates(fcs, def_cands, self._parsed())
