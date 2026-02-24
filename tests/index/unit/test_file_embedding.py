@@ -11,6 +11,7 @@ import pytest
 
 from codeplane.index._internal.indexing.file_embedding import (
     _DOC_MAX_COUNT,
+    _build_config_defines,
     _build_embed_text,
     _build_enriched_chunks,
     _build_enrichment_lines,
@@ -229,6 +230,149 @@ class TestBuildFileScaffold:
         class_pos = defines_line.lower().find("class")
         func_pos = defines_line.lower().find("helper")
         assert class_pos < func_pos
+
+
+# ---------------------------------------------------------------------------
+# _build_config_defines tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildConfigDefines:
+    """Tests for config-file scaffold lines (targets, sections, keys, headings)."""
+
+    def test_makefile_targets(self) -> None:
+        defs = [
+            {"kind": "target", "name": "build"},
+            {"kind": "target", "name": "clean"},
+            {"kind": "target", "name": "test"},
+            {"kind": "target", "name": "lint"},
+        ]
+        lines = _build_config_defines(defs)
+        assert len(lines) == 1
+        assert lines[0].startswith("targets ")
+        assert "build" in lines[0]
+        assert "test" in lines[0]
+
+    def test_makefile_variables(self) -> None:
+        defs = [
+            {"kind": "variable", "name": "CORE_VENV"},
+            {"kind": "variable", "name": "COV_REPORT"},
+        ]
+        lines = _build_config_defines(defs)
+        assert len(lines) == 1
+        assert lines[0].startswith("variables ")
+        assert "core venv" in lines[0]
+
+    def test_phony_and_default_skipped(self) -> None:
+        defs = [
+            {"kind": "target", "name": ".PHONY"},
+            {"kind": "variable", "name": ".DEFAULT_GOAL"},
+            {"kind": "target", "name": "build"},
+        ]
+        lines = _build_config_defines(defs)
+        combined = " ".join(lines)
+        assert ".PHONY" not in combined
+        assert ".DEFAULT_GOAL" not in combined
+        assert "build" in combined
+
+    def test_toml_tables(self) -> None:
+        defs = [
+            {"kind": "table", "name": "build-system"},
+            {"kind": "table", "name": "project.scripts"},
+            {"kind": "table", "name": "tool.pytest.ini_options"},
+        ]
+        lines = _build_config_defines(defs)
+        assert len(lines) == 1
+        assert lines[0].startswith("sections ")
+        assert "build system" in lines[0]
+        assert "project scripts" in lines[0]
+
+    def test_toml_pairs(self) -> None:
+        defs = [
+            {"kind": "pair", "name": "addopts"},
+            {"kind": "pair", "name": "asyncio_mode"},
+        ]
+        lines = _build_config_defines(defs)
+        assert len(lines) == 1
+        assert lines[0].startswith("configures ")
+        assert "addopts" in lines[0]
+
+    def test_yaml_keys(self) -> None:
+        defs = [
+            {"kind": "key", "name": "GITHUB_TOKEN"},
+            {"kind": "key", "name": "coverage_report"},
+        ]
+        lines = _build_config_defines(defs)
+        assert len(lines) == 1
+        assert lines[0].startswith("configures ")
+
+    def test_markdown_headings(self) -> None:
+        defs = [
+            {"kind": "heading", "name": "1. run_experiment"},
+            {"kind": "heading", "name": "2. validate_config"},
+        ]
+        lines = _build_config_defines(defs)
+        assert len(lines) == 1
+        assert lines[0].startswith("topics ")
+        # Numbering prefix should be stripped
+        assert "1" not in lines[0]
+        assert "run experiment" in lines[0]
+
+    def test_mixed_config_kinds(self) -> None:
+        defs = [
+            {"kind": "target", "name": "build"},
+            {"kind": "variable", "name": "VENV"},
+            {"kind": "table", "name": "project"},
+            {"kind": "pair", "name": "version"},
+            {"kind": "heading", "name": "Overview"},
+        ]
+        lines = _build_config_defines(defs)
+        assert len(lines) == 5
+        line_types = [ln.split()[0] for ln in lines]
+        assert "targets" in line_types
+        assert "variables" in line_types
+        assert "sections" in line_types
+        assert "configures" in line_types
+        assert "topics" in line_types
+
+    def test_empty_defs(self) -> None:
+        lines = _build_config_defines([])
+        assert lines == []
+
+    def test_source_code_kinds_ignored(self) -> None:
+        """Source code kinds (class, function, method) are NOT config kinds."""
+        defs = [
+            {"kind": "class", "name": "MyClass"},
+            {"kind": "function", "name": "helper"},
+            {"kind": "method", "name": "do_work"},
+        ]
+        lines = _build_config_defines(defs)
+        assert lines == []
+
+    def test_scaffold_includes_config_defs(self) -> None:
+        """build_file_scaffold integrates config defs into output."""
+        defs = [
+            {"kind": "target", "name": "build"},
+            {"kind": "target", "name": "test"},
+            {"kind": "variable", "name": "VENV_DIR"},
+        ]
+        result = build_file_scaffold("Makefile", defs, [])
+        assert "targets" in result
+        assert "build" in result
+        assert "test" in result
+        assert "variables" in result
+
+    def test_dedup_config_names(self) -> None:
+        """Duplicate kind:name pairs should be deduplicated."""
+        defs = [
+            {"kind": "key", "name": "TOKEN"},
+            {"kind": "key", "name": "TOKEN"},
+            {"kind": "key", "name": "SECRET"},
+        ]
+        lines = _build_config_defines(defs)
+        assert len(lines) == 1
+        # TOKEN should appear only once
+        assert lines[0].count("token") == 1
 
 
 # ---------------------------------------------------------------------------

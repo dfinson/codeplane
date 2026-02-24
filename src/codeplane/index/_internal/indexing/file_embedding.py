@@ -77,7 +77,7 @@ FILE_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 FILE_EMBED_DIM = 384
 FILE_EMBED_MAX_CHARS = 2_048  # ~512 tokens; aligned with max_length=512
 FILE_EMBED_BATCH_SIZE = 8  # default; overridden by _detect_batch_size()
-FILE_EMBED_VERSION = 6  # v6: bge-small + enriched scaffold (S+I+C+D) + 2-chunk split
+FILE_EMBED_VERSION = 7  # v7: config-file scaffold enrichment (targets, sections, keys, headings)
 
 # Maximum token length passed to ONNX model (caps attention cost)
 FILE_EMBED_MAX_LENGTH = 512
@@ -234,6 +234,13 @@ def build_file_scaffold(
         if define_tokens:
             lines.append(f"defines {', '.join(define_tokens)}")
 
+        # Config-file structural defs: targets, sections, keys, headings
+        # These kinds come from tree-sitter extraction of Makefiles, TOML,
+        # YAML, and Markdown — they carry the semantic signal that bridges
+        # natural-language queries to config file content.
+        config_lines = _build_config_defines(defs)
+        lines.extend(config_lines)
+
         # Docstring / comment summaries — include ALL meaningful ones
         doc_count = 0
         for d in sorted_defs:
@@ -271,6 +278,91 @@ def _compact_sig(name: str, sig: str) -> str:
         if compact and compact != "()":
             return f"{words}{compact}"
     return words
+
+
+# Maximum config-kind items per category in scaffold
+_CONFIG_TARGETS_MAX = 15
+_CONFIG_SECTIONS_MAX = 12
+_CONFIG_KEYS_MAX = 20
+_CONFIG_HEADINGS_MAX = 10
+
+# Names too generic to add signal — always skip
+_CONFIG_SKIP_NAMES = frozenset({
+    ".PHONY", ".DEFAULT_GOAL", ".SUFFIXES", ".PRECIOUS",
+    ".INTERMEDIATE", ".SECONDARY", ".DELETE_ON_ERROR",
+})
+
+
+def _build_config_defines(defs: list[dict[str, Any]]) -> list[str]:
+    """Build scaffold lines for config-file def kinds.
+
+    Handles kinds produced by tree-sitter for Makefiles (``target``,
+    ``variable``), TOML/YAML/JSON (``table``, ``pair``, ``key``), and
+    Markdown (``heading``).  Each kind maps to a descriptive scaffold
+    line:
+
+    - ``target``   → ``"targets build, clean, test, lint, format"``
+    - ``table``    → ``"sections build-system, project, tool.pytest"``
+    - ``pair|key`` → ``"configures addopts, artifacts, GITHUB_TOKEN"``
+    - ``heading``  → ``"topics run experiment, validate config"``
+    - ``variable`` → ``"variables COV_REPORT, CORE_VENV"``
+
+    Returns a list of scaffold lines (may be empty).
+    """
+    targets: list[str] = []
+    sections: list[str] = []
+    config_keys: list[str] = []
+    headings: list[str] = []
+    variables: list[str] = []
+
+    seen: set[str] = set()
+
+    for d in defs:
+        kind = d.get("kind", "")
+        name = d.get("name", "")
+        if not name or name in _CONFIG_SKIP_NAMES:
+            continue
+        # Deduplicate
+        key = f"{kind}:{name}"
+        if key in seen:
+            continue
+        seen.add(key)
+
+        words = " ".join(_word_split(name))
+        if not words:
+            continue
+
+        if kind == "target":
+            targets.append(words)
+        elif kind == "table":
+            # TOML table names are dotted paths like "project.scripts"
+            # — anglicify them by splitting on dots too
+            words = " ".join(_word_split(name.replace(".", "_")))
+            sections.append(words)
+        elif kind in ("pair", "key"):
+            config_keys.append(words)
+        elif kind == "heading":
+            # Markdown headings often have numbering prefixes — strip them
+            clean = re.sub(r"^\d+\.\s*", "", name).strip()
+            if clean:
+                words = " ".join(_word_split(clean))
+                headings.append(words)
+        elif kind == "variable":
+            variables.append(words)
+
+    lines: list[str] = []
+    if targets:
+        lines.append(f"targets {', '.join(targets[:_CONFIG_TARGETS_MAX])}")
+    if sections:
+        lines.append(f"sections {', '.join(sections[:_CONFIG_SECTIONS_MAX])}")
+    if config_keys:
+        lines.append(f"configures {', '.join(config_keys[:_CONFIG_KEYS_MAX])}")
+    if headings:
+        lines.append(f"topics {', '.join(headings[:_CONFIG_HEADINGS_MAX])}")
+    if variables:
+        lines.append(f"variables {', '.join(variables[:_CONFIG_TARGETS_MAX])}")
+
+    return lines
 
 
 # ===================================================================
