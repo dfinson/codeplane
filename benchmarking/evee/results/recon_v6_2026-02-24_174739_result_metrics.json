@@ -1,0 +1,43 @@
+{
+  "session_name": null,
+  "repo": null,
+  "issue": null,
+  "model": null,
+  "codeplane": null,
+  "wall_clock": {
+    "start": null,
+    "end": null
+  },
+  "turns": 0,
+  "tool_calls": {
+    "total": 0,
+    "codeplane": 0,
+    "terminal": 0,
+    "tool_search": 0,
+    "other": 0,
+    "errors": 0,
+    "by_tool": {},
+    "total_thinking_chars": 0
+  },
+  "llm_requests": {
+    "agent": 0,
+    "routing": 0,
+    "total": 0
+  },
+  "tokens": {
+    "prompt": 0,
+    "completion": 0,
+    "cached": 0,
+    "reasoning": 0,
+    "total": 0,
+    "cache_hit_ratio": 0.0
+  },
+  "llm_duration_ms": 0,
+  "avg_ttft_ms": null,
+  "context_growth": {
+    "first": null,
+    "last": null,
+    "max": null,
+    "mean": null
+  }
+}

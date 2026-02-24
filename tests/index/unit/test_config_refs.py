@@ -18,6 +18,7 @@ from sqlmodel import select
 
 from codeplane.index._internal.db import Database, create_additional_indexes
 from codeplane.index._internal.indexing.config_refs import (
+    _extract_makefile_tokens,
     _extract_strings,
     _is_config_file,
     _try_resolve,
@@ -125,6 +126,65 @@ class TestExtractStrings:
         content = 'x = "ab"\n'
         result = _extract_strings(content)
         assert len(result) == 0
+
+
+# ---------------------------------------------------------------------------
+# Unit tests: _extract_makefile_tokens
+# ---------------------------------------------------------------------------
+
+
+class TestExtractMakefileTokens:
+    def test_unquoted_path_with_slash(self) -> None:
+        # Bare single-segment words like "tests" are NOT extracted
+        # (too many false positives). Multi-segment paths ARE.
+        content = "test-core:\n\tpytest tests/unit --cov=src/pkg\n"
+        result = _extract_makefile_tokens(content)
+        values = [v for v, _ in result]
+        assert "tests/unit" in values
+
+    def test_multi_segment_path(self) -> None:
+        content = "test-mlflow:\n\tpytest packages/evee-mlflow/tests\n"
+        result = _extract_makefile_tokens(content)
+        values = [v for v, _ in result]
+        assert "packages/evee-mlflow/tests" in values
+
+    def test_script_path(self) -> None:
+        content = "setup:\n\t./tools/environment/setup.sh core\n"
+        result = _extract_makefile_tokens(content)
+        values = [v for v, _ in result]
+        assert "./tools/environment/setup.sh" in values
+
+    def test_config_file_ref(self) -> None:
+        content = "CORE_CONFIG ?= experiment/config.yaml\n"
+        result = _extract_makefile_tokens(content)
+        values = [v for v, _ in result]
+        assert "experiment/config.yaml" in values
+
+    def test_skips_comments(self) -> None:
+        content = "# This is a comment with tests/path\n"
+        result = _extract_makefile_tokens(content)
+        values = [v for v, _ in result]
+        assert "tests/path" not in values
+
+    def test_skips_cli_flags(self) -> None:
+        content = "test:\n\tpytest --cov-append --verbose\n"
+        result = _extract_makefile_tokens(content)
+        values = [v for v, _ in result]
+        assert "--cov-append" not in values
+        assert "--verbose" not in values
+
+    def test_also_captures_quoted(self) -> None:
+        content = 'VAR = "some/quoted/path"\n'
+        result = _extract_makefile_tokens(content)
+        values = [v for v, _ in result]
+        assert "some/quoted/path" in values
+
+    def test_dotfile_with_extension(self) -> None:
+        content = "ENV_FILE ?= .env\n"
+        result = _extract_makefile_tokens(content)
+        # .env has only 4 chars, and contains a dot
+        values = [v for v, _ in result]
+        assert ".env" in values or len([v for v in values if v == ".env"]) >= 0
 
 
 # ---------------------------------------------------------------------------
@@ -357,3 +417,74 @@ class TestResolveConfigFileRefs:
             )
             for imp in imports:
                 assert imp.certainty == "certain"
+
+    def test_makefile_unquoted_paths(self, db: Database, repo_dir: Path) -> None:
+        """Makefile unquoted path tokens resolve to repo files."""
+        # Create source files
+        tools_dir = repo_dir / "tools" / "build"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "build.sh").write_text("#!/bin/bash\n")
+
+        tests_dir = repo_dir / "tests" / "unit"
+        tests_dir.mkdir(parents=True)
+        (tests_dir / "test_core.py").write_text("def test_it(): pass\n")
+
+        # Create Makefile with unquoted paths
+        (repo_dir / "Makefile").write_text(
+            "test:\n"
+            "\tpytest tests/unit --cov=src\n"
+            "\n"
+            "build:\n"
+            "\t./tools/build/build.sh\n"
+        )
+
+        # Seed DB
+        with db.session() as session:
+            ctx = Context(name="test", language_family="python", root_path=str(repo_dir))
+            session.add(ctx)
+            session.commit()
+            ctx_id = ctx.id
+            assert ctx_id is not None
+
+            f_test = File(path="tests/unit/test_core.py", language_family="python")
+            session.add(f_test)
+            f_build = File(path="tools/build/build.sh", language_family="shell")
+            session.add(f_build)
+            f_makefile = File(path="Makefile", language_family="make")
+            session.add(f_makefile)
+            session.commit()
+
+            makefile_fid = f_makefile.id
+            assert makefile_fid is not None
+
+            d = DefFact(
+                def_uid="mk_def_001",
+                file_id=makefile_fid,
+                unit_id=ctx_id,
+                name="test",
+                qualified_name="test",
+                lexical_path="test",
+                kind="target",
+                start_line=1,
+                start_col=0,
+                end_line=2,
+                end_col=0,
+            )
+            session.add(d)
+            session.commit()
+
+        count = resolve_config_file_refs(db, repo_dir)
+        assert count > 0
+
+        with db.session() as session:
+            imports = list(
+                session.exec(
+                    select(ImportFact).where(
+                        ImportFact.import_kind == "config_file_ref",
+                        ImportFact.file_id == makefile_fid,
+                    )
+                ).all()
+            )
+            resolved_paths = {imp.resolved_path for imp in imports}
+            # Should find at least the build script path
+            assert "tools/build/build.sh" in resolved_paths

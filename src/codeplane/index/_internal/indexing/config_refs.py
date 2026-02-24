@@ -54,6 +54,18 @@ _RE_ENTRY_POINT = re.compile(r"^([a-zA-Z_][a-zA-Z0-9_.]+):([a-zA-Z_][a-zA-Z0-9_]
 # Pattern for bare file/directory paths (e.g. ``src/evee``, ``tests/``).
 _RE_PATH_LIKE = re.compile(r"^[a-zA-Z0-9_.][a-zA-Z0-9_./\-]*$")
 
+# Regex for extracting unquoted path-like tokens from Makefile lines.
+# Matches tokens containing ``/`` or ``.`` that look like file/directory paths.
+# Captures tokens like ``tests``, ``src/foo``, ``./tools/build.sh``,
+# ``packages/evee-mlflow/tests``, ``experiment/config.yaml``.
+_RE_MAKEFILE_TOKEN = re.compile(
+    r"(?:^|\s|,|=)"
+    r"(\.?/?[a-zA-Z_][a-zA-Z0-9_./-]*(?:/[a-zA-Z0-9_./-]+)+"
+    r"|(?:^|(?<=\s))[a-zA-Z_][a-zA-Z0-9_-]*(?:\.[a-zA-Z0-9]+))"
+    r"(?=\s|$|,|\))",
+    re.MULTILINE,
+)
+
 # Strings to skip (common non-path values found in config files).
 _SKIP_PREFIXES: tuple[str, ...] = (
     "http://",
@@ -117,6 +129,74 @@ def _extract_strings(content: str) -> list[tuple[str, int]]:
                 results.append((value, line))
 
     return results
+
+
+def _extract_makefile_tokens(content: str) -> list[tuple[str, int]]:
+    """Extract unquoted path-like tokens from Makefile content.
+
+    Makefiles don't quote paths. This extracts tokens that contain
+    ``/`` separators (multi-segment paths) or have file extensions,
+    then feeds them through the same resolve pipeline.
+
+    Also includes quoted strings via ``_extract_strings``.
+
+    Returns:
+        List of (token_value, 1-indexed_line_number) tuples.
+    """
+    results: list[tuple[str, int]] = []
+    seen: set[str] = set()
+
+    # First, get any quoted strings (Makefiles can have those too)
+    results.extend(_extract_strings(content))
+    seen.update(v for v, _ in results)
+
+    # Then extract unquoted path-like tokens line by line
+    for line_idx, line in enumerate(content.split("\n"), start=1):
+        # Skip comments
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+
+        # Skip variable assignments with $(...)  that aren't path refs
+        # but DO scan recipe lines (start with tab) and variable defs
+
+        # Find all path-like tokens: contain / or have common extensions
+        for token in re.findall(r"[a-zA-Z0-9_./-]+", line):
+            # Must contain a / (multi-segment path) or a . with extension
+            if "/" not in token and "." not in token:
+                continue
+
+            # Skip Make variables like $(FOO)
+            if "$" in token:
+                continue
+
+            # Minimum length
+            if len(token) < 4:
+                continue
+
+            # Skip URLs, version constraints
+            if any(token.startswith(p) for p in _SKIP_PREFIXES):
+                continue
+
+            # Skip common non-path patterns
+            if token.startswith("--"):  # CLI flags like --cov-append
+                continue
+
+            # Deduplicate
+            if token in seen:
+                continue
+            seen.add(token)
+
+            results.append((token, line_idx))
+
+    return results
+
+
+def _is_makefile(path: str) -> bool:
+    """Check if a file path is a Makefile variant."""
+    basename = path.rsplit("/", 1)[-1].lower()
+    name_no_ext = basename.split(".")[0]
+    return name_no_ext in _CONFIG_BASENAMES or basename in _CONFIG_BASENAMES
 
 
 def _make_import_uid(config_path: str, resolved_path: str, line: int) -> str:
@@ -295,8 +375,11 @@ def resolve_config_file_refs(
 
         files_scanned += 1
 
-        # Extract strings
-        strings = _extract_strings(content)
+        # Extract strings (use Makefile-specific extractor for unquoted paths)
+        if _is_makefile(file_path):
+            strings = _extract_makefile_tokens(content)
+        else:
+            strings = _extract_strings(content)
         total_strings_checked += len(strings)
 
         # Track resolved paths per file to avoid duplicate edges

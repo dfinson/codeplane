@@ -64,16 +64,16 @@ This runs lint + only the tests impacted by your changes — fast, targeted, suf
 
 | Operation | REQUIRED Tool | FORBIDDEN Alternative |
 |-----------|---------------|----------------------|
-| File scaffold | `mcp_codeplane-codeplane_copy3_read_scaffold` | Manual traversal, `cat` for structure |
-| Read source | `mcp_codeplane-codeplane_copy3_read_source` | `cat`, `head`, `less`, `tail` |
-| Read full file | `mcp_codeplane-codeplane_copy3_read_file_full` | `cat`, `head`, bulk reads |
-| Write/edit files | `mcp_codeplane-codeplane_copy3_write_source` | `sed`, `echo >>`, `awk`, `tee` |
-| List directory | `mcp_codeplane-codeplane_copy3_list_files` | `ls`, `find`, `tree` |
-| Search code | `mcp_codeplane-codeplane_copy3_search` | `grep`, `rg`, `ag`, `ack` |
-| Repository overview | `mcp_codeplane-codeplane_copy3_map_repo` | Manual file traversal |
-| Lint + test + commit + push | `mcp_codeplane-codeplane_copy3_checkpoint` | Running linters/test runners/git directly |
-| Rename across files | `mcp_codeplane-codeplane_copy3_refactor_rename` | Find-and-replace, `sed` |
-| Semantic diff | `mcp_codeplane-codeplane_copy3_semantic_diff` | `git_diff` for change review, manual comparison |
+| File scaffold | `mcp_codeplane-codeplane_read_scaffold` | Manual traversal, `cat` for structure |
+| Read source | `mcp_codeplane-codeplane_read_source` | `cat`, `head`, `less`, `tail` |
+| Read full file | `mcp_codeplane-codeplane_read_file_full` | `cat`, `head`, bulk reads |
+| Write/edit files | `mcp_codeplane-codeplane_write_source` | `sed`, `echo >>`, `awk`, `tee` |
+| List directory | `mcp_codeplane-codeplane_list_files` | `ls`, `find`, `tree` |
+| Search code | `mcp_codeplane-codeplane_search` | `grep`, `rg`, `ag`, `ack` |
+| Repository overview | `mcp_codeplane-codeplane_map_repo` | Manual file traversal |
+| Lint + test + commit + push | `mcp_codeplane-codeplane_checkpoint` | Running linters/test runners/git directly |
+| Rename across files | `mcp_codeplane-codeplane_refactor_rename` | Find-and-replace, `sed` |
+| Semantic diff | `mcp_codeplane-codeplane_semantic_diff` | `git_diff` for change review, manual comparison |
 
 ### Before You Edit: Decision Gate
 
@@ -139,4 +139,5 @@ avoids wasted round-trips.
 - **DON'T** skip `checkpoint` after `write_source` — always lint + test your changes
 - **DON'T** ignore `agentic_hint` in responses
 - **DON'T** use raw `git add` + `git commit` — use `checkpoint` with `commit_message`
+- **DON'T** dismiss lint/test failures as "pre-existing" or "not your problem" — fix ALL issues
 <!-- /codeplane-instructions -->
