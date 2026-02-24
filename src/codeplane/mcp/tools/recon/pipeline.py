@@ -691,9 +691,11 @@ async def _file_centric_pipeline(
     # 5. Two-elbow tier assignment
     file_candidates = assign_tiers(file_candidates)
 
-    # 5.5. Deterministic test co-retrieval via reverse import graph
-    #       For every surviving non-test source file, find test files that
-    #       import it.  The test inherits the source's tier:
+    # 5.5. Deterministic test co-retrieval via direct imports
+    #       Single-hop query: find test files whose import_facts have
+    #       resolved_path pointing to a surviving source candidate.
+    #       (NOT transitive — avoids fan-out through barrel re-exports.)
+    #       The test inherits the source's tier:
     #         - source FULL_FILE  → test FULL_FILE
     #         - source MIN_SCAFFOLD → test MIN_SCAFFOLD
     #       Test files NOT linked to any surviving source get demoted.
@@ -717,20 +719,35 @@ async def _file_centric_pipeline(
 
     all_source_paths = full_source_paths + scaffold_source_paths
     if all_source_paths:
-        from codeplane.index._internal.indexing.import_graph import ImportGraph
+        from sqlmodel import col, select
 
-        # Two-pass: find tests linked to FULL_FILE sources, then
-        # tests linked to MIN_SCAFFOLD sources (all within one session).
+        from codeplane.core.languages import is_test_file as _is_test_path
+        from codeplane.index.models import File, ImportFact
+
+        # Single-hop direct-import query: test files whose resolved_path
+        # points to one of our source candidates.  No BFS, no transitive
+        # closure — just "who directly imports this file?"
         full_tests: set[str] = set()
         scaffold_tests: set[str] = set()
         with coordinator.db.session() as session:
-            graph = ImportGraph(session)
             if full_source_paths:
-                full_impact = graph.affected_tests(full_source_paths)
-                full_tests = {m.test_file for m in full_impact.matches}
+                stmt = (
+                    select(File.path)
+                    .join(ImportFact, ImportFact.file_id == File.id)  # type: ignore[arg-type]
+                    .where(col(ImportFact.resolved_path).in_(full_source_paths))
+                ).distinct()
+                for path in session.exec(stmt).all():
+                    if path and _is_test_path(path):
+                        full_tests.add(path)
             if scaffold_source_paths:
-                scaffold_impact = graph.affected_tests(scaffold_source_paths)
-                scaffold_tests = {m.test_file for m in scaffold_impact.matches}
+                stmt = (
+                    select(File.path)
+                    .join(ImportFact, ImportFact.file_id == File.id)  # type: ignore[arg-type]
+                    .where(col(ImportFact.resolved_path).in_(scaffold_source_paths))
+                ).distinct()
+                for path in session.exec(stmt).all():
+                    if path and _is_test_path(path):
+                        scaffold_tests.add(path)
 
         # FULL_FILE wins over MIN_SCAFFOLD
         for tp in full_tests:
@@ -787,17 +804,108 @@ async def _file_centric_pipeline(
                 fc.tier = OutputTier.SUMMARY_ONLY
             test_demoted += 1
 
+    # 5.6. Reverse direction: test → source co-retrieval
+    #       For test files in the top elbows, find the source files they
+    #       directly import and promote/add those.  Fan-out is naturally
+    #       low (test typically imports 1-3 source modules).
+    source_co_promoted = 0
+    source_co_added = 0
+    linked_source_paths: set[str] = set()
+
+    full_test_paths = [
+        fc.path
+        for fc in file_candidates
+        if fc.tier == OutputTier.FULL_FILE and _is_test_file(fc.path)
+    ]
+    scaffold_test_paths = [
+        fc.path
+        for fc in file_candidates
+        if fc.tier == OutputTier.MIN_SCAFFOLD and _is_test_file(fc.path)
+    ]
+    all_test_query_paths = full_test_paths + scaffold_test_paths
+    if all_test_query_paths:
+        from sqlmodel import col, select
+
+        from codeplane.core.languages import is_test_file as _is_test_path
+        from codeplane.index.models import File, ImportFact
+
+        # Source target tier: test FULL → source FULL, test SCAFFOLD → source SCAFFOLD
+        source_target_tier: dict[str, OutputTier] = {}
+        full_sources: set[str] = set()
+        scaffold_sources: set[str] = set()
+        with coordinator.db.session() as session:
+            if full_test_paths:
+                stmt = (
+                    select(File.path, ImportFact.resolved_path)
+                    .join(ImportFact, ImportFact.file_id == File.id)  # type: ignore[arg-type]
+                    .where(col(File.path).in_(full_test_paths))
+                    .where(ImportFact.resolved_path != None)  # noqa: E711
+                ).distinct()
+                for _test_path, resolved in session.exec(stmt).all():
+                    if resolved and not _is_test_path(resolved):
+                        full_sources.add(resolved)
+            if scaffold_test_paths:
+                stmt = (
+                    select(File.path, ImportFact.resolved_path)
+                    .join(ImportFact, ImportFact.file_id == File.id)  # type: ignore[arg-type]
+                    .where(col(File.path).in_(scaffold_test_paths))
+                    .where(ImportFact.resolved_path != None)  # noqa: E711
+                ).distinct()
+                for _test_path, resolved in session.exec(stmt).all():
+                    if resolved and not _is_test_path(resolved):
+                        scaffold_sources.add(resolved)
+
+        # FULL wins over SCAFFOLD
+        for sp in full_sources:
+            source_target_tier[sp] = OutputTier.FULL_FILE
+        for sp in scaffold_sources:
+            if sp not in source_target_tier:
+                source_target_tier[sp] = OutputTier.MIN_SCAFFOLD
+        linked_source_paths = set(source_target_tier.keys())
+
+        existing_by_path = {fc.path: fc for fc in file_candidates}
+        for src_path, target_tier in source_target_tier.items():
+            if src_path in existing_by_path:
+                fc = existing_by_path[src_path]
+                tier_rank = {
+                    OutputTier.FULL_FILE: 0,
+                    OutputTier.MIN_SCAFFOLD: 1,
+                    OutputTier.SUMMARY_ONLY: 2,
+                }
+                if tier_rank.get(fc.tier, 2) > tier_rank[target_tier]:
+                    fc.tier = target_tier
+                    fc.graph_connected = True
+                    source_co_promoted += 1
+            else:
+                ref_scores = [c.combined_score for c in file_candidates if c.tier == target_tier]
+                score = max(ref_scores, default=pin_floor) * 0.9
+                file_candidates.append(
+                    FileCandidate(
+                        path=src_path,
+                        similarity=0.0,
+                        combined_score=score,
+                        graph_connected=True,
+                        artifact_kind=_classify_artifact(src_path),
+                    ),
+                )
+                file_candidates[-1].tier = target_tier
+                source_co_added += 1
+
     diagnostics["test_co_retrieval_ms"] = round((time.monotonic() - t_test_disco) * 1000)
     diagnostics["test_co_promoted"] = test_co_promoted
     diagnostics["test_co_added"] = test_co_added
     diagnostics["test_demoted"] = test_demoted
-    if test_co_promoted + test_co_added + test_demoted > 0:
+    diagnostics["source_co_promoted"] = source_co_promoted
+    diagnostics["source_co_added"] = source_co_added
+    if test_co_promoted + test_co_added + test_demoted + source_co_promoted + source_co_added > 0:
         log.info(
             "recon.test_co_retrieval",
             promoted=test_co_promoted,
             added=test_co_added,
             demoted=test_demoted,
             source_files=len(all_source_paths),
+            source_co_promoted=source_co_promoted,
+            source_co_added=source_co_added,
         )
 
     # Build expand_reason for each candidate
@@ -817,6 +925,8 @@ async def _file_centric_pipeline(
             reasons.append("structurally connected")
         if fc.path in linked_test_paths:
             reasons.append("test for surviving source")
+        if fc.path in linked_source_paths:
+            reasons.append("source imported by surviving test")
         fc.expand_reason = "; ".join(reasons) if reasons else "embedding match"
 
     # 6. Noise metric
