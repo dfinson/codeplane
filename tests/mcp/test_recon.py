@@ -5,7 +5,6 @@ Tests:
 - _select_seeds: term-intersection + hub-score reranking
 - _expand_seed: graph expansion
 - _trim_to_budget: budget assembly
-- _summarize_recon: summary generation
 - register_tools: tool wiring
 - ArtifactKind: artifact classification
 - TaskIntent: intent extraction
@@ -26,7 +25,9 @@ import pytest
 from codeplane.mcp.tools.recon import (
     ArtifactKind,
     EvidenceRecord,
+    FileCandidate,
     HarvestCandidate,
+    OutputTier,
     ParsedTask,
     ReconBucket,
     TaskIntent,
@@ -47,9 +48,11 @@ from codeplane.mcp.tools.recon import (
     _extract_negative_mentions,
     _read_lines,
     _score_candidates,
-    _summarize_recon,
     _trim_to_budget,
+    assign_tiers,
     compute_anchor_floor,
+    compute_noise_metric,
+    compute_two_elbows,
     find_elbow,
     parse_task,
 )
@@ -242,26 +245,6 @@ class TestReadLines:
     def test_missing_file(self, tmp_path: Path) -> None:
         result = _read_lines(tmp_path / "nope.py", 1, 5)
         assert result == ""
-
-
-class TestSummarizeRecon:
-    """Tests for _summarize_recon."""
-
-    def test_full_summary(self) -> None:
-        s = _summarize_recon(3, 10, 5, 4, 2, "add caching to search")
-        assert "3 seeds" in s
-        assert "10 callees" in s
-        assert "4 import defs" in s
-        assert "5 callers" in s
-        assert "2 scaffolds" in s
-        assert "add caching to search" in s
-
-    def test_minimal_summary(self) -> None:
-        s = _summarize_recon(1, 0, 0, 0, 0, "fix bug")
-        assert "1 seeds" in s
-        assert "callees" not in s
-        assert "callers" not in s
-        assert "import defs" not in s
 
 
 class TestEstimateBytes:
@@ -728,21 +711,6 @@ class TestAggregateToFiles:
 
 class TestFilterPipeline:
     """Tests for intent-aware filter pipeline."""
-
-    def test_legacy_dual_gate_still_works(self) -> None:
-        """The legacy _apply_dual_gate wrapper should still function."""
-        from codeplane.mcp.tools.recon import _apply_dual_gate
-
-        c = HarvestCandidate(
-            def_uid="test::func",
-            from_embedding=True,
-            embedding_similarity=0.5,
-            hub_score=5,
-        )
-        result = _apply_dual_gate({"test::func": c})
-        # With unknown intent, falls back to dual-gate behavior
-        # This candidate has both semantic and structural evidence
-        assert "test::func" in result
 
     def test_explicit_always_passes(self) -> None:
         from codeplane.mcp.tools.recon import _apply_filters
@@ -1352,9 +1320,7 @@ class TestEditLikelihood:
 
     def test_graph_centrality_boosts_edit_score(self) -> None:
         """Graph-connected defs should have higher edit-likelihood."""
-        c_graph = self._make_candidate(
-            uid="a", emb_sim=0.5, from_graph=True, is_callee_of_top=True
-        )
+        c_graph = self._make_candidate(uid="a", emb_sim=0.5, from_graph=True, is_callee_of_top=True)
         c_isolated = self._make_candidate(uid="b", emb_sim=0.5)
         parsed = parse_task("fix something")
         _compute_edit_likelihood({"a": c_graph, "b": c_isolated}, parsed)
@@ -1362,9 +1328,7 @@ class TestEditLikelihood:
 
     def test_test_files_downranked_for_edit(self) -> None:
         """Test files should have low edit-likelihood (unless test-driven)."""
-        c_code = self._make_candidate(
-            uid="a", emb_sim=0.6, file_path="src/handler.py"
-        )
+        c_code = self._make_candidate(uid="a", emb_sim=0.6, file_path="src/handler.py")
         c_test = self._make_candidate(
             uid="b", emb_sim=0.6, file_path="tests/test_handler.py", is_test=True
         )
@@ -1375,8 +1339,11 @@ class TestEditLikelihood:
     def test_test_files_not_downranked_for_test_task(self) -> None:
         """Test files should NOT be downranked when task is test-driven."""
         c_test = self._make_candidate(
-            uid="a", emb_sim=0.6, file_path="tests/test_handler.py",
-            is_test=True, name="test_handler",
+            uid="a",
+            emb_sim=0.6,
+            file_path="tests/test_handler.py",
+            is_test=True,
+            name="test_handler",
         )
         parsed = ParsedTask(
             raw="write tests for handler",
@@ -1446,8 +1413,11 @@ class TestContextValue:
     def test_graph_connected_test_has_high_context(self) -> None:
         """Tests that are graph-connected should have high context-value."""
         c_test = self._make_candidate(
-            uid="a", emb_sim=0.5, is_test=True,
-            from_graph=True, file_path="tests/test_core.py",
+            uid="a",
+            emb_sim=0.5,
+            is_test=True,
+            from_graph=True,
+            file_path="tests/test_core.py",
         )
         parsed = parse_task("fix core module")
         _compute_context_value({"a": c_test}, parsed)
@@ -1456,11 +1426,16 @@ class TestContextValue:
     def test_disconnected_test_has_lower_context(self) -> None:
         """Tests not graph-connected should have lower context-value."""
         c_connected = self._make_candidate(
-            uid="a", emb_sim=0.5, is_test=True, from_graph=True,
+            uid="a",
+            emb_sim=0.5,
+            is_test=True,
+            from_graph=True,
             file_path="tests/test_core.py",
         )
         c_disconnected = self._make_candidate(
-            uid="b", emb_sim=0.5, is_test=True,
+            uid="b",
+            emb_sim=0.5,
+            is_test=True,
             file_path="tests/test_other.py",
         )
         parsed = parse_task("fix core module")
@@ -1470,7 +1445,10 @@ class TestContextValue:
     def test_doc_with_term_overlap_has_context(self) -> None:
         """Docs matching task terms should have decent context-value."""
         c_doc = self._make_candidate(
-            uid="a", emb_sim=0.6, terms=3, file_path="docs/api.md",
+            uid="a",
+            emb_sim=0.6,
+            terms=3,
+            file_path="docs/api.md",
         )
         parsed = parse_task("fix the API")
         _compute_context_value({"a": c_doc}, parsed)
@@ -1479,7 +1457,9 @@ class TestContextValue:
     def test_structurally_coupled_code_has_context(self) -> None:
         """Code that is graph-connected should have context-value."""
         c_coupled = self._make_candidate(
-            uid="a", emb_sim=0.4, from_graph=True,
+            uid="a",
+            emb_sim=0.4,
+            from_graph=True,
             is_imported_by_top=True,
         )
         c_isolated = self._make_candidate(uid="b", emb_sim=0.4)
@@ -1614,10 +1594,7 @@ class TestBucketing:
 
     def test_no_hard_cap_on_edit_targets(self) -> None:
         """All qualifying files should become edit_target — no artificial limit."""
-        files = [
-            self._make_file_entry(i, edit_score=0.9 - i * 0.01)
-            for i in range(10)
-        ]
+        files = [self._make_file_entry(i, edit_score=0.9 - i * 0.01) for i in range(10)]
         buckets = _assign_buckets(files, {})
         edit_count = sum(1 for b in buckets.values() if b == ReconBucket.edit_target)
         # All 10 have edit_score >= 0.10 and ctx=0, so all should be edit_target
@@ -1700,11 +1677,13 @@ class TestFindUnindexedFiles:
             primary_terms=["config", "mlflow"],
             secondary_terms=[],
         )
-        ctx = self._make_app_ctx([
-            "src/app.py",
-            "config/mlflow.yaml",
-            "README.md",
-        ])
+        ctx = self._make_app_ctx(
+            [
+                "src/app.py",
+                "config/mlflow.yaml",
+                "README.md",
+            ]
+        )
         indexed = {"src/app.py"}
         result = _find_unindexed_files(ctx, parsed, indexed)
         paths = [p for p, _ in result]
@@ -1738,11 +1717,13 @@ class TestFindUnindexedFiles:
             primary_terms=["config", "mlflow", "tracking"],
             secondary_terms=[],
         )
-        ctx = self._make_app_ctx([
-            "config.yaml",                     # matches "config"
-            "config/mlflow/tracking.yaml",     # matches all 3
-            "README.md",
-        ])
+        ctx = self._make_app_ctx(
+            [
+                "config.yaml",  # matches "config"
+                "config/mlflow/tracking.yaml",  # matches all 3
+                "README.md",
+            ]
+        )
         result = _find_unindexed_files(ctx, parsed, set())
         if len(result) >= 2:
             assert result[0][1] >= result[1][1]
@@ -1766,10 +1747,189 @@ class TestFindUnindexedFiles:
             primary_terms=["integration"],
             secondary_terms=[],
         )
-        ctx = self._make_app_ctx([
-            ".github/workflows/integration-tests.yml",
-            "README.md",
-        ])
+        ctx = self._make_app_ctx(
+            [
+                ".github/workflows/integration-tests.yml",
+                "README.md",
+            ]
+        )
         result = _find_unindexed_files(ctx, parsed, set())
         paths = [p for p, _ in result]
         assert ".github/workflows/integration-tests.yml" in paths
+
+
+# ---------------------------------------------------------------------------
+# OutputTier and FileCandidate tests
+# ---------------------------------------------------------------------------
+
+
+class TestOutputTier:
+    """Test OutputTier enum values."""
+
+    def test_tier_values(self) -> None:
+        assert OutputTier.FULL_FILE.value == "full_file"
+        assert OutputTier.MIN_SCAFFOLD.value == "min_scaffold"
+        assert OutputTier.SUMMARY_ONLY.value == "summary_only"
+
+    def test_tier_is_str(self) -> None:
+        assert isinstance(OutputTier.FULL_FILE, str)
+
+
+class TestFileCandidate:
+    """Test FileCandidate dataclass."""
+
+    def test_default_tier(self) -> None:
+        fc = FileCandidate(path="foo.py", similarity=0.8)
+        assert fc.tier == OutputTier.SUMMARY_ONLY
+        assert fc.combined_score == 0.0
+
+    def test_evidence_summary(self) -> None:
+        fc = FileCandidate(
+            path="foo.py",
+            similarity=0.85,
+            term_match_count=3,
+            lexical_hit_count=2,
+            has_explicit_mention=True,
+            graph_connected=True,
+        )
+        ev = fc.evidence_summary
+        assert "sim(0.85)" in ev
+        assert "terms(3)" in ev
+        assert "lex(2)" in ev
+        assert "explicit" in ev
+        assert "graph" in ev
+
+    def test_evidence_summary_empty(self) -> None:
+        fc = FileCandidate(path="foo.py")
+        assert fc.evidence_summary == ""
+
+
+# ---------------------------------------------------------------------------
+# Two-elbow detection tests
+# ---------------------------------------------------------------------------
+
+
+class TestTwoElbows:
+    """Test compute_two_elbows function."""
+
+    def test_empty_scores(self) -> None:
+        n_full, n_scaffold = compute_two_elbows([])
+        assert n_full == 0
+        assert n_scaffold == 0
+
+    def test_small_list(self) -> None:
+        """Lists smaller than min_full are returned entirely."""
+        n_full, n_scaffold = compute_two_elbows([0.9], min_full=2)
+        assert n_full == 1
+        assert n_scaffold == 1
+
+    def test_clear_two_elbows(self) -> None:
+        """Distribution with two clear drops should produce two elbows."""
+        # 3 high scores, 3 medium, 4 low
+        scores = [0.9, 0.88, 0.85, 0.5, 0.48, 0.45, 0.1, 0.08, 0.05, 0.03]
+        n_full, n_scaffold = compute_two_elbows(scores, min_full=1, min_total=2)
+        assert n_full >= 1
+        assert n_scaffold >= n_full
+        assert n_scaffold <= len(scores)
+
+    def test_flat_distribution(self) -> None:
+        """Flat distribution → everything in full tier."""
+        scores = [0.5, 0.49, 0.48, 0.47, 0.46]
+        n_full, n_scaffold = compute_two_elbows(scores, min_full=2)
+        # Flat → no clear elbow, should include most
+        assert n_full >= 2
+
+    def test_n_scaffold_gte_n_full(self) -> None:
+        """n_scaffold is always >= n_full."""
+        import random
+
+        random.seed(42)
+        for _ in range(20):
+            scores = sorted([random.random() for _ in range(15)], reverse=True)
+            n_full, n_scaffold = compute_two_elbows(scores, min_full=1, min_total=2)
+            assert n_scaffold >= n_full
+
+    def test_min_full_respected(self) -> None:
+        """min_full is always respected."""
+        scores = [0.9, 0.1, 0.05, 0.01, 0.005]
+        n_full, _ = compute_two_elbows(scores, min_full=3)
+        assert n_full >= 3
+
+
+class TestAssignTiers:
+    """Test assign_tiers function."""
+
+    def test_empty_candidates(self) -> None:
+        result = assign_tiers([])
+        assert result == []
+
+    def test_tiers_are_assigned(self) -> None:
+        candidates = [
+            FileCandidate(path=f"f{i}.py", combined_score=1.0 - i * 0.1) for i in range(10)
+        ]
+        result = assign_tiers(candidates)
+        tiers = [c.tier for c in result]
+        assert OutputTier.FULL_FILE in tiers
+        # Should be sorted by score descending
+        scores = [c.combined_score for c in result]
+        assert scores == sorted(scores, reverse=True)
+
+    def test_explicit_promotion(self) -> None:
+        """Explicit mentions should be promoted to at least MIN_SCAFFOLD."""
+        candidates = [
+            FileCandidate(path="high.py", combined_score=0.9),
+            FileCandidate(path="low.py", combined_score=0.01, has_explicit_mention=True),
+        ]
+        result = assign_tiers(candidates)
+        low = next(c for c in result if c.path == "low.py")
+        assert low.tier != OutputTier.SUMMARY_ONLY  # promoted
+
+
+class TestNoiseMetric:
+    """Test compute_noise_metric function."""
+
+    def test_empty_scores(self) -> None:
+        assert compute_noise_metric([]) == 1.0
+        assert compute_noise_metric([0.5]) == 1.0
+
+    def test_clear_signal(self) -> None:
+        """Strong top-heavy distribution → low noise."""
+        scores = [0.95, 0.90, 0.85, 0.1, 0.05, 0.02, 0.01]
+        noise = compute_noise_metric(scores)
+        assert noise < 0.5
+
+    def test_noisy_signal(self) -> None:
+        """Flat distribution → high noise."""
+        scores = [0.5, 0.49, 0.48, 0.47, 0.46, 0.45, 0.44]
+        noise = compute_noise_metric(scores)
+        assert noise > 0.3
+
+
+# ---------------------------------------------------------------------------
+# Tier-based budget trimming tests
+# ---------------------------------------------------------------------------
+
+
+class TestTierTrimming:
+    """Test budget trimming for tier-based (v6) responses."""
+
+    def test_no_trim_when_under_budget(self) -> None:
+        response = {
+            "summary_only": [{"path": "a.py"}],
+            "min_scaffold": [{"path": "b.py"}],
+            "full_file": [{"path": "c.py", "content": "x = 1"}],
+            "files": [],
+        }
+        result = _trim_to_budget(response, 100_000)
+        assert len(result["summary_only"]) == 1
+
+    def test_summary_only_trimmed_first(self) -> None:
+        """summary_only entries are trimmed before scaffold."""
+        response = {
+            "summary_only": [{"path": f"s{i}.py", "summary_line": "x" * 5000} for i in range(20)],
+            "min_scaffold": [{"path": "b.py", "scaffold": {"symbols": []}}],
+            "full_file": [{"path": "c.py", "content": "y = 1"}],
+            "files": [],
+        }
+        result = _trim_to_budget(response, 500)
+        assert len(result["summary_only"]) < 20

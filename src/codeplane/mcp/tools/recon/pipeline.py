@@ -37,8 +37,10 @@ from codeplane.mcp.tools.recon.expansion import (
 )
 from codeplane.mcp.tools.recon.harvesters import (
     _enrich_candidates,
+    _enrich_file_candidates,
     _harvest_embedding,
     _harvest_explicit,
+    _harvest_file_embedding,
     _harvest_graph,
     _harvest_imports,
     _harvest_lexical,
@@ -48,6 +50,8 @@ from codeplane.mcp.tools.recon.harvesters import (
 from codeplane.mcp.tools.recon.models import (
     _INTERNAL_BUDGET_BYTES,
     _INTERNAL_DEPTH,
+    FileCandidate,
+    OutputTier,
     ParsedTask,
     ReconBucket,
     _classify_artifact,
@@ -61,7 +65,9 @@ from codeplane.mcp.tools.recon.scoring import (
     _compute_context_value,
     _compute_edit_likelihood,
     _score_candidates,
+    assign_tiers,
     compute_anchor_floor,
+    compute_noise_metric,
     find_elbow,
 )
 
@@ -543,6 +549,213 @@ async def _select_seeds(
 
 
 # ===================================================================
+# File-centric pipeline (v6: file-level embedding + two-elbow tiers)
+# ===================================================================
+
+
+async def _file_centric_pipeline(
+    app_ctx: AppContext,
+    task: str,
+    explicit_seeds: list[str] | None = None,
+    *,
+    pinned_paths: list[str] | None = None,
+) -> tuple[
+    list[FileCandidate],
+    ParsedTask,
+    dict[str, Any],
+    dict[str, Any],
+]:
+    """File-centric recon pipeline using file-level embeddings as primary signal.
+
+    v6 pipeline — file-level embedding + two-elbow tiers:
+    1. Parse task → ParsedTask
+    2. File-level embedding search (PRIMARY) → ranked files
+    3. Def-level harvesters in parallel (SECONDARY) → enrichment signals
+    4. Enrich file candidates with secondary signals
+    5. Two-elbow tier assignment (FULL_FILE / MIN_SCAFFOLD / SUMMARY_ONLY)
+    6. Noise metric → conditional mapRepo inclusion
+
+    Returns:
+        (file_candidates, parsed_task, diagnostics, session_info)
+    """
+    diagnostics: dict[str, Any] = {}
+    session_info: dict[str, Any] = {}
+    t0 = time.monotonic()
+
+    # 1. Parse task
+    parsed = parse_task(task)
+    diagnostics["intent"] = parsed.intent.value
+
+    log.debug(
+        "recon.v6.parsed_task",
+        intent=parsed.intent.value,
+        primary=parsed.primary_terms[:5],
+        paths=parsed.explicit_paths,
+    )
+
+    # 2. File-level embedding search (PRIMARY)
+    t_file_emb = time.monotonic()
+    file_candidates = await _harvest_file_embedding(app_ctx, parsed, top_k=100)
+    diagnostics["file_embed_ms"] = round((time.monotonic() - t_file_emb) * 1000)
+    diagnostics["file_embed_count"] = len(file_candidates)
+
+    # 3. Def-level harvesters in parallel (SECONDARY enrichment)
+    t_def_harvest = time.monotonic()
+    emb_cands, term_cands, lex_cands, exp_cands = await asyncio.gather(
+        _harvest_embedding(app_ctx, parsed),
+        _harvest_term_match(app_ctx, parsed),
+        _harvest_lexical(app_ctx, parsed),
+        _harvest_explicit(app_ctx, parsed, explicit_seeds),
+    )
+    merged_def = _merge_candidates(emb_cands, term_cands, lex_cands, exp_cands)
+
+    # Graph + import harvesters for structural signal
+    graph_cands = await _harvest_graph(app_ctx, merged_def, parsed)
+    if graph_cands:
+        merged_def = _merge_candidates(merged_def, graph_cands)
+    import_cands = await _harvest_imports(app_ctx, merged_def, parsed)
+    if import_cands:
+        merged_def = _merge_candidates(merged_def, import_cands)
+
+    # Enrich def-level candidates with structural metadata
+    await _enrich_candidates(app_ctx, merged_def)
+
+    diagnostics["def_harvest_ms"] = round((time.monotonic() - t_def_harvest) * 1000)
+    diagnostics["def_candidates"] = len(merged_def)
+
+    # 4. Enrich file candidates with secondary signals
+    _enrich_file_candidates(file_candidates, merged_def, parsed)
+
+    # Handle pinned paths: ensure they're in candidates with high score
+    if pinned_paths:
+        existing_paths = {fc.path for fc in file_candidates}
+        for pp in pinned_paths:
+            if pp not in existing_paths:
+                file_candidates.append(
+                    FileCandidate(
+                        path=pp,
+                        similarity=0.0,
+                        combined_score=0.5,  # moderate score guarantee
+                        has_explicit_mention=True,
+                        artifact_kind=_classify_artifact(pp),
+                    )
+                )
+            else:
+                for fc in file_candidates:
+                    if fc.path == pp:
+                        fc.has_explicit_mention = True
+                        fc.combined_score = max(fc.combined_score, 0.5)
+                        break
+
+    # Handle explicit paths from task text
+    if parsed.explicit_paths:
+        existing_paths = {fc.path for fc in file_candidates}
+        for ep in parsed.explicit_paths:
+            if ep not in existing_paths:
+                file_candidates.append(
+                    FileCandidate(
+                        path=ep,
+                        similarity=0.0,
+                        combined_score=0.5,
+                        has_explicit_mention=True,
+                        artifact_kind=_classify_artifact(ep),
+                    )
+                )
+            else:
+                for fc in file_candidates:
+                    if fc.path == ep:
+                        fc.has_explicit_mention = True
+                        fc.combined_score = max(fc.combined_score, 0.5)
+                        break
+
+    # Also discover unindexed files (yaml, md, etc.) via path matching
+    indexed_paths: set[str] = set()
+    coordinator = app_ctx.coordinator
+    with coordinator.db.session() as session:
+        from codeplane.index._internal.indexing.graph import FactQueries
+
+        fq = FactQueries(session)
+        for frec in fq.list_files(limit=50000):
+            indexed_paths.add(frec.path)
+
+    unindexed_matches = _find_unindexed_files(app_ctx, parsed, indexed_paths)
+    existing_paths = {fc.path for fc in file_candidates}
+    for upath, uscore in unindexed_matches:
+        if upath not in existing_paths:
+            file_candidates.append(
+                FileCandidate(
+                    path=upath,
+                    similarity=0.0,
+                    combined_score=uscore * 0.3,  # scaled down since it's path-only
+                    artifact_kind=_classify_artifact(upath),
+                )
+            )
+
+    # 5. Two-elbow tier assignment
+    file_candidates = assign_tiers(file_candidates)
+
+    # Build expand_reason for each candidate
+    for fc in file_candidates:
+        reasons: list[str] = []
+        if fc.similarity > 0.5:
+            reasons.append("high semantic similarity")
+        elif fc.similarity > 0.3:
+            reasons.append("moderate semantic match")
+        if fc.term_match_count > 0:
+            reasons.append(f"{fc.term_match_count} term matches")
+        if fc.lexical_hit_count > 0:
+            reasons.append(f"{fc.lexical_hit_count} text hits")
+        if fc.has_explicit_mention:
+            reasons.append("explicitly mentioned")
+        if fc.graph_connected:
+            reasons.append("structurally connected")
+        fc.expand_reason = "; ".join(reasons) if reasons else "embedding match"
+
+    # 6. Noise metric
+    scores = [fc.combined_score for fc in file_candidates]
+    noise = compute_noise_metric(scores)
+    session_info["noise_metric"] = round(noise, 4)
+    session_info["include_map_repo"] = noise > 0.6  # high noise → include map_repo
+
+    # Session window check (if available)
+    try:
+        session_mgr = app_ctx.session
+        if hasattr(session_mgr, "pattern_detector"):
+            pd = session_mgr.pattern_detector
+            if hasattr(pd, "call_count"):
+                session_info["session_call_count"] = pd.call_count
+                # Early in session → include map_repo
+                if pd.call_count <= 3:
+                    session_info["include_map_repo"] = True
+    except Exception:  # noqa: BLE001
+        pass
+
+    diagnostics["n_file_candidates"] = len(file_candidates)
+    diagnostics["noise_metric"] = round(noise, 4)
+    n_full = sum(1 for fc in file_candidates if fc.tier == OutputTier.FULL_FILE)
+    n_scaffold = sum(1 for fc in file_candidates if fc.tier == OutputTier.MIN_SCAFFOLD)
+    n_summary = sum(1 for fc in file_candidates if fc.tier == OutputTier.SUMMARY_ONLY)
+    diagnostics["tiers"] = {
+        "full_file": n_full,
+        "min_scaffold": n_scaffold,
+        "summary_only": n_summary,
+    }
+    diagnostics["total_ms"] = round((time.monotonic() - t0) * 1000)
+
+    log.info(
+        "recon.v6.pipeline_done",
+        n_candidates=len(file_candidates),
+        n_full=n_full,
+        n_scaffold=n_scaffold,
+        n_summary=n_summary,
+        noise=round(noise, 4),
+        total_ms=diagnostics["total_ms"],
+    )
+
+    return file_candidates, parsed, diagnostics, session_info
+
+
+# ===================================================================
 # Evidence string builder (compact single-string format)
 # ===================================================================
 
@@ -617,17 +830,247 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
     ) -> dict[str, Any]:
         """Task-aware code discovery — ONE call, ALL context.
 
-        Returns full source for every relevant definition found,
-        with compressed metadata (evidence, callees, callers, siblings).
-        No follow-up calls needed.
+        Returns file-level results ranked by embedding similarity,
+        with three fidelity tiers:
+        - FULL_FILE: complete file content for top matches
+        - MIN_SCAFFOLD: imports + signatures for middle tier
+        - SUMMARY_ONLY: path + summary for tail
 
-        Pipeline: parse_task -> 5 harvesters -> filter -> score ->
-        file aggregation -> dual scoring -> bucketing -> expand ->
-        compress -> deliver.
+        Pipeline: parse_task → file-level embedding harvest →
+        def-level enrichment → two-elbow tier assignment →
+        content assembly → deliver.
         """
         recon_id = uuid.uuid4().hex[:12]
         t_total = time.monotonic()
 
+        coordinator = app_ctx.coordinator
+        repo_root = coordinator.repo_root
+        budget = _INTERNAL_BUDGET_BYTES
+
+        # Check if file-level embeddings are available
+        has_file_embeddings = (
+            hasattr(coordinator, "_file_embedding")
+            and coordinator._file_embedding is not None
+            and coordinator._file_embedding.count > 0
+        )
+
+        if has_file_embeddings:
+            # ── v6: File-centric pipeline ──
+            (
+                file_candidates,
+                parsed_task,
+                diagnostics,
+                session_info,
+            ) = await _file_centric_pipeline(
+                app_ctx,
+                task,
+                seeds,
+                pinned_paths=pinned_paths,
+            )
+
+            if not file_candidates:
+                task_preview = task[:40] + "..." if len(task) > 40 else task
+                failure_actions = _build_failure_actions(
+                    parsed_task.primary_terms,
+                    parsed_task.explicit_paths,
+                )
+                return {
+                    "recon_id": recon_id,
+                    "files": [],
+                    "summary": f'No relevant files found for "{task_preview}"',
+                    "agentic_hint": (
+                        "No relevant files found. See 'next_actions' for recovery steps."
+                    ),
+                    "next_actions": failure_actions,
+                }
+
+            # ── Assemble file-centric response ──
+            t_assemble = time.monotonic()
+            files_output: list[dict[str, Any]] = []
+
+            for fc in file_candidates:
+                entry: dict[str, Any] = {
+                    "path": fc.path,
+                    "tier": fc.tier.value,
+                    "similarity": round(fc.similarity, 4),
+                    "combined_score": round(fc.combined_score, 4),
+                    "evidence": fc.evidence_summary,
+                    "expand_reason": fc.expand_reason,
+                    "artifact_kind": fc.artifact_kind.value,
+                }
+
+                full_path = repo_root / fc.path
+
+                if fc.tier == OutputTier.FULL_FILE:
+                    # Include full file content
+                    content = _read_unindexed_content(repo_root, fc.path)
+                    if content is not None:
+                        entry["content"] = content
+                    elif full_path.exists():
+                        try:
+                            raw = full_path.read_bytes()
+                            if b"\x00" not in raw[:512]:
+                                text = raw.decode("utf-8", errors="replace")
+                                # Apply larger budget for full_file tier
+                                if len(text) > 50_000:
+                                    entry["content"] = text[:50_000] + "\n... (truncated at 50KB)"
+                                else:
+                                    entry["content"] = text
+                        except Exception:  # noqa: BLE001
+                            pass
+                    if full_path.exists():
+                        entry["file_sha256"] = _compute_sha256(full_path)
+
+                elif fc.tier == OutputTier.MIN_SCAFFOLD:
+                    # Include scaffold: imports + signatures
+                    try:
+                        from codeplane.mcp.tools.files import _build_scaffold
+
+                        scaffold = await _build_scaffold(app_ctx, fc.path, full_path)
+                        entry["scaffold"] = scaffold
+                    except Exception:  # noqa: BLE001
+                        # Fallback: read first 100 lines
+                        if full_path.exists():
+                            content = _read_unindexed_content(repo_root, fc.path)
+                            if content is not None:
+                                lines = content.splitlines()[:100]
+                                entry["scaffold_preview"] = "\n".join(lines)
+                    if full_path.exists():
+                        entry["file_sha256"] = _compute_sha256(full_path)
+
+                else:
+                    # SUMMARY_ONLY: just path + one-line summary
+                    if full_path.exists():
+                        try:
+                            raw = full_path.read_bytes()
+                            if b"\x00" not in raw[:512]:
+                                text = raw.decode("utf-8", errors="replace")
+                                first_line = text.split("\n", 1)[0].strip()
+                                if first_line:
+                                    entry["summary_line"] = first_line[:200]
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                files_output.append(entry)
+
+            assemble_ms = round((time.monotonic() - t_assemble) * 1000)
+            diagnostics["assemble_ms"] = assemble_ms
+
+            # Group by tier for structured output
+            full_files = [f for f in files_output if f["tier"] == "full_file"]
+            scaffold_files = [f for f in files_output if f["tier"] == "min_scaffold"]
+            summary_files = [f for f in files_output if f["tier"] == "summary_only"]
+
+            # Build response
+            n_files = len(files_output)
+            paths_str = ", ".join(f["path"] for f in full_files[:5])
+            if len(full_files) > 5:
+                paths_str += f" (+{len(full_files) - 5} more)"
+
+            response: dict[str, Any] = {
+                "recon_id": recon_id,
+                # Tier-based output (primary structure)
+                "full_file": full_files,
+                "min_scaffold": scaffold_files,
+                "summary_only": summary_files,
+                # Flat files list for backward compat
+                "files": files_output,
+                "summary": (
+                    f"{len(full_files)} full file(s), "
+                    f"{len(scaffold_files)} scaffold(s), "
+                    f"{len(summary_files)} summary(ies) "
+                    f"across {n_files} file(s): {paths_str}"
+                ),
+                "scoring_summary": {
+                    "pipeline": "file_embed→def_enrich→two_elbow→tier→assemble",
+                    "intent": parsed_task.intent.value,
+                    "file_candidates": len(file_candidates),
+                    "tiers": diagnostics.get("tiers", {}),
+                    "parsed_terms": parsed_task.primary_terms[:8],
+                    "noise_metric": session_info.get("noise_metric", 0),
+                },
+            }
+
+            if parsed_task.explicit_paths:
+                response["scoring_summary"]["explicit_paths"] = parsed_task.explicit_paths
+            if parsed_task.negative_mentions:
+                response["scoring_summary"]["negative_mentions"] = parsed_task.negative_mentions
+
+            # Conditional mapRepo inclusion hint
+            if session_info.get("include_map_repo"):
+                response["include_map_repo"] = True
+
+            diagnostics["total_ms"] = round((time.monotonic() - t_total) * 1000)
+            response["diagnostics"] = diagnostics
+
+            # Budget trimming
+            response = _trim_to_budget(response, budget)
+
+            # Agentic hint with expand_reason
+            intent = parsed_task.intent
+            top_paths = [f["path"] for f in full_files[:3]]
+            top_paths_str = ", ".join(top_paths) if top_paths else "(none)"
+            top_reasons = [
+                f"{fc.path}: {fc.expand_reason}"
+                for fc in file_candidates
+                if fc.tier == OutputTier.FULL_FILE
+            ][:3]
+            reasons_str = "; ".join(top_reasons) if top_reasons else ""
+
+            hint_parts = [
+                f"Recon found {n_files} file(s) (intent: {intent.value}).",
+                f"Full content ({len(full_files)}): {top_paths_str}.",
+                f"Scaffolds ({len(scaffold_files)}), Summaries ({len(summary_files)}).",
+            ]
+            if reasons_str:
+                hint_parts.append(f"Top files: {reasons_str}.")
+            hint_parts.append(
+                "Start with full_file entries — these have complete source. "
+                "Use read_source to expand min_scaffold files as needed. "
+                "Use checkpoint after edits."
+            )
+            if session_info.get("include_map_repo"):
+                hint_parts.append("Signal is noisy — consider calling map_repo for orientation.")
+            response["agentic_hint"] = " ".join(hint_parts)
+
+            # Coverage hint
+            if parsed_task.explicit_paths:
+                found_paths = {f["path"] for f in files_output}
+                missing_paths = [p for p in parsed_task.explicit_paths if p not in found_paths]
+                if missing_paths:
+                    response["coverage_hint"] = (
+                        "Mentioned paths not found: "
+                        f"{', '.join(missing_paths)}. "
+                        "Use read_source to examine them directly."
+                    )
+
+            from codeplane.mcp.delivery import wrap_existing_response
+
+            return wrap_existing_response(
+                response,
+                resource_kind="recon_result",
+            )
+
+        # ── Legacy fallback: def-centric pipeline (v5) ──
+        # Used when file-level embeddings are not available
+        return await _legacy_recon(
+            app_ctx,
+            task,
+            seeds,
+            pinned_paths=pinned_paths,
+            recon_id=recon_id,
+            t_total=t_total,
+        )
+
+    async def _legacy_recon(
+        app_ctx: AppContext,
+        task: str,
+        seeds: list[str] | None,
+        pinned_paths: list[str] | None,
+        recon_id: str,
+        t_total: float,
+    ) -> dict[str, Any]:
+        """Legacy def-centric pipeline (v5) — used when file embeddings unavailable."""
         coordinator = app_ctx.coordinator
         repo_root = coordinator.repo_root
         depth = _INTERNAL_DEPTH

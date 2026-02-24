@@ -16,6 +16,7 @@ import structlog
 
 from codeplane.mcp.tools.recon.models import (
     EvidenceRecord,
+    FileCandidate,
     HarvestCandidate,
     _classify_artifact,
     _is_barrel_file,
@@ -76,6 +77,50 @@ async def _harvest_embedding(
         count=len(candidates),
         views=len(views),
         top5=[(uid.split("::")[-1], round(s, 3)) for uid, s in similar[:5]],
+    )
+    return candidates
+
+
+# ===================================================================
+# Harvester A2: File-level embedding (Jina v2 base — PRIMARY)
+# ===================================================================
+
+
+async def _harvest_file_embedding(
+    app_ctx: AppContext,
+    parsed: ParsedTask,
+    *,
+    top_k: int = 100,
+) -> list[FileCandidate]:
+    """File-level embedding harvest using Jina v2 base.
+
+    This is the PRIMARY retrieval mechanism for the recon pipeline.
+    Returns FileCandidate objects ranked by similarity.
+
+    The query is the full task text (no multi-view needed — Jina v2 base
+    handles 8192 tokens and captures whole-file semantics).
+    """
+    coordinator = app_ctx.coordinator
+
+    # Use task text as-is for file-level query (no view engineering)
+    query_text = parsed.query_text or parsed.raw
+
+    file_results = coordinator.query_file_embeddings(query_text, top_k=top_k)
+
+    candidates: list[FileCandidate] = []
+    for path, sim in file_results:
+        cand = FileCandidate(
+            path=path,
+            similarity=sim,
+            combined_score=sim,  # initial score — enriched later
+            artifact_kind=_classify_artifact(path),
+        )
+        candidates.append(cand)
+
+    log.debug(
+        "recon.harvest.file_embedding",
+        count=len(candidates),
+        top5=[(c.path, round(c.similarity, 3)) for c in candidates[:5]],
     )
     return candidates
 
@@ -759,7 +804,7 @@ async def _harvest_imports(
         fq = FactQueries(session)
 
         # Resolve seed file paths
-        seed_file_paths: dict[int, str] = {}   # file_id → path
+        seed_file_paths: dict[int, str] = {}  # file_id → path
         seed_file_ids: set[int] = set()
         for uid in seed_uids:
             cand = merged[uid]
@@ -798,7 +843,10 @@ async def _harvest_imports(
                     continue
                 seen_import_fids.add(imp_file.id)
                 _add_file_defs_as_candidates(
-                    fq, imp_file, candidates, merged,
+                    fq,
+                    imp_file,
+                    candidates,
+                    merged,
                     category="import_forward",
                     detail=f"imported by {seed_file_paths.get(fid, '?')}",
                     score=0.45,
@@ -815,7 +863,7 @@ async def _harvest_imports(
                 .distinct()
             )
             reverse_fids = list(session.exec(reverse_stmt).all())
-            for rfid in reverse_fids[:_IMPORT_MAX_DEPENDENTS_PER_SEED * len(seed_file_ids)]:
+            for rfid in reverse_fids[: _IMPORT_MAX_DEPENDENTS_PER_SEED * len(seed_file_ids)]:
                 if len(candidates) >= _IMPORT_MAX_TOTAL:
                     break
                 if rfid in seed_file_ids:
@@ -824,7 +872,10 @@ async def _harvest_imports(
                 if rfile is None:
                     continue
                 _add_file_defs_as_candidates(
-                    fq, rfile, candidates, merged,
+                    fq,
+                    rfile,
+                    candidates,
+                    merged,
                     category="import_reverse",
                     detail=f"imports a seed file ({rfile.path})",
                     score=0.40,
@@ -848,7 +899,10 @@ async def _harvest_imports(
                 if barrel_file is None or barrel_file.id is None:
                     continue
                 _add_file_defs_as_candidates(
-                    fq, barrel_file, candidates, merged,
+                    fq,
+                    barrel_file,
+                    candidates,
+                    merged,
                     category="import_barrel",
                     detail=f"package init/conftest in {dir_path}",
                     score=0.35,
@@ -864,7 +918,10 @@ async def _harvest_imports(
                 tf = fq.get_file_by_path(tp)
                 if tf is not None and tf.id is not None:
                     _add_file_defs_as_candidates(
-                        fq, tf, candidates, merged,
+                        fq,
+                        tf,
+                        candidates,
+                        merged,
                         category="import_test",
                         detail=f"test file for {seed_path}",
                         score=0.35,
@@ -998,3 +1055,111 @@ def _select_graph_seeds(
 
     scored.sort(key=lambda x: -x[1])
     return [uid for uid, _ in scored[:_GRAPH_MAX_SEEDS]]
+
+
+# ===================================================================
+# File-level enrichment — combine file candidates with def-level signals
+# ===================================================================
+
+
+def _enrich_file_candidates(
+    file_candidates: list[FileCandidate],
+    def_candidates: dict[str, HarvestCandidate],
+    parsed: ParsedTask,
+) -> list[FileCandidate]:
+    """Enrich file-level candidates with secondary signals from def-level harvesters.
+
+    Combines file-level embedding similarity with def-level term matches,
+    lexical hits, explicit mentions, and graph connections.  The combined
+    score is: ``similarity + secondary_bonus`` (capped at 0.3 bonus).
+
+    Mutates candidates in-place.
+    """
+    # Group def-level signals by file path
+    path_signals: dict[str, dict] = {}
+    for _uid, cand in def_candidates.items():
+        fp = cand.file_path
+        if not fp:
+            continue
+        if fp not in path_signals:
+            path_signals[fp] = {
+                "term_count": 0,
+                "lex_count": 0,
+                "explicit": False,
+                "graph": False,
+                "max_embedding_sim": 0.0,
+            }
+        sig = path_signals[fp]
+        sig["term_count"] += len(cand.matched_terms)
+        sig["lex_count"] += cand.lexical_hit_count
+        sig["explicit"] = sig["explicit"] or cand.from_explicit
+        sig["graph"] = sig["graph"] or cand.from_graph
+        sig["max_embedding_sim"] = max(sig["max_embedding_sim"], cand.embedding_similarity)
+
+    # Also track which paths have explicit mentions from the task
+    explicit_paths = set(parsed.explicit_paths or [])
+
+    for fc in file_candidates:
+        sig = path_signals.get(fc.path, {})
+
+        # Apply secondary signals
+        fc.term_match_count = sig.get("term_count", 0)
+        fc.lexical_hit_count = sig.get("lex_count", 0)
+        fc.has_explicit_mention = sig.get("explicit", False) or fc.path in explicit_paths
+        fc.graph_connected = sig.get("graph", False)
+
+        # Compute secondary bonus (capped at 0.3)
+        bonus = 0.0
+        if fc.term_match_count > 0:
+            bonus += min(fc.term_match_count * 0.03, 0.10)
+        if fc.lexical_hit_count > 0:
+            bonus += min(fc.lexical_hit_count * 0.02, 0.08)
+        if fc.has_explicit_mention:
+            bonus += 0.15
+        if fc.graph_connected:
+            bonus += 0.05
+        bonus = min(bonus, 0.30)
+
+        fc.combined_score = fc.similarity + bonus
+
+    # Also add files found by def-level harvesters but NOT in file embedding
+    existing_paths = {fc.path for fc in file_candidates}
+    for fp, sig in path_signals.items():
+        if fp in existing_paths:
+            continue
+        # Files only found via secondary signals get no embedding similarity
+        # but may still be relevant
+        bonus = 0.0
+        term_count = sig.get("term_count", 0)
+        lex_count = sig.get("lex_count", 0)
+        is_explicit = sig.get("explicit", False) or fp in explicit_paths
+        is_graph = sig.get("graph", False)
+        max_def_sim = sig.get("max_embedding_sim", 0.0)
+
+        if term_count > 0:
+            bonus += min(term_count * 0.03, 0.10)
+        if lex_count > 0:
+            bonus += min(lex_count * 0.02, 0.08)
+        if is_explicit:
+            bonus += 0.15
+        if is_graph:
+            bonus += 0.05
+        bonus = min(bonus, 0.30)
+
+        # Use the def-level embedding similarity as a proxy
+        combined = max_def_sim * 0.5 + bonus
+
+        if combined > 0.05 or is_explicit:
+            fc = FileCandidate(
+                path=fp,
+                similarity=0.0,  # no file-level embedding match
+                combined_score=combined,
+                term_match_count=term_count,
+                lexical_hit_count=lex_count,
+                has_explicit_mention=is_explicit,
+                graph_connected=is_graph,
+                artifact_kind=_classify_artifact(fp),
+            )
+            file_candidates.append(fc)
+
+    return file_candidates

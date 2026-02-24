@@ -22,7 +22,6 @@ from __future__ import annotations
 from codeplane.mcp.tools.recon.assembly import (
     _build_failure_actions,
     _estimate_bytes,
-    _summarize_recon,
     _trim_to_budget,
 )
 
@@ -40,8 +39,10 @@ from codeplane.mcp.tools.recon.expansion import (
 # --- harvesters ---
 from codeplane.mcp.tools.recon.harvesters import (
     _enrich_candidates,
+    _enrich_file_candidates,
     _harvest_embedding,
     _harvest_explicit,
+    _harvest_file_embedding,
     _harvest_lexical,
     _harvest_term_match,
     _merge_candidates,
@@ -51,7 +52,9 @@ from codeplane.mcp.tools.recon.harvesters import (
 from codeplane.mcp.tools.recon.models import (
     ArtifactKind,
     EvidenceRecord,
+    FileCandidate,
     HarvestCandidate,
+    OutputTier,
     ParsedTask,
     ReconBucket,
     TaskIntent,
@@ -74,6 +77,7 @@ from codeplane.mcp.tools.recon.parsing import (
 # --- pipeline (orchestrator + tool registration) ---
 from codeplane.mcp.tools.recon.pipeline import (
     _build_evidence_string,
+    _file_centric_pipeline,
     _select_seeds,
     register_tools,
 )
@@ -82,14 +86,16 @@ from codeplane.mcp.tools.recon.pipeline import (
 from codeplane.mcp.tools.recon.scoring import (
     _aggregate_to_files,
     _aggregate_to_files_dual,
-    _apply_dual_gate,
     _apply_filters,
     _assign_buckets,
     _compute_context_value,
     _compute_edit_likelihood,
     _compute_embedding_floor,
     _score_candidates,
+    assign_tiers,
     compute_anchor_floor,
+    compute_noise_metric,
+    compute_two_elbows,
     find_elbow,
 )
 
@@ -97,7 +103,9 @@ __all__ = [
     # Types / enums
     "ArtifactKind",
     "EvidenceRecord",
+    "FileCandidate",
     "HarvestCandidate",
+    "OutputTier",
     "ParsedTask",
     "ReconBucket",
     "TaskIntent",
@@ -114,23 +122,27 @@ __all__ = [
     "_is_barrel_file",
     # Harvesters
     "_harvest_embedding",
+    "_harvest_file_embedding",
     "_harvest_term_match",
     "_harvest_lexical",
     "_harvest_explicit",
     "_merge_candidates",
     "_enrich_candidates",
+    "_enrich_file_candidates",
     # Scoring
     "_aggregate_to_files",
     "_aggregate_to_files_dual",
-    "_apply_dual_gate",
     "_apply_filters",
     "_assign_buckets",
     "_compute_context_value",
     "_compute_edit_likelihood",
     "_compute_embedding_floor",
     "_score_candidates",
-    "find_elbow",
+    "assign_tiers",
     "compute_anchor_floor",
+    "compute_noise_metric",
+    "compute_two_elbows",
+    "find_elbow",
     # Expansion
     "_compute_sha256",
     "_read_lines",
@@ -143,9 +155,9 @@ __all__ = [
     "_build_failure_actions",
     "_estimate_bytes",
     "_trim_to_budget",
-    "_summarize_recon",
     # Pipeline
     "_build_evidence_string",
+    "_file_centric_pipeline",
     "_select_seeds",
     "register_tools",
 ]

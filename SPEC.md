@@ -2546,6 +2546,40 @@ Tier C alone).
 - Deterministic: same input → same records → same vectors
 - Optional: gracefully disabled when fastembed not installed
 
+### 16.8 File-Level Embeddings (v6)
+
+Parallel to the def-level evidence-record system (§16.1–16.7), a
+**file-level embedding index** provides whole-file semantic search.
+
+Model: `jinaai/jina-embeddings-v2-base-en` (768-dim, 8192-token context,
+0.52 GB via fastembed).  One embedding per file.
+
+**Truncation**: when file content exceeds 24,000 chars (~8K tokens),
+deterministic head+tail truncation applies: 75% head + 25% tail.
+No language-dependent logic.
+
+**Storage**: `.codeplane/file_embedding/`
+- `file_embeddings.npz` — float16 matrix + path array
+- `file_meta.json` — model name, dim, count, version
+
+**Lifecycle**: mirrors def-level index — `stage_file()` → `commit_staged()`
+→ `load()` → `query()`.  Incremental updates: only changed files are
+re-embedded.
+
+**Recon v6 pipeline**: file-level embeddings are the PRIMARY retrieval
+signal.  The pipeline:
+1. Query file-level embeddings → ranked (path, similarity) list
+2. Def-level harvesters (A–F) run as SECONDARY enrichment
+3. Two-elbow detection on combined scores → three output tiers:
+   - **FULL_FILE** (above elbow-1): full file content included
+   - **MIN_SCAFFOLD** (between elbows): imports + signatures only
+   - **SUMMARY_ONLY** (below elbow-2): path + one-line summary
+4. Noise metric → conditional `map_repo` inclusion hint
+5. Agent hint includes `expand_reason` per file
+
+**Fallback**: when file-level embeddings are not available (index not built),
+the legacy def-centric pipeline (v5) is used as fallback.
+
 ---
 
 ## 17. Subsystem Ownership Boundaries (Who Owns What)

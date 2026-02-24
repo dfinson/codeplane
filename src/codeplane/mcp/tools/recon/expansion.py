@@ -239,9 +239,7 @@ async def _expand_seed(
                 if len(siblings) >= _MAX_SIBLINGS:
                     break
                 if sd.kind in ("function", "method", "class"):
-                    siblings.append(
-                        f"{sd.kind} {sd.name} [{sd.start_line}-{sd.end_line}]"
-                    )
+                    siblings.append(f"{sd.kind} {sd.name} [{sd.start_line}-{sd.end_line}]")
             if siblings:
                 result["siblings"] = siblings
 

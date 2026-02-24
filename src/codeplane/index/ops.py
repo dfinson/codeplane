@@ -57,6 +57,7 @@ from codeplane.index._internal.indexing import (
     run_pass_1_5,
 )
 from codeplane.index._internal.indexing.embedding import EmbeddingIndex
+from codeplane.index._internal.indexing.file_embedding import FileEmbeddingIndex
 from codeplane.index._internal.parsing import TreeSitterParser
 from codeplane.index._internal.state import FileStateService
 from codeplane.index.models import (
@@ -329,6 +330,7 @@ class IndexCoordinator:
         # Components (initialized lazily in initialize())
         self._lexical: LexicalIndex | None = None
         self._embedding: EmbeddingIndex | None = None
+        self._file_embedding: FileEmbeddingIndex | None = None
         self._parser: TreeSitterParser | None = None
         self._router: ContextRouter | None = None
         self._structural: StructuralIndexer | None = None
@@ -380,6 +382,7 @@ class IndexCoordinator:
         self._parser = TreeSitterParser()
         self._lexical = LexicalIndex(self.tantivy_path)
         self._embedding = EmbeddingIndex(self.repo_root / ".codeplane" / "embedding")
+        self._file_embedding = FileEmbeddingIndex(self.repo_root / ".codeplane")
         self._epoch_manager = EpochManager(self.db, self._lexical)
 
         # Step 3: Discover contexts
@@ -560,6 +563,8 @@ class IndexCoordinator:
         self._lexical = LexicalIndex(self.tantivy_path)
         self._embedding = EmbeddingIndex(self.repo_root / ".codeplane" / "embedding")
         self._embedding.load()
+        self._file_embedding = FileEmbeddingIndex(self.repo_root / ".codeplane")
+        self._file_embedding.load()
         self._epoch_manager = EpochManager(self.db, self._lexical)
 
         # Initialize router from existing contexts
@@ -847,6 +852,13 @@ class IndexCoordinator:
                                     file_path=extraction.file_path,
                                 )
 
+                            # Stage file for file-level embedding
+                            if self._file_embedding is not None and extraction.content_text:
+                                self._file_embedding.stage_file(
+                                    extraction.file_path,
+                                    extraction.content_text,
+                                )
+
                             if extraction.file_path in existing_set:
                                 files_updated += 1
                             symbols_indexed += len(extraction.symbol_names)
@@ -884,6 +896,12 @@ class IndexCoordinator:
                                         remove_uids.add(d.def_uid)
                             if remove_uids:
                                 self._embedding.stage_remove(remove_uids)
+
+                    # Stage file-level embedding removals
+                    if self._file_embedding is not None and removed_paths:
+                        self._file_embedding.stage_remove(
+                            [str(p) for p in removed_paths]
+                        )
 
                     # Commit all staged changes atomically
                     self._lexical.commit_staged()
@@ -928,6 +946,10 @@ class IndexCoordinator:
                             usage_lookup=_usage_lookup,
                         )
 
+                    # Commit file-level embeddings
+                    if self._file_embedding is not None and self._file_embedding.has_staged_changes():
+                        self._file_embedding.commit_staged()
+
                 # Mark successfully indexed files as indexed
                 if changed_file_ids:
                     now = time.time()
@@ -960,10 +982,18 @@ class IndexCoordinator:
                             if remove_uids_alt:
                                 self._embedding.stage_remove(remove_uids_alt)
 
+                    # Stage file-level embedding removals
+                    if self._file_embedding is not None and removed_paths:
+                        self._file_embedding.stage_remove(
+                            [str(p) for p in removed_paths]
+                        )
+
                     if self._lexical is not None:
                         self._lexical.commit_staged()
                     if self._embedding is not None and self._embedding.has_staged_changes():
                         self._embedding.commit_staged()
+                    if self._file_embedding is not None and self._file_embedding.has_staged_changes():
+                        self._file_embedding.commit_staged()
                 if self._lexical is not None:
                     self._lexical.reload()
 
@@ -2621,6 +2651,13 @@ class IndexCoordinator:
                             if self._embedding is not None and extraction.defs:
                                 self._embedding.stage_defs(extraction.defs)
 
+                            # Stage file for file-level embedding
+                            if self._file_embedding is not None and extraction.content_text:
+                                self._file_embedding.stage_file(
+                                    extraction.file_path,
+                                    extraction.content_text,
+                                )
+
                             count += 1
                             indexed_paths.append(extraction.file_path)
 
@@ -2697,7 +2734,23 @@ class IndexCoordinator:
                     # Send final signal with actual def count (not record count)
                     on_progress(emb_count, emb_count, files_by_ext, "embeddings_done")
 
+                # Commit file-level embeddings
+                if self._file_embedding is not None:
+                    self._file_embedding.commit_staged()
+
         return count, indexed_paths, files_by_ext
+
+    def query_file_embeddings(
+        self, text: str, top_k: int = 50
+    ) -> list[tuple[str, float]]:
+        """File-level semantic search using Jina v2 base embeddings.
+
+        Returns (relative_path, cosine_similarity) pairs ranked by similarity.
+        Used by recon for harvest and prune stages.
+        """
+        if self._file_embedding is None or self._file_embedding.count == 0:
+            return []
+        return self._file_embedding.query(text, top_k=top_k)
 
     def query_similar_defs(self, text: str, top_k: int = 50) -> list[tuple[str, float]]:
         """Semantic search over def embeddings.  Used by recon."""
@@ -2744,6 +2797,8 @@ class IndexCoordinator:
         # Clear embedding index alongside structural facts
         if self._embedding is not None:
             self._embedding.clear()
+        if self._file_embedding is not None:
+            self._file_embedding.clear()
 
         with self.db.session() as session:
             # Clear all fact tables

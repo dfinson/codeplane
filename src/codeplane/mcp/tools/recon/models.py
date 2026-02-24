@@ -275,6 +275,24 @@ class ReconBucket(StrEnum):
 
 
 # ===================================================================
+# OutputTier — file-level output fidelity tier
+# ===================================================================
+
+
+class OutputTier(StrEnum):
+    """Output fidelity tier for a file, determined by two-elbow detection.
+
+    FULL_FILE:     Above elbow-1 — include full file content.
+    MIN_SCAFFOLD:  Between elbow-1 and elbow-2 — imports + signatures.
+    SUMMARY_ONLY:  Below elbow-2 — path + one-line summary.
+    """
+
+    FULL_FILE = "full_file"
+    MIN_SCAFFOLD = "min_scaffold"
+    SUMMARY_ONLY = "summary_only"
+
+
+# ===================================================================
 # ArtifactKind — classify what kind of artifact a definition lives in
 # ===================================================================
 
@@ -601,6 +619,53 @@ class ParsedTask:
     negative_mentions: list[str] = field(default_factory=list)
     is_stacktrace_driven: bool = False
     is_test_driven: bool = False
+
+
+# ===================================================================
+# FileCandidate — file-level candidate from embedding + secondary signals
+# ===================================================================
+
+
+@dataclass
+class FileCandidate:
+    """A file-level candidate produced by file-embedding search + secondary signals.
+
+    Unlike def-level ``HarvestCandidate``, this represents an entire file.
+    The ``tier`` is assigned by two-elbow detection after scoring.
+    """
+
+    path: str
+    similarity: float = 0.0  # Cosine similarity from file-level embedding
+    tier: OutputTier = OutputTier.SUMMARY_ONLY
+
+    # Secondary signal reinforcements (from existing harvesters)
+    term_match_count: int = 0  # Number of query terms found in file defs
+    lexical_hit_count: int = 0  # Tantivy full-text hits in this file
+    has_explicit_mention: bool = False  # Agent mentioned this file
+    graph_connected: bool = False  # Connected via graph walk
+    artifact_kind: ArtifactKind = ArtifactKind.code
+
+    # Composite score (similarity + secondary signals)
+    combined_score: float = 0.0
+
+    # Expand reason for agent hint
+    expand_reason: str = ""
+
+    @property
+    def evidence_summary(self) -> str:
+        """Compact one-line evidence string."""
+        parts: list[str] = []
+        if self.similarity > 0:
+            parts.append(f"sim({self.similarity:.2f})")
+        if self.term_match_count > 0:
+            parts.append(f"terms({self.term_match_count})")
+        if self.lexical_hit_count > 0:
+            parts.append(f"lex({self.lexical_hit_count})")
+        if self.has_explicit_mention:
+            parts.append("explicit")
+        if self.graph_connected:
+            parts.append("graph")
+        return " ".join(parts)
 
 
 # ===================================================================
