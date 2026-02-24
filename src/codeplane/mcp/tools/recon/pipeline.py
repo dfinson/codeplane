@@ -428,18 +428,20 @@ async def _select_seeds(
         )
         n_files = max(n_files, elbow_n)
 
-        # Phase 2: MAD-based tail extension
-        # Compute median & MAD of elbow-included scores, then set a
-        # tail floor = median - 1.5 * MAD.  Files below the elbow but
-        # above this floor are "second-tier relevant" — include them.
-        if n_files < n_candidates:
+        # Phase 2: gap-based tail extension
+        # Extend inclusion by one "typical step" below the minimum
+        # included score.  The median consecutive-score gap captures
+        # the natural spacing; subtracting it gives a floor that adapts
+        # to each distribution shape (no constants).
+        if n_files < n_candidates and n_files >= 2:
             included = file_scores[:n_files]
-            inc_sorted = sorted(included)
-            inc_median = inc_sorted[len(inc_sorted) // 2]
-            abs_devs = sorted(abs(s - inc_median) for s in included)
-            inc_mad = abs_devs[len(abs_devs) // 2] if abs_devs else 0.0
-            tail_floor = inc_median - 1.5 * inc_mad
-            # Extend inclusion to files above tail_floor
+            gaps = [included[i] - included[i + 1] for i in range(len(included) - 1)]
+            gaps_sorted = sorted(gaps)
+            median_gap = gaps_sorted[len(gaps_sorted) // 2]
+            min_inc = included[-1]
+            # Safety net: never drop below half the minimum included
+            # score to prevent runaway in pathological distributions.
+            tail_floor = max(min_inc - median_gap, min_inc * 0.5)
             for idx in range(n_files, min(n_candidates, 40)):
                 if file_scores[idx] >= tail_floor:
                     n_files = idx + 1
