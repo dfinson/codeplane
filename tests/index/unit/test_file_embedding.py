@@ -12,6 +12,8 @@ import pytest
 from codeplane.index._internal.indexing.file_embedding import (
     _DOC_MAX_COUNT,
     _build_embed_text,
+    _build_enriched_chunks,
+    _build_enrichment_lines,
     _compact_sig,
     _path_to_phrase,
     _word_split,
@@ -278,3 +280,216 @@ class TestDetectBatchSize:
         assert isinstance(result, int)
         assert result >= 4
         assert result <= 32
+
+
+# ---------------------------------------------------------------------------
+# _build_enrichment_lines tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildEnrichmentLines:
+    """Tests for S+I+C+D enrichment signal extraction."""
+
+    def test_empty_defs_and_imports(self) -> None:
+        result = _build_enrichment_lines([], [])
+        assert result == {}
+
+    def test_string_literals_signal(self) -> None:
+        """S signal: extracts string literals from _string_literals."""
+        defs = [
+            {
+                "name": "load_config",
+                "_string_literals": ["EVEE_MCP_MODE", "config.yaml", "ab", "true", ""],
+            }
+        ]
+        result = _build_enrichment_lines(defs, [])
+        assert "S" in result
+        assert result["S"].startswith("mentions ")
+        assert "EVEE_MCP_MODE" in result["S"]
+        assert "config.yaml" in result["S"]
+        # Too short (ab) and trivial (true, empty) should be excluded
+        assert "ab" not in result["S"]
+        assert "true" not in result["S"]
+
+    def test_string_literals_budget(self) -> None:
+        """S signal respects the character budget."""
+        defs = [
+            {
+                "name": "f",
+                "_string_literals": [f"literal_value_{i:04d}" for i in range(100)],
+            }
+        ]
+        result = _build_enrichment_lines(defs, [])
+        assert "S" in result
+        from codeplane.index._internal.indexing.file_embedding import _STRING_LIT_BUDGET_CHARS
+
+        # The mentions line prefix + content should stay within budget
+        content_part = result["S"][len("mentions ") :]
+        assert len(content_part) <= _STRING_LIT_BUDGET_CHARS + 50  # allow for last item
+
+    def test_full_imports_signal(self) -> None:
+        """I signal: full dotted import path, not just last segment."""
+        imports = [
+            {"imported_name": "Path", "source_literal": "pathlib"},
+            {"imported_name": "Progress", "source_literal": "rich.progress"},
+        ]
+        result = _build_enrichment_lines([], imports)
+        assert "I" in result
+        assert result["I"].startswith("imports ")
+        # Full path should be word-split: rich.progress → "rich progress"
+        assert "rich progress" in result["I"]
+
+    def test_calls_signal(self) -> None:
+        """C signal: function/method call names from _sem_facts."""
+        defs = [
+            {
+                "name": "setup",
+                "_sem_facts": {"calls": ["load_dotenv", "Progress", "x"]},
+            },
+            {
+                "name": "run",
+                "_sem_facts": {"calls": ["Progress", "SpinnerColumn"]},
+            },
+        ]
+        result = _build_enrichment_lines(defs, [])
+        assert "C" in result
+        assert result["C"].startswith("calls ")
+        assert "load_dotenv" in result["C"]
+        assert "Progress" in result["C"]
+        assert "SpinnerColumn" in result["C"]
+        # Single-char call 'x' should be excluded (len < 2)
+        assert ", x" not in result["C"]
+
+    def test_decorators_signal(self) -> None:
+        """D signal: decorator names from decorators_json."""
+        defs = [
+            {
+                "name": "cli",
+                "decorators_json": '["@click.command()", "@property"]',
+            }
+        ]
+        result = _build_enrichment_lines(defs, [])
+        assert "D" in result
+        assert result["D"].startswith("decorated ")
+        assert "click.command" in result["D"]
+        assert "property" in result["D"]
+
+    def test_all_signals_present(self) -> None:
+        """All four signals should be generated when data is available."""
+        defs = [
+            {
+                "name": "handler",
+                "_string_literals": ["api_key", "secret_token"],
+                "_sem_facts": {"calls": ["authenticate", "validate_token"]},
+                "decorators_json": '["@require_auth"]',
+            }
+        ]
+        imports = [{"imported_name": "FastAPI", "source_literal": "fastapi"}]
+        result = _build_enrichment_lines(defs, imports)
+        assert "S" in result
+        assert "I" in result
+        assert "C" in result
+        assert "D" in result
+
+    def test_dedup_calls(self) -> None:
+        """Duplicate call names across defs should be deduplicated."""
+        defs = [
+            {"name": "a", "_sem_facts": {"calls": ["log", "save"]}},
+            {"name": "b", "_sem_facts": {"calls": ["log", "load"]}},
+        ]
+        result = _build_enrichment_lines(defs, [])
+        calls_part = result["C"][len("calls "):]
+        # "log" should appear only once
+        assert calls_part.count("log") == 1
+
+    def test_dedup_string_literals(self) -> None:
+        """Duplicate string literals across defs should be deduplicated."""
+        defs = [
+            {"name": "a", "_string_literals": ["config.yaml"]},
+            {"name": "b", "_string_literals": ["config.yaml", "other.txt"]},
+        ]
+        result = _build_enrichment_lines(defs, [])
+        mentions_part = result["S"][len("mentions "):]
+        assert mentions_part.count("config.yaml") == 1
+
+
+# ---------------------------------------------------------------------------
+# _build_enriched_chunks tests
+# ---------------------------------------------------------------------------
+
+
+class TestBuildEnrichedChunks:
+    """Tests for enriched scaffold chunking (1-chunk and 2-chunk split)."""
+
+    def test_single_chunk_small_scaffold(self) -> None:
+        """Small enriched scaffold fits in one chunk."""
+        scaffold = "module auth handler\nimports os\ndefines function check(request)"
+        enrichment = {"S": "mentions API_KEY", "C": "calls validate"}
+        chunks = _build_enriched_chunks(scaffold, enrichment, "")
+        assert len(chunks) == 1
+        assert "FILE_SCAFFOLD" in chunks[0]
+        assert "mentions API_KEY" in chunks[0]
+        assert "calls validate" in chunks[0]
+
+    def test_import_replacement(self) -> None:
+        """I signal replaces the short imports line with full paths."""
+        scaffold = "module test\nimports os\ndefines function main()"
+        enrichment = {"I": "imports operating system"}
+        chunks = _build_enriched_chunks(scaffold, enrichment, "")
+        assert len(chunks) == 1
+        # Full import should replace the short one
+        assert "imports operating system" in chunks[0]
+        # Short import should NOT be present (replaced)
+        lines = chunks[0].split("\n")
+        import_lines = [ln for ln in lines if ln.startswith("imports ")]
+        assert len(import_lines) == 1
+        assert import_lines[0] == "imports operating system"
+
+    def test_two_chunk_split_large_scaffold(self) -> None:
+        """Large scaffold should split into 2 chunks."""
+        # Create a scaffold that exceeds _CHUNK_SPLIT_CHARS when enriched
+        defs_text = ", ".join(f"function very_long_function_name_{i}(a, b, c)" for i in range(60))
+        scaffold = f"module large module with many definitions\nimports many_modules\ndefines {defs_text}"
+        enrichment = {
+            "I": "imports " + ", ".join(f"package_{i} module_{i}" for i in range(20)),
+            "S": "mentions " + ", ".join(f"CONFIG_KEY_{i}" for i in range(20)),
+            "C": "calls " + ", ".join(f"function_call_{i}" for i in range(15)),
+            "D": "decorated dataclass, property, classmethod",
+        }
+        chunks = _build_enriched_chunks(scaffold, enrichment, "")
+        assert len(chunks) == 2
+        # Chunk 0: base scaffold (without enrichment signals)
+        assert "FILE_SCAFFOLD" in chunks[0]
+        assert "defines" in chunks[0]
+        assert "mentions" not in chunks[0]
+        # Chunk 1: module context + enrichment signals
+        assert "FILE_SCAFFOLD" in chunks[1]
+        assert "module " in chunks[1]
+        assert "mentions " in chunks[1]
+        assert "calls " in chunks[1]
+        assert "decorated " in chunks[1]
+
+    def test_fallback_no_scaffold(self) -> None:
+        """Without scaffold, falls back to truncated content."""
+        chunks = _build_enriched_chunks("", {}, "print('hello')")
+        assert len(chunks) == 1
+        assert "print('hello')" in chunks[0]
+        assert "FILE_SCAFFOLD" not in chunks[0]
+
+    def test_no_enrichment_single_chunk(self) -> None:
+        """Scaffold without enrichment stays as single chunk."""
+        scaffold = "module test\ndefines function main()"
+        chunks = _build_enriched_chunks(scaffold, {}, "")
+        assert len(chunks) == 1
+        assert "FILE_SCAFFOLD" in chunks[0]
+        assert "module test" in chunks[0]
+
+    def test_chunk_respects_max_chars(self) -> None:
+        """Chunks should not exceed FILE_EMBED_MAX_CHARS."""
+        from codeplane.index._internal.indexing.file_embedding import FILE_EMBED_MAX_CHARS
+
+        scaffold = "module test\n" + "defines function x\n" * 500
+        enrichment = {"S": "mentions " + "x" * 500}
+        chunks = _build_enriched_chunks(scaffold, enrichment, "")
+        for chunk in chunks:
+            assert len(chunk) <= FILE_EMBED_MAX_CHARS

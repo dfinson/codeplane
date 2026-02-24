@@ -1,24 +1,19 @@
 #!/usr/bin/env python3
-"""Embedding benchmark: variations × models × real evee repo files × real issue queries.
+"""Hybrid RRF embedding benchmark: anglicised-only vs RRF(anglicised + full_content).
 
-Uses the evee repo (microsoft/evee) as corpus — 70+ real Python source files.
-Queries are drawn from 8 real GitHub issues with curated ground-truth file sets
-from benchmarking/evee/ReconEveeEvaluation.md.
+Compares two models under two retrieval strategies:
+  A) ang_only   — anglicised scaffold vectors only (current production)
+  B) hybrid_rrf — RRF fusion of anglicised + full_content vectors
+                  (full_content only for files < 15KB source)
 
-Compares 4 text representations:
-  A) raw_scaffold  — read_scaffold output: "class Foo(x: int)  [1-20]" format
-  B) anglicised    — anglicified scaffold: "module foo\ndefines class foo, method bar(x)"
-  C) scaffold+ang  — both combined (concatenated)
-  D) full_content  — raw file source code (FULL — no truncation; uses chunking for long files)
+Models:
+  1) BAAI/bge-small-en-v1.5              (384-dim, 0.067 GB)
+  2) jinaai/jina-embeddings-v2-base-code (768-dim, 0.64 GB) ← current production
 
-Across 3 models:
-  1) BAAI/bge-small-en-v1.5       (384-dim, 0.067 GB, 512 tokens)
-  2) jinaai/jina-embeddings-v2-small-en (512-dim, 0.12 GB, 8192 tokens)
-  3) jinaai/jina-embeddings-v2-base-code (768-dim, 0.64 GB, 8192 tokens) ← current
+CUDA-accelerated via fastembed(cuda=True).
 
-Metric: For each query, we measure Recall@K against the curated ground-truth
-edit-target files for the issue. This gives a proper retrieval quality signal
-rather than raw cosine similarity.
+Query set: 24 real queries from 8 evee GitHub issues × 3 difficulty levels.
+Corpus: ~84 Python files from the evee repo.
 """
 
 from __future__ import annotations
@@ -37,31 +32,30 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 EVEE_ROOT = Path("/home/dave01/wsl-repos/evees/evee_cpl/evee")
-CODEPLANE_ROOT = Path(__file__).resolve().parent
 MAX_LENGTH = 512
-SCAFFOLD_MAX_CHARS = 2048  # cap scaffold representations (they're already compact)
-CHUNK_SIZE = 8000  # chars per chunk for full content (well within 8192 token window)
-CHUNK_OVERLAP = 500  # overlap between chunks
+SCAFFOLD_MAX_CHARS = 2048
+CHUNK_SIZE = 8000
+CHUNK_OVERLAP = 500
+FULL_CONTENT_SIZE_LIMIT = 15_000  # only embed full content for files < 15KB
+RRF_K = 60  # RRF smoothing constant
 
 MODELS = [
     ("BAAI/bge-small-en-v1.5", 384, 0.067),
-    ("jinaai/jina-embeddings-v2-small-en", 512, 0.12),
     ("jinaai/jina-embeddings-v2-base-code", 768, 0.64),
 ]
 
 
 # ---------------------------------------------------------------------------
-# Real issue queries with ground-truth edit targets (verified against repo)
-# From benchmarking/evee/ReconEveeEvaluation.md — 8 issues × 3 query levels
+# Issue queries (identical to _bench_embed.py)
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class IssueQuery:
     issue: int
-    level: str  # Q1 (anchored/precise), Q2 (mixed/scoped), Q3 (unanchored/open)
+    level: str
     query: str
-    gt_edit_files: list[str]  # files that need actual code changes
+    gt_edit_files: list[str]
 
 
 ISSUE_QUERIES: list[IssueQuery] = [
@@ -81,7 +75,6 @@ ISSUE_QUERIES: list[IssueQuery] = [
         query="How can I add result caching to Evee so that re-running experiments with the same models doesn't repeat inference? I want to save time and costs during iterative development.",
         gt_edit_files=["src/evee/evaluation/model_evaluator.py", "src/evee/config/models.py"],
     ),
-
     # --- #259: Raise error when .env missing ---
     IssueQuery(
         issue=259, level="Q1",
@@ -113,7 +106,6 @@ ISSUE_QUERIES: list[IssueQuery] = [
             "src/evee/evaluation/model_evaluator.py",
         ],
     ),
-
     # --- #260: Config flag to disable rich progress bars ---
     IssueQuery(
         issue=260, level="Q1",
@@ -142,7 +134,6 @@ ISSUE_QUERIES: list[IssueQuery] = [
             "src/evee/mcp/resources/config.py",
         ],
     ),
-
     # --- #226: Set default MLflow tracking URI to sqlite ---
     IssueQuery(
         issue=226, level="Q1",
@@ -171,7 +162,6 @@ ISSUE_QUERIES: list[IssueQuery] = [
             "src/evee/mcp/resources/config.py",
         ],
     ),
-
     # --- #233: Early stop for evaluation ---
     IssueQuery(
         issue=233, level="Q1",
@@ -197,7 +187,6 @@ ISSUE_QUERIES: list[IssueQuery] = [
             "src/evee/evaluation/progress_tracker.py", "src/evee/tracking/events.py",
         ],
     ),
-
     # --- #262: REST-based models ---
     IssueQuery(
         issue=262, level="Q1",
@@ -229,7 +218,6 @@ ISSUE_QUERIES: list[IssueQuery] = [
             "src/evee/cli/commands/validate.py",
         ],
     ),
-
     # --- #275: Reuse metrics with custom instance names ---
     IssueQuery(
         issue=275, level="Q1",
@@ -261,7 +249,6 @@ ISSUE_QUERIES: list[IssueQuery] = [
             "src/evee/mcp/resources/config.py", "src/evee/mcp/resources/metric_patterns.py",
         ],
     ),
-
     # --- #193: Configurable dependency sources in `evee new` ---
     IssueQuery(
         issue=193, level="Q1",
@@ -294,18 +281,17 @@ ISSUE_QUERIES: list[IssueQuery] = [
 
 @dataclass
 class FileData:
-    path: str  # relative to EVEE_ROOT (e.g. "src/evee/config/models.py")
+    path: str
     content: str
+    source_chars: int
     defs: list[dict]
     imports: list[dict]
-    raw_scaffold: str = ""
     anglicised: str = ""
-    combined: str = ""
     full_chunks: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
-# File discovery + tree-sitter extraction
+# File discovery + extraction
 # ---------------------------------------------------------------------------
 
 
@@ -343,6 +329,7 @@ def extract_all_files(rel_paths: list[str]) -> list[FileData]:
         fd = FileData(
             path=rel_path,
             content=content,
+            source_chars=len(content),
             defs=result.defs,
             imports=result.imports,
         )
@@ -352,73 +339,20 @@ def extract_all_files(rel_paths: list[str]) -> list[FileData]:
 
 
 # ---------------------------------------------------------------------------
-# Build 4 text variations per file
+# Build text representations
 # ---------------------------------------------------------------------------
 
 
-def build_raw_scaffold(fd: FileData) -> str:
-    """Build read_scaffold-style output: compact code-like symbol tree."""
-    lines: list[str] = []
-
-    source_groups: defaultdict[str, list[str]] = defaultdict(list)
-    bare: list[str] = []
-    for imp in fd.imports:
-        name = imp.get("imported_name", "")
-        source = imp.get("source_literal", "") or imp.get("module_path", "")
-        if source and source != name:
-            source_groups[source].append(name)
-        else:
-            bare.append(name)
-
-    if bare:
-        lines.append(f"imports: {', '.join(bare)}")
-    for src, names in sorted(source_groups.items()):
-        lines.append(f"  {src}: {', '.join(names)}")
-
-    container_kinds = frozenset(
-        {"class", "struct", "enum", "interface", "trait", "module", "namespace"}
-    )
-    sorted_defs = sorted(
-        fd.defs, key=lambda d: (d.get("start_line", 0), d.get("start_col", 0))
-    )
-
-    stack: list[tuple[int, int]] = []
-    for d in sorted_defs:
-        sl = d.get("start_line", 0)
-        el = d.get("end_line", 0)
-        while stack and sl >= stack[-1][0]:
-            stack.pop()
-        depth = len(stack)
-        indent = "  " * depth
-
-        kind = d.get("kind", "")
-        name = d.get("name", "")
-        sig = d.get("signature_text", "") or ""
-        if sig and not sig.startswith("("):
-            sig = f"({sig})"
-
-        line = f"{indent}{kind} {name}{sig}  [{sl}-{el}]"
-        lines.append(line)
-
-        if kind in container_kinds:
-            stack.append((el, depth + 1))
-
-    return "\n".join(lines)
-
-
 def build_anglicised(fd: FileData) -> str:
-    """Build anglicified scaffold — the current production format."""
     from codeplane.index._internal.indexing.file_embedding import (
         _build_embed_text,
         build_file_scaffold,
     )
-
     scaffold = build_file_scaffold(fd.path, fd.defs, fd.imports)
     return _build_embed_text(scaffold, fd.content, defs=fd.defs)
 
 
 def build_full_chunks(fd: FileData) -> list[str]:
-    """Split full file content into overlapping chunks. No truncation."""
     content = fd.content
     if len(content) <= CHUNK_SIZE:
         return [content]
@@ -431,17 +365,15 @@ def build_full_chunks(fd: FileData) -> list[str]:
     return chunks
 
 
-def prepare_variations(files: list[FileData]) -> None:
-    """Build all 4 text variations for each file."""
+def prepare_texts(files: list[FileData]) -> None:
+    """Build anglicised + full_content chunks for each file."""
     for fd in files:
-        fd.raw_scaffold = build_raw_scaffold(fd)[:SCAFFOLD_MAX_CHARS]
         fd.anglicised = build_anglicised(fd)[:SCAFFOLD_MAX_CHARS]
-        fd.combined = f"{fd.raw_scaffold}\n---\n{fd.anglicised}"[:SCAFFOLD_MAX_CHARS]
         fd.full_chunks = build_full_chunks(fd)
 
 
 # ---------------------------------------------------------------------------
-# Embedding + evaluation
+# Embedding (CUDA)
 # ---------------------------------------------------------------------------
 
 
@@ -449,14 +381,14 @@ def load_model(model_name: str):
     from fastembed import TextEmbedding
 
     t0 = time.monotonic()
-    m = TextEmbedding(model_name=model_name, max_length=MAX_LENGTH)
+    m = TextEmbedding(model_name=model_name, max_length=MAX_LENGTH, cuda=True)
     dt = time.monotonic() - t0
-    print(f"  Loaded in {dt:.1f}s")
+    print(f"  Loaded {model_name.split('/')[-1]} in {dt:.1f}s (CUDA)")
     return m
 
 
-def embed_batch(model, texts: list[str], batch_size: int = 4) -> np.ndarray:
-    """Embed texts, L2-normalize, return float32 matrix."""
+def embed_batch(model, texts: list[str], batch_size: int = 32) -> np.ndarray:
+    """Embed texts on GPU, L2-normalize, return float32 matrix."""
     vecs = list(model.embed(texts, batch_size=batch_size))
     mat = np.array(vecs, dtype=np.float32)
     norms = np.linalg.norm(mat, axis=1, keepdims=True)
@@ -465,64 +397,105 @@ def embed_batch(model, texts: list[str], batch_size: int = 4) -> np.ndarray:
     return mat
 
 
-def build_variation_index(
-    model,
-    files: list[FileData],
-    var_name: str,
-) -> tuple[np.ndarray, list[int], float]:
-    """Embed a variation and return (vectors, file_index_per_vec, embed_time_ms).
+# ---------------------------------------------------------------------------
+# Index builders
+# ---------------------------------------------------------------------------
 
-    For single-text variations (scaffold, anglicised, combined), there's one
-    vector per file. For full_content with chunking, there may be multiple
-    vectors per file — we track which file each vector belongs to.
+
+def build_ang_index(
+    model, files: list[FileData],
+) -> tuple[np.ndarray, list[int], float]:
+    """Embed anglicised text — one vector per file."""
+    texts = [fd.anglicised for fd in files]
+    file_indices = list(range(len(files)))
+    t0 = time.monotonic()
+    vecs = embed_batch(model, texts)
+    embed_ms = (time.monotonic() - t0) * 1000
+    return vecs, file_indices, embed_ms
+
+
+def build_full_index(
+    model, files: list[FileData],
+) -> tuple[np.ndarray, list[int], float]:
+    """Embed full_content chunks — only for files < FULL_CONTENT_SIZE_LIMIT.
+
+    Returns vectors + file index mapping. Files >= limit get NO full vectors.
     """
     texts: list[str] = []
-    file_indices: list[int] = []  # maps each text -> index into files[]
+    file_indices: list[int] = []
+    skipped = 0
 
     for fi, fd in enumerate(files):
-        if var_name == "raw_scaffold":
-            texts.append(fd.raw_scaffold)
+        if fd.source_chars >= FULL_CONTENT_SIZE_LIMIT:
+            skipped += 1
+            continue
+        for chunk in fd.full_chunks:
+            texts.append(chunk)
             file_indices.append(fi)
-        elif var_name == "anglicised":
-            texts.append(fd.anglicised)
-            file_indices.append(fi)
-        elif var_name == "scaffold+ang":
-            texts.append(fd.combined)
-            file_indices.append(fi)
-        elif var_name == "full_content":
-            for chunk in fd.full_chunks:
-                texts.append(chunk)
-                file_indices.append(fi)
+
+    if not texts:
+        return np.zeros((0, 1), dtype=np.float32), [], 0.0
 
     t0 = time.monotonic()
     vecs = embed_batch(model, texts)
     embed_ms = (time.monotonic() - t0) * 1000
 
+    eligible = len(files) - skipped
+    print(f"    full_content: {eligible}/{len(files)} files eligible (<{FULL_CONTENT_SIZE_LIMIT//1000}KB), "
+          f"{len(texts)} chunks, {skipped} skipped")
     return vecs, file_indices, embed_ms
 
 
-def retrieve_topk(
+# ---------------------------------------------------------------------------
+# Retrieval strategies
+# ---------------------------------------------------------------------------
+
+
+def retrieve_ranked(
     query_vec: np.ndarray,
     doc_vecs: np.ndarray,
     file_indices: list[int],
-    k: int = 10,
+    top_n: int = 50,
 ) -> list[tuple[int, float]]:
-    """Return top-K unique file indices by max similarity.
-
-    For chunked variations, the same file may have multiple vectors.
-    We take the max sim across chunks for each file.
-    """
-    sims = query_vec @ doc_vecs.T  # (D,)
-    # Aggregate: max sim per file
-    file_max_sim: dict[int, float] = {}
+    """Top-N unique files by max cosine similarity across chunks."""
+    if len(doc_vecs) == 0:
+        return []
+    sims = query_vec @ doc_vecs.T
+    file_max: dict[int, float] = {}
     for vi, fi in enumerate(file_indices):
         s = float(sims[vi])
-        if fi not in file_max_sim or s > file_max_sim[fi]:
-            file_max_sim[fi] = s
+        if fi not in file_max or s > file_max[fi]:
+            file_max[fi] = s
+    ranked = sorted(file_max.items(), key=lambda x: -x[1])
+    return ranked[:top_n]
 
-    # Sort by sim descending
-    ranked = sorted(file_max_sim.items(), key=lambda x: -x[1])
-    return ranked[:k]
+
+def rrf_fuse(
+    rank_list_a: list[tuple[int, float]],
+    rank_list_b: list[tuple[int, float]],
+    k: int = RRF_K,
+) -> list[tuple[int, float]]:
+    """Reciprocal Rank Fusion of two ranked file lists.
+
+    RRF_score(file) = 1/(k + rank_a) + 1/(k + rank_b)
+    Files appearing in only one list get rank = len(that_list) + 1 (worst-case).
+    """
+    # Build rank dicts (1-indexed)
+    rank_a: dict[int, int] = {fi: r + 1 for r, (fi, _) in enumerate(rank_list_a)}
+    rank_b: dict[int, int] = {fi: r + 1 for r, (fi, _) in enumerate(rank_list_b)}
+
+    all_files = set(rank_a.keys()) | set(rank_b.keys())
+    default_a = len(rank_list_a) + 1
+    default_b = len(rank_list_b) + 1
+
+    scores: dict[int, float] = {}
+    for fi in all_files:
+        ra = rank_a.get(fi, default_a)
+        rb = rank_b.get(fi, default_b)
+        scores[fi] = 1.0 / (k + ra) + 1.0 / (k + rb)
+
+    ranked = sorted(scores.items(), key=lambda x: -x[1])
+    return ranked
 
 
 # ---------------------------------------------------------------------------
@@ -533,28 +506,24 @@ EVAL_K_VALUES = [5, 10, 20]
 
 
 @dataclass
-class VariationMetrics:
+class StrategyResult:
     name: str
-    avg_chars: float = 0.0
-    num_vectors: int = 0
-    embed_time_ms: float = 0.0
-    # Recall@K averaged across all queries
     recall_at: dict[int, float] = field(default_factory=dict)
-    # MRR (mean reciprocal rank of first GT hit)
     mrr: float = 0.0
+    ang_embed_ms: float = 0.0
+    full_embed_ms: float = 0.0
+    total_vectors: int = 0
+    per_query: list[dict] = field(default_factory=list)
 
 
-def compute_metrics(
+def evaluate_strategy(
     files: list[FileData],
     queries: list[IssueQuery],
-    doc_vecs: np.ndarray,
-    file_indices: list[int],
     query_vecs: np.ndarray,
-) -> tuple[dict[int, float], float, list[dict]]:
-    """Compute Recall@K and MRR across all queries.
-
-    Returns (recall_at_k_dict, mrr, per_query_details).
-    """
+    ranked_lists: list[list[tuple[int, float]]],  # one per query
+    strategy_name: str,
+) -> StrategyResult:
+    """Compute Recall@K and MRR for a list of per-query ranked results."""
     file_paths = [f.path for f in files]
 
     recall_sums: dict[int, float] = {k: 0.0 for k in EVAL_K_VALUES}
@@ -564,22 +533,19 @@ def compute_metrics(
     for qi, iq in enumerate(queries):
         gt_set = set(iq.gt_edit_files)
         gt_indices = {i for i, p in enumerate(file_paths) if p in gt_set}
-
         if not gt_indices:
             continue
 
+        ranked = ranked_lists[qi]
         top_k_max = max(EVAL_K_VALUES)
-        ranked = retrieve_topk(query_vecs[qi], doc_vecs, file_indices, k=top_k_max)
 
-        # Recall@K
-        for k in EVAL_K_VALUES:
-            retrieved = {fi for fi, _ in ranked[:k]}
+        for k_val in EVAL_K_VALUES:
+            retrieved = {fi for fi, _ in ranked[:k_val]}
             hits = len(retrieved & gt_indices)
-            recall_sums[k] += hits / len(gt_indices)
+            recall_sums[k_val] += hits / len(gt_indices)
 
-        # MRR — reciprocal rank of first GT hit
         rr = 0.0
-        for rank, (fi, _sim) in enumerate(ranked, 1):
+        for rank, (fi, _) in enumerate(ranked, 1):
             if fi in gt_indices:
                 rr = 1.0 / rank
                 break
@@ -589,17 +555,19 @@ def compute_metrics(
             "issue": iq.issue,
             "level": iq.level,
             "gt_count": len(gt_indices),
-            "top5": [(file_paths[fi], round(s, 3)) for fi, s in ranked[:5]],
             "recall@5": sum(1 for fi, _ in ranked[:5] if fi in gt_indices) / len(gt_indices),
             "recall@10": sum(1 for fi, _ in ranked[:10] if fi in gt_indices) / len(gt_indices),
+            "recall@20": sum(1 for fi, _ in ranked[:20] if fi in gt_indices) / len(gt_indices),
             "rr": rr,
+            "top5": [(file_paths[fi], round(s, 4)) for fi, s in ranked[:5]],
         })
 
     n = len(queries)
-    recall_at = {k: recall_sums[k] / n for k in EVAL_K_VALUES}
-    mrr = rr_sum / n
-
-    return recall_at, mrr, per_query
+    result = StrategyResult(name=strategy_name)
+    result.recall_at = {k: recall_sums[k] / n for k in EVAL_K_VALUES}
+    result.mrr = rr_sum / n
+    result.per_query = per_query
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -609,243 +577,203 @@ def compute_metrics(
 
 def main() -> None:
     import argparse
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="Hybrid RRF embedding benchmark (CUDA)")
     parser.add_argument("--model", type=int, default=None,
-                        help="Run only model at this index (0-2). Omit to run all.")
+                        help="Run only model at this index (0=bge, 1=jina-base-code). Omit for both.")
     args = parser.parse_args()
 
     run_models = [MODELS[args.model]] if args.model is not None else MODELS
 
     print("=" * 90)
-    print("EMBEDDING BENCHMARK: 4 variations x 3 models x evee repo x real issue queries")
+    print("HYBRID RRF EMBEDDING BENCHMARK (CUDA)")
+    print(f"  Strategy A: ang_only    — anglicised scaffold vectors")
+    print(f"  Strategy B: hybrid_rrf  — RRF(anglicised + full_content for files <{FULL_CONTENT_SIZE_LIMIT//1000}KB)")
+    print(f"  RRF k={RRF_K}, max_length={MAX_LENGTH}, scaffold_cap={SCAFFOLD_MAX_CHARS}")
     print("=" * 90)
 
-    # 1. Discover + extract files
-    print(f"\n[1/4] Discovering Python files in {EVEE_ROOT}/src ...")
+    # ── 1. Discover + extract ──
+    print(f"\n[1/3] Discovering Python files in {EVEE_ROOT} ...")
     rel_paths = discover_files()
     print(f"  Found {len(rel_paths)} files")
 
-    print("\n[2/4] Extracting with tree-sitter...")
+    print("\n  Extracting with tree-sitter...")
     files = extract_all_files(rel_paths)
     print(f"  {len(files)} files extracted successfully")
-
     if len(files) < 20:
-        print("ERROR: Too few files extracted. Aborting.")
+        print("ERROR: Too few files. Aborting.")
         sys.exit(1)
 
-    # 2. Build variations
-    print("\n[3/4] Building 4 text variations per file...")
-    prepare_variations(files)
+    # ── 2. Build text representations ──
+    print("\n[2/3] Building text representations...")
+    prepare_texts(files)
 
-    var_names = ["raw_scaffold", "anglicised", "scaffold+ang", "full_content"]
+    # Stats
+    small_files = sum(1 for f in files if f.source_chars < FULL_CONTENT_SIZE_LIMIT)
+    total_full_chunks = sum(len(f.full_chunks) for f in files if f.source_chars < FULL_CONTENT_SIZE_LIMIT)
+    print(f"  Files: {len(files)} total, {small_files} eligible for full_content (<{FULL_CONTENT_SIZE_LIMIT//1000}KB)")
+    print(f"  Anglicised vectors: {len(files)}")
+    print(f"  Full content vectors: {total_full_chunks} (from {small_files} files)")
 
-    print(f"\n  {'Variation':<16} {'Files':>6} {'Vectors':>8} {'Mean chars':>12} {'Max chars':>10}")
-    print(f"  {'-'*56}")
-    for vname in var_names:
-        if vname == "full_content":
-            all_texts = [c for f in files for c in f.full_chunks]
-        elif vname == "raw_scaffold":
-            all_texts = [f.raw_scaffold for f in files]
-        elif vname == "anglicised":
-            all_texts = [f.anglicised for f in files]
-        else:
-            all_texts = [f.combined for f in files]
-        lens = [len(t) for t in all_texts]
-        print(
-            f"  {vname:<16} {len(files):>6} {len(all_texts):>8} "
-            f"{sum(lens)/len(lens):>12,.0f} {max(lens):>10,}"
-        )
+    sizes = [f.source_chars for f in files]
+    print(f"  Source size: min={min(sizes)}, median={sorted(sizes)[len(sizes)//2]}, "
+          f"max={max(sizes)}, mean={sum(sizes)/len(sizes):.0f}")
 
-    # 3. Run each model
+    # ── 3. Run each model ──
     queries = ISSUE_QUERIES
-    print(f"\n[4/4] Running {len(MODELS)} models x {len(var_names)} variations "
-          f"x {len(queries)} queries (8 issues x 3 levels)...")
+    print(f"\n[3/3] Running {len(run_models)} models × 2 strategies × {len(queries)} queries...")
 
-    # Collect results
-    all_metrics: dict[str, dict[str, VariationMetrics]] = {}  # model -> var -> metrics
-    all_per_query: dict[str, dict[str, list[dict]]] = {}
+    all_results: dict[str, dict[str, StrategyResult]] = {}  # model_short -> strategy -> result
 
     for model_name, dim, size_gb in run_models:
         short_name = model_name.split("/")[-1]
-        print(f"\n{'─'*90}")
-        print(f"  {model_name}  (dim={dim}, {size_gb} GB)")
+        print(f"\n{'━' * 90}")
+        print(f"  MODEL: {model_name}  (dim={dim}, {size_gb} GB)")
+        print(f"{'━' * 90}")
 
         model = load_model(model_name)
 
-        # Embed all queries once
+        # Embed queries
+        print("  Embedding queries...")
         query_texts = [iq.query for iq in queries]
+        t0 = time.monotonic()
         query_vecs = embed_batch(model, query_texts)
+        query_ms = (time.monotonic() - t0) * 1000
+        print(f"    {len(queries)} queries in {query_ms:.0f}ms")
 
-        model_metrics: dict[str, VariationMetrics] = {}
-        model_per_query: dict[str, list[dict]] = {}
+        # ── Strategy A: ang_only ──
+        print("\n  Strategy A: ang_only")
+        ang_vecs, ang_fi, ang_ms = build_ang_index(model, files)
+        print(f"    {len(ang_vecs)} vectors in {ang_ms:.0f}ms")
 
-        for vname in var_names:
-            doc_vecs, file_indices, embed_ms = build_variation_index(model, files, vname)
+        ang_ranked = []
+        for qi in range(len(queries)):
+            ranked = retrieve_ranked(query_vecs[qi], ang_vecs, ang_fi, top_n=50)
+            ang_ranked.append(ranked)
 
-            recall_at, mrr, per_query_details = compute_metrics(
-                files, queries, doc_vecs, file_indices, query_vecs,
-            )
+        ang_result = evaluate_strategy(files, queries, query_vecs, ang_ranked, "ang_only")
+        ang_result.ang_embed_ms = ang_ms
+        ang_result.total_vectors = len(ang_vecs)
 
-            # Compute avg chars
-            if vname == "full_content":
-                all_texts = [c for f in files for c in f.full_chunks]
-            elif vname == "raw_scaffold":
-                all_texts = [f.raw_scaffold for f in files]
-            elif vname == "anglicised":
-                all_texts = [f.anglicised for f in files]
-            else:
-                all_texts = [f.combined for f in files]
+        # ── Strategy B: hybrid_rrf ──
+        print("\n  Strategy B: hybrid_rrf")
+        full_vecs, full_fi, full_ms = build_full_index(model, files)
+        print(f"    {len(full_vecs)} vectors in {full_ms:.0f}ms")
 
-            vm = VariationMetrics(
-                name=vname,
-                avg_chars=sum(len(t) for t in all_texts) / len(all_texts),
-                num_vectors=len(doc_vecs),
-                embed_time_ms=embed_ms,
-                recall_at=recall_at,
-                mrr=mrr,
-            )
-            model_metrics[vname] = vm
-            model_per_query[vname] = per_query_details
+        rrf_ranked = []
+        for qi in range(len(queries)):
+            ang_r = retrieve_ranked(query_vecs[qi], ang_vecs, ang_fi, top_n=50)
+            full_r = retrieve_ranked(query_vecs[qi], full_vecs, full_fi, top_n=50)
+            fused = rrf_fuse(ang_r, full_r)
+            rrf_ranked.append(fused)
 
-        all_metrics[short_name] = model_metrics
-        all_per_query[short_name] = model_per_query
+        rrf_result = evaluate_strategy(files, queries, query_vecs, rrf_ranked, "hybrid_rrf")
+        rrf_result.ang_embed_ms = ang_ms
+        rrf_result.full_embed_ms = full_ms
+        rrf_result.total_vectors = len(ang_vecs) + len(full_vecs)
 
-        # Per-model summary table
-        print(f"\n  {'Variation':<16} {'Vecs':>6} {'ms':>8} {'R@5':>7} {'R@10':>7} {'R@20':>7} {'MRR':>7}")
-        print(f"  {'-'*62}")
-        for vname in var_names:
-            vm = model_metrics[vname]
+        all_results[short_name] = {"ang_only": ang_result, "hybrid_rrf": rrf_result}
+
+        # ── Per-model summary ──
+        print(f"\n  {'Strategy':<14} {'Vecs':>6} {'Embed ms':>10} {'R@5':>7} {'R@10':>7} {'R@20':>7} {'MRR':>7}")
+        print(f"  {'─' * 64}")
+        for strat in [ang_result, rrf_result]:
+            total_ms = strat.ang_embed_ms + strat.full_embed_ms
             print(
-                f"  {vm.name:<16} {vm.num_vectors:>6} {vm.embed_time_ms:>8,.0f} "
-                f"{vm.recall_at[5]:>7.3f} {vm.recall_at[10]:>7.3f} "
-                f"{vm.recall_at[20]:>7.3f} {vm.mrr:>7.3f}"
+                f"  {strat.name:<14} {strat.total_vectors:>6} {total_ms:>10,.0f} "
+                f"{strat.recall_at[5]:>7.3f} {strat.recall_at[10]:>7.3f} "
+                f"{strat.recall_at[20]:>7.3f} {strat.mrr:>7.3f}"
             )
 
-        # Per-query breakdown for this model
-        print(f"\n  Per-query detail (best variation marked with *):")
-        print(f"  {'Issue':>5} {'Lvl':>3} {'GT':>3}", end="")
-        for v in var_names:
-            print(f"  {v[:10]:>10}", end="")
-        print()
-        print(f"  {'-'*5} {'-'*3} {'-'*3}", end="")
-        for _ in var_names:
-            print(f"  {'─'*10}", end="")
-        print()
+        # Deltas
+        d5 = rrf_result.recall_at[5] - ang_result.recall_at[5]
+        d10 = rrf_result.recall_at[10] - ang_result.recall_at[10]
+        d20 = rrf_result.recall_at[20] - ang_result.recall_at[20]
+        dmrr = rrf_result.mrr - ang_result.mrr
+        print(f"  {'Δ (rrf-ang)':<14} {'':>6} {'':>10} "
+              f"{d5:>+7.3f} {d10:>+7.3f} {d20:>+7.3f} {dmrr:>+7.3f}")
 
+        # Per-query breakdown
+        print(f"\n  Per-query R@5 comparison:")
+        print(f"  {'Issue':>5} {'Lvl':>3} {'GT':>3} {'ang_only':>10} {'hybrid_rrf':>12} {'Δ':>8}")
+        print(f"  {'─' * 45}")
         for qi, iq in enumerate(queries):
-            print(f"  {iq.issue:>5} {iq.level:>3} {len(iq.gt_edit_files):>3}", end="")
-            best_recall = -1.0
-            best_var = ""
-            for vname in var_names:
-                pq = model_per_query[vname]
-                r5 = pq[qi]["recall@5"] if qi < len(pq) else 0
-                if r5 > best_recall:
-                    best_recall = r5
-                    best_var = vname
-            for vname in var_names:
-                pq = model_per_query[vname]
-                r5 = pq[qi]["recall@5"] if qi < len(pq) else 0
-                marker = " *" if vname == best_var and best_recall > 0 else "  "
-                print(f"  {r5:>8.1%}{marker}", end="")
-            print()
+            r5_ang = ang_result.per_query[qi]["recall@5"]
+            r5_rrf = rrf_result.per_query[qi]["recall@5"]
+            delta = r5_rrf - r5_ang
+            marker = " ✓" if delta > 0.001 else (" ✗" if delta < -0.001 else "  ")
+            print(f"  #{iq.issue:<4} {iq.level:>3} {len(iq.gt_edit_files):>3} "
+                  f"{r5_ang:>10.1%} {r5_rrf:>12.1%} {delta:>+7.1%}{marker}")
 
         del model
         gc.collect()
 
-    # -----------------------------------------------------------------------
-    # Summary tables (only when running all models)
-    # -----------------------------------------------------------------------
-    model_names = list(all_metrics.keys())
-
-    if len(model_names) < len(MODELS):
-        print(f"\n{'='*90}")
-        print(f"Single-model run complete ({model_names[0]}). Run without --model for full comparison.")
-        print(f"{'='*90}")
+    # ───────────────────────────────────────────────────────────────────────
+    # Cross-model comparison
+    # ───────────────────────────────────────────────────────────────────────
+    if len(all_results) < 2:
+        single = list(all_results.keys())[0]
+        print(f"\n{'=' * 90}")
+        print(f"Single-model run complete ({single}). Run without --model for full comparison.")
+        print(f"{'=' * 90}")
         return
 
-    print(f"\n{'='*90}")
-    print("SUMMARY: VARIATION COMPARISON (averaged across all models)")
-    print(f"{'='*90}")
-    print(f"\n  {'Variation':<16} {'R@5':>7} {'R@10':>7} {'R@20':>7} {'MRR':>7} {'Avg ms':>8} {'Avg chars':>10}")
-    print(f"  {'-'*68}")
-    for vname in var_names:
-        r5 = np.mean([all_metrics[m][vname].recall_at[5] for m in model_names])
-        r10 = np.mean([all_metrics[m][vname].recall_at[10] for m in model_names])
-        r20 = np.mean([all_metrics[m][vname].recall_at[20] for m in model_names])
-        mrr = np.mean([all_metrics[m][vname].mrr for m in model_names])
-        ms = np.mean([all_metrics[m][vname].embed_time_ms for m in model_names])
-        chars = all_metrics[model_names[0]][vname].avg_chars
-        print(
-            f"  {vname:<16} {r5:>7.3f} {r10:>7.3f} {r20:>7.3f} "
-            f"{mrr:>7.3f} {ms:>8,.0f} {chars:>10,.0f}"
-        )
+    print(f"\n{'=' * 90}")
+    print("CROSS-MODEL COMPARISON")
+    print(f"{'=' * 90}")
 
-    print(f"\n{'='*90}")
-    print("SUMMARY: MODEL COMPARISON (averaged across all variations)")
-    print(f"{'='*90}")
-    print(f"\n  {'Model':<40} {'dim':>5} {'GB':>6} {'R@5':>7} {'R@10':>7} {'R@20':>7} {'MRR':>7} {'ms':>8}")
-    print(f"  {'-'*88}")
-    for mname in model_names:
-        info = next(m for m in MODELS if m[0].endswith(mname))
-        r5 = np.mean([all_metrics[mname][v].recall_at[5] for v in var_names])
-        r10 = np.mean([all_metrics[mname][v].recall_at[10] for v in var_names])
-        r20 = np.mean([all_metrics[mname][v].recall_at[20] for v in var_names])
-        mrr = np.mean([all_metrics[mname][v].mrr for v in var_names])
-        ms = np.mean([all_metrics[mname][v].embed_time_ms for v in var_names])
-        print(
-            f"  {mname:<40} {info[1]:>5} {info[2]:>6.2f} "
-            f"{r5:>7.3f} {r10:>7.3f} {r20:>7.3f} {mrr:>7.3f} {ms:>8,.0f}"
-        )
-
-    # Best combo
-    print(f"\n{'='*90}")
-    print("BEST MODEL x VARIATION COMBOS (by Recall@10)")
-    print(f"{'='*90}")
-    combos = []
-    for mname in model_names:
-        for vname in var_names:
-            vm = all_metrics[mname][vname]
-            combos.append((mname, vname, vm.recall_at[10], vm.mrr, vm.embed_time_ms))
-    combos.sort(key=lambda x: -x[2])
-    print(f"\n  {'Model':<35} {'Variation':<16} {'R@10':>7} {'MRR':>7} {'ms':>8}")
-    print(f"  {'-'*78}")
-    for mname, vname, r10, mrr, ms in combos[:8]:
-        print(f"  {mname:<35} {vname:<16} {r10:>7.3f} {mrr:>7.3f} {ms:>8,.0f}")
-
-    # Per-issue breakdown (best model)
-    best_model = max(model_names, key=lambda m: np.mean([all_metrics[m][v].recall_at[10] for v in var_names]))
-    print(f"\n{'='*90}")
-    print(f"PER-ISSUE RECALL@10 DETAIL (best model: {best_model})")
-    print(f"{'='*90}")
-    print(f"\n  {'Issue':>5} {'Lvl':>3} {'GT':>3}", end="")
-    for v in var_names:
-        print(f"  {v[:12]:>12}", end="")
-    print()
-
-    issues_seen: set[int] = set()
-    for qi, iq in enumerate(queries):
-        if iq.issue not in issues_seen:
-            if issues_seen:
-                print()
-            issues_seen.add(iq.issue)
-        pqs = all_per_query[best_model]
-        print(f"  #{iq.issue:<4} {iq.level:>3} {len(iq.gt_edit_files):>3}", end="")
-        for vname in var_names:
-            pq = pqs[vname]
-            r10 = pq[qi]["recall@10"] if qi < len(pq) else 0
-            print(f"  {r10:>10.1%}  ", end="")
+    print(f"\n  {'Model':<35} {'Strategy':<14} {'Vecs':>6} {'R@5':>7} {'R@10':>7} {'R@20':>7} {'MRR':>7}")
+    print(f"  {'─' * 90}")
+    for mname in all_results:
+        for sname in ["ang_only", "hybrid_rrf"]:
+            r = all_results[mname][sname]
+            print(
+                f"  {mname:<35} {sname:<14} {r.total_vectors:>6} "
+                f"{r.recall_at[5]:>7.3f} {r.recall_at[10]:>7.3f} "
+                f"{r.recall_at[20]:>7.3f} {r.mrr:>7.3f}"
+            )
         print()
 
-    # Sample retrieval
-    print(f"\n{'='*90}")
-    print(f"SAMPLE RETRIEVAL: Issue #4 Q1 (best model: {best_model})")
-    print(f"{'='*90}")
-    for vname in var_names:
-        pq = all_per_query[best_model][vname][0]  # first query = #4 Q1
-        print(f"\n  {vname}:")
-        for path, sim in pq["top5"]:
-            gt_marker = " <GT>" if path in queries[0].gt_edit_files else ""
-            print(f"    {sim:.3f}  {path}{gt_marker}")
+    # Best combo
+    print(f"\n  RANKED BY R@10:")
+    combos = []
+    for mname in all_results:
+        for sname in ["ang_only", "hybrid_rrf"]:
+            r = all_results[mname][sname]
+            combos.append((mname, sname, r.recall_at[5], r.recall_at[10], r.recall_at[20], r.mrr))
+    combos.sort(key=lambda x: (-x[3], -x[5]))
+    print(f"  {'#':>3} {'Model':<35} {'Strategy':<14} {'R@5':>7} {'R@10':>7} {'R@20':>7} {'MRR':>7}")
+    print(f"  {'─' * 90}")
+    for i, (mname, sname, r5, r10, r20, mrr) in enumerate(combos, 1):
+        print(f"  {i:>3} {mname:<35} {sname:<14} {r5:>7.3f} {r10:>7.3f} {r20:>7.3f} {mrr:>7.3f}")
+
+    # Per-issue winner table
+    print(f"\n{'=' * 90}")
+    print("PER-ISSUE R@10 — ALL 4 COMBOS")
+    print(f"{'=' * 90}")
+    model_names = list(all_results.keys())
+    combos_labels = [(m, s) for m in model_names for s in ["ang_only", "hybrid_rrf"]]
+    print(f"  {'Issue':>5} {'Lvl':>3} {'GT':>3}", end="")
+    for m, s in combos_labels:
+        label = f"{m[:8]}_{s[:3]}"
+        print(f"  {label:>14}", end="")
+    print()
+    print(f"  {'─' * 5} {'─' * 3} {'─' * 3}", end="")
+    for _ in combos_labels:
+        print(f"  {'─' * 14}", end="")
+    print()
+
+    for qi, iq in enumerate(queries):
+        print(f"  #{iq.issue:<4} {iq.level:>3} {len(iq.gt_edit_files):>3}", end="")
+        best_r10 = -1.0
+        for m, s in combos_labels:
+            r10 = all_results[m][s].per_query[qi]["recall@10"]
+            if r10 > best_r10:
+                best_r10 = r10
+        for m, s in combos_labels:
+            r10 = all_results[m][s].per_query[qi]["recall@10"]
+            marker = " *" if abs(r10 - best_r10) < 0.001 and best_r10 > 0 else "  "
+            print(f"  {r10:>12.1%}{marker}", end="")
+        print()
 
 
 if __name__ == "__main__":
