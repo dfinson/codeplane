@@ -1025,7 +1025,23 @@ class IndexCoordinator:
                 by_context[ctx_id].append(rel_path)
 
             for ctx_id, paths in by_context.items():
-                self._structural.index_files(paths, context_id=ctx_id, file_id_map=file_id_map)
+                # Extract first, then persist + stage embeddings
+                extractions = self._structural.extract_files(paths, ctx_id)
+                self._structural.index_files(
+                    paths, context_id=ctx_id, file_id_map=file_id_map,
+                    _extractions=extractions,
+                )
+
+                # Stage file embeddings from extraction data
+                if self._file_embedding is not None:
+                    for extraction in extractions:
+                        if extraction.content_text:
+                            self._file_embedding.stage_file(
+                                extraction.file_path,
+                                extraction.content_text,
+                                defs=extraction.defs,
+                                imports=extraction.imports,
+                            )
 
             # Pass 1.5: DB-backed cross-file resolution (all languages)
             # Use unit_id=None to allow cross-context resolution, which is the
@@ -1038,6 +1054,14 @@ class IndexCoordinator:
 
             # Resolve type-traced member accesses (Pass 3 - follows type annotations)
             resolve_type_traced(self.db)
+
+        # Stage file embedding removals for ignored files
+        if to_remove and self._file_embedding is not None:
+            self._file_embedding.stage_remove(list(to_remove))
+
+        # Commit file embeddings (additions + removals)
+        if self._file_embedding is not None and self._file_embedding.has_staged_changes():
+            self._file_embedding.commit_staged()
 
         # Remove structural facts for removed files
         if to_remove:
@@ -1189,10 +1213,26 @@ class IndexCoordinator:
                                 self._lexical.add_file(
                                     rel_path, content, context_id=ctx_id, symbols=symbols
                                 )
+
+                            # Stage file embedding (content-only; no extraction data
+                            # available in this path — graceful degradation)
+                            if self._file_embedding is not None and content:
+                                self._file_embedding.stage_file(
+                                    rel_path, content,
+                                )
+
                             files_added += 1
                             symbols_indexed += len(symbols)
                         except (OSError, UnicodeDecodeError):
                             continue
+
+            # Stage file embedding removals
+            if self._file_embedding is not None and to_remove:
+                self._file_embedding.stage_remove(list(to_remove))
+
+            # Commit file embeddings (additions + removals)
+            if self._file_embedding is not None and self._file_embedding.has_staged_changes():
+                self._file_embedding.commit_staged()
 
             # Reload index
             if self._lexical is not None:
