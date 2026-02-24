@@ -398,10 +398,14 @@ async def _select_seeds(
 
     _K_SATURATE = 3  # anchor-case consecutive-miss limit
 
+    # Hard ceiling: never include more than 40 files regardless of path.
+    _MAX_FILES = 40
+
     if floor_score > 0:
-        # ── Anchor case: gate on floor_score (unchanged) ──
+        # ── Anchor case: gate on floor_score ──
         consecutive_empty = 0
-        for idx in range(n_files, len(file_ranked_dual)):
+        upper = min(len(file_ranked_dual), _MAX_FILES)
+        for idx in range(n_files, upper):
             _fid, _fscore, _, _, fdefs = file_ranked_dual[idx]
             if _fscore >= floor_score:
                 n_files = idx + 1
@@ -424,7 +428,7 @@ async def _select_seeds(
         elbow_n = find_elbow(
             file_scores,
             min_seeds=adaptive_min,
-            max_seeds=min(n_candidates, 40),
+            max_seeds=min(n_candidates, _MAX_FILES),
         )
         n_files = max(n_files, elbow_n)
 
@@ -442,7 +446,7 @@ async def _select_seeds(
             # Safety net: never drop below half the minimum included
             # score to prevent runaway in pathological distributions.
             tail_floor = max(min_inc - median_gap, min_inc * 0.5)
-            for idx in range(n_files, min(n_candidates, 40)):
+            for idx in range(n_files, min(n_candidates, _MAX_FILES)):
                 if file_scores[idx] >= tail_floor:
                     n_files = idx + 1
                 else:
