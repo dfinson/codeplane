@@ -50,7 +50,6 @@ from codeplane.mcp.tools.recon.harvesters import (
 from codeplane.mcp.tools.recon.models import (
     _INTERNAL_BUDGET_BYTES,
     _INTERNAL_DEPTH,
-    ArtifactKind,
     FileCandidate,
     OutputTier,
     ParsedTask,
@@ -626,46 +625,42 @@ async def _file_centric_pipeline(
     if pinned_paths:
         existing_paths = {fc.path for fc in file_candidates}
         for pp in pinned_paths:
-            kind = _classify_artifact(pp)
-            score = pin_floor if kind in (ArtifactKind.code, ArtifactKind.test) else pin_floor * 0.3
             if pp not in existing_paths:
                 file_candidates.append(
                     FileCandidate(
                         path=pp,
                         similarity=0.0,
-                        combined_score=score,
+                        combined_score=pin_floor,
                         has_explicit_mention=True,
-                        artifact_kind=kind,
+                        artifact_kind=_classify_artifact(pp),
                     )
                 )
             else:
                 for fc in file_candidates:
                     if fc.path == pp:
                         fc.has_explicit_mention = True
-                        fc.combined_score = max(fc.combined_score, score)
+                        fc.combined_score = max(fc.combined_score, pin_floor)
                         break
 
     # Handle explicit paths from task text
     if parsed.explicit_paths:
         existing_paths = {fc.path for fc in file_candidates}
         for ep in parsed.explicit_paths:
-            kind = _classify_artifact(ep)
-            score = pin_floor if kind in (ArtifactKind.code, ArtifactKind.test) else pin_floor * 0.3
             if ep not in existing_paths:
                 file_candidates.append(
                     FileCandidate(
                         path=ep,
                         similarity=0.0,
-                        combined_score=score,
+                        combined_score=pin_floor,
                         has_explicit_mention=True,
-                        artifact_kind=kind,
+                        artifact_kind=_classify_artifact(ep),
                     )
                 )
             else:
                 for fc in file_candidates:
                     if fc.path == ep:
                         fc.has_explicit_mention = True
-                        fc.combined_score = max(fc.combined_score, score)
+                        fc.combined_score = max(fc.combined_score, pin_floor)
                         break
 
     # Also discover unindexed files (yaml, md, etc.) via path matching
