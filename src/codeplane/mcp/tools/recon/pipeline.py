@@ -876,20 +876,10 @@ async def _file_centric_pipeline(
                     fc.tier = target_tier
                     fc.graph_connected = True
                     source_co_promoted += 1
-            else:
-                ref_scores = [c.combined_score for c in file_candidates if c.tier == target_tier]
-                score = max(ref_scores, default=pin_floor) * 0.9
-                file_candidates.append(
-                    FileCandidate(
-                        path=src_path,
-                        similarity=0.0,
-                        combined_score=score,
-                        graph_connected=True,
-                        artifact_kind=_classify_artifact(src_path),
-                    ),
-                )
-                file_candidates[-1].tier = target_tier
-                source_co_added += 1
+            # NOTE: no 'else' branch — we promote existing candidates
+            # but do NOT add new source files that were not already
+            # retrieved by the core pipeline.  Adding was too noisy
+            # (~4.3 files/query, all noise → precision -27%).
 
     diagnostics["test_co_retrieval_ms"] = round((time.monotonic() - t_test_disco) * 1000)
     diagnostics["test_co_promoted"] = test_co_promoted
