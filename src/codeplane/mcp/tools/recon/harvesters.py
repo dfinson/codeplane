@@ -1107,26 +1107,32 @@ def _enrich_file_candidates(
     # independent of code content.  Important for graph-island files
     # (e.g. packages/evee-azureml/) where the path is the primary
     # discriminator and code-only harvesters miss them.
-    all_query_terms_lower: set[str] = set()
+    # Only primary terms, stop-word filtered, ≥4 chars — secondary
+    # terms like "config", "model" are too common in paths.
+    _PATH_STOP_TOKENS = frozenset({
+        "src", "test", "tests", "config", "models", "utils",
+        "core", "cli", "docs", "init", "main", "base", "common",
+        "tools", "commands", "templates", "integration", "lib",
+        "internal", "helpers", "types", "api", "app", "pkg",
+    })
+    path_query_terms: set[str] = set()
     for t in parsed.primary_terms:
-        if len(t) >= 3:
-            all_query_terms_lower.add(t.lower())
-    for t in parsed.secondary_terms:
-        if len(t) >= 3:
-            all_query_terms_lower.add(t.lower())
+        tl = t.lower()
+        if len(tl) >= 4 and tl not in _PATH_STOP_TOKENS:
+            path_query_terms.add(tl)
 
     path_match_scores: dict[str, int] = {}
-    if all_query_terms_lower:
+    if path_query_terms:
         for fc in file_candidates:
             path_lower = fc.path.lower()
             path_tokens = set(re.split(r"[/._\-]", path_lower))
             path_tokens = {t for t in path_tokens if len(t) >= 2}
 
             # Token overlap
-            hits = all_query_terms_lower & path_tokens
+            hits = path_query_terms & path_tokens
             # Also substring match for compound terms (e.g. "mlflow" in path)
             if not hits:
-                hits = {t for t in all_query_terms_lower if t in path_lower}
+                hits = {t for t in path_query_terms if t in path_lower}
 
             if hits:
                 path_match_scores[fc.path] = len(hits)

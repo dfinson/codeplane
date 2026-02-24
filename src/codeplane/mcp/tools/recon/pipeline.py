@@ -632,14 +632,23 @@ async def _file_centric_pipeline(
         for frec in fq.list_files(limit=50000):
             indexed_paths.add(frec.path)
 
-    _PATH_INJECT_MAX = 30
+    _PATH_INJECT_MAX = 10
+    # Only use primary terms for path injection — secondary terms are
+    # too common (config, model, test, etc.) and match nearly every file.
+    # Also require len≥4 to avoid short noise tokens.
     path_inject_terms: set[str] = set()
+    # Common path tokens that match too many files — skip these.
+    _PATH_STOP_TOKENS = frozenset({
+        "src", "test", "tests", "config", "models", "utils",
+        "core", "cli", "docs", "init", "main", "base", "common",
+        "tools", "commands", "templates", "integration", "lib",
+        "internal", "helpers", "types", "api", "app", "pkg",
+        "evee", "codeplane", "python",
+    })
     for t in parsed.primary_terms:
-        if len(t) >= 3:
-            path_inject_terms.add(t.lower())
-    for t in parsed.secondary_terms:
-        if len(t) >= 3:
-            path_inject_terms.add(t.lower())
+        tl = t.lower()
+        if len(tl) >= 4 and tl not in _PATH_STOP_TOKENS:
+            path_inject_terms.add(tl)
 
     if path_inject_terms:
         existing_paths = {fc.path for fc in file_candidates}
@@ -655,7 +664,7 @@ async def _file_centric_pipeline(
             if not hits:
                 hits = {t for t in path_inject_terms if t in path_lower}
 
-            # Require ≥2 path-token matches to avoid noise
+            # Require ≥2 distinctive path-token matches to avoid noise
             if len(hits) >= 2:
                 path_inject_scored.append((ip, len(hits)))
 
