@@ -688,55 +688,117 @@ async def _file_centric_pipeline(
                 )
             )
 
-    # 4.5. Deterministic test co-retrieval via reverse import graph
-    #       For each source file in the candidate set, find test files
-    #       that import it and add them if not already present.
+    # 5. Two-elbow tier assignment
+    file_candidates = assign_tiers(file_candidates)
+
+    # 5.5. Deterministic test co-retrieval via reverse import graph
+    #       For every surviving non-test source file, find test files that
+    #       import it.  The test inherits the source's tier:
+    #         - source FULL_FILE  → test FULL_FILE
+    #         - source MIN_SCAFFOLD → test MIN_SCAFFOLD
+    #       Test files NOT linked to any surviving source get demoted.
     t_test_disco = time.monotonic()
-    source_paths = [
-        fc.path for fc in file_candidates if not _is_test_file(fc.path) and fc.combined_score > 0
+    full_source_paths = [
+        fc.path
+        for fc in file_candidates
+        if fc.tier == OutputTier.FULL_FILE and not _is_test_file(fc.path)
     ]
-    test_co_count = 0
-    if source_paths:
+    scaffold_source_paths = [
+        fc.path
+        for fc in file_candidates
+        if fc.tier == OutputTier.MIN_SCAFFOLD and not _is_test_file(fc.path)
+    ]
+    linked_test_paths: set[str] = set()
+    # Maps test_path → best tier it should inherit
+    test_target_tier: dict[str, OutputTier] = {}
+    test_co_promoted = 0
+    test_co_added = 0
+    test_demoted = 0
+
+    all_source_paths = full_source_paths + scaffold_source_paths
+    if all_source_paths:
         from codeplane.index._internal.indexing.import_graph import ImportGraph
 
+        # Two-pass: find tests linked to FULL_FILE sources, then
+        # tests linked to MIN_SCAFFOLD sources (all within one session).
+        full_tests: set[str] = set()
+        scaffold_tests: set[str] = set()
         with coordinator.db.session() as session:
             graph = ImportGraph(session)
-            impact = graph.affected_tests(source_paths)
+            if full_source_paths:
+                full_impact = graph.affected_tests(full_source_paths)
+                full_tests = {m.test_file for m in full_impact.matches}
+            if scaffold_source_paths:
+                scaffold_impact = graph.affected_tests(scaffold_source_paths)
+                scaffold_tests = {m.test_file for m in scaffold_impact.matches}
 
-        existing_paths = {fc.path for fc in file_candidates}
-        # Use floor score from median of existing candidates so test
-        # files land in the inclusion band (not at the bottom).
-        candidate_scores = sorted(
-            (fc.combined_score for fc in file_candidates if fc.combined_score > 0),
-            reverse=True,
-        )
-        test_floor = (
-            candidate_scores[len(candidate_scores) // 2] if candidate_scores else pin_floor * 0.5
-        )
-        for match in impact.matches:
-            if match.test_file not in existing_paths:
-                # High-confidence matches get median score,
-                # low-confidence get half that.
-                score = test_floor if match.confidence == "high" else test_floor * 0.5
+        # FULL_FILE wins over MIN_SCAFFOLD
+        for tp in full_tests:
+            test_target_tier[tp] = OutputTier.FULL_FILE
+        for tp in scaffold_tests:
+            if tp not in test_target_tier:
+                test_target_tier[tp] = OutputTier.MIN_SCAFFOLD
+        linked_test_paths = set(test_target_tier.keys())
+
+        existing_by_path = {fc.path: fc for fc in file_candidates}
+
+        for test_path, target_tier in test_target_tier.items():
+            if test_path in existing_by_path:
+                fc = existing_by_path[test_path]
+                # Promote if current tier is worse than target
+                tier_rank = {
+                    OutputTier.FULL_FILE: 0,
+                    OutputTier.MIN_SCAFFOLD: 1,
+                    OutputTier.SUMMARY_ONLY: 2,
+                }
+                if tier_rank.get(fc.tier, 2) > tier_rank[target_tier]:
+                    fc.tier = target_tier
+                    fc.graph_connected = True
+                    test_co_promoted += 1
+            else:
+                # Not in candidates at all — add with the target tier
+                ref_scores = [c.combined_score for c in file_candidates if c.tier == target_tier]
+                score = max(ref_scores, default=pin_floor) * 0.9
                 file_candidates.append(
                     FileCandidate(
-                        path=match.test_file,
+                        path=test_path,
                         similarity=0.0,
                         combined_score=score,
                         graph_connected=True,
-                        artifact_kind=_classify_artifact(match.test_file),
-                    )
+                        artifact_kind=_classify_artifact(test_path),
+                    ),
                 )
-                test_co_count += 1
-                existing_paths.add(match.test_file)
+                # Set tier after construction (assign_tiers already ran)
+                file_candidates[-1].tier = target_tier
+                test_co_added += 1
+
+    # Demote unlinked test files by one tier (not a full drop):
+    #   FULL_FILE → MIN_SCAFFOLD, MIN_SCAFFOLD → SUMMARY_ONLY
+    for fc in file_candidates:
+        if (
+            _is_test_file(fc.path)
+            and fc.path not in linked_test_paths
+            and not fc.has_explicit_mention
+            and fc.tier in (OutputTier.FULL_FILE, OutputTier.MIN_SCAFFOLD)
+        ):
+            if fc.tier == OutputTier.FULL_FILE:
+                fc.tier = OutputTier.MIN_SCAFFOLD
+            else:
+                fc.tier = OutputTier.SUMMARY_ONLY
+            test_demoted += 1
 
     diagnostics["test_co_retrieval_ms"] = round((time.monotonic() - t_test_disco) * 1000)
-    diagnostics["test_co_retrieved"] = test_co_count
-    if test_co_count > 0:
-        log.info("recon.test_co_retrieval", added=test_co_count, source_files=len(source_paths))
-
-    # 5. Two-elbow tier assignment
-    file_candidates = assign_tiers(file_candidates)
+    diagnostics["test_co_promoted"] = test_co_promoted
+    diagnostics["test_co_added"] = test_co_added
+    diagnostics["test_demoted"] = test_demoted
+    if test_co_promoted + test_co_added + test_demoted > 0:
+        log.info(
+            "recon.test_co_retrieval",
+            promoted=test_co_promoted,
+            added=test_co_added,
+            demoted=test_demoted,
+            source_files=len(all_source_paths),
+        )
 
     # Build expand_reason for each candidate
     for fc in file_candidates:
@@ -753,6 +815,8 @@ async def _file_centric_pipeline(
             reasons.append("explicitly mentioned")
         if fc.graph_connected:
             reasons.append("structurally connected")
+        if fc.path in linked_test_paths:
+            reasons.append("test for surviving source")
         fc.expand_reason = "; ".join(reasons) if reasons else "embedding match"
 
     # 6. Noise metric

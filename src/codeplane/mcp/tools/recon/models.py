@@ -572,11 +572,7 @@ class HarvestCandidate:
         Used to let high-confidence candidates through even when they
         lack evidence on other axes.
         """
-        return (
-            self.from_explicit
-            or self.hub_score >= 8
-            or len(self.matched_terms) >= 3
-        )
+        return self.from_explicit or self.hub_score >= 8 or len(self.matched_terms) >= 3
 
 
 # ===================================================================
