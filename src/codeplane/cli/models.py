@@ -25,9 +25,9 @@ log = structlog.get_logger()
 
 _MODELS: list[dict[str, str | float]] = [
     {
-        "name": "jinaai/jina-embeddings-v2-base-en",
-        "label": "File embeddings (jina-v2-base)",
-        "size_gb": 0.52,
+        "name": "jinaai/jina-embeddings-v2-base-code",
+        "label": "File embeddings (jina-v2-base-code)",
+        "size_gb": 0.64,
     },
 ]
 

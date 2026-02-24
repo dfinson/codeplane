@@ -2551,8 +2551,9 @@ Tier C alone).
 Parallel to the def-level evidence-record system (§16.1–16.7), a
 **file-level embedding index** provides whole-file semantic search.
 
-Model: `jinaai/jina-embeddings-v2-base-en` (768-dim, 8192-token context,
-0.52 GB via fastembed).  One embedding per file.
+Model: `jinaai/jina-embeddings-v2-base-code` (768-dim, 8192-token context,
+0.64 GB via fastembed).  Trained on English + 30 programming languages.
+One embedding per file.
 
 **Truncation**: when file content exceeds 24,000 chars (~8K tokens),
 deterministic head+tail truncation applies: 75% head + 25% tail.

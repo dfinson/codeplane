@@ -1,4 +1,4 @@
-"""File-level embedding index using Jina v2 base with anglicified scaffold.
+"""File-level embedding index using Jina v2 base-code with anglicified scaffold.
 
 Each file produces one embedding record.  The embedded text is the
 anglicified scaffold ONLY — no raw file content is embedded::
@@ -18,6 +18,23 @@ Embedding only the scaffold (not file content) keeps texts short
 (typically 200-2000 chars) which dramatically reduces inference
 time vs. embedding full file content (up to 24K chars).
 
+Model: ``jinaai/jina-embeddings-v2-base-code`` — trained on
+English + 30 programming languages.  Same architecture as the
+``-en`` variant (768-dim, 8192-token context) but far better
+at matching natural-language queries to code constructs.
+
+Performance: the model is loaded with ``max_length=512`` to cap
+the internal tokenizer / attention at 512 tokens.  This is more
+than enough for scaffolds (50-500 tokens) and avoids the
+quadratic attention cost of the default 8192-token context.
+Texts exceeding 512 tokens are gracefully truncated — the
+scaffold format guarantees the most important information
+(module path, imports, top-level classes) appears first.
+
+Batching: texts are sorted by length before batching so that
+similar-length sequences are grouped together, reducing ONNX
+padding overhead.
+
 Storage: .codeplane/file_embedding/
   - file_embeddings.npz   (float16 matrix + path arrays)
   - file_meta.json         (model name, dim, count, version)
@@ -32,6 +49,7 @@ Lifecycle:
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 import re
@@ -49,11 +67,14 @@ log = structlog.get_logger()
 # Constants (centralized)
 # ===================================================================
 
-FILE_EMBED_MODEL = "jinaai/jina-embeddings-v2-base-en"
+FILE_EMBED_MODEL = "jinaai/jina-embeddings-v2-base-code"
 FILE_EMBED_DIM = 768
-FILE_EMBED_MAX_CHARS = 4_000  # scaffold-only; generous budget for very large files
-FILE_EMBED_BATCH_SIZE = 16  # default; overridden by _detect_batch_size()
-FILE_EMBED_VERSION = 3  # v3: scaffold-only (no file content)
+FILE_EMBED_MAX_CHARS = 2_048  # ~512 tokens; aligned with max_length=512
+FILE_EMBED_BATCH_SIZE = 8  # default; overridden by _detect_batch_size()
+FILE_EMBED_VERSION = 5  # v5: max_length=512 + length-sorted batching
+
+# Maximum token length passed to ONNX model (caps attention cost)
+FILE_EMBED_MAX_LENGTH = 512
 FILE_EMBED_SUBDIR = "file_embedding"
 
 # Per-docstring budget (first sentence or first N chars)
@@ -353,11 +374,10 @@ def _detect_providers() -> list[str]:
 def _detect_batch_size() -> int:
     """Choose embedding batch size based on available system memory.
 
-    Jina v2 base needs ~550 MB for the model itself.  Each batch
-    element allocates attention buffers proportional to sequence
-    length.  With scaffold-only texts (≤4 K chars ≈ 1 K tokens)
-    the per-element cost is modest, so we can afford larger batches
-    on machines with enough RAM.
+    Jina v2 base-code needs ~650 MB for the model itself plus
+    ONNX runtime overhead (~300-500 MB workspace).  With
+    max_length=512 the per-element attention cost is capped,
+    so larger batches are safe on modest hardware.
 
     Heuristic:
       ≥ 16 GB free → batch 32
@@ -647,6 +667,9 @@ class FileEmbeddingIndex:
 
         from fastembed import TextEmbedding
 
+        # Free memory before loading ~650 MB ONNX model
+        gc.collect()
+
         providers = _detect_providers()
         threads = max(1, (os.cpu_count() or 2) // 2)
         self._batch_size = _detect_batch_size()
@@ -655,6 +678,7 @@ class FileEmbeddingIndex:
             model_name=FILE_EMBED_MODEL,
             providers=providers,
             threads=threads,
+            max_length=FILE_EMBED_MAX_LENGTH,
         )
         log.info(
             "file_embedding.model_loaded",
@@ -679,19 +703,41 @@ class FileEmbeddingIndex:
         texts: list[str],
         on_progress: Callable[[int, int], None] | None = None,
     ) -> np.ndarray:
-        """Embed a batch of texts, return L2-normalized float16 matrix."""
+        """Embed a batch of texts, return L2-normalized float16 matrix.
+
+        Texts are sorted by character length before batching so that
+        similar-length sequences are grouped together.  This reduces
+        ONNX padding overhead (the runtime pads every element in a
+        batch to the length of the longest element).  Original order
+        is restored before returning.
+        """
         if not texts:
             return np.empty((0, FILE_EMBED_DIM), dtype=np.float16)
 
         total = len(texts)
         batch_size = getattr(self, "_batch_size", FILE_EMBED_BATCH_SIZE)
-        all_vecs: list[np.ndarray] = []
+
+        # Sort by length → similar-length texts batch together → less padding
+        order = sorted(range(total), key=lambda i: len(texts[i]))
+        sorted_texts = [texts[i] for i in order]
+
+        sorted_vecs: list[np.ndarray] = []
         for i in range(0, total, batch_size):
-            batch = texts[i : i + batch_size]
+            batch = sorted_texts[i : i + batch_size]
             vecs = list(self._model.embed(batch, batch_size=len(batch)))
-            all_vecs.extend(vecs)
+            sorted_vecs.extend(vecs)
             if on_progress is not None:
                 on_progress(min(i + len(batch), total), total)
+            # Release ONNX intermediate buffers between batches
+            if i + batch_size < total:
+                gc.collect()
+
+        # Restore original order
+        inverse = [0] * total
+        for new_pos, orig_pos in enumerate(order):
+            inverse[orig_pos] = new_pos
+
+        all_vecs = [sorted_vecs[inverse[i]] for i in range(total)]
 
         matrix = np.array(all_vecs, dtype=np.float32)
         # L2-normalize each row
