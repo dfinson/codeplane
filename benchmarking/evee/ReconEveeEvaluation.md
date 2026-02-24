@@ -309,18 +309,12 @@ How can I load test Evee to find its performance limits? I want to test with dif
 | 20 | infra/terraform/modules/ai-foundry/main.tf | Foundry Hub and Project resources | Supp/Docs |
 | 21 | infra/terraform/modules/ai-foundry/variables.tf | Foundry module variables | Supp/Docs |
 | 22 | infra/terraform/modules/ai-foundry/outputs.tf | Foundry endpoints | Supp/Docs |
-| 23 | infra/terraform/main.tf | Module invocation | Supp/Docs |
-| 24 | infra/terraform/variables.tf | Deploy flags | Supp/Docs |
-| 25 | infra/terraform/terraform.tfvars | Foundry config values | Supp/Docs |
-| 26 | infra/terraform/outputs.tf | Foundry outputs | Supp/Docs |
-| 27 | infra/terraform/rbac.tf | RBAC assignments for Foundry | Supp/Docs |
-| 28 | infra/terraform/generate-env.sh | AZURE_AI_FOUNDRY_PROJECT_ENDPOINT generation | Supp/Docs |
-| 29 | docs/backends/overview.md | Backend overview | Supp/Docs |
-| 30 | docs/backends/azureml.md | AzureML docs — reference pattern | Supp/Docs |
-| 31 | docs/backends/custom-backends.md | Custom backend implementation guide | Supp/Docs |
-| 32 | docs/advanced/infrastructure.md | Terraform infrastructure docs | Supp/Docs |
-| 33 | docs/user-guide/configuration.md | Config reference | Supp/Docs |
-| 34 | pyproject.toml | Core entry points | Supp/Docs |
+| 23 | infra/terraform/generate-env.sh | AZURE_AI_FOUNDRY_PROJECT_ENDPOINT generation | Supp/Docs |
+| 24 | docs/backends/overview.md | Backend overview | Supp/Docs |
+| 25 | docs/backends/custom-backends.md | Custom backend implementation guide | Supp/Docs |
+| 26 | docs/advanced/infrastructure.md | Terraform infrastructure docs | Supp/Docs |
+| 27 | docs/user-guide/configuration.md | Config reference | Supp/Docs |
+| 28 | pyproject.toml | Core entry points | Supp/Docs |
 
 **Q1** *(anchored, precise)*:
 I need to integrate Azure AI Foundry as both a tracking and compute backend for Evee. The tracking backend should send metrics to Foundry dashboards via OpenTelemetry or native SDK. The compute backend should execute evaluations on Foundry infrastructure. I should follow the `packages/evee-azureml/` pattern — examining the AzureML tracking backend, compute backend, auth, config models, and entry points. I also need the Terraform AI Foundry module for infrastructure provisioning and the CLI commands for tracking/compute backend configuration.
@@ -346,26 +340,21 @@ How do I add a new backend to Evee for Azure AI Foundry? I need both tracking an
 | 3 | .github/workflows/ci.yml | CI config — add mocked integration to PR gating | Edit |
 | 4 | .github/workflows/integration-tests.yml | Integration test workflow — add mocked tier | Edit |
 | 5 | tests/evee/integration/helpers.py | Integration test helpers: `run_evee_evaluation()`, `EvaluationResult` | Context/Test |
-| 6 | tests/evee/integration/__init__.py | Integration test package | Context/Test |
-| 7 | tests/evee/integration/test_example_evaluate_locally_core.py | Existing local integration test pattern | Context/Test |
-| 8 | tests/evee/integration/test_example_evaluate_locally_mlflow.py | Existing MLflow integration test | Context/Test |
-| 9 | tests/evee/integration/test_model_cleanup.py | Existing mocked integration test pattern | Context/Test |
-| 10 | tests/evee/conftest.py | Shared fixtures: `mock_config_dict`, `mock_config_yaml`, `evaluator_with_setup` | Context/Test |
-| 11 | src/evee/evaluation/model_evaluator.py | Core evaluator pipeline — code exercised, not modified | Context/Test |
-| 12 | src/evee/config/models.py | Config models for loading real config — not modified | Context/Test |
-| 13 | src/evee/execution/experiment_runner.py | ExperimentRunner — top-level execution flow, not modified | Context/Test |
-| 14 | src/evee/core/base_model.py | `@model` decorator for mocked model registration — not modified | Context/Test |
-| 15 | src/evee/core/base_metric.py | `@metric` decorator for mocked metrics — not modified | Context/Test |
-| 16 | src/evee/core/base_dataset.py | `@dataset` decorator for mock dataset — not modified | Context/Test |
-| 17 | src/evee/datasets/jsonl_dataset.py | JSONL dataset loader — not modified | Context/Test |
-| 18 | src/evee/datasets/dataset_factory.py | DatasetFactory — not modified | Context/Test |
-| 19 | src/evee/tracking/backends/no_op_fallback_backend.py | NoOp backend for no-network tests — not modified | Context/Test |
-| 20 | src/evee/tracking/factory.py | Tracking backend factory — not modified | Context/Test |
-| 21 | src/evee/evaluation/metrics_aggregator.py | Output validation reference — not modified | Context/Test |
-| 22 | src/evee/logging/local_metrics_logger.py | Output artifact reference — not modified | Context/Test |
-| 23 | src/evee/compute/local_compute_backend.py | Local execution path — not modified | Context/Test |
-| 24 | example/experiment/config.yaml | Reference config | Supp/Docs |
-| 25 | example/experiment/data/sample_dataset.jsonl | Reference dataset | Supp/Docs |
+| 6 | tests/evee/integration/test_example_evaluate_locally_core.py | Existing local integration test pattern | Context/Test |
+| 7 | tests/evee/integration/test_example_evaluate_locally_mlflow.py | Existing MLflow integration test | Context/Test |
+| 8 | tests/evee/integration/test_model_cleanup.py | Existing mocked integration test pattern | Context/Test |
+| 9 | tests/evee/conftest.py | Shared fixtures: `mock_config_dict`, `mock_config_yaml`, `evaluator_with_setup` | Context/Test |
+| 10 | src/evee/evaluation/model_evaluator.py | Core evaluator pipeline — code exercised, not modified | Context/Test |
+| 11 | src/evee/config/models.py | Config models for loading real config — not modified | Context/Test |
+| 12 | src/evee/execution/experiment_runner.py | ExperimentRunner — top-level execution flow, not modified | Context/Test |
+| 13 | src/evee/core/base_model.py | `@model` decorator for mocked model registration — not modified | Context/Test |
+| 14 | src/evee/core/base_metric.py | `@metric` decorator for mocked metrics — not modified | Context/Test |
+| 15 | src/evee/core/base_dataset.py | `@dataset` decorator for mock dataset — not modified | Context/Test |
+| 16 | src/evee/datasets/jsonl_dataset.py | JSONL dataset loader — not modified | Context/Test |
+| 17 | src/evee/tracking/backends/no_op_fallback_backend.py | NoOp backend for no-network tests — not modified | Context/Test |
+| 18 | src/evee/evaluation/metrics_aggregator.py | Output validation reference — not modified | Context/Test |
+| 19 | example/experiment/config.yaml | Reference config | Supp/Docs |
+| 20 | example/experiment/data/sample_dataset.jsonl | Reference dataset | Supp/Docs |
 
 **Q1** *(anchored, precise)*:
 I need to implement integration tests that run Evee's full evaluation pipeline end-to-end with mocked services. The tests should load a real config, create mock `@model` and `@metric` decorated classes with deterministic responses, use `NoOpTrackingBackend`, run through `ExperimentRunner` and `ModelEvaluator`, and validate output artifacts. No external network calls. I need the existing integration test patterns in `tests/evee/integration/`, the evaluation pipeline code, config models, dataset loading, and CI workflow configuration to add these to PR gating.
@@ -450,30 +439,26 @@ I need to document and test the Evee MCP server thoroughly. Where is all the MCP
 | 7 | packages/evee-azureml/src/evee_azureml/compute.py | Reference compute backend | Context/Test |
 | 8 | packages/evee-azureml/src/evee_azureml/config.py | Reference config models | Context/Test |
 | 9 | packages/evee-azureml/src/evee_azureml/auth.py | Azure identity auth pattern | Context/Test |
-| 10 | packages/evee-azureml/src/evee_azureml/utils.py | Shared utilities pattern | Context/Test |
-| 11 | packages/evee-azureml/src/evee_azureml/__init__.py | Package init pattern | Context/Test |
-| 12 | packages/evee-azureml/pyproject.toml | Entry points pattern | Context/Test |
-| 13 | packages/evee-azureml/tests/test_tracking.py | Tracking test patterns | Context/Test |
-| 14 | packages/evee-azureml/tests/test_azureml_backend_pkg.py | Compute test patterns | Context/Test |
-| 15 | src/evee/tracking/backend.py | TrackingBackend protocol — unchanged | Context/Test |
-| 16 | src/evee/tracking/factory.py | Backend factory — uses entry_points, unchanged | Context/Test |
-| 17 | src/evee/tracking/events.py | Event types — sufficient for Foundry | Context/Test |
-| 18 | src/evee/compute/backend.py | ComputeBackend ABC — unchanged | Context/Test |
-| 19 | src/evee/config/models.py | Config models — uses `extra="allow"`, unchanged | Context/Test |
-| 20 | src/evee/execution/experiment_runner.py | Backend loading via entry points — unchanged | Context/Test |
-| 21 | tests/evee/tracking/test_tracking_factory.py | Factory tests pattern | Context/Test |
-| 22 | pyproject.toml | Core entry points reference | Supp/Docs |
-| 23 | example/experiment/config.azureml.yaml | Reference AzureML config pattern | Supp/Docs |
-| 24 | example/README.md | Example docs | Supp/Docs |
-| 25 | example/.env.sample | Env var samples | Supp/Docs |
-| 26 | infra/terraform/modules/ai-foundry/main.tf | Foundry infrastructure | Supp/Docs |
-| 27 | infra/terraform/modules/ai-foundry/variables.tf | Foundry variables | Supp/Docs |
-| 28 | infra/terraform/modules/ai-foundry/outputs.tf | Foundry endpoints | Supp/Docs |
-| 29 | infra/terraform/main.tf | Module invocation | Supp/Docs |
-| 30 | docs/backends/overview.md | Backend overview | Supp/Docs |
-| 31 | docs/backends/custom-backends.md | Backend implementation guide | Supp/Docs |
-| 32 | docs/user-guide/configuration.md | Config reference | Supp/Docs |
-| 33 | docs/user-guide/cli.md | CLI reference | Supp/Docs |
+| 10 | packages/evee-azureml/pyproject.toml | Entry points pattern | Context/Test |
+| 11 | packages/evee-azureml/tests/test_tracking.py | Tracking test patterns | Context/Test |
+| 12 | packages/evee-azureml/tests/test_azureml_backend_pkg.py | Compute test patterns | Context/Test |
+| 13 | src/evee/tracking/backend.py | TrackingBackend protocol — unchanged | Context/Test |
+| 14 | src/evee/tracking/factory.py | Backend factory — uses entry_points, unchanged | Context/Test |
+| 15 | src/evee/tracking/events.py | Event types — sufficient for Foundry | Context/Test |
+| 16 | src/evee/compute/backend.py | ComputeBackend ABC — unchanged | Context/Test |
+| 17 | src/evee/config/models.py | Config models — uses `extra="allow"`, unchanged | Context/Test |
+| 18 | src/evee/execution/experiment_runner.py | Backend loading via entry points — unchanged | Context/Test |
+| 19 | tests/evee/tracking/test_tracking_factory.py | Factory tests pattern | Context/Test |
+| 20 | pyproject.toml | Core entry points reference | Supp/Docs |
+| 21 | example/experiment/config.azureml.yaml | Reference AzureML config pattern | Supp/Docs |
+| 22 | infra/terraform/modules/ai-foundry/main.tf | Foundry infrastructure | Supp/Docs |
+| 23 | infra/terraform/modules/ai-foundry/variables.tf | Foundry variables | Supp/Docs |
+| 24 | infra/terraform/modules/ai-foundry/outputs.tf | Foundry endpoints | Supp/Docs |
+| 25 | infra/terraform/main.tf | Module invocation | Supp/Docs |
+| 26 | docs/backends/overview.md | Backend overview | Supp/Docs |
+| 27 | docs/backends/custom-backends.md | Backend implementation guide | Supp/Docs |
+| 28 | docs/user-guide/configuration.md | Config reference | Supp/Docs |
+| 29 | docs/user-guide/cli.md | CLI reference | Supp/Docs |
 
 **Q1** *(anchored, precise)*:
 I need to implement Azure AI Foundry as both a tracking and compute backend for Evee, following the `packages/evee-azureml/` pattern exactly. The tracking backend should implement the `TrackingBackend` protocol and send metrics to Foundry dashboards. The compute backend should implement `ComputeBackend` ABC and submit evaluations to Foundry infrastructure. I need to register via entry points, add CLI commands for tracking/compute backend selection, add a `make run_foundry` target in the example Makefile, configure Terraform infrastructure, and document region limitations for LLM-based evaluators.
@@ -575,37 +560,8 @@ How does `evee new` work for creating new projects? I need to add support for di
 | 10 | tests/evee/integration/test_cli.py | CLI integration test | Context/Test |
 | 11 | tests/evee/integration/test_e2e_new_project_workflow.py | E2E workflow test | Context/Test |
 | 12 | tests/evee/integration/test_model_cleanup.py | Model cleanup test | Context/Test |
-| 13 | example/__init__.py | Moved, not content-edited | Supp/Docs |
-| 14 | example/README.md | Moved | Supp/Docs |
-| 15 | example/Makefile | Moved | Supp/Docs |
-| 16 | example/.env.sample | Moved | Supp/Docs |
-| 17 | example/.gitignore | Moved | Supp/Docs |
-| 18 | example/.amlignore | Moved | Supp/Docs |
-| 19 | example/.dockerignore | Moved | Supp/Docs |
-| 20 | example/Dockerfile.aml | Moved | Supp/Docs |
-| 21 | example/experiment/config.yaml | Moved | Supp/Docs |
-| 22 | example/experiment/config.mlflow.yaml | Moved | Supp/Docs |
-| 23 | example/experiment/config.azureml.yaml | Moved | Supp/Docs |
-| 24 | example/experiment/data/sample_dataset.jsonl | Moved | Supp/Docs |
-| 25 | example/experiment/data/full_dataset.jsonl | Moved | Supp/Docs |
-| 26 | example/models/__init__.py | Moved | Supp/Docs |
-| 27 | example/models/baseline/baseline.py | Moved | Supp/Docs |
-| 28 | example/models/baseline/baseline.j2 | Moved | Supp/Docs |
-| 29 | example/models/few_shot/few_shot.py | Moved | Supp/Docs |
-| 30 | example/models/few_shot/few_shot.j2 | Moved | Supp/Docs |
-| 31 | example/models/few_shot/single_shot.j2 | Moved | Supp/Docs |
-| 32 | example/metrics/__init__.py | Moved | Supp/Docs |
-| 33 | example/metrics/f1score_metric.py | Moved | Supp/Docs |
-| 34 | example/metrics/llm_judge_metric.py | Moved | Supp/Docs |
-| 35 | example/metrics/rouge_metric.py | Moved | Supp/Docs |
-| 36 | example/metrics/token_usage_metric.py | Moved | Supp/Docs |
-| 37 | example/auth/auth.py | Moved | Supp/Docs |
-| 38 | example/prompt_template/prompt_loader.py | Moved | Supp/Docs |
-| 39 | example/core/pyproject.toml | Moved | Supp/Docs |
-| 40 | example/mlflow/pyproject.toml | Moved | Supp/Docs |
-| 41 | example/azureml/pyproject.toml | Moved | Supp/Docs |
-| 42 | CONTRIBUTING.md | References to `example/` directory | Supp/Docs |
-| 43 | docs/development/contributing.md | Project structure showing `example/` | Supp/Docs |
+| 13 | CONTRIBUTING.md | References to `example/` directory | Supp/Docs |
+| 14 | docs/development/contributing.md | Project structure showing `example/` | Supp/Docs |
 
 **Q1** *(anchored, precise)*:
 I need to move the `example/` project directory into the `tests/` folder so it becomes a pure testing fixture instead of serving double duty as a user-facing sample. All integration tests in `tests/evee/integration/` reference `example/` via `get_example_dir()` in `helpers.py`. The MCP conftest also references it via `example_project` fixture. I need to update all path references, CI workflows, debug configs, pyproject.toml coverage settings, and documentation that mentions `example/`. The `samples/agent-sample/` should remain as the user-facing reference project.
@@ -680,15 +636,10 @@ What does Evee's release and distribution setup look like? I need to evaluate wh
 | 10 | docs/backends/mlflow.md | MLflow backend documentation | Supp/Docs |
 | 11 | docs/user-guide/configuration.md | Configuration reference | Supp/Docs |
 | 12 | docs/getting-started/quickstart.md | Quickstart tracking_uri example | Supp/Docs |
-| 13 | docs/troubleshooting.md | Troubleshooting tracking_uri errors | Supp/Docs |
-| 14 | docs/user-guide/cli.md | CLI config examples | Supp/Docs |
-| 15 | example/experiment/config.mlflow.yaml | Example MLflow config | Supp/Docs |
-| 16 | example/Makefile | MLflow UI command with backend-store-uri | Supp/Docs |
-| 17 | example/.amlignore | Lists mlflow.db in ignore | Supp/Docs |
-| 18 | samples/agent-sample/experiment/config.yaml | Agent sample config | Supp/Docs |
-| 19 | samples/coding-sample/experiment/config.yaml | Coding sample config | Supp/Docs |
-| 20 | src/evee/cli/templates/overlays/mlflow/experiment/config.yaml | MLflow template — shows default value | Supp/Docs |
-| 21 | cspell.config.yaml | "mlruns" in custom words | Supp/Docs |
+| 13 | example/experiment/config.mlflow.yaml | Example MLflow config | Supp/Docs |
+| 14 | example/Makefile | MLflow UI command with backend-store-uri | Supp/Docs |
+| 15 | example/.amlignore | Lists mlflow.db in ignore | Supp/Docs |
+| 16 | src/evee/cli/templates/overlays/mlflow/experiment/config.yaml | MLflow template — shows default value | Supp/Docs |
 
 **Q1** *(anchored, precise)*:
 I need to change the default MLflow tracking URI from the filesystem backend (`./mlruns`) to `sqlite:///mlflow.db` in the evee-mlflow package. The `MLflowTrackingConfig` in `packages/evee-mlflow/src/evee_mlflow/config.py` has `tracking_uri` defaulting to None with artifact_location defaulting to `./mlruns`. The `MLflowBackend.on_startup()` in `tracking.py` logs the `./mlruns directory` message when no URI is set. I need to update the config default, the startup logic, all tests that assert on `./mlruns`, example/sample configs, the MLflow project template, documentation references, and the core `TrackingBackendConfig` default.
@@ -718,20 +669,15 @@ MLflow's filesystem backend is being deprecated. I need to change Evee's default
 | 7 | docs/user-guide/configuration.md | Config docs — new early stop fields | Supp/Docs |
 | 8 | src/evee/evaluation/evaluate.py | `evaluate_main` entry point — passes through, no changes | Context/Test |
 | 9 | src/evee/evaluation/metrics_aggregator.py | Metrics aggregation — no changes needed | Context/Test |
-| 10 | src/evee/evaluation/__init__.py | Module exports — unchanged | Context/Test |
-| 11 | src/evee/config/__init__.py | Config exports — unchanged | Context/Test |
-| 12 | src/evee/execution/experiment_runner.py | ExperimentRunner — passes config through, no changes | Context/Test |
-| 13 | src/evee/execution/preflight.py | Preflight checks — not relevant to runtime early stop | Context/Test |
-| 14 | src/evee/core/base_model.py | BaseModel inference interface — unchanged | Context/Test |
-| 15 | src/evee/core/base_metric.py | BaseMetric compute interface — unchanged | Context/Test |
-| 16 | src/evee/core/models/evaluation_output.py | EvaluationOutput — unchanged | Context/Test |
-| 17 | src/evee/tracking/backend.py | TrackingBackend — unchanged; receives events | Context/Test |
-| 18 | tests/evee/evaluation/test_model_evaluator_init.py | Evaluator init tests | Context/Test |
-| 19 | tests/evee/evaluation/test_model_evaluator_metrics.py | Metric computation tests | Context/Test |
-| 20 | tests/evee/evaluation/test_progress_tracker.py | Progress tracker tests | Context/Test |
-| 21 | tests/evee/evaluation/test_metrics_aggregator.py | Aggregator tests | Context/Test |
-| 22 | docs/troubleshooting.md | Error threshold guidance | Supp/Docs |
-| 23 | docs/design/architecture.md | Architecture doc | Supp/Docs |
+| 10 | src/evee/execution/experiment_runner.py | ExperimentRunner — passes config through, no changes | Context/Test |
+| 11 | src/evee/core/base_model.py | BaseModel inference interface — unchanged | Context/Test |
+| 12 | src/evee/core/base_metric.py | BaseMetric compute interface — unchanged | Context/Test |
+| 13 | src/evee/tracking/backend.py | TrackingBackend — unchanged; receives events | Context/Test |
+| 14 | tests/evee/evaluation/test_model_evaluator_init.py | Evaluator init tests | Context/Test |
+| 15 | tests/evee/evaluation/test_model_evaluator_metrics.py | Metric computation tests | Context/Test |
+| 16 | tests/evee/evaluation/test_progress_tracker.py | Progress tracker tests | Context/Test |
+| 17 | docs/troubleshooting.md | Error threshold guidance | Supp/Docs |
+| 18 | docs/design/architecture.md | Architecture doc | Supp/Docs |
 
 **Q1** *(anchored, precise)*:
 I need to implement early stopping in Evee's evaluation pipeline. Part 1: In the inference phase (`_run_evaluation_loop` in `ModelEvaluator`), count consecutive or total errors and abort early if a threshold is exceeded, alerting the user. Part 2: In the evaluation phase, mark metrics as optimization targets in `MetricConfig` and stop when no significant improvement is observed across hyperparameter variations. I need the evaluation loop code, config models for new threshold fields, progress tracking, error handling patterns, and tests for the evaluation pipeline.
@@ -758,27 +704,16 @@ Evee should stop evaluation early when there are too many errors. Where is the e
 | 4 | src/evee/mcp/tools/validation.py | validate_config tool — exercised during demo | Context/Test |
 | 5 | src/evee/mcp/tools/discovery.py | list_components tool — exercised during demo | Context/Test |
 | 6 | src/evee/mcp/tools/view_results.py | view_results tool — exercised during demo | Context/Test |
-| 7 | src/evee/mcp/tools/base.py | Base tool class — reference | Context/Test |
-| 8 | src/evee/mcp/tools/__init__.py | Tool registry — reference | Context/Test |
-| 9 | src/evee/mcp/resources/config.py | Config schema — agent eval YAML example | Context/Test |
-| 10 | src/evee/mcp/resources/connections.py | Connections docs — reference | Context/Test |
-| 11 | src/evee/mcp/resources/model_patterns.py | Model patterns docs — reference | Context/Test |
-| 12 | src/evee/mcp/resources/metric_patterns.py | Metric patterns docs — reference | Context/Test |
-| 13 | src/evee/mcp/resources/patterns.py | Decorator patterns — reference | Context/Test |
-| 14 | src/evee/mcp/resources/evaluators.py | Azure evaluators — reference | Context/Test |
-| 15 | src/evee/mcp/constants.py | Server constants — reference | Context/Test |
-| 16 | src/evee/mcp/__init__.py | MCP package — reference | Context/Test |
-| 17 | src/evee/execution/runner.py | ExecutionRunner — exercised via tools | Context/Test |
-| 18 | src/evee/execution/environment.py | EnvironmentResolver — exercised via tools | Context/Test |
-| 19 | tests/mcp/test_e2e.py | E2E MCP tests — verify before demo | Context/Test |
-| 20 | tests/mcp/test_tools.py | Tool tests — verify before demo | Context/Test |
-| 21 | samples/agent-sample/README.md | Agent sample README — reference for demo | Supp/Docs |
-| 22 | samples/agent-sample/experiment/config.yaml | Agent sample config | Supp/Docs |
-| 23 | samples/agent-sample/models/baseline/baseline.py | Agent baseline model | Supp/Docs |
-| 24 | samples/agent-sample/models/foundry_agent/agent.py | Foundry agent model | Supp/Docs |
-| 25 | samples/agent-sample/metrics/agent_tool_call_f1_metric.py | Agent F1 metric | Supp/Docs |
-| 26 | samples/agent-sample/pyproject.toml | Agent sample dependencies | Supp/Docs |
-| 27 | docs/user-guide/mcp-server.md | MCP user docs | Supp/Docs |
+| 7 | src/evee/mcp/resources/config.py | Config schema — agent eval YAML example | Context/Test |
+| 8 | tests/mcp/test_e2e.py | E2E MCP tests — verify before demo | Context/Test |
+| 9 | tests/mcp/test_tools.py | Tool tests — verify before demo | Context/Test |
+| 10 | samples/agent-sample/README.md | Agent sample README — reference for demo | Supp/Docs |
+| 11 | samples/agent-sample/experiment/config.yaml | Agent sample config | Supp/Docs |
+| 12 | samples/agent-sample/models/baseline/baseline.py | Agent baseline model | Supp/Docs |
+| 13 | samples/agent-sample/models/foundry_agent/agent.py | Foundry agent model | Supp/Docs |
+| 14 | samples/agent-sample/metrics/agent_tool_call_f1_metric.py | Agent F1 metric | Supp/Docs |
+| 15 | samples/agent-sample/pyproject.toml | Agent sample dependencies | Supp/Docs |
+| 16 | docs/user-guide/mcp-server.md | MCP user docs | Supp/Docs |
 
 **Q1** *(anchored, precise)*:
 I need to demonstrate creating an agent evaluation end-to-end using Evee's MCP server. The demo should show an AI assistant using MCP tools (list_components, validate_config, run_experiment, view_results) to scaffold and run an agent evaluation. I need all MCP tools and resources, the agent sample project in `samples/agent-sample/` as reference, the MCP VS Code config template, the execution infrastructure, and any documentation or test gaps to fix before the demo.
@@ -807,14 +742,8 @@ How can I use Evee's MCP server to set up an agent evaluation from scratch? I ne
 | 6 | src/evee/mcp/tools/base.py | BaseTool, ToolResult — base class reference | Context/Test |
 | 7 | src/evee/mcp/tools/view_results.py | ViewResultsTool — reuse results loading pattern | Context/Test |
 | 8 | src/evee/mcp/tools/experiment.py | RunExperimentTool — reference implementation | Context/Test |
-| 9 | src/evee/mcp/tools/validation.py | ValidateConfigTool — reference implementation | Context/Test |
-| 10 | src/evee/mcp/tools/discovery.py | ListComponentsTool — reference implementation | Context/Test |
-| 11 | src/evee/mcp/__init__.py | MCP package init — no changes needed | Context/Test |
-| 12 | src/evee/mcp/resources/config.py | Config schema resource — reference | Context/Test |
-| 13 | src/evee/mcp/resources/evaluators.py | Evaluators resource — reference | Context/Test |
-| 14 | tests/mcp/test_e2e.py | E2E tests — add analysis tool e2e | Context/Test |
-| 15 | tests/mcp/test_resources.py | Resource tests — reference | Context/Test |
-| 16 | docs/user-guide/mcp-server.md | MCP user documentation | Supp/Docs |
+| 9 | tests/mcp/test_e2e.py | E2E tests — add analysis tool e2e | Context/Test |
+| 10 | docs/user-guide/mcp-server.md | MCP user documentation | Supp/Docs |
 
 **Q1** *(anchored, precise)*:
 I need to add a new MCP tool called `analyze_results` that analyzes experiment results and suggests the best model using LLM sampling. The tool should follow the existing tool pattern: extend `BaseTool` from `src/evee/mcp/tools/base.py`, register in `tools/__init__.py`, add a handler in `server.py`, and add the tool name to `constants.py`. It should reuse the results-loading logic from `ViewResultsTool` and leverage MCP's sampling capabilities to produce a markdown report. I also need to add tests in `tests/mcp/test_tools.py` and update MCP documentation.
@@ -847,18 +776,14 @@ How do I add a new tool to Evee's MCP server? I want one that analyzes results a
 | 10 | packages/evee-azureml/src/evee_azureml/config.py | Config pattern | Context/Test |
 | 11 | src/evee/config/models.py | `ComputeBackendConfig` — `extra="allow"`, no changes | Context/Test |
 | 12 | src/evee/execution/experiment_runner.py | Uses `entry_points()` for discovery — no changes | Context/Test |
-| 13 | src/evee/cli/commands/run.py | `--remote` flag is backend-agnostic — no changes | Context/Test |
-| 14 | src/evee/cli/constants.py | CLI constants — no changes | Context/Test |
-| 15 | src/evee/cli/utils/backend_helpers.py | Generic helpers — no changes | Context/Test |
-| 16 | src/evee/compute/utils/wheels_provisioner.py | May be reused by server backend — no changes | Context/Test |
-| 17 | src/evee/execution/preflight.py | Preflight checks — backend-agnostic | Context/Test |
-| 18 | tests/evee/execution/test_experiment_runner.py | Runner tests reference | Context/Test |
-| 19 | tests/evee/compute/test_local_compute_backend.py | Compute backend test reference | Context/Test |
-| 20 | pyproject.toml | Core entry points reference | Supp/Docs |
-| 21 | CONTRIBUTING.md | Extension package structure | Supp/Docs |
-| 22 | docs/backends/custom-backends.md | Custom backend guide | Supp/Docs |
-| 23 | docs/user-guide/configuration.md | Config reference | Supp/Docs |
-| 24 | docs/user-guide/cli.md | CLI reference | Supp/Docs |
+| 13 | src/evee/compute/utils/wheels_provisioner.py | May be reused by server backend — no changes | Context/Test |
+| 14 | tests/evee/execution/test_experiment_runner.py | Runner tests reference | Context/Test |
+| 15 | tests/evee/compute/test_local_compute_backend.py | Compute backend test reference | Context/Test |
+| 16 | pyproject.toml | Core entry points reference | Supp/Docs |
+| 17 | CONTRIBUTING.md | Extension package structure | Supp/Docs |
+| 18 | docs/backends/custom-backends.md | Custom backend guide | Supp/Docs |
+| 19 | docs/user-guide/configuration.md | Config reference | Supp/Docs |
+| 20 | docs/user-guide/cli.md | CLI reference | Supp/Docs |
 
 **Q1** *(anchored, precise)*:
 I need to create a new `packages/evee-server/` package implementing a Dedicated Server compute backend for Evee. It should follow the `packages/evee-azureml/` pattern: implement `ComputeBackend` ABC from `src/evee/compute/backend.py`, register via entry points in `pyproject.toml`, include a FastAPI server daemon, code sync module, and HTTP client. The backend's `submit()` method should sync code, provision the remote env (reuse `wheels_provisioner`), and submit via HTTP. I need CLI commands for `evee server status/start`, updates to `VALID_COMPUTE_BACKENDS` in `cli/commands/compute.py`, deployment scripts, Makefile targets, and documentation.
@@ -890,15 +815,11 @@ I want to add a way to run Evee evaluations on a remote server instead of locall
 | 9 | tests/evee/execution/test_experiment_runner.py | Add tests for .env missing error | Edit |
 | 10 | tests/evee/execution/test_preflight.py | Add test for .env preflight check | Edit |
 | 11 | src/evee/cli/constants.py | `DEFAULT_ENV_FILE = ".env"` — already defined, no changes | Context/Test |
-| 12 | src/evee/config/models.py | Env is a CLI arg, not config model field — not relevant | Context/Test |
-| 13 | src/evee/core/base_model.py | `load_dotenv(verbose=True)` uses default discovery — check belongs upstream | Context/Test |
-| 14 | src/evee/execution/runner.py | Generic runner, just passes `env_path` through | Context/Test |
-| 15 | src/evee/mcp/tools/experiment.py | Passes `env_file` to runner, no loading | Context/Test |
-| 16 | src/evee/mcp/tools/validation.py | Passes `env_file` to runner, no loading | Context/Test |
-| 17 | src/evee/mcp/server.py | Server plumbing, no .env loading | Context/Test |
-| 18 | docs/troubleshooting.md | Troubleshooting — add missing .env entry | Supp/Docs |
-| 19 | docs/getting-started/quickstart.md | Quickstart .env setup | Supp/Docs |
-| 20 | docs/user-guide/configuration.md | .env in config hierarchy | Supp/Docs |
+| 12 | src/evee/core/base_model.py | `load_dotenv(verbose=True)` uses default discovery — check belongs upstream | Context/Test |
+| 13 | src/evee/execution/runner.py | Generic runner, just passes `env_path` through | Context/Test |
+| 14 | docs/troubleshooting.md | Troubleshooting — add missing .env entry | Supp/Docs |
+| 15 | docs/getting-started/quickstart.md | Quickstart .env setup | Supp/Docs |
+| 16 | docs/user-guide/configuration.md | .env in config hierarchy | Supp/Docs |
 
 **Q1** *(anchored, precise)*:
 I need to add startup validation in Evee that raises an explicit error when the `.env` file is missing. Currently, `.env` loading is handled silently in multiple places: `cli/commands/run.py`, `cli/commands/validate.py`, `cli/main.py` (`_execute_in_project_env`), `evaluation/model_evaluator.py`, `evaluation/evaluate.py`, `execution/experiment_runner.py`, and `core/base_model.py`. The `DEFAULT_ENV_FILE` constant is in `cli/constants.py`. I should add the check in `execution/preflight.py` (which already does pre-flight validation) and ensure it surfaces a clear error message before any downstream failures.
@@ -929,10 +850,7 @@ Evee should tell users clearly when their `.env` file is missing instead of fail
 | 8 | docs/user-guide/configuration.md | Config reference — new flag | Supp/Docs |
 | 9 | docs/troubleshooting.md | Disable Rich Console section | Supp/Docs |
 | 10 | src/evee/logging/logger.py | Already calls `is_rich_compatible_environment()` — inherits change, no direct edits | Context/Test |
-| 11 | src/evee/cli/commands/run.py | MCP mode check is separate concern — no changes | Context/Test |
-| 12 | src/evee/utils/__init__.py | Already exports function — no changes if signature stays compatible | Context/Test |
-| 13 | src/evee/config/__init__.py | Config exports — unchanged | Context/Test |
-| 14 | tests/evee/conftest.py | Sets `EVEE_DISABLE_RICH_LOGGING=true` — reference | Context/Test |
+| 11 | tests/evee/conftest.py | Sets `EVEE_DISABLE_RICH_LOGGING=true` — reference | Context/Test |
 
 **Q1** *(anchored, precise)*:
 I need to add a configuration flag in `config.yaml` to disable Rich progress bars for CI environments. The `is_rich_compatible_environment()` function in `src/evee/utils/environment.py` already checks `EVEE_DISABLE_RICH_LOGGING` env var and MCP mode. The `ProgressTracker` in `evaluation/progress_tracker.py` and logger in `logging/logger.py` both use this function. I need to add a new field to `RuntimeConfig` or `ExperimentConfig` in `config/models.py`, update the environment check to also consult the config flag, and update tests and documentation.
@@ -997,13 +915,11 @@ I want to add tests that verify an LLM can use Evee's MCP tools correctly from n
 | 10 | src/evee/core/base_model.py | `BaseModel`, `MODEL_REGISTRY` — interface unchanged | Context/Test |
 | 11 | src/evee/core/execution_context.py | `connections_registry` — REST models use this, no changes | Context/Test |
 | 12 | src/evee/core/decorator_discovery.py | REST models bypass discovery (config-driven) — no changes | Context/Test |
-| 13 | src/evee/core/decorator_helpers.py | Parameter injection — not used for REST models | Context/Test |
-| 14 | src/evee/cli/templates/model/empty_model.py | Template reference | Context/Test |
-| 15 | src/evee/cli/templates/base/models/baseline.py | Template reference | Context/Test |
-| 16 | tests/evee/cli/test_model_commands.py | Model CLI tests — add REST scaffolding tests | Context/Test |
-| 17 | docs/user-guide/models.md | Model documentation | Supp/Docs |
-| 18 | docs/user-guide/configuration.md | Config reference | Supp/Docs |
-| 19 | pyproject.toml | May need httpx/aiohttp dependency | Supp/Docs |
+| 13 | src/evee/cli/templates/model/empty_model.py | Template reference | Context/Test |
+| 14 | src/evee/cli/templates/base/models/baseline.py | Template reference | Context/Test |
+| 15 | tests/evee/cli/test_model_commands.py | Model CLI tests — add REST scaffolding tests | Edit |
+| 16 | docs/user-guide/models.md | Model documentation | Supp/Docs |
+| 17 | docs/user-guide/configuration.md | Config reference | Supp/Docs |
 
 **Q1** *(anchored, precise)*:
 I need to add support for configurable REST-based models in Evee. Instead of writing custom `@model` decorated classes for each REST endpoint, users should define REST model configuration in `config.yaml` (endpoint URL, request/response format, headers, auth). This requires changes to `ModelVariantConfig` in `config/models.py`, a new `RestModel` class that doesn't use `@model` decorator but still works with `ModelEvaluator._register_model`, connection handling via `ExecutionContext.connections_registry`, and a REST model template for CLI scaffolding. The model should bypass `decorator_discovery` and instead be resolved from config.
@@ -1041,9 +957,7 @@ Users keep writing model classes that just wrap REST calls. I want to make REST 
 | 15 | tests/evee/test_azure_evaluators_metadata.py | Evaluator metadata tests | Context/Test |
 | 16 | tests/scripts/test_generate_azure_evaluators.py | Metadata generation tests | Context/Test |
 | 17 | example/metrics/f1score_metric.py | Reference: working metric | Supp/Docs |
-| 18 | example/metrics/rouge_metric.py | Reference: working metric | Supp/Docs |
-| 19 | docs/user-guide/metrics.md | Metric implementation guide | Supp/Docs |
-| 20 | docs/user-guide/cli.md | CLI metric add reference | Supp/Docs |
+| 18 | docs/user-guide/metrics.md | Metric implementation guide | Supp/Docs |
 
 **Q1** *(anchored, precise)*:
 I need to make Foundry metric scaffolding fully implement the metric class instead of generating a stub with `NotImplementedError`. The `_create_azure_metric()` in `cli/commands/metric.py` uses the template at `cli/templates/metrics/azure_evaluator_metric.py` which produces a non-functional stub. I need to use the evaluator metadata from `cli/azure_evaluators.json` (parameters, callable_params) to generate a complete `compute()` and `aggregate()` implementation. Also fix `get_metric_file_path()` in `cli/utils/metric_operations.py` which places files in the wrong directory. Reference working implementations like `example/metrics/f1score_metric.py`.
@@ -1082,14 +996,10 @@ When I add a Foundry metric via the CLI, it creates a stub that doesn't work. I 
 | 16 | tests/evee/evaluation/test_model_evaluator_metrics.py | Test `_get_metrics_for_model` with set references | Edit |
 | 17 | tests/mcp/test_resources.py | Test updated evaluators/config resource | Edit |
 | 18 | src/evee/core/base_metric.py | `METRIC_REGISTRY` — unchanged (sets are config-level) | Context/Test |
-| 19 | src/evee/core/decorator_discovery.py | Discovery — unchanged | Context/Test |
-| 20 | src/evee/evaluation/metrics_aggregator.py | Aggregation — per-metric, may not need changes | Context/Test |
-| 21 | src/evee/cli/templates/metrics/azure_evaluator_metric.py | Template — individual scaffolding unchanged | Context/Test |
-| 22 | src/evee/cli/templates/metrics/empty_metric.py | Template — unchanged | Context/Test |
-| 23 | docs/user-guide/configuration.md | Document `metric_sets` config section | Supp/Docs |
-| 24 | docs/user-guide/cli.md | Document `evee metric set` commands | Supp/Docs |
-| 25 | docs/getting-started/glossary.md | Add "metric set" term | Supp/Docs |
-| 26 | docs/user-guide/metrics.md | Add metric sets usage section | Supp/Docs |
+| 19 | docs/user-guide/configuration.md | Document `metric_sets` config section | Supp/Docs |
+| 20 | docs/user-guide/cli.md | Document `evee metric set` commands | Supp/Docs |
+| 21 | docs/getting-started/glossary.md | Add "metric set" term | Supp/Docs |
+| 22 | docs/user-guide/metrics.md | Add metric sets usage section | Supp/Docs |
 
 **Q1** *(anchored, precise)*:
 I need to add configurable metric sets (presets) to Evee for Responsible AI compliance. Users should be able to specify a metric set name (e.g., "rai_1p", "rai_3p") in their config and have it resolve to a predefined list of metrics with specific parameters. This requires a new config model for metric sets in `config/models.py`, resolution logic in `ModelEvaluator._get_metrics_for_model()`, CLI commands for managing sets in `cli/commands/metric.py`, categorization metadata in `cli/azure_evaluators.json`, and documentation covering 1P and 3P RAI use cases.
@@ -1124,18 +1034,12 @@ Different users need different sets of metrics for compliance (1P vs 3P RAI). I 
 | 12 | tests/evee/evaluation/test_metrics_aggregator.py | Verify aggregation uses display name | Edit |
 | 13 | tests/evee/evaluation/test_model_evaluator_metrics.py | Test entry_point-based registry lookup | Edit |
 | 14 | src/evee/core/base_metric.py | `METRIC_REGISTRY` keyed by decorator name — unchanged | Context/Test |
-| 15 | src/evee/core/decorator_helpers.py | Parameter helpers — unchanged | Context/Test |
-| 16 | src/evee/core/decorator_discovery.py | Discovery — unchanged | Context/Test |
-| 17 | src/evee/evaluation/metrics_aggregator.py | Uses `metric_name` from `metrics_registry` keys — inherits display name, no direct changes | Context/Test |
-| 18 | src/evee/cli/commands/list.py | Lists from `METRIC_REGISTRY` — shows decorator names, no changes | Context/Test |
-| 19 | src/evee/cli/utils/config_manager.py | `add_metric` accepts arbitrary config dicts — no structural change | Context/Test |
-| 20 | src/evee/cli/constants.py | No new constants needed | Context/Test |
-| 21 | src/evee/cli/templates/metrics/empty_metric.py | Templates generate `@metric(name=...)` — `entry_point` is in config.yaml | Context/Test |
-| 22 | src/evee/cli/templates/metrics/azure_evaluator_metric.py | Template — unchanged | Context/Test |
-| 23 | tests/evee/conftest.py | Mock fixtures already have `entry_point` field — confirms pattern anticipated | Context/Test |
-| 24 | tests/evee/core/test_base_metric.py | METRIC_REGISTRY tests — unchanged | Context/Test |
-| 25 | docs/user-guide/configuration.md | Document `entry_point` field, reuse pattern | Supp/Docs |
-| 26 | docs/user-guide/metrics.md | Add "reusing metrics with custom names" section | Supp/Docs |
+| 15 | src/evee/evaluation/metrics_aggregator.py | Uses `metric_name` from `metrics_registry` keys — inherits display name, no direct changes | Context/Test |
+| 16 | src/evee/cli/utils/config_manager.py | `add_metric` accepts arbitrary config dicts — no structural change | Context/Test |
+| 17 | tests/evee/conftest.py | Mock fixtures already have `entry_point` field — confirms pattern anticipated | Context/Test |
+| 18 | tests/evee/core/test_base_metric.py | METRIC_REGISTRY tests — unchanged | Context/Test |
+| 19 | docs/user-guide/configuration.md | Document `entry_point` field, reuse pattern | Supp/Docs |
+| 20 | docs/user-guide/metrics.md | Add "reusing metrics with custom names" section | Supp/Docs |
 
 **Q1** *(anchored, precise)*:
 I need to decouple metric implementation lookup from display names in Evee. Currently `MetricConfig.name` in `config/models.py` serves as both the `METRIC_REGISTRY` lookup key (in `base_metric.py`) and the reporting label (in `metrics_aggregator.py`, `model_evaluator.py`). To reuse the same metric class with different parameters (e.g., LLM judge with different prompts), I need either an `entry_point` field for implementation lookup while `name` becomes display-only, or a `display_name` field for reporting while `name` stays as lookup key. This affects `_register_metric()`, metric templates, CLI commands, validation, list command, aggregation, and all related tests.
@@ -1152,30 +1056,30 @@ I want to use the same metric class multiple times with different parameters, bu
 
 | Issue | GT | E | C | S | Difficulty |
 |-------|-----|---|---|---|------------|
-| #4 | 13 | 3 | 6 | 4 | Medium |
+| #4 | 12 | 2 | 6 | 4 | Medium |
 | #38 | 30 | 22 | 5 | 3 | Complex |
 | #57 | 13 | 5 | 8 | 0 | Medium |
-| #63 | 23 | 8 | 15 | 0 | Medium |
-| #72 | 42 | 15 | 12 | 15 | Complex |
-| #108 | 28 | 7 | 19 | 2 | Complex |
+| #63 | 18 | 3 | 15 | 0 | Medium |
+| #72 | 28 | 7 | 12 | 9 | Complex |
+| #108 | 20 | 4 | 14 | 2 | Medium |
 | #172 | 35 | 13 | 21 | 1 | Complex |
-| #191 | 45 | 17 | 16 | 12 | Complex |
-| #192 | 16 | 4 | 10 | 2 | Medium |
+| #191 | 29 | 5 | 14 | 10 | Complex |
+| #192 | 15 | 3 | 10 | 2 | Medium |
 | #193 | 14 | 7 | 4 | 3 | Medium |
-| #201 | 43 | 6 | 6 | 31 | Complex |
+| #201 | 14 | 6 | 6 | 2 | Medium |
 | #210 | 22 | 0 | 8 | 14 | Medium |
-| #226 | 21 | 3 | 6 | 12 | Medium |
-| #233 | 23 | 6 | 14 | 3 | Medium |
-| #234 | 27 | 1 | 19 | 7 | Complex |
-| #236 | 17 | 6 | 10 | 1 | Medium |
-| #240 | 31 | 12 | 14 | 5 | Complex |
-| #259 | 20 | 10 | 7 | 3 | Medium |
-| #260 | 14 | 7 | 5 | 2 | Medium |
-| #261 | 16 | 7 | 8 | 1 | Medium |
-| #262 | 21 | 11 | 7 | 3 | Medium |
-| #263 | 20 | 7 | 9 | 4 | Medium |
-| #268 | 26 | 17 | 5 | 4 | Complex |
-| #275 | 26 | 13 | 11 | 2 | Complex |
+| #226 | 16 | 3 | 6 | 7 | Medium |
+| #233 | 18 | 6 | 9 | 3 | Medium |
+| #234 | 16 | 1 | 8 | 7 | Medium |
+| #236 | 10 | 5 | 4 | 1 | Simple |
+| #240 | 20 | 5 | 10 | 5 | Medium |
+| #259 | 16 | 10 | 3 | 3 | Medium |
+| #260 | 11 | 7 | 2 | 2 | Medium |
+| #261 | 12 | 3 | 8 | 1 | Medium |
+| #262 | 17 | 10 | 5 | 2 | Medium |
+| #263 | 18 | 7 | 9 | 2 | Medium |
+| #268 | 22 | 17 | 1 | 4 | Medium |
+| #275 | 20 | 13 | 5 | 2 | Medium |
 
 ### Difficulty Criteria
 
@@ -1189,7 +1093,7 @@ I want to use the same metric class multiple times with different parameters, bu
 
 - **#72 / #191 / #192**: Azure AI Foundry triple (parent → phase 1 → phase 2). Large GT overlap; tests Recon's scope sensitivity.
 - **#210**: Zero-Edit issue — all files are C or S. Tests whether Recon correctly produces empty `edit_target` bucket.
-- **#201**: Mostly move/rename operations — 6 Edit files are path-reference updates, 31 Supp files are just moved. Tests Recon's handling of repo-structure tasks.
+- **#201**: Mostly move/rename operations — 6 Edit files are path-reference updates, 2 Supp files are project-level references. Tests Recon's handling of repo-structure tasks.
 
 ---
 
