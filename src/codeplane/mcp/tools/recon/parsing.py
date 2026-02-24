@@ -271,8 +271,6 @@ def _build_query_views(parsed: ParsedTask) -> list[str]:
     # V2: Code-style view — looks like the text format used at index time
     #     "kind qualified_name\nsignature\ndocstring"
     code_parts: list[str] = []
-    for sym in parsed.explicit_symbols:
-        code_parts.append(sym)
     for p in parsed.explicit_paths:
         code_parts.append(p)
     if parsed.primary_terms:

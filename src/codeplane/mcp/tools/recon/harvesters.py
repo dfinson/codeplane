@@ -280,52 +280,11 @@ async def _harvest_explicit(
                     else:
                         candidates[d.def_uid].from_explicit = True
 
-    # D3: Symbol names mentioned in the task text
-    if parsed.explicit_symbols:
-        for sym in parsed.explicit_symbols:
-            # Exact match first via symbol table (Section 1: use the index)
-            exact_defs = await coordinator.get_all_defs(sym, limit=10)
-            for d in exact_defs:
-                if d.def_uid not in candidates:
-                    candidates[d.def_uid] = HarvestCandidate(
-                        def_uid=d.def_uid,
-                        def_fact=d,
-                        from_explicit=True,
-                        evidence=[
-                            EvidenceRecord(
-                                category="explicit",
-                                detail=f"exact symbol match '{sym}'",
-                                score=1.0,
-                            )
-                        ],
-                    )
-                else:
-                    candidates[d.def_uid].from_explicit = True
-
-            # LIKE fallback only for symbols not found by exact match
-            if not exact_defs:
-                with coordinator.db.session() as session:
-                    fq = FactQueries(session)
-                    matching = fq.find_defs_matching_term(sym, limit=10)
-                    for d in matching:
-                        if sym.lower() in d.name.lower() or (
-                            d.qualified_name and sym.lower() in d.qualified_name.lower()
-                        ):
-                            if d.def_uid not in candidates:
-                                candidates[d.def_uid] = HarvestCandidate(
-                                    def_uid=d.def_uid,
-                                    def_fact=d,
-                                    from_explicit=True,
-                                    evidence=[
-                                        EvidenceRecord(
-                                            category="explicit",
-                                            detail=f"fuzzy symbol match '{sym}'",
-                                            score=0.7,
-                                        )
-                                    ],
-                                )
-                            else:
-                                candidates[d.def_uid].from_explicit = True
+    # D3 removed: Symbol-name extraction from task text was too noisy.
+    # The _SYMBOL_REGEX matched ordinary English words (PascalCase sentence
+    # starts), causing hub files to appear with from_explicit=True in 50-80%
+    # of all queries.  Term-match and lexical harvesters already surface
+    # symbol names via properly weighted (non-binary) scoring.
 
     log.debug(
         "recon.harvest.explicit",

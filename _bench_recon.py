@@ -5,11 +5,13 @@ compares returned seed file paths against the known-relevant files.
 """
 
 import json
+import os
 import sys
 import time
 import httpx
 
 MCP_URL = "http://127.0.0.1:7777/mcp"
+EVEE_ROOT = "/home/dave01/wsl-repos/evees/evee_cpl/evee"
 
 # =====================================================================
 # Ground truth: files an agent MUST discover to complete each task
@@ -100,8 +102,34 @@ GROUND_TRUTH: dict[str, dict] = {
 }
 
 
+def _new_session() -> str:
+    """Create a fresh MCP session. One per task to avoid consecutive-recon guards."""
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 0,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "bench", "version": "0.1"},
+        },
+    }
+    resp = httpx.post(
+        MCP_URL,
+        json=payload,
+        timeout=30,
+        headers={"Accept": "application/json, text/event-stream"},
+    )
+    resp.raise_for_status()
+    sid = resp.headers.get("mcp-session-id")
+    if not sid:
+        raise RuntimeError("No mcp-session-id in initialize response")
+    return sid
+
+
 def call_recon(task: str) -> dict:
     """Call the recon MCP tool via JSON-RPC over HTTP."""
+    sid = _new_session()
     payload = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -113,33 +141,60 @@ def call_recon(task: str) -> dict:
             },
         },
     }
-    resp = httpx.post(MCP_URL, json=payload, timeout=60)
+    resp = httpx.post(
+        MCP_URL,
+        json=payload,
+        timeout=120,
+        headers={
+            "Accept": "application/json, text/event-stream",
+            "Mcp-Session-Id": sid,
+        },
+    )
     resp.raise_for_status()
     return resp.json()
 
 
-def extract_seed_paths(result: dict) -> set[str]:
-    """Extract file paths from recon result."""
+def extract_file_paths(result: dict) -> set[str]:
+    """Extract file paths from recon result.
+
+    The recon tool may return results inline or via cached resource delivery.
+    For resource delivery, the inline text contains a cache path — we read
+    that cache file to get the full result.
+    """
     paths = set()
-    # Navigate MCP response structure
     r = result.get("result", result)
-    # MCP tools/call returns {"content": [{"type": "text", "text": "..."}]}
     content = r.get("content", [])
+
+    data: dict | None = None
     for item in content:
         if item.get("type") == "text":
             try:
                 data = json.loads(item["text"])
             except (json.JSONDecodeError, TypeError):
                 continue
-            for seed in data.get("seeds", []):
-                p = seed.get("path", "")
-                if p:
-                    paths.add(p)
-    # Also try direct structure (non-MCP wrapper)
-    for seed in r.get("seeds", []):
-        p = seed.get("path", "")
-        if p:
-            paths.add(p)
+
+    # If resource delivery, read the cache file
+    if data and data.get("delivery") == "resource":
+        # Find cache path from agentic_hint or structuredContent
+        hint = data.get("agentic_hint", "")
+        # Extract path like ".codeplane/cache/recon_result/XXXX.json"
+        for token in hint.split():
+            if ".codeplane/cache/" in token:
+                cache_path = os.path.join(EVEE_ROOT, token)
+                if os.path.exists(cache_path):
+                    with open(cache_path) as f:
+                        data = json.load(f)
+                break
+
+    if not data:
+        return paths
+
+    # Extract from all tier keys
+    for key in ("files", "full_file", "min_scaffold", "summary_only"):
+        for f in data.get(key, []):
+            p = f.get("path", "") if isinstance(f, dict) else ""
+            if p:
+                paths.add(p)
     return paths
 
 
@@ -187,7 +242,7 @@ def main():
             continue
         dt = time.perf_counter() - t0
         
-        predicted = extract_seed_paths(result)
+        predicted = extract_file_paths(result)
         actual = spec["relevant_files"]
         
         m = compute_metrics(predicted, actual)

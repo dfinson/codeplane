@@ -62,6 +62,11 @@ from typing import Any
 import numpy as np
 import structlog
 
+# Suppress onnxruntime CUDA probe warnings before any ort import.
+# bge-small-en-v1.5 is CPU-only; GPU transfer overhead exceeds model cost.
+os.environ.setdefault("ORT_DISABLE_ALL_LOGS", "1")
+os.environ.setdefault("ONNXRUNTIME_DISABLE_CUDA", "1")
+
 log = structlog.get_logger()
 
 # ===================================================================
@@ -535,15 +540,12 @@ def _truncate_semantic(
 
 
 def _detect_providers() -> list[str]:
-    """Detect ONNX Runtime execution providers (GPU-aware)."""
-    try:
-        import onnxruntime as ort
+    """Return CPU-only ONNX providers.
 
-        available = ort.get_available_providers()
-        if "CUDAExecutionProvider" in available:
-            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    except ImportError:
-        pass
+    bge-small-en-v1.5 is a 67 MB model that runs faster on CPU than
+    the overhead of GPU transfer.  Always use CPUExecutionProvider.
+    CUDA probe warnings are suppressed at module level via env vars.
+    """
     return ["CPUExecutionProvider"]
 
 
