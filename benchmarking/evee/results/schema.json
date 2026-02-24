@@ -9,7 +9,7 @@
       "type": "object",
       "required": ["pipeline_version", "date", "recon_commit", "evee_commit"],
       "properties": {
-        "pipeline_version": { "type": "string", "description": "Recon pipeline version, e.g. v5" },
+        "pipeline_version": { "type": "string", "description": "Recon pipeline version, e.g. v6" },
         "date": { "type": "string", "format": "date", "description": "ISO date of the run" },
         "recon_commit": { "type": "string", "description": "Git SHA of the CodePlane repo" },
         "evee_commit": { "type": "string", "description": "Git SHA of the Evee repo" },
@@ -66,7 +66,7 @@
   "definitions": {
     "query_result": {
       "type": "object",
-      "required": ["precision", "recall", "f1", "edit_recall", "noise_ratio", "returned_files", "bucket_alignment"],
+      "required": ["precision", "recall", "f1", "edit_recall", "noise_ratio", "returned_files", "tier_alignment"],
       "properties": {
         "precision": { "type": "number", "minimum": 0, "maximum": 1 },
         "recall": { "type": "number", "minimum": 0, "maximum": 1 },
@@ -78,12 +78,16 @@
           "items": { "type": "string" },
           "description": "File paths returned by Recon"
         },
-        "bucket_alignment": {
+        "tier_alignment": {
           "type": "object",
+          "description": "How well Recon's output tiers match GT categories (E→full_file, C→min_scaffold, S→summary_only)",
           "properties": {
-            "edit_to_edit_target": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
-            "ctx_to_context": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
-            "supp_to_supplementary": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+            "edit_to_full_file": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+            "ctx_to_min_scaffold": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+            "supp_to_summary_only": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+            "edit_found_any": { "type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "Fraction of Edit GT files found in any tier" },
+            "ctx_found_any": { "type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "Fraction of Context GT files found in any tier" },
+            "supp_found_any": { "type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "Fraction of Supp GT files found in any tier" }
           }
         }
       }

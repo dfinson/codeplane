@@ -84,14 +84,14 @@ Recon cannot return non-existent files, so these inflate Recall denominators.
 
 ## Results Format
 
-Write to `benchmarking/evee/results/recon_{pipeline}_{date}.json`.
+Write to `benchmarking/evee/results/recon_v6_{date}.json`.
 See `results/schema.json` for full schema.
 
 ```json
 {
   "meta": {
-    "pipeline_version": "v5",
-    "date": "2026-02-23",
+    "pipeline_version": "v6",
+    "date": "2026-02-24",
     "recon_commit": "<sha>",
     "evee_commit": "<sha>"
   },
@@ -101,10 +101,10 @@ See `results/schema.json` for full schema.
         "precision": 0.0, "recall": 0.0, "f1": 0.0,
         "edit_recall": 0.0, "noise_ratio": 0.0,
         "returned_files": [],
-        "bucket_alignment": {
-          "edit_to_edit_target": 0.0,
-          "ctx_to_context": 0.0,
-          "supp_to_supplementary": 0.0
+        "tier_alignment": {
+          "edit_to_full_file": 0.0,
+          "ctx_to_min_scaffold": 0.0,
+          "supp_to_summary_only": 0.0
         }
       }
     }
@@ -119,13 +119,15 @@ See `results/schema.json` for full schema.
 
 ## Ground Truth Categories
 
-| Code | Category | Meaning |
-|------|----------|---------|
-| **E** | Edit | Files requiring direct code changes |
-| **C** | Context/Test | Pattern context + test files |
-| **S** | Supp/Docs | Docs, examples, CI, infra, config |
+| Code | Category | Expected Tier | Meaning |
+|------|----------|---------------|---------|
+| **E** | Edit | `full_file` | Files requiring direct code changes — agent needs full content |
+| **C** | Context/Test | `min_scaffold` | Pattern context + test files — agent needs structure/signatures |
+| **S** | Supp/Docs | `summary_only` | Docs, examples, CI, infra, config — agent needs awareness only |
 
 Category assignments are issue-specific — the same file may be E for one issue and C for another.
+Tier mapping reflects the v6 two-elbow pipeline: the most important files get complete content,
+mid-tier files get structural scaffolds, and tail files get minimal summaries.
 
 ---
 

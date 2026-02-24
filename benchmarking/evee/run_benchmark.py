@@ -215,8 +215,8 @@ def call_recon(task: str, session: MCPSession, timeout: int = 120) -> dict:
                     if cache_file.exists():
                         return json.loads(cache_file.read_text())
 
-            # If inline (small result), data IS the result
-            if "seeds" in data:
+            # If inline, data IS the result
+            if "files" in data:
                 return data
 
     # Fallback: try structuredContent
@@ -229,22 +229,27 @@ def call_recon(task: str, session: MCPSession, timeout: int = 120) -> dict:
             if cache_file.exists():
                 return json.loads(cache_file.read_text())
 
-    return {"seeds": [], "summary": "No result parsed"}
+    return {"files": [], "summary": "No result parsed"}
 
 
 def extract_returned_files(recon_data: dict) -> list[dict[str, str]]:
-    """Extract file paths and bucket assignments from recon result.
+    """Extract file paths and tier assignments from v6 recon result.
 
-    Returns list of {path, bucket} dicts.
+    Returns list of {path, tier, similarity, combined_score} dicts.
     """
     files: list[dict[str, str]] = []
     seen_paths: set[str] = set()
 
-    for seed in recon_data.get("seeds", []):
-        p = seed.get("path", "")
-        b = seed.get("bucket", "supplementary")
+    for entry in recon_data.get("files", []):
+        p = entry.get("path", "")
+        tier = entry.get("tier", "summary_only")
         if p and p not in seen_paths:
-            files.append({"path": p, "bucket": b})
+            files.append({
+                "path": p,
+                "tier": tier,
+                "similarity": str(entry.get("similarity", 0.0)),
+                "combined_score": str(entry.get("combined_score", 0.0)),
+            })
             seen_paths.add(p)
 
     return files
@@ -261,7 +266,7 @@ def compute_query_metrics(
 ) -> dict[str, Any]:
     """Compute all metrics for a single query against ground truth."""
     returned_paths = {f["path"] for f in returned_files}
-    returned_buckets = {f["path"]: f["bucket"] for f in returned_files}
+    returned_tiers = {f["path"]: f["tier"] for f in returned_files}
 
     # Separate GT into existing vs new files
     gt_new = {f["path"] for f in gt_files if f["is_new"]}
@@ -283,24 +288,23 @@ def compute_query_metrics(
     )
     noise_ratio = len(returned_paths - gt) / len(returned_paths) if returned_paths else 0.0
 
-    # Bucket alignment — A2: track both "found anywhere" and "correctly bucketed"
-    def bucket_align(gt_set: set[str], expected_bucket: str) -> float | None:
+    # Tier alignment — E→full_file, C→min_scaffold, S→summary_only
+    def tier_align(gt_set: set[str], expected_tier: str) -> float | None:
         if not gt_set:
             return None
-        matched = sum(1 for f in gt_set if returned_buckets.get(f) == expected_bucket)
+        matched = sum(1 for f in gt_set if returned_tiers.get(f) == expected_tier)
         return matched / len(gt_set)
 
     def found_rate(gt_set: set[str]) -> float | None:
-        """Fraction of GT set found in ANY bucket."""
+        """Fraction of GT set found in ANY tier."""
         if not gt_set:
             return None
         return len(gt_set & returned_paths) / len(gt_set)
 
-    bucket_alignment = {
-        "edit_to_edit_target": bucket_align(gt_edit, "edit_target"),
-        "ctx_to_context": bucket_align(gt_ctx, "context"),
-        "supp_to_supplementary": bucket_align(gt_supp, "supplementary"),
-        # A2: found-anywhere rates (were they retrieved at all, regardless of bucket?)
+    tier_alignment = {
+        "edit_to_full_file": tier_align(gt_edit, "full_file"),
+        "ctx_to_min_scaffold": tier_align(gt_ctx, "min_scaffold"),
+        "supp_to_summary_only": tier_align(gt_supp, "summary_only"),
         "edit_found_any": found_rate(gt_edit),
         "ctx_found_any": found_rate(gt_ctx),
         "supp_found_any": found_rate(gt_supp),
@@ -315,7 +319,7 @@ def compute_query_metrics(
         "returned_files": sorted(returned_paths),
         "returned_count": len(returned_paths),
         "gt_existing_count": len(gt),
-        "bucket_alignment": bucket_alignment,
+        "tier_alignment": tier_alignment,
         "new_file_count": len(gt_new),
         "_detail": {
             "tp": tp,
@@ -367,13 +371,13 @@ def compute_aggregates(
             "avg_returned_count": round(_mean([r.get("returned_count", len(r["returned_files"])) for r in results]), 1),
             # A2: found-anywhere averages
             "avg_edit_found_any": round(
-                _mean([r["bucket_alignment"]["edit_found_any"] for r in results
-                       if r["bucket_alignment"].get("edit_found_any") is not None]),
+                _mean([r["tier_alignment"]["edit_found_any"] for r in results
+                       if r["tier_alignment"].get("edit_found_any") is not None]),
                 4,
             ),
-            "avg_edit_to_edit_target": round(
-                _mean([r["bucket_alignment"]["edit_to_edit_target"] for r in results
-                       if r["bucket_alignment"].get("edit_to_edit_target") is not None]),
+            "avg_edit_to_full_file": round(
+                _mean([r["tier_alignment"]["edit_to_full_file"] for r in results
+                       if r["tier_alignment"].get("edit_to_full_file") is not None]),
                 4,
             ),
         }
@@ -614,10 +618,10 @@ def main() -> None:
                 qresults[q] = {
                     "precision": 0.0, "recall": 0.0, "f1": 0.0,
                     "edit_recall": None, "noise_ratio": 1.0,
-                    "returned_files": [], "bucket_alignment": {
-                        "edit_to_edit_target": None,
-                        "ctx_to_context": None,
-                        "supp_to_supplementary": None,
+                    "returned_files": [], "tier_alignment": {
+                        "edit_to_full_file": None,
+                        "ctx_to_min_scaffold": None,
+                        "supp_to_summary_only": None,
                     },
                     "error": str(e),
                 }
@@ -659,11 +663,11 @@ def main() -> None:
     # 7. Write results
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     date_stamp = start_time.strftime("%Y-%m-%d_%H%M%S")
-    out_file = RESULTS_DIR / f"recon_v5_{date_stamp}.json"
+    out_file = RESULTS_DIR / f"recon_v6_{date_stamp}.json"
 
     output = {
         "meta": {
-            "pipeline_version": "v5",
+            "pipeline_version": "v6",
             "date": start_time.strftime("%Y-%m-%d"),
             "started_at": start_iso,
             "recon_commit": recon_commit,
@@ -689,7 +693,7 @@ def main() -> None:
                 "returned_files": metrics["returned_files"],
                 "returned_count": metrics.get("returned_count", len(metrics["returned_files"])),
                 "gt_existing_count": metrics.get("gt_existing_count", 0),
-                "bucket_alignment": metrics["bucket_alignment"],
+                "tier_alignment": metrics["tier_alignment"],
             }
             if "new_file_count" in metrics:
                 clean_q[q]["new_file_count"] = metrics["new_file_count"]
