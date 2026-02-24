@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
 import re
 import time
 import uuid
@@ -38,7 +39,6 @@ from codeplane.mcp.tools.recon.expansion import (
 from codeplane.mcp.tools.recon.harvesters import (
     _enrich_candidates,
     _enrich_file_candidates,
-    _harvest_embedding,
     _harvest_explicit,
     _harvest_file_embedding,
     _harvest_graph,
@@ -248,8 +248,7 @@ async def _select_seeds(
 
     # 2. Run harvesters in parallel (independent, no shared state)
     t_harvest = time.monotonic()
-    emb_candidates, term_candidates, lex_candidates, exp_candidates = await asyncio.gather(
-        _harvest_embedding(app_ctx, parsed),
+    term_candidates, lex_candidates, exp_candidates = await asyncio.gather(
         _harvest_term_match(app_ctx, parsed),
         _harvest_lexical(app_ctx, parsed),
         _harvest_explicit(app_ctx, parsed, explicit_seeds),
@@ -257,10 +256,9 @@ async def _select_seeds(
     diagnostics["harvest_ms"] = round((time.monotonic() - t_harvest) * 1000)
 
     # 3. Merge
-    merged = _merge_candidates(emb_candidates, term_candidates, lex_candidates, exp_candidates)
+    merged = _merge_candidates(term_candidates, lex_candidates, exp_candidates)
 
     diagnostics["harvested"] = {
-        "embedding": len(emb_candidates),
         "term_match": len(term_candidates),
         "lexical": len(lex_candidates),
         "explicit": len(exp_candidates),
@@ -270,7 +268,6 @@ async def _select_seeds(
     log.debug(
         "recon.merged",
         total=len(merged),
-        embedding=len(emb_candidates),
         term_match=len(term_candidates),
         lexical=len(lex_candidates),
         explicit=len(exp_candidates),
@@ -304,15 +301,8 @@ async def _select_seeds(
 
     if not gated:
         log.info("recon.filter_empty", pre_filter=len(merged))
-        # Fall back to ungated top embedding candidates
-        gated = {
-            uid: cand
-            for uid, cand in merged.items()
-            if cand.from_embedding and cand.embedding_similarity >= 0.15
-        }
-        if not gated:
-            diagnostics["total_ms"] = round((time.monotonic() - t0) * 1000)
-            return [], parsed, [], diagnostics, {}, {}
+        diagnostics["total_ms"] = round((time.monotonic() - t0) * 1000)
+        return [], parsed, [], diagnostics, {}, {}
 
     diagnostics["post_filter"] = len(gated)
 
@@ -601,13 +591,12 @@ async def _file_centric_pipeline(
 
     # 3. Def-level harvesters in parallel (SECONDARY enrichment)
     t_def_harvest = time.monotonic()
-    emb_cands, term_cands, lex_cands, exp_cands = await asyncio.gather(
-        _harvest_embedding(app_ctx, parsed),
+    term_cands, lex_cands, exp_cands = await asyncio.gather(
         _harvest_term_match(app_ctx, parsed),
         _harvest_lexical(app_ctx, parsed),
         _harvest_explicit(app_ctx, parsed, explicit_seeds),
     )
-    merged_def = _merge_candidates(emb_cands, term_cands, lex_cands, exp_cands)
+    merged_def = _merge_candidates(term_cands, lex_cands, exp_cands)
 
     # Graph + import harvesters for structural signal
     graph_cands = await _harvest_graph(app_ctx, merged_def, parsed)
@@ -766,8 +755,6 @@ def _build_evidence_string(cand: Any) -> str:
     Format: ``"emb(0.82) term(config,model) lex(3) graph(→Config.validate)"``
     """
     parts: list[str] = []
-    if cand.from_embedding:
-        parts.append(f"emb({cand.embedding_similarity:.2f})")
     if cand.from_term_match:
         terms = ",".join(sorted(cand.matched_terms)[:3])
         parts.append(f"term({terms})")
@@ -782,6 +769,181 @@ def _build_evidence_string(cand: Any) -> str:
         else:
             parts.append("graph")
     return " ".join(parts)
+
+
+# ===================================================================
+# Consecutive Recon Gating
+# ===================================================================
+
+# Minimum expand_reason length for 2nd consecutive call
+_RECON_EXPAND_REASON_MIN = 250
+# Minimum gate_reason length for 3rd+ consecutive call
+_RECON_GATE_REASON_MIN = 500
+
+
+def _check_recon_gate(
+    app_ctx: Any,
+    ctx: Any,
+    *,
+    expand_reason: str | None,
+    pinned_paths: list[str] | None,
+    gate_token: str | None,
+    gate_reason: str | None,
+) -> dict[str, Any] | None:
+    """Enforce escalating requirements for consecutive recon calls.
+
+    Returns a gate/error response dict if the call is blocked,
+    or None if the call should proceed.
+
+    Rules:
+        1st call (counter=0): No restrictions.
+        2nd call (counter=1): Must provide expand_reason (≥250 chars)
+            AND pinned_paths with semantic anchors in query.
+        3rd+ call (counter≥2): Must provide gate_token + gate_reason
+            (≥500 chars) AND pinned_paths.
+
+    Counter resets when write_source is called (tracked in middleware).
+    """
+    try:
+        session = app_ctx.session_manager.get_or_create(ctx.session_id)
+    except Exception:  # noqa: BLE001
+        return None
+
+    consecutive = session.counters.get("recon_consecutive", 0)
+
+    if consecutive == 0:
+        # First call — no restrictions
+        return None
+
+    if consecutive == 1:
+        # 2nd call — require expand_reason + pinned_paths
+        errors: list[str] = []
+
+        if not expand_reason or len(expand_reason.strip()) < _RECON_EXPAND_REASON_MIN:
+            got = len((expand_reason or "").strip())
+            errors.append(
+                f"expand_reason must be at least {_RECON_EXPAND_REASON_MIN} "
+                f"characters explaining what was missing from the first "
+                f"recon call and what needs expansion (got {got})."
+            )
+
+        if not pinned_paths:
+            errors.append(
+                "pinned_paths is required on 2nd consecutive recon call. "
+                "Pin specific files you want to expand on as semantic anchors."
+            )
+
+        if errors:
+            return {
+                "status": "blocked",
+                "error": {
+                    "code": "RECON_FOLLOW_UP_REQUIRES_JUSTIFICATION",
+                    "message": " ".join(errors),
+                },
+                "agentic_hint": (
+                    "This is your 2nd consecutive recon call without a "
+                    "write_source in between.  You must provide:\n"
+                    "1. expand_reason (≥250 chars) explaining what was "
+                    "missing and what needs expansion\n"
+                    "2. pinned_paths with specific files to anchor on\n"
+                    "3. A task query with semantic anchors (symbol names, "
+                    "file paths, or domain terms)\n\n"
+                    "If you have enough context, proceed to write_source "
+                    "instead of calling recon again."
+                ),
+                "consecutive_recon_calls": consecutive + 1,
+            }
+        return None
+
+    # 3rd+ call — require gate token + gate_reason + pinned_paths
+    from codeplane.mcp.gate import GateSpec
+
+    if not pinned_paths:
+        return {
+            "status": "blocked",
+            "error": {
+                "code": "RECON_EXCESSIVE_REQUIRES_GATE",
+                "message": (
+                    "3rd+ consecutive recon call requires pinned_paths. "
+                    "Pin specific files to anchor your search."
+                ),
+            },
+            "agentic_hint": (
+                f"This is recon call #{consecutive + 1} without a "
+                "write_source in between.  You must provide pinned_paths "
+                "along with gate_token and gate_reason."
+            ),
+            "consecutive_recon_calls": consecutive + 1,
+        }
+
+    if gate_token:
+        # Validate the gate
+        gate_reason_str = gate_reason if isinstance(gate_reason, str) else ""
+        gate_result = session.gate_manager.validate(gate_token, gate_reason_str)
+        if gate_result.ok:
+            return None  # Gate passed — proceed
+        # Gate validation failed — re-issue
+        gate_spec = GateSpec(
+            kind="recon_repeat",
+            reason_min_chars=_RECON_GATE_REASON_MIN,
+            reason_prompt=(
+                f"This is recon call #{consecutive + 1}. Explain in ≥500 "
+                "characters why your previous recon calls were insufficient "
+                "and what specific context is still missing that cannot be "
+                "obtained via read_source or search."
+            ),
+            expires_calls=3,
+            message=(
+                f"Recon call #{consecutive + 1} blocked. "
+                f"Gate validation failed: {gate_result.error}"
+            ),
+        )
+        gate_block = session.gate_manager.issue(gate_spec)
+        return {
+            "status": "blocked",
+            "error": {
+                "code": "GATE_VALIDATION_FAILED",
+                "message": gate_result.error,
+            },
+            "gate": gate_block,
+            "consecutive_recon_calls": consecutive + 1,
+        }
+
+    # No gate token — issue a new gate
+    gate_spec = GateSpec(
+        kind="recon_repeat",
+        reason_min_chars=_RECON_GATE_REASON_MIN,
+        reason_prompt=(
+            f"This is recon call #{consecutive + 1}. Explain in ≥500 "
+            "characters why your previous recon calls were insufficient "
+            "and what specific context is still missing that cannot be "
+            "obtained via read_source or search."
+        ),
+        expires_calls=3,
+        message=(
+            f"Recon call #{consecutive + 1} requires gate confirmation. "
+            "You have called recon multiple times without making progress "
+            "via write_source.  Consider using read_source to expand on "
+            "specific files, or proceed to write_source with the context "
+            "you already have."
+        ),
+    )
+    gate_block = session.gate_manager.issue(gate_spec)
+    return {
+        "status": "blocked",
+        "gate": gate_block,
+        "agentic_hint": (
+            f"This is recon call #{consecutive + 1} without a "
+            "write_source in between.  You must:\n"
+            "1. Provide gate_token from the gate block below\n"
+            f"2. Provide gate_reason (≥{_RECON_GATE_REASON_MIN} chars) "
+            "explaining why previous recon calls were insufficient\n"
+            "3. Include pinned_paths\n\n"
+            "Alternative: use read_source to expand on specific files "
+            "from previous recon results, or proceed to write_source."
+        ),
+        "consecutive_recon_calls": consecutive + 1,
+    }
 
 
 # ===================================================================
@@ -827,6 +989,31 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                 "specific files are relevant."
             ),
         ),
+        expand_reason: str | None = Field(
+            None,
+            description=(
+                "REQUIRED on 2nd+ consecutive recon call (before any "
+                "write_source).  Explain what was missing from the "
+                "first call, what needs expansion, and why (~250 chars "
+                "min).  Must accompany pinned_paths and semantic "
+                "anchors in the task query."
+            ),
+        ),
+        gate_token: str | None = Field(
+            None,
+            description=(
+                "Gate confirmation token from a previous recon gate "
+                "block.  Required on 3rd+ consecutive recon call."
+            ),
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description=(
+                "Justification for 3rd+ consecutive recon call (min "
+                "500 chars).  Explain why 2 recon calls were "
+                "insufficient and what specific context is still missing."
+            ),
+        ),
     ) -> dict[str, Any]:
         """Task-aware code discovery — ONE call, ALL context.
 
@@ -842,6 +1029,30 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         """
         recon_id = uuid.uuid4().hex[:12]
         t_total = time.monotonic()
+
+        # ── Consecutive recon call gating ──
+        # Env var bypass for benchmarking
+        gate_bypass = os.environ.get("CODEPLANE_RECON_GATE_BYPASS", "") == "1"
+
+        if not gate_bypass:
+            gate_block = _check_recon_gate(
+                app_ctx, ctx,
+                expand_reason=expand_reason,
+                pinned_paths=pinned_paths,
+                gate_token=gate_token,
+                gate_reason=gate_reason,
+            )
+            if gate_block is not None:
+                return gate_block
+
+        # Increment consecutive recon counter
+        try:
+            session = app_ctx.session_manager.get_or_create(ctx.session_id)
+            session.counters["recon_consecutive"] = (
+                session.counters.get("recon_consecutive", 0) + 1
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
         coordinator = app_ctx.coordinator
         repo_root = coordinator.repo_root

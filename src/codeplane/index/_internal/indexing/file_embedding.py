@@ -1,24 +1,35 @@
-"""File-level embedding index using Jina v2 base.
+"""File-level embedding index using Jina v2 base with anglicified scaffold.
 
-One embedding per file.  Input text = full file content with
-deterministic head+tail truncation.  No language-dependent logic.
+Each file produces one embedding record.  The embedded text is::
+
+    FILE_SCAFFOLD
+    <anglicified scaffold from tree-sitter extraction>
+
+    FILE_CHUNK
+    <file content (head+tail truncated if needed)>
+
+The scaffold converts tree-sitter-extracted defs and imports into
+English-like tokens (identifier splitting, signature compaction)
+so that natural-language queries match code structure.  No
+language-specific keyword lists — purely mechanical extraction.
 
 Storage: .codeplane/file_embedding/
   - file_embeddings.npz   (float16 matrix + path arrays)
   - file_meta.json         (model name, dim, count, version)
 
-Lifecycle mirrors EmbeddingIndex:
-  - stage_file(path, content) → queue for embedding
-  - stage_remove(paths)       → mark for removal
-  - commit_staged()           → compute embeddings + persist
-  - reload()                  → reload from disk
-  - clear()                   → wipe
+Lifecycle:
+  - stage_file(path, content, defs, imports) → queue for embedding
+  - stage_remove(paths)                      → mark for removal
+  - commit_staged()                          → compute embeddings + persist
+  - reload() / load()                        → reload from disk
+  - clear()                                  → wipe
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -36,29 +47,274 @@ FILE_EMBED_MODEL = "jinaai/jina-embeddings-v2-base-en"
 FILE_EMBED_DIM = 768
 FILE_EMBED_MAX_CHARS = 24_000  # ~8000 tokens; Jina v2 supports 8192 tokens
 FILE_EMBED_BATCH_SIZE = 8  # larger model → smaller batches
-FILE_EMBED_VERSION = 1
+FILE_EMBED_VERSION = 2  # v2: scaffold prefix
 FILE_EMBED_SUBDIR = "file_embedding"
 
-# Head/tail truncation: keep 75% head + 25% tail
-_HEAD_RATIO = 0.75
+# Word split regex: camelCase / PascalCase / snake_case → words
+_CAMEL_SPLIT = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z][a-z]|\d|\b)|[0-9]+")
 
 
 # ===================================================================
-# Helpers
+# Scaffold helpers (anglicification from tree-sitter extraction)
 # ===================================================================
 
 
-def _truncate_head_tail(text: str, max_chars: int = FILE_EMBED_MAX_CHARS) -> str:
-    """Deterministic head+tail truncation.
+def _word_split(name: str) -> list[str]:
+    """Split an identifier into lowercase natural words.
 
-    Keeps first 75% of budget from the head and last 25% from the tail.
-    No language-dependent logic.
+    Handles camelCase, PascalCase, snake_case, and mixed styles.
+    Example: ``getUserById`` → ``["get", "user", "by", "id"]``
+    """
+    words: list[str] = []
+    for part in name.split("_"):
+        if not part:
+            continue
+        camel = _CAMEL_SPLIT.findall(part)
+        if camel:
+            words.extend(w.lower() for w in camel)
+        else:
+            words.append(part.lower())
+    return words
+
+
+def _path_to_phrase(file_path: str) -> str:
+    """Convert a file path into a natural-language phrase.
+
+    Example: ``src/auth/middleware/rate_limiter.py``
+    → ``"auth middleware rate limiter"``
+    """
+    p = file_path.replace("\\", "/")
+    for prefix in ("src/", "lib/", "app/", "pkg/", "internal/"):
+        if p.startswith(prefix):
+            p = p[len(prefix):]
+            break
+    dot = p.rfind(".")
+    if dot > 0:
+        p = p[:dot]
+    parts: list[str] = []
+    for segment in p.split("/"):
+        parts.extend(_word_split(segment))
+    return " ".join(parts)
+
+
+def build_file_scaffold(
+    file_path: str,
+    defs: list[dict[str, Any]],
+    imports: list[dict[str, Any]],
+) -> str:
+    """Build an anglicified scaffold from tree-sitter extraction data.
+
+    Converts structural facts (defs, imports) into English-like tokens
+    that bridge the gap between natural-language queries and code.
+    Language-agnostic: uses only identifier splitting and structural
+    metadata from tree-sitter, no per-language keyword lists.
+
+    Returns empty string if no meaningful scaffold can be built.
+
+    Example output::
+
+        FILE_SCAFFOLD
+        module auth middleware rate limiter
+        imports os, logging, base handler, rate config
+        defines class RateLimiter, function check_rate(request, limit),
+          method reset(self)
+    """
+    lines: list[str] = []
+
+    # Module line from file path
+    path_phrase = _path_to_phrase(file_path)
+    if path_phrase:
+        lines.append(f"module {path_phrase}")
+
+    # Imports line
+    if imports:
+        import_tokens: list[str] = []
+        for imp in imports:
+            name = imp.get("imported_name", "") or ""
+            source = imp.get("source_literal", "") or imp.get("module_path", "") or ""
+            if source:
+                import_tokens.append(" ".join(_word_split(source.split(".")[-1])))
+            elif name:
+                import_tokens.append(" ".join(_word_split(name)))
+        # Deduplicate preserving order
+        seen: set[str] = set()
+        unique_imports: list[str] = []
+        for tok in import_tokens:
+            if tok and tok not in seen:
+                seen.add(tok)
+                unique_imports.append(tok)
+        if unique_imports:
+            lines.append(f"imports {', '.join(unique_imports)}")
+
+    # Defines line from defs (tree-sitter extraction)
+    if defs:
+        kind_order = {
+            "class": 0, "interface": 0, "struct": 0, "enum": 1,
+            "function": 2, "method": 3, "variable": 4,
+        }
+        sorted_defs = sorted(
+            defs, key=lambda d: kind_order.get(d.get("kind", ""), 5)
+        )
+
+        class_names: list[str] = []
+        method_parts: list[str] = []
+        func_parts: list[str] = []
+
+        for d in sorted_defs:
+            kind = d.get("kind", "")
+            name = d.get("name", "")
+            if not name:
+                continue
+            sig = d.get("signature_text", "") or ""
+
+            if kind in ("class", "interface", "struct", "enum"):
+                words = " ".join(_word_split(name))
+                class_names.append(f"{kind} {words}")
+            elif kind == "function":
+                compact = _compact_sig(name, sig)
+                func_parts.append(compact)
+            elif kind == "method":
+                compact = _compact_sig(name, sig)
+                method_parts.append(compact)
+
+        define_tokens: list[str] = []
+        define_tokens.extend(class_names)
+        define_tokens.extend(func_parts)
+        define_tokens.extend(method_parts)
+
+        if define_tokens:
+            lines.append(f"defines {', '.join(define_tokens)}")
+
+        # Docstring hints: first meaningful class or function docstring
+        for d in sorted_defs:
+            doc = (d.get("docstring") or "").strip()
+            if doc and len(doc) > 15:
+                first_sentence = doc.split(".")[0].strip() if "." in doc else doc[:80]
+                if first_sentence:
+                    lines.append(f"describes {first_sentence}")
+                    break
+
+    if not lines:
+        return ""
+
+    return "\n".join(lines)
+
+
+def _compact_sig(name: str, sig: str) -> str:
+    """Build a compact anglicified signature for a def.
+
+    Strips ``self`` and returns e.g. ``"check rate(request, limit)"``.
+    """
+    words = " ".join(_word_split(name))
+    if sig:
+        compact = (
+            sig.replace("self, ", "")
+            .replace("self,", "")
+            .replace("self", "")
+        )
+        if compact and compact != "()":
+            return f"{words}{compact}"
+    return words
+
+
+def _build_embed_text(
+    scaffold: str,
+    content: str,
+    defs: list[dict[str, Any]] | None = None,
+) -> str:
+    """Compose the final embed text: scaffold prefix + file content.
+
+    Format::
+
+        FILE_SCAFFOLD
+        <scaffold lines>
+
+        FILE_CHUNK
+        <file content>
+
+    Scaffold is preserved in full.  If the combined text exceeds the
+    model's context window, content is truncated at semantic boundaries
+    (def spans from tree-sitter) rather than at arbitrary character
+    positions.
+    """
+    # Compute actual structural overhead (no magic numbers)
+    scaffold_block = f"FILE_SCAFFOLD\n{scaffold}\n\n" if scaffold else ""
+    chunk_header = "FILE_CHUNK\n"
+    overhead = len(scaffold_block) + len(chunk_header)
+
+    content_budget = FILE_EMBED_MAX_CHARS - overhead
+    truncated = _truncate_semantic(content, max_chars=content_budget, defs=defs)
+
+    return f"{scaffold_block}{chunk_header}{truncated}"
+
+
+# ===================================================================
+# Semantic truncation
+# ===================================================================
+
+
+def _truncate_semantic(
+    text: str,
+    max_chars: int,
+    defs: list[dict[str, Any]] | None = None,
+) -> str:
+    """Truncate content at semantic boundaries.
+
+    When defs (tree-sitter spans) are available, keeps complete
+    definitions from the start of the file until the budget is
+    exhausted.  Falls back to line-boundary splitting when no
+    structural data is available.
+
+    The budget comes from the model's context window minus scaffold
+    overhead — it is NOT an arbitrary constant.
     """
     if len(text) <= max_chars:
         return text
-    head_budget = int(max_chars * _HEAD_RATIO)
-    tail_budget = max_chars - head_budget
-    return text[:head_budget] + "\n...\n" + text[-tail_budget:]
+
+    lines = text.split("\n")
+
+    if defs:
+        # Use def end_lines to find the last complete semantic unit
+        # that fits within budget.  Defs are sorted by position so
+        # we greedily include from the top of the file.
+        end_lines = sorted(
+            {d.get("end_line", 0) for d in defs if d.get("end_line", 0) > 0}
+        )
+        last_included = 0
+        for end_line in end_lines:
+            # end_line is 1-indexed; slice is 0-indexed
+            candidate = "\n".join(lines[:end_line])
+            if len(candidate) <= max_chars:
+                last_included = end_line
+            else:
+                break
+
+        if last_included > 0:
+            included = "\n".join(lines[:last_included])
+            omitted = len(lines) - last_included
+            if omitted > 0:
+                included += f"\n\n... ({omitted} lines omitted)"
+            return included
+
+    # Fallback: split at last line boundary within budget
+    char_count = 0
+    split_line = 0
+    for i, line in enumerate(lines):
+        added = len(line) + (1 if i > 0 else 0)  # +1 for newline separator
+        if char_count + added > max_chars:
+            break
+        char_count += added
+        split_line = i + 1
+
+    if split_line > 0:
+        included = "\n".join(lines[:split_line])
+        omitted = len(lines) - split_line
+        if omitted > 0:
+            included += f"\n\n... ({omitted} lines omitted)"
+        return included
+
+    # Absolute fallback for single very long lines
+    return text[:max_chars]
 
 
 def _detect_providers() -> list[str]:
@@ -104,9 +360,31 @@ class FileEmbeddingIndex:
 
     # --- Staging API ---
 
-    def stage_file(self, path: str, content: str) -> None:
-        """Stage a file for embedding (or re-embedding on change)."""
-        self._staged_files[path] = content
+    def stage_file(
+        self,
+        path: str,
+        content: str,
+        defs: list[dict[str, Any]] | None = None,
+        imports: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Stage a file for embedding with anglicified scaffold prefix.
+
+        Args:
+            path: Relative file path.
+            content: Full UTF-8 file content.
+            defs: Tree-sitter extracted definitions (from ExtractionResult).
+            imports: Tree-sitter extracted imports (from ExtractionResult).
+
+        The scaffold is built from defs/imports and prepended to the
+        content before embedding.  If defs/imports are not provided
+        the content is embedded as-is (graceful degradation).
+        """
+        scaffold = ""
+        if defs or imports:
+            scaffold = build_file_scaffold(path, defs or [], imports or [])
+
+        embed_text = _build_embed_text(scaffold, content, defs=defs)
+        self._staged_files[path] = embed_text
 
     def stage_remove(self, paths: list[str]) -> None:
         """Mark file paths for removal from the index."""
@@ -159,7 +437,9 @@ class FileEmbeddingIndex:
         new_count = 0
         if self._staged_files:
             paths_to_embed = list(self._staged_files.keys())
-            texts = [_truncate_head_tail(self._staged_files[p]) for p in paths_to_embed]
+            # staged_files already contain composed embed text
+            # (scaffold + truncated content) from stage_file()
+            texts = [self._staged_files[p] for p in paths_to_embed]
 
             self._ensure_model()
             vectors = self._embed_batch(texts)
@@ -313,8 +593,8 @@ class FileEmbeddingIndex:
         )
 
     def _embed_single(self, text: str) -> np.ndarray:
-        """Embed a single text, return L2-normalized float32 vector."""
-        truncated = _truncate_head_tail(text)
+        """Embed a single text (query), return L2-normalized float32 vector."""
+        truncated = _truncate_semantic(text, max_chars=FILE_EMBED_MAX_CHARS)
         vecs = list(self._model.embed([truncated], batch_size=1))
         vec = np.array(vecs[0], dtype=np.float32)
         norm = np.linalg.norm(vec)

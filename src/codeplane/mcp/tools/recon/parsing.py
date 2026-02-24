@@ -263,9 +263,8 @@ def _build_query_views(parsed: ParsedTask) -> list[str]:
       3. **Keyword-focused** — high-signal terms concatenated
          (targets exact-concept matches without noise).
 
-    All views are batched into a single ``model.embed()`` call by
-    :meth:`EmbeddingIndex.query_batch`, so there is no per-view
-    latency overhead.
+    All views are batched into a single ``model.embed()`` call,
+    so there is no per-view latency overhead.
     """
     views: list[str] = [parsed.query_text]  # V1: NL view (always present)
 

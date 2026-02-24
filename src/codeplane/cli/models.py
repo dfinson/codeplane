@@ -25,11 +25,6 @@ log = structlog.get_logger()
 
 _MODELS: list[dict[str, str | float]] = [
     {
-        "name": "BAAI/bge-small-en-v1.5",
-        "label": "Definition embeddings (bge-small)",
-        "size_gb": 0.067,
-    },
-    {
         "name": "jinaai/jina-embeddings-v2-base-en",
         "label": "File embeddings (jina-v2-base)",
         "size_gb": 0.52,

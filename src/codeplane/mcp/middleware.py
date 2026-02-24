@@ -438,6 +438,10 @@ class ToolMiddleware(Middleware):
             clears_window=lint_mutated,
         )
 
+        # Reset consecutive recon counter when write_source is called
+        if short_name == "write_source":
+            session.counters["recon_consecutive"] = 0
+
         if pattern_match and pattern_match.severity == "warn":
             return pattern_match
         return None

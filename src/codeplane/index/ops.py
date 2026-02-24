@@ -56,7 +56,6 @@ from codeplane.index._internal.indexing import (
     resolve_type_traced,
     run_pass_1_5,
 )
-from codeplane.index._internal.indexing.embedding import EmbeddingIndex
 from codeplane.index._internal.indexing.file_embedding import FileEmbeddingIndex
 from codeplane.index._internal.parsing import TreeSitterParser
 from codeplane.index._internal.state import FileStateService
@@ -329,7 +328,6 @@ class IndexCoordinator:
 
         # Components (initialized lazily in initialize())
         self._lexical: LexicalIndex | None = None
-        self._embedding: EmbeddingIndex | None = None
         self._file_embedding: FileEmbeddingIndex | None = None
         self._parser: TreeSitterParser | None = None
         self._router: ContextRouter | None = None
@@ -381,7 +379,6 @@ class IndexCoordinator:
         # Initialize components
         self._parser = TreeSitterParser()
         self._lexical = LexicalIndex(self.tantivy_path)
-        self._embedding = EmbeddingIndex(self.repo_root / ".codeplane" / "embedding")
         self._file_embedding = FileEmbeddingIndex(self.repo_root / ".codeplane")
         self._epoch_manager = EpochManager(self.db, self._lexical)
 
@@ -561,8 +558,6 @@ class IndexCoordinator:
         # Initialize components
         self._parser = TreeSitterParser()
         self._lexical = LexicalIndex(self.tantivy_path)
-        self._embedding = EmbeddingIndex(self.repo_root / ".codeplane" / "embedding")
-        self._embedding.load()
         self._file_embedding = FileEmbeddingIndex(self.repo_root / ".codeplane")
         self._file_embedding.load()
         self._epoch_manager = EpochManager(self.db, self._lexical)
@@ -802,61 +797,13 @@ class IndexCoordinator:
                                 symbols=extraction.symbol_names,
                             )
 
-                            # Stage defs for embedding (old defs auto-replaced by uid)
-                            if self._embedding is not None and extraction.defs:
-                                self._embedding.stage_defs(
-                                    extraction.defs,
-                                    file_path=extraction.file_path,
-                                )
-                            elif (
-                                self._embedding is not None
-                                and not extraction.defs
-                                and extraction.imports
-                                and not extraction.skipped_no_grammar
-                            ):
-                                # Import-only files (e.g. __init__.py barrel
-                                # exports) still deserve an embedding so they
-                                # surface in semantic search.  Synthesise a
-                                # single virtual "module" def whose scaffold
-                                # captures the import structure.
-                                import hashlib as _hl
-
-                                _fp = extraction.file_path
-                                _vuid = "vmod:" + _hl.sha256(
-                                    _fp.encode()
-                                ).hexdigest()[:16]
-                                _mod_name = (
-                                    _fp.replace("/", ".")
-                                    .removesuffix(".py")
-                                    .removesuffix(".__init__")
-                                )
-                                _import_names = " ".join(
-                                    d.get("module_path", "")
-                                    for d in extraction.imports
-                                    if d.get("module_path")
-                                )
-                                virtual_def = {
-                                    "def_uid": _vuid,
-                                    "unit_id": 0,
-                                    "kind": "module",
-                                    "name": _mod_name,
-                                    "lexical_path": _mod_name,
-                                    "start_line": 1,
-                                    "start_col": 0,
-                                    "end_line": extraction.line_count or 1,
-                                    "end_col": 0,
-                                    "docstring": _import_names,
-                                }
-                                self._embedding.stage_defs(
-                                    [virtual_def],
-                                    file_path=extraction.file_path,
-                                )
-
                             # Stage file for file-level embedding
                             if self._file_embedding is not None and extraction.content_text:
                                 self._file_embedding.stage_file(
                                     extraction.file_path,
                                     extraction.content_text,
+                                    defs=extraction.defs,
+                                    imports=extraction.imports,
                                 )
 
                             if extraction.file_path in existing_set:
@@ -879,23 +826,10 @@ class IndexCoordinator:
                         if failed_paths:
                             self._remove_structural_facts_for_paths(failed_paths)
 
-                    # Stage removals (lexical + embedding)
+                    # Stage removals (lexical + file embedding)
                     for path in removed_paths:
                         self._lexical.stage_remove(str(path))
                         files_removed += 1
-
-                    # Stage embedding removals for deleted files
-                    if self._embedding is not None and removed_paths:
-                        with self.db.session() as session:
-                            fq = FactQueries(session)
-                            remove_uids: set[str] = set()
-                            for path in removed_paths:
-                                frec = fq.get_file_by_path(str(path))
-                                if frec and frec.id is not None:
-                                    for d in fq.list_defs_in_file(frec.id):
-                                        remove_uids.add(d.def_uid)
-                            if remove_uids:
-                                self._embedding.stage_remove(remove_uids)
 
                     # Stage file-level embedding removals
                     if self._file_embedding is not None and removed_paths:
@@ -916,37 +850,8 @@ class IndexCoordinator:
                     resolve_references(self.db, file_ids=changed_file_ids)
                     resolve_type_traced(self.db, file_ids=changed_file_ids)
 
-                # Commit embedding changes (after resolver so CTX_USAGE is populated)
+                # Commit file-level embeddings (after resolver)
                 with self._tantivy_write_lock:
-                    if self._embedding is not None and self._embedding.has_staged_changes():
-
-                        def _usage_lookup(def_uid: str) -> list[str]:
-                            """Return caller def names for CTX_USAGE records."""
-                            try:
-                                with self.db.session() as sess:
-                                    fq = FactQueries(sess)
-                                    refs = fq.list_refs_by_def_uid(
-                                        def_uid, limit=30
-                                    )
-                                    names: list[str] = []
-                                    seen: set[str] = set()
-                                    for ref in refs:
-                                        # Skip definition-role refs (self-ref)
-                                        if ref.role == "definition":
-                                            continue
-                                        tok = ref.token_text
-                                        if tok and tok not in seen:
-                                            seen.add(tok)
-                                            names.append(tok)
-                                    return names
-                            except Exception:
-                                return []
-
-                        self._embedding.commit_staged(
-                            usage_lookup=_usage_lookup,
-                        )
-
-                    # Commit file-level embeddings
                     if self._file_embedding is not None and self._file_embedding.has_staged_changes():
                         self._file_embedding.commit_staged()
 
@@ -969,19 +874,6 @@ class IndexCoordinator:
                             self._lexical.stage_remove(str(path))
                         files_removed += 1
 
-                    # Stage embedding removals for deleted files
-                    if self._embedding is not None and removed_paths:
-                        with self.db.session() as session:
-                            fq = FactQueries(session)
-                            remove_uids_alt: set[str] = set()
-                            for path in removed_paths:
-                                frec = fq.get_file_by_path(str(path))
-                                if frec and frec.id is not None:
-                                    for d in fq.list_defs_in_file(frec.id):
-                                        remove_uids_alt.add(d.def_uid)
-                            if remove_uids_alt:
-                                self._embedding.stage_remove(remove_uids_alt)
-
                     # Stage file-level embedding removals
                     if self._file_embedding is not None and removed_paths:
                         self._file_embedding.stage_remove(
@@ -990,8 +882,6 @@ class IndexCoordinator:
 
                     if self._lexical is not None:
                         self._lexical.commit_staged()
-                    if self._embedding is not None and self._embedding.has_staged_changes():
-                        self._embedding.commit_staged()
                     if self._file_embedding is not None and self._file_embedding.has_staged_changes():
                         self._file_embedding.commit_staged()
                 if self._lexical is not None:
@@ -2647,15 +2537,13 @@ class IndexCoordinator:
                                 symbols=extraction.symbol_names,
                             )
 
-                            # Stage defs for embedding
-                            if self._embedding is not None and extraction.defs:
-                                self._embedding.stage_defs(extraction.defs)
-
                             # Stage file for file-level embedding
                             if self._file_embedding is not None and extraction.content_text:
                                 self._file_embedding.stage_file(
                                     extraction.file_path,
                                     extraction.content_text,
+                                    defs=extraction.defs,
+                                    imports=extraction.imports,
                                 )
 
                             count += 1
@@ -2698,42 +2586,6 @@ class IndexCoordinator:
                 on_progress(0, 1, files_by_ext, "resolving_types")
                 resolve_type_traced(self.db, on_progress=pass3_progress)
 
-                # Commit all embedding changes AFTER resolver so CTX_USAGE
-                # records benefit from resolved cross-file references.
-                if self._embedding is not None and self._embedding.has_staged_changes():
-
-                    def _usage_lookup_init(def_uid: str) -> list[str]:
-                        """Return caller def names for CTX_USAGE records."""
-                        try:
-                            with self.db.session() as sess:
-                                fq = FactQueries(sess)
-                                refs = fq.list_refs_by_def_uid(
-                                    def_uid, limit=30
-                                )
-                                names: list[str] = []
-                                seen: set[str] = set()
-                                for ref in refs:
-                                    if ref.role == "definition":
-                                        continue
-                                    tok = ref.token_text
-                                    if tok and tok not in seen:
-                                        seen.add(tok)
-                                        names.append(tok)
-                                return names
-                        except Exception:
-                            return []
-
-                    def _emb_progress(done: int, total: int) -> None:
-                        on_progress(done, total, files_by_ext, "computing_embeddings")
-
-                    on_progress(0, 1, files_by_ext, "computing_embeddings")
-                    emb_count = self._embedding.commit_staged(
-                        on_progress=_emb_progress,
-                        usage_lookup=_usage_lookup_init,
-                    )
-                    # Send final signal with actual def count (not record count)
-                    on_progress(emb_count, emb_count, files_by_ext, "embeddings_done")
-
                 # Commit file-level embeddings
                 if self._file_embedding is not None:
                     self._file_embedding.commit_staged()
@@ -2752,51 +2604,12 @@ class IndexCoordinator:
             return []
         return self._file_embedding.query(text, top_k=top_k)
 
-    def query_similar_defs(self, text: str, top_k: int = 50) -> list[tuple[str, float]]:
-        """Semantic search over def embeddings.  Used by recon."""
-        if self._embedding is None or self._embedding.count == 0:
-            return []
-        return self._embedding.query(text, top_k=top_k)
-
-    def query_similar_defs_batch(
-        self,
-        texts: list[str],
-        *,
-        top_k: int = 50,
-    ) -> list[list[tuple[str, float]]]:
-        """Batch semantic search — one ONNX forward pass for multiple queries.
-
-        Returns one result list per input text.  Used by recon multi-view
-        embedding pipeline.
-        """
-        if self._embedding is None or self._embedding.count == 0:
-            return [[] for _ in texts]
-        return self._embedding.query_batch(texts, top_k=top_k)
-
-    def query_similar_defs_multiview(
-        self,
-        views: list[str],
-        *,
-        top_k: int = 50,
-    ) -> list[tuple[str, float]]:
-        """Multi-view semantic search with distribution-aware retrieval.
-
-        Uses evidence-record architecture: ratio gate, per-record→per-uid
-        aggregation, and tiered acceptance rules (SPEC §16.4).
-        Returns pre-fused results — no external merge needed.
-        """
-        if self._embedding is None or self._embedding.count == 0:
-            return []
-        return self._embedding.query_multiview(views, top_k=top_k)
-
     def _clear_all_structural_facts(self) -> None:
         """Clear all structural facts from the database.
 
         Used before full reindex to avoid duplicate key violations.
         """
-        # Clear embedding index alongside structural facts
-        if self._embedding is not None:
-            self._embedding.clear()
+        # Clear file-level embedding index alongside structural facts
         if self._file_embedding is not None:
             self._file_embedding.clear()
 

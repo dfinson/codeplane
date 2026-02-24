@@ -22,63 +22,12 @@ from codeplane.mcp.tools.recon.models import (
     _is_barrel_file,
     _is_test_file,
 )
-from codeplane.mcp.tools.recon.parsing import (
-    _build_query_views,
-)
 
 if TYPE_CHECKING:
     from codeplane.mcp.context import AppContext
     from codeplane.mcp.tools.recon.models import ParsedTask
 
 log = structlog.get_logger(__name__)
-
-
-# ===================================================================
-# Harvester A: Embedding (dense vector similarity)
-# ===================================================================
-
-
-async def _harvest_embedding(
-    app_ctx: AppContext,
-    parsed: ParsedTask,
-    *,
-    top_k: int = 200,
-) -> dict[str, HarvestCandidate]:
-    """Harvester A: Multi-view dense vector similarity search.
-
-    Builds multiple query views (natural-language, code-style,
-    keyword-focused) from the parsed task and uses the evidence-record
-    multiview retrieval pipeline (SPEC §16.4).  The embedding index
-    handles ratio gate, per-record→per-uid aggregation, and tiered
-    acceptance — no external threshold or merge needed.
-    """
-    coordinator = app_ctx.coordinator
-
-    views = _build_query_views(parsed)
-    similar = coordinator.query_similar_defs_multiview(views, top_k=top_k)
-
-    candidates: dict[str, HarvestCandidate] = {}
-    for uid, sim in similar:
-        candidates[uid] = HarvestCandidate(
-            def_uid=uid,
-            from_embedding=True,
-            embedding_similarity=sim,
-            evidence=[
-                EvidenceRecord(
-                    category="embedding",
-                    detail=f"semantic similarity {sim:.3f} (multiview-fused)",
-                    score=min(sim, 1.0),
-                )
-            ],
-        )
-
-    log.debug(
-        "recon.harvest.embedding",
-        count=len(candidates),
-        views=len(views),
-        top5=[(uid.split("::")[-1], round(s, 3)) for uid, s in similar[:5]],
-    )
-    return candidates
 
 
 # ===================================================================
@@ -404,14 +353,10 @@ def _merge_candidates(
                 merged[uid] = cand
             else:
                 existing = merged[uid]
-                existing.from_embedding = existing.from_embedding or cand.from_embedding
                 existing.from_term_match = existing.from_term_match or cand.from_term_match
                 existing.from_lexical = existing.from_lexical or cand.from_lexical
                 existing.from_explicit = existing.from_explicit or cand.from_explicit
                 existing.from_graph = existing.from_graph or cand.from_graph
-                existing.embedding_similarity = max(
-                    existing.embedding_similarity, cand.embedding_similarity
-                )
                 existing.matched_terms |= cand.matched_terms
                 existing.lexical_hit_count += cand.lexical_hit_count
                 existing.evidence.extend(cand.evidence)
@@ -482,13 +427,13 @@ async def _enrich_candidates(
             cand.artifact_kind = _classify_artifact(cand.file_path)
 
     # --- Populate structural link fields ---
-    # Identify "anchor" candidates: explicit mentions or strong embedding
+    # Identify "anchor" candidates: explicit mentions
     anchor_uids: set[str] = set()
     anchor_file_ids: set[int] = set()
     for uid, cand in candidates.items():
         if cand.def_fact is None:
             continue
-        if cand.from_explicit or (cand.from_embedding and cand.embedding_similarity >= 0.5):
+        if cand.from_explicit:
             anchor_uids.add(uid)
             anchor_file_ids.add(cand.def_fact.file_id)
 
@@ -1040,15 +985,13 @@ def _select_graph_seeds(
 
     Prioritizes candidates with:
     1. Multiple evidence axes (found by multiple harvesters)
-    2. High embedding similarity
-    3. Explicit mentions
+    2. Explicit mentions
     """
     scored: list[tuple[str, float]] = []
     for uid, cand in merged.items():
-        # Score: axes * 2 + embedding_sim + explicit_bonus
+        # Score: axes * 2 + explicit_bonus
         score = (
             cand.evidence_axes * 2.0
-            + cand.embedding_similarity
             + (2.0 if cand.from_explicit else 0.0)
         )
         scored.append((uid, score))
@@ -1094,7 +1037,6 @@ def _enrich_file_candidates(
         sig["lex_count"] += cand.lexical_hit_count
         sig["explicit"] = sig["explicit"] or cand.from_explicit
         sig["graph"] = sig["graph"] or cand.from_graph
-        sig["max_embedding_sim"] = max(sig["max_embedding_sim"], cand.embedding_similarity)
 
     # Also track which paths have explicit mentions from the task
     explicit_paths = set(parsed.explicit_paths or [])

@@ -28,67 +28,6 @@ log = structlog.get_logger(__name__)
 # ===================================================================
 
 
-def _compute_embedding_floor(candidates: dict[str, HarvestCandidate]) -> float:
-    """Adaptive floor for embedding similarity via elbow detection.
-
-    Computes the natural break in the embedding similarity distribution
-    using the maximum-distance-to-chord method.  The floor is the
-    similarity value at the elbow — candidates below this lack
-    meaningful embedding signal for this specific query.
-
-    Returns 0.0 if there aren't enough embedding candidates or the
-    distribution is too flat (no natural break).
-    """
-    sims = sorted(
-        [
-            c.embedding_similarity
-            for c in candidates.values()
-            if c.from_embedding and c.embedding_similarity > 0
-        ],
-        reverse=True,
-    )
-    if len(sims) < 4:
-        return 0.0
-
-    n = min(len(sims), 50)
-    analysis = sims[:n]
-
-    top, bottom = analysis[0], analysis[-1]
-
-    # Flat distribution (< 10% relative spread) → no useful break
-    if top > 0 and (top - bottom) / top < 0.10:
-        return 0.0
-
-    # Chord from first to last point
-    x2 = n - 1
-    dx = float(x2)
-    dy = bottom - top  # negative
-    chord_len = (dx * dx + dy * dy) ** 0.5
-
-    if chord_len < 1e-10:
-        return 0.0
-
-    max_dist = 0.0
-    elbow_idx = 0
-
-    for i in range(n):
-        dist = abs(dy * i - dx * analysis[i] + x2 * top) / chord_len
-        if dist > max_dist:
-            max_dist = dist
-            elbow_idx = i
-
-    floor = analysis[elbow_idx]
-    log.debug(
-        "recon.embedding_floor",
-        n_sims=len(sims),
-        top=round(top, 4),
-        bottom=round(bottom, 4),
-        elbow_idx=elbow_idx,
-        floor=round(floor, 4),
-    )
-    return floor
-
-
 def _apply_filters(
     candidates: dict[str, HarvestCandidate],
     parsed: ParsedTask,
@@ -112,10 +51,6 @@ def _apply_filters(
     intent = parsed.intent
     filtered: dict[str, HarvestCandidate] = {}
     stats = {"bypassed": 0, "passed": 0, "filtered": 0, "negated": 0}
-
-    # Adaptive embedding floor: replaces arbitrary per-intent thresholds
-    # with a data-driven elbow from the similarity distribution.
-    emb_floor = _compute_embedding_floor(candidates)
 
     for uid, cand in candidates.items():
         # Stage 1: Negative gating
@@ -144,18 +79,11 @@ def _apply_filters(
             stats["filtered"] += 1
             continue
 
-        # Stage 5: Adaptive quality gate (elbow-based)
+        # Stage 5: Structural evidence gate
         #
-        # Replaces per-intent hardcoded thresholds with a single
-        # data-adaptive check.  The embedding floor is derived from
-        # the distribution's elbow — it adapts to each query's signal
-        # quality rather than using fixed constants.
-        #
-        # Candidates with structural evidence pass regardless (they
-        # have graph / hub / co-location support independent of
-        # embedding).  Candidates relying on embedding must be above
-        # the elbow to survive.
-        if not cand.has_structural_evidence and cand.embedding_similarity < emb_floor:
+        # Candidates without structural evidence and without semantic
+        # evidence are filtered out.
+        if not cand.has_structural_evidence and not cand.has_semantic_evidence:
             stats["filtered"] += 1
             continue
 
@@ -594,7 +522,6 @@ def _score_candidates(
     """Score candidates with bounded features and separated scores.
 
     Features (all normalized to [0, 1]):
-      f_emb:      Embedding similarity (already [0, 1]).
       f_hub:      Hub score, log-scaled and capped.
       f_terms:    Term match count, bounded.
       f_axes:     Evidence axis diversity, bounded.
@@ -629,7 +556,6 @@ def _score_candidates(
             continue
 
         # --- Bounded features (semantic / structural only) ---
-        f_emb = _clamp(cand.embedding_similarity)
         f_hub = _clamp(math.log1p(min(cand.hub_score, 30)) / math.log1p(30))
         f_terms = _clamp(len(cand.matched_terms) / 5.0)
         f_axes = _clamp((cand.evidence_axes - 1) / 3.0)
@@ -649,14 +575,13 @@ def _score_candidates(
         # artificial score cliffs that distort the gap cutoff.  Those files
         # survive via anchoring (step 8b), not via scoring.
         relevance = (
-            f_emb * 0.30
-            + f_hub * 0.08
-            + f_terms * 0.15
-            + f_axes * 0.12
-            + f_name * 0.13
-            + f_path * 0.06
-            + f_lexical * 0.06
-            + f_graph * 0.10
+            f_hub * 0.10
+            + f_terms * 0.25
+            + f_axes * 0.15
+            + f_name * 0.20
+            + f_path * 0.08
+            + f_lexical * 0.10
+            + f_graph * 0.12
         ) * f_artifact
 
         # --- Seed score (how good as graph expansion entry) ---
@@ -711,11 +636,10 @@ def _compute_edit_likelihood(
             continue
 
         # Signal 1: Def-level intent alignment
-        f_emb = _clamp(cand.embedding_similarity)
         name_lower = cand.def_fact.name.lower()
         f_name_hit = 1.0 if any(t in name_lower for t in parsed.primary_terms) else 0.0
         f_terms = _clamp(len(cand.matched_terms) / 5.0)
-        intent_alignment = f_emb * 0.50 + f_name_hit * 0.30 + f_terms * 0.20
+        intent_alignment = f_name_hit * 0.55 + f_terms * 0.45
 
         # Signal 2: Task-local graph centrality
         # Each graph relationship (from_graph, callee-of-top, imported-by-top)
@@ -781,18 +705,18 @@ def _compute_context_value(
             # Tests are valuable context if they're graph-connected or
             # semantically close to the task
             graph_link = cand.from_graph or cand.is_callee_of_top or cand.is_imported_by_top
-            f_test_adj = 0.8 if graph_link else 0.3 * _clamp(cand.embedding_similarity)
+            f_test_adj = 0.8 if graph_link else 0.3 * _clamp(len(cand.matched_terms) / 3.0)
 
         # Signal 2: Config/doc adjacency — symbol-level mentions
         f_doc_adj = 0.0
         if cand.artifact_kind in (ArtifactKind.config, ArtifactKind.doc):
             # Docs/configs are valuable when they mention task symbols
             term_overlap = _clamp(len(cand.matched_terms) / 3.0)
-            f_doc_adj = term_overlap * 0.5 + _clamp(cand.embedding_similarity) * 0.5
+            f_doc_adj = term_overlap * 0.7 + 0.3 * _clamp(cand.lexical_hit_count / 5.0)
 
         # Signal 3: Semantic proximity (general topic relevance)
         f_semantic = (
-            _clamp(cand.embedding_similarity) * 0.4 + _clamp(len(cand.matched_terms) / 5.0) * 0.3
+            _clamp(len(cand.matched_terms) / 5.0) * 0.5 + _clamp(cand.lexical_hit_count / 5.0) * 0.2
         )
 
         # Signal 4: Structural coupling (any graph evidence)

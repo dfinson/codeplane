@@ -483,14 +483,12 @@ class HarvestCandidate:
     artifact_kind: ArtifactKind = ArtifactKind.code
 
     # Which harvesters found this candidate
-    from_embedding: bool = False
     from_term_match: bool = False
     from_lexical: bool = False
     from_explicit: bool = False
     from_graph: bool = False
 
     # Harvester-specific scores
-    embedding_similarity: float = 0.0
     matched_terms: set[str] = field(default_factory=set)
     lexical_hit_count: int = 0
 
@@ -520,7 +518,6 @@ class HarvestCandidate:
         """Count of independent harvester sources that found this candidate."""
         return sum(
             [
-                self.from_embedding,
                 self.from_term_match,
                 self.from_lexical,
                 self.from_explicit,
@@ -540,8 +537,7 @@ class HarvestCandidate:
         real precision cut downstream.
         """
         return (
-            (self.from_embedding and self.embedding_similarity >= 0.15)
-            or len(self.matched_terms) >= 2
+            len(self.matched_terms) >= 2
             or (len(self.matched_terms) == 1 and self.hub_score >= 3)
             or self.from_lexical
             or self.from_explicit
@@ -575,8 +571,7 @@ class HarvestCandidate:
         lack evidence on other axes.
         """
         return (
-            (self.from_embedding and self.embedding_similarity >= 0.55)
-            or self.from_explicit
+            self.from_explicit
             or self.hub_score >= 8
             or len(self.matched_terms) >= 3
         )

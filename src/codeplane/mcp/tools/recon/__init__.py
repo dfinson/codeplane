@@ -40,7 +40,6 @@ from codeplane.mcp.tools.recon.expansion import (
 from codeplane.mcp.tools.recon.harvesters import (
     _enrich_candidates,
     _enrich_file_candidates,
-    _harvest_embedding,
     _harvest_explicit,
     _harvest_file_embedding,
     _harvest_lexical,
@@ -90,7 +89,6 @@ from codeplane.mcp.tools.recon.scoring import (
     _assign_buckets,
     _compute_context_value,
     _compute_edit_likelihood,
-    _compute_embedding_floor,
     _score_candidates,
     assign_tiers,
     compute_anchor_floor,
@@ -121,7 +119,6 @@ __all__ = [
     "_is_test_file",
     "_is_barrel_file",
     # Harvesters
-    "_harvest_embedding",
     "_harvest_file_embedding",
     "_harvest_term_match",
     "_harvest_lexical",
@@ -136,7 +133,6 @@ __all__ = [
     "_assign_buckets",
     "_compute_context_value",
     "_compute_edit_likelihood",
-    "_compute_embedding_floor",
     "_score_candidates",
     "assign_tiers",
     "compute_anchor_floor",
