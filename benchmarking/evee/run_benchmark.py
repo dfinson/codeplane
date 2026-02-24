@@ -258,7 +258,6 @@ def compute_query_metrics(
 ) -> dict[str, Any]:
     """Compute all metrics for a single query against ground truth."""
     returned_paths = {f["path"] for f in returned_files}
-    returned_tiers = {f["path"]: f["tier"] for f in returned_files}
 
     gt = {f["path"] for f in gt_files}
     gt_edit = {f["path"] for f in gt_files if f["category"] == "E"}
@@ -275,28 +274,6 @@ def compute_query_metrics(
     )
     noise_ratio = len(returned_paths - gt) / len(returned_paths) if returned_paths else 0.0
 
-    # Tier alignment — E→full_file, C→min_scaffold, S→summary_only
-    def tier_align(gt_set: set[str], expected_tier: str) -> float | None:
-        if not gt_set:
-            return None
-        matched = sum(1 for f in gt_set if returned_tiers.get(f) == expected_tier)
-        return matched / len(gt_set)
-
-    def found_rate(gt_set: set[str]) -> float | None:
-        """Fraction of GT set found in ANY tier."""
-        if not gt_set:
-            return None
-        return len(gt_set & returned_paths) / len(gt_set)
-
-    tier_alignment = {
-        "edit_to_full_file": tier_align(gt_edit, "full_file"),
-        "ctx_to_min_scaffold": tier_align(gt_ctx, "min_scaffold"),
-        "supp_to_summary_only": tier_align(gt_supp, "summary_only"),
-        "edit_found_any": found_rate(gt_edit),
-        "ctx_found_any": found_rate(gt_ctx),
-        "supp_found_any": found_rate(gt_supp),
-    }
-
     return {
         "precision": round(precision, 4),
         "recall": round(recall, 4),
@@ -306,7 +283,6 @@ def compute_query_metrics(
         "returned_files": sorted(returned_paths),
         "returned_count": len(returned_paths),
         "gt_count": len(gt),
-        "tier_alignment": tier_alignment,
         "_detail": {
             "tp": tp,
             "fp": len(returned_paths - gt),
@@ -353,17 +329,6 @@ def compute_aggregates(
             ),
             "avg_noise_ratio": round(_mean([r["noise_ratio"] for r in results]), 4),
             "avg_returned_count": round(_mean([r.get("returned_count", len(r["returned_files"])) for r in results]), 1),
-            # A2: found-anywhere averages
-            "avg_edit_found_any": round(
-                _mean([r["tier_alignment"]["edit_found_any"] for r in results
-                       if r["tier_alignment"].get("edit_found_any") is not None]),
-                4,
-            ),
-            "avg_edit_to_full_file": round(
-                _mean([r["tier_alignment"]["edit_to_full_file"] for r in results
-                       if r["tier_alignment"].get("edit_to_full_file") is not None]),
-                4,
-            ),
         }
 
     # Overall
@@ -599,11 +564,7 @@ def main() -> None:
                 qresults[q] = {
                     "precision": 0.0, "recall": 0.0, "f1": 0.0,
                     "edit_recall": None, "noise_ratio": 1.0,
-                    "returned_files": [], "tier_alignment": {
-                        "edit_to_full_file": None,
-                        "ctx_to_min_scaffold": None,
-                        "supp_to_summary_only": None,
-                    },
+                    "returned_files": [],
                     "error": str(e),
                 }
 
@@ -674,7 +635,6 @@ def main() -> None:
                 "returned_files": metrics["returned_files"],
                 "returned_count": metrics.get("returned_count", len(metrics["returned_files"])),
                 "gt_count": metrics.get("gt_count", 0),
-                "tier_alignment": metrics["tier_alignment"],
             }
         output["issues"][issue_num] = clean_q
 

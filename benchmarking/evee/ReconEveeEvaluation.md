@@ -53,11 +53,7 @@ Retrieval quality only. Latency and token counts are tracked separately during A
 | Edit Recall | `\|returned ∩ GT_edit\| / \|GT_edit\|` |
 | Noise Ratio | `\|returned − GT\| / \|returned\|` |
 
-### Bucket Alignment (per query)
 
-Recon assigns files to buckets (`edit_target`, `context`, `supplementary`).
-Ground truth categorizes as Edit (E), Context/Test (C), Supp/Docs (S).
-Alignment measures whether Recon's bucket matches the GT category.
 
 | Metric | Formula |
 |--------|---------|
