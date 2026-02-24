@@ -562,8 +562,12 @@ async def _file_centric_pipeline(
     1. Parse task → ParsedTask
     2. File-level embedding search (PRIMARY) → ranked files
     3. Def-level harvesters in parallel (SECONDARY) → enrichment signals
-    4. Enrich file candidates with secondary signals
+    4a. Inject indexed files with path-token matches (≥2 query terms in path)
+    4b. Enrich file candidates with 6-source RRF scoring
     5. Two-elbow tier assignment (FULL_FILE / MIN_SCAFFOLD / SUMMARY_ONLY)
+    5.5. Test co-retrieval via direct imports (source → test)
+    5.6. Reverse co-retrieval (test → source, promote-only)
+    5.7. Directory cohesion (≥2 siblings → pull in rest of package)
     6. Noise metric → conditional mapRepo inclusion
 
     Returns:
@@ -613,7 +617,62 @@ async def _file_centric_pipeline(
     diagnostics["def_harvest_ms"] = round((time.monotonic() - t_def_harvest) * 1000)
     diagnostics["def_candidates"] = len(merged_def)
 
-    # 4. Enrich file candidates with RRF scoring
+    # 4a. Inject indexed files whose paths match query terms.
+    #     term_match only checks def names, lexical only searches code content.
+    #     Neither finds indexed files whose PATH components match the query
+    #     (e.g. files under packages/evee-azureml/ when query says "azureml").
+    #     This step fills that gap by adding path-matched indexed files to the
+    #     candidate set before RRF scoring gives them a fair rank.
+    coordinator = app_ctx.coordinator
+    indexed_paths: set[str] = set()
+    with coordinator.db.session() as session:
+        from codeplane.index._internal.indexing.graph import FactQueries
+
+        fq = FactQueries(session)
+        for frec in fq.list_files(limit=50000):
+            indexed_paths.add(frec.path)
+
+    _PATH_INJECT_MAX = 30
+    path_inject_terms: set[str] = set()
+    for t in parsed.primary_terms:
+        if len(t) >= 3:
+            path_inject_terms.add(t.lower())
+    for t in parsed.secondary_terms:
+        if len(t) >= 3:
+            path_inject_terms.add(t.lower())
+
+    if path_inject_terms:
+        existing_paths = {fc.path for fc in file_candidates}
+        path_inject_scored: list[tuple[str, int]] = []
+        for ip in indexed_paths:
+            if ip in existing_paths:
+                continue
+            path_lower = ip.lower()
+            path_tokens = set(re.split(r"[/._\-]", path_lower))
+            path_tokens = {t for t in path_tokens if len(t) >= 2}
+
+            hits = path_inject_terms & path_tokens
+            if not hits:
+                hits = {t for t in path_inject_terms if t in path_lower}
+
+            # Require ≥2 path-token matches to avoid noise
+            if len(hits) >= 2:
+                path_inject_scored.append((ip, len(hits)))
+
+        # Sort by match count desc, cap
+        path_inject_scored.sort(key=lambda x: -x[1])
+        for ip, _score in path_inject_scored[:_PATH_INJECT_MAX]:
+            file_candidates.append(
+                FileCandidate(
+                    path=ip,
+                    similarity=0.0,
+                    combined_score=0.0,  # will be set by RRF
+                    artifact_kind=_classify_artifact(ip),
+                )
+            )
+        diagnostics["path_inject_count"] = min(len(path_inject_scored), _PATH_INJECT_MAX)
+
+    # 4b. Enrich file candidates with RRF scoring
     _enrich_file_candidates(file_candidates, merged_def, parsed)
 
     # Determine max RRF score for guaranteeing pinned/explicit placement.
@@ -665,15 +724,7 @@ async def _file_centric_pipeline(
                         break
 
     # Also discover unindexed files (yaml, md, etc.) via path matching
-    indexed_paths: set[str] = set()
-    coordinator = app_ctx.coordinator
-    with coordinator.db.session() as session:
-        from codeplane.index._internal.indexing.graph import FactQueries
-
-        fq = FactQueries(session)
-        for frec in fq.list_files(limit=50000):
-            indexed_paths.add(frec.path)
-
+    # (indexed_paths already collected in step 4a above)
     unindexed_matches = _find_unindexed_files(app_ctx, parsed, indexed_paths)
     existing_paths = {fc.path for fc in file_candidates}
     for upath, uscore in unindexed_matches:
@@ -898,7 +949,87 @@ async def _file_centric_pipeline(
             source_co_added=source_co_added,
         )
 
+    # ── 5.7  Directory cohesion expansion ──────────────────────────
+    #   When ≥2 non-test files from the same directory survive at
+    #   FULL_FILE or MIN_SCAFFOLD, pull in remaining indexed files
+    #   from that directory at one tier lower.  This captures package
+    #   co-relevance: if tracking.py and compute.py from a package
+    #   are relevant, config.py and utils.py likely are too.
+    from collections import defaultdict as _defaultdict
+
+    t_dir_cohesion = time.monotonic()
+    _DIR_COHESION_MIN_FILES = 2  # ≥2 siblings needed to trigger expansion
+    _DIR_COHESION_MAX_PER_DIR = 8  # cap siblings added per directory
+
+    dir_best_tier: dict[str, OutputTier] = {}
+    dir_tier_counts: dict[str, int] = _defaultdict(int)
+
+    for fc in file_candidates:
+        if fc.tier in (OutputTier.FULL_FILE, OutputTier.MIN_SCAFFOLD) and not _is_test_file(fc.path):
+            parent = str(PurePosixPath(fc.path).parent)
+            dir_tier_counts[parent] += 1
+            # Track the best tier present in this directory
+            if parent not in dir_best_tier or fc.tier == OutputTier.FULL_FILE:
+                dir_best_tier[parent] = fc.tier
+
+    # Only expand directories with enough surviving source files
+    dirs_to_expand = {
+        d: tier
+        for d, tier in dir_best_tier.items()
+        if dir_tier_counts[d] >= _DIR_COHESION_MIN_FILES
+    }
+
+    dir_co_added = 0
+    dir_co_dirs: list[str] = []
+    if dirs_to_expand:
+        existing_paths = {fc.path for fc in file_candidates}
+        for ip in indexed_paths:
+            parent = str(PurePosixPath(ip).parent)
+            if parent not in dirs_to_expand:
+                continue
+            if ip in existing_paths:
+                continue
+            if _is_test_file(ip):
+                continue  # test co-retrieval handles tests separately
+
+            # Count how many we've already added for this directory
+            if dir_co_dirs.count(parent) >= _DIR_COHESION_MAX_PER_DIR:
+                continue
+
+            anchor_tier = dirs_to_expand[parent]
+            # Siblings get one tier below the anchor
+            sibling_tier = (
+                OutputTier.MIN_SCAFFOLD
+                if anchor_tier == OutputTier.FULL_FILE
+                else OutputTier.SUMMARY_ONLY
+            )
+            ref_scores = [c.combined_score for c in file_candidates if c.tier == sibling_tier]
+            score = max(ref_scores, default=pin_floor) * 0.8
+            new_fc = FileCandidate(
+                path=ip,
+                similarity=0.0,
+                combined_score=score,
+                graph_connected=True,  # structurally connected via directory
+                artifact_kind=_classify_artifact(ip),
+            )
+            new_fc.tier = sibling_tier
+            file_candidates.append(new_fc)
+            existing_paths.add(ip)
+            dir_co_dirs.append(parent)
+            dir_co_added += 1
+
+    diagnostics["dir_cohesion_ms"] = round((time.monotonic() - t_dir_cohesion) * 1000)
+    diagnostics["dir_cohesion_added"] = dir_co_added
+    diagnostics["dir_cohesion_dirs"] = len(set(dir_co_dirs))
+    if dir_co_added > 0:
+        log.info(
+            "recon.dir_cohesion",
+            added=dir_co_added,
+            dirs=len(set(dir_co_dirs)),
+        )
+
     # Build expand_reason for each candidate
+    dir_cohesion_paths = {fc.path for fc in file_candidates if fc.path in {ip for ip in dir_co_dirs}} if dir_co_added > 0 else set()
     for fc in file_candidates:
         reasons: list[str] = []
         if fc.similarity > 0.5:
@@ -917,6 +1048,11 @@ async def _file_centric_pipeline(
             reasons.append("test for surviving source")
         if fc.path in linked_source_paths:
             reasons.append("source imported by surviving test")
+        # Check if this file was added by directory cohesion
+        parent = str(PurePosixPath(fc.path).parent)
+        if parent in dirs_to_expand and fc.similarity == 0.0 and not fc.has_explicit_mention:
+            if not any(r.startswith("test for") or r.startswith("source imported") for r in reasons):
+                reasons.append("directory sibling")
         fc.expand_reason = "; ".join(reasons) if reasons else "embedding match"
 
     # 6. Noise metric

@@ -10,6 +10,7 @@ Open/Closed: New harvesters can be added without modifying existing ones.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import structlog
@@ -978,6 +979,7 @@ def _enrich_file_candidates(
       3. Lexical    — files ranked by aggregated lexical hit count
       4. Graph      — files ranked by graded edge quality
       5. Explicit   — agent-mentioned paths (always rank 1)
+      6. Path token — files ranked by query-term overlap with path components
 
     Embedding gets 2× weight because it is the only true semantic signal —
     it compares meaning, not just lexical overlap.
@@ -1099,6 +1101,41 @@ def _enrich_file_candidates(
     # Source 5: Explicit mention (binary — rank 1 for all explicit)
     explicit_all = {fc.path for fc in file_candidates if fc.has_explicit_mention}
 
+    # Source 6: Path-token matching
+    # Tokenize file paths and check overlap with query terms.
+    # Gives files a signal when their path components match query terms,
+    # independent of code content.  Important for graph-island files
+    # (e.g. packages/evee-azureml/) where the path is the primary
+    # discriminator and code-only harvesters miss them.
+    all_query_terms_lower: set[str] = set()
+    for t in parsed.primary_terms:
+        if len(t) >= 3:
+            all_query_terms_lower.add(t.lower())
+    for t in parsed.secondary_terms:
+        if len(t) >= 3:
+            all_query_terms_lower.add(t.lower())
+
+    path_match_scores: dict[str, int] = {}
+    if all_query_terms_lower:
+        for fc in file_candidates:
+            path_lower = fc.path.lower()
+            path_tokens = set(re.split(r"[/._\-]", path_lower))
+            path_tokens = {t for t in path_tokens if len(t) >= 2}
+
+            # Token overlap
+            hits = all_query_terms_lower & path_tokens
+            # Also substring match for compound terms (e.g. "mlflow" in path)
+            if not hits:
+                hits = {t for t in all_query_terms_lower if t in path_lower}
+
+            if hits:
+                path_match_scores[fc.path] = len(hits)
+
+    path_match_ranked = sorted(path_match_scores.items(), key=lambda x: -x[1])
+    path_match_rank: dict[str, int] = {
+        path: rank for rank, (path, _) in enumerate(path_match_ranked, 1)
+    }
+
     # ── Compute RRF score for each candidate ──
     for fc in file_candidates:
         rrf = 0.0
@@ -1112,6 +1149,8 @@ def _enrich_file_candidates(
             rrf += 1.0 / (_RRF_K + graph_rank[fc.path])
         if fc.path in explicit_all:
             rrf += 1.0 / (_RRF_K + 1)  # rank 1 for all explicit mentions
+        if fc.path in path_match_rank:
+            rrf += 1.0 / (_RRF_K + path_match_rank[fc.path])
         fc.combined_score = rrf
 
     return file_candidates

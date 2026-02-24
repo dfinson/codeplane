@@ -466,21 +466,18 @@ I want to make Evee work with Azure AI Foundry for running evaluations and track
 
 | # | File | Relevance | Category |
 |---|------|-----------|----------|
-| 1 | packages/evee-foundry/src/evee_foundry/tracking.py | Foundry tracking — prototype SDK integration changes | Edit |
-| 2 | packages/evee-foundry/src/evee_foundry/compute.py | Foundry compute — prototype native evaluation | Edit |
-| 3 | packages/evee-foundry/src/evee_foundry/config.py | Foundry config — prototype new config fields | Edit |
-| 4 | packages/evee-azureml/src/evee_azureml/tracking.py | Reference tracking backend — studying integration patterns | Context/Test |
-| 5 | packages/evee-azureml/src/evee_azureml/compute.py | Reference compute backend | Context/Test |
-| 6 | packages/evee-azureml/src/evee_azureml/config.py | Config models pattern | Context/Test |
-| 7 | packages/evee-azureml/src/evee_azureml/auth.py | Auth pattern | Context/Test |
-| 8 | packages/evee-azureml/src/evee_azureml/utils.py | Shared utilities | Context/Test |
-| 9 | packages/evee-azureml/pyproject.toml | Entry points, azure-ai-projects dependency | Context/Test |
-| 10 | src/evee/tracking/backend.py | TrackingBackend protocol — studying extensibility | Context/Test |
-| 11 | src/evee/compute/backend.py | ComputeBackend ABC — studying extensibility | Context/Test |
-| 12 | src/evee/config/models.py | Config models — studying flexibility | Context/Test |
-| 13 | src/evee/execution/experiment_runner.py | Backend loading — studying plugin architecture | Context/Test |
-| 14 | docs/backends/custom-backends.md | Backend implementation guide | Supp/Docs |
-| 15 | docs/design/architecture.md | Architecture reference | Supp/Docs |
+| 1 | packages/evee-azureml/src/evee_azureml/tracking.py | Reference tracking backend — studying integration patterns | Context/Test |
+| 2 | packages/evee-azureml/src/evee_azureml/compute.py | Reference compute backend | Context/Test |
+| 3 | packages/evee-azureml/src/evee_azureml/config.py | Config models pattern | Context/Test |
+| 4 | packages/evee-azureml/src/evee_azureml/auth.py | Auth pattern | Context/Test |
+| 5 | packages/evee-azureml/src/evee_azureml/utils.py | Shared utilities | Context/Test |
+| 6 | packages/evee-azureml/pyproject.toml | Entry points, azure-ai-projects dependency | Context/Test |
+| 7 | src/evee/tracking/backend.py | TrackingBackend protocol — studying extensibility | Context/Test |
+| 8 | src/evee/compute/backend.py | ComputeBackend ABC — studying extensibility | Context/Test |
+| 9 | src/evee/config/models.py | Config models — studying flexibility | Context/Test |
+| 10 | src/evee/execution/experiment_runner.py | Backend loading — studying plugin architecture | Context/Test |
+| 11 | docs/backends/custom-backends.md | Backend implementation guide | Supp/Docs |
+| 12 | docs/design/architecture.md | Architecture reference | Supp/Docs |
 
 **Q1** *(anchored, precise)*:
 I need to explore deeper SDK-level integration between Evee and Azure AI Foundry. This is Phase 2, which assumes Phase 1 (basic tracking/compute backend) is complete. I need to investigate whether Evee evaluators can be called directly from the Foundry SDK, whether Foundry-native configuration and deployment of Evee experiments is feasible, and whether shared model/dataset registries make sense. I need the existing AzureML backend package as reference, the compute/tracking backend protocols, config models, Terraform Foundry modules, and architecture documentation.
