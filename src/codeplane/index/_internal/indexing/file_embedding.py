@@ -1,17 +1,22 @@
 """File-level embedding index using Jina v2 base with anglicified scaffold.
 
-Each file produces one embedding record.  The embedded text is::
+Each file produces one embedding record.  The embedded text is the
+anglicified scaffold ONLY — no raw file content is embedded::
 
     FILE_SCAFFOLD
-    <anglicified scaffold from tree-sitter extraction>
-
-    FILE_CHUNK
-    <file content (head+tail truncated if needed)>
+    module <path phrase>
+    imports <anglicified imports>
+    defines <anglicified defs with signatures>
+    describes <docstring summaries>
 
 The scaffold converts tree-sitter-extracted defs and imports into
 English-like tokens (identifier splitting, signature compaction)
 so that natural-language queries match code structure.  No
 language-specific keyword lists — purely mechanical extraction.
+
+Embedding only the scaffold (not file content) keeps texts short
+(typically 200-2000 chars) which dramatically reduces inference
+time vs. embedding full file content (up to 24K chars).
 
 Storage: .codeplane/file_embedding/
   - file_embeddings.npz   (float16 matrix + path arrays)
@@ -46,10 +51,15 @@ log = structlog.get_logger()
 
 FILE_EMBED_MODEL = "jinaai/jina-embeddings-v2-base-en"
 FILE_EMBED_DIM = 768
-FILE_EMBED_MAX_CHARS = 24_000  # ~8000 tokens; Jina v2 supports 8192 tokens
-FILE_EMBED_BATCH_SIZE = 8  # larger model → smaller batches
-FILE_EMBED_VERSION = 2  # v2: scaffold prefix
+FILE_EMBED_MAX_CHARS = 4_000  # scaffold-only; generous budget for very large files
+FILE_EMBED_BATCH_SIZE = 16  # default; overridden by _detect_batch_size()
+FILE_EMBED_VERSION = 3  # v3: scaffold-only (no file content)
 FILE_EMBED_SUBDIR = "file_embedding"
+
+# Per-docstring budget (first sentence or first N chars)
+_DOC_BUDGET_CHARS = 120
+# Maximum number of docstrings to include in scaffold
+_DOC_MAX_COUNT = 10
 
 # Word split regex: camelCase / PascalCase / snake_case → words
 _CAMEL_SPLIT = re.compile(r"[A-Z]?[a-z]+|[A-Z]+(?=[A-Z][a-z]|\d|\b)|[0-9]+")
@@ -186,14 +196,27 @@ def build_file_scaffold(
         if define_tokens:
             lines.append(f"defines {', '.join(define_tokens)}")
 
-        # Docstring hints: first meaningful class or function docstring
+        # Docstring / comment summaries — include ALL meaningful ones
+        doc_count = 0
         for d in sorted_defs:
+            if doc_count >= _DOC_MAX_COUNT:
+                break
             doc = (d.get("docstring") or "").strip()
             if doc and len(doc) > 15:
-                first_sentence = doc.split(".")[0].strip() if "." in doc else doc[:80]
+                # First sentence or first N chars
+                first_sentence = (
+                    doc.split(".")[0].strip() if "." in doc else doc[:_DOC_BUDGET_CHARS]
+                )
                 if first_sentence:
-                    lines.append(f"describes {first_sentence}")
-                    break
+                    name = d.get("name", "")
+                    prefix = " ".join(_word_split(name)) if name else ""
+                    if prefix:
+                        lines.append(
+                            f"describes {prefix}: {first_sentence[:_DOC_BUDGET_CHARS]}"
+                        )
+                    else:
+                        lines.append(f"describes {first_sentence[:_DOC_BUDGET_CHARS]}")
+                    doc_count += 1
 
     if not lines:
         return ""
@@ -223,30 +246,26 @@ def _build_embed_text(
     content: str,
     defs: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Compose the final embed text: scaffold prefix + file content.
+    """Compose the final embed text from scaffold only.
 
     Format::
 
         FILE_SCAFFOLD
         <scaffold lines>
 
-        FILE_CHUNK
-        <file content>
+    No file content is included — the scaffold carries all the
+    semantic signal needed for retrieval (module path, imports,
+    definitions with signatures, docstring summaries).  This keeps
+    texts short (200-2000 chars) for fast inference.
 
-    Scaffold is preserved in full.  If the combined text exceeds the
-    model's context window, content is truncated at semantic boundaries
-    (def spans from tree-sitter) rather than at arbitrary character
-    positions.
+    The *content* and *defs* parameters are accepted for API
+    compatibility but are not used when a scaffold is available.
     """
-    # Compute actual structural overhead (no magic numbers)
-    scaffold_block = f"FILE_SCAFFOLD\n{scaffold}\n\n" if scaffold else ""
-    chunk_header = "FILE_CHUNK\n"
-    overhead = len(scaffold_block) + len(chunk_header)
-
-    content_budget = FILE_EMBED_MAX_CHARS - overhead
-    truncated = _truncate_semantic(content, max_chars=content_budget, defs=defs)
-
-    return f"{scaffold_block}{chunk_header}{truncated}"
+    if scaffold:
+        text = f"FILE_SCAFFOLD\n{scaffold}"
+        return text[:FILE_EMBED_MAX_CHARS]
+    # Fallback: no scaffold available, use truncated content
+    return _truncate_semantic(content, max_chars=FILE_EMBED_MAX_CHARS, defs=defs)
 
 
 # ===================================================================
@@ -331,6 +350,48 @@ def _detect_providers() -> list[str]:
     return ["CPUExecutionProvider"]
 
 
+def _detect_batch_size() -> int:
+    """Choose embedding batch size based on available system memory.
+
+    Jina v2 base needs ~550 MB for the model itself.  Each batch
+    element allocates attention buffers proportional to sequence
+    length.  With scaffold-only texts (≤4 K chars ≈ 1 K tokens)
+    the per-element cost is modest, so we can afford larger batches
+    on machines with enough RAM.
+
+    Heuristic:
+      ≥ 16 GB free → batch 32
+      ≥  8 GB free → batch 16
+      ≥  4 GB free → batch  8
+      otherwise    → batch  4
+    """
+    try:
+        import psutil  # type: ignore[import-untyped]
+
+        avail = psutil.virtual_memory().available
+    except Exception:  # noqa: BLE001
+        # psutil not installed or unreadable — fall back to /proc
+        try:
+            with open("/proc/meminfo") as fh:
+                for line in fh:
+                    if line.startswith("MemAvailable:"):
+                        avail = int(line.split()[1]) * 1024  # kB → bytes
+                        break
+                else:
+                    return FILE_EMBED_BATCH_SIZE
+        except OSError:
+            return FILE_EMBED_BATCH_SIZE
+
+    gb = avail / (1024**3)
+    if gb >= 16:
+        return 32
+    if gb >= 8:
+        return 16
+    if gb >= 4:
+        return 8
+    return 4
+
+
 # ===================================================================
 # FileEmbeddingIndex
 # ===================================================================
@@ -356,8 +417,9 @@ class FileEmbeddingIndex:
         self._staged_files: dict[str, str] = {}  # path → content
         self._staged_removals: set[str] = set()
 
-        # Lazy model handle
+        # Lazy model handle + dynamic batch size
         self._model: Any = None
+        self._batch_size: int = FILE_EMBED_BATCH_SIZE
 
     # --- Staging API ---
 
@@ -579,7 +641,7 @@ class FileEmbeddingIndex:
     # --- Internals ---
 
     def _ensure_model(self) -> None:
-        """Lazy-load the embedding model."""
+        """Lazy-load the embedding model and detect optimal batch size."""
         if self._model is not None:
             return
 
@@ -587,6 +649,7 @@ class FileEmbeddingIndex:
 
         providers = _detect_providers()
         threads = max(1, (os.cpu_count() or 2) // 2)
+        self._batch_size = _detect_batch_size()
 
         self._model = TextEmbedding(
             model_name=FILE_EMBED_MODEL,
@@ -598,6 +661,7 @@ class FileEmbeddingIndex:
             model=FILE_EMBED_MODEL,
             providers=providers,
             threads=threads,
+            batch_size=self._batch_size,
         )
 
     def _embed_single(self, text: str) -> np.ndarray:
@@ -620,9 +684,10 @@ class FileEmbeddingIndex:
             return np.empty((0, FILE_EMBED_DIM), dtype=np.float16)
 
         total = len(texts)
+        batch_size = getattr(self, "_batch_size", FILE_EMBED_BATCH_SIZE)
         all_vecs: list[np.ndarray] = []
-        for i in range(0, total, FILE_EMBED_BATCH_SIZE):
-            batch = texts[i : i + FILE_EMBED_BATCH_SIZE]
+        for i in range(0, total, batch_size):
+            batch = texts[i : i + batch_size]
             vecs = list(self._model.embed(batch, batch_size=len(batch)))
             all_vecs.extend(vecs)
             if on_progress is not None:

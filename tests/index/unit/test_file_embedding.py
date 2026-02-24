@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from codeplane.index._internal.indexing.file_embedding import (
+    _DOC_MAX_COUNT,
     _build_embed_text,
     _compact_sig,
     _path_to_phrase,
@@ -154,6 +155,43 @@ class TestBuildFileScaffold:
         ]
         result = build_file_scaffold("src/config.py", defs, [])
         assert "describes" in result.lower()
+        # Should include def name as prefix
+        assert "config:" in result.lower()
+
+    def test_multiple_docstrings(self) -> None:
+        """All meaningful docstrings should be included, not just the first."""
+        defs = [
+            {
+                "kind": "function",
+                "name": "connect",
+                "signature_text": "(host, port)",
+                "docstring": "Establish a database connection to the given host.",
+            },
+            {
+                "kind": "function",
+                "name": "disconnect",
+                "signature_text": "()",
+                "docstring": "Close the active database connection gracefully.",
+            },
+        ]
+        result = build_file_scaffold("src/db.py", defs, [])
+        assert "connect:" in result.lower()
+        assert "disconnect:" in result.lower()
+        assert result.lower().count("describes") == 2
+
+    def test_docstring_count_capped(self) -> None:
+        """Should cap docstrings at _DOC_MAX_COUNT."""
+        defs = [
+            {
+                "kind": "function",
+                "name": f"func_{i}",
+                "signature_text": "()",
+                "docstring": f"This is the docstring for function number {i} in the module.",
+            }
+            for i in range(_DOC_MAX_COUNT + 5)
+        ]
+        result = build_file_scaffold("src/big.py", defs, [])
+        assert result.count("describes") == _DOC_MAX_COUNT
 
     def test_dedup_imports(self) -> None:
         """Duplicate import sources should be deduplicated."""
@@ -193,28 +231,45 @@ class TestBuildFileScaffold:
 
 
 class TestBuildEmbedText:
-    """Tests for composed embed text (scaffold + content)."""
+    """Tests for composed embed text (scaffold only, no file content)."""
 
     def test_with_scaffold(self) -> None:
         scaffold = "module auth rate limiter\ndefines class RateLimiter"
         content = "class RateLimiter:\n    pass"
         result = _build_embed_text(scaffold, content)
         assert "FILE_SCAFFOLD" in result
-        assert "FILE_CHUNK" in result
         assert "module auth" in result
-        assert "class RateLimiter" in result
+        # No FILE_CHUNK — scaffold-only
+        assert "FILE_CHUNK" not in result
+        # Raw content should NOT be in the embed text
+        assert "class RateLimiter:\n    pass" not in result
 
     def test_without_scaffold(self) -> None:
+        """Fallback: no scaffold → use truncated content."""
         result = _build_embed_text("", "print('hello')")
         assert "FILE_SCAFFOLD" not in result
-        assert "FILE_CHUNK" in result
         assert "print('hello')" in result
 
-    def test_scaffold_preserved_on_truncation(self) -> None:
-        """Scaffold should be preserved even when content is truncated."""
-        scaffold = "module test"
-        # Content longer than budget
-        content = "x" * 30_000
-        result = _build_embed_text(scaffold, content)
-        assert "module test" in result
-        assert len(result) < len(content) + len(scaffold) + 50
+    def test_scaffold_truncated_at_budget(self) -> None:
+        """Very large scaffolds should be capped at FILE_EMBED_MAX_CHARS."""
+        scaffold = "module test\n" + "defines function x\n" * 500
+        result = _build_embed_text(scaffold, "")
+        from codeplane.index._internal.indexing.file_embedding import FILE_EMBED_MAX_CHARS
+        assert len(result) <= FILE_EMBED_MAX_CHARS
+
+
+# ---------------------------------------------------------------------------
+# _detect_batch_size tests
+# ---------------------------------------------------------------------------
+
+
+class TestDetectBatchSize:
+    """Tests for dynamic batch size detection."""
+
+    def test_returns_positive_int(self) -> None:
+        from codeplane.index._internal.indexing.file_embedding import _detect_batch_size
+
+        result = _detect_batch_size()
+        assert isinstance(result, int)
+        assert result >= 4
+        assert result <= 32
