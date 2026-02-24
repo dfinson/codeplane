@@ -260,25 +260,18 @@ def compute_query_metrics(
     returned_paths = {f["path"] for f in returned_files}
 
     gt = {f["path"] for f in gt_files}
-    gt_edit = {f["path"] for f in gt_files if f["category"] == "E"}
-    gt_ctx = {f["path"] for f in gt_files if f["category"] == "C"}
-    gt_supp = {f["path"] for f in gt_files if f["category"] == "S"}
 
-    # Retrieval metrics
+    # Core retrieval metrics
     tp = len(returned_paths & gt)
     precision = tp / len(returned_paths) if returned_paths else 0.0
     recall = tp / len(gt) if gt else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-    edit_recall = (
-        len(returned_paths & gt_edit) / len(gt_edit) if gt_edit else None
-    )
     noise_ratio = len(returned_paths - gt) / len(returned_paths) if returned_paths else 0.0
 
     return {
         "precision": round(precision, 4),
         "recall": round(recall, 4),
         "f1": round(f1, 4),
-        "edit_recall": round(edit_recall, 4) if edit_recall is not None else None,
         "noise_ratio": round(noise_ratio, 4),
         "returned_files": sorted(returned_paths),
         "returned_count": len(returned_paths),
@@ -287,10 +280,6 @@ def compute_query_metrics(
             "tp": tp,
             "fp": len(returned_paths - gt),
             "fn": len(gt - returned_paths),
-            "gt_total": len(gt_files),
-            "gt_edit_count": len(gt_edit),
-            "gt_ctx_count": len(gt_ctx),
-            "gt_supp_count": len(gt_supp),
             "hits": sorted(returned_paths & gt),
             "misses": sorted(gt - returned_paths),
             "extras": sorted(returned_paths - gt),
@@ -323,10 +312,6 @@ def compute_aggregates(
             "avg_precision": round(_mean([r["precision"] for r in results]), 4),
             "avg_recall": round(_mean([r["recall"] for r in results]), 4),
             "avg_f1": round(_mean([r["f1"] for r in results]), 4),
-            "avg_edit_recall": round(
-                _mean([r["edit_recall"] for r in results if r["edit_recall"] is not None]),
-                4,
-            ),
             "avg_noise_ratio": round(_mean([r["noise_ratio"] for r in results]), 4),
             "avg_returned_count": round(_mean([r.get("returned_count", len(r["returned_files"])) for r in results]), 1),
         }
@@ -338,42 +323,28 @@ def compute_aggregates(
             if q in qresults:
                 all_f1.append(qresults[q]["f1"])
 
-    perfect_edit_recall: dict[str, int] = {"Q1": 0, "Q2": 0, "Q3": 0}
-    for _issue_num, qresults in issue_results.items():
-        for q in ("Q1", "Q2", "Q3"):
-            if q in qresults:
-                er = qresults[q].get("edit_recall")
-                if er is not None and er >= 1.0:
-                    perfect_edit_recall[q] += 1
-
     overall = {
         "mean_f1": round(_mean(all_f1), 4) if all_f1 else 0.0,
         "median_f1": round(_median(all_f1), 4) if all_f1 else 0.0,
         "min_f1": round(min(all_f1), 4) if all_f1 else 0.0,
         "max_f1": round(max(all_f1), 4) if all_f1 else 0.0,
-        "perfect_edit_recall_count": perfect_edit_recall,
     }
 
     # By difficulty
     difficulty_map: dict[str, str] = {iss["number"]: iss["difficulty"] for iss in issues}
     by_diff: dict[str, list[float]] = {"simple": [], "medium": [], "complex": []}
-    by_diff_er: dict[str, list[float]] = {"simple": [], "medium": [], "complex": []}
 
     for issue_num, qresults in issue_results.items():
         diff = difficulty_map.get(issue_num, "medium")
         for q in ("Q1", "Q2", "Q3"):
             if q in qresults:
                 by_diff[diff].append(qresults[q]["f1"])
-                er = qresults[q].get("edit_recall")
-                if er is not None:
-                    by_diff_er[diff].append(er)
 
     by_difficulty = {}
     for diff in ("simple", "medium", "complex"):
         by_difficulty[diff] = {
             "count": len(by_diff[diff]) // 3 if by_diff[diff] else 0,  # issues, not queries
             "avg_f1": round(_mean(by_diff[diff]), 4) if by_diff[diff] else 0.0,
-            "avg_edit_recall": round(_mean(by_diff_er[diff]), 4) if by_diff_er[diff] else 0.0,
         }
 
     return {
@@ -423,8 +394,6 @@ def check_alerts(issue_results: dict[str, dict]) -> list[str]:
         q1 = qresults.get("Q1", {})
         if q1.get("recall", 1.0) < 0.5:
             alerts.append(f"🔴 #{issue_num} Q1 Recall < 0.5 ({q1['recall']:.2f})")
-        if q1.get("edit_recall") == 0.0:
-            alerts.append(f"🔴 #{issue_num} Q1 Edit Recall = 0")
         for q in ("Q1", "Q2", "Q3"):
             qr = qresults.get(q, {})
             if qr.get("precision", 1.0) < 0.3:
@@ -478,9 +447,7 @@ def main() -> None:
         print("\n🔍 DRY RUN — showing parsed data:")
         for iss in issues:
             print(f"\n   #{iss['number']} — {iss['title']}")
-            print(f"   GT files: {len(iss['gt_files'])} (E={sum(1 for f in iss['gt_files'] if f['category']=='E')}, "
-                  f"C={sum(1 for f in iss['gt_files'] if f['category']=='C')}, "
-                  f"S={sum(1 for f in iss['gt_files'] if f['category']=='S')})")
+            print(f"   GT files: {len(iss['gt_files'])}")
             for q in ("Q1", "Q2", "Q3"):
                 qt = iss["queries"].get(q, "MISSING")
                 print(f"   {q}: {qt[:80]}...")
@@ -524,10 +491,7 @@ def main() -> None:
         issue_num = iss["number"]
         print(f"\n{'─' * 60}")
         print(f"   #{issue_num} — {iss['title']}")
-        print(f"   GT: {len(iss['gt_files'])} files "
-              f"(E={sum(1 for f in iss['gt_files'] if f['category']=='E')}, "
-              f"C={sum(1 for f in iss['gt_files'] if f['category']=='C')}, "
-              f"S={sum(1 for f in iss['gt_files'] if f['category']=='S')})")
+        print(f"   GT: {len(iss['gt_files'])} files")
 
         qresults: dict[str, dict] = {}
         for q in ("Q1", "Q2", "Q3"):
@@ -549,12 +513,10 @@ def main() -> None:
 
                 # Compact result line
                 returned_count = len(returned)
-                er_str = f"{metrics['edit_recall']:.2f}" if metrics['edit_recall'] is not None else "N/A"
                 print(
                     f"{returned_count} files | "
                     f"P={metrics['precision']:.2f} R={metrics['recall']:.2f} "
                     f"F1={metrics['f1']:.2f} "
-                    f"ER={er_str} "
                     f"NR={metrics['noise_ratio']:.2f} "
                     f"({elapsed:.1f}s)"
                 )
@@ -563,7 +525,7 @@ def main() -> None:
                 print(f"ERROR ({elapsed:.1f}s): {e}")
                 qresults[q] = {
                     "precision": 0.0, "recall": 0.0, "f1": 0.0,
-                    "edit_recall": None, "noise_ratio": 1.0,
+                    "noise_ratio": 1.0,
                     "returned_files": [],
                     "error": str(e),
                 }
@@ -579,19 +541,15 @@ def main() -> None:
     for q in ("Q1", "Q2", "Q3"):
         qs = aggregates["by_query_level"].get(q, {})
         print(f"   {q}: P={qs.get('avg_precision', 0):.3f} R={qs.get('avg_recall', 0):.3f} "
-              f"F1={qs.get('avg_f1', 0):.3f} ER={qs.get('avg_edit_recall', 0):.3f} "
-              f"NR={qs.get('avg_noise_ratio', 0):.3f}")
+              f"F1={qs.get('avg_f1', 0):.3f} NR={qs.get('avg_noise_ratio', 0):.3f}")
 
     ov = aggregates["overall"]
     print(f"\n   Overall: mean_F1={ov['mean_f1']:.3f} median_F1={ov['median_f1']:.3f} "
           f"min={ov['min_f1']:.3f} max={ov['max_f1']:.3f}")
-    print(f"   Perfect Edit Recall: Q1={ov['perfect_edit_recall_count']['Q1']} "
-          f"Q2={ov['perfect_edit_recall_count']['Q2']} Q3={ov['perfect_edit_recall_count']['Q3']}")
 
     for diff in ("simple", "medium", "complex"):
         ds = aggregates["by_difficulty"].get(diff, {})
-        print(f"   {diff.capitalize()}: n={ds.get('count', 0)} F1={ds.get('avg_f1', 0):.3f} "
-              f"ER={ds.get('avg_edit_recall', 0):.3f}")
+        print(f"   {diff.capitalize()}: n={ds.get('count', 0)} F1={ds.get('avg_f1', 0):.3f}")
 
     # 6. Alerts
     alerts = check_alerts(issue_results)
@@ -630,7 +588,6 @@ def main() -> None:
                 "precision": metrics["precision"],
                 "recall": metrics["recall"],
                 "f1": metrics["f1"],
-                "edit_recall": metrics["edit_recall"],
                 "noise_ratio": metrics["noise_ratio"],
                 "returned_files": metrics["returned_files"],
                 "returned_count": metrics.get("returned_count", len(metrics["returned_files"])),

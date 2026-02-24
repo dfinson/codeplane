@@ -50,16 +50,7 @@ Retrieval quality only. Latency and token counts are tracked separately during A
 | Precision | `\|returned ∩ GT\| / \|returned\|` |
 | Recall | `\|returned ∩ GT\| / \|GT\|` |
 | F1 | `2·P·R / (P+R)` |
-| Edit Recall | `\|returned ∩ GT_edit\| / \|GT_edit\|` |
 | Noise Ratio | `\|returned − GT\| / \|returned\|` |
-
-
-
-| Metric | Formula |
-|--------|---------|
-| Edit → edit_target | `\|edit_target ∩ GT_E\| / \|GT_E\|` |
-| Ctx → context | `\|context ∩ GT_C\| / \|GT_C\|` |
-| Supp → supplementary | `\|supp ∩ GT_S\| / \|GT_S\|` |
 
 ### Alert Thresholds
 
