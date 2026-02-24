@@ -103,17 +103,9 @@ def _parse_gt_table(section: str) -> list[dict]:
         cat_map = {"Edit": "E", "Context/Test": "C", "Supp/Docs": "S"}
         category = cat_map.get(cat_raw, "C")
 
-        # Detect new files — marker can appear in path OR relevance column
-        is_new = (
-            "**New**" in rm.group(2)
-            or "**New" in rm.group(2)
-            or "**New**" in relevance
-        )
-
         files.append({
             "path": path,
             "category": category,
-            "is_new": is_new,
             "relevance": relevance,
         })
     return files
@@ -268,15 +260,10 @@ def compute_query_metrics(
     returned_paths = {f["path"] for f in returned_files}
     returned_tiers = {f["path"]: f["tier"] for f in returned_files}
 
-    # Separate GT into existing vs new files
-    gt_new = {f["path"] for f in gt_files if f["is_new"]}
-    gt_existing = {f["path"] for f in gt_files if not f["is_new"]}
-
-    # Use only existing files for recall computation (Recon can't find new files)
-    gt = gt_existing
-    gt_edit = {f["path"] for f in gt_files if f["category"] == "E" and not f["is_new"]}
-    gt_ctx = {f["path"] for f in gt_files if f["category"] == "C" and not f["is_new"]}
-    gt_supp = {f["path"] for f in gt_files if f["category"] == "S" and not f["is_new"]}
+    gt = {f["path"] for f in gt_files}
+    gt_edit = {f["path"] for f in gt_files if f["category"] == "E"}
+    gt_ctx = {f["path"] for f in gt_files if f["category"] == "C"}
+    gt_supp = {f["path"] for f in gt_files if f["category"] == "S"}
 
     # Retrieval metrics
     tp = len(returned_paths & gt)
@@ -318,16 +305,13 @@ def compute_query_metrics(
         "noise_ratio": round(noise_ratio, 4),
         "returned_files": sorted(returned_paths),
         "returned_count": len(returned_paths),
-        "gt_existing_count": len(gt),
+        "gt_count": len(gt),
         "tier_alignment": tier_alignment,
-        "new_file_count": len(gt_new),
         "_detail": {
             "tp": tp,
             "fp": len(returned_paths - gt),
             "fn": len(gt - returned_paths),
             "gt_total": len(gt_files),
-            "gt_existing": len(gt),
-            "gt_new": len(gt_new),
             "gt_edit_count": len(gt_edit),
             "gt_ctx_count": len(gt_ctx),
             "gt_supp_count": len(gt_supp),
@@ -532,9 +516,6 @@ def main() -> None:
             print(f"   GT files: {len(iss['gt_files'])} (E={sum(1 for f in iss['gt_files'] if f['category']=='E')}, "
                   f"C={sum(1 for f in iss['gt_files'] if f['category']=='C')}, "
                   f"S={sum(1 for f in iss['gt_files'] if f['category']=='S')})")
-            new_count = sum(1 for f in iss["gt_files"] if f["is_new"])
-            if new_count:
-                print(f"   New files (excluded from recall): {new_count}")
             for q in ("Q1", "Q2", "Q3"):
                 qt = iss["queries"].get(q, "MISSING")
                 print(f"   {q}: {qt[:80]}...")
@@ -692,11 +673,9 @@ def main() -> None:
                 "noise_ratio": metrics["noise_ratio"],
                 "returned_files": metrics["returned_files"],
                 "returned_count": metrics.get("returned_count", len(metrics["returned_files"])),
-                "gt_existing_count": metrics.get("gt_existing_count", 0),
+                "gt_count": metrics.get("gt_count", 0),
                 "tier_alignment": metrics["tier_alignment"],
             }
-            if "new_file_count" in metrics:
-                clean_q[q]["new_file_count"] = metrics["new_file_count"]
         output["issues"][issue_num] = clean_q
 
     # Fix elapsed
