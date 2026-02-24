@@ -1043,6 +1043,13 @@ class IndexCoordinator:
                                 imports=extraction.imports,
                             )
 
+            # Create synthetic import edges from config files to source files.
+            from codeplane.index._internal.indexing.config_refs import (
+                resolve_config_file_refs,
+            )
+
+            resolve_config_file_refs(self.db, self.repo_root)
+
             # Pass 1.5: DB-backed cross-file resolution (all languages)
             # Use unit_id=None to allow cross-context resolution, which is the
             # common case (shared libraries, common utilities, framework code).
@@ -2639,6 +2646,14 @@ class IndexCoordinator:
                 # Re-resolve any import paths that couldn't resolve during
                 # batched indexing (e.g. batch 1 imports targeting batch 2 files).
                 self._structural.resolve_all_imports()
+
+                # Create synthetic import edges from config files (TOML,
+                # YAML, Makefile, etc.) to source files they reference.
+                from codeplane.index._internal.indexing.config_refs import (
+                    resolve_config_file_refs,
+                )
+
+                resolve_config_file_refs(self.db, self.repo_root)
 
                 # Pass 1.5: DB-backed cross-file resolution (all languages)
                 on_progress(0, 1, files_by_ext, "resolving_cross_file")
