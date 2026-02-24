@@ -1010,15 +1010,31 @@ def _enrich_file_candidates(
     def_candidates: dict[str, HarvestCandidate],
     parsed: ParsedTask,
 ) -> list[FileCandidate]:
-    """Enrich file-level candidates with secondary signals from def-level harvesters.
+    """Combine file-level embedding with def-level signals via Reciprocal Rank Fusion.
 
-    Combines file-level embedding similarity with def-level term matches,
-    lexical hits, explicit mentions, and graph connections.  The combined
-    score is: ``similarity + secondary_bonus`` (capped at 0.3 bonus).
+    Instead of additive bonuses on top of the embedding score, each signal
+    source produces an independent ranked list.  RRF fuses them so that
+    a file ranked high by *any* source gets a fair shot, and files found
+    by multiple sources are naturally boosted.
 
-    Mutates candidates in-place.
+    RRF(d) = sum over sources of 1 / (k + rank_s(d))
+
+    where k=60 (standard constant, dampens the influence of very high
+    individual ranks).
+
+    Sources:
+      1. Embedding  — file_candidates ranked by similarity
+      2. Term match — files ranked by aggregated term match count
+      3. Lexical    — files ranked by aggregated lexical hit count
+      4. Graph      — files that appear via graph walk (binary → rank 1)
+      5. Explicit   — agent-mentioned paths (always rank 1)
+
+    Mutates candidates in-place (sets combined_score, signal fields).
+    Also appends files found only by secondary sources.
     """
-    # Group def-level signals by file path
+    _RRF_K = 60
+
+    # ── Aggregate def-level signals by file path ──
     path_signals: dict[str, dict] = {}
     for _uid, cand in def_candidates.items():
         fp = cand.file_path
@@ -1030,7 +1046,6 @@ def _enrich_file_candidates(
                 "lex_count": 0,
                 "explicit": False,
                 "graph": False,
-                "max_embedding_sim": 0.0,
             }
         sig = path_signals[fp]
         sig["term_count"] += len(cand.matched_terms)
@@ -1038,64 +1053,32 @@ def _enrich_file_candidates(
         sig["explicit"] = sig["explicit"] or cand.from_explicit
         sig["graph"] = sig["graph"] or cand.from_graph
 
-    # Also track which paths have explicit mentions from the task
     explicit_paths = set(parsed.explicit_paths or [])
 
+    # ── Populate signal fields on existing file candidates ──
     for fc in file_candidates:
         sig = path_signals.get(fc.path, {})
-
-        # Apply secondary signals
         fc.term_match_count = sig.get("term_count", 0)
         fc.lexical_hit_count = sig.get("lex_count", 0)
         fc.has_explicit_mention = sig.get("explicit", False) or fc.path in explicit_paths
         fc.graph_connected = sig.get("graph", False)
 
-        # Compute secondary bonus (capped at 0.3)
-        bonus = 0.0
-        if fc.term_match_count > 0:
-            bonus += min(fc.term_match_count * 0.03, 0.10)
-        if fc.lexical_hit_count > 0:
-            bonus += min(fc.lexical_hit_count * 0.02, 0.08)
-        if fc.has_explicit_mention:
-            bonus += 0.15
-        if fc.graph_connected:
-            bonus += 0.05
-        bonus = min(bonus, 0.30)
-
-        fc.combined_score = fc.similarity + bonus
-
-    # Also add files found by def-level harvesters but NOT in file embedding
+    # ── Append files found ONLY by def-level harvesters ──
     existing_paths = {fc.path for fc in file_candidates}
     for fp, sig in path_signals.items():
         if fp in existing_paths:
             continue
-        # Files only found via secondary signals get no embedding similarity
-        # but may still be relevant
-        bonus = 0.0
         term_count = sig.get("term_count", 0)
         lex_count = sig.get("lex_count", 0)
         is_explicit = sig.get("explicit", False) or fp in explicit_paths
         is_graph = sig.get("graph", False)
-        max_def_sim = sig.get("max_embedding_sim", 0.0)
 
-        if term_count > 0:
-            bonus += min(term_count * 0.03, 0.10)
-        if lex_count > 0:
-            bonus += min(lex_count * 0.02, 0.08)
-        if is_explicit:
-            bonus += 0.15
-        if is_graph:
-            bonus += 0.05
-        bonus = min(bonus, 0.30)
-
-        # Use the def-level embedding similarity as a proxy
-        combined = max_def_sim * 0.5 + bonus
-
-        if combined > 0.05 or is_explicit:
+        # Only include if there's a concrete signal (not noise)
+        if term_count > 0 or lex_count > 0 or is_explicit or is_graph:
             fc = FileCandidate(
                 path=fp,
-                similarity=0.0,  # no file-level embedding match
-                combined_score=combined,
+                similarity=0.0,
+                combined_score=0.0,  # will be set by RRF below
                 term_match_count=term_count,
                 lexical_hit_count=lex_count,
                 has_explicit_mention=is_explicit,
@@ -1103,5 +1086,57 @@ def _enrich_file_candidates(
                 artifact_kind=_classify_artifact(fp),
             )
             file_candidates.append(fc)
+
+    # ── Build per-source ranked lists ──
+    # Each list is sorted descending by the source's score.
+    # rank is 1-based (rank 1 = best).
+
+    # Source 1: Embedding similarity
+    embedding_ranked = sorted(
+        [(fc.path, fc.similarity) for fc in file_candidates if fc.similarity > 0],
+        key=lambda x: -x[1],
+    )
+    embedding_rank: dict[str, int] = {
+        path: rank for rank, (path, _) in enumerate(embedding_ranked, 1)
+    }
+
+    # Source 2: Term match count
+    term_ranked = sorted(
+        [(fc.path, fc.term_match_count) for fc in file_candidates if fc.term_match_count > 0],
+        key=lambda x: -x[1],
+    )
+    term_rank: dict[str, int] = {
+        path: rank for rank, (path, _) in enumerate(term_ranked, 1)
+    }
+
+    # Source 3: Lexical hit count
+    lex_ranked = sorted(
+        [(fc.path, fc.lexical_hit_count) for fc in file_candidates if fc.lexical_hit_count > 0],
+        key=lambda x: -x[1],
+    )
+    lex_rank: dict[str, int] = {
+        path: rank for rank, (path, _) in enumerate(lex_ranked, 1)
+    }
+
+    # Source 4: Graph connected (binary — all connected files share rank 1)
+    graph_paths = {fc.path for fc in file_candidates if fc.graph_connected}
+
+    # Source 5: Explicit mention (binary — rank 1 for all explicit)
+    explicit_all = {fc.path for fc in file_candidates if fc.has_explicit_mention}
+
+    # ── Compute RRF score for each candidate ──
+    for fc in file_candidates:
+        rrf = 0.0
+        if fc.path in embedding_rank:
+            rrf += 1.0 / (_RRF_K + embedding_rank[fc.path])
+        if fc.path in term_rank:
+            rrf += 1.0 / (_RRF_K + term_rank[fc.path])
+        if fc.path in lex_rank:
+            rrf += 1.0 / (_RRF_K + lex_rank[fc.path])
+        if fc.path in graph_paths:
+            rrf += 1.0 / (_RRF_K + 1)  # rank 1 for all graph-connected
+        if fc.path in explicit_all:
+            rrf += 1.0 / (_RRF_K + 1)  # rank 1 for all explicit mentions
+        fc.combined_score = rrf
 
     return file_candidates

@@ -612,10 +612,16 @@ async def _file_centric_pipeline(
     diagnostics["def_harvest_ms"] = round((time.monotonic() - t_def_harvest) * 1000)
     diagnostics["def_candidates"] = len(merged_def)
 
-    # 4. Enrich file candidates with secondary signals
+    # 4. Enrich file candidates with RRF scoring
     _enrich_file_candidates(file_candidates, merged_def, parsed)
 
-    # Handle pinned paths: ensure they're in candidates with high score
+    # Determine max RRF score for guaranteeing pinned/explicit placement.
+    max_rrf = max((fc.combined_score for fc in file_candidates), default=0.0)
+    # Ensure a minimum floor so pinned/explicit paths always surface.
+    _RRF_K = 60
+    pin_floor = max(max_rrf, 1.0 / (_RRF_K + 1))
+
+    # Handle pinned paths: guarantee top-tier placement
     if pinned_paths:
         existing_paths = {fc.path for fc in file_candidates}
         for pp in pinned_paths:
@@ -624,7 +630,7 @@ async def _file_centric_pipeline(
                     FileCandidate(
                         path=pp,
                         similarity=0.0,
-                        combined_score=0.5,  # moderate score guarantee
+                        combined_score=pin_floor,
                         has_explicit_mention=True,
                         artifact_kind=_classify_artifact(pp),
                     )
@@ -633,7 +639,7 @@ async def _file_centric_pipeline(
                 for fc in file_candidates:
                     if fc.path == pp:
                         fc.has_explicit_mention = True
-                        fc.combined_score = max(fc.combined_score, 0.5)
+                        fc.combined_score = max(fc.combined_score, pin_floor)
                         break
 
     # Handle explicit paths from task text
@@ -645,7 +651,7 @@ async def _file_centric_pipeline(
                     FileCandidate(
                         path=ep,
                         similarity=0.0,
-                        combined_score=0.5,
+                        combined_score=pin_floor,
                         has_explicit_mention=True,
                         artifact_kind=_classify_artifact(ep),
                     )
@@ -654,7 +660,7 @@ async def _file_centric_pipeline(
                 for fc in file_candidates:
                     if fc.path == ep:
                         fc.has_explicit_mention = True
-                        fc.combined_score = max(fc.combined_score, 0.5)
+                        fc.combined_score = max(fc.combined_score, pin_floor)
                         break
 
     # Also discover unindexed files (yaml, md, etc.) via path matching
@@ -671,11 +677,12 @@ async def _file_centric_pipeline(
     existing_paths = {fc.path for fc in file_candidates}
     for upath, uscore in unindexed_matches:
         if upath not in existing_paths:
+            # Scale path-match score into the RRF range
             file_candidates.append(
                 FileCandidate(
                     path=upath,
                     similarity=0.0,
-                    combined_score=uscore * 0.3,  # scaled down since it's path-only
+                    combined_score=uscore * pin_floor * 0.5,
                     artifact_kind=_classify_artifact(upath),
                 )
             )
