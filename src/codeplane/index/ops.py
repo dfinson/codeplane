@@ -1925,8 +1925,11 @@ class IndexCoordinator:
         await self.wait_for_freshness()
         with self.db.session() as session:
             # Find context by root_path - normalize to relative path
+            # Convention: root_path="" means repo root (not ".")
             try:
                 rel_path = str(Path(workspace_root).relative_to(self.repo_root))
+                if rel_path == ".":
+                    rel_path = ""
             except ValueError:
                 rel_path = ""  # workspace_root is repo_root itself
 
