@@ -12,13 +12,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import re
 import statistics
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -34,12 +33,30 @@ RECON_CACHE_DIR = EVEE_REPO / ".codeplane" / "cache" / "recon_result"
 
 # ── Difficulty mapping (from doc) ────────────────────────────────────
 DIFFICULTY: dict[str, str] = {
-    "4": "medium", "38": "complex", "57": "medium", "63": "medium",
-    "72": "complex", "108": "complex", "172": "complex", "191": "complex",
-    "192": "medium", "193": "medium", "201": "complex", "210": "medium",
-    "226": "medium", "233": "medium", "234": "complex", "236": "medium",
-    "240": "complex", "259": "medium", "260": "medium", "261": "medium",
-    "262": "medium", "263": "medium", "268": "complex", "275": "complex",
+    "4": "medium",
+    "38": "complex",
+    "57": "medium",
+    "63": "medium",
+    "72": "complex",
+    "108": "complex",
+    "172": "complex",
+    "191": "complex",
+    "192": "medium",
+    "193": "medium",
+    "201": "complex",
+    "210": "medium",
+    "226": "medium",
+    "233": "medium",
+    "234": "complex",
+    "236": "medium",
+    "240": "complex",
+    "259": "medium",
+    "260": "medium",
+    "261": "medium",
+    "262": "medium",
+    "263": "medium",
+    "268": "complex",
+    "275": "complex",
 }
 
 
@@ -70,13 +87,15 @@ def parse_eval_doc(path: Path) -> list[dict]:
         # Extract queries
         queries = _parse_queries(section)
 
-        issues.append({
-            "number": issue_num,
-            "title": title,
-            "gt_files": gt_files,
-            "queries": queries,
-            "difficulty": DIFFICULTY.get(issue_num, "medium"),
-        })
+        issues.append(
+            {
+                "number": issue_num,
+                "title": title,
+                "gt_files": gt_files,
+                "queries": queries,
+                "difficulty": DIFFICULTY.get(issue_num, "medium"),
+            }
+        )
 
     return issues
 
@@ -103,11 +122,13 @@ def _parse_gt_table(section: str) -> list[dict]:
         cat_map = {"Edit": "E", "Context/Test": "C", "Supp/Docs": "S"}
         category = cat_map.get(cat_raw, "C")
 
-        files.append({
-            "path": path,
-            "category": category,
-            "relevance": relevance,
-        })
+        files.append(
+            {
+                "path": path,
+                "category": category,
+                "relevance": relevance,
+            }
+        )
     return files
 
 
@@ -236,12 +257,14 @@ def extract_returned_files(recon_data: dict) -> list[dict[str, str]]:
         p = entry.get("path", "")
         tier = entry.get("tier", "summary_only")
         if p and p not in seen_paths:
-            files.append({
-                "path": p,
-                "tier": tier,
-                "similarity": str(entry.get("similarity", 0.0)),
-                "combined_score": str(entry.get("combined_score", 0.0)),
-            })
+            files.append(
+                {
+                    "path": p,
+                    "tier": tier,
+                    "similarity": str(entry.get("similarity", 0.0)),
+                    "combined_score": str(entry.get("combined_score", 0.0)),
+                }
+            )
             seen_paths.add(p)
 
     return files
@@ -313,7 +336,9 @@ def compute_aggregates(
             "avg_recall": round(_mean([r["recall"] for r in results]), 4),
             "avg_f1": round(_mean([r["f1"] for r in results]), 4),
             "avg_noise_ratio": round(_mean([r["noise_ratio"] for r in results]), 4),
-            "avg_returned_count": round(_mean([r.get("returned_count", len(r["returned_files"])) for r in results]), 1),
+            "avg_returned_count": round(
+                _mean([r.get("returned_count", len(r["returned_files"])) for r in results]), 1
+            ),
         }
 
     # Overall
@@ -410,11 +435,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run Recon Evaluation Benchmark")
     parser.add_argument("--port", type=int, default=7777, help="CodePlane daemon port")
     parser.add_argument("--dry-run", action="store_true", help="Parse doc only, don't call Recon")
-    parser.add_argument("--issues", type=str, default=None, help="Comma-separated issue numbers to run (default: all)")
+    parser.add_argument(
+        "--issues",
+        type=str,
+        default=None,
+        help="Comma-separated issue numbers to run (default: all)",
+    )
     args = parser.parse_args()
 
     mcp_url = f"http://127.0.0.1:{args.port}/mcp"
-    start_time = datetime.now(timezone.utc)
+    start_time = datetime.now(UTC)
     start_iso = start_time.strftime("%Y-%m-%dT%H%M%SZ")
 
     print("=" * 70)
@@ -524,7 +554,9 @@ def main() -> None:
                 elapsed = time.monotonic() - t0
                 print(f"ERROR ({elapsed:.1f}s): {e}")
                 qresults[q] = {
-                    "precision": 0.0, "recall": 0.0, "f1": 0.0,
+                    "precision": 0.0,
+                    "recall": 0.0,
+                    "f1": 0.0,
                     "noise_ratio": 1.0,
                     "returned_files": [],
                     "error": str(e),
@@ -540,12 +572,16 @@ def main() -> None:
 
     for q in ("Q1", "Q2", "Q3"):
         qs = aggregates["by_query_level"].get(q, {})
-        print(f"   {q}: P={qs.get('avg_precision', 0):.3f} R={qs.get('avg_recall', 0):.3f} "
-              f"F1={qs.get('avg_f1', 0):.3f} NR={qs.get('avg_noise_ratio', 0):.3f}")
+        print(
+            f"   {q}: P={qs.get('avg_precision', 0):.3f} R={qs.get('avg_recall', 0):.3f} "
+            f"F1={qs.get('avg_f1', 0):.3f} NR={qs.get('avg_noise_ratio', 0):.3f}"
+        )
 
     ov = aggregates["overall"]
-    print(f"\n   Overall: mean_F1={ov['mean_f1']:.3f} median_F1={ov['median_f1']:.3f} "
-          f"min={ov['min_f1']:.3f} max={ov['max_f1']:.3f}")
+    print(
+        f"\n   Overall: mean_F1={ov['mean_f1']:.3f} median_F1={ov['median_f1']:.3f} "
+        f"min={ov['min_f1']:.3f} max={ov['max_f1']:.3f}"
+    )
 
     for diff in ("simple", "medium", "complex"):
         ds = aggregates["by_difficulty"].get(diff, {})
@@ -596,9 +632,7 @@ def main() -> None:
         output["issues"][issue_num] = clean_q
 
     # Fix elapsed
-    output["meta"]["elapsed_seconds"] = round(
-        (datetime.now(timezone.utc) - start_time).total_seconds(), 1
-    )
+    output["meta"]["elapsed_seconds"] = round((datetime.now(UTC) - start_time).total_seconds(), 1)
 
     with open(out_file, "w") as f:
         json.dump(output, f, indent=2)

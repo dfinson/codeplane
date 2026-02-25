@@ -6,8 +6,8 @@ compares returned seed file paths against the known-relevant files.
 
 import json
 import os
-import sys
 import time
+
 import httpx
 
 MCP_URL = "http://127.0.0.1:7777/mcp"
@@ -225,15 +225,15 @@ def main():
     print("=" * 70)
     print("RECON BENCHMARK — evee ground truth")
     print("=" * 70)
-    
+
     all_metrics = {}
     total_tp = total_fp = total_fn = 0
-    
+
     for label, spec in GROUND_TRUTH.items():
         print(f"\n{'─' * 60}")
         print(f"Task: {label}")
         print(f"{'─' * 60}")
-        
+
         t0 = time.perf_counter()
         try:
             result = call_recon(spec["task"])
@@ -241,21 +241,23 @@ def main():
             print(f"  ERROR: {e}")
             continue
         dt = time.perf_counter() - t0
-        
+
         predicted = extract_file_paths(result)
         actual = spec["relevant_files"]
-        
+
         m = compute_metrics(predicted, actual)
         m["latency_ms"] = round(dt * 1000)
         all_metrics[label] = m
-        
+
         total_tp += m["tp"]
         total_fp += m["fp"]
         total_fn += m["fn"]
-        
+
         print(f"  Latency:   {m['latency_ms']}ms")
         print(f"  Predicted: {len(predicted)} files  |  Actual: {len(actual)} files")
-        print(f"  Precision: {m['precision']:.3f}  |  Recall: {m['recall']:.3f}  |  F1: {m['f1']:.3f}")
+        print(
+            f"  Precision: {m['precision']:.3f}  |  Recall: {m['recall']:.3f}  |  F1: {m['f1']:.3f}"
+        )
         print(f"  TP={m['tp']}  FP={m['fp']}  FN={m['fn']}")
         if m["hits"]:
             print(f"  ✓ Hits:   {', '.join(m['hits'])}")
@@ -263,27 +265,33 @@ def main():
             print(f"  ✗ Misses: {', '.join(m['misses'])}")
         if m["extras"]:
             print(f"  + Extras: {', '.join(m['extras'])}")
-    
+
     # Aggregate
     print(f"\n{'=' * 70}")
     print("AGGREGATE METRICS")
     print(f"{'=' * 70}")
-    
+
     micro_p = total_tp / (total_tp + total_fp) if (total_tp + total_fp) > 0 else 0
     micro_r = total_tp / (total_tp + total_fn) if (total_tp + total_fn) > 0 else 0
     micro_f1 = 2 * micro_p * micro_r / (micro_p + micro_r) if (micro_p + micro_r) > 0 else 0
-    
-    macro_p = sum(m["precision"] for m in all_metrics.values()) / len(all_metrics) if all_metrics else 0
-    macro_r = sum(m["recall"] for m in all_metrics.values()) / len(all_metrics) if all_metrics else 0
+
+    macro_p = (
+        sum(m["precision"] for m in all_metrics.values()) / len(all_metrics) if all_metrics else 0
+    )
+    macro_r = (
+        sum(m["recall"] for m in all_metrics.values()) / len(all_metrics) if all_metrics else 0
+    )
     macro_f1 = sum(m["f1"] for m in all_metrics.values()) / len(all_metrics) if all_metrics else 0
-    
-    avg_latency = sum(m["latency_ms"] for m in all_metrics.values()) / len(all_metrics) if all_metrics else 0
-    
+
+    avg_latency = (
+        sum(m["latency_ms"] for m in all_metrics.values()) / len(all_metrics) if all_metrics else 0
+    )
+
     print(f"  Micro:  P={micro_p:.3f}  R={micro_r:.3f}  F1={micro_f1:.3f}")
     print(f"  Macro:  P={macro_p:.3f}  R={macro_r:.3f}  F1={macro_f1:.3f}")
     print(f"  Total:  TP={total_tp}  FP={total_fp}  FN={total_fn}")
     print(f"  Avg latency: {avg_latency:.0f}ms")
-    
+
     # Save results
     output = {
         "per_task": all_metrics,
@@ -302,7 +310,7 @@ def main():
     }
     with open("/tmp/recon_benchmark_results.json", "w") as f:
         json.dump(output, f, indent=2)
-    print(f"\nResults saved to /tmp/recon_benchmark_results.json")
+    print("\nResults saved to /tmp/recon_benchmark_results.json")
 
 
 if __name__ == "__main__":

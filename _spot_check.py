@@ -1,4 +1,5 @@
 """Spot-check recon for worst-performing benchmark issues."""
+
 import json
 
 import requests

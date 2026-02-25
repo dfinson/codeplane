@@ -67,85 +67,107 @@ class IssueQuery:
 ISSUE_QUERIES: list[IssueQuery] = [
     # --- #4: Cache model inference ---
     IssueQuery(
-        issue=4, level="Q1",
+        issue=4,
+        level="Q1",
         query="I need to implement inference result caching in Evee's evaluation pipeline. The cache should intercept model inference calls in the ModelEvaluator (_infer_record and _infer_record_async), store InferenceOutput results keyed by input record hash, and skip re-inference on cache hits. I need to add cache configuration fields to Config/ModelVariantConfig in the config models, update the evaluation loop, add cache hit/miss logging, and write tests for the caching behavior.",
         gt_edit_files=["src/evee/evaluation/model_evaluator.py", "src/evee/config/models.py"],
     ),
     IssueQuery(
-        issue=4, level="Q2",
+        issue=4,
+        level="Q2",
         query="Add caching support for deterministic model inference results in Evee. When a model's results are deterministic, re-running evaluation should reuse cached inference outputs instead of calling the model again. This involves changes to the evaluation pipeline, configuration schema, and model infrastructure.",
         gt_edit_files=["src/evee/evaluation/model_evaluator.py", "src/evee/config/models.py"],
     ),
     IssueQuery(
-        issue=4, level="Q3",
+        issue=4,
+        level="Q3",
         query="How can I add result caching to Evee so that re-running experiments with the same models doesn't repeat inference? I want to save time and costs during iterative development.",
         gt_edit_files=["src/evee/evaluation/model_evaluator.py", "src/evee/config/models.py"],
     ),
-
     # --- #259: Raise error when .env missing ---
     IssueQuery(
-        issue=259, level="Q1",
+        issue=259,
+        level="Q1",
         query="I need to add startup validation in Evee that raises an explicit error when the .env file is missing. Currently .env loading is handled silently in multiple places: cli/commands/run.py, cli/commands/validate.py, cli/main.py, evaluation/model_evaluator.py, evaluation/evaluate.py, execution/experiment_runner.py, and core/base_model.py. The DEFAULT_ENV_FILE constant is in cli/constants.py. I should add the check in execution/preflight.py.",
         gt_edit_files=[
-            "src/evee/cli/commands/run.py", "src/evee/cli/commands/validate.py",
-            "src/evee/cli/main.py", "src/evee/execution/preflight.py",
-            "src/evee/execution/experiment_runner.py", "src/evee/evaluation/evaluate.py",
+            "src/evee/cli/commands/run.py",
+            "src/evee/cli/commands/validate.py",
+            "src/evee/cli/main.py",
+            "src/evee/execution/preflight.py",
+            "src/evee/execution/experiment_runner.py",
+            "src/evee/evaluation/evaluate.py",
             "src/evee/evaluation/model_evaluator.py",
         ],
     ),
     IssueQuery(
-        issue=259, level="Q2",
+        issue=259,
+        level="Q2",
         query="Add a check that raises an explicit error when the .env file is missing in Evee. Currently it fails silently and causes confusing downstream errors. I need to find all places where .env is loaded, the preflight validation system, and the constants defining the default .env path.",
         gt_edit_files=[
-            "src/evee/cli/commands/run.py", "src/evee/cli/commands/validate.py",
-            "src/evee/cli/main.py", "src/evee/execution/preflight.py",
-            "src/evee/execution/experiment_runner.py", "src/evee/evaluation/evaluate.py",
+            "src/evee/cli/commands/run.py",
+            "src/evee/cli/commands/validate.py",
+            "src/evee/cli/main.py",
+            "src/evee/execution/preflight.py",
+            "src/evee/execution/experiment_runner.py",
+            "src/evee/evaluation/evaluate.py",
             "src/evee/evaluation/model_evaluator.py",
         ],
     ),
     IssueQuery(
-        issue=259, level="Q3",
+        issue=259,
+        level="Q3",
         query="Evee should tell users clearly when their .env file is missing instead of failing with confusing errors later. Where does Evee load the .env file and where should this validation go?",
         gt_edit_files=[
-            "src/evee/cli/commands/run.py", "src/evee/cli/commands/validate.py",
-            "src/evee/cli/main.py", "src/evee/execution/preflight.py",
-            "src/evee/execution/experiment_runner.py", "src/evee/evaluation/evaluate.py",
+            "src/evee/cli/commands/run.py",
+            "src/evee/cli/commands/validate.py",
+            "src/evee/cli/main.py",
+            "src/evee/execution/preflight.py",
+            "src/evee/execution/experiment_runner.py",
+            "src/evee/evaluation/evaluate.py",
             "src/evee/evaluation/model_evaluator.py",
         ],
     ),
-
     # --- #260: Config flag to disable rich progress bars ---
     IssueQuery(
-        issue=260, level="Q1",
+        issue=260,
+        level="Q1",
         query="I need to add a configuration flag in config.yaml to disable Rich progress bars for CI environments. The is_rich_compatible_environment() function in src/evee/utils/environment.py already checks EVEE_DISABLE_RICH_LOGGING env var and MCP mode. The ProgressTracker in evaluation/progress_tracker.py and logger in logging/logger.py both use this function. I need to add a new field to RuntimeConfig or ExperimentConfig in config/models.py.",
         gt_edit_files=[
-            "src/evee/config/models.py", "src/evee/utils/environment.py",
-            "src/evee/evaluation/progress_tracker.py", "src/evee/evaluation/model_evaluator.py",
+            "src/evee/config/models.py",
+            "src/evee/utils/environment.py",
+            "src/evee/evaluation/progress_tracker.py",
+            "src/evee/evaluation/model_evaluator.py",
             "src/evee/mcp/resources/config.py",
         ],
     ),
     IssueQuery(
-        issue=260, level="Q2",
+        issue=260,
+        level="Q2",
         query="Add a config.yaml flag to disable Rich progress bars. Evee already suppresses them for MCP and AzureML, but users need to disable them for CI too. I need to find where Rich environment detection happens, the config model, and the progress tracker/logger code.",
         gt_edit_files=[
-            "src/evee/config/models.py", "src/evee/utils/environment.py",
-            "src/evee/evaluation/progress_tracker.py", "src/evee/evaluation/model_evaluator.py",
+            "src/evee/config/models.py",
+            "src/evee/utils/environment.py",
+            "src/evee/evaluation/progress_tracker.py",
+            "src/evee/evaluation/model_evaluator.py",
             "src/evee/mcp/resources/config.py",
         ],
     ),
     IssueQuery(
-        issue=260, level="Q3",
+        issue=260,
+        level="Q3",
         query="Rich progress bars clutter CI logs. I need to add a way to disable them via config. Where does Evee decide whether to show Rich output and how do I add a config flag?",
         gt_edit_files=[
-            "src/evee/config/models.py", "src/evee/utils/environment.py",
-            "src/evee/evaluation/progress_tracker.py", "src/evee/evaluation/model_evaluator.py",
+            "src/evee/config/models.py",
+            "src/evee/utils/environment.py",
+            "src/evee/evaluation/progress_tracker.py",
+            "src/evee/evaluation/model_evaluator.py",
             "src/evee/mcp/resources/config.py",
         ],
     ),
-
     # --- #226: Set default MLflow tracking URI to sqlite ---
     IssueQuery(
-        issue=226, level="Q1",
+        issue=226,
+        level="Q1",
         query="I need to change the default MLflow tracking URI from the filesystem backend (./mlruns) to sqlite:///mlflow.db in the evee-mlflow package. The MLflowTrackingConfig in packages/evee-mlflow/src/evee_mlflow/config.py has tracking_uri defaulting to None with artifact_location defaulting to ./mlruns. The MLflowBackend.on_startup() in tracking.py logs the ./mlruns directory message when no URI is set.",
         gt_edit_files=[
             "packages/evee-mlflow/src/evee_mlflow/config.py",
@@ -154,7 +176,8 @@ ISSUE_QUERIES: list[IssueQuery] = [
         ],
     ),
     IssueQuery(
-        issue=226, level="Q2",
+        issue=226,
+        level="Q2",
         query="Change the default MLflow tracking URI to use SQLite instead of the filesystem backend being deprecated. I need to find where the MLflow tracking URI default is set in the evee-mlflow package, all tests and configs that reference ./mlruns, and documentation.",
         gt_edit_files=[
             "packages/evee-mlflow/src/evee_mlflow/config.py",
@@ -163,7 +186,8 @@ ISSUE_QUERIES: list[IssueQuery] = [
         ],
     ),
     IssueQuery(
-        issue=226, level="Q3",
+        issue=226,
+        level="Q3",
         query="MLflow's filesystem backend is being deprecated. I need to change Evee's default tracking to use SQLite instead. Where is the MLflow backend configured and what references ./mlruns or the tracking URI?",
         gt_edit_files=[
             "packages/evee-mlflow/src/evee_mlflow/config.py",
@@ -171,117 +195,152 @@ ISSUE_QUERIES: list[IssueQuery] = [
             "src/evee/mcp/resources/config.py",
         ],
     ),
-
     # --- #233: Early stop for evaluation ---
     IssueQuery(
-        issue=233, level="Q1",
+        issue=233,
+        level="Q1",
         query="I need to implement early stopping in Evee's evaluation pipeline. In the inference phase (_run_evaluation_loop in ModelEvaluator), count consecutive or total errors and abort early if a threshold is exceeded. I need the evaluation loop code, config models for new threshold fields, progress tracking, error handling patterns, and the tracking events for an EarlyStopEvent.",
         gt_edit_files=[
-            "src/evee/evaluation/model_evaluator.py", "src/evee/config/models.py",
-            "src/evee/evaluation/progress_tracker.py", "src/evee/tracking/events.py",
+            "src/evee/evaluation/model_evaluator.py",
+            "src/evee/config/models.py",
+            "src/evee/evaluation/progress_tracker.py",
+            "src/evee/tracking/events.py",
         ],
     ),
     IssueQuery(
-        issue=233, level="Q2",
+        issue=233,
+        level="Q2",
         query="Add early stopping to Evee's evaluation. If too many inference errors occur, stop the evaluation early instead of running the full dataset. I need to understand the evaluation loop, error handling, config schema, and progress tracking.",
         gt_edit_files=[
-            "src/evee/evaluation/model_evaluator.py", "src/evee/config/models.py",
-            "src/evee/evaluation/progress_tracker.py", "src/evee/tracking/events.py",
+            "src/evee/evaluation/model_evaluator.py",
+            "src/evee/config/models.py",
+            "src/evee/evaluation/progress_tracker.py",
+            "src/evee/tracking/events.py",
         ],
     ),
     IssueQuery(
-        issue=233, level="Q3",
+        issue=233,
+        level="Q3",
         query="Evee should stop evaluation early when there are too many errors. Where is the evaluation loop and how does error handling work?",
         gt_edit_files=[
-            "src/evee/evaluation/model_evaluator.py", "src/evee/config/models.py",
-            "src/evee/evaluation/progress_tracker.py", "src/evee/tracking/events.py",
+            "src/evee/evaluation/model_evaluator.py",
+            "src/evee/config/models.py",
+            "src/evee/evaluation/progress_tracker.py",
+            "src/evee/tracking/events.py",
         ],
     ),
-
     # --- #262: REST-based models ---
     IssueQuery(
-        issue=262, level="Q1",
+        issue=262,
+        level="Q1",
         query="I need to add support for configurable REST-based models in Evee. Instead of writing custom @model decorated classes for each REST endpoint, users should define REST model configuration in config.yaml. This requires changes to ModelVariantConfig in config/models.py, a new RestModel class, and changes to ModelEvaluator._register_model to detect type rest and instantiate RestModel. The model should bypass decorator_discovery.",
         gt_edit_files=[
-            "src/evee/config/models.py", "src/evee/evaluation/model_evaluator.py",
-            "src/evee/mcp/resources/model_patterns.py", "src/evee/mcp/resources/config.py",
-            "src/evee/cli/commands/model.py", "src/evee/cli/utils/model_operations.py",
+            "src/evee/config/models.py",
+            "src/evee/evaluation/model_evaluator.py",
+            "src/evee/mcp/resources/model_patterns.py",
+            "src/evee/mcp/resources/config.py",
+            "src/evee/cli/commands/model.py",
+            "src/evee/cli/utils/model_operations.py",
             "src/evee/cli/commands/validate.py",
         ],
     ),
     IssueQuery(
-        issue=262, level="Q2",
+        issue=262,
+        level="Q2",
         query="Add configuration-driven REST models to Evee so users don't need to write model classes for simple REST endpoints. I need to understand the model registration system (@model decorator, MODEL_REGISTRY, _register_model), the config schema, and how the evaluation pipeline works with models.",
         gt_edit_files=[
-            "src/evee/config/models.py", "src/evee/evaluation/model_evaluator.py",
-            "src/evee/mcp/resources/model_patterns.py", "src/evee/mcp/resources/config.py",
-            "src/evee/cli/commands/model.py", "src/evee/cli/utils/model_operations.py",
+            "src/evee/config/models.py",
+            "src/evee/evaluation/model_evaluator.py",
+            "src/evee/mcp/resources/model_patterns.py",
+            "src/evee/mcp/resources/config.py",
+            "src/evee/cli/commands/model.py",
+            "src/evee/cli/utils/model_operations.py",
             "src/evee/cli/commands/validate.py",
         ],
     ),
     IssueQuery(
-        issue=262, level="Q3",
+        issue=262,
+        level="Q3",
         query="Users keep writing model classes that just wrap REST calls. I want to make REST models configurable instead. Where is the model system in Evee and how does model registration work?",
         gt_edit_files=[
-            "src/evee/config/models.py", "src/evee/evaluation/model_evaluator.py",
-            "src/evee/mcp/resources/model_patterns.py", "src/evee/mcp/resources/config.py",
-            "src/evee/cli/commands/model.py", "src/evee/cli/utils/model_operations.py",
+            "src/evee/config/models.py",
+            "src/evee/evaluation/model_evaluator.py",
+            "src/evee/mcp/resources/model_patterns.py",
+            "src/evee/mcp/resources/config.py",
+            "src/evee/cli/commands/model.py",
+            "src/evee/cli/utils/model_operations.py",
             "src/evee/cli/commands/validate.py",
         ],
     ),
-
     # --- #275: Reuse metrics with custom instance names ---
     IssueQuery(
-        issue=275, level="Q1",
+        issue=275,
+        level="Q1",
         query="I need to decouple metric implementation lookup from display names in Evee. Currently MetricConfig.name in config/models.py serves as both the METRIC_REGISTRY lookup key and the reporting label. To reuse the same metric class with different parameters, I need an entry_point field for implementation lookup while name becomes display-only. This affects _register_metric(), metric templates, CLI commands, validation, and aggregation.",
         gt_edit_files=[
-            "src/evee/config/models.py", "src/evee/evaluation/model_evaluator.py",
-            "src/evee/cli/commands/validate.py", "src/evee/cli/commands/metric.py",
+            "src/evee/config/models.py",
+            "src/evee/evaluation/model_evaluator.py",
+            "src/evee/cli/commands/validate.py",
+            "src/evee/cli/commands/metric.py",
             "src/evee/cli/utils/metric_operations.py",
-            "src/evee/mcp/resources/config.py", "src/evee/mcp/resources/metric_patterns.py",
+            "src/evee/mcp/resources/config.py",
+            "src/evee/mcp/resources/metric_patterns.py",
         ],
     ),
     IssueQuery(
-        issue=275, level="Q2",
+        issue=275,
+        level="Q2",
         query="Evee can't reuse the same metric with different configurations because name is used for both lookup and display. I need to separate these concerns so I can have Coherence and Violence both using the llm_judge metric with different prompts. Where is the metric registry, config model, evaluation pipeline, and CLI metric management?",
         gt_edit_files=[
-            "src/evee/config/models.py", "src/evee/evaluation/model_evaluator.py",
-            "src/evee/cli/commands/validate.py", "src/evee/cli/commands/metric.py",
+            "src/evee/config/models.py",
+            "src/evee/evaluation/model_evaluator.py",
+            "src/evee/cli/commands/validate.py",
+            "src/evee/cli/commands/metric.py",
             "src/evee/cli/utils/metric_operations.py",
-            "src/evee/mcp/resources/config.py", "src/evee/mcp/resources/metric_patterns.py",
+            "src/evee/mcp/resources/config.py",
+            "src/evee/mcp/resources/metric_patterns.py",
         ],
     ),
     IssueQuery(
-        issue=275, level="Q3",
+        issue=275,
+        level="Q3",
         query="I want to use the same metric class multiple times with different parameters, but Evee's metric naming system doesn't allow it. How does metric registration and lookup work, and where would I change it?",
         gt_edit_files=[
-            "src/evee/config/models.py", "src/evee/evaluation/model_evaluator.py",
-            "src/evee/cli/commands/validate.py", "src/evee/cli/commands/metric.py",
+            "src/evee/config/models.py",
+            "src/evee/evaluation/model_evaluator.py",
+            "src/evee/cli/commands/validate.py",
+            "src/evee/cli/commands/metric.py",
             "src/evee/cli/utils/metric_operations.py",
-            "src/evee/mcp/resources/config.py", "src/evee/mcp/resources/metric_patterns.py",
+            "src/evee/mcp/resources/config.py",
+            "src/evee/mcp/resources/metric_patterns.py",
         ],
     ),
-
     # --- #193: Configurable dependency sources in `evee new` ---
     IssueQuery(
-        issue=193, level="Q1",
+        issue=193,
+        level="Q1",
         query="I need to add an interactive source selection flow to the evee new CLI command. Currently new.py hardcodes Git-based dependencies via _GIT_BASE. I need to add interactive prompts for choosing between Git, pre-built wheels, and local source, with flags (--from-git, --wheels, --from-repo, --from-source) for automation. The pyproject.toml templates in src/evee/cli/templates/overlays/ use placeholders that need different rendering per source type.",
         gt_edit_files=[
-            "src/evee/cli/commands/new.py", "src/evee/cli/utils/new_project_operations.py",
+            "src/evee/cli/commands/new.py",
+            "src/evee/cli/utils/new_project_operations.py",
         ],
     ),
     IssueQuery(
-        issue=193, level="Q2",
+        issue=193,
+        level="Q2",
         query="I want to add dependency source selection to evee new so users can choose between Git, wheels, or local source for installing Evee packages. I need to understand the current scaffolding flow in the CLI, the template overlay system, and how pyproject.toml placeholders are rendered.",
         gt_edit_files=[
-            "src/evee/cli/commands/new.py", "src/evee/cli/utils/new_project_operations.py",
+            "src/evee/cli/commands/new.py",
+            "src/evee/cli/utils/new_project_operations.py",
         ],
     ),
     IssueQuery(
-        issue=193, level="Q3",
+        issue=193,
+        level="Q3",
         query="How does evee new work for creating new projects? I need to add support for different ways of installing Evee packages — not just from Git. Where is the scaffolding code and template system?",
         gt_edit_files=[
-            "src/evee/cli/commands/new.py", "src/evee/cli/utils/new_project_operations.py",
+            "src/evee/cli/commands/new.py",
+            "src/evee/cli/utils/new_project_operations.py",
         ],
     ),
 ]
@@ -378,9 +437,7 @@ def build_raw_scaffold(fd: FileData) -> str:
     container_kinds = frozenset(
         {"class", "struct", "enum", "interface", "trait", "module", "namespace"}
     )
-    sorted_defs = sorted(
-        fd.defs, key=lambda d: (d.get("start_line", 0), d.get("start_col", 0))
-    )
+    sorted_defs = sorted(fd.defs, key=lambda d: (d.get("start_line", 0), d.get("start_col", 0)))
 
     stack: list[tuple[int, int]] = []
     for d in sorted_defs:
@@ -557,7 +614,7 @@ def compute_metrics(
     """
     file_paths = [f.path for f in files]
 
-    recall_sums: dict[int, float] = {k: 0.0 for k in EVAL_K_VALUES}
+    recall_sums: dict[int, float] = dict.fromkeys(EVAL_K_VALUES, 0.0)
     rr_sum = 0.0
     per_query: list[dict] = []
 
@@ -585,15 +642,17 @@ def compute_metrics(
                 break
         rr_sum += rr
 
-        per_query.append({
-            "issue": iq.issue,
-            "level": iq.level,
-            "gt_count": len(gt_indices),
-            "top5": [(file_paths[fi], round(s, 3)) for fi, s in ranked[:5]],
-            "recall@5": sum(1 for fi, _ in ranked[:5] if fi in gt_indices) / len(gt_indices),
-            "recall@10": sum(1 for fi, _ in ranked[:10] if fi in gt_indices) / len(gt_indices),
-            "rr": rr,
-        })
+        per_query.append(
+            {
+                "issue": iq.issue,
+                "level": iq.level,
+                "gt_count": len(gt_indices),
+                "top5": [(file_paths[fi], round(s, 3)) for fi, s in ranked[:5]],
+                "recall@5": sum(1 for fi, _ in ranked[:5] if fi in gt_indices) / len(gt_indices),
+                "recall@10": sum(1 for fi, _ in ranked[:10] if fi in gt_indices) / len(gt_indices),
+                "rr": rr,
+            }
+        )
 
     n = len(queries)
     recall_at = {k: recall_sums[k] / n for k in EVAL_K_VALUES}
@@ -609,9 +668,14 @@ def compute_metrics(
 
 def main() -> None:
     import argparse
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=int, default=None,
-                        help="Run only model at this index (0-2). Omit to run all.")
+    parser.add_argument(
+        "--model",
+        type=int,
+        default=None,
+        help="Run only model at this index (0-2). Omit to run all.",
+    )
     args = parser.parse_args()
 
     run_models = [MODELS[args.model]] if args.model is not None else MODELS
@@ -640,7 +704,7 @@ def main() -> None:
     var_names = ["raw_scaffold", "anglicised", "scaffold+ang", "full_content"]
 
     print(f"\n  {'Variation':<16} {'Files':>6} {'Vectors':>8} {'Mean chars':>12} {'Max chars':>10}")
-    print(f"  {'-'*56}")
+    print(f"  {'-' * 56}")
     for vname in var_names:
         if vname == "full_content":
             all_texts = [c for f in files for c in f.full_chunks]
@@ -653,13 +717,15 @@ def main() -> None:
         lens = [len(t) for t in all_texts]
         print(
             f"  {vname:<16} {len(files):>6} {len(all_texts):>8} "
-            f"{sum(lens)/len(lens):>12,.0f} {max(lens):>10,}"
+            f"{sum(lens) / len(lens):>12,.0f} {max(lens):>10,}"
         )
 
     # 3. Run each model
     queries = ISSUE_QUERIES
-    print(f"\n[4/4] Running {len(MODELS)} models x {len(var_names)} variations "
-          f"x {len(queries)} queries (8 issues x 3 levels)...")
+    print(
+        f"\n[4/4] Running {len(MODELS)} models x {len(var_names)} variations "
+        f"x {len(queries)} queries (8 issues x 3 levels)..."
+    )
 
     # Collect results
     all_metrics: dict[str, dict[str, VariationMetrics]] = {}  # model -> var -> metrics
@@ -667,7 +733,7 @@ def main() -> None:
 
     for model_name, dim, size_gb in run_models:
         short_name = model_name.split("/")[-1]
-        print(f"\n{'─'*90}")
+        print(f"\n{'─' * 90}")
         print(f"  {model_name}  (dim={dim}, {size_gb} GB)")
 
         model = load_model(model_name)
@@ -683,7 +749,11 @@ def main() -> None:
             doc_vecs, file_indices, embed_ms = build_variation_index(model, files, vname)
 
             recall_at, mrr, per_query_details = compute_metrics(
-                files, queries, doc_vecs, file_indices, query_vecs,
+                files,
+                queries,
+                doc_vecs,
+                file_indices,
+                query_vecs,
             )
 
             # Compute avg chars
@@ -711,8 +781,10 @@ def main() -> None:
         all_per_query[short_name] = model_per_query
 
         # Per-model summary table
-        print(f"\n  {'Variation':<16} {'Vecs':>6} {'ms':>8} {'R@5':>7} {'R@10':>7} {'R@20':>7} {'MRR':>7}")
-        print(f"  {'-'*62}")
+        print(
+            f"\n  {'Variation':<16} {'Vecs':>6} {'ms':>8} {'R@5':>7} {'R@10':>7} {'R@20':>7} {'MRR':>7}"
+        )
+        print(f"  {'-' * 62}")
         for vname in var_names:
             vm = model_metrics[vname]
             print(
@@ -722,14 +794,14 @@ def main() -> None:
             )
 
         # Per-query breakdown for this model
-        print(f"\n  Per-query detail (best variation marked with *):")
+        print("\n  Per-query detail (best variation marked with *):")
         print(f"  {'Issue':>5} {'Lvl':>3} {'GT':>3}", end="")
         for v in var_names:
             print(f"  {v[:10]:>10}", end="")
         print()
-        print(f"  {'-'*5} {'-'*3} {'-'*3}", end="")
+        print(f"  {'-' * 5} {'-' * 3} {'-' * 3}", end="")
         for _ in var_names:
-            print(f"  {'─'*10}", end="")
+            print(f"  {'─' * 10}", end="")
         print()
 
         for qi, iq in enumerate(queries):
@@ -758,16 +830,20 @@ def main() -> None:
     model_names = list(all_metrics.keys())
 
     if len(model_names) < len(MODELS):
-        print(f"\n{'='*90}")
-        print(f"Single-model run complete ({model_names[0]}). Run without --model for full comparison.")
-        print(f"{'='*90}")
+        print(f"\n{'=' * 90}")
+        print(
+            f"Single-model run complete ({model_names[0]}). Run without --model for full comparison."
+        )
+        print(f"{'=' * 90}")
         return
 
-    print(f"\n{'='*90}")
+    print(f"\n{'=' * 90}")
     print("SUMMARY: VARIATION COMPARISON (averaged across all models)")
-    print(f"{'='*90}")
-    print(f"\n  {'Variation':<16} {'R@5':>7} {'R@10':>7} {'R@20':>7} {'MRR':>7} {'Avg ms':>8} {'Avg chars':>10}")
-    print(f"  {'-'*68}")
+    print(f"{'=' * 90}")
+    print(
+        f"\n  {'Variation':<16} {'R@5':>7} {'R@10':>7} {'R@20':>7} {'MRR':>7} {'Avg ms':>8} {'Avg chars':>10}"
+    )
+    print(f"  {'-' * 68}")
     for vname in var_names:
         r5 = np.mean([all_metrics[m][vname].recall_at[5] for m in model_names])
         r10 = np.mean([all_metrics[m][vname].recall_at[10] for m in model_names])
@@ -780,11 +856,13 @@ def main() -> None:
             f"{mrr:>7.3f} {ms:>8,.0f} {chars:>10,.0f}"
         )
 
-    print(f"\n{'='*90}")
+    print(f"\n{'=' * 90}")
     print("SUMMARY: MODEL COMPARISON (averaged across all variations)")
-    print(f"{'='*90}")
-    print(f"\n  {'Model':<40} {'dim':>5} {'GB':>6} {'R@5':>7} {'R@10':>7} {'R@20':>7} {'MRR':>7} {'ms':>8}")
-    print(f"  {'-'*88}")
+    print(f"{'=' * 90}")
+    print(
+        f"\n  {'Model':<40} {'dim':>5} {'GB':>6} {'R@5':>7} {'R@10':>7} {'R@20':>7} {'MRR':>7} {'ms':>8}"
+    )
+    print(f"  {'-' * 88}")
     for mname in model_names:
         info = next(m for m in MODELS if m[0].endswith(mname))
         r5 = np.mean([all_metrics[mname][v].recall_at[5] for v in var_names])
@@ -798,9 +876,9 @@ def main() -> None:
         )
 
     # Best combo
-    print(f"\n{'='*90}")
+    print(f"\n{'=' * 90}")
     print("BEST MODEL x VARIATION COMBOS (by Recall@10)")
-    print(f"{'='*90}")
+    print(f"{'=' * 90}")
     combos = []
     for mname in model_names:
         for vname in var_names:
@@ -808,15 +886,17 @@ def main() -> None:
             combos.append((mname, vname, vm.recall_at[10], vm.mrr, vm.embed_time_ms))
     combos.sort(key=lambda x: -x[2])
     print(f"\n  {'Model':<35} {'Variation':<16} {'R@10':>7} {'MRR':>7} {'ms':>8}")
-    print(f"  {'-'*78}")
+    print(f"  {'-' * 78}")
     for mname, vname, r10, mrr, ms in combos[:8]:
         print(f"  {mname:<35} {vname:<16} {r10:>7.3f} {mrr:>7.3f} {ms:>8,.0f}")
 
     # Per-issue breakdown (best model)
-    best_model = max(model_names, key=lambda m: np.mean([all_metrics[m][v].recall_at[10] for v in var_names]))
-    print(f"\n{'='*90}")
+    best_model = max(
+        model_names, key=lambda m: np.mean([all_metrics[m][v].recall_at[10] for v in var_names])
+    )
+    print(f"\n{'=' * 90}")
     print(f"PER-ISSUE RECALL@10 DETAIL (best model: {best_model})")
-    print(f"{'='*90}")
+    print(f"{'=' * 90}")
     print(f"\n  {'Issue':>5} {'Lvl':>3} {'GT':>3}", end="")
     for v in var_names:
         print(f"  {v[:12]:>12}", end="")
@@ -837,9 +917,9 @@ def main() -> None:
         print()
 
     # Sample retrieval
-    print(f"\n{'='*90}")
+    print(f"\n{'=' * 90}")
     print(f"SAMPLE RETRIEVAL: Issue #4 Q1 (best model: {best_model})")
-    print(f"{'='*90}")
+    print(f"{'=' * 90}")
     for vname in var_names:
         pq = all_per_query[best_model][vname][0]  # first query = #4 Q1
         print(f"\n  {vname}:")
