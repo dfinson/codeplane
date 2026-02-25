@@ -1,11 +1,16 @@
-"""Retrieval metrics — Precision, Recall, F1, Noise Ratio.
+"""Retrieval metrics — Precision, Recall, F1 at three fidelity levels.
 
 Registered as ``@metric("cpl-retrieval")`` for EVEE evaluation.
 
+Computes P/R/F1 for three views of the returned file set:
+    all:       every returned file regardless of tier
+    high:      full_file + min_scaffold (files the agent can actually read)
+    edit:      full_file only (files the agent gets full source for)
+
 The ``@metric`` wrapper handles field mapping via the config YAML.
 The inner ``compute()`` receives the mapped fields as keyword arguments:
-    returned_files: list[str]   (from model.returned_files)
-    gt_files:       list[str]   (from dataset.gt_files)
+    returned_tiers: dict[path, tier]   (from model.returned_tiers)
+    gt_files:       list[str]          (from dataset.gt_files)
 """
 
 from __future__ import annotations
@@ -16,46 +21,71 @@ from typing import Any
 
 from evee import metric
 
+_HIGH_TIERS = {"full_file", "min_scaffold"}
+_EDIT_TIERS = {"full_file"}
+
+
+def _prf(returned: set[str], gt: set[str]) -> dict[str, float]:
+    """Compute precision, recall, F1 for a returned-vs-GT pair."""
+    tp = len(returned & gt)
+    p = tp / len(returned) if returned else 0.0
+    r = tp / len(gt) if gt else 0.0
+    f1 = 2 * p * r / (p + r) if (p + r) > 0 else 0.0
+    return {"precision": round(p, 4), "recall": round(r, 4), "f1": round(f1, 4)}
+
 
 @metric("cpl-retrieval")
 class RetrievalMetric:
-    """Standard information retrieval metrics for recon evaluation."""
+    """P/R/F1 at three fidelity levels: all, high (file+scaffold), edit (file only)."""
 
-    def compute(self, returned_files: list[str], gt_files: list[str]) -> dict[str, Any]:
-        """Compute P/R/F1/noise for a single query."""
-        returned = set(returned_files)
+    def compute(self, returned_tiers: dict[str, str], gt_files: list[str]) -> dict[str, Any]:
+        """Compute P/R/F1 for a single query at all three levels."""
         gt = set(gt_files)
 
-        tp = len(returned & gt)
-        precision = tp / len(returned) if returned else 0.0
-        recall = tp / len(gt) if gt else 0.0
-        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-        noise_ratio = len(returned - gt) / len(returned) if returned else 0.0
+        all_returned = set(returned_tiers.keys())
+        high_returned = {p for p, t in returned_tiers.items() if t in _HIGH_TIERS}
+        edit_returned = {p for p, t in returned_tiers.items() if t in _EDIT_TIERS}
+
+        all_prf = _prf(all_returned, gt)
+        high_prf = _prf(high_returned, gt)
+        edit_prf = _prf(edit_returned, gt)
 
         return {
-            "precision": round(precision, 4),
-            "recall": round(recall, 4),
-            "f1": round(f1, 4),
-            "noise_ratio": round(noise_ratio, 4),
-            "tp": tp,
-            "fp": len(returned - gt),
-            "fn": len(gt - returned),
-            "returned_count": len(returned),
+            # All tiers
+            "all_precision": all_prf["precision"],
+            "all_recall": all_prf["recall"],
+            "all_f1": all_prf["f1"],
+            # High fidelity (full_file + min_scaffold)
+            "high_precision": high_prf["precision"],
+            "high_recall": high_prf["recall"],
+            "high_f1": high_prf["f1"],
+            # Edit tier (full_file only)
+            "edit_precision": edit_prf["precision"],
+            "edit_recall": edit_prf["recall"],
+            "edit_f1": edit_prf["f1"],
+            # Counts
+            "all_count": len(all_returned),
+            "high_count": len(high_returned),
+            "edit_count": len(edit_returned),
             "gt_count": len(gt),
         }
 
     def aggregate(self, scores: list[dict[str, Any]]) -> dict[str, Number]:
         """Aggregate retrieval metrics across all queries."""
         if not scores:
-            return {"avg_precision": 0.0, "avg_recall": 0.0, "avg_f1": 0.0, "avg_noise_ratio": 0.0}
+            return {}
 
-        return {
-            "avg_precision": round(statistics.mean(s["precision"] for s in scores), 4),
-            "avg_recall": round(statistics.mean(s["recall"] for s in scores), 4),
-            "avg_f1": round(statistics.mean(s["f1"] for s in scores), 4),
-            "median_f1": round(statistics.median(s["f1"] for s in scores), 4),
-            "min_f1": round(min(s["f1"] for s in scores), 4),
-            "max_f1": round(max(s["f1"] for s in scores), 4),
-            "avg_noise_ratio": round(statistics.mean(s["noise_ratio"] for s in scores), 4),
-            "total_queries": len(scores),
-        }
+        result: dict[str, Number] = {}
+        for level in ("all", "high", "edit"):
+            for stat in ("precision", "recall", "f1"):
+                key = f"{level}_{stat}"
+                values = [s[key] for s in scores]
+                result[f"avg_{key}"] = round(statistics.mean(values), 4)
+            f1_values = [s[f"{level}_f1"] for s in scores]
+            result[f"median_{level}_f1"] = round(statistics.median(f1_values), 4)
+            count_values = [s[f"{level}_count"] for s in scores]
+            result[f"avg_{level}_count"] = round(statistics.mean(count_values), 1)
+
+        result["avg_gt_count"] = round(statistics.mean(s["gt_count"] for s in scores), 1)
+        result["total_queries"] = len(scores)
+        return result
