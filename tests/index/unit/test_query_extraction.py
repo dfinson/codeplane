@@ -1,8 +1,8 @@
 """Comprehensive unit tests for query-based type extraction.
 
-Tests the QueryBasedExtractor with LanguageQueryConfig for all supported languages.
+Tests the QueryBasedExtractor with TypeExtractionConfig for all supported languages.
 Targets 95%+ code coverage via parametrization across:
-- All 18 supported languages
+- All supported languages with type configs
 - Type annotations (parameters, returns, fields, variables)
 - Type members (methods, fields, properties)
 - Member accesses (dot, arrow, scope)
@@ -23,29 +23,40 @@ from codeplane.index._internal.extraction import (
     TypeMemberData,
     get_registry,
 )
-from codeplane.index._internal.extraction.languages import (
-    ALL_LANGUAGE_CONFIGS,
-    CPP_CONFIG,
-    CSHARP_CONFIG,
-    GO_CONFIG,
-    JAVA_CONFIG,
-    PYTHON_CONFIG,
-    RUBY_CONFIG,
-    RUST_CONFIG,
-    TYPESCRIPT_CONFIG,
-    get_config_for_language,
-)
 from codeplane.index._internal.extraction.query_based import (
-    LanguageQueryConfig,
     QueryBasedExtractor,
 )
+from codeplane.index._internal.parsing.packs import (
+    PACKS,
+    TypeExtractionConfig,
+    get_pack,
+)
+
+# Convenience aliases
+
+
+def _cfg(name: str) -> TypeExtractionConfig:
+    """Get type_config for a language, asserting it exists."""
+    tc = PACKS[name].type_config
+    assert tc is not None, f"Missing type_config for {name}"
+    return tc
+
+
+PYTHON_CONFIG = _cfg("python")
+TYPESCRIPT_CONFIG = _cfg("typescript")
+GO_CONFIG = _cfg("go")
+RUST_CONFIG = _cfg("rust")
+JAVA_CONFIG = _cfg("java")
+CSHARP_CONFIG = _cfg("csharp")
+CPP_CONFIG = _cfg("cpp")
+RUBY_CONFIG = _cfg("ruby")
 
 # =============================================================================
 # Test Data: Language-Specific Code Samples
 # =============================================================================
 
 # Mapping of (config, grammar_name, code_sample) for type annotation extraction
-TYPE_ANNOTATION_SAMPLES: list[tuple[LanguageQueryConfig, str, str, str, str]] = [
+TYPE_ANNOTATION_SAMPLES: list[tuple[TypeExtractionConfig, str, str, str, str]] = [
     # (config, grammar_name, code, expected_name, expected_type_substring)
     (
         PYTHON_CONFIG,
@@ -155,7 +166,7 @@ TYPE_ANNOTATION_SAMPLES: list[tuple[LanguageQueryConfig, str, str, str, str]] = 
 ]
 
 # Return type annotation samples
-RETURN_TYPE_SAMPLES: list[tuple[LanguageQueryConfig, str, str, str, str]] = [
+RETURN_TYPE_SAMPLES: list[tuple[TypeExtractionConfig, str, str, str, str]] = [
     (
         PYTHON_CONFIG,
         "python",
@@ -215,7 +226,7 @@ RETURN_TYPE_SAMPLES: list[tuple[LanguageQueryConfig, str, str, str, str]] = [
 ]
 
 # Type member samples (class/struct fields and methods)
-TYPE_MEMBER_SAMPLES: list[tuple[LanguageQueryConfig, str, str, str, str, str]] = [
+TYPE_MEMBER_SAMPLES: list[tuple[TypeExtractionConfig, str, str, str, str, str]] = [
     # (config, grammar_name, code, parent_name, expected_member, member_kind)
     (
         PYTHON_CONFIG,
@@ -316,7 +327,7 @@ TYPE_MEMBER_SAMPLES: list[tuple[LanguageQueryConfig, str, str, str, str, str]] =
 ]
 
 # Member access samples
-MEMBER_ACCESS_SAMPLES: list[tuple[LanguageQueryConfig, str, str, str, str]] = [
+MEMBER_ACCESS_SAMPLES: list[tuple[TypeExtractionConfig, str, str, str, str]] = [
     # (config, grammar_name, code, expected_receiver, expected_member)
     (
         PYTHON_CONFIG,
@@ -377,7 +388,7 @@ MEMBER_ACCESS_SAMPLES: list[tuple[LanguageQueryConfig, str, str, str, str]] = [
 ]
 
 # Interface implementation samples
-INTERFACE_IMPL_SAMPLES: list[tuple[LanguageQueryConfig, str, str, str, str]] = [
+INTERFACE_IMPL_SAMPLES: list[tuple[TypeExtractionConfig, str, str, str, str]] = [
     # (config, grammar_name, code, implementor, interface)
     (
         TYPESCRIPT_CONFIG,
@@ -417,7 +428,7 @@ INTERFACE_IMPL_SAMPLES: list[tuple[LanguageQueryConfig, str, str, str, str]] = [
 ]
 
 # Optional type samples
-OPTIONAL_TYPE_SAMPLES: list[tuple[LanguageQueryConfig, str, str]] = [
+OPTIONAL_TYPE_SAMPLES: list[tuple[TypeExtractionConfig, str, str]] = [
     (PYTHON_CONFIG, "python", "def f(x: int | None): pass"),
     (PYTHON_CONFIG, "python", "def f(x: Optional[int]): pass"),
     (TYPESCRIPT_CONFIG, "typescript", "function f(x: number | null) {}"),
@@ -427,7 +438,7 @@ OPTIONAL_TYPE_SAMPLES: list[tuple[LanguageQueryConfig, str, str]] = [
 ]
 
 # Array/list type samples
-ARRAY_TYPE_SAMPLES: list[tuple[LanguageQueryConfig, str, str]] = [
+ARRAY_TYPE_SAMPLES: list[tuple[TypeExtractionConfig, str, str]] = [
     (PYTHON_CONFIG, "python", "def f(x: list[int]): pass"),
     (PYTHON_CONFIG, "python", "def f(x: List[str]): pass"),
     (TYPESCRIPT_CONFIG, "typescript", "function f(x: number[]) {}"),
@@ -439,7 +450,7 @@ ARRAY_TYPE_SAMPLES: list[tuple[LanguageQueryConfig, str, str]] = [
 ]
 
 # Generic type samples
-GENERIC_TYPE_SAMPLES: list[tuple[LanguageQueryConfig, str, str]] = [
+GENERIC_TYPE_SAMPLES: list[tuple[TypeExtractionConfig, str, str]] = [
     (PYTHON_CONFIG, "python", "def f(x: dict[str, int]): pass"),
     (TYPESCRIPT_CONFIG, "typescript", "function f(x: Map<string, number>) {}"),
     (GO_CONFIG, "go", "package main\nfunc f(x map[string]int) {}"),
@@ -488,10 +499,23 @@ def make_tree(code: str, language: str) -> Any:
     return parser.parse(Path(f"test.{ext}"), code.encode())
 
 
-def make_extractor(config: LanguageQueryConfig) -> QueryBasedExtractor:
+def _grammar_for_config(config: TypeExtractionConfig) -> str:
+    """Resolve grammar_name from a TypeExtractionConfig by finding its pack."""
+    for pack in PACKS.values():
+        if pack.type_config is config:
+            return pack.grammar_name
+    # Fallback: use language_family as grammar hint
+    return config.language_family
+
+
+def make_extractor(
+    config: TypeExtractionConfig, grammar_name: str | None = None
+) -> QueryBasedExtractor:
     """Create an extractor from config, skipping if grammar unavailable."""
+    if grammar_name is None:
+        grammar_name = _grammar_for_config(config)
     try:
-        return QueryBasedExtractor(config)
+        return QueryBasedExtractor(config, grammar_name)
     except ValueError as e:
         pytest.skip(f"Grammar not installed: {e}")
 
@@ -511,14 +535,14 @@ class TestTypeAnnotationExtraction:
     )
     def test_parameter_annotations(
         self,
-        config: LanguageQueryConfig,
+        config: TypeExtractionConfig,
         grammar: str,
         code: str,
         expected_name: str,
         expected_type: str,
     ) -> None:
         """Test parameter type annotation extraction."""
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, grammar)
         try:
             tree = make_tree(code, grammar)
         except ValueError:
@@ -544,14 +568,14 @@ class TestTypeAnnotationExtraction:
     )
     def test_return_type_annotations(
         self,
-        config: LanguageQueryConfig,
+        config: TypeExtractionConfig,
         grammar: str,
         code: str,
         expected_name: str,
         expected_type: str,
     ) -> None:
         """Test return type annotation extraction."""
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, grammar)
         try:
             tree = make_tree(code, grammar)
         except ValueError:
@@ -578,12 +602,12 @@ class TestTypeAnnotationExtraction:
     )
     def test_optional_type_detection(
         self,
-        config: LanguageQueryConfig,
+        config: TypeExtractionConfig,
         grammar: str,
         code: str,
     ) -> None:
         """Test that optional types are correctly flagged."""
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, grammar)
         try:
             tree = make_tree(code, grammar)
         except ValueError:
@@ -604,12 +628,12 @@ class TestTypeAnnotationExtraction:
     )
     def test_array_type_detection(
         self,
-        config: LanguageQueryConfig,
+        config: TypeExtractionConfig,
         grammar: str,
         code: str,
     ) -> None:
         """Test that array/list types are correctly flagged."""
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, grammar)
         try:
             tree = make_tree(code, grammar)
         except ValueError:
@@ -630,12 +654,12 @@ class TestTypeAnnotationExtraction:
     )
     def test_generic_type_detection(
         self,
-        config: LanguageQueryConfig,
+        config: TypeExtractionConfig,
         grammar: str,
         code: str,
     ) -> None:
         """Test that generic types are correctly flagged."""
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, grammar)
         try:
             tree = make_tree(code, grammar)
         except ValueError:
@@ -665,7 +689,7 @@ class TestTypeMemberExtraction:
     )
     def test_member_extraction(
         self,
-        config: LanguageQueryConfig,
+        config: TypeExtractionConfig,
         grammar: str,
         code: str,
         parent_name: str,
@@ -673,7 +697,7 @@ class TestTypeMemberExtraction:
         member_kind: str,
     ) -> None:
         """Test type member extraction."""
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, grammar)
         try:
             tree = make_tree(code, grammar)
         except ValueError:
@@ -710,14 +734,14 @@ class TestMemberAccessExtraction:
     )
     def test_member_access_extraction(
         self,
-        config: LanguageQueryConfig,
+        config: TypeExtractionConfig,
         grammar: str,
         code: str,
         expected_receiver: str,
         expected_member: str,
     ) -> None:
         """Test member access extraction."""
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, grammar)
         try:
             tree = make_tree(code, grammar)
         except ValueError:
@@ -753,14 +777,14 @@ class TestInterfaceImplExtraction:
     )
     def test_interface_impl_extraction(
         self,
-        config: LanguageQueryConfig,
+        config: TypeExtractionConfig,
         grammar: str,
         code: str,
         implementor: str,
         interface: str,
     ) -> None:
         """Test interface implementation extraction."""
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, grammar)
         try:
             tree = make_tree(code, grammar)
         except ValueError:
@@ -803,7 +827,7 @@ class TestExtractorProperties:
         ],
         ids=["python", "typescript", "go", "rust", "java", "csharp", "cpp", "ruby"],
     )
-    def test_language_family_property(self, config: LanguageQueryConfig) -> None:
+    def test_language_family_property(self, config: TypeExtractionConfig) -> None:
         """Test that language_family property returns correct value."""
         extractor = make_extractor(config)
         assert extractor.language_family == config.language_family
@@ -821,7 +845,7 @@ class TestExtractorProperties:
         ids=["python", "typescript", "go", "rust", "java", "ruby"],
     )
     def test_supports_type_annotations_property(
-        self, config: LanguageQueryConfig, expected: bool
+        self, config: TypeExtractionConfig, expected: bool
     ) -> None:
         """Test supports_type_annotations property."""
         extractor = make_extractor(config)
@@ -840,7 +864,7 @@ class TestExtractorProperties:
         ids=["python", "typescript", "go", "rust", "java", "csharp"],
     )
     def test_supports_interfaces_property(
-        self, config: LanguageQueryConfig, expected: bool
+        self, config: TypeExtractionConfig, expected: bool
     ) -> None:
         """Test supports_interfaces property."""
         extractor = make_extractor(config)
@@ -856,7 +880,7 @@ class TestExtractorProperties:
         ids=["python-dot", "rust-dot-scope", "cpp-all"],
     )
     def test_access_styles_property(
-        self, config: LanguageQueryConfig, expected_styles: list[str]
+        self, config: TypeExtractionConfig, expected_styles: list[str]
     ) -> None:
         """Test access_styles property."""
         extractor = make_extractor(config)
@@ -898,29 +922,28 @@ class TestExtractorRegistry:
         assert extractor is not None
         assert not extractor.supports_type_annotations
 
-    def test_config_lookup_case_insensitive(self) -> None:
-        """Config lookup is case-insensitive."""
-        config1 = get_config_for_language("python")
-        config2 = get_config_for_language("Python")
-        config3 = get_config_for_language("PYTHON")
-        assert config1 is config2 is config3
+    def test_pack_lookup(self) -> None:
+        """Pack lookup returns valid packs."""
+        pack = get_pack("python")
+        assert pack is not None
+        assert pack.type_config is not None
+        assert pack.type_config.language_family == "python"
 
-    def test_config_lookup_nonexistent(self) -> None:
+    def test_pack_lookup_nonexistent(self) -> None:
         """Nonexistent language returns None."""
-        config = get_config_for_language("nonexistent_language_xyz")
-        assert config is None
+        assert get_pack("nonexistent_language_xyz") is None
 
     @pytest.mark.parametrize(
         "lang_key",
-        list(ALL_LANGUAGE_CONFIGS.keys()),
-        ids=list(ALL_LANGUAGE_CONFIGS.keys()),
+        [name for name, p in PACKS.items() if p.type_config is not None],
+        ids=[name for name, p in PACKS.items() if p.type_config is not None],
     )
-    def test_all_configs_retrievable(self, lang_key: str) -> None:
-        """All registered configs are retrievable."""
-        config = get_config_for_language(lang_key)
-        assert config is not None
-        assert config.language_family
-        assert config.grammar_name
+    def test_all_packs_with_type_config(self, lang_key: str) -> None:
+        """All packs with type_config have valid language_family."""
+        pack = get_pack(lang_key)
+        assert pack is not None
+        assert pack.type_config is not None
+        assert pack.type_config.language_family
 
 
 # =============================================================================
@@ -944,10 +967,10 @@ class TestOutputFormatConsistency:
         ids=["python", "go", "rust", "java", "csharp", "cpp"],
     )
     def test_annotation_dataclass_fields(
-        self, config: LanguageQueryConfig, code: str, grammar: str
+        self, config: TypeExtractionConfig, code: str, grammar: str
     ) -> None:
         """All extractors produce TypeAnnotationData with all required fields."""
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, grammar)
         try:
             tree = make_tree(code, grammar)
         except ValueError:
@@ -982,10 +1005,10 @@ class TestOutputFormatConsistency:
         ids=["python", "rust", "java", "cpp"],
     )
     def test_member_dataclass_fields(
-        self, config: LanguageQueryConfig, code: str, grammar: str, parent: str
+        self, config: TypeExtractionConfig, code: str, grammar: str, parent: str
     ) -> None:
         """All extractors produce TypeMemberData with all required fields."""
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, grammar)
         try:
             tree = make_tree(code, grammar)
         except ValueError:
@@ -1015,10 +1038,10 @@ class TestOutputFormatConsistency:
         ids=["python", "typescript", "java"],
     )
     def test_member_access_dataclass_fields(
-        self, config: LanguageQueryConfig, code: str, grammar: str
+        self, config: TypeExtractionConfig, code: str, grammar: str
     ) -> None:
         """All extractors produce MemberAccessData with all required fields."""
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, grammar)
         try:
             tree = make_tree(code, grammar)
         except ValueError:
@@ -1051,14 +1074,14 @@ class TestOutputFormatConsistency:
     )
     def test_interface_impl_dataclass_fields(
         self,
-        config: LanguageQueryConfig,
+        config: TypeExtractionConfig,
         code: str,
         grammar: str,
         impl_name: str,
         iface_name: str,
     ) -> None:
         """All extractors produce InterfaceImplData with all required fields."""
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, grammar)
         try:
             tree = make_tree(code, grammar)
         except ValueError:
@@ -1103,9 +1126,9 @@ class TestEdgeCases:
         ],
         ids=["python", "typescript", "go", "rust", "java"],
     )
-    def test_empty_file(self, config: LanguageQueryConfig, grammar: str) -> None:
+    def test_empty_file(self, config: TypeExtractionConfig, grammar: str) -> None:
         """Empty file should not crash and return empty results."""
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, grammar)
         try:
             tree = make_tree("", grammar)
         except ValueError:
@@ -1138,9 +1161,9 @@ class TestEdgeCases:
             "java-incomplete",
         ],
     )
-    def test_syntax_errors(self, config: LanguageQueryConfig, grammar: str, code: str) -> None:
+    def test_syntax_errors(self, config: TypeExtractionConfig, grammar: str, code: str) -> None:
         """Partial/invalid syntax should not crash."""
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, grammar)
         try:
             tree = make_tree(code, grammar)
         except ValueError:
@@ -1185,12 +1208,11 @@ def long_sig(
 
     def test_no_type_annotation_query(self) -> None:
         """Extractor with no type_annotation_query returns empty."""
-        config = LanguageQueryConfig(
+        config = TypeExtractionConfig(
             language_family="test",
-            grammar_name="python",
             type_annotation_query="",  # Empty query
         )
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, "python")
         tree = make_tree("def f(x: int): pass", "python")
 
         annotations = extractor.extract_type_annotations(tree.tree, "test.py", scopes=[])
@@ -1198,12 +1220,11 @@ def long_sig(
 
     def test_no_member_query(self) -> None:
         """Extractor with no type_member_query returns empty."""
-        config = LanguageQueryConfig(
+        config = TypeExtractionConfig(
             language_family="test",
-            grammar_name="python",
             type_member_query="",  # Empty query
         )
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, "python")
         tree = make_tree("class C:\n    def m(self): pass", "python")
 
         members = extractor.extract_type_members(
@@ -1215,12 +1236,11 @@ def long_sig(
 
     def test_no_interface_impl_query(self) -> None:
         """Extractor with no interface_impl_query returns empty."""
-        config = LanguageQueryConfig(
+        config = TypeExtractionConfig(
             language_family="test",
-            grammar_name="python",
             interface_impl_query="",  # Empty query
         )
-        extractor = make_extractor(config)
+        extractor = make_extractor(config, "python")
         tree = make_tree("class C: pass", "python")
 
         impls = extractor.extract_interface_impls(
@@ -1410,13 +1430,12 @@ class TestGrammarLoading:
 
     def test_unknown_grammar_raises(self) -> None:
         """Unknown grammar name raises ValueError."""
-        config = LanguageQueryConfig(
+        config = TypeExtractionConfig(
             language_family="unknown",
-            grammar_name="nonexistent_grammar_xyz",
         )
-        extractor = QueryBasedExtractor(config)
+        extractor = QueryBasedExtractor(config, "nonexistent_grammar_xyz")
 
-        with pytest.raises(ValueError, match="Unknown grammar"):
+        with pytest.raises(ValueError, match="Unknown grammar|Grammar not installed"):
             extractor._get_language()
 
     def test_grammar_cached(self) -> None:

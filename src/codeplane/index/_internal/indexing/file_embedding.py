@@ -287,10 +287,17 @@ _CONFIG_KEYS_MAX = 20
 _CONFIG_HEADINGS_MAX = 10
 
 # Names too generic to add signal — always skip
-_CONFIG_SKIP_NAMES = frozenset({
-    ".PHONY", ".DEFAULT_GOAL", ".SUFFIXES", ".PRECIOUS",
-    ".INTERMEDIATE", ".SECONDARY", ".DELETE_ON_ERROR",
-})
+_CONFIG_SKIP_NAMES = frozenset(
+    {
+        ".PHONY",
+        ".DEFAULT_GOAL",
+        ".SUFFIXES",
+        ".PRECIOUS",
+        ".INTERMEDIATE",
+        ".SECONDARY",
+        ".DELETE_ON_ERROR",
+    }
+)
 
 
 def _build_config_defines(defs: list[dict[str, Any]]) -> list[str]:
@@ -892,7 +899,8 @@ class FileEmbeddingIndex:
         idx = self._path_to_idx.get(path)
         if idx is None or self._matrix is None:
             return None
-        return self._matrix[idx].astype(np.float32)
+        row: np.ndarray = self._matrix[idx]
+        return row.astype(np.float32)
 
     # --- Lifecycle ---
 

@@ -25,21 +25,25 @@ from codeplane.index._internal.db import Database
 logger = logging.getLogger(__name__)
 
 # Config file extensions that we scan for cross-file string references.
-_CONFIG_EXTENSIONS: frozenset[str] = frozenset({
-    ".toml",
-    ".yml",
-    ".yaml",
-    ".json",
-    ".cfg",
-    ".ini",
-})
+_CONFIG_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".toml",
+        ".yml",
+        ".yaml",
+        ".json",
+        ".cfg",
+        ".ini",
+    }
+)
 
 # Basenames (no extension) that are also config files.
-_CONFIG_BASENAMES: frozenset[str] = frozenset({
-    "makefile",
-    "gnumakefile",
-    "dockerfile",
-})
+_CONFIG_BASENAMES: frozenset[str] = frozenset(
+    {
+        "makefile",
+        "gnumakefile",
+        "dockerfile",
+    }
+)
 
 # Regex to extract double- and single-quoted strings (3–200 chars inside quotes).
 _RE_DQUOTE = re.compile(r'"([^"\n]{3,200})"')
@@ -121,7 +125,7 @@ def _extract_strings(content: str) -> list[tuple[str, int]]:
                 continue
 
             # Compute 1-indexed line number
-            line = content[:match.start()].count("\n") + 1
+            line = content[: match.start()].count("\n") + 1
 
             key = (value, line)
             if key not in seen:
@@ -310,9 +314,8 @@ def resolve_config_file_refs(
 
     # 1. Build complete file path set and directory set from DB.
     with db.session() as session:
-        all_files: list[tuple[int, str]] = list(
-            session.exec(select(File.id, File.path)).all()
-        )
+        rows = session.exec(select(File.id, File.path)).all()
+        all_files: list[tuple[int, str]] = [(fid, fpath) for fid, fpath in rows if fid is not None]
 
     path_set = frozenset(path for _, path in all_files)
 
@@ -326,8 +329,7 @@ def resolve_config_file_refs(
 
     # 2. Identify config files already in the index.
     config_files: list[tuple[int, str]] = [
-        (fid, path) for fid, path in all_files
-        if fid is not None and _is_config_file(path)
+        (fid, path) for fid, path in all_files if fid is not None and _is_config_file(path)
     ]
 
     if not config_files:
@@ -340,9 +342,7 @@ def resolve_config_file_refs(
     with db.session() as session:
         for fid in config_file_ids:
             row = session.exec(
-                select(DefFact.unit_id)
-                .where(DefFact.file_id == fid)
-                .limit(1)
+                select(DefFact.unit_id).where(DefFact.file_id == fid).limit(1)
             ).first()
             if row is not None:
                 unit_id_map[fid] = row
@@ -400,22 +400,24 @@ def resolve_config_file_refs(
             seen_resolved.add(resolved)
 
             import_uid = _make_import_uid(file_path, resolved, line)
-            new_imports.append({
-                "import_uid": import_uid,
-                "file_id": file_id,
-                "unit_id": unit_id,
-                "scope_id": None,
-                "imported_name": resolved.rsplit("/", 1)[-1],
-                "alias": None,
-                "source_literal": value,
-                "resolved_path": resolved,
-                "import_kind": "config_file_ref",
-                "certainty": "certain",
-                "start_line": line,
-                "start_col": 0,
-                "end_line": line,
-                "end_col": 0,
-            })
+            new_imports.append(
+                {
+                    "import_uid": import_uid,
+                    "file_id": file_id,
+                    "unit_id": unit_id,
+                    "scope_id": None,
+                    "imported_name": resolved.rsplit("/", 1)[-1],
+                    "alias": None,
+                    "source_literal": value,
+                    "resolved_path": resolved,
+                    "import_kind": "config_file_ref",
+                    "certainty": "certain",
+                    "start_line": line,
+                    "start_col": 0,
+                    "end_line": line,
+                    "end_col": 0,
+                }
+            )
 
     # 6. Bulk insert new ImportFacts.
     if new_imports:

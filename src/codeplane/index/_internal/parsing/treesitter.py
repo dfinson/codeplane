@@ -26,10 +26,17 @@ import tree_sitter
 from tree_sitter import Query as _TSQuery
 from tree_sitter import QueryCursor as _TSQueryCursor
 
-from codeplane.index._internal.parsing._lang_queries import (
-    LANGUAGE_QUERY_CONFIGS,
-    LanguageQueryConfig,
+from codeplane.index._internal.parsing.packs import (
+    PACKS,
+    LanguagePack,
+    SymbolQueryConfig,
+    get_pack,
+    get_pack_for_ext,
+    get_pack_for_filename,
 )
+
+# Derive LANGUAGE_MAP from packs — includes aliases like shell→bash
+LANGUAGE_MAP: dict[str, str] = {key: pack.grammar_name for key, pack in PACKS.items()}
 
 if TYPE_CHECKING:
     pass
@@ -153,65 +160,9 @@ _CSHARP_PREPROC_WRAPPERS = frozenset(
 )
 
 
-# Language to Tree-sitter language name mapping
-# Maps our internal names to tree-sitter grammar module names
-LANGUAGE_MAP: dict[str, str] = {
-    # Core/mainstream
-    "python": "python",
-    "javascript": "javascript",
-    "typescript": "typescript",
-    "tsx": "tsx",
-    "go": "go",
-    "rust": "rust",
-    "java": "java",
-    "kotlin": "kotlin",
-    "scala": "scala",
-    "csharp": "c_sharp",
-    "c": "c",
-    "cpp": "cpp",
-    "ruby": "ruby",
-    "php": "php",
-    "swift": "swift",
-    # Functional
-    "elixir": "elixir",
-    "haskell": "haskell",
-    "ocaml": "ocaml",
-    # Scripting
-    "bash": "bash",
-    "shell": "bash",
-    "lua": "lua",
-    "julia": "julia",
-    # Systems
-    "zig": "zig",
-    "ada": "ada",
-    "fortran": "fortran",
-    "odin": "odin",
-    # Web
-    "html": "html",
-    "css": "css",
-    "xml": "xml",
-    # Hardware
-    "verilog": "verilog",
-    # Data/Config
-    "json": "json",
-    "yaml": "yaml",
-    "toml": "toml",
-    "dockerfile": "dockerfile",
-    "hcl": "hcl",
-    "terraform": "hcl",
-    "sql": "sql",
-    "graphql": "graphql",
-    "makefile": "make",
-    "make": "make",
-    "markdown": "markdown",
-    "regex": "regex",
-    "requirements": "requirements",
-}
-
-
-# ---------------------------------------------------------------------------
-# Language query configs are in _lang_queries.py
-# ---------------------------------------------------------------------------
+def _import_uid(file_path: str, name: str, line: int) -> str:
+    """Compute stable import UID."""
+    return hashlib.sha256(f"{file_path}:{line}:{name}".encode()).hexdigest()[:16]
 
 
 @dataclass
@@ -251,51 +202,29 @@ class TreeSitterParser:
         self._languages = {}
 
     def _get_language(self, lang_name: str) -> Any:
-        """Get or load a Tree-sitter language."""
+        """Get or load a Tree-sitter language.
+
+        Uses LanguagePack metadata for module/function resolution instead
+        of hard-coded special-case blocks.
+        """
         if lang_name in self._languages:
             return self._languages[lang_name]
 
-        # Special handling for languages with non-standard function names
-        if lang_name in ("typescript", "tsx"):
+        # Find the pack for this grammar name (lang_name is grammar_name here)
+        pack = self._find_pack_by_grammar(lang_name)
+
+        if pack is not None and pack.language_func:
+            # Non-standard language function (typescript, tsx, php, xml, ocaml)
             try:
-                ts_module = importlib.import_module("tree_sitter_typescript")
-                if lang_name == "typescript":
-                    lang = tree_sitter.Language(ts_module.language_typescript())
-                else:
-                    lang = tree_sitter.Language(ts_module.language_tsx())
+                mod = importlib.import_module(pack.grammar_module)
+                lang_fn = getattr(mod, pack.language_func)
+                lang = tree_sitter.Language(lang_fn())
                 self._languages[lang_name] = lang
                 return lang
-            except ImportError as err:
+            except (ImportError, AttributeError) as err:
                 raise ValueError(f"Language not available: {lang_name}") from err
 
-        if lang_name == "xml":
-            try:
-                xml_module = importlib.import_module("tree_sitter_xml")
-                lang = tree_sitter.Language(xml_module.language_xml())
-                self._languages[lang_name] = lang
-                return lang
-            except ImportError as err:
-                raise ValueError(f"Language not available: {lang_name}") from err
-
-        if lang_name == "php":
-            try:
-                php_module = importlib.import_module("tree_sitter_php")
-                lang = tree_sitter.Language(php_module.language_php())
-                self._languages[lang_name] = lang
-                return lang
-            except ImportError as err:
-                raise ValueError(f"Language not available: {lang_name}") from err
-
-        if lang_name == "ocaml":
-            try:
-                ocaml_module = importlib.import_module("tree_sitter_ocaml")
-                lang = tree_sitter.Language(ocaml_module.language_ocaml())
-                self._languages[lang_name] = lang
-                return lang
-            except ImportError as err:
-                raise ValueError(f"Language not available: {lang_name}") from err
-
-        # Standard loading for other languages
+        # Standard loading: module.language()
         lang_module = self._load_language_module(lang_name)
         if lang_module is None:
             raise ValueError(f"Language not available: {lang_name}")
@@ -304,59 +233,26 @@ class TreeSitterParser:
         self._languages[lang_name] = lang
         return lang
 
-    def _load_language_module(self, lang_name: str) -> Any:
-        """Load tree-sitter language module by name."""
-        # Map grammar names to their import paths
-        # Must match all languages in GRAMMAR_PACKAGES in grammars.py
-        import_map: dict[str, str] = {
-            # Core/mainstream
-            "python": "tree_sitter_python",
-            "javascript": "tree_sitter_javascript",
-            "go": "tree_sitter_go",
-            "rust": "tree_sitter_rust",
-            "java": "tree_sitter_java",
-            "kotlin": "tree_sitter_kotlin",
-            "scala": "tree_sitter_scala",
-            "c_sharp": "tree_sitter_c_sharp",
-            "c": "tree_sitter_c",
-            "cpp": "tree_sitter_cpp",
-            "ruby": "tree_sitter_ruby",
-            "php": "tree_sitter_php",
-            "swift": "tree_sitter_swift",
-            # Functional
-            "elixir": "tree_sitter_elixir",
-            "haskell": "tree_sitter_haskell",
-            "ocaml": "tree_sitter_ocaml",
-            # Scripting
-            "bash": "tree_sitter_bash",
-            "lua": "tree_sitter_lua",
-            "julia": "tree_sitter_julia",
-            # Systems
-            "zig": "tree_sitter_zig",
-            "ada": "tree_sitter_ada",
-            "fortran": "tree_sitter_fortran",
-            "odin": "tree_sitter_odin",
-            # Web
-            "html": "tree_sitter_html",
-            "css": "tree_sitter_css",
-            "xml": "tree_sitter_xml",
-            # Hardware
-            "verilog": "tree_sitter_verilog",
-            # Data/Config
-            "json": "tree_sitter_json",
-            "yaml": "tree_sitter_yaml",
-            "toml": "tree_sitter_toml",
-            "dockerfile": "tree_sitter_dockerfile",
-            "hcl": "tree_sitter_hcl",
-            "sql": "tree_sitter_sql",
-            "graphql": "tree_sitter_graphql",
-            "make": "tree_sitter_make",
-            "markdown": "tree_sitter_markdown",
-            "regex": "tree_sitter_regex",
-            "requirements": "tree_sitter_requirements",
-        }
+    @staticmethod
+    def _find_pack_by_grammar(grammar_name: str) -> LanguagePack | None:
+        """Find the pack whose grammar_name matches."""
+        # Fast path: name == grammar_name for most languages
+        pack = get_pack(grammar_name)
+        if pack is not None and pack.grammar_name == grammar_name:
+            return pack
+        # Slow path: search all packs (e.g. csharp -> c_sharp)
+        for p in PACKS.values():
+            if p.grammar_name == grammar_name:
+                return p
+        return None
 
-        module_name = import_map.get(lang_name)
+    def _load_language_module(self, lang_name: str) -> Any:
+        """Load tree-sitter language module by name.
+
+        Uses LanguagePack metadata for module resolution.
+        """
+        pack = self._find_pack_by_grammar(lang_name)
+        module_name = pack.grammar_module if pack is not None else None
         if module_name is None:
             return None
 
@@ -390,7 +286,8 @@ class TreeSitterParser:
         if language is None:
             raise ValueError(f"Unsupported file extension: {ext}")
 
-        ts_lang_name = LANGUAGE_MAP.get(language, language)
+        pack = get_pack(language)
+        ts_lang_name = pack.grammar_name if pack is not None else language
         ts_lang = self._get_language(ts_lang_name)
 
         self._parser.language = ts_lang
@@ -424,8 +321,8 @@ class TreeSitterParser:
         Extract symbol definitions from a parse result.
 
         Uses tree-sitter queries for all supported languages.  Each language
-        has a declarative ``LanguageQueryConfig`` (defined in
-        ``_lang_queries.py``) that maps query patterns to symbol kinds.
+        has a declarative ``SymbolQueryConfig`` (defined in
+        ``packs.py``) that maps query patterns to symbol kinds.
         The unified executor processes query matches, resolves parent
         context, and extracts parameter signatures.
 
@@ -435,7 +332,8 @@ class TreeSitterParser:
         Returns:
             List of SyntacticSymbol objects.
         """
-        config = LANGUAGE_QUERY_CONFIGS.get(result.language)
+        pack = get_pack(result.language)
+        config = pack.symbol_config if pack is not None else None
         if config is not None:
             return self._extract_symbols_via_query(result.tree, result.root_node, config)
         # Generic extraction via walking for unsupported languages
@@ -478,21 +376,33 @@ class TreeSitterParser:
     def extract_scopes(self, result: ParseResult) -> list[SyntacticScope]:
         """Extract lexical scopes from a parse result.
 
+        Uses pack-driven scope_types for a single generic walker instead of
+        per-language methods.
+
         Args:
             result: ParseResult from parse()
 
         Returns:
             List of SyntacticScope objects representing lexical scopes.
         """
-        if result.language == "python":
-            return self._extract_python_scopes(result.root_node)
-        elif result.language in ("javascript", "typescript", "tsx"):
-            return self._extract_js_scopes(result.root_node)
-        else:
-            return self._extract_generic_scopes(result.root_node)
+        from codeplane.index._internal.parsing.packs import (
+            _GENERIC_SCOPE_PATTERNS,
+        )
+        from codeplane.index._internal.parsing.service import (
+            _extract_scopes_by_pattern,
+            _extract_scopes_generic,
+        )
+
+        pack = get_pack(result.language)
+        if pack is not None and pack.scope_types:
+            return _extract_scopes_generic(result.root_node, pack.scope_types)
+        return _extract_scopes_by_pattern(result.root_node, _GENERIC_SCOPE_PATTERNS)
 
     def extract_imports(self, result: ParseResult, file_path: str) -> list[SyntacticImport]:
         """Extract import statements from a parse result.
+
+        Uses tree-sitter queries to find import container nodes, then
+        per-language processors extract SyntacticImport objects.
 
         Args:
             result: ParseResult from parse()
@@ -501,124 +411,178 @@ class TreeSitterParser:
         Returns:
             List of SyntacticImport objects.
         """
-        if result.language == "python":
-            return self._extract_python_imports(result.root_node, file_path)
-        elif result.language in ("javascript", "typescript", "tsx"):
-            return self._extract_js_imports(result.root_node, file_path)
-        elif result.language == "csharp":
-            return self._extract_csharp_imports(result.root_node, file_path)
-        elif result.language == "go":
-            return self._extract_go_imports(result.root_node, file_path)
-        elif result.language == "rust":
-            return self._extract_rust_imports(result.root_node, file_path)
-        elif result.language == "java":
-            return self._extract_java_imports(result.root_node, file_path)
-        elif result.language == "kotlin":
-            return self._extract_kotlin_imports(result.root_node, file_path)
-        elif result.language == "ruby":
-            return self._extract_ruby_imports(result.root_node, file_path)
-        elif result.language == "php":
-            return self._extract_php_imports(result.root_node, file_path)
-        elif result.language == "swift":
-            return self._extract_swift_imports(result.root_node, file_path)
-        elif result.language == "scala":
-            return self._extract_scala_imports(result.root_node, file_path)
-        elif result.language == "elixir":
-            return self._extract_elixir_imports(result.root_node, file_path)
-        elif result.language == "haskell":
-            return self._extract_haskell_imports(result.root_node, file_path)
-        elif result.language == "ocaml":
-            return self._extract_ocaml_imports(result.root_node, file_path)
-        elif result.language == "lua":
-            return self._extract_lua_imports(result.root_node, file_path)
-        elif result.language == "julia":
-            return self._extract_julia_imports(result.root_node, file_path)
-        elif result.language in ("c", "cpp"):
-            return self._extract_c_imports(result.root_node, file_path)
-        else:
+        pack = get_pack(result.language)
+        if pack is not None and pack.import_query is not None:
+            return self._extract_imports_via_query(result.tree, result.root_node, pack, file_path)
+        return []
+
+    def _extract_imports_via_query(
+        self,
+        tree: Any,
+        root: Any,
+        pack: LanguagePack,
+        file_path: str,
+    ) -> list[SyntacticImport]:
+        """Extract imports using a tree-sitter query to find import nodes.
+
+        The query finds all import container nodes, then a per-language
+        processor extracts SyntacticImport objects from each matched node.
+        """
+        assert pack.import_query is not None
+        try:
+            query = _TSQuery(tree.language, pack.import_query)
+        except Exception:
             return []
+        cursor = _TSQueryCursor(query)
+        matches: list[tuple[int, dict[str, list[Any]]]] = cursor.matches(root)
+
+        processor = self._get_import_processor(pack.name)
+        imports: list[SyntacticImport] = []
+        for _pattern_idx, captures in matches:
+            nodes = captures.get("import_node", [])
+            for node in nodes:
+                imports.extend(processor(node, file_path))
+        return imports
+
+    def _get_import_processor(self, language: str) -> Any:
+        """Return the per-language import node processor."""
+        _PROCESSORS: dict[str, Any] = {
+            "python": self._process_python_import_node,
+            "javascript": self._process_js_import_node,
+            "typescript": self._process_js_import_node,
+            "tsx": self._process_js_import_node,
+            "go": self._process_go_import_node,
+            "rust": self._process_rust_import_node,
+            "java": self._process_java_import_node,
+            "csharp": self._process_csharp_import_node,
+            "kotlin": self._process_kotlin_import_node,
+            "scala": self._process_scala_import_node,
+            "ruby": self._process_ruby_import_node,
+            "php": self._process_php_import_node,
+            "swift": self._process_swift_import_node,
+            "elixir": self._process_elixir_import_node,
+            "haskell": self._process_haskell_import_node,
+            "ocaml": self._process_ocaml_import_node,
+            "lua": self._process_lua_import_node,
+            "julia": self._process_julia_import_node,
+            "c": self._process_c_import_node,
+            "cpp": self._process_c_import_node,
+        }
+        return _PROCESSORS.get(language, lambda _n, _f: [])
 
     def extract_declared_module(self, result: ParseResult, file_path: str) -> str | None:
         """Extract the language-level module/package/namespace declaration.
 
-        Returns the dotted module identity as written in source, or None
-        if the language doesn't use declarations or the file lacks one.
-
-        For Go, returns only the short package name (e.g. 'mypackage');
-        the full module path requires go.mod resolution done separately.
+        Uses tree-sitter queries when available, falls back to per-language
+        handlers for complex cases.
         """
+        pack = get_pack(result.language)
+
+        # Try query-based extraction first
+        if pack and pack.declared_module_query:
+            return self._extract_declared_module_via_query(result.tree, result.root_node, pack)
+
+        # Fall back to handler-based extraction
         lang = result.language
         root = result.root_node
-        if lang == "java":
-            return self._declared_module_java(root)
-        elif lang == "kotlin":
-            return self._declared_module_kotlin(root)
-        elif lang == "scala":
-            return self._declared_module_scala(root)
-        elif lang == "csharp":
+        if lang == "csharp":
             return self._declared_module_csharp(root)
-        elif lang == "go":
-            return self._declared_module_go(root)
         elif lang == "haskell":
             return self._declared_module_haskell(root)
         elif lang == "elixir":
             return self._declared_module_elixir(root)
-        elif lang == "julia":
-            return self._declared_module_julia(root)
         elif lang == "ruby":
             return self._declared_module_ruby(root)
-        elif lang == "php":
-            return self._declared_module_php(root)
         elif lang == "ocaml":
             return self._declared_module_ocaml(file_path)
-        # Python, JS/TS, C/C++, Rust, Swift, Lua: no declaration-based module
-        # Python: resolved via path_to_module() (filesystem = module path)
-        # JS/TS, C/C++: resolved via path-based resolution
-        # Rust: resolved via Cargo.toml + directory structure
-        # Swift, Lua: unresolvable / not yet supported
         return None
+
+    def _extract_declared_module_via_query(
+        self,
+        tree: Any,
+        root: Any,
+        pack: LanguagePack,
+    ) -> str | None:
+        """Extract declared module using a tree-sitter query."""
+        assert pack.declared_module_query is not None
+        try:
+            query = _TSQuery(tree.language, pack.declared_module_query)
+        except Exception:
+            return None
+        cursor = _TSQueryCursor(query)
+        matches: list[tuple[int, dict[str, list[Any]]]] = cursor.matches(root)
+        if not matches:
+            return None
+
+        module_node = matches[0][1].get("module_node", [None])[0]
+        if module_node is None:
+            return None
+
+        # Per-language text extraction from the found node
+        lang = pack.name
+        if lang == "java":
+            return self._declared_module_java_node(module_node)
+        elif lang == "kotlin":
+            return self._declared_module_kotlin_node(module_node)
+        elif lang == "scala":
+            return self._declared_module_scala_node(module_node)
+        elif lang == "go":
+            return self._declared_module_go_node(module_node)
+        elif lang == "julia":
+            # module_definition has identifier child
+            for child in module_node.children:
+                if child.type == "identifier" and child.text:
+                    return str(child.text.decode("utf-8"))
+            return None
+        elif lang == "php":
+            # namespace_definition has namespace_name child
+            for child in module_node.children:
+                if child.type == "namespace_name":
+                    parts = [
+                        c.text.decode("utf-8")
+                        for c in child.children
+                        if c.type == "name" and c.text
+                    ]
+                    return ".".join(parts) if parts else None
+            return None
+
+        # Generic: try using node text directly
+        return module_node.text.decode("utf-8") if module_node.text else None
 
     # ---- Package/module declaration extractors ----
 
-    def _declared_module_java(self, root: Any) -> str | None:
-        """Extract `package com.example.app;` → 'com.example.app'."""
-        for child in root.children:
-            if child.type == "package_declaration":
-                for sub in child.children:
-                    if sub.type == "scoped_identifier":
-                        parts = self._extract_java_scoped_path(sub)
-                        return ".".join(parts) if parts else None
-                    elif sub.type == "identifier":
-                        text = sub.text.decode("utf-8") if sub.text else None
-                        return text
+    def _declared_module_java_node(self, node: Any) -> str | None:
+        """Extract module from a package_declaration node."""
+        for child in node.children:
+            if child.type == "scoped_identifier":
+                parts = self._extract_java_scoped_path(child)
+                return ".".join(parts) if parts else None
+            elif child.type == "identifier":
+                return child.text.decode("utf-8") if child.text else None
         return None
 
-    def _declared_module_kotlin(self, root: Any) -> str | None:
-        """Extract `package com.example.app` → 'com.example.app'."""
-        for child in root.children:
-            if child.type == "package_header":
-                for sub in child.children:
-                    if sub.type == "qualified_identifier":
-                        parts = [
-                            c.text.decode("utf-8")
-                            for c in sub.children
-                            if c.type == "identifier" and c.text
-                        ]
-                        return ".".join(parts) if parts else None
+    def _declared_module_kotlin_node(self, node: Any) -> str | None:
+        """Extract module from a package_header node."""
+        for child in node.children:
+            if child.type == "qualified_identifier":
+                parts = [
+                    c.text.decode("utf-8")
+                    for c in child.children
+                    if c.type == "identifier" and c.text
+                ]
+                return ".".join(parts) if parts else None
         return None
 
-    def _declared_module_scala(self, root: Any) -> str | None:
-        """Extract `package cats.effect` → 'cats.effect'."""
-        for child in root.children:
-            if child.type == "package_clause":
-                for sub in child.children:
-                    if sub.type == "package_identifier":
-                        parts = [
-                            c.text.decode("utf-8")
-                            for c in sub.children
-                            if c.type == "identifier" and c.text
-                        ]
-                        return ".".join(parts) if parts else None
+    def _declared_module_scala_node(self, node: Any) -> str | None:
+        """Extract module from a package_clause node."""
+        for child in node.children:
+            if child.type == "package_identifier":
+                parts = [
+                    c.text.decode("utf-8")
+                    for c in child.children
+                    if c.type == "identifier" and c.text
+                ]
+                return ".".join(parts) if parts else None
         return None
 
     def _declared_module_csharp(self, root: Any) -> str | None:
@@ -667,17 +631,11 @@ class TreeSitterParser:
                 break
         return ".".join(parts) if parts else None
 
-    def _declared_module_go(self, root: Any) -> str | None:
-        """Extract `package mypackage` → 'mypackage'.
-
-        Returns only the short name. Full module path (e.g.
-        'github.com/user/repo/pkg') requires go.mod resolution.
-        """
-        for child in root.children:
-            if child.type == "package_clause":
-                for sub in child.children:
-                    if sub.type == "package_identifier":
-                        return sub.text.decode("utf-8") if sub.text else None
+    def _declared_module_go_node(self, node: Any) -> str | None:
+        """Extract module from a package_clause node."""
+        for child in node.children:
+            if child.type == "package_identifier":
+                return child.text.decode("utf-8") if child.text else None
         return None
 
     def _declared_module_haskell(self, root: Any) -> str | None:
@@ -721,15 +679,6 @@ class TreeSitterParser:
 
         return _find_defmodule(root)
 
-    def _declared_module_julia(self, root: Any) -> str | None:
-        """Extract `module MyModule ... end` → 'MyModule'."""
-        for child in root.children:
-            if child.type == "module_definition":
-                for sub in child.children:
-                    if sub.type == "identifier" and sub.text:
-                        return str(sub.text.decode("utf-8"))
-        return None
-
     def _declared_module_ruby(self, root: Any) -> str | None:
         """Extract nested `module A; module B; end; end` → 'A::B'.
 
@@ -754,23 +703,6 @@ class TreeSitterParser:
 
         _walk_modules(root.children[0] if root.children else root)
         return "::.".join(parts).replace("::", ".") if parts else None
-
-    def _declared_module_php(self, root: Any) -> str | None:
-        r"""Extract `namespace App\Models;` → 'App.Models'.
-
-        Converts PHP backslash separators to dots for uniform matching.
-        """
-        for child in root.children:
-            if child.type == "namespace_definition":
-                for sub in child.children:
-                    if sub.type == "namespace_name":
-                        parts = [
-                            c.text.decode("utf-8")
-                            for c in sub.children
-                            if c.type == "name" and c.text
-                        ]
-                        return ".".join(parts) if parts else None
-        return None
 
     @staticmethod
     def _declared_module_ocaml(file_path: str) -> str | None:
@@ -800,200 +732,76 @@ class TreeSitterParser:
         Returns:
             List of DynamicAccess objects.
         """
-        if result.language == "python":
-            return self._extract_python_dynamic(result.root_node)
-        elif result.language in ("javascript", "typescript", "tsx"):
-            return self._extract_js_dynamic(result.root_node)
-        else:
+        pack = get_pack(result.language)
+        if pack is not None and pack.dynamic_query is not None:
+            return self._extract_dynamic_via_query(result.tree, result.root_node, pack)
+        return []
+
+    def _extract_dynamic_via_query(
+        self,
+        tree: Any,
+        root: Any,
+        pack: LanguagePack,
+    ) -> list[DynamicAccess]:
+        """Extract dynamic accesses using a query to find candidate nodes."""
+        assert pack.dynamic_query is not None
+        try:
+            query = _TSQuery(tree.language, pack.dynamic_query)
+        except Exception:
             return []
+        cursor = _TSQueryCursor(query)
+        matches: list[tuple[int, dict[str, list[Any]]]] = cursor.matches(root)
 
-    def _extract_python_scopes(self, root: Any) -> list[SyntacticScope]:
-        """Extract scopes from Python AST."""
-        scopes: list[SyntacticScope] = []
-        scope_counter = 0
+        processor = {
+            "python": self._process_python_dynamic_node,
+            "javascript": self._process_js_dynamic_node,
+            "typescript": self._process_js_dynamic_node,
+            "tsx": self._process_js_dynamic_node,
+        }.get(pack.name, lambda _n: [])
 
-        # File scope is implicit (scope_id=0)
-        file_scope = SyntacticScope(
-            scope_id=scope_counter,
-            parent_scope_id=None,
-            kind="file",
-            start_line=root.start_point[0] + 1,
-            start_col=root.start_point[1],
-            end_line=root.end_point[0] + 1,
-            end_col=root.end_point[1],
-        )
-        scopes.append(file_scope)
+        dynamics: list[DynamicAccess] = []
+        for _idx, captures in matches:
+            nodes = captures.get("dynamic_node", [])
+            for node in nodes:
+                dynamics.extend(processor(node))
+        return dynamics
 
-        def walk(node: Any, parent_scope_id: int) -> None:
-            nonlocal scope_counter
-
-            scope_types = {
-                "class_definition": "class",
-                "function_definition": "function",
-                "lambda": "lambda",
-                "list_comprehension": "comprehension",
-                "set_comprehension": "comprehension",
-                "dictionary_comprehension": "comprehension",
-                "generator_expression": "comprehension",
-            }
-
-            if node.type in scope_types:
-                scope_counter += 1
-                scope = SyntacticScope(
-                    scope_id=scope_counter,
-                    parent_scope_id=parent_scope_id,
-                    kind=scope_types[node.type],
-                    start_line=node.start_point[0] + 1,
-                    start_col=node.start_point[1],
-                    end_line=node.end_point[0] + 1,
-                    end_col=node.end_point[1],
-                )
-                scopes.append(scope)
-                for child in node.children:
-                    walk(child, scope_counter)
-            else:
-                for child in node.children:
-                    walk(child, parent_scope_id)
-
-        for child in root.children:
-            walk(child, 0)
-
-        return scopes
-
-    def _extract_js_scopes(self, root: Any) -> list[SyntacticScope]:
-        """Extract scopes from JavaScript/TypeScript AST."""
-        scopes: list[SyntacticScope] = []
-        scope_counter = 0
-
-        # File scope
-        file_scope = SyntacticScope(
-            scope_id=scope_counter,
-            parent_scope_id=None,
-            kind="file",
-            start_line=root.start_point[0] + 1,
-            start_col=root.start_point[1],
-            end_line=root.end_point[0] + 1,
-            end_col=root.end_point[1],
-        )
-        scopes.append(file_scope)
-
-        def walk(node: Any, parent_scope_id: int) -> None:
-            nonlocal scope_counter
-
-            scope_types = {
-                "class_declaration": "class",
-                "class_expression": "class",
-                "function_declaration": "function",
-                "function_expression": "function",
-                "arrow_function": "function",
-                "method_definition": "function",
-                "for_statement": "block",
-                "for_in_statement": "block",
-                "while_statement": "block",
-                "if_statement": "block",
-                "statement_block": "block",
-            }
-
-            if node.type in scope_types:
-                scope_counter += 1
-                scope = SyntacticScope(
-                    scope_id=scope_counter,
-                    parent_scope_id=parent_scope_id,
-                    kind=scope_types[node.type],
-                    start_line=node.start_point[0] + 1,
-                    start_col=node.start_point[1],
-                    end_line=node.end_point[0] + 1,
-                    end_col=node.end_point[1],
-                )
-                scopes.append(scope)
-                for child in node.children:
-                    walk(child, scope_counter)
-            else:
-                for child in node.children:
-                    walk(child, parent_scope_id)
-
-        for child in root.children:
-            walk(child, 0)
-
-        return scopes
-
-    def _extract_generic_scopes(self, root: Any) -> list[SyntacticScope]:
-        """Extract scopes generically by looking for common scope patterns."""
-        scopes: list[SyntacticScope] = []
-        scope_counter = 0
-
-        # File scope
-        file_scope = SyntacticScope(
-            scope_id=scope_counter,
-            parent_scope_id=None,
-            kind="file",
-            start_line=root.start_point[0] + 1,
-            start_col=root.start_point[1],
-            end_line=root.end_point[0] + 1,
-            end_col=root.end_point[1],
-        )
-        scopes.append(file_scope)
-
-        scope_type_patterns = {
-            "class": "class",
-            "function": "function",
-            "method": "function",
-            "block": "block",
-            "lambda": "lambda",
-        }
-
-        def walk(node: Any, parent_scope_id: int) -> None:
-            nonlocal scope_counter
-
-            # Check if node type contains any scope-indicating patterns
-            kind: str | None = None
-            for pattern, scope_kind in scope_type_patterns.items():
-                if pattern in node.type:
-                    kind = scope_kind
-                    break
-
-            if kind is not None:
-                scope_counter += 1
-                scope = SyntacticScope(
-                    scope_id=scope_counter,
-                    parent_scope_id=parent_scope_id,
-                    kind=kind,
-                    start_line=node.start_point[0] + 1,
-                    start_col=node.start_point[1],
-                    end_line=node.end_point[0] + 1,
-                    end_col=node.end_point[1],
-                )
-                scopes.append(scope)
-                for child in node.children:
-                    walk(child, scope_counter)
-            else:
-                for child in node.children:
-                    walk(child, parent_scope_id)
-
-        for child in root.children:
-            walk(child, 0)
-
-        return scopes
-
-    def _extract_python_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract imports from Python AST."""
+    def _process_python_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a single Python import node found by query."""
         imports: list[SyntacticImport] = []
 
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-        def walk(node: Any) -> None:
-            # import foo, import foo as bar
-            if node.type == "import_statement":
-                for child in node.children:
-                    if child.type == "dotted_name":
-                        name = child.text.decode("utf-8") if child.text else ""
+        if node.type == "import_statement":
+            for child in node.children:
+                if child.type == "dotted_name":
+                    name = child.text.decode("utf-8") if child.text else ""
+                    imports.append(
+                        SyntacticImport(
+                            import_uid=_import_uid(file_path, name, node.start_point[0] + 1),
+                            imported_name=name,
+                            alias=None,
+                            source_literal=name,
+                            import_kind="python_import",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_col=node.end_point[1],
+                        )
+                    )
+                elif child.type == "aliased_import":
+                    name_node = child.child_by_field_name("name")
+                    alias_node = child.child_by_field_name("alias")
+                    if name_node:
+                        name = name_node.text.decode("utf-8") if name_node.text else ""
+                        alias = (
+                            alias_node.text.decode("utf-8")
+                            if alias_node and alias_node.text
+                            else None
+                        )
                         imports.append(
                             SyntacticImport(
-                                import_uid=make_uid(name, node.start_point[0] + 1),
+                                import_uid=_import_uid(file_path, name, node.start_point[0] + 1),
                                 imported_name=name,
-                                alias=None,
+                                alias=alias,
                                 source_literal=name,
                                 import_kind="python_import",
                                 start_line=node.start_point[0] + 1,
@@ -1002,96 +810,65 @@ class TreeSitterParser:
                                 end_col=node.end_point[1],
                             )
                         )
-                    elif child.type == "aliased_import":
-                        name_node = child.child_by_field_name("name")
-                        alias_node = child.child_by_field_name("alias")
-                        if name_node:
-                            name = name_node.text.decode("utf-8") if name_node.text else ""
-                            alias = (
-                                alias_node.text.decode("utf-8")
-                                if alias_node and alias_node.text
-                                else None
-                            )
-                            imports.append(
-                                SyntacticImport(
-                                    import_uid=make_uid(name, node.start_point[0] + 1),
-                                    imported_name=name,
-                                    alias=alias,
-                                    source_literal=name,
-                                    import_kind="python_import",
-                                    start_line=node.start_point[0] + 1,
-                                    start_col=node.start_point[1],
-                                    end_line=node.end_point[0] + 1,
-                                    end_col=node.end_point[1],
-                                )
-                            )
 
-            # from foo import bar, from foo import bar as baz
-            elif node.type == "import_from_statement":
-                module_node = node.child_by_field_name("module_name")
-                source = (
-                    module_node.text.decode("utf-8") if module_node and module_node.text else None
-                )
-
-                for child in node.children:
-                    if child.type == "dotted_name" and child != module_node:
-                        name = child.text.decode("utf-8") if child.text else ""
-                        imports.append(
-                            SyntacticImport(
-                                import_uid=make_uid(name, node.start_point[0] + 1),
-                                imported_name=name,
-                                alias=None,
-                                source_literal=source,
-                                import_kind="python_from",
-                                start_line=node.start_point[0] + 1,
-                                start_col=node.start_point[1],
-                                end_line=node.end_point[0] + 1,
-                                end_col=node.end_point[1],
-                            )
-                        )
-                    elif child.type == "aliased_import":
-                        name_node = child.child_by_field_name("name")
-                        alias_node = child.child_by_field_name("alias")
-                        if name_node:
-                            name = name_node.text.decode("utf-8") if name_node.text else ""
-                            alias = (
-                                alias_node.text.decode("utf-8")
-                                if alias_node and alias_node.text
-                                else None
-                            )
-                            imports.append(
-                                SyntacticImport(
-                                    import_uid=make_uid(name, node.start_point[0] + 1),
-                                    imported_name=name,
-                                    alias=alias,
-                                    source_literal=source,
-                                    import_kind="python_from",
-                                    start_line=node.start_point[0] + 1,
-                                    start_col=node.start_point[1],
-                                    end_line=node.end_point[0] + 1,
-                                    end_col=node.end_point[1],
-                                )
-                            )
-                    elif child.type == "wildcard_import":
-                        # from X import * — namespace-level wildcard import
-                        imports.append(
-                            SyntacticImport(
-                                import_uid=make_uid("*", node.start_point[0] + 1),
-                                imported_name="*",
-                                alias=None,
-                                source_literal=source,
-                                import_kind="python_from",
-                                start_line=node.start_point[0] + 1,
-                                start_col=node.start_point[1],
-                                end_line=node.end_point[0] + 1,
-                                end_col=node.end_point[1],
-                            )
-                        )
+        elif node.type == "import_from_statement":
+            module_node = node.child_by_field_name("module_name")
+            source = module_node.text.decode("utf-8") if module_node and module_node.text else None
 
             for child in node.children:
-                walk(child)
+                if child.type == "dotted_name" and child != module_node:
+                    name = child.text.decode("utf-8") if child.text else ""
+                    imports.append(
+                        SyntacticImport(
+                            import_uid=_import_uid(file_path, name, node.start_point[0] + 1),
+                            imported_name=name,
+                            alias=None,
+                            source_literal=source,
+                            import_kind="python_from",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_col=node.end_point[1],
+                        )
+                    )
+                elif child.type == "aliased_import":
+                    name_node = child.child_by_field_name("name")
+                    alias_node = child.child_by_field_name("alias")
+                    if name_node:
+                        name = name_node.text.decode("utf-8") if name_node.text else ""
+                        alias = (
+                            alias_node.text.decode("utf-8")
+                            if alias_node and alias_node.text
+                            else None
+                        )
+                        imports.append(
+                            SyntacticImport(
+                                import_uid=_import_uid(file_path, name, node.start_point[0] + 1),
+                                imported_name=name,
+                                alias=alias,
+                                source_literal=source,
+                                import_kind="python_from",
+                                start_line=node.start_point[0] + 1,
+                                start_col=node.start_point[1],
+                                end_line=node.end_point[0] + 1,
+                                end_col=node.end_point[1],
+                            )
+                        )
+                elif child.type == "wildcard_import":
+                    imports.append(
+                        SyntacticImport(
+                            import_uid=_import_uid(file_path, "*", node.start_point[0] + 1),
+                            imported_name="*",
+                            alias=None,
+                            source_literal=source,
+                            import_kind="python_from",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            end_line=node.end_point[0] + 1,
+                            end_col=node.end_point[1],
+                        )
+                    )
 
-        walk(root)
         return imports
 
     # ------------------------------------------------------------------
@@ -1106,8 +883,8 @@ class TreeSitterParser:
             return text
         return ""
 
-    def _extract_csharp_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract using directives from C# AST.
+    def _process_csharp_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a single C# using_directive node found by query.
 
         Handles three forms:
         - ``using Namespace;``  -> import_kind = csharp_using
@@ -1116,166 +893,42 @@ class TreeSitterParser:
         """
         imports: list[SyntacticImport] = []
 
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+        children = node.children
+        has_static = any(c.type == "static" for c in children)
+        has_equals = any(c.type == "=" or (c.text and c.text == b"=") for c in children)
 
-        def _walk_for_usings(parent: Any) -> None:
-            """Walk tree nodes, descending into namespaces and preprocessor wrappers.
-
-            C# allows `using` directives inside namespace declarations, so we must
-            recurse into namespace_declaration and declaration_list nodes.
-            """
-            _DESCEND_INTO = _CSHARP_PREPROC_WRAPPERS | {
-                "namespace_declaration",
-                "declaration_list",
-            }
-            for node in parent.children:
-                if node.type in _DESCEND_INTO:
-                    _walk_for_usings(node)
-                if node.type == "using_directive":
-                    _process_using_directive(node)
-
-        def _process_using_directive(node: Any) -> None:
-            children = node.children
-            has_static = any(c.type == "static" for c in children)
-            has_equals = any(c.type == "=" or (c.text and c.text == b"=") for c in children)
-
-            if has_equals:
-                # Aliased using: using Alias = Namespace.Type;
-                alias_node = None
-                target_node = None
-                found_equals = False
-                for c in children:
-                    if c.type == "using":
-                        continue
-                    if c.type == ";":
-                        continue
-                    if c.type == "=" or (c.text and c.text == b"="):
-                        found_equals = True
-                        continue
-                    if not found_equals and c.type == "identifier":
-                        alias_node = c
-                    elif found_equals and c.type in (
-                        "qualified_name",
-                        "identifier",
-                        "generic_name",
-                    ):
-                        target_node = c
-
-                if alias_node and target_node:
-                    alias_text = self._qualified_name_text(alias_node)
-                    target_text = self._qualified_name_text(target_node)
-                    imports.append(
-                        SyntacticImport(
-                            import_uid=make_uid(target_text, node.start_point[0] + 1),
-                            imported_name=target_text,
-                            alias=alias_text,
-                            source_literal=target_text,
-                            import_kind="csharp_using",
-                            start_line=node.start_point[0] + 1,
-                            start_col=node.start_point[1],
-                            end_line=node.end_point[0] + 1,
-                            end_col=node.end_point[1],
-                        )
-                    )
-
-            elif has_static:
-                # Static using: using static Namespace.Type;
-                target_node = None
-                for c in children:
-                    if c.type in ("qualified_name", "identifier", "generic_name"):
-                        target_node = c
-                if target_node:
-                    target_text = self._qualified_name_text(target_node)
-                    imports.append(
-                        SyntacticImport(
-                            import_uid=make_uid(target_text, node.start_point[0] + 1),
-                            imported_name=target_text,
-                            alias=None,
-                            source_literal=target_text,
-                            import_kind="csharp_using_static",
-                            start_line=node.start_point[0] + 1,
-                            start_col=node.start_point[1],
-                            end_line=node.end_point[0] + 1,
-                            end_col=node.end_point[1],
-                        )
-                    )
-
-            else:
-                # Regular namespace using: using Namespace;
-                target_node = None
-                for c in children:
-                    if c.type in ("qualified_name", "identifier"):
-                        target_node = c
-                        break
-                if target_node:
-                    target_text = self._qualified_name_text(target_node)
-                    imports.append(
-                        SyntacticImport(
-                            import_uid=make_uid(target_text, node.start_point[0] + 1),
-                            imported_name=target_text,
-                            alias=None,
-                            source_literal=target_text,
-                            import_kind="csharp_using",
-                            start_line=node.start_point[0] + 1,
-                            start_col=node.start_point[1],
-                            end_line=node.end_point[0] + 1,
-                            end_col=node.end_point[1],
-                        )
-                    )
-
-        _walk_for_usings(root)
-        return imports
-
-    def _extract_go_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract import declarations from Go AST.
-
-        Handles three forms:
-        - ``import "fmt"`` -> single import
-        - ``import alias "pkg"`` -> aliased import
-        - ``import . "pkg"`` -> dot import (namespace-level, like Python's *)
-        """
-        imports: list[SyntacticImport] = []
-
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-        def process_import_spec(node: Any) -> None:
-            """Process a single import_spec node."""
-            path_node = None
+        if has_equals:
+            # Aliased using: using Alias = Namespace.Type;
             alias_node = None
-            is_dot_import = False
+            target_node = None
+            found_equals = False
+            for c in children:
+                if c.type == "using":
+                    continue
+                if c.type == ";":
+                    continue
+                if c.type == "=" or (c.text and c.text == b"="):
+                    found_equals = True
+                    continue
+                if not found_equals and c.type == "identifier":
+                    alias_node = c
+                elif found_equals and c.type in (
+                    "qualified_name",
+                    "identifier",
+                    "generic_name",
+                ):
+                    target_node = c
 
-            for child in node.children:
-                if child.type == "interpreted_string_literal" or child.type == "raw_string_literal":
-                    path_node = child
-                elif child.type == "package_identifier":
-                    alias_node = child
-                elif child.type == "dot" or (child.text and child.text == b"."):
-                    is_dot_import = True
-                elif child.type == "blank_identifier":
-                    # import _ "pkg" - side-effect import, still record it
-                    alias_node = child
-
-            if path_node:
-                # Strip quotes (double or backtick) from import path
-                path_text = path_node.text.decode("utf-8").strip('"`') if path_node.text else ""
-                alias_text = None
-                if alias_node and alias_node.text:
-                    alias_text = alias_node.text.decode("utf-8")
-
-                # For dot imports, mark with "*" as imported_name like other star imports
-                imported_name = "*" if is_dot_import else path_text.split("/")[-1]
-
+            if alias_node and target_node:
+                alias_text = self._qualified_name_text(alias_node)
+                target_text = self._qualified_name_text(target_node)
                 imports.append(
                     SyntacticImport(
-                        import_uid=make_uid(path_text, node.start_point[0] + 1),
-                        imported_name=imported_name,
-                        alias=alias_text if not is_dot_import else None,
-                        source_literal=path_text,
-                        import_kind="go_import",
+                        import_uid=_import_uid(file_path, target_text, node.start_point[0] + 1),
+                        imported_name=target_text,
+                        alias=alias_text,
+                        source_literal=target_text,
+                        import_kind="csharp_using",
                         start_line=node.start_point[0] + 1,
                         start_col=node.start_point[1],
                         end_line=node.end_point[0] + 1,
@@ -1283,113 +936,95 @@ class TreeSitterParser:
                     )
                 )
 
-        def walk(node: Any) -> None:
-            if node.type == "import_declaration":
-                for child in node.children:
-                    if child.type == "import_spec":
-                        process_import_spec(child)
-                    elif child.type == "import_spec_list":
-                        for spec in child.children:
-                            if spec.type == "import_spec":
-                                process_import_spec(spec)
-            for child in node.children:
-                walk(child)
+        elif has_static:
+            # Static using: using static Namespace.Type;
+            target_node = None
+            for c in children:
+                if c.type in ("qualified_name", "identifier", "generic_name"):
+                    target_node = c
+            if target_node:
+                target_text = self._qualified_name_text(target_node)
+                imports.append(
+                    SyntacticImport(
+                        import_uid=_import_uid(file_path, target_text, node.start_point[0] + 1),
+                        imported_name=target_text,
+                        alias=None,
+                        source_literal=target_text,
+                        import_kind="csharp_using_static",
+                        start_line=node.start_point[0] + 1,
+                        start_col=node.start_point[1],
+                        end_line=node.end_point[0] + 1,
+                        end_col=node.end_point[1],
+                    )
+                )
 
-        walk(root)
+        else:
+            # Regular namespace using: using Namespace;
+            target_node = None
+            for c in children:
+                if c.type in ("qualified_name", "identifier"):
+                    target_node = c
+                    break
+            if target_node:
+                target_text = self._qualified_name_text(target_node)
+                imports.append(
+                    SyntacticImport(
+                        import_uid=_import_uid(file_path, target_text, node.start_point[0] + 1),
+                        imported_name=target_text,
+                        alias=None,
+                        source_literal=target_text,
+                        import_kind="csharp_using",
+                        start_line=node.start_point[0] + 1,
+                        start_col=node.start_point[1],
+                        end_line=node.end_point[0] + 1,
+                        end_col=node.end_point[1],
+                    )
+                )
+
         return imports
 
-    def _extract_rust_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract use declarations from Rust AST.
-
-        Handles:
-        - ``use crate::module::Type;``
-        - ``use crate::module::*;`` -> glob import
-        - ``use X as Y;`` -> aliased import
-        - ``use crate::module::{A, B};`` -> grouped imports
-        """
+    def _process_go_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a single Go import_spec node found by query."""
         imports: list[SyntacticImport] = []
+        # node is an import_spec
+        path_node = None
+        alias_node = None
+        is_dot_import = False
 
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+        for child in node.children:
+            if child.type == "interpreted_string_literal" or child.type == "raw_string_literal":
+                path_node = child
+            elif child.type == "package_identifier":
+                alias_node = child
+            elif child.type == "dot" or (child.text and child.text == b"."):
+                is_dot_import = True
+            elif child.type == "blank_identifier":
+                alias_node = child
 
-        def extract_use_tree(node: Any, prefix: str = "") -> list[tuple[str, str | None, bool]]:
-            """Recursively extract (path, alias, is_glob) from use_tree nodes."""
-            results: list[tuple[str, str | None, bool]] = []
+        if path_node:
+            path_text = path_node.text.decode("utf-8").strip('"`') if path_node.text else ""
+            alias_text = None
+            if alias_node and alias_node.text:
+                alias_text = alias_node.text.decode("utf-8")
+            imported_name = "*" if is_dot_import else path_text.split("/")[-1]
+            imports.append(
+                SyntacticImport(
+                    import_uid=_import_uid(file_path, path_text, node.start_point[0] + 1),
+                    imported_name=imported_name,
+                    alias=alias_text if not is_dot_import else None,
+                    source_literal=path_text,
+                    import_kind="go_import",
+                    start_line=node.start_point[0] + 1,
+                    start_col=node.start_point[1],
+                    end_line=node.end_point[0] + 1,
+                    end_col=node.end_point[1],
+                )
+            )
+        return imports
 
-            if node.type == "use_as_clause":
-                # use X as Y - structure: scoped_identifier, 'as', identifier
-                path_node = None
-                alias_node = None
-                saw_as = False
-                for child in node.children:
-                    if child.type == "as":
-                        saw_as = True
-                    elif child.type in (
-                        "scoped_identifier",
-                        "crate",
-                        "self",
-                        "super",
-                    ):
-                        path_node = child
-                    elif child.type == "identifier":
-                        if saw_as:
-                            # This is the alias (comes after 'as')
-                            alias_node = child
-                        elif path_node is None:
-                            # This is the path (simple identifier before 'as')
-                            path_node = child
-                if path_node:
-                    path = self._extract_rust_path(path_node)
-                    full_path = f"{prefix}::{path}" if prefix else path
-                    alias = (
-                        alias_node.text.decode("utf-8") if alias_node and alias_node.text else None
-                    )
-                    results.append((full_path, alias, False))
-
-            elif node.type == "use_wildcard":
-                # use module::*
-                for child in node.children:
-                    if child.type == "scoped_identifier":
-                        path = self._extract_rust_path(child)
-                        full_path = f"{prefix}::{path}" if prefix else path
-                        results.append((full_path, None, True))
-                if not results:
-                    # Just * at current level
-                    results.append((prefix, None, True))
-
-            elif node.type == "use_list":
-                # use module::{A, B}
-                for child in node.children:
-                    if child.type in (
-                        "use_as_clause",
-                        "use_wildcard",
-                        "use_list",
-                        "identifier",
-                        "self",
-                    ):
-                        sub_results = extract_use_tree(child, prefix)
-                        results.extend(sub_results)
-
-            elif node.type == "scoped_use_list":
-                # use module::{...}
-                scope_prefix = ""
-                use_list = None
-                for child in node.children:
-                    if child.type in ("scoped_identifier", "identifier", "crate", "self", "super"):
-                        scope_prefix = self._extract_rust_path(child)
-                    elif child.type == "use_list":
-                        use_list = child
-                if use_list:
-                    full_prefix = f"{prefix}::{scope_prefix}" if prefix else scope_prefix
-                    results.extend(extract_use_tree(use_list, full_prefix))
-
-            elif node.type in ("scoped_identifier", "identifier", "crate", "self", "super"):
-                path = self._extract_rust_path(node)
-                full_path = f"{prefix}::{path}" if prefix else path
-                results.append((full_path, None, False))
-
-            return results
+    def _process_rust_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a single Rust use_declaration node found by query."""
+        imports: list[SyntacticImport] = []
 
         def _extract_rust_path(node: Any) -> str:
             """Extract full path from scoped_identifier or identifier."""
@@ -1407,84 +1042,97 @@ class TreeSitterParser:
                 return "::".join(p for p in parts if p)
             return ""
 
-        # Store the helper as instance method for reuse
-        self._extract_rust_path = _extract_rust_path
+        def extract_use_tree(node: Any, prefix: str = "") -> list[tuple[str, str | None, bool]]:
+            """Recursively extract (path, alias, is_glob) from use_tree nodes."""
+            results: list[tuple[str, str | None, bool]] = []
 
-        def walk(node: Any) -> None:
-            if node.type == "use_declaration":
+            if node.type == "use_as_clause":
+                path_node = None
+                alias_node = None
+                saw_as = False
+                for child in node.children:
+                    if child.type == "as":
+                        saw_as = True
+                    elif child.type in (
+                        "scoped_identifier",
+                        "crate",
+                        "self",
+                        "super",
+                    ):
+                        path_node = child
+                    elif child.type == "identifier":
+                        if saw_as:
+                            alias_node = child
+                        elif path_node is None:
+                            path_node = child
+                if path_node:
+                    path = _extract_rust_path(path_node)
+                    full_path = f"{prefix}::{path}" if prefix else path
+                    alias = (
+                        alias_node.text.decode("utf-8") if alias_node and alias_node.text else None
+                    )
+                    results.append((full_path, alias, False))
+
+            elif node.type == "use_wildcard":
+                for child in node.children:
+                    if child.type == "scoped_identifier":
+                        path = _extract_rust_path(child)
+                        full_path = f"{prefix}::{path}" if prefix else path
+                        results.append((full_path, None, True))
+                if not results:
+                    results.append((prefix, None, True))
+
+            elif node.type == "use_list":
                 for child in node.children:
                     if child.type in (
                         "use_as_clause",
                         "use_wildcard",
-                        "scoped_use_list",
-                        "scoped_identifier",
-                        "identifier",
                         "use_list",
+                        "identifier",
+                        "self",
                     ):
-                        results = extract_use_tree(child)
-                        for path, alias, is_glob in results:
-                            imported_name = "*" if is_glob else path.split("::")[-1]
-                            imports.append(
-                                SyntacticImport(
-                                    import_uid=make_uid(path, node.start_point[0] + 1),
-                                    imported_name=imported_name,
-                                    alias=alias,
-                                    source_literal=path,
-                                    import_kind="rust_use",
-                                    start_line=node.start_point[0] + 1,
-                                    start_col=node.start_point[1],
-                                    end_line=node.end_point[0] + 1,
-                                    end_col=node.end_point[1],
-                                )
-                            )
-            for child in node.children:
-                walk(child)
+                        sub_results = extract_use_tree(child, prefix)
+                        results.extend(sub_results)
 
-        walk(root)
-        return imports
-
-    def _extract_java_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract import declarations from Java AST.
-
-        Handles:
-        - ``import com.foo.Bar;``
-        - ``import static com.foo.Bar.method;``
-        - ``import com.foo.*;`` -> wildcard import
-        """
-        imports: list[SyntacticImport] = []
-
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-        def walk(node: Any) -> None:
-            if node.type == "import_declaration":
-                is_static = False
-                is_wildcard = False
-                path_parts: list[str] = []
-
+            elif node.type == "scoped_use_list":
+                scope_prefix = ""
+                use_list = None
                 for child in node.children:
-                    if child.type == "static":
-                        is_static = True
-                    elif child.type == "scoped_identifier":
-                        path_parts = self._extract_java_scoped_path(child)
-                    elif child.type == "identifier":
-                        path_parts = [child.text.decode("utf-8") if child.text else ""]
-                    elif child.type == "asterisk":
-                        is_wildcard = True
+                    if child.type in ("scoped_identifier", "identifier", "crate", "self", "super"):
+                        scope_prefix = _extract_rust_path(child)
+                    elif child.type == "use_list":
+                        use_list = child
+                if use_list:
+                    full_prefix = f"{prefix}::{scope_prefix}" if prefix else scope_prefix
+                    results.extend(extract_use_tree(use_list, full_prefix))
 
-                if path_parts:
-                    full_path = ".".join(path_parts)
-                    imported_name = "*" if is_wildcard else path_parts[-1]
-                    import_kind = "java_import_static" if is_static else "java_import"
+            elif node.type in ("scoped_identifier", "identifier", "crate", "self", "super"):
+                path = _extract_rust_path(node)
+                full_path = f"{prefix}::{path}" if prefix else path
+                results.append((full_path, None, False))
 
+            return results
+
+        # Process the use_declaration node
+        for child in node.children:
+            if child.type in (
+                "use_as_clause",
+                "use_wildcard",
+                "scoped_use_list",
+                "scoped_identifier",
+                "identifier",
+                "use_list",
+            ):
+                results = extract_use_tree(child)
+                for path, alias, is_glob in results:
+                    imported_name = "*" if is_glob else path.split("::")[-1]
                     imports.append(
                         SyntacticImport(
-                            import_uid=make_uid(full_path, node.start_point[0] + 1),
+                            import_uid=_import_uid(file_path, path, node.start_point[0] + 1),
                             imported_name=imported_name,
-                            alias=None,
-                            source_literal=full_path,
-                            import_kind=import_kind,
+                            alias=alias,
+                            source_literal=path,
+                            import_kind="rust_use",
                             start_line=node.start_point[0] + 1,
                             start_col=node.start_point[1],
                             end_line=node.end_point[0] + 1,
@@ -1492,10 +1140,45 @@ class TreeSitterParser:
                         )
                     )
 
-            for child in node.children:
-                walk(child)
+        return imports
 
-        walk(root)
+    def _process_java_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a single Java import_declaration node found by query."""
+        imports: list[SyntacticImport] = []
+
+        is_static = False
+        is_wildcard = False
+        path_parts: list[str] = []
+
+        for child in node.children:
+            if child.type == "static":
+                is_static = True
+            elif child.type == "scoped_identifier":
+                path_parts = self._extract_java_scoped_path(child)
+            elif child.type == "identifier":
+                path_parts = [child.text.decode("utf-8") if child.text else ""]
+            elif child.type == "asterisk":
+                is_wildcard = True
+
+        if path_parts:
+            full_path = ".".join(path_parts)
+            imported_name = "*" if is_wildcard else path_parts[-1]
+            import_kind = "java_import_static" if is_static else "java_import"
+
+            imports.append(
+                SyntacticImport(
+                    import_uid=_import_uid(file_path, full_path, node.start_point[0] + 1),
+                    imported_name=imported_name,
+                    alias=None,
+                    source_literal=full_path,
+                    import_kind=import_kind,
+                    start_line=node.start_point[0] + 1,
+                    start_col=node.start_point[1],
+                    end_line=node.end_point[0] + 1,
+                    end_col=node.end_point[1],
+                )
+            )
+
         return imports
 
     def _extract_java_scoped_path(self, node: Any) -> list[str]:
@@ -1508,182 +1191,141 @@ class TreeSitterParser:
                 parts.extend(self._extract_java_scoped_path(child))
         return parts
 
-    def _extract_kotlin_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract import declarations from Kotlin AST.
+    def _process_kotlin_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a Kotlin import_header node found by query.
 
-        Handles:
-        - ``import com.foo.Bar``
-        - ``import com.foo.Bar as Alias``
-        - ``import com.foo.*`` -> wildcard import
+        The import_header node directly contains the qualified path, optional
+        alias, and optional wildcard — there is no intermediate 'import' child.
         """
         imports: list[SyntacticImport] = []
+        path_text = ""
+        alias_text: str | None = None
+        is_wildcard = False
 
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+        for child in node.children:
+            if child.type == "qualified_identifier":
+                parts: list[str] = []
+                for qchild in child.children:
+                    if qchild.type == "identifier" and qchild.text:
+                        parts.append(qchild.text.decode("utf-8"))
+                path_text = ".".join(parts)
+            elif child.type == "identifier":
+                # Single-segment import or the dotted-identifier node
+                if not path_text:
+                    raw = child.text.decode("utf-8") if child.text else ""
+                    # identifier may be a dotted path (simple_identifier children)
+                    sub_parts: list[str] = []
+                    for sc in child.children:
+                        if sc.type == "simple_identifier" and sc.text:
+                            sub_parts.append(sc.text.decode("utf-8"))
+                    path_text = ".".join(sub_parts) if sub_parts else raw
+            elif child.type == "import_alias":
+                for alias_child in child.children:
+                    if alias_child.type == "simple_identifier":
+                        alias_text = alias_child.text.decode("utf-8") if alias_child.text else None
+            elif child.text == b"*":
+                is_wildcard = True
 
-        def walk(node: Any) -> None:
-            # Kotlin tree-sitter uses "import" as the node type for import declarations
-            # Child structure: import (keyword) + qualified_identifier
-            if node.type == "import" and node.child_count > 0:
-                path_text = ""
-                alias_text: str | None = None
-                is_wildcard = False
+        if path_text:
+            imported_name = "*" if is_wildcard else path_text.split(".")[-1]
+            imports.append(
+                SyntacticImport(
+                    import_uid=_import_uid(file_path, path_text, node.start_point[0] + 1),
+                    imported_name=imported_name,
+                    alias=alias_text,
+                    source_literal=path_text,
+                    import_kind="kotlin_import",
+                    start_line=node.start_point[0] + 1,
+                    start_col=node.start_point[1],
+                    end_line=node.end_point[0] + 1,
+                    end_col=node.end_point[1],
+                )
+            )
 
-                for child in node.children:
-                    if child.type == "qualified_identifier":
-                        # Extract full qualified path from all identifiers
-                        parts: list[str] = []
-                        for qchild in child.children:
-                            if qchild.type == "identifier":
-                                parts.append(qchild.text.decode("utf-8") if qchild.text else "")
-                        path_text = ".".join(parts)
-                    elif child.type == "identifier":
-                        # Single identifier import
-                        path_text = child.text.decode("utf-8") if child.text else ""
-                    elif child.type == "import_alias":
-                        for alias_child in child.children:
-                            if alias_child.type == "simple_identifier":
-                                alias_text = (
-                                    alias_child.text.decode("utf-8") if alias_child.text else None
-                                )
-                    elif child.text == b"*":
-                        is_wildcard = True
-
-                if path_text:
-                    imported_name = "*" if is_wildcard else path_text.split(".")[-1]
-                    imports.append(
-                        SyntacticImport(
-                            import_uid=make_uid(path_text, node.start_point[0] + 1),
-                            imported_name=imported_name,
-                            alias=alias_text,
-                            source_literal=path_text,
-                            import_kind="kotlin_import",
-                            start_line=node.start_point[0] + 1,
-                            start_col=node.start_point[1],
-                            end_line=node.end_point[0] + 1,
-                            end_col=node.end_point[1],
-                        )
-                    )
-
-            for child in node.children:
-                walk(child)
-
-        walk(root)
         return imports
 
-    def _extract_ruby_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract require/require_relative calls from Ruby AST.
-
-        Handles:
-        - ``require 'foo'``
-        - ``require "foo"``
-        - ``require_relative 'foo'``
-        - ``require_relative "foo"``
-        """
+    def _process_ruby_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a single Ruby call node for require/require_relative."""
         imports: list[SyntacticImport] = []
 
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+        if node.type == "call":
+            method_node = node.child_by_field_name("method")
+            if method_node and method_node.text:
+                method_name = method_node.text.decode("utf-8")
+                if method_name in ("require", "require_relative"):
+                    args_node = node.child_by_field_name("arguments")
+                    if args_node:
+                        for arg in args_node.children:
+                            if arg.type == "string":
+                                content = arg.text.decode("utf-8") if arg.text else ""
+                                if (content.startswith("'") and content.endswith("'")) or (
+                                    content.startswith('"') and content.endswith('"')
+                                ):
+                                    content = content[1:-1]
 
-        def walk(node: Any) -> None:
-            if node.type == "call":
-                method_node = node.child_by_field_name("method")
-                if method_node and method_node.text:
-                    method_name = method_node.text.decode("utf-8")
-                    if method_name in ("require", "require_relative"):
-                        args_node = node.child_by_field_name("arguments")
-                        if args_node:
-                            for arg in args_node.children:
-                                if arg.type == "string":
-                                    # Extract string content, stripping quotes
-                                    content = arg.text.decode("utf-8") if arg.text else ""
-                                    # Remove surrounding quotes
-                                    if (content.startswith("'") and content.endswith("'")) or (
-                                        content.startswith('"') and content.endswith('"')
-                                    ):
-                                        content = content[1:-1]
-
-                                    import_kind = (
-                                        "ruby_require_relative"
-                                        if method_name == "require_relative"
-                                        else "ruby_require"
+                                import_kind = (
+                                    "ruby_require_relative"
+                                    if method_name == "require_relative"
+                                    else "ruby_require"
+                                )
+                                imports.append(
+                                    SyntacticImport(
+                                        import_uid=_import_uid(
+                                            file_path, content, node.start_point[0] + 1
+                                        ),
+                                        imported_name=content.split("/")[-1],
+                                        alias=None,
+                                        source_literal=content,
+                                        import_kind=import_kind,
+                                        start_line=node.start_point[0] + 1,
+                                        start_col=node.start_point[1],
+                                        end_line=node.end_point[0] + 1,
+                                        end_col=node.end_point[1],
                                     )
-                                    imports.append(
-                                        SyntacticImport(
-                                            import_uid=make_uid(content, node.start_point[0] + 1),
-                                            imported_name=content.split("/")[-1],
-                                            alias=None,
-                                            source_literal=content,
-                                            import_kind=import_kind,
-                                            start_line=node.start_point[0] + 1,
-                                            start_col=node.start_point[1],
-                                            end_line=node.end_point[0] + 1,
-                                            end_col=node.end_point[1],
-                                        )
-                                    )
-                                    break
+                                )
+                                break
 
-            for child in node.children:
-                walk(child)
-
-        walk(root)
         return imports
 
-    def _extract_php_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract use declarations from PHP AST.
-
-        Handles:
-        - ``use Namespace\\Class;``
-        - ``use Namespace\\Class as Alias;``
-        - ``use function Namespace\func;``
-        - ``use const Namespace\\CONST;``
-        """
+    def _process_php_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a single PHP namespace_use_declaration node found by query."""
         imports: list[SyntacticImport] = []
 
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+        if node.type == "namespace_use_declaration":
+            for child in node.children:
+                if child.type == "namespace_use_clause":
+                    path_text = ""
+                    alias_text: str | None = None
 
-        def walk(node: Any) -> None:
-            if node.type == "namespace_use_declaration":
-                for child in node.children:
-                    if child.type == "namespace_use_clause":
-                        path_text = ""
-                        alias_text: str | None = None
+                    for sub in child.children:
+                        if sub.type == "qualified_name":
+                            path_text = self._extract_php_qualified_name(sub)
+                        elif sub.type == "namespace_aliasing_clause":
+                            for alias_child in sub.children:
+                                if alias_child.type == "name":
+                                    alias_text = (
+                                        alias_child.text.decode("utf-8")
+                                        if alias_child.text
+                                        else None
+                                    )
 
-                        for sub in child.children:
-                            if sub.type == "qualified_name":
-                                path_text = self._extract_php_qualified_name(sub)
-                            elif sub.type == "namespace_aliasing_clause":
-                                for alias_child in sub.children:
-                                    if alias_child.type == "name":
-                                        alias_text = (
-                                            alias_child.text.decode("utf-8")
-                                            if alias_child.text
-                                            else None
-                                        )
-
-                        if path_text:
-                            imports.append(
-                                SyntacticImport(
-                                    import_uid=make_uid(path_text, node.start_point[0] + 1),
-                                    imported_name=path_text.split("\\")[-1],
-                                    alias=alias_text,
-                                    source_literal=path_text,
-                                    import_kind="php_use",
-                                    start_line=node.start_point[0] + 1,
-                                    start_col=node.start_point[1],
-                                    end_line=node.end_point[0] + 1,
-                                    end_col=node.end_point[1],
-                                )
+                    if path_text:
+                        imports.append(
+                            SyntacticImport(
+                                import_uid=_import_uid(
+                                    file_path, path_text, node.start_point[0] + 1
+                                ),
+                                imported_name=path_text.split("\\")[-1],
+                                alias=alias_text,
+                                source_literal=path_text,
+                                import_kind="php_use",
+                                start_line=node.start_point[0] + 1,
+                                start_col=node.start_point[1],
+                                end_line=node.end_point[0] + 1,
+                                end_col=node.end_point[1],
                             )
+                        )
 
-            for child in node.children:
-                walk(child)
-
-        walk(root)
         return imports
 
     def _extract_php_qualified_name(self, node: Any) -> str:
@@ -1697,108 +1339,79 @@ class TreeSitterParser:
                 parts.append(child.text.decode("utf-8") if child.text else "")
         return "\\".join(parts)
 
-    def _extract_swift_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract import declarations from Swift AST.
-
-        Handles:
-        - ``import Foundation``
-        - ``import struct Foundation.URL``
-        - ``import class UIKit.UIView``
-        """
+    def _process_swift_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a single Swift import_declaration node found by query."""
         imports: list[SyntacticImport] = []
 
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-        def walk(node: Any) -> None:
-            if node.type == "import_declaration":
-                module_parts: list[str] = []
-
-                for child in node.children:
-                    if child.type == "identifier":
-                        module_parts.append(child.text.decode("utf-8") if child.text else "")
-                    elif child.type == "import_path":
-                        for path_child in child.children:
-                            if path_child.type == "identifier":
-                                module_parts.append(
-                                    path_child.text.decode("utf-8") if path_child.text else ""
-                                )
-
-                if module_parts:
-                    full_path = ".".join(module_parts)
-                    imports.append(
-                        SyntacticImport(
-                            import_uid=make_uid(full_path, node.start_point[0] + 1),
-                            imported_name=module_parts[-1],
-                            alias=None,
-                            source_literal=full_path,
-                            import_kind="swift_import",
-                            start_line=node.start_point[0] + 1,
-                            start_col=node.start_point[1],
-                            end_line=node.end_point[0] + 1,
-                            end_col=node.end_point[1],
-                        )
-                    )
+        if node.type == "import_declaration":
+            module_parts: list[str] = []
 
             for child in node.children:
-                walk(child)
+                if child.type == "identifier":
+                    module_parts.append(child.text.decode("utf-8") if child.text else "")
+                elif child.type == "import_path":
+                    for path_child in child.children:
+                        if path_child.type == "identifier":
+                            module_parts.append(
+                                path_child.text.decode("utf-8") if path_child.text else ""
+                            )
 
-        walk(root)
-        return imports
-
-    def _extract_scala_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract import declarations from Scala AST.
-
-        Handles:
-        - ``import com.foo.Bar``
-        - ``import com.foo.{Bar, Baz}``
-        - ``import com.foo.{Bar => B}``
-        - ``import com.foo._`` -> wildcard import
-        - ``import com.foo.Bar, com.baz.Qux`` -> comma-separated imports
-
-        The Scala tree-sitter grammar produces flat children for import_declaration:
-        ``import ident . ident . ident , ident . ident``
-        Commas separate independent import paths within one declaration.
-        """
-        imports: list[SyntacticImport] = []
-
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-        def _emit_import(
-            full_path: str,
-            is_wildcard: bool,
-            node: Any,
-        ) -> None:
-            """Create a SyntacticImport from an assembled dotted path."""
-            if is_wildcard:
+            if module_parts:
+                full_path = ".".join(module_parts)
                 imports.append(
                     SyntacticImport(
-                        import_uid=make_uid(f"{full_path}.*", node.start_point[0] + 1),
-                        imported_name="*",
+                        import_uid=_import_uid(file_path, full_path, node.start_point[0] + 1),
+                        imported_name=module_parts[-1],
                         alias=None,
                         source_literal=full_path,
-                        import_kind="scala_import",
+                        import_kind="swift_import",
                         start_line=node.start_point[0] + 1,
                         start_col=node.start_point[1],
                         end_line=node.end_point[0] + 1,
                         end_col=node.end_point[1],
                     )
                 )
+
+        return imports
+
+    def _process_scala_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a single Scala import_declaration node found by query."""
+        imports: list[SyntacticImport] = []
+
+        def _emit_import(
+            full_path: str,
+            is_wildcard: bool,
+            decl_node: Any,
+        ) -> None:
+            """Create a SyntacticImport from an assembled dotted path."""
+            if is_wildcard:
+                imports.append(
+                    SyntacticImport(
+                        import_uid=_import_uid(
+                            file_path, f"{full_path}.*", decl_node.start_point[0] + 1
+                        ),
+                        imported_name="*",
+                        alias=None,
+                        source_literal=full_path,
+                        import_kind="scala_import",
+                        start_line=decl_node.start_point[0] + 1,
+                        start_col=decl_node.start_point[1],
+                        end_line=decl_node.end_point[0] + 1,
+                        end_col=decl_node.end_point[1],
+                    )
+                )
             else:
                 imports.append(
                     SyntacticImport(
-                        import_uid=make_uid(full_path, node.start_point[0] + 1),
+                        import_uid=_import_uid(file_path, full_path, decl_node.start_point[0] + 1),
                         imported_name=full_path.split(".")[-1],
                         alias=None,
                         source_literal=full_path,
                         import_kind="scala_import",
-                        start_line=node.start_point[0] + 1,
-                        start_col=node.start_point[1],
-                        end_line=node.end_point[0] + 1,
-                        end_col=node.end_point[1],
+                        start_line=decl_node.start_point[0] + 1,
+                        start_col=decl_node.start_point[1],
+                        end_line=decl_node.end_point[0] + 1,
+                        end_col=decl_node.end_point[1],
                     )
                 )
 
@@ -1807,23 +1420,17 @@ class TreeSitterParser:
             selectors_node: Any,
             decl_node: Any,
         ) -> None:
-            """Process namespace_selectors: import com.foo.{Bar, Baz => B}.
-
-            Grammar children of namespace_selectors:
-            - ``identifier`` for plain imports (e.g. Bar)
-            - ``arrow_renamed_identifier`` for renamed (e.g. Baz => B)
-            - ``namespace_wildcard`` for wildcard (e.g. _)
-            - ``{``, ``}``, ``,`` punctuation (skipped)
-            """
+            """Process namespace_selectors: import com.foo.{Bar, Baz => B}."""
             for selector in selectors_node.children:
                 if selector.type == "identifier":
-                    # Plain selector: import com.foo.{Bar}
                     name = selector.text.decode("utf-8") if selector.text else ""
                     if name:
                         full_path = f"{base_path}.{name}" if base_path else name
                         imports.append(
                             SyntacticImport(
-                                import_uid=make_uid(full_path, decl_node.start_point[0] + 1),
+                                import_uid=_import_uid(
+                                    file_path, full_path, decl_node.start_point[0] + 1
+                                ),
                                 imported_name=name,
                                 alias=None,
                                 source_literal=full_path,
@@ -1835,7 +1442,6 @@ class TreeSitterParser:
                             )
                         )
                 elif selector.type == "arrow_renamed_identifier":
-                    # Renamed selector: import com.foo.{Baz => B}
                     idents = [c for c in selector.children if c.type == "identifier"]
                     if idents:
                         name = idents[0].text.decode("utf-8") if idents[0].text else ""
@@ -1848,7 +1454,9 @@ class TreeSitterParser:
                             full_path = f"{base_path}.{name}" if base_path else name
                             imports.append(
                                 SyntacticImport(
-                                    import_uid=make_uid(full_path, decl_node.start_point[0] + 1),
+                                    import_uid=_import_uid(
+                                        file_path, full_path, decl_node.start_point[0] + 1
+                                    ),
                                     imported_name=name,
                                     alias=alias,
                                     source_literal=full_path,
@@ -1860,22 +1468,15 @@ class TreeSitterParser:
                                 )
                             )
                 elif selector.type == "namespace_wildcard":
-                    _emit_import(base_path, is_wildcard=True, node=decl_node)
+                    _emit_import(base_path, is_wildcard=True, decl_node=decl_node)
 
-        def _process_import_declaration(node: Any) -> None:
-            """Process one import_declaration with potentially comma-separated paths.
-
-            The grammar produces flat children:
-              import ident . ident . ident , ident . ident . namespace_wildcard
-            We split on commas to get independent import groups, then assemble
-            each group's identifiers into a dotted path.
-            """
-            # Split children into comma-separated groups (skip 'import' keyword)
+        def _process_import_declaration(decl_node: Any) -> None:
+            """Process one import_declaration with potentially comma-separated paths."""
             groups: list[list[Any]] = []
             current: list[Any] = []
-            for child in node.children:
+            for child in decl_node.children:
                 if child.type == "import":
-                    continue  # skip keyword
+                    continue
                 if child.type == ",":
                     if current:
                         groups.append(current)
@@ -1885,44 +1486,31 @@ class TreeSitterParser:
             if current:
                 groups.append(current)
 
-            # Process each comma-separated group
             for group in groups:
-                # Check if the last element is namespace_selectors
                 if group and group[-1].type == "namespace_selectors":
-                    # import com.foo.{Bar, Baz}
-                    # Base path is all identifiers before the selectors
                     parts = [
                         c.text.decode("utf-8")
                         for c in group[:-1]
                         if c.type == "identifier" and c.text
                     ]
                     base_path = ".".join(parts)
-                    _process_selectors(base_path, group[-1], node)
+                    _process_selectors(base_path, group[-1], decl_node)
                 elif group and group[-1].type == "namespace_wildcard":
-                    # import com.foo._
                     parts = [
                         c.text.decode("utf-8") for c in group if c.type == "identifier" and c.text
                     ]
                     full_path = ".".join(parts)
                     if full_path:
-                        _emit_import(full_path, is_wildcard=True, node=node)
+                        _emit_import(full_path, is_wildcard=True, decl_node=decl_node)
                 else:
-                    # import com.foo.Bar (simple dotted path)
                     parts = [
                         c.text.decode("utf-8") for c in group if c.type == "identifier" and c.text
                     ]
                     full_path = ".".join(parts)
                     if full_path:
-                        _emit_import(full_path, is_wildcard=False, node=node)
+                        _emit_import(full_path, is_wildcard=False, decl_node=decl_node)
 
-        def walk(node: Any) -> None:
-            if node.type == "import_declaration":
-                _process_import_declaration(node)
-            else:
-                for child in node.children:
-                    walk(child)
-
-        walk(root)
+        _process_import_declaration(node)
         return imports
 
     def _extract_scala_path(self, node: Any) -> str:
@@ -1942,231 +1530,53 @@ class TreeSitterParser:
                 return self._extract_scala_path(child)
         return ""
 
-    def _extract_elixir_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract import/alias/use declarations from Elixir AST.
-
-        Handles:
-        - ``import Module``
-        - ``alias Module``
-        - ``alias Module, as: Alias``
-        - ``use Module``
-        """
+    def _process_elixir_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a single Elixir call node for import/alias/use/require."""
         imports: list[SyntacticImport] = []
 
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+        if node.type == "call":
+            target = None
+            for child in node.children:
+                if child.type == "identifier":
+                    target = child.text.decode("utf-8") if child.text else ""
+                    break
+                elif child.type == "dot":
+                    break
 
-        def walk(node: Any) -> None:
-            if node.type == "call":
-                target = None
+            if target in ("import", "alias", "use", "require"):
+                args_node = None
                 for child in node.children:
-                    if child.type == "identifier":
-                        target = child.text.decode("utf-8") if child.text else ""
-                        break
-                    elif child.type == "dot":
-                        # Module function call, not an import
+                    if child.type == "arguments":
+                        args_node = child
                         break
 
-                if target in ("import", "alias", "use", "require"):
-                    args_node = None
-                    for child in node.children:
-                        if child.type == "arguments":
-                            args_node = child
-                            break
+                if args_node:
+                    module_name = ""
+                    alias_name: str | None = None
 
-                    if args_node:
-                        module_name = ""
-                        alias_name: str | None = None
-
-                        for arg in args_node.children:
-                            if arg.type == "alias":
-                                # Module name like Enum, Map.Helpers
-                                module_name = arg.text.decode("utf-8") if arg.text else ""
-                            elif arg.type == "keywords":
-                                # Keyword arguments like as: Alias
-                                for kw in arg.children:
-                                    if kw.type == "pair":
-                                        key_node = kw.child_by_field_name("key")
-                                        val_node = kw.child_by_field_name("value")
-                                        if key_node and key_node.text == b"as" and val_node:
-                                            alias_name = (
-                                                val_node.text.decode("utf-8")
-                                                if val_node.text
-                                                else None
-                                            )
-
-                        if module_name:
-                            imports.append(
-                                SyntacticImport(
-                                    import_uid=make_uid(module_name, node.start_point[0] + 1),
-                                    imported_name=module_name.split(".")[-1],
-                                    alias=alias_name,
-                                    source_literal=module_name,
-                                    import_kind="elixir_import",
-                                    start_line=node.start_point[0] + 1,
-                                    start_col=node.start_point[1],
-                                    end_line=node.end_point[0] + 1,
-                                    end_col=node.end_point[1],
-                                )
-                            )
-
-            for child in node.children:
-                walk(child)
-
-        walk(root)
-        return imports
-
-    def _extract_haskell_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract import declarations from Haskell AST.
-
-        Handles:
-        - ``import Module``
-        - ``import qualified Module as M``
-        - ``import Module (func1, func2)``
-        - ``import Module hiding (func)``
-        """
-        imports: list[SyntacticImport] = []
-
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-        def walk(node: Any) -> None:
-            if node.type == "import":
-                module_name = ""
-                alias_name: str | None = None
-                _ = False  # is_qualified - tracked but not used in output
-
-                for child in node.children:
-                    if child.type == "qualified":
-                        pass  # Qualified imports tracked via module_name
-                    elif child.type == "module" or child.type == "module_id":
-                        module_name = child.text.decode("utf-8") if child.text else ""
-                    elif child.type == "as":
-                        # Next sibling should be the alias
-                        pass
-                    elif child.type == "alias":
-                        alias_name = child.text.decode("utf-8") if child.text else None
-
-                if module_name:
-                    imports.append(
-                        SyntacticImport(
-                            import_uid=make_uid(module_name, node.start_point[0] + 1),
-                            imported_name=module_name.split(".")[-1],
-                            alias=alias_name,
-                            source_literal=module_name,
-                            import_kind="haskell_import",
-                            start_line=node.start_point[0] + 1,
-                            start_col=node.start_point[1],
-                            end_line=node.end_point[0] + 1,
-                            end_col=node.end_point[1],
-                        )
-                    )
-
-            for child in node.children:
-                walk(child)
-
-        walk(root)
-        return imports
-
-    def _extract_ocaml_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract open declarations from OCaml AST.
-
-        Handles:
-        - ``open Module``
-        - ``open Module.SubModule``
-        - ``open! Module`` (shadow variant)
-        - ``include Module``
-        """
-        imports: list[SyntacticImport] = []
-
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-        def walk(node: Any) -> None:
-            # tree-sitter-ocaml uses "open_module" (not "open_statement")
-            # and "include_module" for include directives
-            if node.type in ("open_module", "include_module"):
-                module_name = ""
-
-                for child in node.children:
-                    if (
-                        child.type in ("module_path", "extended_module_path", "constructor_path")
-                        or child.type == "constructor_name"
-                    ):
-                        module_name = child.text.decode("utf-8") if child.text else ""
-
-                if module_name:
-                    imports.append(
-                        SyntacticImport(
-                            import_uid=make_uid(module_name, node.start_point[0] + 1),
-                            imported_name=module_name.split(".")[-1],
-                            alias=None,
-                            source_literal=module_name,
-                            import_kind="ocaml_open",
-                            start_line=node.start_point[0] + 1,
-                            start_col=node.start_point[1],
-                            end_line=node.end_point[0] + 1,
-                            end_col=node.end_point[1],
-                        )
-                    )
-
-            for child in node.children:
-                walk(child)
-
-        walk(root)
-        return imports
-
-    def _extract_lua_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract require() calls from Lua AST.
-
-        Handles:
-        - ``require("module")``
-        - ``require 'module'``
-        - ``local M = require("module")``
-        """
-        imports: list[SyntacticImport] = []
-
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-        def walk(node: Any) -> None:
-            if node.type == "function_call":
-                func_name = ""
-                module_name = ""
-
-                # Get function name
-                for child in node.children:
-                    if child.type == "identifier":
-                        func_name = child.text.decode("utf-8") if child.text else ""
-                        break
-
-                if func_name == "require":
-                    # Get argument
-                    for child in node.children:
-                        if child.type == "arguments":
-                            for arg in child.children:
-                                if arg.type == "string":
-                                    module_name = arg.text.decode("utf-8") if arg.text else ""
-                                    # Strip quotes
-                                    module_name = module_name.strip("'\"")
-                                    break
-                        elif child.type == "string":
-                            # require 'module' form (no parens)
-                            module_name = child.text.decode("utf-8") if child.text else ""
-                            module_name = module_name.strip("'\"")
+                    for arg in args_node.children:
+                        if arg.type == "alias":
+                            module_name = arg.text.decode("utf-8") if arg.text else ""
+                        elif arg.type == "keywords":
+                            for kw in arg.children:
+                                if kw.type == "pair":
+                                    key_node = kw.child_by_field_name("key")
+                                    val_node = kw.child_by_field_name("value")
+                                    if key_node and key_node.text == b"as" and val_node:
+                                        alias_name = (
+                                            val_node.text.decode("utf-8") if val_node.text else None
+                                        )
 
                     if module_name:
                         imports.append(
                             SyntacticImport(
-                                import_uid=make_uid(module_name, node.start_point[0] + 1),
+                                import_uid=_import_uid(
+                                    file_path, module_name, node.start_point[0] + 1
+                                ),
                                 imported_name=module_name.split(".")[-1],
-                                alias=None,
+                                alias=alias_name,
                                 source_literal=module_name,
-                                import_kind="lua_require",
+                                import_kind="elixir_import",
                                 start_line=node.start_point[0] + 1,
                                 start_col=node.start_point[1],
                                 end_line=node.end_point[0] + 1,
@@ -2174,88 +1584,107 @@ class TreeSitterParser:
                             )
                         )
 
-            for child in node.children:
-                walk(child)
-
-        walk(root)
         return imports
 
-    def _extract_julia_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract using/import declarations from Julia AST.
-
-        Handles:
-        - ``using Module``
-        - ``using Module: func1, func2``
-        - ``import Module``
-        - ``import Module: func``
-        """
+    def _process_haskell_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a single Haskell import node found by query."""
         imports: list[SyntacticImport] = []
 
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+        if node.type == "import":
+            module_name = ""
+            alias_name: str | None = None
 
-        def walk(node: Any) -> None:
-            if node.type in ("import_statement", "using_statement"):
+            for child in node.children:
+                if child.type == "qualified":
+                    pass
+                elif child.type == "module" or child.type == "module_id":
+                    module_name = child.text.decode("utf-8") if child.text else ""
+                elif child.type == "as":
+                    pass
+                elif child.type == "alias":
+                    alias_name = child.text.decode("utf-8") if child.text else None
+
+            if module_name:
+                imports.append(
+                    SyntacticImport(
+                        import_uid=_import_uid(file_path, module_name, node.start_point[0] + 1),
+                        imported_name=module_name.split(".")[-1],
+                        alias=alias_name,
+                        source_literal=module_name,
+                        import_kind="haskell_import",
+                        start_line=node.start_point[0] + 1,
+                        start_col=node.start_point[1],
+                        end_line=node.end_point[0] + 1,
+                        end_col=node.end_point[1],
+                    )
+                )
+
+        return imports
+
+    def _process_ocaml_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a single OCaml open_module or include_module node found by query."""
+        imports: list[SyntacticImport] = []
+
+        if node.type in ("open_module", "include_module"):
+            module_name = ""
+
+            for child in node.children:
+                if (
+                    child.type in ("module_path", "extended_module_path", "constructor_path")
+                    or child.type == "constructor_name"
+                ):
+                    module_name = child.text.decode("utf-8") if child.text else ""
+
+            if module_name:
+                imports.append(
+                    SyntacticImport(
+                        import_uid=_import_uid(file_path, module_name, node.start_point[0] + 1),
+                        imported_name=module_name.split(".")[-1],
+                        alias=None,
+                        source_literal=module_name,
+                        import_kind="ocaml_open",
+                        start_line=node.start_point[0] + 1,
+                        start_col=node.start_point[1],
+                        end_line=node.end_point[0] + 1,
+                        end_col=node.end_point[1],
+                    )
+                )
+
+        return imports
+
+    def _process_lua_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a single Lua function_call node for require()."""
+        imports: list[SyntacticImport] = []
+
+        if node.type == "function_call":
+            func_name = ""
+            module_name = ""
+
+            for child in node.children:
+                if child.type == "identifier":
+                    func_name = child.text.decode("utf-8") if child.text else ""
+                    break
+
+            if func_name == "require":
                 for child in node.children:
-                    if child.type in ("identifier", "selected_import", "scoped_identifier"):
+                    if child.type == "arguments":
+                        for arg in child.children:
+                            if arg.type == "string":
+                                module_name = arg.text.decode("utf-8") if arg.text else ""
+                                module_name = module_name.strip("'\"")
+                                break
+                    elif child.type == "string":
                         module_name = child.text.decode("utf-8") if child.text else ""
-                        if module_name:
-                            imports.append(
-                                SyntacticImport(
-                                    import_uid=make_uid(module_name, node.start_point[0] + 1),
-                                    imported_name=module_name.split(".")[-1].split(":")[0],
-                                    alias=None,
-                                    source_literal=module_name.split(":")[0],
-                                    import_kind="julia_using",
-                                    start_line=node.start_point[0] + 1,
-                                    start_col=node.start_point[1],
-                                    end_line=node.end_point[0] + 1,
-                                    end_col=node.end_point[1],
-                                )
-                            )
+                        module_name = module_name.strip("'\"")
 
-            for child in node.children:
-                walk(child)
-
-        walk(root)
-        return imports
-
-    def _extract_c_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract #include directives from C/C++ AST.
-
-        Handles:
-        - ``#include <header>`` -> system include
-        - ``#include "header"`` -> local include
-        """
-        imports: list[SyntacticImport] = []
-
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
-
-        def walk(node: Any) -> None:
-            if node.type == "preproc_include":
-                header_name = ""
-
-                for child in node.children:
-                    if child.type == "string_literal":
-                        # "header.h"
-                        header_name = child.text.decode("utf-8") if child.text else ""
-                        header_name = header_name.strip('"')
-                    elif child.type == "system_lib_string":
-                        # <header.h>
-                        header_name = child.text.decode("utf-8") if child.text else ""
-                        header_name = header_name.strip("<>")
-
-                if header_name:
+                if module_name:
                     imports.append(
                         SyntacticImport(
-                            import_uid=make_uid(header_name, node.start_point[0] + 1),
-                            imported_name=header_name.split("/")[-1],
+                            import_uid=_import_uid(file_path, module_name, node.start_point[0] + 1),
+                            imported_name=module_name.split(".")[-1],
                             alias=None,
-                            source_literal=header_name,
-                            import_kind="c_include",
+                            source_literal=module_name,
+                            import_kind="lua_require",
                             start_line=node.start_point[0] + 1,
                             start_col=node.start_point[1],
                             end_line=node.end_point[0] + 1,
@@ -2263,10 +1692,65 @@ class TreeSitterParser:
                         )
                     )
 
-            for child in node.children:
-                walk(child)
+        return imports
 
-        walk(root)
+    def _process_julia_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a single Julia import/using statement node found by query."""
+        imports: list[SyntacticImport] = []
+
+        if node.type in ("import_statement", "using_statement"):
+            for child in node.children:
+                if child.type in ("identifier", "selected_import", "scoped_identifier"):
+                    module_name = child.text.decode("utf-8") if child.text else ""
+                    if module_name:
+                        imports.append(
+                            SyntacticImport(
+                                import_uid=_import_uid(
+                                    file_path, module_name, node.start_point[0] + 1
+                                ),
+                                imported_name=module_name.split(".")[-1].split(":")[0],
+                                alias=None,
+                                source_literal=module_name.split(":")[0],
+                                import_kind="julia_using",
+                                start_line=node.start_point[0] + 1,
+                                start_col=node.start_point[1],
+                                end_line=node.end_point[0] + 1,
+                                end_col=node.end_point[1],
+                            )
+                        )
+
+        return imports
+
+    def _process_c_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a single C/C++ preproc_include node found by query."""
+        imports: list[SyntacticImport] = []
+
+        if node.type == "preproc_include":
+            header_name = ""
+
+            for child in node.children:
+                if child.type == "string_literal":
+                    header_name = child.text.decode("utf-8") if child.text else ""
+                    header_name = header_name.strip('"')
+                elif child.type == "system_lib_string":
+                    header_name = child.text.decode("utf-8") if child.text else ""
+                    header_name = header_name.strip("<>")
+
+            if header_name:
+                imports.append(
+                    SyntacticImport(
+                        import_uid=_import_uid(file_path, header_name, node.start_point[0] + 1),
+                        imported_name=header_name.split("/")[-1],
+                        alias=None,
+                        source_literal=header_name,
+                        import_kind="c_include",
+                        start_line=node.start_point[0] + 1,
+                        start_col=node.start_point[1],
+                        end_line=node.end_point[0] + 1,
+                        end_col=node.end_point[1],
+                    )
+                )
+
         return imports
 
     def extract_csharp_namespace_types(self, root: Any) -> dict[str, list[str]]:
@@ -2355,83 +1839,54 @@ class TreeSitterParser:
 
         return ns_map
 
-    def _extract_js_imports(self, root: Any, file_path: str) -> list[SyntacticImport]:
-        """Extract imports from JavaScript/TypeScript AST."""
+    def _process_js_import_node(self, node: Any, file_path: str) -> list[SyntacticImport]:
+        """Process a single JS/TS import node found by query."""
         imports: list[SyntacticImport] = []
 
-        def make_uid(name: str, line: int) -> str:
-            raw = f"{file_path}:{line}:{name}"
-            return hashlib.sha256(raw.encode()).hexdigest()[:16]
+        if node.type == "import_statement":
+            source_node = node.child_by_field_name("source")
+            source = None
+            if source_node and source_node.text:
+                source = source_node.text.decode("utf-8").strip("'\"")
 
-        def walk(node: Any) -> None:
-            # import { foo } from 'bar', import foo from 'bar'
-            if node.type == "import_statement":
-                source_node = node.child_by_field_name("source")
-                source = None
-                if source_node and source_node.text:
-                    # Strip quotes
-                    source = source_node.text.decode("utf-8").strip("'\"")
-
-                # Find imported names
-                for child in node.children:
-                    if child.type == "import_clause":
-                        for clause_child in child.children:
-                            if clause_child.type == "identifier":
-                                # default import
-                                name = (
-                                    clause_child.text.decode("utf-8") if clause_child.text else ""
+            for child in node.children:
+                if child.type == "import_clause":
+                    for clause_child in child.children:
+                        if clause_child.type == "identifier":
+                            name = clause_child.text.decode("utf-8") if clause_child.text else ""
+                            imports.append(
+                                SyntacticImport(
+                                    import_uid=_import_uid(
+                                        file_path, name, node.start_point[0] + 1
+                                    ),
+                                    imported_name=name,
+                                    alias=None,
+                                    source_literal=source,
+                                    import_kind="js_import",
+                                    start_line=node.start_point[0] + 1,
+                                    start_col=node.start_point[1],
+                                    end_line=node.end_point[0] + 1,
+                                    end_col=node.end_point[1],
                                 )
-                                imports.append(
-                                    SyntacticImport(
-                                        import_uid=make_uid(name, node.start_point[0] + 1),
-                                        imported_name=name,
-                                        alias=None,
-                                        source_literal=source,
-                                        import_kind="js_import",
-                                        start_line=node.start_point[0] + 1,
-                                        start_col=node.start_point[1],
-                                        end_line=node.end_point[0] + 1,
-                                        end_col=node.end_point[1],
-                                    )
-                                )
-                            elif clause_child.type == "named_imports":
-                                for spec in clause_child.children:
-                                    if spec.type == "import_specifier":
-                                        name_node = spec.child_by_field_name("name")
-                                        alias_node = spec.child_by_field_name("alias")
-                                        if name_node and name_node.text:
-                                            name = name_node.text.decode("utf-8")
-                                            alias = (
-                                                alias_node.text.decode("utf-8")
-                                                if alias_node and alias_node.text
-                                                else None
-                                            )
-                                            imports.append(
-                                                SyntacticImport(
-                                                    import_uid=make_uid(
-                                                        name, node.start_point[0] + 1
-                                                    ),
-                                                    imported_name=name,
-                                                    alias=alias,
-                                                    source_literal=source,
-                                                    import_kind="js_import",
-                                                    start_line=node.start_point[0] + 1,
-                                                    start_col=node.start_point[1],
-                                                    end_line=node.end_point[0] + 1,
-                                                    end_col=node.end_point[1],
-                                                )
-                                            )
-                            elif clause_child.type == "namespace_import":
-                                # import * as foo
-                                for ns_child in clause_child.children:
-                                    if ns_child.type == "identifier":
+                            )
+                        elif clause_child.type == "named_imports":
+                            for spec in clause_child.children:
+                                if spec.type == "import_specifier":
+                                    name_node = spec.child_by_field_name("name")
+                                    alias_node = spec.child_by_field_name("alias")
+                                    if name_node and name_node.text:
+                                        name = name_node.text.decode("utf-8")
                                         alias = (
-                                            ns_child.text.decode("utf-8") if ns_child.text else ""
+                                            alias_node.text.decode("utf-8")
+                                            if alias_node and alias_node.text
+                                            else None
                                         )
                                         imports.append(
                                             SyntacticImport(
-                                                import_uid=make_uid("*", node.start_point[0] + 1),
-                                                imported_name="*",
+                                                import_uid=_import_uid(
+                                                    file_path, name, node.start_point[0] + 1
+                                                ),
+                                                imported_name=name,
                                                 alias=alias,
                                                 source_literal=source,
                                                 import_kind="js_import",
@@ -2441,159 +1896,154 @@ class TreeSitterParser:
                                                 end_col=node.end_point[1],
                                             )
                                         )
-
-            # require() calls - const foo = require('bar')
-            elif node.type == "call_expression":
-                func_node = node.child_by_field_name("function")
-                if func_node and func_node.text and func_node.text.decode("utf-8") == "require":
-                    args_node = node.child_by_field_name("arguments")
-                    if args_node and args_node.children:
-                        for arg in args_node.children:
-                            if arg.type == "string":
-                                source = arg.text.decode("utf-8").strip("'\"") if arg.text else None
-                                # Try to find variable name from parent
-                                imports.append(
-                                    SyntacticImport(
-                                        import_uid=make_uid(
-                                            source or "require", node.start_point[0] + 1
-                                        ),
-                                        imported_name=source or "require",
-                                        alias=None,
-                                        source_literal=source,
-                                        import_kind="js_require",
-                                        start_line=node.start_point[0] + 1,
-                                        start_col=node.start_point[1],
-                                        end_line=node.end_point[0] + 1,
-                                        end_col=node.end_point[1],
+                        elif clause_child.type == "namespace_import":
+                            for ns_child in clause_child.children:
+                                if ns_child.type == "identifier":
+                                    alias = ns_child.text.decode("utf-8") if ns_child.text else ""
+                                    imports.append(
+                                        SyntacticImport(
+                                            import_uid=_import_uid(
+                                                file_path, "*", node.start_point[0] + 1
+                                            ),
+                                            imported_name="*",
+                                            alias=alias,
+                                            source_literal=source,
+                                            import_kind="js_import",
+                                            start_line=node.start_point[0] + 1,
+                                            start_col=node.start_point[1],
+                                            end_line=node.end_point[0] + 1,
+                                            end_col=node.end_point[1],
+                                        )
                                     )
+
+        elif node.type == "call_expression":
+            func_node = node.child_by_field_name("function")
+            if func_node and func_node.text and func_node.text.decode("utf-8") == "require":
+                args_node = node.child_by_field_name("arguments")
+                if args_node and args_node.children:
+                    for arg in args_node.children:
+                        if arg.type == "string":
+                            source = arg.text.decode("utf-8").strip("'\"") if arg.text else None
+                            imports.append(
+                                SyntacticImport(
+                                    import_uid=_import_uid(
+                                        file_path,
+                                        source or "require",
+                                        node.start_point[0] + 1,
+                                    ),
+                                    imported_name=source or "require",
+                                    alias=None,
+                                    source_literal=source,
+                                    import_kind="js_require",
+                                    start_line=node.start_point[0] + 1,
+                                    start_col=node.start_point[1],
+                                    end_line=node.end_point[0] + 1,
+                                    end_col=node.end_point[1],
                                 )
-                                break
+                            )
+                            break
 
-            for child in node.children:
-                walk(child)
-
-        walk(root)
         return imports
 
-    def _extract_python_dynamic(self, root: Any) -> list[DynamicAccess]:
-        """Extract dynamic access patterns from Python AST."""
+    def _process_python_dynamic_node(self, node: Any) -> list[DynamicAccess]:
+        """Process a single Python dynamic-access node found by query."""
         dynamics: list[DynamicAccess] = []
 
-        def walk(node: Any) -> None:
-            # getattr(obj, name)
-            if node.type == "call":
-                func_node = node.child_by_field_name("function")
-                if func_node and func_node.type == "identifier":
-                    func_name = func_node.text.decode("utf-8") if func_node.text else ""
-                    if func_name in ("getattr", "setattr", "hasattr", "delattr"):
-                        args_node = node.child_by_field_name("arguments")
-                        literals: list[str] = []
-                        has_dynamic = False
-                        if args_node:
-                            for i, arg in enumerate(args_node.children):
-                                if i == 1:  # Second argument is the attribute name
-                                    if arg.type == "string":
-                                        literal = (
-                                            arg.text.decode("utf-8").strip("'\"")
-                                            if arg.text
-                                            else ""
-                                        )
-                                        literals.append(literal)
-                                    else:
-                                        has_dynamic = True
-                        dynamics.append(
-                            DynamicAccess(
-                                pattern_type="getattr",
-                                start_line=node.start_point[0] + 1,
-                                start_col=node.start_point[1],
-                                extracted_literals=literals,
-                                has_non_literal_key=has_dynamic,
-                            )
+        if node.type == "call":
+            func_node = node.child_by_field_name("function")
+            if func_node and func_node.type == "identifier":
+                func_name = func_node.text.decode("utf-8") if func_node.text else ""
+                if func_name in ("getattr", "setattr", "hasattr", "delattr"):
+                    args_node = node.child_by_field_name("arguments")
+                    literals: list[str] = []
+                    has_dynamic = False
+                    if args_node:
+                        for i, arg in enumerate(args_node.children):
+                            if i == 1:
+                                if arg.type == "string":
+                                    literal = (
+                                        arg.text.decode("utf-8").strip("'\"") if arg.text else ""
+                                    )
+                                    literals.append(literal)
+                                else:
+                                    has_dynamic = True
+                    dynamics.append(
+                        DynamicAccess(
+                            pattern_type="getattr",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            extracted_literals=literals,
+                            has_non_literal_key=has_dynamic,
                         )
-                    elif func_name in ("eval", "exec"):
-                        dynamics.append(
-                            DynamicAccess(
-                                pattern_type="eval",
-                                start_line=node.start_point[0] + 1,
-                                start_col=node.start_point[1],
-                                has_non_literal_key=True,
-                            )
+                    )
+                elif func_name in ("eval", "exec"):
+                    dynamics.append(
+                        DynamicAccess(
+                            pattern_type="eval",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            has_non_literal_key=True,
                         )
+                    )
 
-            # obj[key] subscript
-            elif node.type == "subscript":
-                subscript_node = node.child_by_field_name("subscript")
-                sub_literals: list[str] = []
-                sub_has_dynamic = True
-                if subscript_node and subscript_node.type == "string":
-                    literal = (
-                        subscript_node.text.decode("utf-8").strip("'\"")
-                        if subscript_node.text
-                        else ""
-                    )
-                    sub_literals.append(literal)
-                    sub_has_dynamic = False
-                dynamics.append(
-                    DynamicAccess(
-                        pattern_type="bracket_access",
-                        start_line=node.start_point[0] + 1,
-                        start_col=node.start_point[1],
-                        extracted_literals=sub_literals,
-                        has_non_literal_key=sub_has_dynamic,
-                    )
+        elif node.type == "subscript":
+            subscript_node = node.child_by_field_name("subscript")
+            sub_literals: list[str] = []
+            sub_has_dynamic = True
+            if subscript_node and subscript_node.type == "string":
+                literal = (
+                    subscript_node.text.decode("utf-8").strip("'\"") if subscript_node.text else ""
                 )
+                sub_literals.append(literal)
+                sub_has_dynamic = False
+            dynamics.append(
+                DynamicAccess(
+                    pattern_type="bracket_access",
+                    start_line=node.start_point[0] + 1,
+                    start_col=node.start_point[1],
+                    extracted_literals=sub_literals,
+                    has_non_literal_key=sub_has_dynamic,
+                )
+            )
 
-            for child in node.children:
-                walk(child)
-
-        walk(root)
         return dynamics
 
-    def _extract_js_dynamic(self, root: Any) -> list[DynamicAccess]:
-        """Extract dynamic access patterns from JavaScript/TypeScript AST."""
+    def _process_js_dynamic_node(self, node: Any) -> list[DynamicAccess]:
+        """Process a single JS/TS dynamic-access node found by query."""
         dynamics: list[DynamicAccess] = []
 
-        def walk(node: Any) -> None:
-            # obj[key] subscript
-            if node.type == "subscript_expression":
-                index_node = node.child_by_field_name("index")
-                literals: list[str] = []
-                has_dynamic = True
-                if index_node and index_node.type == "string":
-                    literal = (
-                        index_node.text.decode("utf-8").strip("'\"") if index_node.text else ""
-                    )
-                    literals.append(literal)
-                    has_dynamic = False
-                dynamics.append(
-                    DynamicAccess(
-                        pattern_type="bracket_access",
-                        start_line=node.start_point[0] + 1,
-                        start_col=node.start_point[1],
-                        extracted_literals=literals,
-                        has_non_literal_key=has_dynamic,
-                    )
+        if node.type == "subscript_expression":
+            index_node = node.child_by_field_name("index")
+            literals: list[str] = []
+            has_dynamic = True
+            if index_node and index_node.type == "string":
+                literal = index_node.text.decode("utf-8").strip("'\"") if index_node.text else ""
+                literals.append(literal)
+                has_dynamic = False
+            dynamics.append(
+                DynamicAccess(
+                    pattern_type="bracket_access",
+                    start_line=node.start_point[0] + 1,
+                    start_col=node.start_point[1],
+                    extracted_literals=literals,
+                    has_non_literal_key=has_dynamic,
                 )
+            )
 
-            # eval() calls
-            elif node.type == "call_expression":
-                func_node = node.child_by_field_name("function")
-                if func_node and func_node.type == "identifier":
-                    func_name = func_node.text.decode("utf-8") if func_node.text else ""
-                    if func_name == "eval":
-                        dynamics.append(
-                            DynamicAccess(
-                                pattern_type="eval",
-                                start_line=node.start_point[0] + 1,
-                                start_col=node.start_point[1],
-                                has_non_literal_key=True,
-                            )
+        elif node.type == "call_expression":
+            func_node = node.child_by_field_name("function")
+            if func_node and func_node.type == "identifier":
+                func_name = func_node.text.decode("utf-8") if func_node.text else ""
+                if func_name == "eval":
+                    dynamics.append(
+                        DynamicAccess(
+                            pattern_type="eval",
+                            start_line=node.start_point[0] + 1,
+                            start_col=node.start_point[1],
+                            has_non_literal_key=True,
                         )
+                    )
 
-            for child in node.children:
-                walk(child)
-
-        walk(root)
         return dynamics
 
     def compute_interface_hash(self, symbols: list[SyntacticSymbol]) -> str:
@@ -2684,129 +2134,14 @@ class TreeSitterParser:
         )
 
     def _detect_language_from_ext(self, ext: str) -> str | None:
-        """Detect language from file extension."""
-        ext_map = {
-            # Python
-            "py": "python",
-            "pyi": "python",
-            "pyw": "python",
-            "pyx": "python",
-            "pxd": "python",
-            # JavaScript/TypeScript
-            "js": "javascript",
-            "jsx": "javascript",
-            "mjs": "javascript",
-            "cjs": "javascript",
-            "ts": "typescript",
-            "tsx": "tsx",
-            "mts": "typescript",
-            "cts": "typescript",
-            # Go
-            "go": "go",
-            # Rust
-            "rs": "rust",
-            # JVM
-            "java": "java",
-            "kt": "kotlin",
-            "kts": "kotlin",
-            "scala": "scala",
-            "sc": "scala",
-            # .NET
-            "cs": "csharp",
-            # C/C++
-            "c": "c",
-            "h": "c",
-            "cpp": "cpp",
-            "cc": "cpp",
-            "cxx": "cpp",
-            "hpp": "cpp",
-            "hxx": "cpp",
-            "hh": "cpp",
-            # Ruby
-            "rb": "ruby",
-            "rake": "ruby",
-            # PHP
-            "php": "php",
-            # Swift
-            "swift": "swift",
-            # Functional
-            "ex": "elixir",
-            "exs": "elixir",
-            "hs": "haskell",
-            "lhs": "haskell",
-            "ml": "ocaml",
-            "mli": "ocaml",
-            # Scripting
-            "jl": "julia",
-            "lua": "lua",
-            "sh": "bash",
-            "bash": "bash",
-            "zsh": "bash",
-            # Systems
-            "zig": "zig",
-            "adb": "ada",
-            "ads": "ada",
-            "f90": "fortran",
-            "f95": "fortran",
-            "f03": "fortran",
-            "f08": "fortran",
-            "odin": "odin",
-            # Web
-            "html": "html",
-            "htm": "html",
-            "css": "css",
-            "xml": "xml",
-            "xsl": "xml",
-            "svg": "xml",
-            # Hardware
-            "v": "verilog",
-            "sv": "verilog",
-            "vhd": "verilog",
-            "vhdl": "verilog",
-            # Config/Data
-            "json": "json",
-            "yaml": "yaml",
-            "yml": "yaml",
-            "toml": "toml",
-            "tf": "terraform",
-            "tfvars": "terraform",
-            "hcl": "hcl",
-            "sql": "sql",
-            "graphql": "graphql",
-            "gql": "graphql",
-            "dockerfile": "dockerfile",
-            "makefile": "makefile",
-            "mk": "makefile",
-            "md": "markdown",
-            "mdx": "markdown",
-            "markdown": "markdown",
-            "txt": "requirements",
-            "regex": "regex",
-        }
-        return ext_map.get(ext)
+        """Detect language from file extension -- delegates to packs."""
+        pack = get_pack_for_ext(ext)
+        return pack.name if pack is not None else None
 
     def _detect_language_from_filename(self, filename: str) -> str | None:
-        """Detect language from filename when extension is absent or ambiguous."""
-        name_lower = filename.lower()
-        filename_map: dict[str, str] = {
-            "makefile": "makefile",
-            "gnumakefile": "makefile",
-            "dockerfile": "dockerfile",
-            "vagrantfile": "ruby",
-            "rakefile": "ruby",
-            "gemfile": "ruby",
-            "guardfile": "ruby",
-            "cmakelists.txt": "cmake",
-            "justfile": "makefile",
-        }
-        # Exact match
-        lang = filename_map.get(name_lower)
-        if lang is not None:
-            return lang
-        # Prefix match: Dockerfile.dev, Dockerfile.prod, etc.
-        if name_lower.startswith("dockerfile"):
-            return "dockerfile"
-        return None
+        """Detect language from filename -- delegates to packs."""
+        pack = get_pack_for_filename(filename)
+        return pack.name if pack is not None else None
 
     def _has_meaningful_nodes(self, node: Any) -> bool:
         """Check if tree has meaningful (non-comment, non-whitespace) nodes."""
@@ -2834,12 +2169,12 @@ class TreeSitterParser:
         self,
         tree: Any,
         root: Any,
-        config: LanguageQueryConfig,
+        config: SymbolQueryConfig,
     ) -> list[SyntacticSymbol]:
         """Extract symbols using a tree-sitter query.
 
         This is the unified extraction path for all query-capable languages.
-        Each language defines a ``LanguageQueryConfig`` with:
+        Each language defines a ``SymbolQueryConfig`` with:
 
         - ``query_text``  — S-expression patterns with @name, @node, @params
         - ``patterns``    — ordered mapping of pattern index → SymbolPattern
