@@ -15,6 +15,7 @@ from codeplane.mcp.tools.index import (
     _serialize_tree,
     _summarize_map,
     _summarize_search,
+    _tree_to_collapsed_text,
     _tree_to_text,
 )
 
@@ -444,14 +445,112 @@ class TestTreeToText:
         assert lines[2].startswith("    x.py")
 
 
+class TestTreeToCollapsedText:
+    """Tests for _tree_to_collapsed_text."""
+
+    _SAMPLE_PATHS: list[tuple[str, int | None]] = [
+        ("src/codeplane/cli/main.py", 100),
+        ("src/codeplane/cli/init.py", 50),
+        ("src/codeplane/core/errors.py", 80),
+        ("src/codeplane/core/logging.py", 60),
+        ("tests/cli/test_main.py", 40),
+        ("tests/core/test_errors.py", 30),
+        ("pyproject.toml", 200),
+        ("README.md", 50),
+    ]
+
+    def test_empty(self) -> None:
+        assert _tree_to_collapsed_text([]) == []
+
+    def test_depth_1_shows_top_dirs(self) -> None:
+        lines = _tree_to_collapsed_text(self._SAMPLE_PATHS, collapse_depth=1)
+        joined = "\n".join(lines)
+        # All src/ files aggregated under single entry
+        assert "src/ 4f 290L" in joined
+        assert "tests/ 2f 70L" in joined
+        # Root files listed individually
+        assert "pyproject.toml 200" in joined
+        assert "README.md 50" in joined
+        # No sub-directories shown
+        assert "cli/" not in joined
+        assert "core/" not in joined
+
+    def test_depth_2_shows_sub_dirs(self) -> None:
+        lines = _tree_to_collapsed_text(self._SAMPLE_PATHS, collapse_depth=2)
+        joined = "\n".join(lines)
+        # src/codeplane/ gets all 4 src files (cli/core are deeper than depth 2)
+        assert "codeplane/ 4f 290L" in joined
+        # tests/ sub-dirs each get their direct files
+        assert "cli/ 1f 40L" in joined
+        assert "core/ 1f 30L" in joined
+        # Root files still listed
+        assert "pyproject.toml 200" in joined
+
+    def test_depth_3_shows_leaf_dirs(self) -> None:
+        lines = _tree_to_collapsed_text(self._SAMPLE_PATHS, collapse_depth=3)
+        joined = "\n".join(lines)
+        # Now cli/ and core/ are their own leaf dirs under codeplane/
+        assert "cli/ 2f 150L" in joined
+        assert "core/ 2f 140L" in joined
+
+    def test_no_line_counts(self) -> None:
+        lines = _tree_to_collapsed_text(
+            self._SAMPLE_PATHS, collapse_depth=1, include_line_counts=False
+        )
+        joined = "\n".join(lines)
+        assert "src/ 4f" in joined
+        assert "290L" not in joined
+        # Root files listed without line counts
+        assert "pyproject.toml" in joined
+        assert "200" not in joined
+
+    def test_root_files_only(self) -> None:
+        paths: list[tuple[str, int | None]] = [
+            ("setup.py", 10),
+            ("README.md", 20),
+        ]
+        lines = _tree_to_collapsed_text(paths, collapse_depth=1)
+        assert len(lines) == 2
+        assert "README.md 20" in lines[0]  # sorted
+        assert "setup.py 10" in lines[1]
+
+    def test_indentation_reflects_depth(self) -> None:
+        lines = _tree_to_collapsed_text(self._SAMPLE_PATHS, collapse_depth=2)
+        # src/ is a grouping node (no files directly), child codeplane/ is indented
+        src_lines = [line for line in lines if "codeplane/" in line]
+        assert any(line.startswith("  ") for line in src_lines), (
+            "codeplane/ should be indented under src/"
+        )
+
+    def test_compression_ratio(self) -> None:
+        """Collapsed at depth=1 should be dramatically smaller than listing files."""
+        import json
+
+        collapsed = _tree_to_collapsed_text(self._SAMPLE_PATHS, collapse_depth=1)
+        collapsed_size = len(json.dumps(collapsed))
+
+        # Full file listing (simulate current behavior)
+        full_lines = [f"{p} {lc}" for p, lc in self._SAMPLE_PATHS]
+        full_size = len(json.dumps(full_lines))
+
+        # Collapsed should be smaller (at least 30% for this small sample)
+        assert collapsed_size < full_size
+
+
 class _MockStructureInfo:
     def __init__(
-        self, root: str, tree: list[Any], file_count: int, contexts: list[str] | None = None
+        self,
+        root: str,
+        tree: list[Any],
+        file_count: int,
+        contexts: list[str] | None = None,
+        all_paths: list[tuple[str, int | None]] | None = None,
     ) -> None:
         self.root = root
         self.tree = tree
         self.file_count = file_count
         self.contexts = contexts or []
+        self.all_paths = all_paths or []
 
 
 class _MockLanguageStats:
@@ -611,3 +710,43 @@ class TestMapRepoSectionsToText:
         )
         sections = _map_repo_sections_to_text(result)
         assert "func  medium" in sections["public_api"][0]
+
+    def test_structure_uses_collapsed_format_when_collapse_depth_set(self) -> None:
+        """When collapse_depth is provided and all_paths is available, use collapsed format."""
+        all_paths: list[tuple[str, int | None]] = [
+            ("src/main.py", 100),
+            ("src/utils.py", 50),
+            ("tests/test_main.py", 30),
+            ("README.md", 20),
+        ]
+        result = _MockMapRepoResult(
+            structure=_MockStructureInfo(
+                root="/repo",
+                tree=[],  # tree is empty — collapsed format uses all_paths
+                file_count=4,
+                all_paths=all_paths,
+            )
+        )
+        sections = _map_repo_sections_to_text(result, collapse_depth=1)
+        tree = "\n".join(sections["structure"]["tree"])
+        # Directories with stats, not individual files
+        assert "src/ 2f 150L" in tree
+        assert "tests/ 1f 30L" in tree
+        # Root file still listed individually
+        assert "README.md 20" in tree
+        # No individual source files listed
+        assert "main.py" not in tree.replace("test_main.py", "")
+
+    def test_structure_falls_back_to_tree_when_no_all_paths(self) -> None:
+        """Without all_paths, _map_repo_sections_to_text uses the tree as before."""
+        file_node = MockFileNode(name="app.py", path="src/app.py", line_count=100)
+        result = _MockMapRepoResult(
+            structure=_MockStructureInfo(
+                root="/repo",
+                tree=[file_node],
+                file_count=1,
+            )
+        )
+        sections = _map_repo_sections_to_text(result, collapse_depth=1)
+        # Falls back to _tree_to_text because all_paths is empty
+        assert "app.py" in sections["structure"]["tree"][0]
