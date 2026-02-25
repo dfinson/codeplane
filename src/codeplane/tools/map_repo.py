@@ -157,9 +157,7 @@ class RepoMapper:
         result = MapRepoResult()
 
         if "structure" in include and filtered_files is not None:
-            result.structure, _truncated, _file_count = self._build_structure(
-                depth, limit, filtered_files
-            )
+            result.structure, _truncated, _file_count = self._build_structure(depth, filtered_files)
 
         if "languages" in include and filtered_files is not None:
             result.languages = self._analyze_languages(limit, filtered_files)
@@ -225,20 +223,23 @@ class RepoMapper:
     def _build_structure(
         self,
         depth: int,
-        limit: int,
         filtered_files: list[tuple[str, str | None, int | None]],
     ) -> tuple[StructureInfo, bool, int]:
         """Build directory tree from pre-filtered file data.
+
+        All files are included — ``depth`` controls how many levels of
+        the tree are rendered, which is the appropriate budget knob for
+        the structure section.  File-count truncation was removed because
+        it silently dropped entire top-level directories depending on
+        SQLite insertion order.
 
         Returns:
             Tuple of (structure, truncated, total_file_count)
         """
         total_count = len(filtered_files)
-        truncated = total_count > limit
+        truncated = False
 
-        # Apply limit
-        limited = filtered_files[:limit]
-        path_to_lines: dict[str, int | None] = {path: lines for path, _, lines in limited}
+        path_to_lines: dict[str, int | None] = {path: lines for path, _, lines in filtered_files}
 
         # Get valid contexts
         ctx_stmt = select(Context.root_path).where(Context.probe_status == ProbeStatus.VALID.value)
