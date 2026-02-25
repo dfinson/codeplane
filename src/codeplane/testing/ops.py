@@ -660,7 +660,7 @@ class TestOps:
         parallelism: int | None = None,
         timeout_sec: int | None = None,
         fail_fast: bool = False,
-        coverage: bool = False,
+        coverage: bool = True,
         coverage_dir: str | None = None,
     ) -> TestResult:
         """Run tests using runner packs.
@@ -676,8 +676,8 @@ class TestOps:
             parallelism: Max concurrent test invocations
             timeout_sec: Per-target timeout
             fail_fast: Stop on first failure
-            coverage: Enable coverage collection if supported
-            coverage_dir: Directory for coverage artifacts (required when coverage=True)
+            coverage: Enable coverage collection if supported (default: True)
+            coverage_dir: Directory for coverage artifacts (auto-derived if not provided)
         """
         # Validate that targets is not an empty list
         if targets is not None and len(targets) == 0:
@@ -698,6 +698,15 @@ class TestOps:
         # Create artifact directory
         artifact_dir = self._artifacts_base / run_id
         artifact_dir.mkdir(parents=True, exist_ok=True)
+
+        # Auto-derive coverage_dir when coverage enabled and not provided
+        effective_coverage_dir: Path | None = None
+        if coverage:
+            if coverage_dir:
+                effective_coverage_dir = Path(coverage_dir)
+            else:
+                effective_coverage_dir = artifact_dir / "coverage"
+            effective_coverage_dir.mkdir(parents=True, exist_ok=True)
 
         progress = TestProgress(
             targets=TargetProgress(),
@@ -765,7 +774,7 @@ class TestOps:
                 timeout_sec=timeout_sec or 300,
                 fail_fast=fail_fast,
                 coverage=coverage,
-                coverage_dir=Path(coverage_dir) if coverage_dir else None,
+                coverage_dir=effective_coverage_dir,
             )
         )
 
@@ -1247,17 +1256,18 @@ class TestOps:
         test_filter: str | None,
         tags: list[str] | None,
         timeout_sec: int,
-    ) -> ParsedTestSuite:
+        coverage_dir: Path | None = None,
+    ) -> tuple[ParsedTestSuite, CoverageArtifact | None]:
         """Run multiple targets in a single subprocess invocation.
 
         All targets must share the same ``runner_pack_id`` and
         ``workspace_root``.  The runner pack's ``build_batch_command``
         method produces a single command that exercises every target.
 
-        Returns a single ``ParsedTestSuite`` covering all targets.
+        Returns (ParsedTestSuite, CoverageArtifact | None).
         """
         if not targets:
-            return ParsedTestSuite(name="batch-empty", total=0)
+            return ParsedTestSuite(name="batch-empty", total=0), None
 
         first = targets[0]
         pack_class = runner_registry.get(first.runner_pack_id)
@@ -1267,7 +1277,7 @@ class TestOps:
                 errors=len(targets),
                 error_type="unknown",
                 error_detail=f"Runner pack not found: {first.runner_pack_id}",
-            )
+            ), None
 
         pack = pack_class()
         exec_ctx = await self._get_execution_context(first)
@@ -1294,18 +1304,44 @@ class TestOps:
                 errors=len(targets),
                 error_type="unknown",
                 error_detail="Runner pack does not support batch execution",
-            )
+            ), None
 
-        # Sanitize + run (simplified — no coverage in batch mode)
+        # Coverage handling - always enabled when supported
+        cov_artifact: CoverageArtifact | None = None
+        emitter = get_emitter(first.runner_pack_id) if coverage_dir else None
+        coverage_available = False
+        if emitter:
+            coverage_tools = await self._coordinator.get_coverage_capability(
+                first.workspace_root, first.runner_pack_id
+            )
+            runtime = PackRuntime(
+                workspace_root=Path(first.workspace_root),
+                runner_available=True,
+                coverage_tools=coverage_tools,
+            )
+            capability = emitter.capability(runtime)
+            coverage_available = capability == CoverageCapability.AVAILABLE
+
         safe_ctx = SafeExecutionContext(
             SafeExecutionConfig(
                 artifact_dir=artifact_dir,
                 workspace_root=Path(first.workspace_root),
                 timeout_sec=timeout_sec,
-                strip_coverage_flags=False,
+                strip_coverage_flags=coverage_available,
             )
         )
         cmd = safe_ctx.sanitize_command(cmd, first.runner_pack_id)
+
+        # Add coverage flags after sanitization
+        if coverage_available and emitter and coverage_dir:
+            cmd = emitter.modify_command(cmd, coverage_dir, source_dirs=None)
+            cov_artifact = CoverageArtifact(
+                format=emitter.format_id,
+                path=emitter.artifact_path(coverage_dir),
+                pack_id=first.runner_pack_id,
+                invocation_id=f"batch_{len(targets)}",
+            )
+
         safe_env = safe_ctx.prepare_environment(first.runner_pack_id)
 
         if exec_ctx:
@@ -1326,7 +1362,7 @@ class TestOps:
                 execution=ExecutionContext(command=cmd),
                 target_selector=selectors,
                 workspace_root=first.workspace_root,
-            )
+            ), None
 
         cwd = pack.get_cwd(first)
         stdout = ""
@@ -1383,7 +1419,7 @@ class TestOps:
                 result.error_detail = f"Command exited with code {exit_code}"
                 result.errors = 1
 
-            return result
+            return result, cov_artifact
 
         except TimeoutError:
             safe_ctx.cleanup()
@@ -1401,7 +1437,7 @@ class TestOps:
                 ),
                 target_selector=selectors,
                 workspace_root=first.workspace_root,
-            )
+            ), None
         except OSError as e:
             safe_ctx.cleanup()
             selectors = ", ".join(t.selector for t in targets)
@@ -1413,7 +1449,7 @@ class TestOps:
                 execution=ExecutionContext(command=cmd, working_directory=str(cwd)),
                 target_selector=selectors,
                 workspace_root=first.workspace_root,
-            )
+            ), None
         finally:
             safe_ctx.cleanup()
 
