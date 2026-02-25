@@ -479,6 +479,11 @@ def _partition_for_batching(
     return batch_groups, solo_targets
 
 
+# Default: run only direct tests (hop 0) for fast iteration.
+# When committing, escalate to all hops for thorough validation.
+_DEFAULT_MAX_TEST_HOPS = 1
+
+
 async def _run_tiered_tests(
     *,
     app_ctx: "AppContext",
@@ -490,6 +495,7 @@ async def _run_tiered_tests(
     coverage: bool,
     coverage_dir: str | None,
     coverage_filter_paths: set[str] | None,
+    max_test_hops: int,
     phase: int,
     total_phases: int,
 ) -> dict[str, Any]:
@@ -504,12 +510,19 @@ async def _run_tiered_tests(
     Args:
         coverage_filter_paths: Source files to include in coverage report
             (changed files excluding tests).
+        max_test_hops: Maximum hop tier to execute.  0 = direct only,
+            1 = direct + first transitive, etc.  Use a large number
+            (e.g. 99) for unlimited.
 
     Returns a dict with keys: serialized, status, passed, failed, tier_log.
     """
     hop_targets = _assign_target_hops(filtered_targets, graph_result, repo_root)
     sorted_hops = sorted(hop_targets.keys())
     max_hop = sorted_hops[-1] if sorted_hops else 0
+
+    # Limit hops to the requested depth
+    executable_hops = [h for h in sorted_hops if h <= max_test_hops]
+    skipped_hops = [h for h in sorted_hops if h > max_test_hops]
 
     # Accumulate results across tiers
     total_passed = 0
@@ -521,7 +534,7 @@ async def _run_tiered_tests(
     final_status = "completed"
     stopped_at_hop: int | None = None
 
-    for hop in sorted_hops:
+    for hop in executable_hops:
         targets_this_hop = hop_targets[hop]
         target_count = len(targets_this_hop)
 
@@ -628,7 +641,7 @@ async def _run_tiered_tests(
 
         # Tiered fail-fast: if this hop has failures, skip remaining hops
         if tier_failed > 0 and hop < max_hop:
-            remaining_hops = [h for h in sorted_hops if h > hop]
+            remaining_hops = [h for h in executable_hops if h > hop] + skipped_hops
             stopped_at_hop = hop
 
             skipped_info = ", ".join(
@@ -694,6 +707,25 @@ async def _run_tiered_tests(
             tier_parts.append("→ STOPPED")
     combined["tiers"] = " | ".join(tier_parts)
 
+    # Log skipped hops due to hop limit
+    if skipped_hops and stopped_at_hop is None:
+        skipped_targets = sum(len(hop_targets[h]) for h in skipped_hops)
+        skipped_info = ", ".join(f"hop {h} ({len(hop_targets[h])} targets)" for h in skipped_hops)
+        tier_log.append(
+            {
+                "hop": skipped_hops[0],
+                "label": "skipped (hop limit)",
+                "targets": skipped_targets,
+                "batched": 0,
+                "batch_groups": 0,
+                "passed": 0,
+                "failed": 0,
+                "total": 0,
+                "duration_seconds": 0.0,
+                "stopped_reason": f"max_test_hops={max_test_hops} \u2014 skipped: {skipped_info}",
+            }
+        )
+
     # Build transparent summary
     tier_log_idx = next(
         (i for i, t in enumerate(tier_log) if t["hop"] == stopped_at_hop),
@@ -707,10 +739,12 @@ async def _run_tiered_tests(
         )
     else:
         total_duration = sum(t["duration_seconds"] for t in tier_log)
+        hop_note = f", {len(executable_hops)} tier(s)" if executable_hops else ""
+        skip_note = f", {len(skipped_hops)} skipped" if skipped_hops else ""
         combined["summary"] = (
             f"{total_passed} passed"
             + (f", {total_failed} failed" if total_failed > 0 else "")
-            + f" ({total_duration:.1f}s, {len(sorted_hops)} tier(s))"
+            + f" ({total_duration:.1f}s{hop_note}{skip_note})"
         )
 
     return {
@@ -753,6 +787,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             None,
             description="Filter which test names to run within targets "
             "(passed to pytest -k, jest --testNamePattern).",
+        ),
+        max_test_hops: int | None = Field(
+            None,
+            description="Max import-graph hop depth for test selection. "
+            "0 = direct tests only, 1 = direct + 1 transitive, etc. "
+            "Default: 1 for lint+test, auto-escalates to all hops when "
+            "commit_message is set. Override to force deeper/shallower.",
         ),
         commit_message: str | None = Field(
             None,
@@ -904,6 +945,17 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     # Filter changed_files to source files only (exclude tests)
                     coverage_filter_paths = {f for f in changed_files if not is_test_file(f)}
 
+                    # Resolve effective max_test_hops:
+                    # - Explicit override from agent wins
+                    # - Auto-escalate to all hops when committing
+                    # - Default: _DEFAULT_MAX_TEST_HOPS (1) for fast iteration
+                    if max_test_hops is not None:
+                        effective_hops = max_test_hops
+                    elif commit_message:
+                        effective_hops = 99  # unlimited — thorough on commit
+                    else:
+                        effective_hops = _DEFAULT_MAX_TEST_HOPS
+
                     # --- Tiered execution: run direct tests first, then transitive ---
                     tiered_result = await _run_tiered_tests(
                         app_ctx=app_ctx,
@@ -916,6 +968,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                         coverage_dir=coverage_dir,
                         # Always pass filter_paths - empty set = no source files changed
                         coverage_filter_paths=coverage_filter_paths,
+                        max_test_hops=effective_hops,
                         phase=phase,
                         total_phases=total_phases,
                     )
