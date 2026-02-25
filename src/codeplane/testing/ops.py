@@ -22,7 +22,7 @@ from codeplane.index._internal.ignore import PRUNABLE_DIRS
 
 # Import packs to trigger registration
 from codeplane.testing import packs as _packs  # noqa: F401
-from codeplane.testing.coverage import (
+from codeplane.testing.emitters import (
     CoverageArtifact,
     CoverageCapability,
     PackRuntime,

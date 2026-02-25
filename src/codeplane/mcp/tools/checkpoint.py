@@ -223,26 +223,24 @@ def _summarize_run(result: "TestResult") -> str:
     return status.status
 
 
-def _build_coverage_hint(
+def _build_coverage_data(
     coverage_artifacts: list[dict[str, str]],
     target_selectors: list[str] | None = None,
-) -> str:
-    """Build guidance for interpreting coverage data."""
+) -> dict[str, Any]:
+    """Build structured coverage data from artifacts.
+
+    Parses all coverage artifacts, merges them, and returns a structured
+    summary suitable for agent consumption.
+    """
+    from codeplane.testing.coverage import (
+        CoverageParseError,
+        build_summary,
+        merge,
+        parse_artifact,
+    )
+
     if not coverage_artifacts:
-        return "No coverage data available."
-
-    hints: list[str] = []
-
-    if target_selectors:
-        hints.append(
-            "Executed test targets:\n"
-            + "\n".join(f"  - {sel}" for sel in target_selectors[:10])
-            + (
-                f"\n  ... and {len(target_selectors) - 10} more"
-                if len(target_selectors) > 10
-                else ""
-            )
-        )
+        return {"status": "no_coverage_data"}
 
     # Dedupe coverage artifacts by path
     seen_paths: set[str] = set()
@@ -253,44 +251,55 @@ def _build_coverage_hint(
             seen_paths.add(path)
             deduped.append(cov)
 
+    # Parse all artifacts
+    reports = []
+    parse_errors: list[str] = []
+
     for cov in deduped:
-        fmt = cov.get("format", "unknown")
-        path = cov.get("path", "")
+        path_str = cov.get("path", "")
+        fmt = cov.get("format")
+        if not path_str:
+            continue
 
-        if fmt == "lcov":
-            hints.append(
-                f"Coverage file: {path}\n"
-                "  Format: LCOV (line-by-line coverage)\n"
-                "  Reading: Look for 'SF:' (source file), 'DA:line,count' (line hits), "
-                "'LF:' (lines found), 'LH:' (lines hit)\n"
-                "  Note: File includes ALL project sources. Focus on files matching "
-                "your test paths."
+        try:
+            report = parse_artifact(
+                Path(path_str),
+                format_id=fmt if fmt and fmt != "unknown" else None,
             )
-        elif fmt == "istanbul":
-            hints.append(
-                f"Coverage directory: {path}\n"
-                "  Format: Istanbul/NYC (JSON + LCOV)\n"
-                "  Files: coverage-summary.json (overview), lcov.info (line detail)\n"
-                "  Note: Focus on source files corresponding to your test targets."
-            )
-        elif fmt == "gocov":
-            hints.append(
-                f"Coverage file: {path}\n"
-                "  Format: Go coverage profile\n"
-                "  Reading: 'mode: set/count/atomic', then 'file:start.col,end.col count'\n"
-                "  Note: Go coverage is package-scoped."
-            )
-        elif fmt == "jacoco":
-            hints.append(
-                f"Coverage directory: {path}\n"
-                "  Format: JaCoCo (XML + HTML)\n"
-                "  Files: jacoco.xml (machine-readable), index.html (human-readable)\n"
-                "  Note: Coverage tied to modules configured in build file."
-            )
-        else:
-            hints.append(f"Coverage: {path} (format: {fmt})")
+            reports.append(report)
+        except CoverageParseError as e:
+            parse_errors.append(f"{path_str}: {e}")
+        except Exception as e:
+            log.debug("Failed to parse coverage artifact", path=path_str, error=str(e))
+            parse_errors.append(f"{path_str}: {e}")
 
-    return "\n\n".join(hints)
+    if not reports:
+        result: dict[str, Any] = {"status": "parse_failed"}
+        if parse_errors:
+            result["errors"] = parse_errors
+        return result
+
+    # Merge reports if multiple
+    merged = merge(*reports) if len(reports) > 1 else reports[0]
+
+    # Build structured summary
+    summary = build_summary(merged, max_files=20, max_missed_lines=10)
+
+    # Add metadata
+    result = {
+        "status": "ok",
+        **summary,
+    }
+
+    if target_selectors:
+        result["test_targets"] = target_selectors[:20]
+        if len(target_selectors) > 20:
+            result["test_targets_truncated"] = len(target_selectors)
+
+    if parse_errors:
+        result["parse_warnings"] = parse_errors
+
+    return result
 
 
 def _serialize_test_result(result: "TestResult") -> dict[str, Any]:
@@ -338,7 +347,7 @@ def _serialize_test_result(result: "TestResult") -> dict[str, Any]:
             output["diagnostics"] = "\n".join(diag_lines)
 
         if status.coverage:
-            output["coverage"] = _build_coverage_hint(
+            output["coverage"] = _build_coverage_data(
                 status.coverage,
                 status.target_selectors,
             )

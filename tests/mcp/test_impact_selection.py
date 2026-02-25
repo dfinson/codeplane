@@ -120,7 +120,7 @@ class TestAutoScopedCoverage:
     @pytest.mark.asyncio
     async def test_source_dirs_passed_to_modify_command(self) -> None:
         """When coverage is enabled, source_dirs from import graph are used."""
-        from codeplane.testing.coverage import PytestCovEmitter
+        from codeplane.testing.emitters import PytestCovEmitter
 
         emitter = PytestCovEmitter()
         cmd = ["pytest", "tests/test_core.py"]
@@ -137,7 +137,7 @@ class TestAutoScopedCoverage:
     @pytest.mark.asyncio
     async def test_no_source_dirs_falls_back(self) -> None:
         """When source_dirs is None, falls back to --cov=. ."""
-        from codeplane.testing.coverage import PytestCovEmitter
+        from codeplane.testing.emitters import PytestCovEmitter
 
         emitter = PytestCovEmitter()
         cmd = ["pytest", "tests/test_core.py"]
@@ -150,7 +150,7 @@ class TestAutoScopedCoverage:
     @pytest.mark.asyncio
     async def test_empty_source_dirs_falls_back(self) -> None:
         """When source_dirs is empty list, falls back to --cov=. ."""
-        from codeplane.testing.coverage import PytestCovEmitter
+        from codeplane.testing.emitters import PytestCovEmitter
 
         emitter = PytestCovEmitter()
         cmd = ["pytest", "tests/test_core.py"]
@@ -189,9 +189,9 @@ class TestCoverageEmitterSignatures:
         """Each emitter's modify_command accepts source_dirs kwarg."""
         import inspect
 
-        from codeplane.testing import coverage
+        from codeplane.testing import emitters
 
-        cls = getattr(coverage, emitter_class)
+        cls = getattr(emitters, emitter_class)
         sig = inspect.signature(cls.modify_command)
         assert "source_dirs" in sig.parameters, (
             f"{emitter_class}.modify_command missing source_dirs parameter"
