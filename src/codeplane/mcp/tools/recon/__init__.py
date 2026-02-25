@@ -4,13 +4,13 @@ Package layout (SOLID decomposition):
 
     models.py      — Enums, dataclasses, constants, classifiers  (S: types only)
     parsing.py     — Task parsing, query views                   (S: text analysis)
-    harvesters.py  — Five independent candidate harvesters       (O: extensible)
-    scoring.py     — Filter pipeline, scoring, cutoff detection  (S: evaluation)
-    expansion.py   — Graph expansion, IO helpers, scaffolds      (S: context build)
-    assembly.py    — Budget trimming, summary generation         (S: response shape)
-    pipeline.py    — Select-seeds orchestrator + register_tools  (D: composition)
+    harvesters.py  — File-embedding harvester + def enrichment   (O: extensible)
+    scoring.py     — Two-elbow tier assignment, noise detection  (S: evaluation)
+    expansion.py   — IO helpers, signature text, sha256          (S: context build)
+    assembly.py    — Budget trimming, failure actions             (S: response shape)
+    pipeline.py    — File-centric orchestrator + register_tools  (D: composition)
 
-All public symbols are re-exported here for backward compatibility:
+All public symbols are re-exported here:
 
     from codeplane.mcp.tools.recon import register_tools
     from codeplane.mcp.tools.recon import parse_task, ParsedTask, ...
@@ -27,24 +27,16 @@ from codeplane.mcp.tools.recon.assembly import (
 
 # --- expansion ---
 from codeplane.mcp.tools.recon.expansion import (
-    _build_import_scaffolds,
-    _collect_barrel_paths,
     _compute_sha256,
     _def_signature_text,
-    _expand_seed,
     _file_path_for_id,
     _read_lines,
 )
 
 # --- harvesters ---
 from codeplane.mcp.tools.recon.harvesters import (
-    _enrich_candidates,
     _enrich_file_candidates,
-    _harvest_explicit,
     _harvest_file_embedding,
-    _harvest_lexical,
-    _harvest_term_match,
-    _merge_candidates,
 )
 
 # --- models ---
@@ -55,7 +47,6 @@ from codeplane.mcp.tools.recon.models import (
     HarvestCandidate,
     OutputTier,
     ParsedTask,
-    ReconBucket,
     TaskIntent,
     _classify_artifact,
     _extract_intent,
@@ -75,21 +66,12 @@ from codeplane.mcp.tools.recon.parsing import (
 
 # --- pipeline (orchestrator + tool registration) ---
 from codeplane.mcp.tools.recon.pipeline import (
-    _build_evidence_string,
     _file_centric_pipeline,
-    _select_seeds,
     register_tools,
 )
 
 # --- scoring ---
 from codeplane.mcp.tools.recon.scoring import (
-    _aggregate_to_files,
-    _aggregate_to_files_dual,
-    _apply_filters,
-    _assign_buckets,
-    _compute_context_value,
-    _compute_edit_likelihood,
-    _score_candidates,
     assign_tiers,
     compute_anchor_floor,
     compute_noise_metric,
@@ -105,7 +87,6 @@ __all__ = [
     "HarvestCandidate",
     "OutputTier",
     "ParsedTask",
-    "ReconBucket",
     "TaskIntent",
     # Parsing
     "parse_task",
@@ -120,20 +101,8 @@ __all__ = [
     "_is_barrel_file",
     # Harvesters
     "_harvest_file_embedding",
-    "_harvest_term_match",
-    "_harvest_lexical",
-    "_harvest_explicit",
-    "_merge_candidates",
-    "_enrich_candidates",
     "_enrich_file_candidates",
     # Scoring
-    "_aggregate_to_files",
-    "_aggregate_to_files_dual",
-    "_apply_filters",
-    "_assign_buckets",
-    "_compute_context_value",
-    "_compute_edit_likelihood",
-    "_score_candidates",
     "assign_tiers",
     "compute_anchor_floor",
     "compute_noise_metric",
@@ -144,16 +113,11 @@ __all__ = [
     "_read_lines",
     "_def_signature_text",
     "_file_path_for_id",
-    "_expand_seed",
-    "_collect_barrel_paths",
-    "_build_import_scaffolds",
     # Assembly
     "_build_failure_actions",
     "_estimate_bytes",
     "_trim_to_budget",
     # Pipeline
-    "_build_evidence_string",
     "_file_centric_pipeline",
-    "_select_seeds",
     "register_tools",
 ]

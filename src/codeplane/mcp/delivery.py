@@ -748,36 +748,31 @@ def _extract_jq_commands(
         return summary, cmds
 
     if kind == "recon_result":
-        seeds = payload.get("seeds", [])
-        n_seeds = len(seeds)
-        files = sorted({s.get("path", "") for s in seeds})
-        n_files = len(files)
-        summary = f"{n_seeds} seed(s) across {n_files} file(s)"
+        full_files = payload.get("full_file", [])
+        scaffold_files = payload.get("min_scaffold", [])
+        summary_files = payload.get("summary_only", [])
+        n_full = len(full_files)
+        n_scaffold = len(scaffold_files)
+        n_summary = len(summary_files)
+        n_total = n_full + n_scaffold + n_summary
+        summary = (
+            f"{n_full} full file(s), {n_scaffold} scaffold(s), "
+            f"{n_summary} summary(ies) across {n_total} file(s)"
+        )
         cmds = [
-            f"jq '[.seeds[] | {{symbol: .symbol, path: .path, score: .score, span: .span}}]' {path}",
-            f"jq '[.seeds[] | .path] | unique' {path}",
+            f"jq '[.full_file[] | {{path: .path, tier: .tier, combined_score: .combined_score}}]' {path}",
+            f"jq '[.min_scaffold[] | {{path: .path, tier: .tier, combined_score: .combined_score}}]' {path}",
+            f"jq '[.files[] | .path]' {path}",
         ]
-        # Per-file filter commands (dynamic, from actual data)
-        for file_path in files[:6]:
+        # Per-file content extraction for top full_file entries
+        for entry in full_files[:4]:
+            file_path = entry.get("path", "")
+            cmds.append(f"jq '.full_file[] | select(.path == \"{file_path}\") | .content' {path}")
+        # Scaffold extraction
+        for entry in scaffold_files[:3]:
+            file_path = entry.get("path", "")
             cmds.append(
-                f'jq \'[.seeds[] | select(.path == "{file_path}")'
-                f" | {{symbol: .symbol, score: .score, span: .span}}]' {path}"
-            )
-        # High-score filter for large result sets
-        if n_seeds > 8:
-            scores = sorted((s.get("score", 0) for s in seeds), reverse=True)
-            median_score = scores[n_seeds // 2]
-            cmds.append(
-                f"jq '[.seeds[] | select(.score > {median_score:.3f})"
-                f" | {{symbol: .symbol, path: .path, source: .source}}]' {path}"
-            )
-        # Source extraction for top seed
-        if seeds:
-            top_seed = max(seeds, key=lambda s: s.get("score", 0))
-            top_symbol = top_seed.get("symbol", "?")[:40]
-            cmds.append(
-                f'jq \'.seeds[] | select(.symbol | startswith("{top_symbol[:20]}"))'
-                f" | .source' {path}"
+                f"jq '.min_scaffold[] | select(.path == \"{file_path}\") | .scaffold' {path}"
             )
         return summary, cmds
 

@@ -26,16 +26,6 @@ _INTERNAL_DEPTH = 2  # Graph expansion depth (backend-decided, not agent-facing)
 # pathologically huge payloads before the delivery layer applies its own cap.
 _INTERNAL_BUDGET_BYTES = 120_000
 
-# Per-tier line caps
-_SEED_BODY_MAX_LINES = 80
-_LARGE_DEF_THRESHOLD_LINES = 200  # Defs above this get progressive disclosure
-_CALLEE_SIG_MAX_LINES = 5
-_CALLER_CONTEXT_LINES = 8  # lines around each caller ref
-_MAX_CALLERS_PER_SEED = 5
-_MAX_CALLEES_PER_SEED = 8
-_MAX_IMPORT_SCAFFOLDS = 5
-_MAX_IMPORT_DEFS_PER_SEED = 10  # Max imported-file defs surfaced per seed
-
 # Barrel / index files (language-agnostic re-export patterns)
 _BARREL_FILENAMES = frozenset(
     {
@@ -254,24 +244,6 @@ _BUILD_FILES = frozenset(
         "Taskfile.yml",
     }
 )
-
-
-# ===================================================================
-# ReconBucket — output bucket for bucketed recon response
-# ===================================================================
-
-
-class ReconBucket(StrEnum):
-    """Output bucket for a file in the recon response.
-
-    edit_target:    Files the agent will almost certainly edit.
-    context:        Files needed for understanding (tests, config, types).
-    supplementary:  Nice-to-have reference material.
-    """
-
-    edit_target = "edit_target"
-    context = "context"
-    supplementary = "supplementary"
 
 
 # ===================================================================
@@ -500,11 +472,6 @@ class HarvestCandidate:
     # Separated scores (populated during scoring phase)
     relevance_score: float = 0.0
     seed_score: float = 0.0
-
-    # Dual scores for bucketed output (populated during dual scoring phase)
-    edit_score: float = 0.0
-    context_score: float = 0.0
-    bucket: ReconBucket = ReconBucket.supplementary
 
     # Structural metadata (populated during enrichment)
     hub_score: int = 0
