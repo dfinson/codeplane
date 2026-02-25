@@ -1083,6 +1083,17 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                 "next_actions": failure_actions,
             }
 
+        # ── Filter phantom files (stale embeddings / DB records) ──
+        pre_filter = len(file_candidates)
+        file_candidates = [fc for fc in file_candidates if (repo_root / fc.path).exists()]
+        phantom_count = pre_filter - len(file_candidates)
+        if phantom_count:
+            log.warning(
+                "recon.phantom_files_filtered",
+                removed=phantom_count,
+                remaining=len(file_candidates),
+            )
+
         # ── Assemble file-centric response ──
         t_assemble = time.monotonic()
         files_output: list[dict[str, Any]] = []

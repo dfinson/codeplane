@@ -561,6 +561,7 @@ class IndexCoordinator:
         self._lexical = LexicalIndex(self.tantivy_path)
         self._file_embedding = FileEmbeddingIndex(self.repo_root / ".codeplane")
         self._file_embedding.load()
+        self._file_embedding.prune_missing(self.repo_root)
         self._epoch_manager = EpochManager(self.db, self._lexical)
 
         # Initialize router from existing contexts

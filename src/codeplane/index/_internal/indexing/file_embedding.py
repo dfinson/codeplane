@@ -941,6 +941,38 @@ class FileEmbeddingIndex:
             log.exception("file_embedding.load_error")
             return False
 
+    def prune_missing(self, repo_root: Path) -> int:
+        """Remove embeddings for files that no longer exist on disk.
+
+        Called after load() to purge stale entries that survived daemon
+        restarts (file deleted while daemon was down, so the watcher
+        never staged a removal).
+
+        Returns number of paths pruned.
+        """
+        if self._matrix is None or not self._paths:
+            return 0
+
+        stale = {p for p in self._path_to_idx if not (repo_root / p).exists()}
+        if not stale:
+            return 0
+
+        keep_mask = [p not in stale for p in self._paths]
+        keep_indices = [i for i, k in enumerate(keep_mask) if k]
+        if keep_indices:
+            self._matrix = self._matrix[keep_indices]
+            self._paths = [self._paths[i] for i in keep_indices]
+        else:
+            self._matrix = None
+            self._paths = []
+        self._rebuild_index()
+        self._save()
+
+        log.info(
+            "file_embedding.pruned_missing", removed=len(stale), remaining=len(self._path_to_idx)
+        )
+        return len(stale)
+
     def reload(self) -> bool:
         """Reload from disk (alias for load)."""
         return self.load()
