@@ -548,10 +548,15 @@ async def _harvest_graph(
                 if callee.def_uid == seed_uid:
                     continue
                 quality = _EDGE_WEIGHT_CALLEE / seed_idx
-                raw_edges.append((
-                    callee.def_uid, callee, quality,
-                    "graph", f"callee of {seed_def.name}",
-                ))
+                raw_edges.append(
+                    (
+                        callee.def_uid,
+                        callee,
+                        quality,
+                        "graph",
+                        f"callee of {seed_def.name}",
+                    )
+                )
 
             # (b) Callers: defs that reference this seed (via RefFact)
             refs = fq.list_refs_by_def_uid(seed_uid, limit=30)
@@ -569,10 +574,15 @@ async def _harvest_graph(
                         and cd.start_line <= ref.start_line <= cd.end_line
                     ):
                         quality = _EDGE_WEIGHT_CALLER / seed_idx
-                        raw_edges.append((
-                            cd.def_uid, cd, quality,
-                            "graph", f"caller of {seed_def.name}",
-                        ))
+                        raw_edges.append(
+                            (
+                                cd.def_uid,
+                                cd,
+                                quality,
+                                "graph",
+                                f"caller of {seed_def.name}",
+                            )
+                        )
                         break
 
             # (c) Same-file siblings: other key defs in seed's file
@@ -585,10 +595,15 @@ async def _harvest_graph(
                     if sd.kind not in ("function", "method", "class"):
                         continue
                     quality = _EDGE_WEIGHT_SIBLING / seed_idx
-                    raw_edges.append((
-                        sd.def_uid, sd, quality,
-                        "graph", f"sibling of {seed_def.name} in {frec.path}",
-                    ))
+                    raw_edges.append(
+                        (
+                            sd.def_uid,
+                            sd,
+                            quality,
+                            "graph",
+                            f"sibling of {seed_def.name} in {frec.path}",
+                        )
+                    )
 
     # Deduplicate: keep max quality per uid
     best_edges: dict[str, EdgeInfo] = {}
@@ -622,9 +637,7 @@ async def _harvest_graph(
             def_fact=def_fact,  # type: ignore[arg-type]
             from_graph=True,
             graph_quality=quality,
-            evidence=[
-                EvidenceRecord(category=category, detail=detail, score=quality)
-            ],
+            evidence=[EvidenceRecord(category=category, detail=detail, score=quality)],
         )
 
     log.debug(
@@ -941,10 +954,7 @@ def _select_graph_seeds(
     scored: list[tuple[str, float]] = []
     for uid, cand in merged.items():
         # Score: axes * 2 + explicit_bonus
-        score = (
-            cand.evidence_axes * 2.0
-            + (2.0 if cand.from_explicit else 0.0)
-        )
+        score = cand.evidence_axes * 2.0 + (2.0 if cand.from_explicit else 0.0)
         scored.append((uid, score))
 
     scored.sort(key=lambda x: -x[1])
@@ -1076,27 +1086,21 @@ def _enrich_file_candidates(
         if idf_val > 0:
             term_idf_by_path[fp] = idf_val
     term_ranked = sorted(term_idf_by_path.items(), key=lambda x: -x[1])
-    term_rank: dict[str, int] = {
-        path: rank for rank, (path, _) in enumerate(term_ranked, 1)
-    }
+    term_rank: dict[str, int] = {path: rank for rank, (path, _) in enumerate(term_ranked, 1)}
 
     # Source 3: Lexical hit count
     lex_ranked = sorted(
         [(fc.path, fc.lexical_hit_count) for fc in file_candidates if fc.lexical_hit_count > 0],
         key=lambda x: -x[1],
     )
-    lex_rank: dict[str, int] = {
-        path: rank for rank, (path, _) in enumerate(lex_ranked, 1)
-    }
+    lex_rank: dict[str, int] = {path: rank for rank, (path, _) in enumerate(lex_ranked, 1)}
 
     # Source 4: Graph — ranked by graded edge quality (not binary)
     graph_ranked = sorted(
         [(fc.path, fc.graph_quality) for fc in file_candidates if fc.graph_quality > 0],
         key=lambda x: -x[1],
     )
-    graph_rank: dict[str, int] = {
-        path: rank for rank, (path, _) in enumerate(graph_ranked, 1)
-    }
+    graph_rank: dict[str, int] = {path: rank for rank, (path, _) in enumerate(graph_ranked, 1)}
 
     # Source 5: Explicit mention (binary — rank 1 for all explicit)
     explicit_all = {fc.path for fc in file_candidates if fc.has_explicit_mention}
@@ -1109,12 +1113,34 @@ def _enrich_file_candidates(
     # discriminator and code-only harvesters miss them.
     # Only primary terms, stop-word filtered, ≥4 chars — secondary
     # terms like "config", "model" are too common in paths.
-    _PATH_STOP_TOKENS = frozenset({
-        "src", "test", "tests", "config", "models", "utils",
-        "core", "cli", "docs", "init", "main", "base", "common",
-        "tools", "commands", "templates", "integration", "lib",
-        "internal", "helpers", "types", "api", "app", "pkg",
-    })
+    _PATH_STOP_TOKENS = frozenset(
+        {
+            "src",
+            "test",
+            "tests",
+            "config",
+            "models",
+            "utils",
+            "core",
+            "cli",
+            "docs",
+            "init",
+            "main",
+            "base",
+            "common",
+            "tools",
+            "commands",
+            "templates",
+            "integration",
+            "lib",
+            "internal",
+            "helpers",
+            "types",
+            "api",
+            "app",
+            "pkg",
+        }
+    )
     path_query_terms: set[str] = set()
     for t in parsed.primary_terms:
         tl = t.lower()

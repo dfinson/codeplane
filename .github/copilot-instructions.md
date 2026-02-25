@@ -15,6 +15,28 @@ Authority: SPEC.md wins. If unsure or there is a spec conflict, stop and ask.
 The `checkpoint` tool runs lint + affected tests + commit + push in one call.
 Terminal commands for these operations are ALWAYS wrong in this repo.
 
+## ⛔ CHECKPOINT IS A BLOCKING GATE ⛔
+
+`checkpoint`, `semantic_diff`, and `map_repo` are **exclusive tools**.
+The server enforces a session lock — no other tool runs concurrently.
+
+**After checkpoint returns, you MUST fully process the result before ANY other work:**
+1. Read `passed` (true/false) — stop here if false
+2. Read `lint` section — check for errors in YOUR changed files
+3. Read `tests` section — check for failures
+4. Read `commit` section — confirm commit/push status
+5. Read `agentic_hint` — follow its instructions
+6. ONLY THEN resume other work
+
+**Lint/test failures are YOUR fault.** You passed `changed_files` — checkpoint runs
+lint and tests ONLY on code affected by those files. Do NOT dismiss failures as
+"pre-existing" or "not related to my changes". They almost certainly ARE your changes.
+Errors in OTHER files are often transitive — caused by your changes breaking
+downstream dependents. These are still YOUR responsibility. Fix ALL issues.
+
+**If checkpoint fails or you cannot read the full result: STOP and tell the user.**
+Do NOT continue editing files after a failed or unread checkpoint.
+
 ## ⛔ E2E Tests Are OFF-LIMITS ⛔
 
 **DO NOT RUN E2E TESTS** unless ALL of the following are true:

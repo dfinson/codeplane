@@ -195,26 +195,30 @@ class TestExtractMakefileTokens:
 class TestTryResolve:
     @pytest.fixture
     def path_set(self) -> frozenset[str]:
-        return frozenset({
-            "src/evee/__init__.py",
-            "src/evee/cli/__init__.py",
-            "src/evee/cli/main.py",
-            "src/evee/core/engine.py",
-            "tests/__init__.py",
-            "tests/test_main.py",
-            "Makefile",
-            "pyproject.toml",
-        })
+        return frozenset(
+            {
+                "src/evee/__init__.py",
+                "src/evee/cli/__init__.py",
+                "src/evee/cli/main.py",
+                "src/evee/core/engine.py",
+                "tests/__init__.py",
+                "tests/test_main.py",
+                "Makefile",
+                "pyproject.toml",
+            }
+        )
 
     @pytest.fixture
     def dir_set(self) -> frozenset[str]:
-        return frozenset({
-            "src",
-            "src/evee",
-            "src/evee/cli",
-            "src/evee/core",
-            "tests",
-        })
+        return frozenset(
+            {
+                "src",
+                "src/evee",
+                "src/evee/cli",
+                "src/evee/core",
+                "tests",
+            }
+        )
 
     def test_direct_path(self, path_set: frozenset[str], dir_set: frozenset[str]) -> None:
         assert _try_resolve("src/evee/cli/main.py", path_set, dir_set) == "src/evee/cli/main.py"
@@ -269,10 +273,10 @@ class TestResolveConfigFileRefs:
 
         # Create config file
         (repo_dir / "pyproject.toml").write_text(
-            '[project.scripts]\n'
+            "[project.scripts]\n"
             'myapp = "mylib.core:main"\n'
-            '\n'
-            '[tool.pytest.ini_options]\n'
+            "\n"
+            "[tool.pytest.ini_options]\n"
             'testpaths = ["tests"]\n'
         )
 
@@ -431,11 +435,7 @@ class TestResolveConfigFileRefs:
 
         # Create Makefile with unquoted paths
         (repo_dir / "Makefile").write_text(
-            "test:\n"
-            "\tpytest tests/unit --cov=src\n"
-            "\n"
-            "build:\n"
-            "\t./tools/build/build.sh\n"
+            "test:\n\tpytest tests/unit --cov=src\n\nbuild:\n\t./tools/build/build.sh\n"
         )
 
         # Seed DB

@@ -542,7 +542,7 @@ class TestBuildEnrichmentLines:
             {"name": "b", "_sem_facts": {"calls": ["log", "load"]}},
         ]
         result = _build_enrichment_lines(defs, [])
-        calls_part = result["C"][len("calls "):]
+        calls_part = result["C"][len("calls ") :]
         # "log" should appear only once
         assert calls_part.count("log") == 1
 
@@ -553,7 +553,7 @@ class TestBuildEnrichmentLines:
             {"name": "b", "_string_literals": ["config.yaml", "other.txt"]},
         ]
         result = _build_enrichment_lines(defs, [])
-        mentions_part = result["S"][len("mentions "):]
+        mentions_part = result["S"][len("mentions ") :]
         assert mentions_part.count("config.yaml") == 1
 
 
@@ -593,7 +593,9 @@ class TestBuildEnrichedChunks:
         """Large scaffold should split into 2 chunks."""
         # Create a scaffold that exceeds _CHUNK_SPLIT_CHARS when enriched
         defs_text = ", ".join(f"function very_long_function_name_{i}(a, b, c)" for i in range(60))
-        scaffold = f"module large module with many definitions\nimports many_modules\ndefines {defs_text}"
+        scaffold = (
+            f"module large module with many definitions\nimports many_modules\ndefines {defs_text}"
+        )
         enrichment = {
             "I": "imports " + ", ".join(f"package_{i} module_{i}" for i in range(20)),
             "S": "mentions " + ", ".join(f"CONFIG_KEY_{i}" for i in range(20)),

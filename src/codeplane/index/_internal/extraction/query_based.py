@@ -12,7 +12,6 @@ The QueryBasedExtractor executes these queries and normalizes results.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from codeplane.index._internal.extraction import (
@@ -22,59 +21,10 @@ from codeplane.index._internal.extraction import (
     TypeAnnotationData,
     TypeMemberData,
 )
+from codeplane.index._internal.parsing.packs import TypeExtractionConfig
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Node, Query, Tree
-
-
-# =============================================================================
-# Query Pattern Definitions
-# =============================================================================
-
-
-@dataclass
-class CaptureMapping:
-    """Maps query capture names to extraction fields."""
-
-    name_capture: str = "name"  # Capture name for identifier
-    type_capture: str = "type"  # Capture name for type annotation
-    node_capture: str = "node"  # Capture name for the whole node
-
-
-@dataclass
-class LanguageQueryConfig:
-    """Configuration for a language's extraction queries."""
-
-    language_family: str
-    grammar_name: str  # tree-sitter grammar name (e.g., "python", "typescript")
-
-    # Query patterns (S-expression strings)
-    type_annotation_query: str = ""
-    type_member_query: str = ""
-    member_access_query: str = ""
-    interface_impl_query: str = ""
-
-    # Node types that create scopes
-    scope_node_types: list[str] = field(default_factory=list)
-
-    # Node types for member access chains
-    member_access_types: list[str] = field(default_factory=lambda: ["attribute"])
-    member_identifier_types: list[str] = field(
-        default_factory=lambda: ["identifier", "property_identifier", "field_identifier"]
-    )
-
-    # Access style (dot, arrow, scope)
-    access_styles: list[str] = field(default_factory=lambda: ["dot"])
-
-    # Feature flags
-    supports_type_annotations: bool = True
-    supports_interfaces: bool = False
-
-    # Type normalization
-    optional_patterns: list[str] = field(default_factory=list)  # e.g., ["Optional[", "| None"]
-    array_patterns: list[str] = field(default_factory=list)  # e.g., ["List[", "[]"]
-    generic_indicator: str = "<"  # or "["
-    reference_indicator: str = ""  # e.g., "&" for Rust, "*" for C
 
 
 # =============================================================================
@@ -86,12 +36,13 @@ class QueryBasedExtractor(BaseTypeExtractor):
     """Type extractor driven by tree-sitter queries.
 
     Instead of manual AST traversal, this uses declarative query patterns
-    to extract type information. Each language provides a LanguageQueryConfig
-    with query strings and configuration.
+    to extract type information. Each language provides a TypeExtractionConfig
+    (from packs.py) with query strings and configuration.
     """
 
-    def __init__(self, config: LanguageQueryConfig):
+    def __init__(self, config: TypeExtractionConfig, grammar_name: str):
         self._config = config
+        self._grammar_name = grammar_name
         self._queries: dict[str, Query] = {}
         self._language: Language | None = None
 
@@ -109,58 +60,27 @@ class QueryBasedExtractor(BaseTypeExtractor):
 
     @property
     def access_styles(self) -> list[str]:
-        return self._config.access_styles
+        return list(self._config.access_styles)
 
     def _get_language(self) -> Language:
-        """Get the tree-sitter Language object."""
+        """Get the tree-sitter Language object using pack metadata."""
         if self._language is None:
             import importlib
 
             import tree_sitter
 
-            grammar_name = self._config.grammar_name
+            from codeplane.index._internal.parsing.packs import get_pack
 
-            # Handle typescript/tsx specially
-            if grammar_name in ("typescript", "tsx"):
-                ts_module = importlib.import_module("tree_sitter_typescript")
-                if grammar_name == "typescript":
-                    self._language = tree_sitter.Language(ts_module.language_typescript())
-                else:
-                    self._language = tree_sitter.Language(ts_module.language_tsx())
-                return self._language
-
-            # Map grammar names to import paths
-            import_map: dict[str, str] = {
-                "python": "tree_sitter_python",
-                "javascript": "tree_sitter_javascript",
-                "go": "tree_sitter_go",
-                "rust": "tree_sitter_rust",
-                "java": "tree_sitter_java",
-                "kotlin": "tree_sitter_kotlin",
-                "scala": "tree_sitter_scala",
-                "c_sharp": "tree_sitter_c_sharp",
-                "c": "tree_sitter_c",
-                "cpp": "tree_sitter_cpp",
-                "ruby": "tree_sitter_ruby",
-                "php": "tree_sitter_php",
-                "swift": "tree_sitter_swift",
-                "elixir": "tree_sitter_elixir",
-                "haskell": "tree_sitter_haskell",
-                "ocaml": "tree_sitter_ocaml",
-                "zig": "tree_sitter_zig",
-                "nim": "tree_sitter_nim",
-                "dart": "tree_sitter_dart",
-            }
-
-            module_name = import_map.get(grammar_name)
-            if module_name is None:
-                raise ValueError(f"Unknown grammar: {grammar_name}")
+            pack = get_pack(self._grammar_name)
+            if pack is None:
+                raise ValueError(f"Unknown grammar: {self._grammar_name}")
 
             try:
-                lang_module = importlib.import_module(module_name)
-                self._language = tree_sitter.Language(lang_module.language())
+                lang_module = importlib.import_module(pack.grammar_module)
+                func_name = pack.language_func or "language"
+                self._language = tree_sitter.Language(getattr(lang_module, func_name)())
             except ImportError as err:
-                raise ValueError(f"Grammar not installed: {grammar_name}") from err
+                raise ValueError(f"Grammar not installed: {self._grammar_name}") from err
 
         return self._language
 

@@ -287,7 +287,6 @@ class TestStructuralIndexer:
     def test_indexer_creation(self, indexer: StructuralIndexer) -> None:
         """Should create indexer instance."""
         assert indexer is not None
-        assert indexer._parser is not None
 
     def test_index_single_file(
         self, db: Database, indexer: StructuralIndexer, temp_dir: Path

@@ -82,12 +82,18 @@ class ToolMiddleware(Middleware):
 
         # Get MCP session ID from the FastMCP context (agent's session)
         session_id = "unknown"
+        session = None
         if context.fastmcp_context:
             full_session_id = context.fastmcp_context.session_id or "unknown"
             session_id = full_session_id[:8]  # Truncate for display
 
             # Resolve client profile from session and set for envelope builders
             self._resolve_and_set_profile(context.fastmcp_context)
+
+            # Get session for exclusive lock enforcement
+            if self._session_manager:
+                session = self._session_manager.get_or_create(full_session_id)
+
         # Extract key params for logging (avoid logging huge content)
         log_params = self._extract_log_params(tool_name, arguments)
 
@@ -95,6 +101,48 @@ class ToolMiddleware(Middleware):
         log.info("tool_start", tool=tool_name, session_id=session_id, **log_params)
 
         console = get_console()
+
+        # --- Exclusive tool enforcement ---
+        # All tools acquire the session's exclusive lock. For exclusive tools
+        # (checkpoint, semantic_diff, map_repo) this blocks any concurrent
+        # tool call on the same session until the exclusive tool completes.
+        # For regular tools, the lock is acquired and released quickly.
+
+        short = self._strip_tool_prefix(tool_name)
+
+        if session:
+            async with session.exclusive(short):
+                return await self._run_tool(
+                    context,
+                    call_next,
+                    tool_name,
+                    arguments,
+                    session_id,
+                    start_time,
+                    console,
+                )
+        else:
+            return await self._run_tool(
+                context,
+                call_next,
+                tool_name,
+                arguments,
+                session_id,
+                start_time,
+                console,
+            )
+
+    async def _run_tool(
+        self,
+        context: MiddlewareContext[mt.CallToolRequest],
+        call_next: CallNext[mt.CallToolRequest, Any],
+        tool_name: str,
+        arguments: dict[str, Any],
+        session_id: str,
+        start_time: float,
+        console: Any,
+    ) -> Any:
+        """Execute a tool call with structured error handling and UX."""
 
         try:
             result = await call_next(context)

@@ -674,15 +674,73 @@ def _extract_jq_commands(
         return summary, cmds
 
     if kind == "checkpoint":
-        sha = payload.get("short_sha", payload.get("sha", "?")[:7])
-        msg = (payload.get("message", "") or "")[:80]
-        summary = f"Checkpoint {sha}: {msg}"
+        # Checkpoint result: {passed, lint, tests, summary, commit?, agentic_hint}
+        passed = payload.get("passed")
+        summary_text = payload.get("summary", "")
+
+        # Build a compact summary line
+        parts: list[str] = []
+        if passed is True:
+            parts.append("PASSED")
+        elif passed is False:
+            parts.append("FAILED")
+        if summary_text:
+            parts.append(str(summary_text))
+
+        commit = payload.get("commit", {})
+        if isinstance(commit, dict) and commit.get("oid"):
+            parts.append(f"committed {commit.get('short_oid', commit['oid'][:7])}")
+
+        summary = " | ".join(parts) if parts else "checkpoint complete"
+
         cmds = [
-            f"jq '{{sha: (.short_sha // .sha), message, author, date}}' {path}",
+            # Top-level verdict
+            f"jq '{{passed, summary, agentic_hint}}' {path}",
         ]
-        if "files" in payload or "changed_files" in payload:
-            fk = "files" if "files" in payload else "changed_files"
-            cmds.append(f"jq '[.{fk}[] | .path // .filename]' {path}")
+
+        # Lint details
+        if payload.get("lint"):
+            cmds.append(
+                f"jq '{{status: .lint.status, total_diagnostics: .lint.total_diagnostics, "
+                f"files_modified: .lint.total_files_modified}}' {path}"
+            )
+            # Diagnostics filtered to changed files
+            changed = payload.get("changed_files", [])
+            if changed:
+                # Show diagnostics only in changed files (most useful for agent)
+                filter_parts = " or ".join(
+                    f'(.path | endswith("{f.split("/")[-1]}"))' for f in changed[:5]
+                )
+                cmds.append(
+                    f"jq '[.lint.tools_run[].diagnostics[] | select({filter_parts})]' {path}"
+                )
+            else:
+                cmds.append(
+                    f"jq '[.lint.tools_run[].diagnostics[] | {{path: .path, line: .line, code: .code, message: .message}}] | length' {path}"
+                )
+
+        # Test details
+        if payload.get("tests"):
+            cmds.append(f"jq '{{status: .tests.status, reason: .tests.reason}}' {path}")
+            # Failed test details
+            tests = payload.get("tests", {})
+            run_status = tests.get("run_status", {})
+            if isinstance(run_status, dict):
+                progress = run_status.get("progress", {})
+                cases = progress.get("cases", {}) if isinstance(progress, dict) else {}
+                if cases.get("failed", 0) > 0:
+                    cmds.append(
+                        f"jq '[.tests.run_status.failures[] | {{test_id, message}}]' {path}"
+                    )
+
+        # Commit details
+        if isinstance(commit, dict) and commit.get("oid"):
+            cmds.append(
+                f"jq '{{oid: .commit.oid, short_oid: .commit.short_oid, summary: .commit.summary, pushed: .commit.pushed}}' {path}"
+            )
+            if commit.get("semantic_diff"):
+                cmds.append(f"jq '.commit.semantic_diff.structural_changes' {path}")
+
         return summary, cmds
 
     if kind == "blame":
@@ -718,7 +776,7 @@ def _extract_jq_commands(
         # Per-file filter commands (dynamic, from actual data)
         for file_path in files[:6]:
             cmds.append(
-                f"jq '[.seeds[] | select(.path == \"{file_path}\")"
+                f'jq \'[.seeds[] | select(.path == "{file_path}")'
                 f" | {{symbol: .symbol, score: .score, span: .span}}]' {path}"
             )
         # High-score filter for large result sets
@@ -734,7 +792,7 @@ def _extract_jq_commands(
             top_seed = max(seeds, key=lambda s: s.get("score", 0))
             top_symbol = top_seed.get("symbol", "?")[:40]
             cmds.append(
-                f"jq '.seeds[] | select(.symbol | startswith(\"{top_symbol[:20]}\"))"
+                f'jq \'.seeds[] | select(.symbol | startswith("{top_symbol[:20]}"))'
                 f" | .source' {path}"
             )
         return summary, cmds

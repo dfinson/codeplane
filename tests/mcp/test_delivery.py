@@ -377,20 +377,21 @@ class TestFetchHints:
         assert "low" in hint or "medium" in hint
 
     def test_checkpoint_hint(self) -> None:
-        """Checkpoint hint shows sha/message and jq for details."""
+        """Checkpoint hint shows pass/fail summary and jq for details."""
         from codeplane.mcp.delivery import _build_fetch_hint
 
         payload = {
-            "short_sha": "abc1234",
-            "message": "fix regression",
-            "author": "alice",
-            "files": [{"path": "src/x.py"}, {"path": "src/y.py"}],
+            "passed": True,
+            "summary": "lint: clean | tests: 42 passed",
+            "commit": {"oid": "abc1234567", "short_oid": "abc1234"},
+            "lint": {"status": "clean", "total_diagnostics": 0, "total_files_modified": 0},
+            "agentic_hint": "All checks passed.",
         }
         hint = _build_fetch_hint("abc123", 2000, "checkpoint", payload)
-        assert "abc1234" in hint
-        assert "fix regression" in hint
+        assert "abc1234" in hint  # short_oid from commit
+        assert "PASSED" in hint
         assert "jq" in hint
-        assert ".files" in hint  # command to list changed files
+        assert "passed" in hint
 
     def test_repo_map_hint(self) -> None:
         """Repo map hint lists sections and jq to explore each."""

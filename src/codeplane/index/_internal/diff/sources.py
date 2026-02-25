@@ -128,7 +128,7 @@ def snapshots_from_blob(
     import pygit2
 
     from codeplane.core.languages import detect_language_family, has_grammar
-    from codeplane.index._internal.parsing.treesitter import TreeSitterParser
+    from codeplane.index._internal.parsing.service import tree_sitter_service
 
     assert isinstance(repo, pygit2.Repository)
     assert isinstance(commit, pygit2.Commit)
@@ -150,7 +150,7 @@ def snapshots_from_blob(
     if isinstance(source, memoryview):
         source = bytes(source)
 
-    parser = TreeSitterParser()
+    parser = tree_sitter_service.parser
     try:
         # parse() takes a Path (for lang detection) and optional content as bytes
         from pathlib import Path as _Path

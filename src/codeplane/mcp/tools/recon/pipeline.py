@@ -638,13 +638,37 @@ async def _file_centric_pipeline(
     # Also require len≥4 to avoid short noise tokens.
     path_inject_terms: set[str] = set()
     # Common path tokens that match too many files — skip these.
-    _PATH_STOP_TOKENS = frozenset({
-        "src", "test", "tests", "config", "models", "utils",
-        "core", "cli", "docs", "init", "main", "base", "common",
-        "tools", "commands", "templates", "integration", "lib",
-        "internal", "helpers", "types", "api", "app", "pkg",
-        "evee", "codeplane", "python",
-    })
+    _PATH_STOP_TOKENS = frozenset(
+        {
+            "src",
+            "test",
+            "tests",
+            "config",
+            "models",
+            "utils",
+            "core",
+            "cli",
+            "docs",
+            "init",
+            "main",
+            "base",
+            "common",
+            "tools",
+            "commands",
+            "templates",
+            "integration",
+            "lib",
+            "internal",
+            "helpers",
+            "types",
+            "api",
+            "app",
+            "pkg",
+            "evee",
+            "codeplane",
+            "python",
+        }
+    )
     for t in parsed.primary_terms:
         tl = t.lower()
         if len(tl) >= 4 and tl not in _PATH_STOP_TOKENS:
@@ -974,7 +998,9 @@ async def _file_centric_pipeline(
     dir_tier_counts: dict[str, int] = _defaultdict(int)
 
     for fc in file_candidates:
-        if fc.tier in (OutputTier.FULL_FILE, OutputTier.MIN_SCAFFOLD) and not _is_test_file(fc.path):
+        if fc.tier in (OutputTier.FULL_FILE, OutputTier.MIN_SCAFFOLD) and not _is_test_file(
+            fc.path
+        ):
             parent = str(PurePosixPath(fc.path).parent)
             dir_tier_counts[parent] += 1
             # Track the best tier present in this directory
@@ -1038,7 +1064,6 @@ async def _file_centric_pipeline(
         )
 
     # Build expand_reason for each candidate
-    dir_cohesion_paths = {fc.path for fc in file_candidates if fc.path in {ip for ip in dir_co_dirs}} if dir_co_added > 0 else set()
     for fc in file_candidates:
         reasons: list[str] = []
         if fc.similarity > 0.5:
@@ -1059,9 +1084,15 @@ async def _file_centric_pipeline(
             reasons.append("source imported by surviving test")
         # Check if this file was added by directory cohesion
         parent = str(PurePosixPath(fc.path).parent)
-        if parent in dirs_to_expand and fc.similarity == 0.0 and not fc.has_explicit_mention:
-            if not any(r.startswith("test for") or r.startswith("source imported") for r in reasons):
-                reasons.append("directory sibling")
+        if (
+            parent in dirs_to_expand
+            and fc.similarity == 0.0
+            and not fc.has_explicit_mention
+            and not any(
+                r.startswith("test for") or r.startswith("source imported") for r in reasons
+            )
+        ):
+            reasons.append("directory sibling")
         fc.expand_reason = "; ".join(reasons) if reasons else "embedding match"
 
     # 6. Noise metric

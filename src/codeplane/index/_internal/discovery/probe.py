@@ -18,6 +18,7 @@ from pathlib import Path
 
 from codeplane.index._internal.ignore import IgnoreChecker
 from codeplane.index._internal.parsing import TreeSitterParser
+from codeplane.index._internal.parsing.service import tree_sitter_service
 from codeplane.index.models import CandidateContext, LanguageFamily
 
 
@@ -69,7 +70,7 @@ class ContextProbe:
     ):
         self.repo_path = Path(repo_path)
         self.config = config or ProbeConfig()
-        self.parser = parser or TreeSitterParser()
+        self.parser = parser or tree_sitter_service.parser
         self._family_to_ext = self._build_extension_map()
         # Shared ignore checker - loads .cplignore automatically
         self._ignore_checker = IgnoreChecker(self.repo_path, respect_gitignore=False)

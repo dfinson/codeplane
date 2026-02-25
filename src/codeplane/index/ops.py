@@ -58,6 +58,7 @@ from codeplane.index._internal.indexing import (
 )
 from codeplane.index._internal.indexing.file_embedding import FileEmbeddingIndex
 from codeplane.index._internal.parsing import TreeSitterParser
+from codeplane.index._internal.parsing.service import tree_sitter_service
 from codeplane.index._internal.state import FileStateService
 from codeplane.index.models import (
     CandidateContext,
@@ -377,7 +378,7 @@ class IndexCoordinator:
         create_additional_indexes(self.db.engine)
 
         # Initialize components
-        self._parser = TreeSitterParser()
+        self._parser = tree_sitter_service.parser
         self._lexical = LexicalIndex(self.tantivy_path)
         self._file_embedding = FileEmbeddingIndex(self.repo_root / ".codeplane")
         self._epoch_manager = EpochManager(self.db, self._lexical)
@@ -556,7 +557,7 @@ class IndexCoordinator:
             return False
 
         # Initialize components
-        self._parser = TreeSitterParser()
+        self._parser = tree_sitter_service.parser
         self._lexical = LexicalIndex(self.tantivy_path)
         self._file_embedding = FileEmbeddingIndex(self.repo_root / ".codeplane")
         self._file_embedding.load()
@@ -833,9 +834,7 @@ class IndexCoordinator:
 
                     # Stage file-level embedding removals
                     if self._file_embedding is not None and removed_paths:
-                        self._file_embedding.stage_remove(
-                            [str(p) for p in removed_paths]
-                        )
+                        self._file_embedding.stage_remove([str(p) for p in removed_paths])
 
                     # Commit all staged changes atomically
                     self._lexical.commit_staged()
@@ -852,7 +851,10 @@ class IndexCoordinator:
 
                 # Commit file-level embeddings (after resolver)
                 with self._tantivy_write_lock:
-                    if self._file_embedding is not None and self._file_embedding.has_staged_changes():
+                    if (
+                        self._file_embedding is not None
+                        and self._file_embedding.has_staged_changes()
+                    ):
                         self._file_embedding.commit_staged()
 
                 # Mark successfully indexed files as indexed
@@ -876,13 +878,14 @@ class IndexCoordinator:
 
                     # Stage file-level embedding removals
                     if self._file_embedding is not None and removed_paths:
-                        self._file_embedding.stage_remove(
-                            [str(p) for p in removed_paths]
-                        )
+                        self._file_embedding.stage_remove([str(p) for p in removed_paths])
 
                     if self._lexical is not None:
                         self._lexical.commit_staged()
-                    if self._file_embedding is not None and self._file_embedding.has_staged_changes():
+                    if (
+                        self._file_embedding is not None
+                        and self._file_embedding.has_staged_changes()
+                    ):
                         self._file_embedding.commit_staged()
                 if self._lexical is not None:
                     self._lexical.reload()
@@ -1028,7 +1031,9 @@ class IndexCoordinator:
                 # Extract first, then persist + stage embeddings
                 extractions = self._structural.extract_files(paths, ctx_id)
                 self._structural.index_files(
-                    paths, context_id=ctx_id, file_id_map=file_id_map,
+                    paths,
+                    context_id=ctx_id,
+                    file_id_map=file_id_map,
                     _extractions=extractions,
                 )
 
@@ -1265,7 +1270,9 @@ class IndexCoordinator:
                     # Extract facts (tree-sitter parse + structural extraction)
                     extractions = self._structural.extract_files(paths, ctx_id)
                     self._structural.index_files(
-                        paths, context_id=ctx_id, file_id_map=file_id_map,
+                        paths,
+                        context_id=ctx_id,
+                        file_id_map=file_id_map,
                         _extractions=extractions,
                     )
 
@@ -2685,17 +2692,13 @@ class IndexCoordinator:
                         embedded = self._file_embedding.commit_staged(
                             on_progress=_embed_progress,
                         )
-                        on_progress(
-                            embedded, embedded, files_by_ext, "embeddings_done"
-                        )
+                        on_progress(embedded, embedded, files_by_ext, "embeddings_done")
                     else:
                         self._file_embedding.commit_staged()
 
         return count, indexed_paths, files_by_ext
 
-    def query_file_embeddings(
-        self, text: str, top_k: int = 50
-    ) -> list[tuple[str, float]]:
+    def query_file_embeddings(self, text: str, top_k: int = 50) -> list[tuple[str, float]]:
         """File-level semantic search using Jina v2 base embeddings.
 
         Returns (relative_path, cosine_similarity) pairs ranked by similarity.

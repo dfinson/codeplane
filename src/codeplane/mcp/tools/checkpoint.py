@@ -521,7 +521,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             mode = "auto-fix" if autofix else "check-only"
             await ctx.report_progress(phase, total_phases, f"Linting ({mode})")
             lint_result = await app_ctx.lint_ops.check(
-                paths=None,  # full repo
+                paths=changed_files or None,  # scope to changeset; None = full repo fallback
                 tools=None,
                 categories=None,
                 dry_run=not autofix,
@@ -678,8 +678,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             if has_test_error:
                 hints.append("Test phase errored — check tests section for details.")
             hints.append(
-                "Think VERY carefully before concluding that an issue is "
-                "'pre-existing' or 'not your problem' — fix ALL issues."
+                "STOP! You passed changed_files — lint and tests ran ONLY on "
+                "code affected by YOUR changes. These failures are almost "
+                "certainly YOUR fault. Do NOT dismiss them as 'pre-existing' "
+                "or 'not related to my changes'. Errors in OTHER files are "
+                "often transitive — caused by your changes breaking downstream "
+                "dependents. These are still YOUR responsibility. "
+                "Fix ALL issues before proceeding."
             )
             result["agentic_hint"] = " ".join(hints)
         else:
@@ -761,4 +766,16 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     "to commit your changes."
                 )
 
-        return result
+        # --- Wrap with delivery envelope ---
+        # Checkpoint results can be large (all lint diagnostics + test output).
+        # Use the same envelope pattern as semantic_diff/map_repo so large
+        # results go to disk with a compact inline summary.
+        from codeplane.mcp.delivery import wrap_existing_response
+
+        inline_summary = result.get("summary", "checkpoint complete")
+
+        return wrap_existing_response(
+            result,
+            resource_kind="checkpoint",
+            inline_summary=inline_summary,
+        )

@@ -1,5 +1,6 @@
 """Tree-sitter parsing for syntactic analysis."""
 
+from codeplane.index._internal.parsing.service import TreeSitterService
 from codeplane.index._internal.parsing.treesitter import (
     DynamicAccess,
     IdentifierOccurrence,
@@ -22,4 +23,5 @@ __all__ = [
     "SyntacticScope",
     "SyntacticSymbol",
     "TreeSitterParser",
+    "TreeSitterService",
 ]

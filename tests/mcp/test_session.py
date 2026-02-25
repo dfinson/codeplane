@@ -6,11 +6,15 @@ Covers:
 - SessionManager.get()
 - SessionManager.close()
 - SessionManager.cleanup_stale()
+- Exclusive lock for blocking tools (checkpoint, semantic_diff, map_repo)
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
+
+import pytest
 
 from codeplane.config.models import TimeoutsConfig
 from codeplane.mcp.session import SessionManager, SessionState
@@ -291,3 +295,69 @@ class TestSessionManagerIntegration:
 
         assert mgr.get("s1").fingerprints["key"] == "value1"  # type: ignore[union-attr]
         assert mgr.get("s2").fingerprints["key"] == "value2"  # type: ignore[union-attr]
+
+
+# =========================================================================
+# Exclusive Lock Tests
+# =========================================================================
+
+
+class TestExclusiveLock:
+    """Tests for the exclusive session lock used by checkpoint/semantic_diff/map_repo."""
+
+    def test_exclusive_holder_default_none(self) -> None:
+        """Exclusive holder is None when no tool holds the lock."""
+        state = SessionState(session_id="x", created_at=0, last_active=0)
+        assert state.exclusive_holder is None
+
+    @pytest.mark.asyncio
+    async def test_exclusive_sets_and_clears_holder(self) -> None:
+        """exclusive() context manager sets holder during, clears after."""
+        state = SessionState(session_id="x", created_at=0, last_active=0)
+        async with state.exclusive("checkpoint"):
+            assert state.exclusive_holder == "checkpoint"
+        assert state.exclusive_holder is None
+
+    @pytest.mark.asyncio
+    async def test_exclusive_blocks_concurrent_calls(self) -> None:
+        """Second call to exclusive() blocks until first completes."""
+        state = SessionState(session_id="x", created_at=0, last_active=0)
+        order: list[str] = []
+
+        async def hold_lock(name: str, delay: float) -> None:
+            async with state.exclusive(name):
+                order.append(f"{name}_start")
+                await asyncio.sleep(delay)
+                order.append(f"{name}_end")
+
+        # Start checkpoint (holds lock for 0.1s), then immediately start search
+        task1 = asyncio.create_task(hold_lock("checkpoint", 0.1))
+        await asyncio.sleep(0.01)  # Let checkpoint acquire first
+        task2 = asyncio.create_task(hold_lock("search", 0.0))
+
+        await asyncio.gather(task1, task2)
+
+        # search must start AFTER checkpoint ends
+        assert order == [
+            "checkpoint_start",
+            "checkpoint_end",
+            "search_start",
+            "search_end",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_exclusive_clears_on_exception(self) -> None:
+        """Holder is cleared even if the tool raises an exception."""
+        state = SessionState(session_id="x", created_at=0, last_active=0)
+        with pytest.raises(ValueError, match="boom"):
+            async with state.exclusive("checkpoint"):
+                raise ValueError("boom")
+        assert state.exclusive_holder is None
+
+    def test_exclusive_tools_frozenset(self) -> None:
+        """EXCLUSIVE_TOOLS contains expected tool names."""
+        from codeplane.mcp.session import EXCLUSIVE_TOOLS
+
+        assert "checkpoint" in EXCLUSIVE_TOOLS
+        assert "semantic_diff" in EXCLUSIVE_TOOLS
+        assert "map_repo" in EXCLUSIVE_TOOLS

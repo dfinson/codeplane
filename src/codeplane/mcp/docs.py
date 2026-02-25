@@ -243,7 +243,13 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
     ),
     "checkpoint": ToolDocumentation(
         name="checkpoint",
-        description="Lint, test, and optionally commit+push in one call.",
+        description=(
+            "Lint, test, and optionally commit+push in one call. "
+            "BLOCKING: this tool acquires an exclusive session lock. "
+            "No other tools execute until it completes. "
+            "You MUST fully process the result (status, lint, tests, commit, agentic_hint) "
+            "before doing any other work."
+        ),
         category=ToolCategory.TESTING,
         when_to_use=[
             "After making code changes — validates and optionally saves",

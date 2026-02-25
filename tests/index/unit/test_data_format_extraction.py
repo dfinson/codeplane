@@ -1,6 +1,6 @@
 """Tests for data format (Markdown, TOML, YAML, JSON) symbol extraction.
 
-Verifies that LanguageQueryConfig entries for data/config file formats
+Verifies that language pack configurations for data/config file formats
 correctly extract structural symbols via tree-sitter queries.
 """
 

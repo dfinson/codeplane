@@ -32,8 +32,8 @@ from codeplane.core.languages import detect_language_family, has_grammar
 from codeplane.index._internal.parsing import (
     SyntacticScope,
     SyntacticSymbol,
-    TreeSitterParser,
 )
+from codeplane.index._internal.parsing.service import tree_sitter_service
 from codeplane.index.models import (
     BindReasonCode,
     BindTargetKind,
@@ -230,20 +230,24 @@ def _extract_sem_facts(
     - Query compilation fails (grammar mismatch)
     - No captures within any def span
     """
-    from codeplane.index._internal.parsing._sem_queries import (
-        SEM_CAP_PER_CATEGORY,
-        SEM_CAPTURE_CATEGORIES,
-        SEM_FACTS_QUERIES,
-    )
-    from codeplane.index._internal.parsing.treesitter import LANGUAGE_MAP
+    from codeplane.index._internal.parsing.packs import get_pack
 
-    ts_lang_name = LANGUAGE_MAP.get(language, language)
-    query_text = SEM_FACTS_QUERIES.get(ts_lang_name)
-    if not query_text:
+    # Mapping from tree-sitter capture names to SEM_FACTS categories
+    _capture_categories = {
+        "sem_call": "calls",
+        "sem_field": "assigns",
+        "sem_return": "returns",
+        "sem_raise": "raises",
+        "sem_key": "literals",
+    }
+
+    pack = get_pack(language)
+    if pack is None or pack.sem_query is None:
         return
+    query_text = pack.sem_query
 
     # Compile query (cached per grammar × language)
-    cache_key = (id(ts_language), ts_lang_name)
+    cache_key = (id(ts_language), pack.grammar_name)
     if cache_key in _sem_query_cache:
         compiled = _sem_query_cache[cache_key]
     else:
@@ -272,7 +276,7 @@ def _extract_sem_facts(
     all_captures: list[tuple[str, str, int]] = []
     for _pattern_idx, captures in matches:
         for capture_name, nodes in captures.items():
-            category = SEM_CAPTURE_CATEGORIES.get(capture_name)
+            category = _capture_categories.get(capture_name)
             if not category:
                 continue
             for node in nodes:
@@ -297,7 +301,7 @@ def _extract_sem_facts(
             if line < start_line_0 or line > end_line_0:
                 continue
             cat_list = facts.setdefault(category, [])
-            if text not in cat_list and len(cat_list) < SEM_CAP_PER_CATEGORY:
+            if text not in cat_list:
                 cat_list.append(text)
 
         if facts:
@@ -436,7 +440,7 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
             result.parse_time_ms = int((time.monotonic() - start) * 1000)
             return result
 
-        parser = TreeSitterParser()
+        parser = tree_sitter_service.parser
         try:
             parse_result = parser.parse(full_path, content)
         except ValueError as e:
@@ -573,20 +577,22 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
         if parse_result.ts_language is not None:
             string_types = _discover_string_node_types(parse_result.ts_language)
         for def_dict in result.defs:
+            sl: int = int(def_dict["start_line"])
+            el: int = int(def_dict["end_line"])
             if string_types:
                 literals = _collect_string_literals(
                     parse_result.root_node,
                     content,
-                    def_dict["start_line"] - 1,  # tree-sitter uses 0-indexed lines
-                    def_dict["end_line"] - 1,
+                    sl - 1,  # tree-sitter uses 0-indexed lines
+                    el - 1,
                     string_types,
                 )
             else:
                 # Regex fallback when grammar doesn't expose string node types
                 literals = _extract_string_literals_regex(
                     result.content_text or "",
-                    def_dict["start_line"],
-                    def_dict["end_line"],
+                    sl,
+                    el,
                 )
             if literals:
                 def_dict["_string_literals"] = literals
@@ -746,18 +752,18 @@ def _extract_type_aware_facts(
     """
     try:
         from codeplane.index._internal.extraction import get_registry
-        from codeplane.index._internal.extraction.languages import ALL_LANGUAGE_CONFIGS
+        from codeplane.index._internal.parsing.packs import get_pack
 
         language = extraction.language
         if not language:
             return
 
-        config = ALL_LANGUAGE_CONFIGS.get(language)
-        if config is None:
+        pack = get_pack(language)
+        if pack is None or pack.type_config is None:
             return
 
         registry = get_registry()
-        extractor = registry.get_or_fallback(config.language_family)
+        extractor = registry.get_or_fallback(pack.type_config.language_family)
 
         # Extract type annotations
         annotations = extractor.extract_type_annotations(tree, file_path, extraction.scopes)
@@ -917,7 +923,6 @@ class StructuralIndexer:
     def __init__(self, db: Database, repo_path: Path | str):
         self.db = db
         self.repo_path = Path(repo_path)
-        self._parser = TreeSitterParser()
 
     def extract_files(
         self,

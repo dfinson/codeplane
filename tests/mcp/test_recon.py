@@ -63,6 +63,7 @@ from codeplane.mcp.tools.recon.pipeline import _find_unindexed_files
 # Tokenization tests
 # ---------------------------------------------------------------------------
 
+
 class TestTokenizeTask:
     """Tests for parse_task keyword extraction."""
 
@@ -135,14 +136,17 @@ class TestTokenizeTask:
             ("recon tool", "recon"),
             ("MCP server", "mcp"),
             ("graph.py", "graph"),
-        ])
+        ],
+    )
     def test_common_tasks(self, task: str, expected_term: str) -> None:
         terms = parse_task(task).keywords
         assert expected_term in terms
 
+
 # ---------------------------------------------------------------------------
 # Path extraction tests
 # ---------------------------------------------------------------------------
+
 
 class TestExtractPaths:
     """Tests for parse_task path extraction."""
@@ -190,9 +194,11 @@ class TestExtractPaths:
         assert "lib/utils.js" in paths
         assert "main.go" in paths
 
+
 # ---------------------------------------------------------------------------
 # Helper unit tests
 # ---------------------------------------------------------------------------
+
 
 class TestDefSignatureText:
     """Tests for _def_signature_text."""
@@ -221,6 +227,7 @@ class TestDefSignatureText:
         d.return_type = None
         assert _def_signature_text(d) == "method run(self, timeout: float)"
 
+
 class TestReadLines:
     """Tests for _read_lines."""
 
@@ -240,6 +247,7 @@ class TestReadLines:
         result = _read_lines(tmp_path / "nope.py", 1, 5)
         assert result == ""
 
+
 class TestEstimateBytes:
     """Tests for _estimate_bytes."""
 
@@ -248,6 +256,7 @@ class TestEstimateBytes:
         result = _estimate_bytes(obj)
         assert result > 0
         assert isinstance(result, int)
+
 
 class TestTrimToBudget:
     """Tests for _trim_to_budget."""
@@ -290,9 +299,11 @@ class TestTrimToBudget:
         callee_count = len(seed.get("callees", []))
         assert caller_count <= callee_count or callee_count == 0
 
+
 # ---------------------------------------------------------------------------
 # Tool registration test
 # ---------------------------------------------------------------------------
+
 
 class TestReconRegistration:
     """Tests for recon tool registration."""
@@ -312,6 +323,7 @@ class TestReconRegistration:
         # Verify mcp.tool was called (to register the recon function)
         assert mcp_mock.tool.called
 
+
 class TestReconInGate:
     """Tests for recon in TOOL_CATEGORIES."""
 
@@ -321,6 +333,7 @@ class TestReconInGate:
         assert "recon" in TOOL_CATEGORIES
         assert TOOL_CATEGORIES["recon"] == "search"
 
+
 class TestReconInToolsInit:
     """Tests for recon in tools __init__."""
 
@@ -329,9 +342,11 @@ class TestReconInToolsInit:
 
         assert hasattr(recon, "register_tools")
 
+
 # ---------------------------------------------------------------------------
 # ArtifactKind classification tests
 # ---------------------------------------------------------------------------
+
 
 class TestArtifactKind:
     """Tests for _classify_artifact."""
@@ -351,13 +366,16 @@ class TestArtifactKind:
             ("Dockerfile", ArtifactKind.build),
             ("docs/README.md", ArtifactKind.doc),
             ("CHANGELOG.rst", ArtifactKind.doc),
-        ])
+        ],
+    )
     def test_classification(self, path: str, expected: ArtifactKind) -> None:
         assert _classify_artifact(path) == expected
+
 
 # ---------------------------------------------------------------------------
 # TaskIntent tests
 # ---------------------------------------------------------------------------
+
 
 class TestTaskIntent:
     """Tests for _extract_intent."""
@@ -377,7 +395,8 @@ class TestTaskIntent:
             ("write unit tests with pytest for search", TaskIntent.test),
             ("increase test coverage for search", TaskIntent.test),
             ("FactQueries", TaskIntent.unknown),
-        ])
+        ],
+    )
     def test_intent_extraction(self, task: str, expected: TaskIntent) -> None:
         assert _extract_intent(task) == expected
 
@@ -389,18 +408,17 @@ class TestTaskIntent:
         parsed = parse_task("IndexCoordinator")
         assert parsed.intent == TaskIntent.unknown
 
+
 # ---------------------------------------------------------------------------
 # EvidenceRecord tests
 # ---------------------------------------------------------------------------
+
 
 class TestEvidenceRecord:
     """Tests for EvidenceRecord dataclass."""
 
     def test_creation(self) -> None:
-        e = EvidenceRecord(
-            category="embedding",
-            detail="semantic similarity 0.850",
-            score=0.85)
+        e = EvidenceRecord(category="embedding", detail="semantic similarity 0.850", score=0.85)
         assert e.category == "embedding"
         assert e.score == 0.85
 
@@ -408,9 +426,11 @@ class TestEvidenceRecord:
         e = EvidenceRecord(category="explicit", detail="agent seed")
         assert e.score == 0.0
 
+
 # ---------------------------------------------------------------------------
 # HarvestCandidate with new fields tests
 # ---------------------------------------------------------------------------
+
 
 class TestHarvestCandidateNew:
     """Tests for new HarvestCandidate fields."""
@@ -430,20 +450,20 @@ class TestHarvestCandidateNew:
             evidence=[
                 EvidenceRecord(category="embedding", detail="sim 0.9", score=0.9),
                 EvidenceRecord(category="term_match", detail="name match", score=0.5),
-            ])
+            ],
+        )
         assert len(c.evidence) == 2
         assert c.evidence[0].category == "embedding"
 
     def test_evidence_axes_unchanged(self) -> None:
-        c = HarvestCandidate(
-            def_uid="test::func",
-            from_term_match=True,
-            from_lexical=True)
+        c = HarvestCandidate(def_uid="test::func", from_term_match=True, from_lexical=True)
         assert c.evidence_axes == 2
+
 
 # ---------------------------------------------------------------------------
 # Scoring model tests
 # ---------------------------------------------------------------------------
+
 
 class TestBoundedScoring:
     """Tests for bounded scoring model."""
@@ -457,7 +477,8 @@ class TestBoundedScoring:
         from_explicit: bool = False,
         is_test: bool = False,
         name: str = "func",
-        file_path: str = "src/core.py") -> HarvestCandidate:
+        file_path: str = "src/core.py",
+    ) -> HarvestCandidate:
         d = MagicMock()
         d.name = name
         d.kind = "function"
@@ -469,14 +490,12 @@ class TestBoundedScoring:
             from_explicit=from_explicit,
             is_test=is_test,
             file_path=file_path,
-            artifact_kind=_classify_artifact(file_path))
+            artifact_kind=_classify_artifact(file_path),
+        )
 
     def test_scores_are_bounded(self) -> None:
         """All scores should be in reasonable bounded range."""
-        c = self._make_candidate(
-            hub=100,
-            terms=10,
-            from_explicit=True)
+        c = self._make_candidate(hub=100, terms=10, from_explicit=True)
         parsed = parse_task("test task")
         scored = _score_candidates({"test::func": c}, parsed)
         assert len(scored) == 1
@@ -491,11 +510,8 @@ class TestBoundedScoring:
         f_explicit in relevance creates an artificial cluster boundary
         that distorts the gap cutoff.
         """
-        c_explicit = self._make_candidate(
-            uid="a",
-            from_explicit=True)
-        c_embed = self._make_candidate(
-            uid="b")
+        c_explicit = self._make_candidate(uid="a", from_explicit=True)
+        c_embed = self._make_candidate(uid="b")
         parsed = parse_task("test task")
         _score_candidates({"a": c_explicit, "b": c_embed}, parsed)
         # Same embedding → same relevance (explicit doesn't inflate)
@@ -511,13 +527,8 @@ class TestBoundedScoring:
 
     def test_test_file_downranked_for_implement(self) -> None:
         """Test files should be lower-ranked for implementation tasks."""
-        c_code = self._make_candidate(
-            uid="a",
-            file_path="src/handler.py")
-        c_test = self._make_candidate(
-            uid="b",
-            file_path="tests/test_handler.py",
-            is_test=True)
+        c_code = self._make_candidate(uid="a", file_path="src/handler.py")
+        c_test = self._make_candidate(uid="b", file_path="tests/test_handler.py", is_test=True)
         parsed = parse_task("implement caching in handler")
         scored = _score_candidates({"a": c_code, "b": c_test}, parsed)
         scores = dict(scored)
@@ -525,8 +536,7 @@ class TestBoundedScoring:
 
     def test_separated_relevance_and_seed_scores(self) -> None:
         """relevance_score and seed_score should be set on candidates."""
-        c = self._make_candidate(
-            hub=5)
+        c = self._make_candidate(hub=5)
         parsed = parse_task("test task")
         _score_candidates({"test::func": c}, parsed)
         assert c.relevance_score > 0
@@ -534,18 +544,16 @@ class TestBoundedScoring:
         # seed_score incorporates hub-based multiplier
         assert c.seed_score != c.relevance_score
 
+
 # ---------------------------------------------------------------------------
 # File-level aggregation tests
 # ---------------------------------------------------------------------------
 
+
 class TestAggregateToFiles:
     """Tests for _aggregate_to_files — distribution-relative file scoring."""
 
-    def _make_candidate(
-        self,
-        uid: str,
-        file_id: int,
-        name: str = "func") -> HarvestCandidate:
+    def _make_candidate(self, uid: str, file_id: int, name: str = "func") -> HarvestCandidate:
         d = MagicMock()
         d.name = name
         d.file_id = file_id
@@ -650,9 +658,11 @@ class TestAggregateToFiles:
         scores = [s for _, s in defs]
         assert scores == sorted(scores, reverse=True)
 
+
 # ---------------------------------------------------------------------------
 # Filter pipeline tests
 # ---------------------------------------------------------------------------
+
 
 class TestFilterPipeline:
     """Tests for intent-aware filter pipeline."""
@@ -660,16 +670,16 @@ class TestFilterPipeline:
     def test_explicit_always_passes(self) -> None:
         from codeplane.mcp.tools.recon import _apply_filters
 
-        c = HarvestCandidate(
-            def_uid="test::func",
-            from_explicit=True)
+        c = HarvestCandidate(def_uid="test::func", from_explicit=True)
         parsed = ParsedTask(raw="", intent=TaskIntent.unknown)
         result = _apply_filters({"test::func": c}, parsed)
         assert "test::func" in result
 
+
 # ---------------------------------------------------------------------------
 # Elbow detection tests (existing + new)
 # ---------------------------------------------------------------------------
+
 
 class TestFindElbow:
     """Tests for find_elbow."""
@@ -702,6 +712,7 @@ class TestFindElbow:
         scores = [float(x) for x in range(100, 0, -1)]
         k = find_elbow(scores, max_seeds=10)
         assert k <= 10
+
 
 class TestComputeAnchorFloor:
     """Tests for compute_anchor_floor — anchor-only MAD band."""
@@ -760,6 +771,7 @@ class TestComputeAnchorFloor:
         # floor = 0.74 - 0.07 = 0.67
         assert floor == pytest.approx(0.67)
 
+
 class TestElbowBasedFileInclusion:
     """Verify no-anchor file inclusion uses elbow detection.
 
@@ -805,6 +817,7 @@ class TestElbowBasedFileInclusion:
         k = find_elbow(scores, min_seeds=3, max_seeds=10)
         assert k <= 10
 
+
 class TestBuildEvidenceString:
     """Tests for _build_evidence_string — compact evidence format."""
 
@@ -836,9 +849,11 @@ class TestBuildEvidenceString:
         result = _build_evidence_string(cand)
         assert result == ""
 
+
 # ---------------------------------------------------------------------------
 # Negative mention extraction tests
 # ---------------------------------------------------------------------------
+
 
 class TestNegativeMentions:
     """Tests for _extract_negative_mentions."""
@@ -868,9 +883,11 @@ class TestNegativeMentions:
         parsed = parse_task("refactor handler not tests")
         assert "tests" in parsed.negative_mentions
 
+
 # ---------------------------------------------------------------------------
 # Stacktrace detection tests
 # ---------------------------------------------------------------------------
+
 
 class TestStacktraceDetection:
     """Tests for _detect_stacktrace_driven."""
@@ -892,9 +909,11 @@ class TestStacktraceDetection:
         parsed = parse_task("fix the traceback error in handler")
         assert parsed.is_stacktrace_driven
 
+
 # ---------------------------------------------------------------------------
 # Test-driven detection tests
 # ---------------------------------------------------------------------------
+
 
 class TestTestDrivenDetection:
     """Tests for _detect_test_driven."""
@@ -912,9 +931,11 @@ class TestTestDrivenDetection:
         parsed = parse_task("write unit tests for the search tool")
         assert parsed.is_test_driven
 
+
 # ---------------------------------------------------------------------------
 # OR gate tests
 # ---------------------------------------------------------------------------
+
 
 class TestORGate:
     """Tests for has_strong_single_axis and OR gate in filter pipeline."""
@@ -923,31 +944,24 @@ class TestORGate:
         c = HarvestCandidate(
             def_uid="test::func",
             matched_terms={"search", "handler", "query", "filter"},
-            file_path="src/handler.py")
+            file_path="src/handler.py",
+        )
         assert c.has_strong_single_axis
 
     def test_explicit_passes(self) -> None:
-        c = HarvestCandidate(
-            def_uid="test::func",
-            from_explicit=True)
+        c = HarvestCandidate(def_uid="test::func", from_explicit=True)
         assert c.has_strong_single_axis
 
     def test_high_hub_passes(self) -> None:
-        c = HarvestCandidate(
-            def_uid="test::func",
-            hub_score=10)
+        c = HarvestCandidate(def_uid="test::func", hub_score=10)
         assert c.has_strong_single_axis
 
     def test_many_terms_passes(self) -> None:
-        c = HarvestCandidate(
-            def_uid="test::func",
-            matched_terms={"search", "handler", "query"})
+        c = HarvestCandidate(def_uid="test::func", matched_terms={"search", "handler", "query"})
         assert c.has_strong_single_axis
 
     def test_weak_signal_does_not_pass(self) -> None:
-        c = HarvestCandidate(
-            def_uid="test::func",
-            hub_score=2)
+        c = HarvestCandidate(def_uid="test::func", hub_score=2)
         assert not c.has_strong_single_axis
 
     def test_or_gate_in_filter(self) -> None:
@@ -958,14 +972,17 @@ class TestORGate:
             def_uid="test::func",
             hub_score=10,  # Strong hub signal
             file_path="src/handler.py",
-            artifact_kind=ArtifactKind.code)
+            artifact_kind=ArtifactKind.code,
+        )
         parsed = ParsedTask(raw="fix handler", intent=TaskIntent.debug)
         result = _apply_filters({"test::func": c}, parsed)
         assert "test::func" in result
 
+
 # ---------------------------------------------------------------------------
 # Negative gating tests
 # ---------------------------------------------------------------------------
+
 
 class TestNegativeGating:
     """Tests for matches_negative and negative gating in filter pipeline."""
@@ -973,28 +990,19 @@ class TestNegativeGating:
     def test_name_match(self) -> None:
         d = MagicMock()
         d.name = "test_handler"
-        c = HarvestCandidate(
-            def_uid="test::func",
-            def_fact=d,
-            file_path="tests/test_handler.py")
+        c = HarvestCandidate(def_uid="test::func", def_fact=d, file_path="tests/test_handler.py")
         assert c.matches_negative(["test_handler"])
 
     def test_path_match(self) -> None:
         d = MagicMock()
         d.name = "func"
-        c = HarvestCandidate(
-            def_uid="test::func",
-            def_fact=d,
-            file_path="src/logging/handler.py")
+        c = HarvestCandidate(def_uid="test::func", def_fact=d, file_path="src/logging/handler.py")
         assert c.matches_negative(["logging"])
 
     def test_no_match(self) -> None:
         d = MagicMock()
         d.name = "func"
-        c = HarvestCandidate(
-            def_uid="test::func",
-            def_fact=d,
-            file_path="src/handler.py")
+        c = HarvestCandidate(def_uid="test::func", def_fact=d, file_path="src/handler.py")
         assert not c.matches_negative(["logging"])
 
     def test_negative_gating_in_filter(self) -> None:
@@ -1004,20 +1012,19 @@ class TestNegativeGating:
         d = MagicMock()
         d.name = "logging_handler"
         c = HarvestCandidate(
-            def_uid="test::func",
-            def_fact=d,
-            hub_score=10,
-            file_path="src/handler.py")
+            def_uid="test::func", def_fact=d, hub_score=10, file_path="src/handler.py"
+        )
         parsed = ParsedTask(
-            raw="fix handler not logging",
-            intent=TaskIntent.debug,
-            negative_mentions=["logging"])
+            raw="fix handler not logging", intent=TaskIntent.debug, negative_mentions=["logging"]
+        )
         result = _apply_filters({"test::func": c}, parsed)
         assert "test::func" not in result
+
 
 # ---------------------------------------------------------------------------
 # Failure-mode next actions tests
 # ---------------------------------------------------------------------------
+
 
 class TestFailureActions:
     """Tests for _build_failure_actions."""
@@ -1038,9 +1045,11 @@ class TestFailureActions:
         actions = _build_failure_actions([], [])
         assert any(a["action"] == "map_repo" for a in actions)
 
+
 # ---------------------------------------------------------------------------
 # Graph evidence boosting tests
 # ---------------------------------------------------------------------------
+
 
 class TestGraphEvidenceBoosting:
     """Tests that graph harvester adds evidence to already-merged candidates."""
@@ -1054,7 +1063,8 @@ class TestGraphEvidenceBoosting:
             from_term_match=True,
             evidence=[
                 EvidenceRecord(category="term_match", detail="BaseModel", score=0.7),
-            ])
+            ],
+        )
         assert c.from_graph is False
         assert c.evidence_axes == 1
 
@@ -1074,7 +1084,8 @@ class TestGraphEvidenceBoosting:
             def_uid="a",
             def_fact=d,
             file_path="src/base_model.py",
-            artifact_kind=_classify_artifact("src/base_model.py"))
+            artifact_kind=_classify_artifact("src/base_model.py"),
+        )
         c_with_graph = HarvestCandidate(
             def_uid="b",
             def_fact=d,
@@ -1084,16 +1095,19 @@ class TestGraphEvidenceBoosting:
             evidence=[
                 EvidenceRecord(category="embedding", detail="sim=0.70", score=0.7),
                 EvidenceRecord(category="graph", detail="callee of evaluate", score=0.4),
-            ])
+            ],
+        )
         parsed = parse_task("test model evaluation")
         _score_candidates({"a": c_no_graph}, parsed)
         _score_candidates({"b": c_with_graph}, parsed)
 
         assert c_with_graph.relevance_score > c_no_graph.relevance_score
 
+
 # ---------------------------------------------------------------------------
 # Dual scoring tests
 # ---------------------------------------------------------------------------
+
 
 class TestEditLikelihood:
     """Tests for _compute_edit_likelihood — def-level edit-likelihood scoring."""
@@ -1111,7 +1125,8 @@ class TestEditLikelihood:
         shares_file: bool = False,
         name: str = "func",
         file_path: str = "src/core.py",
-        kind: str = "function") -> HarvestCandidate:
+        kind: str = "function",
+    ) -> HarvestCandidate:
         d = MagicMock()
         d.name = name
         d.kind = kind
@@ -1127,12 +1142,12 @@ class TestEditLikelihood:
             is_imported_by_top=is_imported_by_top,
             shares_file_with_seed=shares_file,
             file_path=file_path,
-            artifact_kind=_classify_artifact(file_path))
+            artifact_kind=_classify_artifact(file_path),
+        )
 
     def test_high_embedding_code_gets_high_edit_score(self) -> None:
         """Code with high embedding similarity should have high edit-likelihood."""
-        c = self._make_candidate(
-            name="handle_request")
+        c = self._make_candidate(name="handle_request")
         parsed = parse_task("fix handle_request error")
         _compute_edit_likelihood({"test::func": c}, parsed)
         assert c.edit_score > 0.3
@@ -1156,9 +1171,7 @@ class TestEditLikelihood:
     def test_test_files_downranked_for_edit(self) -> None:
         """Test files should have low edit-likelihood (unless test-driven)."""
         c_code = self._make_candidate(uid="a", file_path="src/handler.py")
-        c_test = self._make_candidate(
-            uid="b", file_path="tests/test_handler.py", is_test=True
-        )
+        c_test = self._make_candidate(uid="b", file_path="tests/test_handler.py", is_test=True)
         parsed = parse_task("implement caching")
         _compute_edit_likelihood({"a": c_code, "b": c_test}, parsed)
         assert c_code.edit_score > c_test.edit_score
@@ -1166,16 +1179,15 @@ class TestEditLikelihood:
     def test_test_files_not_downranked_for_test_task(self) -> None:
         """Test files should NOT be downranked when task is test-driven."""
         c_test = self._make_candidate(
-            uid="a",
-            file_path="tests/test_handler.py",
-            is_test=True,
-            name="test_handler")
+            uid="a", file_path="tests/test_handler.py", is_test=True, name="test_handler"
+        )
         parsed = ParsedTask(
             raw="write tests for handler",
             intent=TaskIntent.test,
             primary_terms=["handler"],
             keywords=["handler"],
-            is_test_driven=True)
+            is_test_driven=True,
+        )
         _compute_edit_likelihood({"a": c_test}, parsed)
         # Should not be heavily penalized
         assert c_test.edit_score > 0.1
@@ -1196,6 +1208,7 @@ class TestEditLikelihood:
         _compute_edit_likelihood({"a": c_code, "b": c_doc}, parsed)
         assert c_code.edit_score > c_doc.edit_score * 3
 
+
 class TestContextValue:
     """Tests for _compute_context_value — context-value scoring."""
 
@@ -1211,7 +1224,8 @@ class TestContextValue:
         is_imported_by_top: bool = False,
         shares_file: bool = False,
         name: str = "func",
-        file_path: str = "src/core.py") -> HarvestCandidate:
+        file_path: str = "src/core.py",
+    ) -> HarvestCandidate:
         d = MagicMock()
         d.name = name
         d.kind = "function"
@@ -1227,15 +1241,14 @@ class TestContextValue:
             is_imported_by_top=is_imported_by_top,
             shares_file_with_seed=shares_file,
             file_path=file_path,
-            artifact_kind=_classify_artifact(file_path))
+            artifact_kind=_classify_artifact(file_path),
+        )
 
     def test_graph_connected_test_has_high_context(self) -> None:
         """Tests that are graph-connected should have high context-value."""
         c_test = self._make_candidate(
-            uid="a",
-            is_test=True,
-            from_graph=True,
-            file_path="tests/test_core.py")
+            uid="a", is_test=True, from_graph=True, file_path="tests/test_core.py"
+        )
         parsed = parse_task("fix core module")
         _compute_context_value({"a": c_test}, parsed)
         assert c_test.context_score > 0.3
@@ -1243,34 +1256,25 @@ class TestContextValue:
     def test_disconnected_test_has_lower_context(self) -> None:
         """Tests not graph-connected should have lower context-value."""
         c_connected = self._make_candidate(
-            uid="a",
-            is_test=True,
-            from_graph=True,
-            file_path="tests/test_core.py")
+            uid="a", is_test=True, from_graph=True, file_path="tests/test_core.py"
+        )
         c_disconnected = self._make_candidate(
-            uid="b",
-            is_test=True,
-            file_path="tests/test_other.py")
+            uid="b", is_test=True, file_path="tests/test_other.py"
+        )
         parsed = parse_task("fix core module")
         _compute_context_value({"a": c_connected, "b": c_disconnected}, parsed)
         assert c_connected.context_score > c_disconnected.context_score
 
     def test_doc_with_term_overlap_has_context(self) -> None:
         """Docs matching task terms should have decent context-value."""
-        c_doc = self._make_candidate(
-            uid="a",
-            terms=3,
-            file_path="docs/api.md")
+        c_doc = self._make_candidate(uid="a", terms=3, file_path="docs/api.md")
         parsed = parse_task("fix the API")
         _compute_context_value({"a": c_doc}, parsed)
         assert c_doc.context_score > 0.15
 
     def test_structurally_coupled_code_has_context(self) -> None:
         """Code that is graph-connected should have context-value."""
-        c_coupled = self._make_candidate(
-            uid="a",
-            from_graph=True,
-            is_imported_by_top=True)
+        c_coupled = self._make_candidate(uid="a", from_graph=True, is_imported_by_top=True)
         c_isolated = self._make_candidate(uid="b")
         parsed = parse_task("fix something")
         _compute_context_value({"a": c_coupled, "b": c_isolated}, parsed)
@@ -1285,9 +1289,11 @@ class TestContextValue:
         assert 0.0 <= c.edit_score <= 1.0
         assert 0.0 <= c.context_score <= 1.0
 
+
 # ---------------------------------------------------------------------------
 # Dual file aggregation tests
 # ---------------------------------------------------------------------------
+
 
 class TestAggregateToFilesDual:
     """Tests for _aggregate_to_files_dual — dual-score file aggregation."""
@@ -1299,16 +1305,15 @@ class TestAggregateToFilesDual:
         *,
         name: str = "func",
         edit_score: float = 0.0,
-        context_score: float = 0.0) -> HarvestCandidate:
+        context_score: float = 0.0,
+    ) -> HarvestCandidate:
         d = MagicMock()
         d.name = name
         d.file_id = file_id
         d.kind = "function"
         return HarvestCandidate(
-            def_uid=uid,
-            def_fact=d,
-            edit_score=edit_score,
-            context_score=context_score)
+            def_uid=uid, def_fact=d, edit_score=edit_score, context_score=context_score
+        )
 
     def test_empty_input(self) -> None:
         assert _aggregate_to_files_dual([], {}) == []
@@ -1339,9 +1344,11 @@ class TestAggregateToFilesDual:
         # Top-2 context: (0.8 + 0.2) / 2 = 0.50
         assert abs(fctx - 0.50) < 0.01
 
+
 # ---------------------------------------------------------------------------
 # Bucketing tests
 # ---------------------------------------------------------------------------
+
 
 class TestBucketing:
     """Tests for _assign_buckets — score-based bucket assignment."""
@@ -1352,7 +1359,8 @@ class TestBucketing:
         *,
         file_score: float = 0.5,
         edit_score: float = 0.0,
-        context_score: float = 0.0) -> tuple[int, float, float, float, list[tuple[str, float]]]:
+        context_score: float = 0.0,
+    ) -> tuple[int, float, float, float, list[tuple[str, float]]]:
         return (fid, file_score, edit_score, context_score, [(f"def::{fid}", file_score)])
 
     def test_empty_input(self) -> None:
@@ -1438,9 +1446,11 @@ class TestBucketing:
         _assign_buckets(files, {"a": cand})
         assert cand.bucket == ReconBucket.edit_target
 
+
 # ---------------------------------------------------------------------------
 # ReconBucket enum tests
 # ---------------------------------------------------------------------------
+
 
 class TestReconBucket:
     """Tests for ReconBucket enum."""
@@ -1455,9 +1465,11 @@ class TestReconBucket:
         c = HarvestCandidate(def_uid="test")
         assert c.bucket == ReconBucket.supplementary
 
+
 # ---------------------------------------------------------------------------
 # Unindexed file discovery tests
 # ---------------------------------------------------------------------------
+
 
 class TestFindUnindexedFiles:
     """Tests for _find_unindexed_files — path-based discovery of non-indexed files."""
@@ -1470,10 +1482,7 @@ class TestFindUnindexedFiles:
 
     def test_matches_yaml_by_term(self) -> None:
         """YAML file with matching path component is found."""
-        parsed = ParsedTask(
-            raw="",
-            primary_terms=["config", "mlflow"],
-            secondary_terms=[])
+        parsed = ParsedTask(raw="", primary_terms=["config", "mlflow"], secondary_terms=[])
         ctx = self._make_app_ctx(
             [
                 "src/app.py",
@@ -1488,10 +1497,7 @@ class TestFindUnindexedFiles:
 
     def test_excludes_indexed_files(self) -> None:
         """Files already in the structural index are excluded."""
-        parsed = ParsedTask(
-            raw="",
-            primary_terms=["config"],
-            secondary_terms=[])
+        parsed = ParsedTask(raw="", primary_terms=["config"], secondary_terms=[])
         ctx = self._make_app_ctx(["src/config.py", "config.yaml"])
         indexed = {"src/config.py"}
         result = _find_unindexed_files(ctx, parsed, indexed)
@@ -1509,9 +1515,8 @@ class TestFindUnindexedFiles:
     def test_sorted_by_score_desc(self) -> None:
         """Results sorted by score descending."""
         parsed = ParsedTask(
-            raw="",
-            primary_terms=["config", "mlflow", "tracking"],
-            secondary_terms=[])
+            raw="", primary_terms=["config", "mlflow", "tracking"], secondary_terms=[]
+        )
         ctx = self._make_app_ctx(
             [
                 "config.yaml",  # matches "config"
@@ -1525,10 +1530,7 @@ class TestFindUnindexedFiles:
 
     def test_caps_at_limit(self) -> None:
         """Results capped at _UNINDEXED_MAX_FILES."""
-        parsed = ParsedTask(
-            raw="",
-            primary_terms=["test"],
-            secondary_terms=[])
+        parsed = ParsedTask(raw="", primary_terms=["test"], secondary_terms=[])
         files = [f"test/file{i}.yaml" for i in range(30)]
         ctx = self._make_app_ctx(files)
         result = _find_unindexed_files(ctx, parsed, set())
@@ -1536,10 +1538,7 @@ class TestFindUnindexedFiles:
 
     def test_substring_match(self) -> None:
         """Terms match as substrings in path."""
-        parsed = ParsedTask(
-            raw="",
-            primary_terms=["integration"],
-            secondary_terms=[])
+        parsed = ParsedTask(raw="", primary_terms=["integration"], secondary_terms=[])
         ctx = self._make_app_ctx(
             [
                 ".github/workflows/integration-tests.yml",
@@ -1550,9 +1549,11 @@ class TestFindUnindexedFiles:
         paths = [p for p, _ in result]
         assert ".github/workflows/integration-tests.yml" in paths
 
+
 # ---------------------------------------------------------------------------
 # OutputTier and FileCandidate tests
 # ---------------------------------------------------------------------------
+
 
 class TestOutputTier:
     """Test OutputTier enum values."""
@@ -1564,6 +1565,7 @@ class TestOutputTier:
 
     def test_tier_is_str(self) -> None:
         assert isinstance(OutputTier.FULL_FILE, str)
+
 
 class TestFileCandidate:
     """Test FileCandidate dataclass."""
@@ -1580,7 +1582,8 @@ class TestFileCandidate:
             term_match_count=3,
             lexical_hit_count=2,
             has_explicit_mention=True,
-            graph_connected=True)
+            graph_connected=True,
+        )
         ev = fc.evidence_summary
         assert "sim(0.85)" in ev
         assert "terms(3)" in ev
@@ -1681,12 +1684,16 @@ class TestEnrichFileCandidatesRRF:
         ]
         def_cands = {
             "a.py::f": HarvestCandidate(
-                def_uid="a.py::f", file_path="a.py",
-                from_graph=True, graph_quality=1.0,
+                def_uid="a.py::f",
+                file_path="a.py",
+                from_graph=True,
+                graph_quality=1.0,
             ),
             "b.py::f": HarvestCandidate(
-                def_uid="b.py::f", file_path="b.py",
-                from_graph=True, graph_quality=0.3,
+                def_uid="b.py::f",
+                file_path="b.py",
+                from_graph=True,
+                graph_quality=0.3,
             ),
         }
         result = _enrich_file_candidates(fcs, def_cands, self._parsed())
@@ -1797,6 +1804,7 @@ class TestEnrichFileCandidatesRRF:
 # Two-elbow detection tests
 # ---------------------------------------------------------------------------
 
+
 class TestTwoElbows:
     """Test compute_two_elbows function."""
 
@@ -1843,6 +1851,7 @@ class TestTwoElbows:
         n_full, _ = compute_two_elbows(scores, min_full=3)
         assert n_full >= 3
 
+
 class TestAssignTiers:
     """Test assign_tiers function."""
 
@@ -1871,6 +1880,7 @@ class TestAssignTiers:
         low = next(c for c in result if c.path == "low.py")
         assert low.tier != OutputTier.SUMMARY_ONLY  # promoted
 
+
 class TestNoiseMetric:
     """Test compute_noise_metric function."""
 
@@ -1890,9 +1900,11 @@ class TestNoiseMetric:
         noise = compute_noise_metric(scores)
         assert noise > 0.3
 
+
 # ---------------------------------------------------------------------------
 # Tier-based budget trimming tests
 # ---------------------------------------------------------------------------
+
 
 class TestTierTrimming:
     """Test budget trimming for tier-based (v6) responses."""
@@ -1955,9 +1967,12 @@ class TestReconCallGating:
         from codeplane.mcp.tools.recon.pipeline import _check_recon_gate
 
         result = _check_recon_gate(
-            self._make_app_ctx(0), self._make_ctx(),
-            expand_reason=None, pinned_paths=None,
-            gate_token=None, gate_reason=None,
+            self._make_app_ctx(0),
+            self._make_ctx(),
+            expand_reason=None,
+            pinned_paths=None,
+            gate_token=None,
+            gate_reason=None,
         )
         assert result is None
 
@@ -1966,9 +1981,12 @@ class TestReconCallGating:
         from codeplane.mcp.tools.recon.pipeline import _check_recon_gate
 
         result = _check_recon_gate(
-            self._make_app_ctx(1), self._make_ctx(),
-            expand_reason=None, pinned_paths=None,
-            gate_token=None, gate_reason=None,
+            self._make_app_ctx(1),
+            self._make_ctx(),
+            expand_reason=None,
+            pinned_paths=None,
+            gate_token=None,
+            gate_reason=None,
         )
         assert result is not None
         assert result["status"] == "blocked"
@@ -1979,10 +1997,12 @@ class TestReconCallGating:
         from codeplane.mcp.tools.recon.pipeline import _check_recon_gate
 
         result = _check_recon_gate(
-            self._make_app_ctx(1), self._make_ctx(),
+            self._make_app_ctx(1),
+            self._make_ctx(),
             expand_reason="too short",
             pinned_paths=["src/foo.py"],
-            gate_token=None, gate_reason=None,
+            gate_token=None,
+            gate_reason=None,
         )
         assert result is not None
         assert result["status"] == "blocked"
@@ -1993,9 +2013,12 @@ class TestReconCallGating:
 
         reason = "x" * 300  # meets min length
         result = _check_recon_gate(
-            self._make_app_ctx(1), self._make_ctx(),
-            expand_reason=reason, pinned_paths=None,
-            gate_token=None, gate_reason=None,
+            self._make_app_ctx(1),
+            self._make_ctx(),
+            expand_reason=reason,
+            pinned_paths=None,
+            gate_token=None,
+            gate_reason=None,
         )
         assert result is not None
         assert result["status"] == "blocked"
@@ -2006,10 +2029,12 @@ class TestReconCallGating:
 
         reason = "x" * 300
         result = _check_recon_gate(
-            self._make_app_ctx(1), self._make_ctx(),
+            self._make_app_ctx(1),
+            self._make_ctx(),
             expand_reason=reason,
             pinned_paths=["src/core/base.py"],
-            gate_token=None, gate_reason=None,
+            gate_token=None,
+            gate_reason=None,
         )
         assert result is None
 
@@ -2018,10 +2043,12 @@ class TestReconCallGating:
         from codeplane.mcp.tools.recon.pipeline import _check_recon_gate
 
         result = _check_recon_gate(
-            self._make_app_ctx(2), self._make_ctx(),
+            self._make_app_ctx(2),
+            self._make_ctx(),
             expand_reason="x" * 300,
             pinned_paths=["src/core/base.py"],
-            gate_token=None, gate_reason=None,
+            gate_token=None,
+            gate_reason=None,
         )
         assert result is not None
         assert result["status"] == "blocked"
@@ -2032,9 +2059,12 @@ class TestReconCallGating:
         from codeplane.mcp.tools.recon.pipeline import _check_recon_gate
 
         result = _check_recon_gate(
-            self._make_app_ctx(2), self._make_ctx(),
-            expand_reason="x" * 300, pinned_paths=None,
-            gate_token=None, gate_reason=None,
+            self._make_app_ctx(2),
+            self._make_ctx(),
+            expand_reason="x" * 300,
+            pinned_paths=None,
+            gate_token=None,
+            gate_reason=None,
         )
         assert result is not None
         assert "RECON_EXCESSIVE" in result["error"]["code"]
@@ -2068,7 +2098,8 @@ class TestReconCallGating:
         app_ctx.session_manager = session_manager
 
         result = _check_recon_gate(
-            app_ctx, self._make_ctx(),
+            app_ctx,
+            self._make_ctx(),
             expand_reason="x" * 600,
             pinned_paths=["src/core/base.py"],
             gate_token=token,
@@ -2085,8 +2116,11 @@ class TestReconCallGating:
         # the bypass is in the recon() function itself. Verify the
         # gating function properly blocks when bypass is NOT active.
         result = _check_recon_gate(
-            self._make_app_ctx(5), self._make_ctx(),
-            expand_reason=None, pinned_paths=None,
-            gate_token=None, gate_reason=None,
+            self._make_app_ctx(5),
+            self._make_ctx(),
+            expand_reason=None,
+            pinned_paths=None,
+            gate_token=None,
+            gate_reason=None,
         )
         assert result is not None  # Should block without bypass

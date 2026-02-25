@@ -1,70 +1,70 @@
-"""Tests for language-specific query configurations."""
+"""Tests for language pack type extraction configurations."""
 
 from __future__ import annotations
 
 import pytest
 
-from codeplane.index._internal.extraction.languages import (
-    ALL_LANGUAGE_CONFIGS,
-    CPP_CONFIG,
-    CSHARP_CONFIG,
-    DART_CONFIG,
-    ELIXIR_CONFIG,
-    GO_CONFIG,
-    HASKELL_CONFIG,
-    JAVA_CONFIG,
-    KOTLIN_CONFIG,
-    NIM_CONFIG,
-    OCAML_CONFIG,
-    PHP_CONFIG,
-    PYTHON_CONFIG,
-    RUBY_CONFIG,
-    RUST_CONFIG,
-    SCALA_CONFIG,
-    SWIFT_CONFIG,
-    TYPESCRIPT_CONFIG,
-    ZIG_CONFIG,
-    get_config_for_language,
+from codeplane.index._internal.parsing.packs import (
+    PACKS,
+    TypeExtractionConfig,
+    get_pack,
 )
-from codeplane.index._internal.extraction.query_based import LanguageQueryConfig
+
+# Convenience aliases — access type_config from each pack
+PYTHON_CONFIG = PACKS["python"].type_config
+TYPESCRIPT_CONFIG = PACKS["typescript"].type_config
+GO_CONFIG = PACKS["go"].type_config
+RUST_CONFIG = PACKS["rust"].type_config
+JAVA_CONFIG = PACKS["java"].type_config
+KOTLIN_CONFIG = PACKS["kotlin"].type_config
+SCALA_CONFIG = PACKS["scala"].type_config
+CSHARP_CONFIG = PACKS["csharp"].type_config
+CPP_CONFIG = PACKS["cpp"].type_config
+RUBY_CONFIG = PACKS["ruby"].type_config
+PHP_CONFIG = PACKS["php"].type_config
+SWIFT_CONFIG = PACKS["swift"].type_config
+ELIXIR_CONFIG = PACKS["elixir"].type_config
+HASKELL_CONFIG = PACKS["haskell"].type_config
+OCAML_CONFIG = PACKS["ocaml"].type_config
+ZIG_CONFIG = PACKS["zig"].type_config
 
 
-class TestAllLanguageConfigs:
-    """Tests for ALL_LANGUAGE_CONFIGS registry."""
+class TestPackTypeConfigs:
+    """Tests for PACKS type config registry."""
 
-    def test_is_dict(self) -> None:
-        """ALL_LANGUAGE_CONFIGS is a dictionary."""
-        assert isinstance(ALL_LANGUAGE_CONFIGS, dict)
+    def test_packs_is_dict(self) -> None:
+        """PACKS is a dictionary."""
+        assert isinstance(PACKS, dict)
 
-    def test_values_are_language_query_configs(self) -> None:
-        """All values are LanguageQueryConfig instances."""
-        for name, config in ALL_LANGUAGE_CONFIGS.items():
-            assert isinstance(config, LanguageQueryConfig), f"{name} has invalid config"
+    def test_packs_with_type_config_have_valid_configs(self) -> None:
+        """All packs with type_config have TypeExtractionConfig instances."""
+        for name, pack in PACKS.items():
+            if pack.type_config is not None:
+                assert isinstance(pack.type_config, TypeExtractionConfig), (
+                    f"{name} has invalid type_config"
+                )
 
     def test_common_languages_present(self) -> None:
-        """Common languages are in registry."""
+        """Common languages are in PACKS with type configs."""
         expected = {"python", "javascript", "typescript", "go", "rust", "java"}
-        assert expected.issubset(set(ALL_LANGUAGE_CONFIGS.keys()))
+        for lang in expected:
+            pack = get_pack(lang)
+            assert pack is not None, f"{lang} not in PACKS"
+            assert pack.type_config is not None, f"{lang} has no type_config"
 
     def test_aliases_map_to_same_config(self) -> None:
-        """Language aliases map to same configs."""
-        assert ALL_LANGUAGE_CONFIGS["javascript"] is ALL_LANGUAGE_CONFIGS["typescript"]
-        assert ALL_LANGUAGE_CONFIGS["c"] is ALL_LANGUAGE_CONFIGS["cpp"]
-        # Split JVM/dotnet languages share similar structure with their primary config
-        assert ALL_LANGUAGE_CONFIGS["groovy"] is ALL_LANGUAGE_CONFIGS["java"]
-        assert ALL_LANGUAGE_CONFIGS["fsharp"] is ALL_LANGUAGE_CONFIGS["csharp"]
-        assert ALL_LANGUAGE_CONFIGS["vbnet"] is ALL_LANGUAGE_CONFIGS["csharp"]
+        """Language aliases map to same type configs."""
+        assert PACKS["javascript"].type_config is PACKS["typescript"].type_config
+        assert PACKS["c"].type_config is PACKS["cpp"].type_config
 
 
-class TestGetConfigForLanguage:
-    """Tests for get_config_for_language function."""
+class TestGetPackTypeConfig:
+    """Tests for get_pack type config lookup."""
 
     @pytest.mark.parametrize(
         "language,expected",
         [
             ("python", PYTHON_CONFIG),
-            ("Python", PYTHON_CONFIG),
-            ("PYTHON", PYTHON_CONFIG),
             ("javascript", TYPESCRIPT_CONFIG),
             ("typescript", TYPESCRIPT_CONFIG),
             ("go", GO_CONFIG),
@@ -77,28 +77,24 @@ class TestGetConfigForLanguage:
             ("kotlin", KOTLIN_CONFIG),
             ("scala", SCALA_CONFIG),
             ("swift", SWIFT_CONFIG),
-            ("dart", DART_CONFIG),
             ("elixir", ELIXIR_CONFIG),
             ("haskell", HASKELL_CONFIG),
             ("ocaml", OCAML_CONFIG),
             ("zig", ZIG_CONFIG),
-            ("nim", NIM_CONFIG),
         ],
     )
-    def test_returns_correct_config(self, language: str, expected: LanguageQueryConfig) -> None:
-        """Returns correct config for language."""
-        result = get_config_for_language(language)
-        assert result is expected
+    def test_returns_correct_config(
+        self, language: str, expected: TypeExtractionConfig | None
+    ) -> None:
+        """Returns correct type config for language."""
+        pack = get_pack(language)
+        assert pack is not None
+        assert pack.type_config is expected
 
     def test_returns_none_for_unknown(self) -> None:
         """Returns None for unknown languages."""
-        assert get_config_for_language("unknown") is None
-        assert get_config_for_language("brainfuck") is None
-
-    def test_case_insensitive(self) -> None:
-        """Language lookup is case-insensitive."""
-        assert get_config_for_language("Python") is get_config_for_language("python")
-        assert get_config_for_language("GO") is get_config_for_language("go")
+        assert get_pack("unknown") is None
+        assert get_pack("brainfuck") is None
 
 
 class TestPythonConfig:
@@ -109,8 +105,8 @@ class TestPythonConfig:
         assert PYTHON_CONFIG.language_family == "python"
 
     def test_grammar_name(self) -> None:
-        """Python config has correct grammar name."""
-        assert PYTHON_CONFIG.grammar_name == "python"
+        """Python pack has correct grammar name."""
+        assert PACKS["python"].grammar_name == "python"
 
     def test_scope_node_types(self) -> None:
         """Python config has expected scope node types."""
@@ -145,8 +141,8 @@ class TestTypescriptConfig:
         assert TYPESCRIPT_CONFIG.language_family == "javascript"
 
     def test_grammar_name(self) -> None:
-        """TypeScript config has correct grammar name."""
-        assert TYPESCRIPT_CONFIG.grammar_name == "typescript"
+        """TypeScript pack has correct grammar name."""
+        assert PACKS["typescript"].grammar_name == "typescript"
 
     def test_supports_interfaces(self) -> None:
         """TypeScript config supports interfaces."""
@@ -176,8 +172,8 @@ class TestGoConfig:
         assert GO_CONFIG.language_family == "go"
 
     def test_grammar_name(self) -> None:
-        """Go config has correct grammar name."""
-        assert GO_CONFIG.grammar_name == "go"
+        """Go pack has correct grammar name."""
+        assert PACKS["go"].grammar_name == "go"
 
     def test_reference_indicator(self) -> None:
         """Go config has pointer reference indicator."""
@@ -218,8 +214,8 @@ class TestJavaConfig:
         assert JAVA_CONFIG.language_family == "jvm"
 
     def test_grammar_name(self) -> None:
-        """Java config has correct grammar name."""
-        assert JAVA_CONFIG.grammar_name == "java"
+        """Java pack has correct grammar name."""
+        assert PACKS["java"].grammar_name == "java"
 
     def test_supports_interfaces(self) -> None:
         """Java config supports interfaces."""

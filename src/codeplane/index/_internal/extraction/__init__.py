@@ -489,19 +489,20 @@ def get_registry() -> ExtractorRegistry:
 def _register_builtin_extractors(registry: ExtractorRegistry) -> None:
     """Register all built-in extractors."""
     # Import here to avoid circular imports
-    from codeplane.index._internal.extraction.languages import ALL_LANGUAGE_CONFIGS
     from codeplane.index._internal.extraction.query_based import QueryBasedExtractor
+    from codeplane.index._internal.parsing.packs import PACKS
 
-    # Register query-based extractors for all configured languages
-    # Use dict to dedupe by id since configs with list fields aren't hashable
-    seen_configs: dict[int, bool] = {}
-    for config in ALL_LANGUAGE_CONFIGS.values():
-        config_id = id(config)
+    # Register query-based extractors for all packs that have type_config
+    seen_configs: set[int] = set()
+    for pack in PACKS.values():
+        if pack.type_config is None:
+            continue
+        config_id = id(pack.type_config)
         if config_id in seen_configs:
             continue
-        seen_configs[config_id] = True
+        seen_configs.add(config_id)
         try:
-            extractor = QueryBasedExtractor(config)
+            extractor = QueryBasedExtractor(pack.type_config, pack.grammar_name)
             registry.register(extractor)
         except ValueError:
             # Grammar not available - skip this language
