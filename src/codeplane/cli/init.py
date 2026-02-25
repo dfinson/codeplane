@@ -54,21 +54,56 @@ Terminal fallback is permitted ONLY when no CodePlane tool exists for the operat
 ### What CodePlane Provides
 
 CodePlane maintains a **structural index** of your codebase — definitions, imports,
-references. This enables structural search, semantic diff, impact-aware test selection,
-and safe refactoring that terminal commands cannot provide.
+references, embeddings. This enables task-aware code discovery, semantic diff,
+impact-aware test selection, and safe refactoring that terminal commands cannot provide.
 
-### Four-Tool Read Model
+### Start Every Task With `recon`
 
-  search         -> semantic enumeration (spans + metadata, NEVER source text)
-  read_scaffold  -> structural skeleton (imports, signatures, hierarchy — no source)
-  read_source    -> bounded semantic retrieval (span-based or structural-unit-based)
-  read_file_full -> gated bulk access (two-phase confirmation, resource-first delivery)
+**`recon` is the PRIMARY entry point.** It replaces manual search → scaffold → read loops.
 
-Search = find. Scaffold = orient. Read = retrieve. Full = gated.
+One call to `recon` returns everything you need to start working:
+- **FULL_FILE** content for top-ranked files (edit targets)
+- **MIN_SCAFFOLD** (imports + signatures) for context files
+- **SUMMARY_ONLY** (path + description) for peripheral files
 
-`read_source` accepts multiple `targets` in one call — batch reads of independent spans.
+```
+recon(task="<describe the task in natural language>")
+```
+
+**Parameters:**
+- `task` (required): Natural language task description. Be specific — include symbol
+  names, file paths, or domain terms. The server extracts structured signals automatically.
+- `seeds`: Optional list of symbol names to anchor on (e.g., `["IndexCoordinator"]`).
+- `pinned_paths`: Optional file paths to force-include (e.g., `["src/core/base.py"]`).
+- `expand_reason`: REQUIRED on 2nd consecutive recon call — explain what was missing.
+- `gate_token` / `gate_reason`: Required on 3rd+ calls (gated to prevent waste).
+
+**Pipeline:** task parsing → embedding similarity → graph expansion → RRF scoring →
+budget-aware tier assignment → content assembly.
+
+**Workflow:**
+1. `recon(task="...")` — get all relevant files with appropriate fidelity
+2. `read_source` on specific spans if you need more detail from scaffold-tier files
+3. Edit with `write_source`
+4. `checkpoint(changed_files=[...], commit_message="...", push=True)`
+
+**Consecutive call discipline:**
+- 1st call: just `task` (and optionally `seeds`/`pinned_paths`)
+- 2nd call: MUST include `expand_reason` explaining what was missing
+- 3rd+ call: requires `gate_token` from previous response + `gate_reason` (500+ chars)
+
+### Granular Read Tools (use AFTER recon when needed)
+
+  search         -> find spans by definition, reference, lexical, or symbol mode
+  read_scaffold  -> structural skeleton (imports + signatures, no source)
+  read_source    -> bounded source retrieval (span-based, batches multiple targets)
+  read_file_full -> gated full-file access (two-phase confirmation)
+
 `read_source` target format: `[{{"path": "src/foo.py", "start_line": 10, "end_line": 50}}]`
 Response includes `file_sha256` per file — save it for `write_source` span edits.
+
+Use `search` to find specific symbols, then `read_source` for their bodies.
+Search NEVER returns source text — it returns spans only.
 
 ### CRITICAL: After Every Code Change
 
@@ -79,16 +114,6 @@ After ANY edit via `write_source` or other mutation:
 Omit `commit_message` to lint+test only (no commit).
 
 **FORBIDDEN**: `pytest`, `ruff`, `mypy`, `git add`, `git commit`, `git push` in terminal.
-
-### First Steps When Starting a Task
-
-1. `describe` — get repo metadata, language, active branch, index status
-2. `map_repo(include=["structure", "dependencies", "test_layout"])` — understand repo shape
-3. `search` to find relevant code — definitions, references, or lexical patterns
-4. `read_source` on spans from search results — understand the code you'll modify
-5. After changes: `checkpoint(changed_files=[...])` — lint + affected tests in one call
-6. `semantic_diff` — review structural impact before committing
-7. `checkpoint(changed_files=[...], commit_message="...", push=True)` — one-shot
 
 **Testing rule**: NEVER run the full test suite or use test runners directly.
 Always use `checkpoint(changed_files=[...])` with the files you changed.
@@ -106,6 +131,7 @@ This runs lint + only the tests impacted by your changes — fast, targeted, suf
 
 | Operation | REQUIRED Tool | FORBIDDEN Alternative |
 |-----------|---------------|----------------------|
+| Task-aware discovery | `{tool_prefix}_recon` | Manual search + read loops |
 | File scaffold | `{tool_prefix}_read_scaffold` | Manual traversal, `cat` for structure |
 | Read source | `{tool_prefix}_read_source` | `cat`, `head`, `less`, `tail` |
 | Read full file | `{tool_prefix}_read_file_full` | `cat`, `head`, bulk reads |
@@ -124,26 +150,6 @@ STOP before using `write_source` for multi-file changes:
 - Moving a file? → `refactor_move` (NOT write_source + delete)
 - Deleting a symbol or file? → `refactor_impact`
 
-### Before You Read: Decision Gate
-
-STOP before using `read_file_full`:
-- Need a file's structure or API shape? → `read_scaffold` (signatures, hierarchy, no source)
-- Need to find call sites or consumers? → `search(mode=references)` + `read_source`
-- Need to understand a specific function? → `search(mode=definitions)` + `read_source`
-- Need the ENTIRE file content with no alternative? → ONLY then `read_file_full`
-
-| Task | Mode | Enrichment | Why |
-|------|------|------------|-----|
-| Find where a function is defined | `definitions` | `minimal` | Returns span, use read_source for body |
-| Find all callers of a function | `references` | `none` | You just need locations |
-| Find a string/pattern in code | `lexical` | `none` | Spans only, read_source for content |
-| Explore a symbol's shape | `symbol` | `standard` | Metadata without source text |
-
-Search NEVER returns source text. Use `read_source` with spans from search results.
-
-`search` params: `query` (str), `mode` (definitions|references|lexical|symbol), `enrichment` (none|minimal|standard|function|class).
-`checkpoint` params: `changed_files` (list[str]), `commit_message` (str|None), `push` (bool). Chains lint → test → commit → push + semantic diff.
-
 ### Refactor: preview → inspect → apply/cancel
 
 1. `refactor_rename`/`refactor_move`/`refactor_impact` — preview with `refactor_id`
@@ -153,7 +159,7 @@ Search NEVER returns source text. Use `read_source` with spans from search resul
 ### Span-Based Edits
 
 `write_source` supports span edits: provide `start_line`, `end_line`, `expected_file_sha256`
-(from `read_source`), and `new_content`. Server validates hash; mismatch → re-read.
+(from `read_source` or `recon`), and `new_content`. Server validates hash; mismatch → re-read.
 For updates, always include `expected_content` — the server fuzzy-matches nearby lines.
 
 **Batching**: `edits` accepts multiple files — batch independent edits into one call.
@@ -173,6 +179,7 @@ avoids wasted round-trips.
 
 ### Common Mistakes (Don't Do These)
 
+- **DON'T** skip `recon` and manually search+read — `recon` is faster and more complete
 - **DON'T** guess tool parameter names — use `describe(action='tool', name='...')` first
 - **DON'T** use `search` expecting source text — it returns spans only
 - **DON'T** pass `context:` to search — the parameter is `enrichment`
@@ -551,6 +558,7 @@ def initialize_repo(
     embedding_phase: PhaseBox | None = None
     embedding_task_id: Any = None
     embedding_total: int = 0  # track actual embedding count for display
+    embedding_start: float = 0.0  # track embedding phase timing
     refs_task_id: Any = None
     types_task_id: Any = None
     indexing_elapsed = 0.0
@@ -569,7 +577,7 @@ def initialize_repo(
             indexed: int, total: int, files_by_ext: dict[str, int], progress_phase: str
         ) -> None:
             nonlocal resolution_phase, embedding_phase, embedding_task_id
-            nonlocal embedding_total
+            nonlocal embedding_total, embedding_start
             nonlocal refs_task_id, types_task_id, indexing_elapsed
 
             if progress_phase == "indexing":
@@ -608,6 +616,7 @@ def initialize_repo(
                     embedding_task_id = embedding_phase.add_progress(
                         "Computing embeddings", total=100
                     )
+                    embedding_start = time.time()
 
                 pct = int(indexed / total * 100) if total > 0 else 0
                 embedding_phase._progress.update(embedding_task_id, completed=pct)  # type: ignore[union-attr]
@@ -635,7 +644,10 @@ def initialize_repo(
 
                 # Close embedding phase if it was open
                 if embedding_phase is not None:
-                    embedding_phase.complete(f"{embedding_total} definitions embedded")
+                    embed_elapsed = time.time() - embedding_start
+                    embedding_phase.complete(
+                        f"{embedding_total} definitions embedded ({embed_elapsed:.1f}s)"
+                    )
                     embedding_phase.__exit__(None, None, None)
                     embedding_phase = None
 
@@ -680,7 +692,10 @@ def initialize_repo(
 
         # Close embedding phase box if it was opened but resolution didn't close it
         if embedding_phase is not None:
-            embedding_phase.complete("Done")
+            embed_elapsed = time.time() - embedding_start if embedding_start else 0.0
+            embedding_phase.complete(
+                f"{embedding_total} definitions embedded ({embed_elapsed:.1f}s)"
+            )
             embedding_phase.__exit__(None, None, None)
 
         # Close resolution phase box if it was opened
