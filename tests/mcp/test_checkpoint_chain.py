@@ -9,6 +9,7 @@ Covers:
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -316,3 +317,54 @@ class TestCheckpointSemanticDiff:
         assert result["passed"] is True
         assert result["commit"]["oid"] == "ddd4444555566667777"
         assert "diff" not in result["commit"]
+
+
+# ---- _validate_paths_exist unit tests ----------------------------------------
+
+
+class TestValidatePathsExist:
+    """Unit tests for _validate_paths_exist with git-aware deletion support."""
+
+    def test_existing_file_passes(self, tmp_path: Path) -> None:
+        from codeplane.mcp.tools.checkpoint import _validate_paths_exist
+
+        (tmp_path / "foo.py").write_text("x = 1")
+        _validate_paths_exist(tmp_path, ["foo.py"])  # should not raise
+
+    def test_missing_untracked_file_raises(self, tmp_path: Path) -> None:
+        from codeplane.git.errors import PathsNotFoundError
+        from codeplane.mcp.tools.checkpoint import _validate_paths_exist
+
+        with pytest.raises(PathsNotFoundError):
+            _validate_paths_exist(tmp_path, ["typo.py"])
+
+    def test_deleted_tracked_file_passes(self, tmp_path: Path) -> None:
+        """A file that doesn't exist on disk but is tracked by git is a valid deletion."""
+        from codeplane.mcp.tools.checkpoint import _validate_paths_exist
+
+        tracked = {"deleted.py", "other.py"}
+        _validate_paths_exist(tmp_path, ["deleted.py"], tracked_files=tracked)  # should not raise
+
+    def test_deleted_untracked_file_raises(self, tmp_path: Path) -> None:
+        """A file that doesn't exist on disk AND isn't tracked is a typo."""
+        from codeplane.git.errors import PathsNotFoundError
+        from codeplane.mcp.tools.checkpoint import _validate_paths_exist
+
+        tracked = {"other.py"}
+        with pytest.raises(PathsNotFoundError):
+            _validate_paths_exist(tmp_path, ["never_existed.py"], tracked_files=tracked)
+
+    def test_mixed_existing_and_deleted_tracked(self, tmp_path: Path) -> None:
+        """Mix of existing files and tracked deletions should pass."""
+        from codeplane.mcp.tools.checkpoint import _validate_paths_exist
+
+        (tmp_path / "alive.py").write_text("x = 1")
+        tracked = {"alive.py", "deleted.py"}
+        _validate_paths_exist(
+            tmp_path, ["alive.py", "deleted.py"], tracked_files=tracked
+        )  # should not raise
+
+    def test_empty_paths_is_noop(self, tmp_path: Path) -> None:
+        from codeplane.mcp.tools.checkpoint import _validate_paths_exist
+
+        _validate_paths_exist(tmp_path, [])  # should not raise

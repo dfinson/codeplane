@@ -34,22 +34,28 @@ def _validate_commit_message(message: str) -> None:
         raise EmptyCommitMessageError()
 
 
-def _validate_paths_exist(repo_path: Path, paths: list[str]) -> None:
-    """Validate all paths exist in the repository or working tree.
+def _validate_paths_exist(
+    repo_path: Path, paths: list[str], *, tracked_files: set[str] | None = None
+) -> None:
+    """Validate paths are known to the repository.
 
-    Raises PathsNotFoundError with details about which paths are missing.
+    A path is valid if it exists on disk OR is tracked by git (i.e. a deletion).
+    Only truly unknown paths (typos, never-existed) raise PathsNotFoundError.
     """
     if not paths:
         return
 
-    missing: list[str] = []
+    tracked = tracked_files or set()
+    unknown: list[str] = []
     for p in paths:
-        full_path = repo_path / p
-        if not full_path.exists():
-            missing.append(p)
+        if (repo_path / p).exists():
+            continue  # exists on disk — valid
+        if p in tracked:
+            continue  # tracked deletion — valid
+        unknown.append(p)
 
-    if missing:
-        raise PathsNotFoundError(missing)
+    if unknown:
+        raise PathsNotFoundError(unknown)
 
 
 def _run_hook_with_retry(
@@ -1049,7 +1055,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
                 await ctx.report_progress(total_phases, total_phases + 2, "Staging changes")
                 if changed_files:
-                    _validate_paths_exist(repo_path, changed_files)
+                    tracked = set(app_ctx.git_ops.tracked_files())
+                    _validate_paths_exist(repo_path, changed_files, tracked_files=tracked)
                     app_ctx.git_ops.stage(changed_files)
                     staged_paths = list(changed_files)
                 else:
