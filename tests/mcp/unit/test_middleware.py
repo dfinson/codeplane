@@ -384,13 +384,9 @@ class TestToolMiddleware:
     def test_extract_result_summary_test_run(self, middleware):
         """Test test run summary extraction."""
         result = {
-            "run_status": {
-                "progress": {
-                    "cases": {
-                        "passed": 10,
-                        "failed": 2,
-                    }
-                }
+            "tests": {
+                "passed": 10,
+                "failed": 2,
             }
         }
         summary = middleware._extract_result_summary("checkpoint", result)
@@ -441,11 +437,9 @@ class TestToolMiddleware:
     def test_format_tool_summary_test_run_completed(self, middleware):
         """Test test run completion formatting."""
         result = {
-            "run_status": {
-                "progress": {
-                    "passed": 10,
-                    "failed": 2,
-                }
+            "tests": {
+                "passed": 10,
+                "failed": 2,
             }
         }
         formatted = middleware._format_tool_summary("checkpoint", result)

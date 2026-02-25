@@ -383,8 +383,8 @@ class TestFetchHints:
         payload = {
             "passed": True,
             "summary": "lint: clean | tests: 42 passed",
-            "commit": {"oid": "abc1234567", "short_oid": "abc1234"},
-            "lint": {"status": "clean", "total_diagnostics": 0, "total_files_modified": 0},
+            "commit": {"oid": "abc1234567"},
+            "lint": {"status": "clean", "diagnostics": 0, "fixed_files": 0},
             "agentic_hint": "All checks passed.",
         }
         hint = _build_fetch_hint("abc123", 2000, "checkpoint", payload)

@@ -107,7 +107,6 @@ class TestCheckpointCommitHookAutoRetry:
         assert result["passed"] is True
         assert "commit" in result
         assert result["commit"]["oid"] == "abc1234567890"
-        assert result["commit"]["short_oid"] == "abc1234"
         assert "hook_failure" not in result["commit"]
         assert "hook_warning" not in result["commit"]
 
@@ -166,11 +165,11 @@ class TestCheckpointCommitHookAutoRetry:
         # Commit succeeded
         assert result["passed"] is True
         assert result["commit"]["oid"] == "def5678901234"
-        assert result["commit"]["short_oid"] == "def5678"
-        # Warning about auto-fixes included
+        # Warning about auto-fixes included as text string
         assert "hook_warning" in result["commit"]
-        assert result["commit"]["hook_warning"]["code"] == "HOOK_AUTO_FIXED"
-        assert set(result["commit"]["hook_warning"]["auto_fixed_files"]) == {"src/a.py", "src/b.py"}
+        assert "HOOK_AUTO_FIXED" in result["commit"]["hook_warning"]
+        assert "src/a.py" in result["commit"]["hook_warning"]
+        assert "src/b.py" in result["commit"]["hook_warning"]
         # Re-staged the auto-fixed files
         mock_context.git_ops.stage.assert_called()
 

@@ -158,8 +158,8 @@ class TestCheckpointCommitChain:
         assert result["passed"] is True
         assert "commit" in result
         assert result["commit"]["oid"] == "aaa1111222233334444"
-        assert "semantic_diff" in result["commit"]
-        assert result["commit"]["semantic_diff"]["summary"] == "1 changed"
+        assert "diff" in result["commit"]
+        assert result["commit"]["diff"] == "1 changed"
         assert "committed" in result["agentic_hint"].lower()
 
     @pytest.mark.asyncio
@@ -238,7 +238,7 @@ class TestCheckpointCommitChain:
         assert result["commit"]["pushed"] == "origin"
         mock_context.git_ops.push.assert_called_once_with(remote="origin", force=False)
         # semantic_diff failed gracefully
-        assert "semantic_diff" not in result["commit"]
+        assert "diff" not in result["commit"]
 
 
 class TestCheckpointSemanticDiff:
@@ -283,8 +283,8 @@ class TestCheckpointSemanticDiff:
 
         assert result["passed"] is True
         assert result["commit"]["oid"] == "ccc3333444455556666"
-        assert "semantic_diff" in result["commit"]
-        assert result["commit"]["semantic_diff"]["summary"] == "2 files changed"
+        assert "diff" in result["commit"]
+        assert result["commit"]["diff"] == "2 files changed"
 
     @pytest.mark.asyncio
     async def test_checkpoint_commit_semantic_diff_failure_is_silent(
@@ -315,4 +315,4 @@ class TestCheckpointSemanticDiff:
 
         assert result["passed"] is True
         assert result["commit"]["oid"] == "ddd4444555566667777"
-        assert "semantic_diff" not in result["commit"]
+        assert "diff" not in result["commit"]
