@@ -885,9 +885,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                         test_filter=test_filter,
                         coverage=True,
                         coverage_dir=coverage_dir,
-                        coverage_filter_paths=coverage_filter_paths
-                        if coverage_filter_paths
-                        else None,
+                        # Always pass filter_paths - empty set = no source files changed
+                        coverage_filter_paths=coverage_filter_paths,
                         phase=phase,
                         total_phases=total_phases,
                     )

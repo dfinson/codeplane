@@ -70,10 +70,15 @@ def build_compact_summary(
     Args:
         report: The coverage report to summarize.
         filter_paths: If provided, only include files matching these paths.
+            If empty set, returns minimal summary (no uncovered line details).
 
     Returns:
         Compact text summary.
     """
+    # If filter_paths is an empty set (not None), no source files to evaluate
+    if filter_paths is not None and len(filter_paths) == 0:
+        return "coverage: no source files changed"
+
     total_lines = 0
     covered_lines = 0
     uncovered_parts: list[str] = []
