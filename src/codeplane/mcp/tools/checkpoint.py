@@ -598,14 +598,7 @@ async def _run_tiered_tests(
         batch_groups, solo_targets = _partition_for_batching(targets_this_hop)
 
         batch_count = sum(len(g) for g in batch_groups)
-        solo_count = len(solo_targets)
         batched_into = len(batch_groups)
-
-        if batch_count > 0:
-            await ctx.info(
-                f"Tier {tier_label}: {solo_count} solo + {batch_count} batched "
-                f"into {batched_into} group(s)"
-            )
 
         # Build effective target list: solo targets run individually
         effective_target_ids = [t.target_id for t in solo_targets]
@@ -690,7 +683,6 @@ async def _run_tiered_tests(
         # Tiered fail-fast: if this hop has failures, skip remaining hops
         if tier_failed > 0 and hop < max_hop:
             remaining_hops = [h for h in sorted_hops if h > hop]
-            remaining_targets = sum(len(hop_targets[h]) for h in remaining_hops)
             stopped_at_hop = hop
 
             skipped_info = ", ".join(
@@ -698,10 +690,6 @@ async def _run_tiered_tests(
             )
             tier_entry["stopped_reason"] = (
                 f"Failures in {tier_label} — skipped transitive tiers: {skipped_info}"
-            )
-            await ctx.warning(
-                f"Tests: {tier_label} had {tier_failed} failure(s) — "
-                f"skipping {remaining_targets} transitive target(s)"
             )
             break
 
