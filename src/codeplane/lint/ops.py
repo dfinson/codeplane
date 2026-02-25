@@ -167,8 +167,17 @@ class LintOps:
                 agentic_hint=no_tools_hint,
             )
 
-        # Resolve paths
+        # Resolve paths (filters out deleted files)
         resolved_paths = self._resolve_paths(paths)
+
+        # All requested paths were deleted — nothing to lint
+        if paths and not resolved_paths:
+            return LintResult(
+                action=action,
+                dry_run=dry_run,
+                tools_run=[],
+                duration_seconds=time.time() - start_time,
+            )
 
         # Run tools concurrently
         tasks = [self._run_tool(tool, resolved_paths, dry_run) for tool in tools_to_run]
@@ -268,10 +277,10 @@ class LintOps:
         return detected
 
     def _resolve_paths(self, paths: list[str] | None) -> list[Path]:
-        """Resolve paths to check."""
+        """Resolve paths to check, filtering out non-existent paths (e.g. deletions)."""
         if not paths:
             return [self._repo_root]
-        return [self._repo_root / p for p in paths]
+        return [self._repo_root / p for p in paths if (self._repo_root / p).exists()]
 
     async def _run_tool(
         self,

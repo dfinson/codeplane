@@ -884,6 +884,19 @@ class TestLintOps:
             assert result is not None
 
     @pytest.mark.asyncio
+    async def test_check_all_deleted_paths_returns_clean(self) -> None:
+        """When all changed_files are deleted, lint should return clean (not E902)."""
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            coordinator = create_mock_coordinator()
+            ops = LintOps(root, coordinator)
+
+            result = await ops.check(paths=["deleted_file.py", "also_gone.py"])
+            assert result.status == "clean"
+            assert result.tools_run == []
+            assert result.total_diagnostics == 0
+
+    @pytest.mark.asyncio
     async def test_check_with_categories(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -958,6 +971,8 @@ class TestLintOps:
     def test_resolve_paths_specific(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
+            (root / "src").mkdir()
+            (root / "tests").mkdir()
             coordinator = create_mock_coordinator()
             ops = LintOps(root, coordinator)
 
@@ -965,6 +980,27 @@ class TestLintOps:
             assert len(paths) == 2
             assert paths[0] == root / "src/"
             assert paths[1] == root / "tests/"
+
+    def test_resolve_paths_filters_deleted_files(self) -> None:
+        """Deleted files should be silently filtered out."""
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            (root / "existing.py").write_text("x = 1")
+            coordinator = create_mock_coordinator()
+            ops = LintOps(root, coordinator)
+
+            paths = ops._resolve_paths(["existing.py", "deleted.py"])
+            assert paths == [root / "existing.py"]
+
+    def test_resolve_paths_all_deleted_returns_empty(self) -> None:
+        """When all paths are deleted, return empty list."""
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            coordinator = create_mock_coordinator()
+            ops = LintOps(root, coordinator)
+
+            paths = ops._resolve_paths(["deleted.py", "also_deleted.py"])
+            assert paths == []
 
     @pytest.mark.asyncio
     async def test_get_file_count_from_index(self) -> None:
