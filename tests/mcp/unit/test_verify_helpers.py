@@ -3,7 +3,6 @@
 Tests the pure helper functions:
 - _summarize_verify
 - _summarize_run
-- _display_run
 - _target_matches_affected_files
 - _normalize_selector
 """
@@ -14,7 +13,6 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from codeplane.mcp.tools.checkpoint import (
-    _display_run,
     _normalize_selector,
     _summarize_run,
     _summarize_verify,
@@ -81,35 +79,6 @@ class TestSummarizeRun:
         summary = _summarize_run(result)
         assert "8 passed" in summary
         assert "2 failed" in summary
-
-
-# =========================================================================
-# _display_run
-# =========================================================================
-
-
-class TestDisplayRun:
-    """Tests for _display_run."""
-
-    def test_no_status(self) -> None:
-        result = MagicMock()
-        result.run_status = None
-        assert _display_run(result) is None
-
-    def test_completed_with_failures(self) -> None:
-        result = MagicMock()
-        result.run_status.status = "completed"
-        result.run_status.duration_seconds = 1.5
-        result.run_status.progress.cases.passed = 5
-        result.run_status.progress.cases.failed = 1
-        display = _display_run(result)
-        assert display is not None
-        assert "FAILED" in display
-
-    def test_running_returns_none(self) -> None:
-        result = MagicMock()
-        result.run_status.status = "running"
-        assert _display_run(result) is None
 
 
 # =========================================================================

@@ -223,28 +223,6 @@ def _summarize_run(result: "TestResult") -> str:
     return status.status
 
 
-def _display_run(result: "TestResult") -> str | None:
-    """Human-friendly run message — only on completion or failure."""
-    if not result.run_status:
-        return None
-    status = result.run_status
-    if status.status == "completed":
-        p = status.progress
-        if p and p.cases.failed > 0:
-            return (
-                f"Tests completed: {p.cases.passed} passed, {p.cases.failed} FAILED "
-                f"in {status.duration_seconds:.1f}s."
-            )
-        elif p:
-            return f"Tests completed: {p.cases.passed} passed in {status.duration_seconds:.1f}s."
-        return "Tests completed."
-    elif status.status == "cancelled":
-        return "Test run was cancelled."
-    elif status.status == "failed":
-        return "Test run failed to start."
-    return None
-
-
 def _build_coverage_hint(
     coverage_artifacts: list[dict[str, str]],
     target_selectors: list[str] | None = None,
@@ -345,11 +323,7 @@ def _serialize_test_result(result: "TestResult") -> dict[str, Any]:
                 lines.append(f"{loc} {f.name}: {f.message}")
                 if f.traceback:
                     # First 3 meaningful lines of traceback
-                    tb_lines = [
-                        ln
-                        for ln in f.traceback.strip().splitlines()
-                        if ln.strip()
-                    ][:3]
+                    tb_lines = [ln for ln in f.traceback.strip().splitlines() if ln.strip()][:3]
                     lines.extend(f"  {ln.strip()}" for ln in tb_lines)
             output["failures"] = "\n".join(lines)
 
@@ -821,12 +795,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                         # Keep just the relative-looking portion
                         for prefix in (str(app_ctx.repo_root) + "/",):
                             if rel_path.startswith(prefix):
-                                rel_path = rel_path[len(prefix):]
+                                rel_path = rel_path[len(prefix) :]
                                 break
                     sev = d.severity.value[0].upper()  # W/E/I
-                    issue_lines.append(
-                        f"{rel_path}:{d.line}:{d.column} {sev} {d.code} {d.message}"
-                    )
+                    issue_lines.append(f"{rel_path}:{d.line}:{d.column} {sev} {d.code} {d.message}")
 
             result["lint"] = {
                 "status": lint_result.status,
@@ -994,9 +966,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     }
                     if _hook_result and not _hook_result.success:
                         fixed = _hook_result.modified_files or []
-                        commit_result["hook_warning"] = (
-                            f"HOOK_AUTO_FIXED: {', '.join(fixed)}"
-                        )
+                        commit_result["hook_warning"] = f"HOOK_AUTO_FIXED: {', '.join(fixed)}"
                     if push:
                         app_ctx.git_ops.push(remote="origin", force=False)
                         commit_result["pushed"] = "origin"
@@ -1027,10 +997,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                                 f"{c.get('name', '?')} ({c.get('path', '?').split('/')[-1]})"
                                 for c in changes[:15]
                             ]
-                            commit_result["diff"] = (
-                                f"{diff_summary}: "
-                                + ", ".join(change_lines)
-                            )
+                            commit_result["diff"] = f"{diff_summary}: " + ", ".join(change_lines)
                         elif diff_summary:
                             commit_result["diff"] = diff_summary
                     except Exception:
