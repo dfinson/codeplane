@@ -516,6 +516,7 @@ async def _run_tiered_tests(
     total_failed = 0
     all_test_results: list[Any] = []
     all_batch_results: list[Any] = []
+    all_batch_coverage: list[Any] = []  # Coverage artifacts from batched runs
     tier_log: list[dict[str, Any]] = []
     final_status = "completed"
     stopped_at_hop: int | None = None
@@ -559,10 +560,14 @@ async def _run_tiered_tests(
         import asyncio
         import uuid
 
-        hop_batch_results: list[Any] = []
+        hop_batch_results: list[tuple[Any, Any]] = []
         if batch_groups:
+            # coverage_dir is passed through to batch execution
+            cov_dir_path = Path(coverage_dir) if coverage_dir else None
 
-            async def run_batch(group: list[Any]) -> Any:
+            async def run_batch(
+                group: list[Any], cov_path: Path | None = cov_dir_path
+            ) -> tuple[Any, Any]:
                 artifact_dir = (
                     app_ctx.repo_root / ".codeplane" / "artifacts" / "tests" / uuid.uuid4().hex[:8]
                 )
@@ -573,11 +578,16 @@ async def _run_tiered_tests(
                     test_filter=test_filter,
                     tags=None,
                     timeout_sec=300,
+                    coverage_dir=cov_path,
                 )
 
             batch_tasks = [asyncio.create_task(run_batch(g)) for g in batch_groups]
             hop_batch_results = await asyncio.gather(*batch_tasks)
-            all_batch_results.extend(hop_batch_results)
+            # Separate results and coverage artifacts
+            for result, cov_artifact in hop_batch_results:
+                all_batch_results.append(result)
+                if cov_artifact:
+                    all_batch_coverage.append(cov_artifact)
 
         # Aggregate results for this tier
         tier_passed = 0
@@ -594,7 +604,7 @@ async def _run_tiered_tests(
             tier_duration += rs.duration_seconds
             all_test_results.append(solo_result)
 
-        for br in hop_batch_results:
+        for br in all_batch_results:
             tier_passed += br.passed
             tier_failed += br.failed
             tier_total += br.total
@@ -632,6 +642,15 @@ async def _run_tiered_tests(
     # Build combined serialized result
     combined: dict[str, Any] = {}
     if all_test_results and all_test_results[0].run_status:
+        # Merge batch coverage artifacts into the solo result's coverage
+        if all_batch_coverage:
+            existing_cov = all_test_results[0].run_status.coverage or []
+            for cov in all_batch_coverage:
+                existing_cov.append(
+                    {"format": cov.format, "path": str(cov.path), "pack_id": cov.pack_id}
+                )
+            all_test_results[0].run_status.coverage = existing_cov
+
         combined = _serialize_test_result(
             all_test_results[0],
             coverage_filter_paths=coverage_filter_paths,
@@ -643,13 +662,23 @@ async def _run_tiered_tests(
             combined["failed"] = combined.get("failed", 0) + br.failed
             combined["skipped"] = combined.get("skipped", 0) + br.skipped
     elif all_batch_results:
-        # Only batched targets, no solo
+        # Only batched targets, no solo - build coverage from batch artifacts
         combined = {
             "status": "completed",
             "passed": sum(br.passed for br in all_batch_results),
             "failed": sum(br.failed for br in all_batch_results),
             "skipped": sum(br.skipped for br in all_batch_results),
         }
+        # Add coverage from batch runs
+        if all_batch_coverage:
+            batch_cov_dicts = [
+                {"format": c.format, "path": str(c.path), "pack_id": c.pack_id}
+                for c in all_batch_coverage
+            ]
+            combined["coverage"] = _build_coverage_text(
+                batch_cov_dicts,
+                filter_paths=coverage_filter_paths,
+            )
 
     # Compact tier execution as text string
     tier_parts: list[str] = []
