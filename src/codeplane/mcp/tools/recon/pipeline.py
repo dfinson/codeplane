@@ -1029,7 +1029,9 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         t_total = time.monotonic()
 
         # ── Consecutive recon call gating ──
-        # Env var bypass for benchmarking
+        # TODO(dave01): Remove this override before merging to main.
+        # Temporarily force-bypass gating for development/testing.
+        os.environ["CODEPLANE_RECON_GATE_BYPASS"] = "1"
         gate_bypass = os.environ.get("CODEPLANE_RECON_GATE_BYPASS", "") == "1"
 
         if not gate_bypass:
