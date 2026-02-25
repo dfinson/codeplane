@@ -51,6 +51,7 @@ from codeplane.mcp.tools.recon.models import (
 from codeplane.mcp.tools.recon.parsing import parse_task
 from codeplane.mcp.tools.recon.scoring import (
     assign_tiers,
+    compute_anchor_floor,
     compute_noise_metric,
 )
 
@@ -402,6 +403,36 @@ async def _file_centric_pipeline(
 
     # 5. Two-elbow tier assignment
     file_candidates = assign_tiers(file_candidates)
+
+    # 5.1  Anchor-floor pruning — demote FULL_FILE files below the
+    #       data-driven floor derived from explicit/pinned anchors.
+    #       compute_anchor_floor uses MAD of anchor scores only;
+    #       no arbitrary constants.  When no anchors exist (Q3 open
+    #       prompts, no seeds/pins), floor = 0.0 → no-op.
+    anchor_indices = [i for i, fc in enumerate(file_candidates) if fc.has_explicit_mention]
+    anchor_floor = compute_anchor_floor(
+        [fc.combined_score for fc in file_candidates],
+        anchor_indices,
+    )
+    anchor_demoted = 0
+    if anchor_floor > 0:
+        for fc in file_candidates:
+            if (
+                fc.tier == OutputTier.FULL_FILE
+                and fc.combined_score < anchor_floor
+                and not fc.has_explicit_mention
+            ):
+                fc.tier = OutputTier.MIN_SCAFFOLD
+                anchor_demoted += 1
+    if anchor_demoted > 0:
+        log.info(
+            "recon.anchor_floor_demoted",
+            floor=round(anchor_floor, 4),
+            demoted=anchor_demoted,
+            anchors=len(anchor_indices),
+        )
+    diagnostics["anchor_floor"] = round(anchor_floor, 4)
+    diagnostics["anchor_floor_demoted"] = anchor_demoted
 
     # 5.5. Deterministic test co-retrieval via direct imports
     #       Single-hop query: find test files whose import_facts have
