@@ -1,0 +1,29 @@
+{
+  "run_id": "cpl-recon",
+  "aggregated_metrics": {
+    "number_of_records": 70,
+    "average_response_time_ms": 15169,
+    "cpl-retrieval - avg_precision": 0.077,
+    "cpl-retrieval - avg_recall": 0.9556,
+    "cpl-retrieval - avg_f1": 0.1411,
+    "cpl-retrieval - median_f1": 0.1281,
+    "cpl-retrieval - min_f1": 0.0702,
+    "cpl-retrieval - max_f1": 0.3518,
+    "cpl-retrieval - avg_noise_ratio": 0.923,
+    "cpl-retrieval - total_queries": 70,
+    "cpl-tier-align - avg_E_exact": 0.3662,
+    "cpl-tier-align - avg_E_found_any": 0.9396,
+    "cpl-tier-align - avg_C_exact": 0.2344,
+    "cpl-tier-align - avg_C_found_any": 0.9484,
+    "cpl-tier-align - avg_S_exact": 0.835,
+    "cpl-tier-align - avg_S_found_any": 0.9606,
+    "cpl-tier-align - avg_overall_exact": 0.4109,
+    "cpl-tier-align - total_queries": 70
+  },
+  "tags": {
+    "daemon_port": 7777,
+    "timeout": 120,
+    "experiment_version": "1.0",
+    "model_name": "cpl-recon"
+  }
+}
