@@ -1,220 +1,162 @@
-"""Structured coverage report generation.
+"""Coverage report generation — compact text output.
 
-This module transforms CoverageReport data into structured JSON output
-suitable for agent consumption. It replaces the old text-based coverage hints
-with a fully structured format.
-
-Output schema for build_summary:
-{
-    "summary": {
-        "total_files": int,
-        "covered_files": int,
-        "total_lines": int,
-        "covered_lines": int,
-        "line_coverage_percent": float,
-        "total_branches": int,
-        "covered_branches": int,
-        "branch_coverage_percent": float | null,
-        "total_functions": int,
-        "covered_functions": int,
-        "function_coverage_percent": float | null
-    },
-    "files": [
-        {
-            "path": str,
-            "total_lines": int,
-            "covered_lines": int,
-            "coverage_percent": float,
-            "missed_lines": [int, ...],  # Line numbers with 0 hits
-            "partial_branches": int | null
-        },
-        ...
-    ],
-    "source_format": str
-}
+Output format:
+    coverage: 85% (170/200 lines)
+    uncovered: report.py:37,39,42-48 | merge.py:15-20,45
 """
 
+from pathlib import Path
 from typing import Any
 
 from codeplane.testing.coverage.models import CoverageReport
 
 
-def compute_file_stats(
+def _normalize_path(path: str) -> str:
+    """Normalize path for matching (strip leading ./ and trailing /)."""
+    p = path.lstrip("./").rstrip("/")
+    return p
+
+
+def _path_matches(file_path: str, filter_paths: set[str]) -> bool:
+    """Check if file_path matches any path in filter_paths."""
+    normalized = _normalize_path(file_path)
+    for fp in filter_paths:
+        fp_norm = _normalize_path(fp)
+        if normalized == fp_norm:
+            return True
+        if normalized.endswith("/" + fp_norm) or normalized.endswith("\\" + fp_norm):
+            return True
+        if fp_norm.endswith("/" + normalized) or fp_norm.endswith("\\" + normalized):
+            return True
+    return False
+
+
+def _compress_ranges(lines: list[int]) -> str:
+    """Compress sorted line numbers into ranges: [1,2,3,5,7,8,9] -> '1-3,5,7-9'."""
+    if not lines:
+        return ""
+
+    ranges: list[str] = []
+    start = lines[0]
+    end = lines[0]
+
+    for line in lines[1:]:
+        if line == end + 1:
+            end = line
+        else:
+            ranges.append(f"{start}-{end}" if end > start else str(start))
+            start = end = line
+
+    ranges.append(f"{start}-{end}" if end > start else str(start))
+    return ",".join(ranges)
+
+
+def _file_basename(path: str) -> str:
+    """Extract filename from path."""
+    return Path(path).name
+
+
+def build_compact_summary(
     report: CoverageReport,
-) -> list[dict[str, Any]]:
-    """Compute per-file coverage statistics.
+    *,
+    filter_paths: set[str] | None = None,
+) -> str:
+    """Build compact text coverage summary.
+
+    Format:
+        coverage: 85% (170/200 lines)
+        uncovered: report.py:37,39,42-48 | merge.py:15-20,45
 
     Args:
-        report: The coverage report to analyze.
+        report: The coverage report to summarize.
+        filter_paths: If provided, only include files matching these paths.
 
     Returns:
-        List of dicts with per-file stats, sorted by path.
+        Compact text summary.
     """
-    file_stats = []
+    total_lines = 0
+    covered_lines = 0
+    uncovered_parts: list[str] = []
 
     for path in sorted(report.files.keys()):
+        if filter_paths is not None and not _path_matches(path, filter_paths):
+            continue
+
         fc = report.files[path]
+        total_lines += len(fc.lines)
+        covered_lines += sum(1 for hits in fc.lines.values() if hits > 0)
 
-        total_lines = len(fc.lines)
-        covered_lines = sum(1 for hits in fc.lines.values() if hits > 0)
+        # Collect uncovered lines
+        missed = sorted(line for line, hits in fc.lines.items() if hits == 0)
+        if missed:
+            filename = _file_basename(path)
+            ranges = _compress_ranges(missed)
+            uncovered_parts.append(f"{filename}:{ranges}")
 
-        # Missed lines (0 hits)
-        missed_lines = sorted(line for line, hits in fc.lines.items() if hits == 0)
+    if total_lines == 0:
+        return "coverage: no data"
 
-        # Branch stats
-        total_branches = len(fc.branches)
-        partial_branches = len(
+    percent = int(covered_lines / total_lines * 100)
+    header = f"coverage: {percent}% ({covered_lines}/{total_lines} lines)"
+
+    if not uncovered_parts:
+        return header
+
+    uncovered_text = " | ".join(uncovered_parts)
+    return f"{header}\nuncovered: {uncovered_text}"
+
+
+# Legacy functions kept for backward compatibility
+
+
+def compute_file_stats(
+    report: CoverageReport,
+    *,
+    filter_paths: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Compute per-file coverage statistics (legacy)."""
+    file_stats = []
+    for path in sorted(report.files.keys()):
+        if filter_paths is not None and not _path_matches(path, filter_paths):
+            continue
+        fc = report.files[path]
+        total = len(fc.lines)
+        covered = sum(1 for hits in fc.lines.values() if hits > 0)
+        missed = sorted(line for line, hits in fc.lines.items() if hits == 0)
+        pct = (covered / total * 100.0) if total > 0 else 100.0
+        file_stats.append(
             {
-                b.line
-                for b in fc.branches
-                if any(
-                    b2.line == b.line and b2.hits == 0 for b2 in fc.branches if b2.line == b.line
-                )
-                and any(
-                    b2.line == b.line and b2.hits > 0 for b2 in fc.branches if b2.line == b.line
-                )
+                "path": path,
+                "total_lines": total,
+                "covered_lines": covered,
+                "coverage_percent": round(pct, 2),
+                "missed_lines": missed,
             }
         )
-
-        # Coverage percent
-        coverage_percent = (covered_lines / total_lines * 100.0) if total_lines > 0 else 100.0
-
-        stats: dict[str, Any] = {
-            "path": path,
-            "total_lines": total_lines,
-            "covered_lines": covered_lines,
-            "coverage_percent": round(coverage_percent, 2),
-            "missed_lines": missed_lines,
-        }
-
-        # Only include branch info if there are branches
-        if total_branches > 0:
-            stats["partial_branches"] = partial_branches
-
-        file_stats.append(stats)
-
     return file_stats
 
 
 def build_summary(
     report: CoverageReport,
     *,
-    include_files: bool = True,
-    max_files: int | None = None,
-    max_missed_lines: int = 20,
+    filter_paths: set[str] | None = None,
+    **_kwargs: Any,
 ) -> dict[str, Any]:
-    """Build a structured coverage summary from a report.
-
-    Args:
-        report: The coverage report to summarize.
-        include_files: Whether to include per-file details.
-        max_files: Limit number of files (lowest coverage first). None = all.
-        max_missed_lines: Max missed lines to list per file.
-
-    Returns:
-        Structured dict suitable for JSON serialization.
-    """
-    # Compute overall statistics
+    """Build structured summary (legacy — prefer build_compact_summary)."""
     total_lines = 0
     covered_lines = 0
-    total_branches = 0
-    covered_branches = 0
-    total_functions = 0
-    covered_functions = 0
-
-    for fc in report.files.values():
+    for path, fc in report.files.items():
+        if filter_paths is not None and not _path_matches(path, filter_paths):
+            continue
         total_lines += len(fc.lines)
         covered_lines += sum(1 for hits in fc.lines.values() if hits > 0)
 
-        total_branches += len(fc.branches)
-        covered_branches += sum(1 for b in fc.branches if b.hits > 0)
-
-        total_functions += len(fc.functions)
-        covered_functions += sum(1 for f in fc.functions.values() if f.hits > 0)
-
-    line_coverage_percent = (covered_lines / total_lines * 100.0) if total_lines > 0 else 100.0
-
-    branch_coverage_percent = (
-        (covered_branches / total_branches * 100.0) if total_branches > 0 else None
-    )
-
-    function_coverage_percent = (
-        (covered_functions / total_functions * 100.0) if total_functions > 0 else None
-    )
-
-    covered_files = sum(
-        1
-        for fc in report.files.values()
-        if all(hits > 0 for hits in fc.lines.values()) and fc.lines
-    )
-
-    summary_dict: dict[str, Any] = {
-        "total_files": len(report.files),
-        "covered_files": covered_files,
-        "total_lines": total_lines,
-        "covered_lines": covered_lines,
-        "line_coverage_percent": round(line_coverage_percent, 2),
-    }
-
-    if total_branches > 0:
-        summary_dict["total_branches"] = total_branches
-        summary_dict["covered_branches"] = covered_branches
-        summary_dict["branch_coverage_percent"] = (
-            round(branch_coverage_percent, 2) if branch_coverage_percent else None
-        )
-
-    if total_functions > 0:
-        summary_dict["total_functions"] = total_functions
-        summary_dict["covered_functions"] = covered_functions
-        summary_dict["function_coverage_percent"] = (
-            round(function_coverage_percent, 2) if function_coverage_percent else None
-        )
-
-    result: dict[str, Any] = {
-        "summary": summary_dict,
+    pct = (covered_lines / total_lines * 100.0) if total_lines > 0 else 100.0
+    return {
+        "summary": {
+            "total_lines": total_lines,
+            "covered_lines": covered_lines,
+            "line_coverage_percent": round(pct, 2),
+        },
         "source_format": report.source_format,
     }
-
-    if include_files:
-        file_stats = compute_file_stats(report)
-
-        # Sort by coverage percent (lowest first) to surface problem areas
-        file_stats.sort(key=lambda f: f["coverage_percent"])
-
-        if max_files is not None:
-            file_stats = file_stats[:max_files]
-
-        # Truncate missed_lines lists
-        for fs in file_stats:
-            missed = fs.get("missed_lines", [])
-            if len(missed) > max_missed_lines:
-                fs["missed_lines"] = missed[:max_missed_lines]
-                fs["missed_lines_truncated"] = True
-
-        result["files"] = file_stats
-
-    return result
-
-
-def build_text_summary(report: CoverageReport) -> str:
-    """Build a concise text summary for display contexts.
-
-    This is a fallback for contexts where structured data isn't suitable.
-
-    Args:
-        report: The coverage report to summarize.
-
-    Returns:
-        Human-readable text summary.
-    """
-    total_lines = sum(len(fc.lines) for fc in report.files.values())
-    covered_lines = sum(
-        sum(1 for hits in fc.lines.values() if hits > 0) for fc in report.files.values()
-    )
-
-    if total_lines == 0:
-        return "No coverage data"
-
-    percent = covered_lines / total_lines * 100.0
-
-    return f"Coverage: {percent:.1f}% ({covered_lines}/{total_lines} lines)"

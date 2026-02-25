@@ -223,90 +223,59 @@ def _summarize_run(result: "TestResult") -> str:
     return status.status
 
 
-def _build_coverage_data(
+def _build_coverage_text(
     coverage_artifacts: list[dict[str, str]],
-    target_selectors: list[str] | None = None,
     filter_paths: set[str] | None = None,
-) -> dict[str, Any]:
-    """Build structured coverage data from artifacts.
+) -> str:
+    """Build compact coverage text from artifacts.
 
-    Parses all coverage artifacts, merges them, and returns a structured
-    summary suitable for agent consumption.
-
-    Args:
-        coverage_artifacts: List of coverage artifact dicts with 'path' and 'format'.
-        target_selectors: Test target selectors for metadata.
-        filter_paths: If provided, only include coverage for these source files.
-            Use this to scope coverage to changed files (excluding test files).
+    Returns text like:
+        coverage: 85% (170/200 lines)
+        uncovered: report.py:37,39,42-48 | merge.py:15-20,45
     """
     from codeplane.testing.coverage import (
         CoverageParseError,
-        build_summary,
+        CoverageReport,
+        build_compact_summary,
         merge,
         parse_artifact,
     )
 
     if not coverage_artifacts:
-        return {"status": "no_coverage_data"}
+        return "coverage: no data"
 
-    # Dedupe coverage artifacts by path
-    seen_paths: set[str] = set()
+    # Dedupe by path
+    seen: set[str] = set()
     deduped: list[dict[str, str]] = []
-    for cov in coverage_artifacts:
-        path = cov.get("path", "")
-        if path and path not in seen_paths:
-            seen_paths.add(path)
-            deduped.append(cov)
+    for c in coverage_artifacts:
+        p = c.get("path", "")
+        if p and p not in seen:
+            seen.add(p)
+            deduped.append(c)
 
-    # Parse all artifacts
-    reports = []
-    parse_errors: list[str] = []
-
+    # Parse all
+    reports: list[CoverageReport] = []
     for cov in deduped:
         path_str = cov.get("path", "")
         fmt = cov.get("format")
         if not path_str:
             continue
-
         try:
             report = parse_artifact(
                 Path(path_str),
                 format_id=fmt if fmt and fmt != "unknown" else None,
             )
             reports.append(report)
-        except CoverageParseError as e:
-            parse_errors.append(f"{path_str}: {e}")
+        except CoverageParseError:
+            pass
         except Exception as e:
-            log.debug("Failed to parse coverage artifact", path=path_str, error=str(e))
-            parse_errors.append(f"{path_str}: {e}")
+            log.debug("Coverage parse failed", path=path_str, error=str(e))
 
     if not reports:
-        result: dict[str, Any] = {"status": "parse_failed"}
-        if parse_errors:
-            result["errors"] = parse_errors
-        return result
+        return "coverage: parse failed"
 
-    # Merge reports if multiple
     merged = merge(*reports) if len(reports) > 1 else reports[0]
-
-    # Build structured summary (filtered to changed source files if provided)
-    summary = build_summary(merged, filter_paths=filter_paths, max_files=20, max_missed_lines=10)
-
-    # Add metadata
-    result = {
-        "status": "ok",
-        **summary,
-    }
-
-    if target_selectors:
-        result["test_targets"] = target_selectors[:20]
-        if len(target_selectors) > 20:
-            result["test_targets_truncated"] = len(target_selectors)
-
-    if parse_errors:
-        result["parse_warnings"] = parse_errors
-
-    return result
+    return build_compact_summary(merged, filter_paths=filter_paths)
 
 
 def _serialize_test_result(
@@ -362,9 +331,8 @@ def _serialize_test_result(
             output["diagnostics"] = "\n".join(diag_lines)
 
         if status.coverage:
-            output["coverage"] = _build_coverage_data(
+            output["coverage"] = _build_coverage_text(
                 status.coverage,
-                status.target_selectors,
                 filter_paths=coverage_filter_paths,
             )
 

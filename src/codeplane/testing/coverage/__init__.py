@@ -49,8 +49,8 @@ from codeplane.testing.coverage.parsers import (
     parse_artifact,
 )
 from codeplane.testing.coverage.report import (
+    build_compact_summary,
     build_summary,
-    build_text_summary,
     compute_file_stats,
 )
 
@@ -73,7 +73,7 @@ __all__ = [
     "merge_file_coverage",
     "merge_reports",
     # Report
+    "build_compact_summary",
     "build_summary",
-    "build_text_summary",
     "compute_file_stats",
 ]
