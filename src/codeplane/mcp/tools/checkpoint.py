@@ -486,8 +486,9 @@ def _partition_for_batching(
 
 
 # Default: run only direct tests (hop 0) for fast iteration.
-# When committing, escalate to all hops for thorough validation.
+# When committing, escalate to _COMMIT_MAX_TEST_HOPS for thorough validation.
 _DEFAULT_MAX_TEST_HOPS = 0
+_COMMIT_MAX_TEST_HOPS = 3
 
 
 async def _run_tiered_tests(
@@ -799,7 +800,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             description="Max import-graph hop depth for test selection. "
             "0 = direct tests only, 1 = direct + 1 transitive, etc. "
             "Default: 0 (direct only) for fast iteration; auto-escalates "
-            "to all hops when commit_message is set.",
+            "to 3 hops when commit_message is set.",
         ),
         commit_message: str | None = Field(
             None,
@@ -953,12 +954,12 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
                     # Resolve effective max_test_hops:
                     # - Explicit override from agent wins
-                    # - Auto-escalate to all hops when committing
-                    # - Default: _DEFAULT_MAX_TEST_HOPS (1) for fast iteration
+                    # - Auto-escalate to _COMMIT_MAX_TEST_HOPS when committing
+                    # - Default: _DEFAULT_MAX_TEST_HOPS (0) for fast iteration
                     if max_test_hops is not None:
                         effective_hops = max_test_hops
                     elif commit_message:
-                        effective_hops = 99  # unlimited — thorough on commit
+                        effective_hops = _COMMIT_MAX_TEST_HOPS
                     else:
                         effective_hops = _DEFAULT_MAX_TEST_HOPS
 
