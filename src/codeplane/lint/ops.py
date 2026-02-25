@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from codeplane.core.languages import detect_language_family
 from codeplane.lint.models import LintResult, ToolCategory, ToolResult
 from codeplane.lint.tools import LintTool, registry
 
@@ -179,9 +180,23 @@ class LintOps:
                 duration_seconds=time.time() - start_time,
             )
 
-        # Run tools concurrently
-        tasks = [self._run_tool(tool, resolved_paths, dry_run) for tool in tools_to_run]
-        results = await asyncio.gather(*tasks)
+        # Run tools concurrently, filtering paths per-tool by language
+        tasks: list[asyncio.Task[ToolResult]] = []
+        skipped: list[ToolResult] = []
+        for tool in tools_to_run:
+            tool_paths = self._filter_paths_for_tool(tool, resolved_paths, self._repo_root)
+            if not tool_paths:
+                skipped.append(
+                    ToolResult(
+                        tool_id=tool.tool_id,
+                        status="skipped",
+                        error_detail="No files match tool languages",
+                        duration_seconds=0.0,
+                    )
+                )
+                continue
+            tasks.append(asyncio.ensure_future(self._run_tool(tool, tool_paths, dry_run)))
+        results = [*skipped, *(await asyncio.gather(*tasks))]
 
         # Check for any tools that errored - provide agentic hint
         errored_tools = [r for r in results if r.status == "error"]
@@ -281,6 +296,19 @@ class LintOps:
         if not paths:
             return [self._repo_root]
         return [self._repo_root / p for p in paths if (self._repo_root / p).exists()]
+
+    @staticmethod
+    def _filter_paths_for_tool(tool: LintTool, paths: list[Path], repo_root: Path) -> list[Path]:
+        """Filter paths to only include files whose language matches the tool.
+
+        When the full repo root is passed (no explicit files), returns it
+        unchanged — the tool will discover its own files.  When explicit
+        file paths are given, only keeps files whose detected language is
+        in the tool's ``languages`` set.
+        """
+        if len(paths) == 1 and paths[0] == repo_root:
+            return paths
+        return [p for p in paths if detect_language_family(p.name) in tool.languages]
 
     async def _run_tool(
         self,
@@ -431,6 +459,14 @@ class LintOps:
             cmd.extend(tool.dry_run_args or tool.check_args)
         else:
             cmd.extend(tool.fix_args or tool.check_args)
+
+        # When explicit file paths are given (not just the repo root), inject
+        # --force-exclude (or equivalent) so the tool still honours its own
+        # exclude / extend-exclude config.  Without this flag most tools
+        # (ruff, mypy, etc.) skip exclusion checks for explicitly named files.
+        explicit_paths = paths and not (len(paths) == 1 and paths[0] == self._repo_root)
+        if explicit_paths and tool.force_exclude_flag:
+            cmd.append(tool.force_exclude_flag)
 
         # Add paths
         if tool.paths_position == "end" and paths:

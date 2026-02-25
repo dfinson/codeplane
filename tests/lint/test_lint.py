@@ -1002,6 +1002,67 @@ class TestLintOps:
             paths = ops._resolve_paths(["deleted.py", "also_deleted.py"])
             assert paths == []
 
+    def test_filter_paths_for_tool_repo_root_passes_through(self) -> None:
+        """When repo root is passed, all tools get it unfiltered."""
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            coordinator = create_mock_coordinator()
+            ops = LintOps(root, coordinator)
+
+            tool = registry.get("python.ruff")
+            assert tool is not None
+
+            result = ops._filter_paths_for_tool(tool, [root], root)
+            assert result == [root]
+
+    def test_filter_paths_for_tool_keeps_matching_language(self) -> None:
+        """Python files pass through to a python tool."""
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            coordinator = create_mock_coordinator()
+            ops = LintOps(root, coordinator)
+
+            tool = registry.get("python.ruff")
+            assert tool is not None
+
+            paths = [root / "app.py", root / "lib.py"]
+            result = ops._filter_paths_for_tool(tool, paths, root)
+            assert result == paths
+
+    def test_filter_paths_for_tool_removes_wrong_language(self) -> None:
+        """Non-python files (yaml, json, md) are filtered out of python tools."""
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            coordinator = create_mock_coordinator()
+            ops = LintOps(root, coordinator)
+
+            tool = registry.get("python.ruff")
+            assert tool is not None
+
+            paths = [
+                root / "app.py",
+                root / "config.yaml",
+                root / "data.json",
+                root / "README.md",
+                root / "lib.py",
+            ]
+            result = ops._filter_paths_for_tool(tool, paths, root)
+            assert result == [root / "app.py", root / "lib.py"]
+
+    def test_filter_paths_for_tool_returns_empty_when_no_match(self) -> None:
+        """When no files match the tool's language, return empty list."""
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            coordinator = create_mock_coordinator()
+            ops = LintOps(root, coordinator)
+
+            tool = registry.get("python.ruff")
+            assert tool is not None
+
+            paths = [root / "config.yaml", root / "data.json"]
+            result = ops._filter_paths_for_tool(tool, paths, root)
+            assert result == []
+
     @pytest.mark.asyncio
     async def test_get_file_count_from_index(self) -> None:
         with TemporaryDirectory() as tmpdir:
