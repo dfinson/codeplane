@@ -487,10 +487,6 @@ class TreeSitterParser:
         root = result.root_node
         if lang == "csharp":
             return self._declared_module_csharp(root)
-        elif lang == "haskell":
-            return self._declared_module_haskell(root)
-        elif lang == "elixir":
-            return self._declared_module_elixir(root)
         elif lang == "ruby":
             return self._declared_module_ruby(root)
         elif lang == "ocaml":
@@ -512,6 +508,21 @@ class TreeSitterParser:
         cursor = _TSQueryCursor(query)
         matches: list[tuple[int, dict[str, list[Any]]]] = cursor.matches(root)
         if not matches:
+            return None
+
+        # For Elixir, filter to only defmodule calls
+        # (Python bindings don't auto-filter #eq? predicates)
+        if pack.name == "elixir":
+            for _, captures in matches:
+                target_nodes = captures.get("_target", [])
+                if (
+                    target_nodes
+                    and target_nodes[0].text
+                    and target_nodes[0].text.decode("utf-8") == "defmodule"
+                ):
+                    module_nodes = captures.get("module_node", [])
+                    if module_nodes and module_nodes[0].text:
+                        return str(module_nodes[0].text.decode("utf-8"))
             return None
 
         module_node = matches[0][1].get("module_node", [None])[0]
@@ -545,6 +556,15 @@ class TreeSitterParser:
                     ]
                     return ".".join(parts) if parts else None
             return None
+
+        elif lang == "haskell":
+            # module node contains module_id children
+            parts = [
+                c.text.decode("utf-8")
+                for c in module_node.children
+                if c.type == "module_id" and c.text
+            ]
+            return ".".join(parts) if parts else None
 
         # Generic: try using node text directly
         return module_node.text.decode("utf-8") if module_node.text else None
@@ -637,47 +657,6 @@ class TreeSitterParser:
             if child.type == "package_identifier":
                 return child.text.decode("utf-8") if child.text else None
         return None
-
-    def _declared_module_haskell(self, root: Any) -> str | None:
-        """Extract `module Data.List.Utils where` → 'Data.List.Utils'."""
-        for child in root.children:
-            if child.type == "header":
-                for sub in child.children:
-                    if sub.type == "module" and sub.child_count > 0:
-                        # The module node contains module_id parts with dots
-                        parts = [
-                            c.text.decode("utf-8")
-                            for c in sub.children
-                            if c.type == "module_id" and c.text
-                        ]
-                        return ".".join(parts) if parts else None
-        return None
-
-    def _declared_module_elixir(self, root: Any) -> str | None:
-        """Extract `defmodule MyApp.Accounts do ... end` → 'MyApp.Accounts'."""
-
-        def _find_defmodule(node: Any) -> str | None:
-            if (
-                node.type == "call"
-                and node.child_count >= 2
-                and node.children[0].type == "identifier"
-                and node.children[0].text
-                and node.children[0].text.decode("utf-8") == "defmodule"
-            ):
-                # Second child is 'arguments' containing an 'alias' node
-                args = node.children[1]
-                if args.type == "arguments":
-                    for sub in args.children:
-                        if sub.type == "alias" and sub.text:
-                            return str(sub.text.decode("utf-8"))
-                return None
-            for child in node.children:
-                result = _find_defmodule(child)
-                if result is not None:
-                    return result
-            return None
-
-        return _find_defmodule(root)
 
     def _declared_module_ruby(self, root: Any) -> str | None:
         """Extract nested `module A; module B; end; end` → 'A::B'.

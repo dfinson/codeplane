@@ -2051,6 +2051,12 @@ ELIXIR_PACK = LanguagePack(
     import_query="""
         (call) @import_node
     """,
+    declared_module_query="""
+        (call
+            (identifier) @_target
+            (arguments
+                (alias) @module_node))
+    """,
     declared_module_handler="_declared_module_elixir",
 )
 
@@ -2149,6 +2155,9 @@ HASKELL_PACK = LanguagePack(
     type_config=_HASKELL_TYPES,
     import_query="""
         (import) @import_node
+    """,
+    declared_module_query="""
+        (header (module) @module_node)
     """,
     declared_module_handler="_declared_module_haskell",
 )
