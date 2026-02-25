@@ -207,10 +207,14 @@ class RepoMapper:
     ) -> list[tuple[str, str | None, int | None]]:
         """Single query for file data, filtered once.
 
-        Returns list of (path, language_family, line_count) tuples.
-        All sections that need File data share this result set.
+        Returns list of (path, language_family, line_count) tuples
+        sorted by path.  All sections that need File data share this
+        result set.  Path ordering is essential so that ``limit``-based
+        truncation in ``_build_structure`` produces a balanced cross-section
+        of the repo (e.g. ``benchmarking/ → src/ → tests/``) instead of
+        being biased by SQLite insertion order.
         """
-        stmt = select(File.path, File.language_family, File.line_count)
+        stmt = select(File.path, File.language_family, File.line_count).order_by(File.path)
         rows = list(self._session.exec(stmt).all())
         return [
             (path, lang, lines)

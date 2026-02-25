@@ -281,3 +281,44 @@ class TestRepoMapper:
         names = [s.name for s in result.public_api]
         assert "MyClass" in names
         assert "helper_func" in names
+
+    def test_given_many_files_when_limit_applied_then_structure_sorted_by_path(
+        self, db_session: Session, tmp_path: Path
+    ) -> None:
+        """Limit-based truncation uses path order, not insertion order.
+
+        Regression: when files were inserted tests/ first, src/ second,
+        a limit=10 slice would only contain tests/ files because the
+        query had no ORDER BY.
+        """
+        # Given — insert tests/ files first, then src/ files
+        # (simulates real indexing order that triggered the bug)
+        for i in range(15):
+            db_session.add(
+                File(
+                    path=f"tests/test_{i:02d}.py",
+                    language_family="python",
+                    line_count=10,
+                )
+            )
+        for i in range(5):
+            db_session.add(
+                File(
+                    path=f"src/mod_{i:02d}.py",
+                    language_family="python",
+                    line_count=20,
+                )
+            )
+        db_session.commit()
+
+        mapper = RepoMapper(db_session, tmp_path)
+
+        # When — limit=10 (less than total 20 files)
+        result = mapper.map(include=["structure"], limit=10)
+
+        # Then — src/ files should appear because path sort puts them first
+        assert result.structure is not None
+        dir_names = [n.name for n in result.structure.tree if n.is_dir]
+        assert "src" in dir_names, (
+            f"src/ missing from structure with limit=10; got dirs: {dir_names}"
+        )
