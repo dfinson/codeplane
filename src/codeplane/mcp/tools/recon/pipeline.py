@@ -1259,6 +1259,14 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         ]
         if reasons_str:
             hint_parts.append(f"Top files: {reasons_str}.")
+        if summary_files:
+            cache_path = f".codeplane/cache/recon_result/{recon_id}.json"
+            hint_parts.append(
+                f"Summary entries contain lite scaffolds (symbol names + imports). "
+                f"Scan for missed edit targets: "
+                f"jq '[.summary_only[] | {{path, summary}}]' {cache_path} "
+                f"— then batch any relevant files into ONE read_source call."
+            )
         hint_parts.append(
             "Start with full_file entries — these have complete source. "
             "Use read_source to expand min_scaffold files as needed. "
