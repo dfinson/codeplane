@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "evee-ms-core",
     "httpx",
+    "pyyaml",
 ]
 
 [build-system]
