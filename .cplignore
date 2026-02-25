@@ -2,3 +2,6 @@
 benchmarking/evee/results/baseline/
 benchmarking/evee/results/0.1.dev120-8cdf362e/
 benchmarking/evee/results/recon_*.json
+
+# Benchmark experiment output (EVEE results)
+benchmarking/cpl_bench/experiments/output/
