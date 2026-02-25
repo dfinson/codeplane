@@ -2,7 +2,6 @@
 
 Tests:
 - parse_task: task description parsing (keywords, paths, symbols)
-- _trim_to_budget: budget assembly (tier-based)
 - register_tools: tool wiring
 - ArtifactKind: artifact classification
 - TaskIntent: intent extraction
@@ -34,11 +33,9 @@ from codeplane.mcp.tools.recon import (
     _detect_stacktrace_driven,
     _detect_test_driven,
     _enrich_file_candidates,
-    _estimate_bytes,
     _extract_intent,
     _extract_negative_mentions,
     _read_lines,
-    _trim_to_budget,
     assign_tiers,
     compute_anchor_floor,
     compute_noise_metric,
@@ -235,15 +232,6 @@ class TestReadLines:
     def test_missing_file(self, tmp_path: Path) -> None:
         result = _read_lines(tmp_path / "nope.py", 1, 5)
         assert result == ""
-
-
-class TestEstimateBytes:
-    """Tests for _estimate_bytes."""
-
-    def test_simple_dict(self) -> None:
-        obj = {"key": "value"}
-        result = _estimate_bytes(obj)
-        assert result > 0
 
 
 class TestReconRegistration:
@@ -1068,36 +1056,6 @@ class TestNoiseMetric:
         scores = [0.5, 0.49, 0.48, 0.47, 0.46, 0.45, 0.44]
         noise = compute_noise_metric(scores)
         assert noise > 0.3
-
-
-# ---------------------------------------------------------------------------
-# Tier-based budget trimming tests
-# ---------------------------------------------------------------------------
-
-
-class TestTierTrimming:
-    """Test budget trimming for tier-based (v6) responses."""
-
-    def test_no_trim_when_under_budget(self) -> None:
-        response = {
-            "summary_only": [{"path": "a.py"}],
-            "min_scaffold": [{"path": "b.py"}],
-            "full_file": [{"path": "c.py", "content": "x = 1"}],
-            "files": [],
-        }
-        result = _trim_to_budget(response, 100_000)
-        assert len(result["summary_only"]) == 1
-
-    def test_summary_only_trimmed_first(self) -> None:
-        """summary_only entries are trimmed before scaffold."""
-        response = {
-            "summary_only": [{"path": f"s{i}.py", "summary_line": "x" * 5000} for i in range(20)],
-            "min_scaffold": [{"path": "b.py", "scaffold": {"symbols": []}}],
-            "full_file": [{"path": "c.py", "content": "y = 1"}],
-            "files": [],
-        }
-        result = _trim_to_budget(response, 500)
-        assert len(result["summary_only"]) < 20
 
 
 # ---------------------------------------------------------------------------

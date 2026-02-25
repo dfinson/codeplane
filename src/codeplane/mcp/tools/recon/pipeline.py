@@ -29,7 +29,6 @@ from pydantic import Field
 
 from codeplane.mcp.tools.recon.assembly import (
     _build_failure_actions,
-    _trim_to_budget,
 )
 from codeplane.mcp.tools.recon.harvesters import (
     _enrich_candidates,
@@ -43,7 +42,6 @@ from codeplane.mcp.tools.recon.harvesters import (
     _merge_candidates,
 )
 from codeplane.mcp.tools.recon.models import (
-    _INTERNAL_BUDGET_BYTES,
     FileCandidate,
     OutputTier,
     ParsedTask,
@@ -1055,7 +1053,6 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
 
         coordinator = app_ctx.coordinator
         repo_root = coordinator.repo_root
-        budget = _INTERNAL_BUDGET_BYTES
 
         # ── File-centric pipeline ──
         (
@@ -1110,12 +1107,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                     try:
                         raw = full_path.read_bytes()
                         if b"\x00" not in raw[:512]:
-                            text = raw.decode("utf-8", errors="replace")
-                            # Apply larger budget for full_file tier
-                            if len(text) > 50_000:
-                                entry["content"] = text[:50_000] + "\n... (truncated at 50KB)"
-                            else:
-                                entry["content"] = text
+                            entry["content"] = raw.decode("utf-8", errors="replace")
                     except Exception:  # noqa: BLE001
                         pass
                 if full_path.exists():
@@ -1202,17 +1194,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         diagnostics["total_ms"] = round((time.monotonic() - t_total) * 1000)
         response["diagnostics"] = diagnostics
 
-        # Budget trimming
-        response = _trim_to_budget(response, budget)
-
-        # Recompute tier lists from trimmed response (Bug fix: pre-trim
-        # counts were stale after _trim_to_budget drops entries)
-        full_files = response.get("full_file", [])
-        scaffold_files = response.get("min_scaffold", [])
-        summary_files = response.get("summary_only", [])
-        n_files = len(full_files) + len(scaffold_files) + len(summary_files)
-
-        # Agentic hint with expand_reason (uses post-trim counts)
+        # Agentic hint with expand_reason
         intent = parsed_task.intent
         top_paths = [f["path"] for f in full_files[:3]]
         top_paths_str = ", ".join(top_paths) if top_paths else "(none)"

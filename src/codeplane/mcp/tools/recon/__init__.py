@@ -7,7 +7,7 @@ Package layout (SOLID decomposition):
     harvesters.py  — File-embedding harvester + def enrichment   (O: extensible)
     scoring.py     — Two-elbow tier assignment, noise detection  (S: evaluation)
     expansion.py   — IO helpers, signature text, sha256          (S: context build)
-    assembly.py    — Budget trimming, failure actions             (S: response shape)
+    assembly.py    — Failure actions, response helpers            (S: response shape)
     pipeline.py    — File-centric orchestrator + register_tools  (D: composition)
 
 All public symbols are re-exported here:
@@ -21,8 +21,6 @@ from __future__ import annotations
 # --- assembly ---
 from codeplane.mcp.tools.recon.assembly import (
     _build_failure_actions,
-    _estimate_bytes,
-    _trim_to_budget,
 )
 
 # --- expansion ---
@@ -115,8 +113,6 @@ __all__ = [
     "_file_path_for_id",
     # Assembly
     "_build_failure_actions",
-    "_estimate_bytes",
-    "_trim_to_budget",
     # Pipeline
     "_file_centric_pipeline",
     "register_tools",

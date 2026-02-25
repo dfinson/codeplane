@@ -21,11 +21,6 @@ if TYPE_CHECKING:
 
 _INTERNAL_DEPTH = 2  # Graph expansion depth (backend-decided, not agent-facing)
 
-# Internal budget for pre-delivery response shaping (bytes).
-# This is NOT the MCP inline cap — it's a generous ceiling to avoid
-# pathologically huge payloads before the delivery layer applies its own cap.
-_INTERNAL_BUDGET_BYTES = 120_000
-
 # Barrel / index files (language-agnostic re-export patterns)
 _BARREL_FILENAMES = frozenset(
     {
