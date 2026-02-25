@@ -167,60 +167,94 @@ def _tree_to_text(
     return lines
 
 
-def _tree_to_compact_text(
+def _tree_to_hybrid_text(
     all_paths: list[tuple[str, int | None]],
-    *,
-    include_line_counts: bool = True,
 ) -> list[str]:
-    """Lossless compact tree from a flat file list.
+    """Lossless hybrid tree: indented directories with inline files.
 
-    Every filename and per-file line count is preserved.  Files are
-    grouped by their parent directory on a single line, eliminating
-    indentation overhead:
+    Combines directory hierarchy (for spatial understanding) with inline
+    file listings (for compactness).  Line counts are shown as ``name:N``;
+    files with zero/unknown line counts are listed without a suffix
+    (the header comment documents this convention).
+
+    Single-child directory chains are collapsed (``src/codeplane/`` instead
+    of ``src/`` → ``codeplane/``).
 
     Example output::
 
-        src/codeplane/cli/ __init__.py:3 clear.py:85 down.py:53
-        src/codeplane/core/ errors.py:80 logging.py:60
-        tests/cli/ test_main.py:40
-        . pyproject.toml:200 README.md:50
+        # files without :N have 0 lines
+        src/codeplane/
+          cli/ __init__.py | main.py:100 | init.py:50
+          core/ errors.py:80 | logging.py:60
+        tests/
+          cli/ test_main.py:40
+        pyproject.toml:200 | README.md:50
 
-    Root-level files appear under the ``.`` pseudo-directory.
+    Root-level files appear at indent level 0 at the end.
     """
-    from collections import defaultdict
 
-    dir_files: dict[str, list[str]] = defaultdict(list)
-    root_entries: list[str] = []
+    # ---- build trie ----
+    class _DirNode:
+        __slots__ = ("children", "files")
 
+        def __init__(self) -> None:
+            self.children: dict[str, _DirNode] = {}
+            self.files: list[str] = []
+
+    root = _DirNode()
     for path, lc in all_paths:
         parts = path.split("/")
         if len(parts) == 1:
-            root_entries.append(f"{path}:{lc or 0}" if include_line_counts else path)
+            # root-level file
+            root.files.append(f"{path}:{lc}" if lc else path)
         else:
-            d = "/".join(parts[:-1])
+            node = root
+            for p in parts[:-1]:
+                if p not in node.children:
+                    node.children[p] = _DirNode()
+                node = node.children[p]
             fname = parts[-1]
-            dir_files[d].append(f"{fname}:{lc or 0}" if include_line_counts else fname)
+            node.files.append(f"{fname}:{lc}" if lc else fname)
 
-    lines: list[str] = []
-    for d in sorted(dir_files):
-        lines.append(f"{d}/ {' '.join(dir_files[d])}")
-    if root_entries:
-        lines.append(f". {' '.join(root_entries)}")
+    # ---- render ----
+    def _render(node: _DirNode, indent: int) -> list[str]:
+        result: list[str] = []
+        for name in sorted(node.children):
+            child = node.children[name]
+            # collapse single-child chains with no files
+            chain = [name]
+            n = child
+            while len(n.children) == 1 and not n.files:
+                only = next(iter(n.children))
+                chain.append(only)
+                n = n.children[only]
 
+            label = "/".join(chain) + "/"
+            prefix = "  " * indent
+            if n.files:
+                result.append(f"{prefix}{label} {' | '.join(n.files)}")
+            else:
+                result.append(f"{prefix}{label}")
+            result.extend(_render(n, indent + 1))
+        return result
+
+    lines = ["# files without :N have 0 lines"]
+    lines.extend(_render(root, 0))
+    if root.files:
+        lines.append(" | ".join(root.files))
     return lines
 
 
 def _map_repo_sections_to_text(
     result: Any,
-    *,
-    include_line_counts: bool = True,
 ) -> dict[str, Any]:
-    """Convert map_repo result sections to compact text format.
+    """Convert map_repo result sections to hybrid text format.
 
     When ``all_paths`` is available on the structure, uses the lossless
-    compact format (one line per directory, files inline) which is ~28%
-    smaller than the indented tree.  Every filename and per-file line
-    count is preserved.
+    hybrid format (indented directory tree with inline files) which
+    gives both spatial hierarchy and compactness.  Every filename and
+    non-zero line count is preserved; zero-line files are listed without
+    a ``:N`` suffix (documented in a header comment).
 
     Same data as JSON serializers, but as flat lines.
     """
@@ -234,14 +268,9 @@ def _map_repo_sections_to_text(
 
     if result.structure:
         if result.structure.all_paths:
-            tree_lines = _tree_to_compact_text(
-                result.structure.all_paths,
-                include_line_counts=include_line_counts,
-            )
+            tree_lines = _tree_to_hybrid_text(result.structure.all_paths)
         else:
-            tree_lines = _tree_to_text(
-                result.structure.tree, include_line_counts=include_line_counts
-            )
+            tree_lines = _tree_to_text(result.structure.tree)
         sections["structure"] = {
             "root": result.structure.root,
             "file_count": result.structure.file_count,
@@ -1054,19 +1083,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         respect_gitignore: bool = Field(
             True, description="Honor .gitignore patterns (default: true)"
         ),
-        verbosity: Literal["full", "standard", "minimal"] = Field(
-            "full",
-            description=(
-                "Output detail level: full=all files with line counts, "
-                "standard=all files without line counts, "
-                "minimal=counts only (no tree)"
-            ),
-        ),
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Get repository mental model."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
-        include_line_counts = verbosity == "full"
 
         # Fetch data from coordinator
         result = await app_ctx.coordinator.map_repo(
@@ -1081,10 +1101,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         # Build overview
         overview = _build_overview(result)
 
-        sections_output = _map_repo_sections_to_text(
-            result,
-            include_line_counts=include_line_counts,
-        )
+        sections_output = _map_repo_sections_to_text(result)
 
         # Build output
         output: dict[str, Any] = {
@@ -1096,7 +1113,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         file_count = result.structure.file_count if result.structure else 0
         section_names = list(sections_output.keys())
         output["summary"] = _summarize_map(file_count, section_names, False)
-        output["preset_used"] = "synopsis" if include is None else "custom"
+        output["preset_used"] = "custom"
 
         from codeplane.mcp.delivery import wrap_existing_response
 
