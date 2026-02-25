@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from codeplane.index._internal.indexing.file_embedding import (
+    _DOC_MAX_COUNT,
     _build_config_defines,
     _build_embed_text,
     _build_enriched_chunks,
@@ -86,14 +87,6 @@ class TestCompactSig:
     def test_self_only(self) -> None:
         result = _compact_sig("reset", "(self)")
         assert result == "reset"
-
-    def test_with_return_type(self) -> None:
-        result = _compact_sig("get_count", "()", ret="int")
-        assert "-> int" in result
-
-    def test_with_parent_name(self) -> None:
-        result = _compact_sig("reset", "(self)", parent="RateLimiter")
-        assert "rate limiter reset" in result
 
 
 # ---------------------------------------------------------------------------
@@ -193,8 +186,8 @@ class TestBuildFileScaffold:
         assert "disconnect:" in result.lower()
         assert result.lower().count("describes") == 2
 
-    def test_docstrings_not_capped(self) -> None:
-        """All meaningful docstrings should be included with no arbitrary cap."""
+    def test_docstring_count_capped(self) -> None:
+        """Should cap docstrings at _DOC_MAX_COUNT."""
         defs = [
             {
                 "kind": "function",
@@ -202,10 +195,10 @@ class TestBuildFileScaffold:
                 "signature_text": "()",
                 "docstring": f"This is the docstring for function number {i} in the module.",
             }
-            for i in range(20)
+            for i in range(_DOC_MAX_COUNT + 5)
         ]
         result = build_file_scaffold("src/big.py", defs, [])
-        assert result.count("describes") == 20
+        assert result.count("describes") == _DOC_MAX_COUNT
 
     def test_dedup_imports(self) -> None:
         """Duplicate import sources should be deduplicated."""
@@ -237,43 +230,6 @@ class TestBuildFileScaffold:
         class_pos = defines_line.lower().find("class")
         func_pos = defines_line.lower().find("helper")
         assert class_pos < func_pos
-
-    def test_variable_definitions_in_scaffold(self) -> None:
-        """Variable, property, val, constant defs should appear in scaffold."""
-        defs = [
-            {"kind": "variable", "name": "MAX_RETRIES", "signature_text": ""},
-            {"kind": "property", "name": "is_active", "signature_text": ""},
-            {"kind": "function", "name": "run", "signature_text": "(self)"},
-        ]
-        result = build_file_scaffold("src/config.py", defs, [])
-        assert "max retries" in result.lower()
-        assert "is active" in result.lower()
-
-    def test_return_type_in_scaffold(self) -> None:
-        """Functions with return_type should include -> type in defines."""
-        defs = [
-            {
-                "kind": "function",
-                "name": "get_count",
-                "signature_text": "()",
-                "return_type": "int",
-            },
-        ]
-        result = build_file_scaffold("src/counter.py", defs, [])
-        assert "-> int" in result
-
-    def test_parent_name_in_method_scaffold(self) -> None:
-        """Methods should include their parent class name in defines."""
-        defs = [
-            {
-                "kind": "method",
-                "name": "reset",
-                "signature_text": "(self)",
-                "parent_name": "RateLimiter",
-            },
-        ]
-        result = build_file_scaffold("src/limiter.py", defs, [])
-        assert "rate limiter" in result.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -499,8 +455,8 @@ class TestBuildEnrichmentLines:
         assert "ab" not in result["S"]
         assert "true" not in result["S"]
 
-    def test_string_literals_no_budget_truncation(self) -> None:
-        """S signal includes all valid string literals without a char budget."""
+    def test_string_literals_budget(self) -> None:
+        """S signal respects the character budget."""
         defs = [
             {
                 "name": "f",
@@ -509,9 +465,11 @@ class TestBuildEnrichmentLines:
         ]
         result = _build_enrichment_lines(defs, [])
         assert "S" in result
-        # All 100 literals should be present (no truncation)
+        from codeplane.index._internal.indexing.file_embedding import _STRING_LIT_BUDGET_CHARS
+
+        # The mentions line prefix + content should stay within budget
         content_part = result["S"][len("mentions ") :]
-        assert content_part.count("literal_value_") == 100
+        assert len(content_part) <= _STRING_LIT_BUDGET_CHARS + 50  # allow for last item
 
     def test_full_imports_signal(self) -> None:
         """I signal: full dotted import path, not just last segment."""
@@ -561,16 +519,12 @@ class TestBuildEnrichmentLines:
         assert "property" in result["D"]
 
     def test_all_signals_present(self) -> None:
-        """All six signals should be generated when data is available."""
+        """All four signals should be generated when data is available."""
         defs = [
             {
                 "name": "handler",
                 "_string_literals": ["api_key", "secret_token"],
-                "_sem_facts": {
-                    "calls": ["authenticate", "validate_token"],
-                    "assigns": ["session", "user"],
-                    "raises": ["AuthError"],
-                },
+                "_sem_facts": {"calls": ["authenticate", "validate_token"]},
                 "decorators_json": '["@require_auth"]',
             }
         ]
@@ -580,38 +534,6 @@ class TestBuildEnrichmentLines:
         assert "I" in result
         assert "C" in result
         assert "D" in result
-        assert "F" in result
-        assert "E" in result
-
-    def test_field_assigns_signal(self) -> None:
-        """F signal: field assignment names from _sem_facts.assigns."""
-        defs = [
-            {
-                "name": "init",
-                "_sem_facts": {"assigns": ["database_url", "config", "x"]},
-            }
-        ]
-        result = _build_enrichment_lines(defs, [])
-        assert "F" in result
-        assert result["F"].startswith("fields ")
-        assert "database_url" in result["F"]
-        assert "config" in result["F"]
-        # Single-char 'x' should be excluded (len < 2)
-        assert ", x" not in result["F"]
-
-    def test_raises_signal(self) -> None:
-        """E signal: exception class names from _sem_facts.raises."""
-        defs = [
-            {
-                "name": "validate",
-                "_sem_facts": {"raises": ["ValueError", "AuthenticationError"]},
-            }
-        ]
-        result = _build_enrichment_lines(defs, [])
-        assert "E" in result
-        assert result["E"].startswith("raises ")
-        assert "ValueError" in result["E"]
-        assert "AuthenticationError" in result["E"]
 
     def test_dedup_calls(self) -> None:
         """Duplicate call names across defs should be deduplicated."""
@@ -641,7 +563,7 @@ class TestBuildEnrichmentLines:
 
 
 class TestBuildEnrichedChunks:
-    """Tests for enriched scaffold chunking (N-chunk split)."""
+    """Tests for enriched scaffold chunking (1-chunk and 2-chunk split)."""
 
     def test_single_chunk_small_scaffold(self) -> None:
         """Small enriched scaffold fits in one chunk."""
@@ -668,8 +590,8 @@ class TestBuildEnrichedChunks:
         assert import_lines[0] == "imports operating system"
 
     def test_two_chunk_split_large_scaffold(self) -> None:
-        """Large scaffold should split into multiple chunks, each with header."""
-        # Create a scaffold that exceeds _CHUNK_CHARS when enriched
+        """Large scaffold should split into 2 chunks."""
+        # Create a scaffold that exceeds _CHUNK_SPLIT_CHARS when enriched
         defs_text = ", ".join(f"function very_long_function_name_{i}(a, b, c)" for i in range(60))
         scaffold = (
             f"module large module with many definitions\nimports many_modules\ndefines {defs_text}"
@@ -681,15 +603,17 @@ class TestBuildEnrichedChunks:
             "D": "decorated dataclass, property, classmethod",
         }
         chunks = _build_enriched_chunks(scaffold, enrichment, "")
-        assert len(chunks) >= 2
-        # Every chunk starts with FILE_SCAFFOLD + module line
-        for chunk in chunks:
-            assert chunk.startswith("FILE_SCAFFOLD\nmodule ")
-        # Enrichment signals should appear somewhere across chunks
-        all_text = "\n".join(chunks)
-        assert "mentions " in all_text
-        assert "calls " in all_text
-        assert "decorated " in all_text
+        assert len(chunks) == 2
+        # Chunk 0: base scaffold (without enrichment signals)
+        assert "FILE_SCAFFOLD" in chunks[0]
+        assert "defines" in chunks[0]
+        assert "mentions" not in chunks[0]
+        # Chunk 1: module context + enrichment signals
+        assert "FILE_SCAFFOLD" in chunks[1]
+        assert "module " in chunks[1]
+        assert "mentions " in chunks[1]
+        assert "calls " in chunks[1]
+        assert "decorated " in chunks[1]
 
     def test_fallback_no_scaffold(self) -> None:
         """Without scaffold, falls back to truncated content."""
