@@ -167,6 +167,40 @@ class PytestPack(RunnerPack):
             cmd.extend(["-m", " or ".join(tags)])
         return cmd
 
+    def build_batch_command(
+        self,
+        targets: list[TestTarget],
+        *,
+        output_path: Path,
+        pattern: str | None = None,
+        tags: list[str] | None = None,
+        exec_ctx: RuntimeExecutionContext | None = None,
+    ) -> list[str] | None:
+        """Run multiple test files in a single pytest invocation."""
+        if not targets:
+            return None
+
+        # Use execution context if available
+        if exec_ctx:
+            tool_config = exec_ctx.get_test_runner(self.pack_id)
+            if tool_config and tool_config.available:
+                cmd = [tool_config.executable] + list(tool_config.base_args)
+            else:
+                cmd = ["pytest"]
+        else:
+            cmd = ["pytest"]
+
+        # Add all selectors (file paths) as positional args
+        for t in targets:
+            cmd.append(t.selector)
+
+        cmd.extend([f"--junitxml={output_path}", "--tb=short", "-q"])
+        if pattern:
+            cmd.extend(["-k", pattern])
+        if tags:
+            cmd.extend(["-m", " or ".join(tags)])
+        return cmd
+
     def parse_output(self, output_path: Path, stdout: str) -> ParsedTestSuite:  # noqa: ARG002
         from codeplane.testing.parsers import parse_junit_xml
 

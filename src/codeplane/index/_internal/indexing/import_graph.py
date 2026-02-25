@@ -43,6 +43,7 @@ class ImpactMatch:
     source_modules: list[str]  # modules it imports that were in the changed set
     confidence: Literal["high", "low"]
     reason: str
+    hop: int = 0  # graph distance: 0 = direct import/changed test, 1+ = transitive
 
 
 @dataclass
@@ -76,6 +77,24 @@ class ImportGraphResult:
     @property
     def low_confidence_tests(self) -> list[str]:
         return [m.test_file for m in self.matches if m.confidence == "low"]
+
+    @property
+    def max_hop(self) -> int:
+        """Highest hop distance among all matches."""
+        return max((m.hop for m in self.matches), default=0)
+
+    def tests_by_hop(self) -> dict[int, list[str]]:
+        """Group test file paths by hop distance.
+
+        Returns:
+            Dict mapping hop number to list of test file paths.
+            hop 0 = directly affected (changed test files + direct importers),
+            hop 1+ = transitively affected via re-export/barrel chains.
+        """
+        result: dict[int, list[str]] = {}
+        for m in self.matches:
+            result.setdefault(m.hop, []).append(m.test_file)
+        return result
 
 
 @dataclass
@@ -277,12 +296,17 @@ class ImportGraph:
         # that imports a barrel (re-export) file which in turn imports the
         # changed file should still be matched.  We do BFS up to a
         # reasonable depth to avoid runaway traversal.
+        #
+        # Track hop distance: hop 0 = direct import of changed file,
+        # hop 1+ = transitive through barrel/re-export chains.
         _MAX_HOPS = 5
         frontier: set[str] = set(changed_files)
         visited: set[str] = set(frontier)
         all_rp_rows: list[tuple[str, str | None]] = []
+        # Map test_file -> earliest hop at which it was discovered
+        test_hop_distance: dict[str, int] = {}
 
-        for _hop in range(_MAX_HOPS):
+        for hop in range(_MAX_HOPS):
             if not frontier:
                 break
             rp_stmt = (
@@ -299,6 +323,9 @@ class ImportGraph:
                 if importer_path in self._test_file_paths:
                     # This is a test file — record the match
                     all_rp_rows.append((importer_path, src_literal))
+                    # Record earliest hop distance
+                    if importer_path not in test_hop_distance:
+                        test_hop_distance[importer_path] = hop
                 elif importer_path not in visited:
                     # Non-test file that imports something in our frontier —
                     # it might be a barrel/re-export, so keep tracing
@@ -399,12 +426,19 @@ class ImportGraph:
                 reason = f"imports child of changed module: {', '.join(unique_mods)}"
             else:
                 reason = f"imports parent module {', '.join(unique_mods)}"
+
+            # Hop distance: module-name matches (Step 3) are hop 0 (direct).
+            # resolved_path matches use the BFS hop distance from Step 3b.
+            # If a test was found by both paths, use the earliest (lowest hop).
+            hop = test_hop_distance.get(test_path, 0)
+
             matches.append(
                 ImpactMatch(
                     test_file=test_path,
                     source_modules=unique_mods,
                     confidence=confidence,
                     reason=reason,
+                    hop=hop,
                 )
             )
 
@@ -420,6 +454,7 @@ class ImportGraph:
                         source_modules=[],
                         confidence="high",
                         reason="test file directly changed",
+                        hop=0,
                     )
                 )
 

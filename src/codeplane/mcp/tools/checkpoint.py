@@ -447,6 +447,337 @@ def _summarize_verify(
 
 
 # =============================================================================
+# Tiered Test Execution
+# =============================================================================
+
+# Targets with estimated_cost at or below this threshold are batched together
+# into a single subprocess call when they share the same runner + workspace.
+_BATCH_COST_THRESHOLD = 1.0
+
+
+def _assign_target_hops(
+    targets: list[Any],
+    graph_result: Any,
+    repo_root: Path,
+) -> dict[int, list[Any]]:
+    """Map test targets to their import-graph hop distance.
+
+    Returns dict[hop_number, list_of_targets].  Targets that don't match any
+    hop in the graph result (e.g., discovered-but-not-in-graph) default to
+    hop 0 to ensure they always run.
+    """
+    from codeplane.index._internal.indexing.import_graph import ImportGraphResult
+
+    assert isinstance(graph_result, ImportGraphResult)
+    tests_by_hop = graph_result.tests_by_hop()
+
+    # Build reverse map: test_file -> hop
+    file_to_hop: dict[str, int] = {}
+    for hop, files in tests_by_hop.items():
+        for f in files:
+            if f not in file_to_hop:
+                file_to_hop[f] = hop
+
+    # Map targets to hops via _target_matches_affected_files logic
+    hop_targets: dict[int, list[Any]] = {}
+    for target in targets:
+        ws = Path(target.workspace_root)
+        sel = _normalize_selector(target.selector)
+        scope_abs = ws / sel if sel else ws
+
+        try:
+            scope_rel = str(scope_abs.relative_to(repo_root))
+        except ValueError:
+            scope_rel = target.selector
+
+        # Find the hop for this target's file path
+        if scope_rel in file_to_hop:
+            hop = file_to_hop[scope_rel]
+        else:
+            # Target didn't match directly — check prefix matching
+            hop = 0  # default to hop 0 (always run)
+            for fpath, fhop in file_to_hop.items():
+                if fpath == scope_rel or fpath.startswith(scope_rel + "/"):
+                    hop = fhop
+                    break
+
+        hop_targets.setdefault(hop, []).append(target)
+
+    return hop_targets
+
+
+def _partition_for_batching(
+    targets: list[Any],
+) -> tuple[list[list[Any]], list[Any]]:
+    """Split targets into batchable groups and solo targets.
+
+    Batchable: multiple targets that share the same (runner_pack_id,
+    workspace_root) and all have estimated_cost <= _BATCH_COST_THRESHOLD.
+
+    Solo: targets with higher estimated cost, or unique runner/workspace
+    combinations.
+
+    Returns (batch_groups, solo_targets).
+    """
+    from collections import defaultdict
+
+    # Group by (runner_pack_id, workspace_root)
+    groups: dict[tuple[str, str], list[Any]] = defaultdict(list)
+    for t in targets:
+        key = (t.runner_pack_id, t.workspace_root)
+        groups[key].append(t)
+
+    batch_groups: list[list[Any]] = []
+    solo_targets: list[Any] = []
+
+    for _key, group in groups.items():
+        # Separate low-cost and high-cost targets
+        low_cost = [t for t in group if t.estimated_cost <= _BATCH_COST_THRESHOLD]
+        high_cost = [t for t in group if t.estimated_cost > _BATCH_COST_THRESHOLD]
+
+        solo_targets.extend(high_cost)
+
+        if len(low_cost) >= 2:
+            # Worth batching: 2+ targets save subprocess overhead
+            batch_groups.append(low_cost)
+        else:
+            # Single target — no point batching
+            solo_targets.extend(low_cost)
+
+    return batch_groups, solo_targets
+
+
+async def _run_tiered_tests(
+    *,
+    app_ctx: "AppContext",
+    ctx: Any,
+    graph_result: Any,
+    filtered_targets: list[Any],
+    repo_root: Path,
+    test_filter: str | None,
+    coverage: bool,
+    coverage_dir: str | None,
+    phase: int,
+    total_phases: int,
+) -> dict[str, Any]:
+    """Execute tests in hop tiers: direct tests first, then transitive.
+
+    If direct tests (hop 0) fail, transitive tests (hop 1+) are skipped
+    on the assumption that direct-import failures will cascade.
+
+    Within each tier, low-cost targets are batched into fewer subprocess
+    invocations to reduce startup overhead.
+
+    Returns a dict with keys: serialized, status, passed, failed, tier_log.
+    """
+    hop_targets = _assign_target_hops(filtered_targets, graph_result, repo_root)
+    sorted_hops = sorted(hop_targets.keys())
+    max_hop = sorted_hops[-1] if sorted_hops else 0
+
+    # Accumulate results across tiers
+    total_passed = 0
+    total_failed = 0
+    all_test_results: list[Any] = []
+    all_batch_results: list[Any] = []
+    tier_log: list[dict[str, Any]] = []
+    final_status = "completed"
+    stopped_at_hop: int | None = None
+
+    for hop in sorted_hops:
+        targets_this_hop = hop_targets[hop]
+        target_count = len(targets_this_hop)
+
+        tier_label = "direct" if hop == 0 else f"hop {hop}"
+        await ctx.report_progress(
+            phase,
+            total_phases,
+            f"Running {target_count} {tier_label} test target(s)",
+        )
+
+        # Partition into batches and solo targets
+        batch_groups, solo_targets = _partition_for_batching(targets_this_hop)
+
+        batch_count = sum(len(g) for g in batch_groups)
+        solo_count = len(solo_targets)
+        batched_into = len(batch_groups)
+
+        if batch_count > 0:
+            await ctx.info(
+                f"Tier {tier_label}: {solo_count} solo + {batch_count} batched "
+                f"into {batched_into} group(s)"
+            )
+
+        # Build effective target list: solo targets run individually
+        effective_target_ids = [t.target_id for t in solo_targets]
+
+        # Run solo targets via normal test_ops.run
+        solo_result = None
+        if effective_target_ids:
+            solo_result = await app_ctx.test_ops.run(
+                targets=effective_target_ids,
+                target_filter=None,
+                test_filter=test_filter,
+                tags=None,
+                failed_only=False,
+                parallelism=None,
+                timeout_sec=None,
+                fail_fast=False,
+                coverage=coverage,
+                coverage_dir=coverage_dir,
+            )
+
+        # Run batched targets
+        import asyncio
+        import uuid
+
+        hop_batch_results: list[Any] = []
+        if batch_groups:
+
+            async def run_batch(group: list[Any]) -> Any:
+                artifact_dir = (
+                    app_ctx.repo_root / ".codeplane" / "artifacts" / "tests" / uuid.uuid4().hex[:8]
+                )
+                artifact_dir.mkdir(parents=True, exist_ok=True)
+                return await app_ctx.test_ops._run_batch_targets(
+                    targets=group,
+                    artifact_dir=artifact_dir,
+                    test_filter=test_filter,
+                    tags=None,
+                    timeout_sec=300,
+                )
+
+            batch_tasks = [asyncio.create_task(run_batch(g)) for g in batch_groups]
+            hop_batch_results = await asyncio.gather(*batch_tasks)
+            all_batch_results.extend(hop_batch_results)
+
+        # Aggregate results for this tier
+        tier_passed = 0
+        tier_failed = 0
+        tier_total = 0
+        tier_duration = 0.0
+
+        if solo_result and solo_result.run_status:
+            rs = solo_result.run_status
+            if rs.progress:
+                tier_passed += rs.progress.cases.passed
+                tier_failed += rs.progress.cases.failed
+                tier_total += rs.progress.cases.total
+            tier_duration += rs.duration_seconds
+            all_test_results.append(solo_result)
+
+        for br in hop_batch_results:
+            tier_passed += br.passed
+            tier_failed += br.failed
+            tier_total += br.total
+            tier_duration += br.duration_seconds
+
+        total_passed += tier_passed
+        total_failed += tier_failed
+
+        tier_entry: dict[str, Any] = {
+            "hop": hop,
+            "label": tier_label,
+            "targets": target_count,
+            "batched": batch_count,
+            "batch_groups": batched_into,
+            "passed": tier_passed,
+            "failed": tier_failed,
+            "total": tier_total,
+            "duration_seconds": round(tier_duration, 2),
+        }
+        tier_log.append(tier_entry)
+
+        # Tiered fail-fast: if this hop has failures, skip remaining hops
+        if tier_failed > 0 and hop < max_hop:
+            remaining_hops = [h for h in sorted_hops if h > hop]
+            remaining_targets = sum(len(hop_targets[h]) for h in remaining_hops)
+            stopped_at_hop = hop
+
+            skipped_info = ", ".join(
+                f"hop {h} ({len(hop_targets[h])} targets)" for h in remaining_hops
+            )
+            tier_entry["stopped_reason"] = (
+                f"Failures in {tier_label} — skipped transitive tiers: {skipped_info}"
+            )
+            await ctx.warning(
+                f"Tests: {tier_label} had {tier_failed} failure(s) — "
+                f"skipping {remaining_targets} transitive target(s)"
+            )
+            break
+
+    # Build combined serialized result
+    # Use the first solo_result as the base if available
+    combined: dict[str, Any] = {}
+    if all_test_results and all_test_results[0].run_status:
+        combined = _serialize_test_result(all_test_results[0])
+
+        # Overlay batch results into the progress
+        for br in all_batch_results:
+            if "run_status" in combined:
+                prog = combined["run_status"].get("progress", {})
+                cases = prog.get("cases", {})
+                cases["passed"] = cases.get("passed", 0) + br.passed
+                cases["failed"] = cases.get("failed", 0) + br.failed
+                cases["skipped"] = cases.get("skipped", 0) + br.skipped
+                cases["total"] = cases.get("total", 0) + br.total
+    elif all_batch_results:
+        # Only batched targets, no solo
+        br_total = sum(br.total for br in all_batch_results)
+        br_passed = sum(br.passed for br in all_batch_results)
+        br_failed = sum(br.failed for br in all_batch_results)
+        br_skipped = sum(br.skipped for br in all_batch_results)
+        br_duration = sum(br.duration_seconds for br in all_batch_results)
+        combined = {
+            "summary": (
+                f"{br_passed} passed ({br_duration:.1f}s)"
+                if br_failed == 0
+                else f"{br_passed} passed, {br_failed} failed ({br_duration:.1f}s)"
+            ),
+            "run_status": {
+                "status": "completed",
+                "progress": {
+                    "cases": {
+                        "total": br_total,
+                        "passed": br_passed,
+                        "failed": br_failed,
+                        "skipped": br_skipped,
+                    },
+                },
+            },
+        }
+
+    # Add tier execution log for transparency
+    combined["tier_execution"] = tier_log
+
+    # Build transparent summary
+    tier_log_idx = next(
+        (i for i, t in enumerate(tier_log) if t["hop"] == stopped_at_hop),
+        None,
+    )
+    if stopped_at_hop is not None and tier_log_idx is not None:
+        combined["summary"] = (
+            f"{total_passed} passed, {total_failed} failed "
+            f"(stopped at {tier_log[tier_log_idx]['label']}, "
+            f"transitive tiers skipped)"
+        )
+    else:
+        total_duration = sum(t["duration_seconds"] for t in tier_log)
+        combined["summary"] = (
+            f"{total_passed} passed"
+            + (f", {total_failed} failed" if total_failed > 0 else "")
+            + f" ({total_duration:.1f}s, {len(sorted_hops)} tier(s))"
+        )
+
+    return {
+        "serialized": combined,
+        "status": final_status,
+        "passed": total_passed,
+        "failed": total_failed,
+        "tier_log": tier_log,
+    }
+
+
+# =============================================================================
 # Tool Registration
 # =============================================================================
 
@@ -589,10 +920,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     for t in all_targets
                     if _target_matches_affected_files(t, affected_paths, app_ctx.repo_root)
                 ]
-                effective_targets = [t.target_id for t in filtered]
                 phase += 1
 
-                if not effective_targets:
+                if not filtered:
                     test_status = "skipped"
                     await ctx.info("Tests: no affected targets — skipping")
                     result["tests"] = {
@@ -609,32 +939,24 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                             "reason": "coverage=True requires coverage_dir",
                         }
                     else:
-                        await ctx.report_progress(
-                            phase,
-                            total_phases,
-                            f"Running {len(effective_targets)} affected test target(s)",
-                        )
-                        test_result = await app_ctx.test_ops.run(
-                            targets=effective_targets,
-                            target_filter=None,
+                        # --- Tiered execution: run direct tests first, then transitive ---
+                        tiered_result = await _run_tiered_tests(
+                            app_ctx=app_ctx,
+                            ctx=ctx,
+                            graph_result=graph_result,
+                            filtered_targets=filtered,
+                            repo_root=app_ctx.repo_root,
                             test_filter=test_filter,
-                            tags=None,
-                            failed_only=False,
-                            parallelism=None,
-                            timeout_sec=None,
-                            fail_fast=False,
                             coverage=coverage,
                             coverage_dir=coverage_dir,
+                            phase=phase,
+                            total_phases=total_phases,
                         )
 
-                        serialized = _serialize_test_result(test_result)
-                        result["tests"] = serialized
-
-                        if test_result.run_status:
-                            test_status = test_result.run_status.status
-                            if test_result.run_status.progress:
-                                test_passed = test_result.run_status.progress.cases.passed
-                                test_failed = test_result.run_status.progress.cases.failed
+                        result["tests"] = tiered_result["serialized"]
+                        test_status = tiered_result["status"]
+                        test_passed = tiered_result["passed"]
+                        test_failed = tiered_result["failed"]
 
                         if test_failed > 0:
                             await ctx.warning(f"Tests: {test_passed} passed, {test_failed} FAILED")
@@ -677,6 +999,28 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 hints.append(f"Fix {test_failed} failing test(s).")
             if has_test_error:
                 hints.append("Test phase errored — check tests section for details.")
+
+            # Add tier execution transparency
+            tier_log = (
+                result.get("tests", {}).get("tier_execution", [])
+                if isinstance(result.get("tests"), dict)
+                else []
+            )
+            if tier_log:
+                tier_parts: list[str] = []
+                for entry in tier_log:
+                    label = entry.get("label", "?")
+                    tp = entry.get("passed", 0)
+                    tf = entry.get("failed", 0)
+                    tt = entry.get("targets", 0)
+                    dur = entry.get("duration_seconds", 0)
+                    tier_parts.append(
+                        f"{label}: {tt} targets, {tp} passed, {tf} failed ({dur:.1f}s)"
+                    )
+                    if entry.get("stopped_reason"):
+                        tier_parts.append(f"  → {entry['stopped_reason']}")
+                hints.append(f"Tier execution: {'; '.join(tier_parts)}")
+
             hints.append(
                 "STOP! You passed changed_files — lint and tests ran ONLY on "
                 "code affected by YOUR changes. These failures are almost "

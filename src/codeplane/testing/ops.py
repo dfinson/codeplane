@@ -1240,6 +1240,183 @@ class TestOps:
             # Always cleanup safe execution context
             safe_ctx.cleanup()
 
+    async def _run_batch_targets(
+        self,
+        targets: list[TestTarget],
+        artifact_dir: Path,
+        test_filter: str | None,
+        tags: list[str] | None,
+        timeout_sec: int,
+    ) -> ParsedTestSuite:
+        """Run multiple targets in a single subprocess invocation.
+
+        All targets must share the same ``runner_pack_id`` and
+        ``workspace_root``.  The runner pack's ``build_batch_command``
+        method produces a single command that exercises every target.
+
+        Returns a single ``ParsedTestSuite`` covering all targets.
+        """
+        if not targets:
+            return ParsedTestSuite(name="batch-empty", total=0)
+
+        first = targets[0]
+        pack_class = runner_registry.get(first.runner_pack_id)
+        if not pack_class:
+            return ParsedTestSuite(
+                name="batch",
+                errors=len(targets),
+                error_type="unknown",
+                error_detail=f"Runner pack not found: {first.runner_pack_id}",
+            )
+
+        pack = pack_class()
+        exec_ctx = await self._get_execution_context(first)
+
+        # Deterministic batch name for artifact files
+        batch_name = "batch_" + "_".join(
+            t.target_id.replace("/", "_").replace(":", "_") for t in targets[:5]
+        )
+        if len(targets) > 5:
+            batch_name += f"_plus{len(targets) - 5}"
+        output_path = artifact_dir / f"{batch_name}.xml"
+
+        cmd = pack.build_batch_command(
+            targets,
+            output_path=output_path,
+            pattern=test_filter,
+            tags=tags,
+            exec_ctx=exec_ctx,
+        )
+        if not cmd:
+            # Fallback: pack doesn't support batching
+            return ParsedTestSuite(
+                name="batch",
+                errors=len(targets),
+                error_type="unknown",
+                error_detail="Runner pack does not support batch execution",
+            )
+
+        # Sanitize + run (simplified — no coverage in batch mode)
+        safe_ctx = SafeExecutionContext(
+            SafeExecutionConfig(
+                artifact_dir=artifact_dir,
+                workspace_root=Path(first.workspace_root),
+                timeout_sec=timeout_sec,
+                strip_coverage_flags=False,
+            )
+        )
+        cmd = safe_ctx.sanitize_command(cmd, first.runner_pack_id)
+        safe_env = safe_ctx.prepare_environment(first.runner_pack_id)
+
+        if exec_ctx:
+            runtime_env = exec_ctx.build_env()
+            safe_env.update(runtime_env)
+
+        executable = cmd[0]
+        resolved_executable = shutil.which(executable, path=safe_env.get("PATH"))
+        if not resolved_executable:
+            safe_ctx.cleanup()
+            selectors = ", ".join(t.selector for t in targets)
+            return ParsedTestSuite(
+                name="batch",
+                errors=len(targets),
+                error_type="command_not_found",
+                error_detail=f"Executable not found: {executable}",
+                suggested_action=f"Install {executable} or activate the correct environment",
+                execution=ExecutionContext(command=cmd),
+                target_selector=selectors,
+                workspace_root=first.workspace_root,
+            )
+
+        cwd = pack.get_cwd(first)
+        stdout = ""
+        stderr = ""
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+                env=safe_env,
+            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                proc.communicate(), timeout=timeout_sec
+            )
+            stdout = stdout_bytes.decode(errors="replace")
+            stderr = stderr_bytes.decode(errors="replace")
+            exit_code = proc.returncode
+
+            # Write artifacts
+            stdout_path = artifact_dir / f"{batch_name}.stdout.txt"
+            stdout_path.write_text(stdout)
+            if stderr:
+                stderr_path = artifact_dir / f"{batch_name}.stderr.txt"
+                stderr_path.write_text(stderr)
+
+            execution = ExecutionContext(
+                command=cmd,
+                working_directory=str(cwd),
+                exit_code=exit_code,
+                raw_stdout=stdout,
+                raw_stderr=stderr if stderr else None,
+            )
+
+            result = pack.parse_output(output_path, stdout)
+            selectors = ", ".join(t.selector for t in targets)
+            result.target_selector = selectors
+            result.workspace_root = first.workspace_root
+            result.execution = execution
+
+            if result.tests is not None:
+                result.parsed_test_count = len(result.tests)
+
+            if result.errors > 0 and result.total == 0:
+                if not output_path.exists() and not stdout.strip():
+                    result.error_type = "output_missing"
+                    result.error_detail = "No output file or stdout from test runner"
+                elif result.error_type == "none":
+                    result.error_type = "parse_failed"
+                    result.error_detail = "Could not parse test output"
+            elif exit_code and exit_code != 0 and result.failed == 0 and result.errors == 0:
+                result.error_type = "command_failed"
+                result.error_detail = f"Command exited with code {exit_code}"
+                result.errors = 1
+
+            return result
+
+        except TimeoutError:
+            safe_ctx.cleanup()
+            selectors = ", ".join(t.selector for t in targets)
+            return ParsedTestSuite(
+                name="batch",
+                errors=len(targets),
+                error_type="timeout",
+                error_detail=f"Batch command timed out after {timeout_sec} seconds",
+                execution=ExecutionContext(
+                    command=cmd,
+                    working_directory=str(cwd),
+                    raw_stdout=stdout if stdout else None,
+                    raw_stderr=stderr if stderr else None,
+                ),
+                target_selector=selectors,
+                workspace_root=first.workspace_root,
+            )
+        except OSError as e:
+            safe_ctx.cleanup()
+            selectors = ", ".join(t.selector for t in targets)
+            return ParsedTestSuite(
+                name="batch",
+                errors=len(targets),
+                error_type="command_failed",
+                error_detail=f"OS error executing batch command: {e}",
+                execution=ExecutionContext(command=cmd, working_directory=str(cwd)),
+                target_selector=selectors,
+                workspace_root=first.workspace_root,
+            )
+        finally:
+            safe_ctx.cleanup()
+
     def _persist_result(self, artifact_dir: Path, status: TestRunStatus) -> None:
         """Persist test run result to artifact directory."""
         result_path = artifact_dir / "result.json"

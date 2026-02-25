@@ -11,7 +11,7 @@ Open/Closed: New harvesters can be added without modifying existing ones.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -1007,7 +1007,7 @@ def _enrich_file_candidates(
     _EMBEDDING_WEIGHT = 2.0
 
     # ── Aggregate def-level signals by file path ──
-    path_signals: dict[str, dict] = {}
+    path_signals: dict[str, dict[str, Any]] = {}
     for _uid, cand in def_candidates.items():
         fp = cand.file_path
         if not fp:

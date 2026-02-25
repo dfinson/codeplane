@@ -120,6 +120,32 @@ class RunnerPack(abc.ABC):
             Parsed test suite
         """
 
+    def build_batch_command(
+        self,
+        targets: list[TestTarget],  # noqa: ARG002
+        *,
+        output_path: Path,  # noqa: ARG002
+        pattern: str | None = None,  # noqa: ARG002
+        tags: list[str] | None = None,  # noqa: ARG002
+        exec_ctx: RuntimeExecutionContext | None = None,  # noqa: ARG002
+    ) -> list[str] | None:
+        """Build command to run multiple targets in a single invocation.
+
+        Not all runners support batching.  The default returns None, meaning
+        this runner cannot batch and each target must be run individually.
+
+        Args:
+            targets: Multiple test targets to run together
+            output_path: Path to write machine-readable output
+            pattern: Test name pattern filter
+            tags: Test tags/markers filter
+            exec_ctx: Execution context with runtime info
+
+        Returns:
+            Command as list of strings, or None if batching not supported.
+        """
+        return None
+
     def get_cwd(self, target: TestTarget) -> Path:
         """Get working directory for running tests."""
         return Path(target.workspace_root)
