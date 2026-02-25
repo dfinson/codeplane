@@ -291,11 +291,37 @@ async def _harvest_explicit(
                     else:
                         candidates[d.def_uid].from_explicit = True
 
-    # D3 removed: Symbol-name extraction from task text was too noisy.
-    # The _SYMBOL_REGEX matched ordinary English words (PascalCase sentence
-    # starts), causing hub files to appear with from_explicit=True in 50-80%
-    # of all queries.  Term-match and lexical harvesters already surface
-    # symbol names via properly weighted (non-binary) scoring.
+    # D3: Index-validated symbol extraction from task text.
+    #
+    # Prior version set from_explicit=True on raw regex matches, which
+    # bypassed the dual-signal gate and caused hub-file pollution (50-80%
+    # of queries).  This version validates each regex-extracted symbol
+    # against the index (coordinator.get_def) — only real definitions
+    # pass.  Validated symbols use from_explicit=True but a lower evidence
+    # score (0.7) than agent-provided seeds (1.0), reflecting lower
+    # confidence from automated extraction vs intentional agent input.
+    if parsed.explicit_symbols:
+        d3_count = 0
+        for sym in parsed.explicit_symbols:
+            if sym in {c.def_fact.name for c in candidates.values() if c.def_fact}:
+                continue  # Already found via D1 or D2
+            d = await coordinator.get_def(sym)
+            if d is not None and d.def_uid not in candidates:
+                candidates[d.def_uid] = HarvestCandidate(
+                    def_uid=d.def_uid,
+                    def_fact=d,
+                    from_explicit=True,
+                    evidence=[
+                        EvidenceRecord(
+                            category="explicit",
+                            detail=f"task-extracted symbol '{sym}'",
+                            score=0.7,
+                        )
+                    ],
+                )
+                d3_count += 1
+        if d3_count:
+            log.debug("recon.harvest.explicit.d3", validated=d3_count)
 
     log.debug(
         "recon.harvest.explicit",
