@@ -129,7 +129,7 @@ def _patch_config(config_path: Path, port: int, timeout: int) -> Path:
 
     for model_cfg in config.get("experiment", {}).get("models", []):
         if model_cfg.get("name") == "cpl-recon":
-            model_cfg["args"] = [{"daemon_port": [port], "timeout": [timeout]}]
+            model_cfg["args"] = [{"daemon_port": [port]}, {"timeout": [timeout]}]
 
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".yaml", prefix="cpl_bench_", delete=False
@@ -177,7 +177,7 @@ def _run_evee(config_path: Path) -> None:
 
     from evee.evaluation.evaluate import main
 
-    main(str(config_path))
+    main(str(config_path), tracking_enabled=False)
 
 
 # ── Main ─────────────────────────────────────────────────────────────
