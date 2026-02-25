@@ -26,21 +26,16 @@ experiment:
     - name: cpl-recon
       args:
         - daemon_port: [7777]
-          timeout: [120]
+        - timeout: [120]
 
   dataset:
-    name: recon-ground-truth
-    type: cpl-recon-gt
+    name: cpl-recon-gt
+    type: custom
     args:
       data_path: data/ground_truth.json
 
   metrics:
     - name: cpl-retrieval
       mapping:
-        returned_files: model.returned_files
-        gt_files: dataset.gt_files
-
-    - name: cpl-tier-align
-      mapping:
         returned_tiers: model.returned_tiers
-        gt_categories: dataset.gt_categories
+        gt_files: dataset.gt_files

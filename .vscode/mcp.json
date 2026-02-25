@@ -1,12 +1,11 @@
 {
-  "servers": {
-    "codeplane-codeplane": {
-      "type": "http",
-      "url": "http://127.0.0.1:7654/mcp"
-    },
-    "codeplane-evee": {
-      "type": "http",
-      "url": "http://127.0.0.1:7777/mcp"
+    "servers": {
+        "codeplane-codeplane": {"type": "http", "url": "http://127.0.0.1:7654/mcp"},
+        "codeplane-evee": {"type": "http", "url": "http://127.0.0.1:7777/mcp"},
+        "evee": {
+            "type": "stdio",
+            "command": "/home/dave01/wsl-repos/codeplane/.venv/bin/python",
+            "args": ["-m", "evee.mcp.server"],
+        },
     }
-  }
 }
