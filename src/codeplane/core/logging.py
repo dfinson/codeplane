@@ -188,6 +188,9 @@ def _configure_stdlib_logging(
     logging.getLogger("mcp.server.lowlevel.server").setLevel(logging.WARNING)
     logging.getLogger("mcp.server.streamable_http").setLevel(logging.WARNING)
 
+    # Silence FastMCP's "Sending INFO/DEBUG to client" spam on every notification
+    logging.getLogger("fastmcp.server.context.to_client").setLevel(logging.WARNING)
+
     # Silence watchfiles debug logging (triggers on every filtered change,
     # creates feedback loop with log file inside watched directory)
     logging.getLogger("watchfiles.main").setLevel(logging.WARNING)
