@@ -167,71 +167,45 @@ def _tree_to_text(
     return lines
 
 
-def _tree_to_collapsed_text(
+def _tree_to_compact_text(
     all_paths: list[tuple[str, int | None]],
     *,
-    collapse_depth: int = 2,
     include_line_counts: bool = True,
 ) -> list[str]:
-    """Render a depth-collapsed directory tree from a flat file list.
+    """Lossless compact tree from a flat file list.
 
-    Instead of listing individual files, directories are shown with
-    aggregate file-count and line-count stats.  Files deeper than
-    *collapse_depth* directory levels are attributed to their ancestor
-    at that depth.
+    Every filename and per-file line count is preserved.  Files are
+    grouped by their parent directory on a single line, eliminating
+    indentation overhead:
 
-    Root-level files (no directory component) are listed individually
-    so that config files like ``pyproject.toml`` remain visible.
+    Example output::
 
-    Example output at collapse_depth=2::
+        src/codeplane/cli/ __init__.py:3 clear.py:85 down.py:53
+        src/codeplane/core/ errors.py:80 logging.py:60
+        tests/cli/ test_main.py:40
+        . pyproject.toml:200 README.md:50
 
-        src/
-          codeplane/ 154f 61381L
-        tests/ 2f 18L
-          cli/ 7f 1040L
-        pyproject.toml 209
+    Root-level files appear under the ``.`` pseudo-directory.
     """
     from collections import defaultdict
 
-    dir_files: dict[str, int] = defaultdict(int)
-    dir_lines: dict[str, int] = defaultdict(int)
-    root_files: list[tuple[str, int]] = []
+    dir_files: dict[str, list[str]] = defaultdict(list)
+    root_entries: list[str] = []
 
     for path, lc in all_paths:
         parts = path.split("/")
         if len(parts) == 1:
-            root_files.append((path, lc or 0))
+            root_entries.append(f"{path}:{lc or 0}" if include_line_counts else path)
         else:
-            dir_parts = parts[:-1]
-            truncated = "/".join(dir_parts[:collapse_depth])
-            dir_files[truncated] += 1
-            dir_lines[truncated] += lc or 0
+            d = "/".join(parts[:-1])
+            fname = parts[-1]
+            dir_files[d].append(f"{fname}:{lc or 0}" if include_line_counts else fname)
 
-    # Build indented tree from sorted directory paths
     lines: list[str] = []
-    seen: set[str] = set()
     for d in sorted(dir_files):
-        parts = d.split("/")
-        # Emit parent grouping dirs we haven't seen
-        for i in range(1, len(parts)):
-            parent = "/".join(parts[:i])
-            if parent not in seen and parent not in dir_files:
-                seen.add(parent)
-                indent = "  " * (i - 1)
-                lines.append(f"{indent}{parts[i - 1]}/")
-
-        indent = "  " * (len(parts) - 1)
-        if include_line_counts:
-            lines.append(f"{indent}{parts[-1]}/ {dir_files[d]}f {dir_lines[d]}L")
-        else:
-            lines.append(f"{indent}{parts[-1]}/ {dir_files[d]}f")
-
-    # Root-level files
-    for name, lc in sorted(root_files):
-        if include_line_counts:
-            lines.append(f"{name} {lc}")
-        else:
-            lines.append(name)
+        lines.append(f"{d}/ {' '.join(dir_files[d])}")
+    if root_entries:
+        lines.append(f". {' '.join(root_entries)}")
 
     return lines
 
@@ -240,13 +214,13 @@ def _map_repo_sections_to_text(
     result: Any,
     *,
     include_line_counts: bool = True,
-    collapse_depth: int | None = None,
 ) -> dict[str, Any]:
     """Convert map_repo result sections to compact text format.
 
-    When *collapse_depth* is set, the structure tree uses a depth-collapsed
-    directory format (directories with aggregate stats instead of individual
-    file listings).  This typically achieves 5-28× token reduction.
+    When ``all_paths`` is available on the structure, uses the lossless
+    compact format (one line per directory, files inline) which is ~28%
+    smaller than the indented tree.  Every filename and per-file line
+    count is preserved.
 
     Same data as JSON serializers, but as flat lines.
     """
@@ -259,10 +233,9 @@ def _map_repo_sections_to_text(
         ]
 
     if result.structure:
-        if collapse_depth is not None and result.structure.all_paths:
-            tree_lines = _tree_to_collapsed_text(
+        if result.structure.all_paths:
+            tree_lines = _tree_to_compact_text(
                 result.structure.all_paths,
-                collapse_depth=collapse_depth,
                 include_line_counts=include_line_counts,
             )
         else:
@@ -1084,21 +1057,16 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         verbosity: Literal["full", "standard", "minimal"] = Field(
             "full",
             description=(
-                "Output detail level: full=dirs collapsed at tree depth, "
-                "standard=dirs to depth 2, minimal=top-level dirs only"
+                "Output detail level: full=all files with line counts, "
+                "standard=all files without line counts, "
+                "minimal=counts only (no tree)"
             ),
         ),
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Get repository mental model."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
-        include_line_counts = verbosity != "minimal"
-
-        # Map verbosity → collapse_depth for the directory tree.
-        # Collapsed format shows directories with aggregate file/line stats
-        # instead of listing individual files — typically 5-28× fewer tokens.
-        _collapse_depth_map = {"minimal": 1, "standard": 2, "full": depth}
-        collapse_depth = _collapse_depth_map[verbosity]
+        include_line_counts = verbosity == "full"
 
         # Fetch data from coordinator
         result = await app_ctx.coordinator.map_repo(
@@ -1116,7 +1084,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         sections_output = _map_repo_sections_to_text(
             result,
             include_line_counts=include_line_counts,
-            collapse_depth=collapse_depth,
         )
 
         # Build output
