@@ -685,15 +685,11 @@ class ToolMiddleware(Middleware):
         elif tool_name == "write_source" and "delta" in result:
             delta = result["delta"]
             summary["files_changed"] = delta.get("files_changed", 0)
-        elif tool_name == "checkpoint" and "run_status" in result:
-            run_status = result.get("run_status", {})
-            if isinstance(run_status, dict):
-                progress = run_status.get("progress", {})
-                if isinstance(progress, dict):
-                    cases = progress.get("cases", {})
-                    if isinstance(cases, dict):
-                        summary["passed"] = cases.get("passed", 0)
-                        summary["failed"] = cases.get("failed", 0)
+        elif tool_name == "checkpoint" and "tests" in result:
+            tests = result.get("tests", {})
+            if isinstance(tests, dict):
+                summary["passed"] = tests.get("passed", 0)
+                summary["failed"] = tests.get("failed", 0)
 
         return summary
 
@@ -747,13 +743,11 @@ class ToolMiddleware(Middleware):
         if tool_name in ("checkpoint",):
             if "summary" in data:
                 return str(data["summary"])
-            run_status = data.get("run_status", {})
-            if isinstance(run_status, dict):
-                progress = run_status.get("progress", {})
-                if isinstance(progress, dict):
-                    passed = progress.get("passed", 0)
-                    failed = progress.get("failed", 0)
-                    return f"{passed} passed, {failed} failed"
+            tests = data.get("tests", {})
+            if isinstance(tests, dict):
+                passed = tests.get("passed", 0)
+                failed = tests.get("failed", 0)
+                return f"{passed} passed, {failed} failed"
             return f"{tool_name} complete"
 
         if tool_name == "map_repo":

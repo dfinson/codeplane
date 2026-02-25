@@ -316,93 +316,58 @@ def _build_coverage_hint(
 
 
 def _serialize_test_result(result: "TestResult") -> dict[str, Any]:
-    """Convert TestResult to serializable dict."""
+    """Convert TestResult to compact serializable dict.
+
+    Outer structure is flat JSON for parseability.  Inner details
+    (failures, diagnostics) are compressed text strings to minimise
+    token count.
+    """
     output: dict[str, Any] = {
         "summary": _summarize_run(result),
     }
 
-    display = _display_run(result)
-    if display:
-        output["display_to_user"] = display
-
     if result.run_status:
         status = result.run_status
+        output["status"] = status.status
+        output["duration"] = round(status.duration_seconds, 2)
 
-        output["run_status"] = {
-            "run_id": status.run_id,
-            "status": status.status,
-            "duration_seconds": status.duration_seconds,
-            "artifact_dir": status.artifact_dir,
-        }
         if status.progress:
-            progress = status.progress
-            output["run_status"]["progress"] = {
-                "targets": {
-                    "total": progress.targets.total,
-                    "completed": progress.targets.completed,
-                    "running": progress.targets.running,
-                    "failed": progress.targets.failed,
-                },
-                "cases": {
-                    "total": progress.cases.total,
-                    "passed": progress.cases.passed,
-                    "failed": progress.cases.failed,
-                    "skipped": progress.cases.skipped,
-                    "errors": progress.cases.errors,
-                },
-                "total": progress.total,
-                "completed": progress.completed,
-                "passed": progress.passed,
-                "failed": progress.failed,
-                "skipped": progress.skipped,
-            }
+            p = status.progress
+            output["passed"] = p.cases.passed
+            output["failed"] = p.cases.failed
+            output["skipped"] = p.cases.skipped
+            output["targets"] = p.targets.total
+
         if status.failures:
-            output["run_status"]["failures"] = [
-                {
-                    "name": f.name,
-                    "path": f.path,
-                    "line": f.line,
-                    "message": f.message,
-                    "traceback": f.traceback,
-                    "classname": f.classname,
-                    "duration_seconds": f.duration_seconds,
-                }
-                for f in status.failures
-            ]
+            lines: list[str] = []
+            for f in status.failures:
+                loc = f"{f.path}:{f.line}" if f.line else f.path
+                lines.append(f"{loc} {f.name}: {f.message}")
+                if f.traceback:
+                    # First 3 meaningful lines of traceback
+                    tb_lines = [
+                        ln
+                        for ln in f.traceback.strip().splitlines()
+                        if ln.strip()
+                    ][:3]
+                    lines.extend(f"  {ln.strip()}" for ln in tb_lines)
+            output["failures"] = "\n".join(lines)
+
         if status.diagnostics:
-            output["run_status"]["diagnostics"] = [
-                {
-                    "target_id": d.target_id,
-                    "error_type": d.error_type,
-                    "error_detail": d.error_detail,
-                    "suggested_action": d.suggested_action,
-                    "command": d.command,
-                    "working_directory": d.working_directory,
-                    "exit_code": d.exit_code,
-                }
-                for d in status.diagnostics
-            ]
+            diag_lines: list[str] = []
+            for d in status.diagnostics:
+                exit_info = f" (exit {d.exit_code})" if d.exit_code is not None else ""
+                detail = d.error_detail or "no detail"
+                diag_lines.append(f"{d.target_id} [{d.error_type}]: {detail}{exit_info}")
+                if d.suggested_action:
+                    diag_lines.append(f"  → {d.suggested_action}")
+            output["diagnostics"] = "\n".join(diag_lines)
+
         if status.coverage:
-            output["run_status"]["coverage"] = status.coverage
-            output["run_status"]["coverage_hint"] = _build_coverage_hint(
+            output["coverage"] = _build_coverage_hint(
                 status.coverage,
                 status.target_selectors,
             )
-            from codeplane.testing.coverage import CoverageArtifact, parse_coverage_summary
-
-            coverage_stats: list[dict[str, Any]] = []
-            for cov_dict in status.coverage:
-                artifact = CoverageArtifact(
-                    format=cov_dict.get("format", "unknown"),
-                    path=Path(cov_dict.get("path", "")),
-                    pack_id=cov_dict.get("pack_id", ""),
-                    invocation_id="",
-                )
-                summary = parse_coverage_summary(artifact)
-                if summary and summary.is_valid:
-                    coverage_stats.append(summary.to_dict())
-            if coverage_stats:
-                output["run_status"]["coverage_stats"] = coverage_stats
 
     if isinstance(result.agentic_hint, str) and result.agentic_hint:
         output["agentic_hint"] = result.agentic_hint
@@ -694,48 +659,37 @@ async def _run_tiered_tests(
             break
 
     # Build combined serialized result
-    # Use the first solo_result as the base if available
     combined: dict[str, Any] = {}
     if all_test_results and all_test_results[0].run_status:
         combined = _serialize_test_result(all_test_results[0])
 
-        # Overlay batch results into the progress
+        # Overlay batch results into flat counters
         for br in all_batch_results:
-            if "run_status" in combined:
-                prog = combined["run_status"].get("progress", {})
-                cases = prog.get("cases", {})
-                cases["passed"] = cases.get("passed", 0) + br.passed
-                cases["failed"] = cases.get("failed", 0) + br.failed
-                cases["skipped"] = cases.get("skipped", 0) + br.skipped
-                cases["total"] = cases.get("total", 0) + br.total
+            combined["passed"] = combined.get("passed", 0) + br.passed
+            combined["failed"] = combined.get("failed", 0) + br.failed
+            combined["skipped"] = combined.get("skipped", 0) + br.skipped
     elif all_batch_results:
         # Only batched targets, no solo
-        br_total = sum(br.total for br in all_batch_results)
-        br_passed = sum(br.passed for br in all_batch_results)
-        br_failed = sum(br.failed for br in all_batch_results)
-        br_skipped = sum(br.skipped for br in all_batch_results)
-        br_duration = sum(br.duration_seconds for br in all_batch_results)
         combined = {
-            "summary": (
-                f"{br_passed} passed ({br_duration:.1f}s)"
-                if br_failed == 0
-                else f"{br_passed} passed, {br_failed} failed ({br_duration:.1f}s)"
-            ),
-            "run_status": {
-                "status": "completed",
-                "progress": {
-                    "cases": {
-                        "total": br_total,
-                        "passed": br_passed,
-                        "failed": br_failed,
-                        "skipped": br_skipped,
-                    },
-                },
-            },
+            "status": "completed",
+            "passed": sum(br.passed for br in all_batch_results),
+            "failed": sum(br.failed for br in all_batch_results),
+            "skipped": sum(br.skipped for br in all_batch_results),
         }
 
-    # Add tier execution log for transparency
-    combined["tier_execution"] = tier_log
+    # Compact tier execution as text string
+    tier_parts: list[str] = []
+    for entry in tier_log:
+        label = entry["label"]
+        t_count = entry["targets"]
+        p = entry["passed"]
+        f = entry["failed"]
+        dur = entry["duration_seconds"]
+        tier_parts.append(f"{label}: {t_count}t {p}p/{f}f {dur}s")
+        if entry.get("stopped_reason"):
+            # Append skip info
+            tier_parts.append("→ STOPPED")
+    combined["tiers"] = " | ".join(tier_parts)
 
     # Build transparent summary
     tier_log_idx = next(
@@ -857,32 +811,31 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     f"{lint_result.total_files_modified} file(s) modified"
                 )
 
+            # Build compact lint result: structured outer keys, text for issues
+            issue_lines: list[str] = []
+            for t in lint_result.tools_run:
+                for d in t.diagnostics:
+                    # Strip repo root prefix for brevity
+                    rel_path = d.path
+                    if "/" in rel_path:
+                        # Keep just the relative-looking portion
+                        for prefix in (str(app_ctx.repo_root) + "/",):
+                            if rel_path.startswith(prefix):
+                                rel_path = rel_path[len(prefix):]
+                                break
+                    sev = d.severity.value[0].upper()  # W/E/I
+                    issue_lines.append(
+                        f"{rel_path}:{d.line}:{d.column} {sev} {d.code} {d.message}"
+                    )
+
             result["lint"] = {
                 "status": lint_result.status,
-                "total_diagnostics": lint_result.total_diagnostics,
-                "total_files_modified": lint_result.total_files_modified,
-                "duration_seconds": round(lint_result.duration_seconds, 2),
-                "tools_run": [
-                    {
-                        "tool_id": t.tool_id,
-                        "status": t.status,
-                        "files_checked": t.files_checked,
-                        "files_modified": t.files_modified,
-                        "diagnostics": [
-                            {
-                                "path": d.path,
-                                "line": d.line,
-                                "column": d.column,
-                                "severity": d.severity.value,
-                                "code": d.code,
-                                "message": d.message,
-                            }
-                            for d in t.diagnostics
-                        ],
-                    }
-                    for t in lint_result.tools_run
-                ],
+                "diagnostics": lint_result.total_diagnostics,
+                "fixed_files": lint_result.total_files_modified,
+                "duration": round(lint_result.duration_seconds, 2),
             }
+            if issue_lines:
+                result["lint"]["issues"] = "\n".join(issue_lines)
 
             if lint_result.agentic_hint:
                 result["lint"]["agentic_hint"] = lint_result.agentic_hint
@@ -989,25 +942,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 hints.append("Test phase errored — check tests section for details.")
 
             # Add tier execution transparency
-            tier_log = (
-                result.get("tests", {}).get("tier_execution", [])
+            tiers_text = (
+                result.get("tests", {}).get("tiers", "")
                 if isinstance(result.get("tests"), dict)
-                else []
+                else ""
             )
-            if tier_log:
-                tier_parts: list[str] = []
-                for entry in tier_log:
-                    label = entry.get("label", "?")
-                    tp = entry.get("passed", 0)
-                    tf = entry.get("failed", 0)
-                    tt = entry.get("targets", 0)
-                    dur = entry.get("duration_seconds", 0)
-                    tier_parts.append(
-                        f"{label}: {tt} targets, {tp} passed, {tf} failed ({dur:.1f}s)"
-                    )
-                    if entry.get("stopped_reason"):
-                        tier_parts.append(f"  → {entry['stopped_reason']}")
-                hints.append(f"Tier execution: {'; '.join(tier_parts)}")
+            if tiers_text:
+                hints.append(f"Tiers: {tiers_text}")
 
             hints.append(
                 "STOP! You passed changed_files — lint and tests ran ONLY on "
@@ -1049,14 +990,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     sha = app_ctx.git_ops.commit(commit_message)
                     commit_result: dict[str, Any] = {
                         "oid": sha,
-                        "short_oid": sha[:7],
                         "summary": _summarize_commit(sha, commit_message),
                     }
                     if _hook_result and not _hook_result.success:
-                        commit_result["hook_warning"] = {
-                            "code": "HOOK_AUTO_FIXED",
-                            "auto_fixed_files": _hook_result.modified_files or [],
-                        }
+                        fixed = _hook_result.modified_files or []
+                        commit_result["hook_warning"] = (
+                            f"HOOK_AUTO_FIXED: {', '.join(fixed)}"
+                        )
                     if push:
                         app_ctx.git_ops.push(remote="origin", force=False)
                         commit_result["pushed"] = "origin"
@@ -1068,7 +1008,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                         f"Committed {sha[:7]}",
                     )
 
-                    # --- Lean semantic diff for the new commit ---
+                    # --- Lean semantic diff as compact text ---
                     try:
                         from codeplane.mcp.tools.diff import (
                             _result_to_dict,
@@ -1079,11 +1019,20 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                             app_ctx, base="HEAD~1", target="HEAD", paths=None
                         )
                         minimal = _result_to_dict(diff_result, verbosity="minimal")
-                        commit_result["semantic_diff"] = {
-                            "summary": minimal.get("summary"),
-                            "structural_changes": minimal.get("structural_changes", []),
-                            "non_structural_changes": minimal.get("non_structural_changes", []),
-                        }
+                        diff_summary = minimal.get("summary", "")
+                        changes = minimal.get("structural_changes", [])
+                        if changes:
+                            change_lines = [
+                                f"{c.get('change', '?')} {c.get('kind', '?')} "
+                                f"{c.get('name', '?')} ({c.get('path', '?').split('/')[-1]})"
+                                for c in changes[:15]
+                            ]
+                            commit_result["diff"] = (
+                                f"{diff_summary}: "
+                                + ", ".join(change_lines)
+                            )
+                        elif diff_summary:
+                            commit_result["diff"] = diff_summary
                     except Exception:
                         log.debug("post-commit semantic diff skipped", exc_info=True)
 

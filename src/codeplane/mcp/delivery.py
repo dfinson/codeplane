@@ -689,7 +689,7 @@ def _extract_jq_commands(
 
         commit = payload.get("commit", {})
         if isinstance(commit, dict) and commit.get("oid"):
-            parts.append(f"committed {commit.get('short_oid', commit['oid'][:7])}")
+            parts.append(f"committed {commit['oid'][:7]}")
 
         summary = " | ".join(parts) if parts else "checkpoint complete"
 
@@ -701,45 +701,29 @@ def _extract_jq_commands(
         # Lint details
         if payload.get("lint"):
             cmds.append(
-                f"jq '{{status: .lint.status, total_diagnostics: .lint.total_diagnostics, "
-                f"files_modified: .lint.total_files_modified}}' {path}"
+                f"jq '{{status: .lint.status, diagnostics: .lint.diagnostics, "
+                f"fixed_files: .lint.fixed_files}}' {path}"
             )
-            # Diagnostics filtered to changed files
-            changed = payload.get("changed_files", [])
-            if changed:
-                # Show diagnostics only in changed files (most useful for agent)
-                filter_parts = " or ".join(
-                    f'(.path | endswith("{f.split("/")[-1]}"))' for f in changed[:5]
-                )
-                cmds.append(
-                    f"jq '[.lint.tools_run[].diagnostics[] | select({filter_parts})]' {path}"
-                )
-            else:
-                cmds.append(
-                    f"jq '[.lint.tools_run[].diagnostics[] | {{path: .path, line: .line, code: .code, message: .message}}] | length' {path}"
-                )
+            if payload["lint"].get("issues"):
+                cmds.append(f"jq '.lint.issues' {path}")
 
         # Test details
         if payload.get("tests"):
-            cmds.append(f"jq '{{status: .tests.status, reason: .tests.reason}}' {path}")
-            # Failed test details
             tests = payload.get("tests", {})
-            run_status = tests.get("run_status", {})
-            if isinstance(run_status, dict):
-                progress = run_status.get("progress", {})
-                cases = progress.get("cases", {}) if isinstance(progress, dict) else {}
-                if cases.get("failed", 0) > 0:
-                    cmds.append(
-                        f"jq '[.tests.run_status.failures[] | {{test_id, message}}]' {path}"
-                    )
+            if isinstance(tests, dict) and tests.get("failed", 0) > 0:
+                cmds.append(f"jq '{{status: .tests.status, failures: .tests.failures}}' {path}")
+            else:
+                cmds.append(
+                    f"jq '{{status: .tests.status, passed: .tests.passed, tiers: .tests.tiers}}' {path}"
+                )
 
         # Commit details
         if isinstance(commit, dict) and commit.get("oid"):
             cmds.append(
-                f"jq '{{oid: .commit.oid, short_oid: .commit.short_oid, summary: .commit.summary, pushed: .commit.pushed}}' {path}"
+                f"jq '{{oid: .commit.oid, summary: .commit.summary, pushed: .commit.pushed}}' {path}"
             )
-            if commit.get("semantic_diff"):
-                cmds.append(f"jq '.commit.semantic_diff.structural_changes' {path}")
+            if commit.get("diff"):
+                cmds.append(f"jq '.commit.diff' {path}")
 
         return summary, cmds
 
