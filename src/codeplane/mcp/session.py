@@ -33,6 +33,10 @@ class SessionState:
     gate_manager: GateManager = field(default_factory=GateManager)
     pattern_detector: CallPatternDetector = field(default_factory=CallPatternDetector)
 
+    # Timestamp (monotonic) of the most recent recon call completion.
+    # Used by read_source to refuse scatter-read within 5 s of recon.
+    last_recon_at: float | None = field(default=None, repr=False)
+
     # Exclusive-tool lock: prevents concurrent tool execution during
     # long-running operations like checkpoint, semantic_diff, map_repo.
     _exclusive_lock: asyncio.Lock = field(default_factory=asyncio.Lock)

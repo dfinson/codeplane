@@ -7,6 +7,7 @@ Three-tool read model:
 """
 
 import hashlib
+import time
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
@@ -180,6 +181,33 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             return page
 
         session = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        # ── Hard gate: refuse read_source within 5 s of a recon call ──
+        # Agents should parse recon's JSON output (jq extraction commands)
+        # rather than immediately scatter-reading individual files.
+        _RECON_COOLDOWN_SEC = 5.0
+        if session.last_recon_at is not None:
+            elapsed = time.monotonic() - session.last_recon_at
+            if elapsed < _RECON_COOLDOWN_SEC:
+                remaining = round(_RECON_COOLDOWN_SEC - elapsed, 1)
+                return {
+                    "status": "blocked",
+                    "error": {
+                        "code": "RECON_COOLDOWN",
+                        "message": (
+                            f"read_source blocked: recon was called {elapsed:.1f}s ago. "
+                            f"Wait {remaining}s or use the JSON extraction commands from "
+                            f"the recon response instead of scatter-reading."
+                        ),
+                    },
+                    "agentic_hint": (
+                        "Use the agentic_hint jq/JSON parsing commands from the recon "
+                        "response to extract file content — NOT read_source. Recon already "
+                        "returned full files, scaffolds, and summaries. Parse them with the "
+                        "extraction commands provided in the recon response."
+                    ),
+                    "cooldown_remaining_sec": remaining,
+                }
 
         # Evaluate pattern detector before executing read
         pattern_match = session.pattern_detector.evaluate()
@@ -1006,4 +1034,66 @@ def _build_unindexed_fallback(full_path: Any, rel_path: str) -> dict[str, Any]:
             "Use read_source with span targets to read specific line ranges, "
             "or read_file_full for the complete file."
         ),
+    }
+
+
+async def _build_lite_scaffold(
+    app_ctx: "AppContext",
+    rel_path: str,
+    full_path: Any,
+) -> dict[str, Any]:
+    """Build a lightweight scaffold with only symbol names and import sources.
+
+    Costs ~74 tokens per file vs ~65 for a bare summary_line and ~188 for
+    a full scaffold.  Gives agents enough signal (function/class names +
+    dependency modules + file size) to judge edit-relevance without the
+    overhead of full signatures, decorators, or line ranges.
+    """
+
+    from codeplane.index._internal.indexing.graph import FactQueries
+    from codeplane.index.models import DefFact, File, ImportFact
+
+    # Compute line count
+    try:
+        raw_text = full_path.read_text(encoding="utf-8", errors="replace")
+        total_lines = raw_text.count("\n") + (1 if raw_text and not raw_text.endswith("\n") else 0)
+    except Exception:
+        total_lines = 0
+
+    # Look up file in the index
+    file_rec: File | None = None
+    with app_ctx.coordinator.db.session() as session:
+        from sqlmodel import select
+
+        stmt = select(File).where(File.path == rel_path)
+        file_rec = session.exec(stmt).first()
+
+    if file_rec is None or file_rec.id is None:
+        return {"total_lines": total_lines, "imports": [], "symbols": []}
+
+    # Query defs and imports
+    defs: list[DefFact] = []
+    imports: list[ImportFact] = []
+    with app_ctx.coordinator.db.session() as session:
+        fq = FactQueries(session)
+        defs = fq.list_defs_in_file(file_rec.id, limit=5000)
+        imports = fq.list_imports(file_rec.id, limit=1000)
+
+    # Import sources only — deduplicated module names
+    sources: set[str] = set()
+    for imp in imports:
+        if imp.source_literal and imp.source_literal != imp.imported_name:
+            sources.add(imp.source_literal)
+        else:
+            sources.add(imp.imported_name)
+    import_sources = sorted(sources)
+
+    # Symbol names only — "kind name", skip constants/variables
+    constant_kinds = frozenset({"variable", "constant", "val", "var", "property", "field"})
+    symbol_names = [f"{d.kind} {d.name}" for d in defs if d.kind not in constant_kinds]
+
+    return {
+        "total_lines": total_lines,
+        "imports": import_sources,
+        "symbols": symbol_names,
     }

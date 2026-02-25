@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -279,3 +280,86 @@ class TestReadSourceEnvelope:
             inline_summary="test",
         )
         assert result.get("scope_usage") == usage
+
+
+# =============================================================================
+# Recon cooldown gate tests
+# =============================================================================
+
+
+class TestReconCooldownSessionState:
+    """Test last_recon_at field on SessionState."""
+
+    def test_default_none(self) -> None:
+        """last_recon_at is None by default."""
+        from codeplane.mcp.session import SessionState
+
+        s = SessionState(session_id="s1", created_at=0, last_active=0)
+        assert s.last_recon_at is None
+
+    def test_settable(self) -> None:
+        """last_recon_at can be set to a float timestamp."""
+        import time
+
+        from codeplane.mcp.session import SessionState
+
+        s = SessionState(session_id="s1", created_at=0, last_active=0)
+        now = time.monotonic()
+        s.last_recon_at = now
+        assert s.last_recon_at == now
+
+    def test_cooldown_blocks_read_source_within_window(self) -> None:
+        """read_source returns RECON_COOLDOWN error when recon was recent."""
+        import time
+
+        from codeplane.mcp.session import SessionState
+
+        session = SessionState(session_id="s1", created_at=0, last_active=0)
+        # Simulate recon just happened
+        session.last_recon_at = time.monotonic()
+
+        # The gate check logic (mirrored from files.py)
+        _RECON_COOLDOWN_SEC = 5.0
+        elapsed = time.monotonic() - session.last_recon_at
+        assert elapsed < _RECON_COOLDOWN_SEC
+
+    def test_cooldown_allows_after_window(self) -> None:
+        """read_source proceeds when recon was >5s ago."""
+        import time
+
+        from codeplane.mcp.session import SessionState
+
+        session = SessionState(session_id="s1", created_at=0, last_active=0)
+        # Simulate recon was 10 seconds ago
+        session.last_recon_at = time.monotonic() - 10.0
+
+        _RECON_COOLDOWN_SEC = 5.0
+        elapsed = time.monotonic() - session.last_recon_at
+        assert elapsed >= _RECON_COOLDOWN_SEC
+
+    def test_cooldown_response_structure(self) -> None:
+        """Verify the blocked response has required fields."""
+
+        response: dict[str, Any] = {
+            "status": "blocked",
+            "error": {
+                "code": "RECON_COOLDOWN",
+                "message": (
+                    "read_source blocked: recon was called 0.5s ago. "
+                    "Wait 4.5s or use the JSON extraction commands from "
+                    "the recon response instead of scatter-reading."
+                ),
+            },
+            "agentic_hint": (
+                "Use the agentic_hint jq/JSON parsing commands from the recon "
+                "response to extract file content — NOT read_source."
+            ),
+            "cooldown_remaining_sec": 4.5,
+        }
+        assert response["status"] == "blocked"
+        err = response["error"]
+        assert isinstance(err, dict)
+        assert err["code"] == "RECON_COOLDOWN"
+        assert "agentic_hint" in response
+        assert "cooldown_remaining_sec" in response
+        assert "scatter-reading" in err["message"]

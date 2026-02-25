@@ -1081,10 +1081,11 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             if gate_block is not None:
                 return gate_block
 
-        # Increment consecutive recon counter
+        # Increment consecutive recon counter and record recon timestamp
         try:
             session = app_ctx.session_manager.get_or_create(ctx.session_id)
             session.counters["recon_consecutive"] = session.counters.get("recon_consecutive", 0) + 1
+            session.last_recon_at = time.monotonic()
         except Exception:  # noqa: BLE001
             pass
 
@@ -1179,15 +1180,13 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                     entry["file_sha256"] = _compute_sha256(full_path)
 
             else:
-                # SUMMARY_ONLY: just path + one-line summary
+                # SUMMARY_ONLY: lite scaffold (symbol names + import sources + line count)
                 if full_path.exists():
                     try:
-                        raw = full_path.read_bytes()
-                        if b"\x00" not in raw[:512]:
-                            text = raw.decode("utf-8", errors="replace")
-                            first_line = text.split("\n", 1)[0].strip()
-                            if first_line:
-                                entry["summary_line"] = first_line[:200]
+                        from codeplane.mcp.tools.files import _build_lite_scaffold
+
+                        lite = await _build_lite_scaffold(app_ctx, fc.path, full_path)
+                        entry["summary"] = lite
                     except Exception:  # noqa: BLE001
                         pass
 
