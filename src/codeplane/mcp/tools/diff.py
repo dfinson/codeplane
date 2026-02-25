@@ -75,7 +75,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         from codeplane.mcp.delivery import wrap_existing_response
 
-        result_dict = _result_to_text(result)
+        result_dict = _result_to_text(result, verbosity=verbosity)
 
         # Track scope usage
         scope_usage = None
@@ -448,12 +448,21 @@ def _build_agentic_hint(result: SemanticDiffResult) -> str:
     return hint
 
 
-def _result_to_text(result: SemanticDiffResult) -> dict[str, Any]:
+def _result_to_text(
+    result: SemanticDiffResult,
+    *,
+    verbosity: Literal["full", "standard", "minimal"] = "full",
+) -> dict[str, Any]:
     """Convert SemanticDiffResult to compact text format.
 
     Same information as _result_to_dict, but structural_changes rendered as
     flat text lines instead of nested JSON objects.
     Format per change: {change} {kind} {name}  {path}:{start}-{end}  Δ{lines}  risk:{risk}  refs:{N}  tests:{list}
+
+    Verbosity levels:
+    - full: everything (default)
+    - standard: same as full (change_preview not in text format)
+    - minimal: just change/kind/name + path:start-end
     """
     from codeplane.mcp.tools.index import _change_to_text
 
@@ -461,7 +470,7 @@ def _result_to_text(result: SemanticDiffResult) -> dict[str, Any]:
 
     structural_lines: list[str] = []
     for c in result.structural_changes:
-        structural_lines.extend(_change_to_text(c))
+        structural_lines.extend(_change_to_text(c, verbosity=verbosity))
 
     non_structural_lines: list[str] = []
     for f in result.non_structural_changes:
