@@ -406,13 +406,17 @@ async def _file_centric_pipeline(
 
     # 5.1  Anchor-floor pruning — demote FULL_FILE files below the
     #       data-driven floor derived from explicit/pinned anchors.
-    #       compute_anchor_floor uses MAD of anchor scores only;
+    #       compute_anchor_floor uses max(MAD_anchor, MAD_full_file);
     #       no arbitrary constants.  When no anchors exist (Q3 open
     #       prompts, no seeds/pins), floor = 0.0 → no-op.
     anchor_indices = [i for i, fc in enumerate(file_candidates) if fc.has_explicit_mention]
+    full_file_indices = [
+        i for i, fc in enumerate(file_candidates) if fc.tier == OutputTier.FULL_FILE
+    ]
     anchor_floor = compute_anchor_floor(
         [fc.combined_score for fc in file_candidates],
         anchor_indices,
+        full_file_indices,
     )
     anchor_demoted = 0
     if anchor_floor > 0:

@@ -423,7 +423,7 @@ class TestFindElbow:
 
 
 class TestComputeAnchorFloor:
-    """Tests for compute_anchor_floor — anchor-only MAD band."""
+    """Tests for compute_anchor_floor — max(MAD_anchor, MAD_full) band."""
 
     def test_empty(self) -> None:
         assert compute_anchor_floor([], []) == 0.0
@@ -434,7 +434,7 @@ class TestComputeAnchorFloor:
     def test_single_anchor(self) -> None:
         # Single anchor at rank 1 (score 5.0)
         # Anchor scores: [5.0], median=5.0, MAD=0.0
-        # floor = 5.0 - 0.0 = 5.0
+        # No full_file_indices → floor = 5.0 - 0.0 = 5.0
         floor = compute_anchor_floor([10.0, 5.0, 3.0], [1])
         assert floor == 5.0
 
@@ -442,7 +442,7 @@ class TestComputeAnchorFloor:
         """Simulates #108-like distribution: anchor at rank 4 (0-indexed)."""
         scores = [1.33, 1.02, 0.84, 0.83, 0.81, 0.74, 0.67, 0.59]
         floor = compute_anchor_floor(scores, [4])
-        # Single anchor → MAD=0, floor=0.81
+        # Single anchor → MAD_anchor=0, no full → floor=0.81
         assert floor == scores[4]
 
     def test_multiple_anchors(self) -> None:
@@ -478,6 +478,52 @@ class TestComputeAnchorFloor:
         # Abs devs: [0.07, 0.0, 0.21] → sorted [0.0, 0.07, 0.21] → MAD=0.07
         # floor = 0.74 - 0.07 = 0.67
         assert floor == pytest.approx(0.67)
+
+    # -- full_file_indices integration tests ----------------------------
+
+    def test_full_file_widens_floor_when_anchors_tight(self) -> None:
+        """Tight anchor cluster + dispersed tier → full MAD wins."""
+        # Anchors at [0, 1] with scores 0.09, 0.09 → MAD_anchor = 0
+        # Full tier at [0..4] with scores 0.09, 0.09, 0.07, 0.06, 0.04
+        # Full MAD: median=0.07, abs_devs=[0.02, 0.02, 0, 0.01, 0.03]
+        #   sorted=[0, 0.01, 0.02, 0.02, 0.03] → MAD=0.02
+        # max(0, 0.02) = 0.02 → floor = 0.09 - 0.02 = 0.07
+        scores = [0.09, 0.09, 0.07, 0.06, 0.04, 0.02]
+        floor = compute_anchor_floor(scores, [0, 1], [0, 1, 2, 3, 4])
+        assert floor == pytest.approx(0.07)
+
+    def test_anchor_mad_wins_when_larger(self) -> None:
+        """When anchors are widely spread, anchor MAD dominates."""
+        # Anchors at [0, 4] with scores 0.10, 0.04
+        # MAD_anchor: median=0.10, abs_devs=[0, 0.06] → MAD=0.06
+        # Full tier [0..4]: scores 0.10, 0.09, 0.08, 0.07, 0.04
+        # Full MAD: median=0.08, abs_devs=[0.02, 0.01, 0, 0.01, 0.04]
+        #   sorted=[0, 0.01, 0.01, 0.02, 0.04] → MAD=0.01
+        # max(0.06, 0.01) = 0.06 → floor = 0.04 - 0.06 = -0.02
+        scores = [0.10, 0.09, 0.08, 0.07, 0.04, 0.01]
+        floor = compute_anchor_floor(scores, [0, 4], [0, 1, 2, 3, 4])
+        assert floor == pytest.approx(-0.02)
+
+    def test_full_file_none_falls_back_to_anchor_only(self) -> None:
+        """When full_file_indices is None, behaves like anchor-only."""
+        scores = [0.09, 0.09, 0.07, 0.06, 0.04, 0.02]
+        floor_none = compute_anchor_floor(scores, [0, 1], None)
+        floor_empty = compute_anchor_floor(scores, [0, 1], [])
+        # Both should use anchor-only MAD = 0 → floor = 0.09
+        assert floor_none == pytest.approx(0.09)
+        assert floor_empty == pytest.approx(0.09)
+
+    def test_single_anchor_with_full_file_spread(self) -> None:
+        """Single anchor + spread tier → full MAD saves marginal files."""
+        # Anchor at [2] score=0.08, MAD_anchor=0 → old floor=0.08
+        # Full tier [0..5]: 0.12, 0.10, 0.08, 0.06, 0.05, 0.04
+        #   sorted=[0.04, 0.05, 0.06, 0.08, 0.10, 0.12] → median=0.08 (idx 3)
+        #   abs_devs from 0.08: [0.04, 0.03, 0.02, 0, 0.02, 0.04]
+        #   sorted=[0, 0.02, 0.02, 0.03, 0.04, 0.04] → MAD=0.03 (idx 3)
+        # max(0, 0.03) = 0.03 → floor = 0.08 - 0.03 = 0.05
+        scores = [0.12, 0.10, 0.08, 0.06, 0.05, 0.04, 0.01]
+        floor = compute_anchor_floor(scores, [2], [0, 1, 2, 3, 4, 5])
+        assert floor == pytest.approx(0.05)
 
 
 class TestElbowBasedFileInclusion:

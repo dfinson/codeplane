@@ -266,24 +266,27 @@ def compute_noise_metric(scores: list[float]) -> float:
 def compute_anchor_floor(
     scores: list[float],
     anchor_indices: list[int],
+    full_file_indices: list[int] | None = None,
 ) -> float:
     """Compute floor score for anchor-calibrated file inclusion.
 
-    Uses the **Median Absolute Deviation** (MAD) of anchor scores only
-    to estimate natural score variation among known-relevant files.
+    Uses ``max(MAD_anchor, MAD_full_file)`` as the tolerance band.
+    Anchor MAD alone can be dangerously small when anchors are tightly
+    clustered (2-3 files with near-identical scores → MAD ≈ 0 → floor ≈
+    ``min(anchor)``, demoting nearly everything).  Using the wider of
+    anchor-only or full-tier dispersion prevents over-pruning while
+    still anchoring the floor to real data — no arbitrary constants.
 
     The inclusion floor is::
 
-        min(anchor_scores) - MAD(anchor_scores)
-
-    Non-anchor files are excluded from the MAD computation to prevent
-    high-scoring false positives (e.g., cross-cutting utility modules)
-    from inflating the variation estimate and widening the band.
+        min(anchor_scores) - max(MAD_anchor, MAD_full_file)
 
     Args:
         scores: File scores, sorted descending.
         anchor_indices: 0-based indices of anchor files in the sorted
             score list.
+        full_file_indices: 0-based indices of all FULL_FILE files.
+            When *None* or empty, falls back to anchor-only MAD.
 
     Returns:
         Floor score.  Files with ``score >= floor`` should be included.
@@ -299,16 +302,31 @@ def compute_anchor_floor(
 
     s_anchor_min = anchor_scores[0]
 
-    # MAD = Median Absolute Deviation of anchor scores only
+    # MAD = Median Absolute Deviation of anchor scores
     anchor_median = anchor_scores[len(anchor_scores) // 2]
     abs_devs = sorted(abs(s - anchor_median) for s in anchor_scores)
-    mad = abs_devs[len(abs_devs) // 2] if abs_devs else 0.0
+    mad_anchor = abs_devs[len(abs_devs) // 2] if abs_devs else 0.0
+
+    # MAD of full-tier scores — captures natural spread across the tier
+    mad_full = 0.0
+    if full_file_indices:
+        full_scores = sorted(scores[i] for i in full_file_indices if i < n)
+        if full_scores:
+            full_median = full_scores[len(full_scores) // 2]
+            full_abs_devs = sorted(abs(s - full_median) for s in full_scores)
+            mad_full = full_abs_devs[len(full_abs_devs) // 2] if full_abs_devs else 0.0
+
+    # Use the wider of the two spreads — prevents over-pruning when
+    # anchors are tightly clustered but the tier is naturally dispersed.
+    mad = max(mad_anchor, mad_full)
 
     floor_score = s_anchor_min - mad
 
     log.debug(
         "recon.anchor_floor",
         s_anchor_min=round(s_anchor_min, 4),
+        mad_anchor=round(mad_anchor, 4),
+        mad_full=round(mad_full, 4),
         mad=round(mad, 4),
         floor=round(floor_score, 4),
         n_anchors=len(anchor_scores),
