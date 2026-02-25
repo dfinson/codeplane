@@ -1,0 +1,46 @@
+# CodePlane Recon Baseline Evaluation
+#
+# Evaluates recon's file retrieval quality against ground-truth issue annotations.
+# Requires a running CodePlane daemon on the target repo.
+#
+# Prerequisites:
+#   1. Start CodePlane daemon on the target repo
+#   2. Set CPL_BENCH_TARGET_REPO env var (default: ~/wsl-repos/evees/evee_cpl/evee)
+#
+# Run:
+#   cd benchmarking/cpl_bench && python run.py experiments/recon_baseline.yaml
+
+experiment:
+  name: cpl-recon-baseline
+  description: >-
+    Evaluate CodePlane recon file retrieval precision, recall, F1,
+    and tier alignment against hand-annotated ground truth across
+    24 issues × 3 query levels (anchored, exploratory, vague).
+  version: "1.0"
+  output_path: experiments/output/recon_baseline
+
+  tracking_backend:
+    type: local
+
+  models:
+    - name: cpl-recon
+      args:
+        - daemon_port: [7777]
+          timeout: [120]
+
+  dataset:
+    name: recon-ground-truth
+    type: cpl-recon-gt
+    args:
+      data_path: data/ground_truth.json
+
+  metrics:
+    - name: cpl-retrieval
+      mapping:
+        returned_files: model.returned_files
+        gt_files: dataset.gt_files
+
+    - name: cpl-tier-align
+      mapping:
+        returned_tiers: model.returned_tiers
+        gt_categories: dataset.gt_categories

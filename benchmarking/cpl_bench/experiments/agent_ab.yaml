@@ -1,0 +1,58 @@
+# CodePlane Agent A/B Evaluation
+#
+# Compares agent efficiency and outcome quality between CodePlane-augmented
+# sessions and native (terminal-only) sessions on the same issues.
+#
+# Prerequisites:
+#   1. Collect chatreplay exports from VS Code Copilot sessions:
+#      - Run each issue with CodePlane MCP enabled → export chatreplay
+#      - Run each issue without CodePlane (native) → export chatreplay
+#   2. Convert to traces:
+#      python -m benchmarking.cpl_bench.preprocessing.chatreplay_to_traces \
+#        benchmarking/evee/results/*.json --repo evee
+#   3. (Optional) Score outcomes manually and add "outcome" field to traces
+#
+# Run:
+#   cd benchmarking/cpl_bench && python run.py experiments/agent_ab.yaml
+
+experiment:
+  name: cpl-agent-ab
+  description: >-
+    Head-to-head comparison of CodePlane-augmented vs native agent sessions.
+    Measures efficiency (turns, tokens, tool calls) and outcome quality
+    (correctness, completeness, code quality) from pre-collected traces.
+  version: "1.0"
+  output_path: experiments/output/agent_ab
+
+  tracking_backend:
+    type: local
+
+  models:
+    - name: cpl-agent-replay
+
+  dataset:
+    name: agent-traces
+    type: cpl-agent-traces
+    args:
+      traces_dir: data/traces
+
+  metrics:
+    - name: cpl-efficiency
+      mapping:
+        variant: model.variant
+        turns: model.turns
+        total_tool_calls: model.total_tool_calls
+        codeplane_tool_calls: model.codeplane_tool_calls
+        terminal_tool_calls: model.terminal_tool_calls
+        tool_search_calls: model.tool_search_calls
+        other_tool_calls: model.other_tool_calls
+        total_tokens: model.total_tokens
+        prompt_tokens: model.prompt_tokens
+        completion_tokens: model.completion_tokens
+        cached_tokens: model.cached_tokens
+        cache_hit_ratio: model.cache_hit_ratio
+
+    - name: cpl-outcome
+      mapping:
+        outcome: model.outcome
+        variant: model.variant
