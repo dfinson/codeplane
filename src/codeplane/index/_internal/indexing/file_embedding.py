@@ -81,6 +81,13 @@ FILE_EMBED_VERSION = 7  # v7: config-file scaffold enrichment (targets, sections
 
 # Maximum token length passed to ONNX model (caps attention cost)
 FILE_EMBED_MAX_LENGTH = 512
+
+# Adaptive batch sizing thresholds.
+# ONNX attention cost scales quadratically with sequence length, so
+# short texts can use much larger batches without extra memory or time.
+# Thresholds are in characters (~3.5 chars/token for scaffold text).
+_BATCH_SHORT_THRESHOLD = 500  # <~140 tokens
+_BATCH_MEDIUM_THRESHOLD = 1_200  # <~340 tokens
 FILE_EMBED_SUBDIR = "file_embedding"
 
 # Per-docstring budget (first sentence or first N chars)
@@ -1003,28 +1010,50 @@ class FileEmbeddingIndex:
         Texts are sorted by character length before batching so that
         similar-length sequences are grouped together.  This reduces
         ONNX padding overhead (the runtime pads every element in a
-        batch to the length of the longest element).  Original order
-        is restored before returning.
+        batch to the length of the longest element).
+
+        Adaptive batch sizing:  Short texts use larger batches (up to 4×
+        the base size) because ONNX attention cost scales quadratically
+        with sequence length — a batch of 64 short texts (~140 tokens)
+        costs roughly the same as a batch of 16 long texts (~500 tokens).
+
+        Original order is restored before returning.
         """
         if not texts:
             return np.empty((0, FILE_EMBED_DIM), dtype=np.float16)
 
         total = len(texts)
-        batch_size = getattr(self, "_batch_size", FILE_EMBED_BATCH_SIZE)
+        base_batch = getattr(self, "_batch_size", FILE_EMBED_BATCH_SIZE)
 
         # Sort by length → similar-length texts batch together → less padding
         order = sorted(range(total), key=lambda i: len(texts[i]))
         sorted_texts = [texts[i] for i in order]
 
         sorted_vecs: list[np.ndarray] = []
-        for i in range(0, total, batch_size):
-            batch = sorted_texts[i : i + batch_size]
+        embedded = 0
+        gc_counter = 0
+        while embedded < total:
+            # Adaptive batch size based on length of next text in sorted order
+            char_len = len(sorted_texts[embedded])
+            if char_len < _BATCH_SHORT_THRESHOLD:
+                batch_size = base_batch * 4  # ~140 tokens → 4× batch
+            elif char_len < _BATCH_MEDIUM_THRESHOLD:
+                batch_size = base_batch * 2  # ~340 tokens → 2× batch
+            else:
+                batch_size = base_batch  # 340+ tokens → base batch
+
+            batch = sorted_texts[embedded : embedded + batch_size]
             vecs = list(self._model.embed(batch, batch_size=len(batch)))
             sorted_vecs.extend(vecs)
+            embedded += len(batch)
+
             if on_progress is not None:
-                on_progress(min(i + len(batch), total), total)
-            # Release ONNX intermediate buffers between batches
-            if i + batch_size < total:
+                on_progress(min(embedded, total), total)
+
+            # Periodic GC (every 5th batch) to release ONNX intermediate
+            # buffers without the overhead of collecting on every batch.
+            gc_counter += 1
+            if gc_counter % 5 == 0 and embedded < total:
                 gc.collect()
 
         # Restore original order
