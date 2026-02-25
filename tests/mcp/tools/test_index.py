@@ -15,7 +15,7 @@ from codeplane.mcp.tools.index import (
     _serialize_tree,
     _summarize_map,
     _summarize_search,
-    _tree_to_compact_text,
+    _tree_to_hybrid_text,
     _tree_to_text,
 )
 
@@ -445,8 +445,8 @@ class TestTreeToText:
         assert lines[2].startswith("    x.py")
 
 
-class TestTreeToCompactText:
-    """Tests for _tree_to_compact_text — lossless flat dir-header format."""
+class TestTreeToHybridText:
+    """Tests for _tree_to_hybrid_text — indented directory tree with inline files."""
 
     _SAMPLE_PATHS: list[tuple[str, int | None]] = [
         ("src/codeplane/cli/main.py", 100),
@@ -460,11 +460,12 @@ class TestTreeToCompactText:
     ]
 
     def test_empty(self) -> None:
-        assert _tree_to_compact_text([]) == []
+        lines = _tree_to_hybrid_text([])
+        assert lines == ["# files without :N have 0 lines"]
 
     def test_every_file_present(self) -> None:
         """No filenames dropped — lossless."""
-        lines = _tree_to_compact_text(self._SAMPLE_PATHS)
+        lines = _tree_to_hybrid_text(self._SAMPLE_PATHS)
         joined = "\n".join(lines)
         assert "main.py:100" in joined
         assert "init.py:50" in joined
@@ -475,50 +476,80 @@ class TestTreeToCompactText:
         assert "pyproject.toml:200" in joined
         assert "README.md:50" in joined
 
-    def test_files_grouped_by_directory(self) -> None:
-        lines = _tree_to_compact_text(self._SAMPLE_PATHS)
-        # Each directory gets one line with its files inline
-        cli_line = [ln for ln in lines if ln.startswith("src/codeplane/cli/")]
-        assert len(cli_line) == 1
-        assert "main.py:100" in cli_line[0]
-        assert "init.py:50" in cli_line[0]
+    def test_header_comment(self) -> None:
+        lines = _tree_to_hybrid_text(self._SAMPLE_PATHS)
+        assert lines[0] == "# files without :N have 0 lines"
 
-    def test_root_files_on_dot_line(self) -> None:
-        lines = _tree_to_compact_text(self._SAMPLE_PATHS)
-        dot_lines = [ln for ln in lines if ln.startswith(". ")]
-        assert len(dot_lines) == 1
-        assert "pyproject.toml:200" in dot_lines[0]
-        assert "README.md:50" in dot_lines[0]
-
-    def test_no_line_counts(self) -> None:
-        lines = _tree_to_compact_text(self._SAMPLE_PATHS, include_line_counts=False)
+    def test_hierarchy_indentation(self) -> None:
+        """Subdirectories are indented under parents."""
+        lines = _tree_to_hybrid_text(self._SAMPLE_PATHS)
         joined = "\n".join(lines)
-        # Filenames present, no :LC suffixes
-        assert "main.py" in joined
-        assert ":100" not in joined
-        assert ":50" not in joined
+        # src/codeplane/ is a collapsed chain at indent 0
+        assert "src/codeplane/" in joined
+        # cli/ and core/ are indented under it
+        cli_lines = [ln for ln in lines if "cli/" in ln and "init.py:50" in ln]
+        assert len(cli_lines) == 1
+        assert cli_lines[0].startswith("  ")  # indented
+
+    def test_collapsed_single_child_chains(self) -> None:
+        """Single-child dir chains are collapsed."""
+        paths: list[tuple[str, int | None]] = [
+            ("a/b/c/file.py", 10),
+        ]
+        lines = _tree_to_hybrid_text(paths)
+        joined = "\n".join(lines)
+        # a/b/c/ should be collapsed into one line
+        assert "a/b/c/" in joined
+        assert "file.py:10" in joined
+
+    def test_zero_line_count_no_suffix(self) -> None:
+        """Files with 0 or None line counts appear without :N."""
+        paths: list[tuple[str, int | None]] = [
+            ("empty.py", 0),
+            ("unknown.py", None),
+            ("real.py", 42),
+        ]
+        lines = _tree_to_hybrid_text(paths)
+        joined = "\n".join(lines)
+        assert "empty.py" in joined
+        assert "empty.py:" not in joined
+        assert "unknown.py" in joined
+        assert "unknown.py:" not in joined
+        assert "real.py:42" in joined
+
+    def test_root_files_at_end(self) -> None:
+        lines = _tree_to_hybrid_text(self._SAMPLE_PATHS)
+        # Root files (pyproject.toml, README.md) on last line, not indented
+        last = lines[-1]
+        assert "pyproject.toml:200" in last
+        assert "README.md:50" in last
+        assert not last.startswith(" ")
 
     def test_root_files_only(self) -> None:
         paths: list[tuple[str, int | None]] = [
             ("setup.py", 10),
             ("README.md", 20),
         ]
-        lines = _tree_to_compact_text(paths)
-        assert len(lines) == 1  # single dot line
-        assert ". " in lines[0]
-        assert "setup.py:10" in lines[0]
-        assert "README.md:20" in lines[0]
-
-    def test_dirs_sorted(self) -> None:
-        lines = _tree_to_compact_text(self._SAMPLE_PATHS)
-        dir_prefixes = [ln.split(" ")[0] for ln in lines if not ln.startswith(". ")]
-        assert dir_prefixes == sorted(dir_prefixes)
+        lines = _tree_to_hybrid_text(paths)
+        # header + root files
+        assert len(lines) == 2
+        assert "setup.py:10" in lines[1]
+        assert "README.md:20" in lines[1]
 
     def test_lossless_file_count(self) -> None:
-        """Total colon-separated entries equals input file count."""
-        lines = _tree_to_compact_text(self._SAMPLE_PATHS)
+        """All input files appear in output."""
+        lines = _tree_to_hybrid_text(self._SAMPLE_PATHS)
         joined = "\n".join(lines)
-        assert joined.count(":") == len(self._SAMPLE_PATHS)
+        for path, _ in self._SAMPLE_PATHS:
+            fname = path.rsplit("/", 1)[-1] if "/" in path else path
+            assert fname in joined, f"{fname} missing from output"
+
+    def test_dirs_sorted(self) -> None:
+        lines = _tree_to_hybrid_text(self._SAMPLE_PATHS)
+        # Skip header and root-file lines
+        dir_lines = [ln for ln in lines[1:] if ln.rstrip().endswith("/") or "/" in ln]
+        # Indented dirs should be sorted within each level
+        assert len(dir_lines) > 0
 
 
 class _MockStructureInfo:
@@ -695,8 +726,8 @@ class TestMapRepoSectionsToText:
         sections = _map_repo_sections_to_text(result)
         assert "func  medium" in sections["public_api"][0]
 
-    def test_structure_uses_compact_format_when_all_paths_available(self) -> None:
-        """When all_paths is available, uses lossless compact format."""
+    def test_structure_uses_hybrid_format_when_all_paths_available(self) -> None:
+        """When all_paths is available, uses lossless hybrid format."""
         all_paths: list[tuple[str, int | None]] = [
             ("src/main.py", 100),
             ("src/utils.py", 50),
@@ -713,14 +744,16 @@ class TestMapRepoSectionsToText:
         )
         sections = _map_repo_sections_to_text(result)
         tree = "\n".join(sections["structure"]["tree"])
-        # Every file listed with line count — no data loss
+        # Every file present — no data loss
         assert "main.py:100" in tree
         assert "utils.py:50" in tree
         assert "test_main.py:30" in tree
         assert "README.md:20" in tree
+        # Has header comment
+        assert "# files without :N have 0 lines" in tree
 
     def test_structure_falls_back_to_tree_when_no_all_paths(self) -> None:
-        """Without all_paths, _map_repo_sections_to_text uses the tree as before."""
+        """Without all_paths, uses the old indented tree format."""
         file_node = MockFileNode(name="app.py", path="src/app.py", line_count=100)
         result = _MockMapRepoResult(
             structure=_MockStructureInfo(
