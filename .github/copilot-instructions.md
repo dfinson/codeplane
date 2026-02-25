@@ -114,4 +114,31 @@ If you believe a hard reset is needed:
 
 Violating this rule destroys work irreversibly and may affect parallel agent workflows.
 
+## Benchmarking (cpl-bench)
+
+The benchmarking script lives at `benchmarking/cpl_bench/setup_and_run.py`.
+It handles CodePlane init, daemon lifecycle, and EVEE evaluation in one command.
+
+```bash
+# Basic run (recon experiment, port 7777, no reindex)
+python benchmarking/cpl_bench/setup_and_run.py /path/to/target/repo
+
+# Choose experiment
+python benchmarking/cpl_bench/setup_and_run.py /path/to/repo --experiment agent-ab
+
+# Custom port and timeout
+python benchmarking/cpl_bench/setup_and_run.py /path/to/repo --port 8888 --timeout 180
+
+# Force full reindex (deletes .codeplane/ first)
+python benchmarking/cpl_bench/setup_and_run.py /path/to/repo --reindex
+```
+
+**Key flags:**
+- `--experiment {recon,agent-ab}` — which evaluation to run (default: `recon`)
+- `--port PORT` — daemon port (default: `7777`)
+- `--timeout SECS` — MCP call timeout (default: `120`)
+- `--reindex` — delete `.codeplane/` and rebuild the index from scratch (default: off)
+
+The script automatically kills the daemon when the experiment finishes.
+
 For CodePlane MCP tool usage instructions, see [AGENTS.md](../AGENTS.md).
