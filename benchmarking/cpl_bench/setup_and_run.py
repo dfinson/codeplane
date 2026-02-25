@@ -12,8 +12,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -60,6 +63,19 @@ def _resolve_repo(repo_arg: str) -> Path:
     if not (repo / ".git").exists():
         _die(f"Not a git repository: {repo}")
     return repo
+
+
+def _force_reindex(repo: Path, port: int) -> None:
+    """Delete existing index data so the next `cpl init` + `cpl up` rebuilds from scratch."""
+    codeplane_dir = repo / ".codeplane"
+    if not codeplane_dir.is_dir():
+        _ok("No .codeplane/ dir — nothing to clean")
+        return
+    # Kill daemon first if running on this port
+    _kill_daemon(port)
+    _log("Removing .codeplane/ for full reindex ...")
+    shutil.rmtree(codeplane_dir)
+    _ok("Removed .codeplane/ — will reinitialize")
 
 
 def _ensure_init(repo: Path, port: int) -> None:
@@ -120,6 +136,28 @@ def _ensure_daemon(repo: Path, port: int) -> None:
         time.sleep(HEALTH_POLL_INTERVAL)
 
     _die(f"Daemon did not become healthy within {HEALTH_POLL_TIMEOUT}s.\n  Check logs: {log_path}")
+
+
+def _kill_daemon(port: int) -> None:
+    """Find and kill the cpl daemon listening on *port*."""
+    if not _daemon_healthy(port):
+        return
+    # Find PID via lsof
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f":{port}"],
+            capture_output=True,
+            text=True,
+        )
+        pids = [int(p) for p in result.stdout.strip().split() if p.strip()]
+    except (subprocess.SubprocessError, ValueError):
+        pids = []
+    for pid in pids:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGTERM)
+    if pids:
+        time.sleep(1)
+        _ok(f"Killed daemon (PID {', '.join(str(p) for p in pids)}) on port {port}")
 
 
 def _patch_config(config_path: Path, port: int, timeout: int) -> Path:
@@ -198,6 +236,12 @@ def main_cli() -> None:
     parser.add_argument(
         "--timeout", type=int, default=120, help="MCP call timeout in seconds (default: 120)"
     )
+    parser.add_argument(
+        "--reindex",
+        action="store_true",
+        default=False,
+        help="Delete .codeplane/ and rebuild the index from scratch",
+    )
     args = parser.parse_args()
 
     config_path = EXPERIMENTS[args.experiment]
@@ -209,22 +253,26 @@ def main_cli() -> None:
     repo = _resolve_repo(args.repo)
     _ok(f"Repo: {repo}")
 
-    # 2. Init if needed
+    # 2. Force reindex if requested
+    if args.reindex:
+        _force_reindex(repo, args.port)
+
+    # 3. Init if needed
     _ensure_init(repo, args.port)
 
-    # 3. Start daemon if needed, wait for healthy
+    # 4. Start daemon if needed, wait for healthy
     _ensure_daemon(repo, args.port)
 
-    # 4. Set env
+    # 5. Set env
     os.environ["CPL_BENCH_TARGET_REPO"] = str(repo)
 
-    # 5. Check data files
+    # 6. Check data files
     _validate_data(args.experiment, config_path)
 
-    # 6. Patch config with runtime args
+    # 7. Patch config with runtime args
     patched = _patch_config(config_path, args.port, args.timeout)
 
-    # 7. Run
+    # 8. Run
     print()
     print("Running evaluation")
     print("=" * 50)
@@ -235,6 +283,10 @@ def main_cli() -> None:
     finally:
         os.chdir(original_cwd)
         patched.unlink(missing_ok=True)
+
+    # 9. Kill daemon
+    _log("Stopping daemon ...")
+    _kill_daemon(args.port)
 
     print()
     _ok(f"Results: {BENCH_DIR / 'experiments' / 'output'}")
