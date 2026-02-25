@@ -20,6 +20,7 @@ registry.register(
         fix_args=["check", "--fix", "--output-format=json"],
         dry_run_args=["check", "--diff", "--output-format=json"],
         output_format="json",
+        force_exclude_flag="--force-exclude",
     ),
     parser=parsers.parse_ruff,
 )
@@ -36,6 +37,7 @@ registry.register(
         fix_args=["format"],
         dry_run_args=["format", "--check", "--diff"],
         output_format="custom",
+        force_exclude_flag="--force-exclude",
     ),
     parser=parsers.parse_ruff_format,
 )

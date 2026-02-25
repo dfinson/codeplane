@@ -37,6 +37,10 @@ class LintTool:
     paths_position: str = "end"  # "end", "after_executable", "none"
     paths_separator: str | None = None  # For tools that want comma-separated paths
 
+    # Flag to force the tool to respect its exclude config even for explicitly passed paths.
+    # e.g. ruff's --force-exclude.  Injected only when explicit file paths are given.
+    force_exclude_flag: str | None = None
+
     # Output parsing
     output_format: str = "json"  # "json", "sarif", "custom"
     stderr_has_output: bool = False  # Some tools write to stderr

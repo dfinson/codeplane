@@ -488,7 +488,7 @@ def _partition_for_batching(
 # Default: run only direct tests (hop 0) for fast iteration.
 # When committing, escalate to _COMMIT_MAX_TEST_HOPS for thorough validation.
 _DEFAULT_MAX_TEST_HOPS = 0
-_COMMIT_MAX_TEST_HOPS = 3
+_COMMIT_MAX_TEST_HOPS = 2
 
 
 async def _run_tiered_tests(
@@ -836,7 +836,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             description="Max import-graph hop depth for test selection. "
             "0 = direct tests only, 1 = direct + 1 transitive, etc. "
             "Default: 0 (direct only) for fast iteration; auto-escalates "
-            "to 3 hops when commit_message is set.",
+            "to 2 hops when commit_message is set.",
         ),
         commit_message: str | None = Field(
             None,
