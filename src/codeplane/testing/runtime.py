@@ -178,14 +178,29 @@ class RuntimeExecutionContext:
         2. Runtime env_vars
         3. Context env_vars
         4. Tool-specific env_overrides
+
+        Additionally prepends ``_VENV_BIN`` (captured at runtime resolution)
+        to *PATH* so that venv-installed executables (pytest, ruff, …) are
+        found even when the daemon process itself was not launched from an
+        activated virtualenv.
         """
         import os
 
         env = dict(os.environ)
-        env.update(self.runtime.get_env_vars())
+        runtime_vars = self.runtime.get_env_vars()
+        env.update(runtime_vars)
         env.update(self.env_vars)
         if tool_config:
             env.update(tool_config.env_overrides)
+
+        # Prepend venv bin directory to PATH so shutil.which / subprocess
+        # can discover venv-installed tools.
+        venv_bin = runtime_vars.get("_VENV_BIN") or self.env_vars.get("_VENV_BIN")
+        if venv_bin:
+            current_path = env.get("PATH", "")
+            if venv_bin not in current_path.split(os.pathsep):
+                env["PATH"] = venv_bin + os.pathsep + current_path
+
         return env
 
 

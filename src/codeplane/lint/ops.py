@@ -70,6 +70,32 @@ class LintOps:
     def __init__(self, repo_root: Path, coordinator: IndexCoordinator) -> None:
         self._repo_root = repo_root
         self._coordinator = coordinator
+        self._venv_bin: str | None = self._detect_venv_bin()
+
+    def _detect_venv_bin(self) -> str | None:
+        """Detect venv bin directory for PATH augmentation."""
+        for name in (".venv", "venv", ".env", "env"):
+            venv = self._repo_root / name
+            if not venv.is_dir():
+                continue
+            unix_bin = venv / "bin"
+            if unix_bin.is_dir() and (unix_bin / "activate").exists():
+                return str(unix_bin)
+            win_bin = venv / "Scripts"
+            if win_bin.is_dir() and (win_bin / "activate").exists():
+                return str(win_bin)
+        return None
+
+    def _resolve_path(self) -> str | None:
+        """Return PATH with venv bin prepended (if detected)."""
+        import os
+
+        if not self._venv_bin:
+            return None
+        current = os.environ.get("PATH", "")
+        if self._venv_bin in current.split(os.pathsep):
+            return None  # already present
+        return self._venv_bin + os.pathsep + current
 
     async def check(
         self,
@@ -256,8 +282,11 @@ class LintOps:
         """Run a single lint tool."""
         start_time = time.time()
 
-        # Check if executable exists
-        if not shutil.which(tool.executable):
+        # Resolve PATH with venv bin so we find venv-installed tools
+        augmented_path = self._resolve_path()
+
+        # Check if executable exists (use augmented PATH if available)
+        if not shutil.which(tool.executable, path=augmented_path):
             return ToolResult(
                 tool_id=tool.tool_id,
                 status="skipped",
@@ -268,12 +297,21 @@ class LintOps:
         # Build command
         cmd = self._build_command(tool, paths, dry_run)
 
+        # Build subprocess environment with venv PATH
+        import os
+
+        sub_env: dict[str, str] | None = None
+        if augmented_path:
+            sub_env = dict(os.environ)
+            sub_env["PATH"] = augmented_path
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=self._repo_root,
+                env=sub_env,
             )
             stdout_bytes, stderr_bytes = await proc.communicate()
             stdout = stdout_bytes.decode(errors="replace")

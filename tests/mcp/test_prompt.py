@@ -53,9 +53,9 @@ class TestPromptContent:
         assert "my_cool_prefix" in snippet
         assert "{tool_prefix}" not in snippet
 
-    def test_prompt_contains_three_tool_model(self) -> None:
-        """Prompt explains the three-tool read model."""
+    def test_prompt_contains_recon_as_primary(self) -> None:
+        """Prompt prioritizes recon as the primary entry point."""
         snippet = _make_codeplane_snippet("test_prefix")
-        assert "Search = find" in snippet
-        assert "Read = retrieve" in snippet
-        assert "Full = gated" in snippet
+        assert "recon" in snippet
+        assert "Start Every Task With" in snippet
+        assert "recon(task=" in snippet

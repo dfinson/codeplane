@@ -1105,9 +1105,9 @@ class TestOps:
             runtime_env = exec_ctx.build_env()
             safe_env.update(runtime_env)
 
-        # Verify executable exists
+        # Verify executable exists (use safe_env PATH which includes venv bin)
         executable = cmd[0]
-        resolved_executable = shutil.which(executable)
+        resolved_executable = shutil.which(executable, path=safe_env.get("PATH"))
         if not resolved_executable:
             safe_ctx.cleanup()
             return (
