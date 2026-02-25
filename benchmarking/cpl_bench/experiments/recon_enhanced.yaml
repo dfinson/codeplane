@@ -1,0 +1,42 @@
+# CodePlane Recon Enhanced Evaluation
+#
+# Tests whether per-issue seeds + pinned_paths (derived from ONE map_repo call)
+# improve recon file retrieval quality over the bare-task baseline.
+#
+# Prerequisites:
+#   1. Start CodePlane daemon on the target repo (port 7777)
+#   2. Set CPL_BENCH_TARGET_REPO env var (default: ~/wsl-repos/evees/evee_cpl/evee)
+#
+# Run:
+#   cd benchmarking/cpl_bench && python run.py experiments/recon_enhanced.yaml
+
+experiment:
+  name: cpl-recon-enhanced
+  description: >-
+    Evaluate CodePlane recon with per-issue seeds and pinned_paths derived
+    from a single map_repo call. Compares against the bare-task baseline
+    to measure the value of structural hints for retrieval quality.
+  version: "1.0"
+  output_path: experiments/output/recon_enhanced
+
+  tracking_backend:
+    type: local
+
+  models:
+    - name: cpl-recon-enhanced
+      args:
+        - daemon_port: [7777]
+        - timeout: [120]
+        - seeds_path: ["data/enhanced_seeds.json", "data/enhanced_seeds_v2.json"]
+
+  dataset:
+    name: cpl-recon-gt
+    type: custom
+    args:
+      data_path: data/ground_truth.json
+
+  metrics:
+    - name: cpl-retrieval
+      mapping:
+        returned_tiers: model.returned_tiers
+        gt_files: dataset.gt_files

@@ -1,0 +1,31 @@
+{
+  "run_id": "cpl-recon-enhanced__data_enhanced_seeds_v2.json",
+  "aggregated_metrics": {
+    "number_of_records": 67,
+    "average_response_time_ms": 14168,
+    "cpl-retrieval - avg_all_precision": 0.0756,
+    "cpl-retrieval - avg_all_recall": 0.9792,
+    "cpl-retrieval - avg_all_f1": 0.1391,
+    "cpl-retrieval - median_all_f1": 0.1295,
+    "cpl-retrieval - avg_all_count": 245.9,
+    "cpl-retrieval - avg_high_precision": 0.2003,
+    "cpl-retrieval - avg_high_recall": 0.6874,
+    "cpl-retrieval - avg_high_f1": 0.3019,
+    "cpl-retrieval - median_high_f1": 0.2745,
+    "cpl-retrieval - avg_high_count": 66.7,
+    "cpl-retrieval - avg_edit_precision": 0.2896,
+    "cpl-retrieval - avg_edit_recall": 0.6074,
+    "cpl-retrieval - avg_edit_f1": 0.3734,
+    "cpl-retrieval - median_edit_f1": 0.338,
+    "cpl-retrieval - avg_edit_count": 40.4,
+    "cpl-retrieval - avg_gt_count": 18.8,
+    "cpl-retrieval - total_queries": 67
+  },
+  "tags": {
+    "daemon_port": 7777,
+    "timeout": 120,
+    "seeds_path": "data/enhanced_seeds_v2.json",
+    "experiment_version": "1.0",
+    "model_name": "cpl-recon-enhanced"
+  }
+}

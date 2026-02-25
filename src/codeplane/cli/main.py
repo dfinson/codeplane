@@ -3,6 +3,7 @@
 import click
 
 from codeplane.cli.clear import clear_command
+from codeplane.cli.down import down_command
 from codeplane.cli.init import init_command
 from codeplane.cli.status import status_command
 from codeplane.cli.up import up_command
@@ -22,6 +23,7 @@ def cli(ctx: click.Context, verbose: bool) -> None:
 
 cli.add_command(init_command, name="init")
 cli.add_command(up_command, name="up")
+cli.add_command(down_command, name="down")
 cli.add_command(clear_command, name="clear")
 cli.add_command(status_command, name="status")
 

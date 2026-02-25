@@ -1,0 +1,99 @@
+{
+    "_comment": "Per-issue seeds and pinned_paths derived from ONE map_repo call + task text analysis. Seeds are symbol names found in the codebase. Pinned paths are files strongly implied by the task context. These are shared across Q1/Q2/Q3 for each issue.",
+    "4": {
+        "seeds": ["ModelEvaluator", "_infer_record", "_infer_record_async", "InferenceOutput", "ModelVariantConfig"],
+        "pinned_paths": ["src/evee/evaluation/model_evaluator.py", "src/evee/config/models.py", "src/evee/core/models/inference_output.py"]
+    },
+    "38": {
+        "seeds": ["server", "BaseTool", "BaseResource", "run_experiment", "validate_config", "list_components", "view_results"],
+        "pinned_paths": ["src/evee/mcp/server.py", "src/evee/mcp/tools/base.py", "src/evee/mcp/resources/base.py"]
+    },
+    "57": {
+        "seeds": [],
+        "pinned_paths": [".github/workflows/ci.yml", "pyproject.toml", ".github/workflows/integration-tests.yml"]
+    },
+    "63": {
+        "seeds": ["ModelEvaluator", "_run_evaluation_loop", "model", "base_model"],
+        "pinned_paths": ["src/evee/evaluation/model_evaluator.py", "src/evee/core/base_model.py", "src/evee/core/base_dataset.py"]
+    },
+    "72": {
+        "seeds": ["TrackingBackend", "ComputeBackend", "AzureMLComputeBackend"],
+        "pinned_paths": ["packages/evee-azureml/src/evee_azureml/compute.py", "packages/evee-azureml/src/evee_azureml/tracking.py", "src/evee/tracking/backend.py", "src/evee/compute/backend.py"]
+    },
+    "108": {
+        "seeds": ["ModelEvaluator", "ExperimentRunner", "NoOpTrackingBackend"],
+        "pinned_paths": ["src/evee/evaluation/model_evaluator.py", "src/evee/execution/experiment_runner.py", "tests/evee/conftest.py"]
+    },
+    "172": {
+        "seeds": ["server", "BaseTool", "BaseResource"],
+        "pinned_paths": ["src/evee/mcp/server.py", "docs/user-guide/mcp-server.md", "docs/design/mcp-server.md", "tests/mcp/conftest.py"]
+    },
+    "191": {
+        "seeds": ["TrackingBackend", "ComputeBackend", "AzureMLComputeBackend"],
+        "pinned_paths": ["packages/evee-azureml/src/evee_azureml/compute.py", "packages/evee-azureml/src/evee_azureml/tracking.py", "src/evee/tracking/backend.py", "src/evee/compute/backend.py", "src/evee/tracking/factory.py"]
+    },
+    "192": {
+        "seeds": ["TrackingBackend", "ComputeBackend"],
+        "pinned_paths": ["packages/evee-azureml/src/evee_azureml/compute.py", "packages/evee-azureml/src/evee_azureml/tracking.py", "src/evee/tracking/backend.py", "src/evee/compute/backend.py"]
+    },
+    "193": {
+        "seeds": ["new", "_GIT_BASE"],
+        "pinned_paths": ["src/evee/cli/commands/new.py", "src/evee/cli/utils/new_project_operations.py"]
+    },
+    "201": {
+        "seeds": ["get_example_dir"],
+        "pinned_paths": ["tests/evee/integration/helpers.py", "tests/mcp/conftest.py"]
+    },
+    "210": {
+        "seeds": ["calculate_version"],
+        "pinned_paths": [".github/workflows/release.yml", ".github/tools/calculate_version.py", "pyproject.toml"]
+    },
+    "226": {
+        "seeds": ["MLflowTrackingConfig", "tracking_uri"],
+        "pinned_paths": ["packages/evee-mlflow/src/evee_mlflow/config.py", "packages/evee-mlflow/src/evee_mlflow/tracking.py", "packages/evee-mlflow/src/evee_mlflow/constants.py"]
+    },
+    "233": {
+        "seeds": ["ModelEvaluator", "_run_evaluation_loop"],
+        "pinned_paths": ["src/evee/evaluation/model_evaluator.py", "src/evee/config/models.py"]
+    },
+    "234": {
+        "seeds": ["run_experiment", "validate_config", "list_components", "view_results"],
+        "pinned_paths": ["src/evee/mcp/server.py", "src/evee/mcp/tools/experiment.py", "samples/agent-sample/experiment/config.yaml"]
+    },
+    "236": {
+        "seeds": ["BaseTool", "execute"],
+        "pinned_paths": ["src/evee/mcp/tools/base.py", "src/evee/mcp/tools/view_results.py", "src/evee/mcp/server.py"]
+    },
+    "240": {
+        "seeds": ["ComputeBackend", "AzureMLComputeBackend"],
+        "pinned_paths": ["src/evee/compute/backend.py", "src/evee/compute/local_compute_backend.py", "packages/evee-azureml/src/evee_azureml/compute.py"]
+    },
+    "259": {
+        "seeds": ["preflight", "_execute_in_project_env"],
+        "pinned_paths": ["src/evee/execution/preflight.py", "src/evee/cli/commands/run.py", "src/evee/cli/main.py"]
+    },
+    "260": {
+        "seeds": ["is_rich_compatible_environment", "ProgressTracker"],
+        "pinned_paths": ["src/evee/utils/environment.py", "src/evee/evaluation/progress_tracker.py", "src/evee/config/models.py"]
+    },
+    "261": {
+        "seeds": ["server", "BaseTool", "validate_config", "list_components", "run_experiment", "view_results"],
+        "pinned_paths": ["src/evee/mcp/server.py", "src/evee/mcp/tools/base.py", "tests/mcp/conftest.py"]
+    },
+    "262": {
+        "seeds": ["ModelVariantConfig", "ModelWrapper", "base_model"],
+        "pinned_paths": ["src/evee/core/base_model.py", "src/evee/config/models.py", "src/evee/mcp/resources/model_patterns.py"]
+    },
+    "263": {
+        "seeds": ["_create_azure_metric", "metric"],
+        "pinned_paths": ["src/evee/cli/commands/metric.py", "src/evee/cli/templates/metrics/azure_evaluator_metric.py", "src/evee/cli/utils/metric_operations.py"]
+    },
+    "268": {
+        "seeds": ["MetricConfig", "BaseMetric"],
+        "pinned_paths": ["src/evee/config/models.py", "src/evee/core/base_metric.py", "src/evee/cli/commands/metric.py"]
+    },
+    "275": {
+        "seeds": ["MetricConfig", "METRIC_REGISTRY", "BaseMetric"],
+        "pinned_paths": ["src/evee/config/models.py", "src/evee/core/base_metric.py", "src/evee/evaluation/metrics_aggregator.py"]
+    }
+}
