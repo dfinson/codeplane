@@ -1,0 +1,774 @@
+{
+  "meta": {
+    "pipeline_version": "v6",
+    "date": "2026-02-24",
+    "started_at": "2026-02-24T210944Z",
+    "recon_commit": "504f454b3fe4",
+    "evee_commit": "0efef495a5bb",
+    "total_issues": 24,
+    "total_queries": 72,
+    "elapsed_seconds": 4.1
+  },
+  "issues": {
+    "4": {
+      "Q1": {
+        "precision": 0.3333,
+        "recall": 0.5,
+        "f1": 0.4,
+        "noise_ratio": 0.6667,
+        "returned_files": [
+          "src/evee/config/models.py",
+          "src/evee/core/base_dataset.py",
+          "src/evee/core/base_metric.py",
+          "src/evee/core/base_model.py",
+          "src/evee/core/decorator_discovery.py",
+          "src/evee/core/models/evaluation_output.py",
+          "src/evee/core/models/inference_output.py",
+          "src/evee/evaluation/model_evaluator.py",
+          "src/evee/tracking/backends/no_op_fallback_backend.py",
+          "tests/evee/config/test_models.py",
+          "tests/evee/core/test_base_model.py",
+          "tests/evee/core/test_decorator_discovery.py",
+          "tests/evee/datasets/test_model_evaluator_dataset_loading.py",
+          "tests/evee/evaluation/test_model_evaluator_evaluation.py",
+          "tests/evee/evaluation/test_model_evaluator_init.py",
+          "tests/evee/evaluation/test_model_evaluator_metrics.py",
+          "tests/evee/evaluation/test_model_evaluator_output.py",
+          "tests/evee/integration/test_model_cleanup.py"
+        ],
+        "returned_count": 18,
+        "gt_count": 12
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 12
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 12
+      }
+    },
+    "38": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 30
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 30
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 30
+      }
+    },
+    "57": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 13
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 13
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 13
+      }
+    },
+    "63": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 18
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 18
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 18
+      }
+    },
+    "72": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 28
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 28
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 28
+      }
+    },
+    "108": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 20
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 20
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 20
+      }
+    },
+    "172": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 35
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 35
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 35
+      }
+    },
+    "191": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 29
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 29
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 29
+      }
+    },
+    "192": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 12
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 12
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 12
+      }
+    },
+    "193": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 14
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 14
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 14
+      }
+    },
+    "201": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 14
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 14
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 14
+      }
+    },
+    "210": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 22
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 22
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 22
+      }
+    },
+    "226": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 16
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 16
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 16
+      }
+    },
+    "233": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 18
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 18
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 18
+      }
+    },
+    "234": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 16
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 16
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 16
+      }
+    },
+    "236": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 10
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 10
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 10
+      }
+    },
+    "240": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 20
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 20
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 20
+      }
+    },
+    "259": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 16
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 16
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 16
+      }
+    },
+    "260": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 11
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 11
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 11
+      }
+    },
+    "261": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 12
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 12
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 12
+      }
+    },
+    "262": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 17
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 17
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 17
+      }
+    },
+    "263": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 18
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 18
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 18
+      }
+    },
+    "268": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 22
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 22
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 22
+      }
+    },
+    "275": {
+      "Q1": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 20
+      },
+      "Q2": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 20
+      },
+      "Q3": {
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "noise_ratio": 0.0,
+        "returned_files": [],
+        "returned_count": 0,
+        "gt_count": 20
+      }
+    }
+  },
+  "aggregates": {
+    "by_query_level": {
+      "Q1": {
+        "avg_precision": 0.0139,
+        "avg_recall": 0.0208,
+        "avg_f1": 0.0167,
+        "avg_noise_ratio": 0.0278,
+        "avg_returned_count": 0.8
+      },
+      "Q2": {
+        "avg_precision": 0.0,
+        "avg_recall": 0.0,
+        "avg_f1": 0.0,
+        "avg_noise_ratio": 0.0,
+        "avg_returned_count": 0
+      },
+      "Q3": {
+        "avg_precision": 0.0,
+        "avg_recall": 0.0,
+        "avg_f1": 0.0,
+        "avg_noise_ratio": 0.0,
+        "avg_returned_count": 0
+      }
+    },
+    "overall": {
+      "mean_f1": 0.0056,
+      "median_f1": 0.0,
+      "min_f1": 0.0,
+      "max_f1": 0.4
+    },
+    "by_difficulty": {
+      "simple": {
+        "count": 0,
+        "avg_f1": 0.0
+      },
+      "medium": {
+        "count": 14,
+        "avg_f1": 0.0095
+      },
+      "complex": {
+        "count": 10,
+        "avg_f1": 0.0
+      }
+    }
+  }
+}
