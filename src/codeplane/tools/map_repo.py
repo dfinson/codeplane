@@ -98,6 +98,10 @@ class StructureInfo:
     tree: list[DirectoryNode]
     file_count: int
     contexts: list[str]  # Valid context root paths
+    all_paths: list[tuple[str, int | None]] = field(default_factory=list)
+    """Flat (path, line_count) for every filtered file — used by the text
+    formatter to build depth-collapsed directory summaries without
+    re-querying the database."""
 
 
 @dataclass
@@ -300,6 +304,7 @@ class RepoMapper:
                 tree=root_node.children,
                 file_count=len(path_to_lines),
                 contexts=contexts,
+                all_paths=list(path_to_lines.items()),
             ),
             truncated,
             total_count,

@@ -325,3 +325,5 @@ class TestRepoMapper:
         assert "tests" in dir_names, f"tests/ missing from structure; got dirs: {dir_names}"
         # All 20 files should be in the tree (limit doesn't truncate structure)
         assert result.structure.file_count == 20
+        # all_paths should have every file for collapsed text rendering
+        assert len(result.structure.all_paths) == 20
