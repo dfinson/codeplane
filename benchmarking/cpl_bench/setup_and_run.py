@@ -63,9 +63,15 @@ def _resolve_repo(repo_arg: str) -> Path:
 
 
 def _ensure_init(repo: Path, port: int) -> None:
-    """Run `cpl init` if .codeplane doesn't exist yet."""
-    if (repo / ".codeplane").is_dir():
-        _ok("Already initialized")
+    """Run `cpl init` only on first use — skips if already initialized.
+
+    `cpl init` is idempotent: if .codeplane/ exists it prints "Already initialized"
+    and returns immediately (no reindex).  `cpl up` also only rebuilds the index
+    if the DB is missing or corrupted.  So repeated runs are safe and fast.
+    """
+    codeplane_dir = repo / ".codeplane"
+    if codeplane_dir.is_dir():
+        _ok("Already initialized (skipping cpl init)")
         return
     _log(f"Initializing CodePlane in {repo} ...")
     result = subprocess.run(
