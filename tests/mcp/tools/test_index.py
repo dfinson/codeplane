@@ -367,6 +367,11 @@ class TestChangeToText:
         lines = _change_to_text(c)
         assert "risk:" not in lines[0]
 
+    def test_unknown_risk_not_shown(self) -> None:
+        c = _MockChange(behavior_change_risk="unknown")
+        lines = _change_to_text(c)
+        assert "risk:" not in lines[0]
+
     def test_signature_changed_shows_sigs(self) -> None:
         c = _MockChange(
             change="signature_changed",

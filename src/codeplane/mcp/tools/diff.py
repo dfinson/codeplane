@@ -6,6 +6,7 @@ Orchestrates the full pipeline: sources -> engine -> enrichment -> output.
 # Removed: from __future__ import annotations - breaks FastMCP+pydantic Literal resolution
 
 import contextlib
+import re
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -47,13 +48,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         base: str = Field("HEAD", description="Base ref (commit, branch, tag) or epoch:N"),
         target: str | None = Field(None, description="Target ref (None = working tree)"),
         paths: list[str] | None = Field(None, description="Limit to specific paths"),
-        verbosity: Literal["full", "standard", "minimal"] = Field(
-            "full",
-            description=(
-                "Output detail level: full=everything, standard=omit change_preview, "
-                "minimal=just path/kind/name/change"
-            ),
-        ),
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
     ) -> dict[str, Any]:
         """Structural change summary from index facts.
@@ -75,7 +69,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         from codeplane.mcp.delivery import wrap_existing_response
 
-        result_dict = _result_to_text(result, verbosity=verbosity)
+        result_dict = _result_to_text(result)
 
         # Track scope usage
         scope_usage = None
@@ -448,29 +442,77 @@ def _build_agentic_hint(result: SemanticDiffResult) -> str:
     return hint
 
 
-def _result_to_text(
-    result: SemanticDiffResult,
-    *,
-    verbosity: Literal["full", "standard", "minimal"] = "full",
-) -> dict[str, Any]:
-    """Convert SemanticDiffResult to compact text format.
+def _result_to_text(result: SemanticDiffResult) -> dict[str, Any]:
+    """Convert SemanticDiffResult to losslessly-compressed text format.
 
-    Same information as _result_to_dict, but structural_changes rendered as
-    flat text lines instead of nested JSON objects.
-    Format per change: {change} {kind} {name}  {path}:{start}-{end}  Δ{lines}  risk:{risk}  refs:{N}  tests:{list}
+    Structural changes are rendered as flat text lines with three compression
+    strategies applied:
 
-    Verbosity levels:
-    - full: everything (default)
-    - standard: same as full (change_preview not in text format)
-    - minimal: just change/kind/name + path:start-end
+    1. **Nested path dedup** — nested entries (methods inside a class) omit the
+       file path and show only ``:start-end`` since the parent already carries it.
+    2. **risk:unknown omitted** — the default risk level is dropped; a header
+       comment documents the convention.
+    3. **Test aliases** — test file paths that appear 3+ times are replaced with
+       short aliases (``t1``, ``t2``, …) defined in a header line.
+
+    Format per top-level change:
+        {change} {kind} {name}  {path}:{start}-{end}  Δ{lines}  risk:{risk}  refs:{N}  tests:{list}
+    Format per nested change:
+        {change} {kind} {name}  :{start}-{end}  Δ{lines}  …
     """
+    from collections import Counter
+
     from codeplane.mcp.tools.index import _change_to_text
 
     agentic_hint = _build_agentic_hint(result)
 
-    structural_lines: list[str] = []
+    # --- Phase 1: render raw lines ---
+    raw_lines: list[str] = []
     for c in result.structural_changes:
-        structural_lines.extend(_change_to_text(c, verbosity=verbosity))
+        raw_lines.extend(_change_to_text(c))
+
+    # --- Phase 2: build test aliases (paths appearing 3+ times) ---
+    test_counter: Counter[str] = Counter()
+    for line in raw_lines:
+        idx = line.find("tests:")
+        if idx != -1:
+            tests_str = line[idx + 6 :].split("  ")[0]  # stop at next double-space field
+            for t in tests_str.split(","):
+                if t:
+                    test_counter[t] += 1
+
+    aliases: dict[str, str] = {}
+    alias_idx = 0
+    for test_path, count in test_counter.most_common():
+        if count >= 3 and (len(test_path) - 2) * count > 50:
+            alias_idx += 1
+            aliases[test_path] = f"t{alias_idx}"
+
+    # --- Phase 3: apply nested path dedup + test aliases ---
+    structural_lines: list[str] = []
+
+    if raw_lines:
+        # Header comments (lossless documentation)
+        structural_lines.append("# entries without risk: have unknown risk")
+        if aliases:
+            alias_defs = ", ".join(f"{v}={k}" for k, v in aliases.items())
+            structural_lines.append(f"# test aliases: {alias_defs}")
+
+    for line in raw_lines:
+        new_line = line
+
+        # Nested path dedup: indented lines keep only :start-end
+        if new_line.startswith("  "):
+            m = re.search(r"  ([\w/.]+\.\w+):(\d+-\d+)", new_line)
+            if m:
+                # Replace "  path/to/file.py:10-20" with "  :10-20"
+                new_line = new_line[: m.start()] + "  :" + m.group(2) + new_line[m.end() :]
+
+        # Apply test aliases
+        for test_path, alias in aliases.items():
+            new_line = new_line.replace(test_path, alias)
+
+        structural_lines.append(new_line)
 
     non_structural_lines: list[str] = []
     for f in result.non_structural_changes:

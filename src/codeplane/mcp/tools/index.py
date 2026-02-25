@@ -99,20 +99,13 @@ def _search_results_to_text(
     return lines
 
 
-def _change_to_text(
-    c: Any,
-    depth: int = 0,
-    *,
-    verbosity: str = "full",
-) -> list[str]:
+def _change_to_text(c: Any, depth: int = 0) -> list[str]:
     """Convert a StructuralChange to compact text lines.
 
     Format: {change} {kind} {name}  {path}:{start}-{end}  Δ{lines}  risk:{risk}  refs:{N}  tests:{list}
 
-    Verbosity levels:
-    - full: everything (default)
-    - standard: same as full (change_preview is not in text format)
-    - minimal: just change/kind/name + path:start-end
+    risk:unknown is omitted (it is the default; documented via header comment
+    in the caller).
     """
     indent = "  " * depth
     parts = [f"{indent}{c.change} {c.kind} {c.name}"]
@@ -122,30 +115,29 @@ def _change_to_text(
     else:
         parts.append(f"  {c.path}")
 
-    if verbosity != "minimal":
-        if c.lines_changed is not None:
-            parts.append(f"  Δ{c.lines_changed}")
+    if c.lines_changed is not None:
+        parts.append(f"  Δ{c.lines_changed}")
 
-        if c.behavior_change_risk and c.behavior_change_risk != "low":
-            parts.append(f"  risk:{c.behavior_change_risk}")
+    if c.behavior_change_risk and c.behavior_change_risk not in ("low", "unknown"):
+        parts.append(f"  risk:{c.behavior_change_risk}")
 
-        if c.change == "signature_changed":
-            parts.append(f"  old:{c.old_sig or ''}  new:{c.new_sig or ''}")
+    if c.change == "signature_changed":
+        parts.append(f"  old:{c.old_sig or ''}  new:{c.new_sig or ''}")
 
-        if c.change == "renamed" and c.old_name:
-            parts.append(f"  was:{c.old_name}")
+    if c.change == "renamed" and c.old_name:
+        parts.append(f"  was:{c.old_name}")
 
-        if c.impact:
-            if c.impact.reference_count:
-                parts.append(f"  refs:{c.impact.reference_count}")
-            if c.impact.affected_test_files:
-                tests = ",".join(c.impact.affected_test_files)
-                parts.append(f"  tests:{tests}")
+    if c.impact:
+        if c.impact.reference_count:
+            parts.append(f"  refs:{c.impact.reference_count}")
+        if c.impact.affected_test_files:
+            tests = ",".join(c.impact.affected_test_files)
+            parts.append(f"  tests:{tests}")
 
     result_lines = ["".join(parts)]
     if c.nested_changes:
         for nc in c.nested_changes:
-            result_lines.extend(_change_to_text(nc, depth + 1, verbosity=verbosity))
+            result_lines.extend(_change_to_text(nc, depth + 1))
     return result_lines
 
 
