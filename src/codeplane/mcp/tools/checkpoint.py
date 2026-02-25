@@ -226,11 +226,18 @@ def _summarize_run(result: "TestResult") -> str:
 def _build_coverage_data(
     coverage_artifacts: list[dict[str, str]],
     target_selectors: list[str] | None = None,
+    filter_paths: set[str] | None = None,
 ) -> dict[str, Any]:
     """Build structured coverage data from artifacts.
 
     Parses all coverage artifacts, merges them, and returns a structured
     summary suitable for agent consumption.
+
+    Args:
+        coverage_artifacts: List of coverage artifact dicts with 'path' and 'format'.
+        target_selectors: Test target selectors for metadata.
+        filter_paths: If provided, only include coverage for these source files.
+            Use this to scope coverage to changed files (excluding test files).
     """
     from codeplane.testing.coverage import (
         CoverageParseError,
@@ -282,8 +289,8 @@ def _build_coverage_data(
     # Merge reports if multiple
     merged = merge(*reports) if len(reports) > 1 else reports[0]
 
-    # Build structured summary
-    summary = build_summary(merged, max_files=20, max_missed_lines=10)
+    # Build structured summary (filtered to changed source files if provided)
+    summary = build_summary(merged, filter_paths=filter_paths, max_files=20, max_missed_lines=10)
 
     # Add metadata
     result = {
@@ -302,12 +309,20 @@ def _build_coverage_data(
     return result
 
 
-def _serialize_test_result(result: "TestResult") -> dict[str, Any]:
+def _serialize_test_result(
+    result: "TestResult",
+    coverage_filter_paths: set[str] | None = None,
+) -> dict[str, Any]:
     """Convert TestResult to compact serializable dict.
 
     Outer structure is flat JSON for parseability.  Inner details
     (failures, diagnostics) are compressed text strings to minimise
     token count.
+
+    Args:
+        result: TestResult to serialize.
+        coverage_filter_paths: If provided, only include coverage for these
+            source files (excluding test files).
     """
     output: dict[str, Any] = {
         "summary": _summarize_run(result),
@@ -350,6 +365,7 @@ def _serialize_test_result(result: "TestResult") -> dict[str, Any]:
             output["coverage"] = _build_coverage_data(
                 status.coverage,
                 status.target_selectors,
+                filter_paths=coverage_filter_paths,
             )
 
     if isinstance(result.agentic_hint, str) and result.agentic_hint:
@@ -505,6 +521,7 @@ async def _run_tiered_tests(
     test_filter: str | None,
     coverage: bool,
     coverage_dir: str | None,
+    coverage_filter_paths: set[str] | None,
     phase: int,
     total_phases: int,
 ) -> dict[str, Any]:
@@ -515,6 +532,10 @@ async def _run_tiered_tests(
 
     Within each tier, low-cost targets are batched into fewer subprocess
     invocations to reduce startup overhead.
+
+    Args:
+        coverage_filter_paths: Source files to include in coverage report
+            (changed files excluding tests).
 
     Returns a dict with keys: serialized, status, passed, failed, tier_log.
     """
@@ -643,7 +664,10 @@ async def _run_tiered_tests(
     # Build combined serialized result
     combined: dict[str, Any] = {}
     if all_test_results and all_test_results[0].run_status:
-        combined = _serialize_test_result(all_test_results[0])
+        combined = _serialize_test_result(
+            all_test_results[0],
+            coverage_filter_paths=coverage_filter_paths,
+        )
 
         # Overlay batch results into flat counters
         for br in all_batch_results:
@@ -733,11 +757,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             description="Filter which test names to run within targets "
             "(passed to pytest -k, jest --testNamePattern).",
         ),
-        coverage: bool = Field(False, description="Collect coverage data"),
-        coverage_dir: str | None = Field(
-            None,
-            description="Directory for coverage artifacts (required when coverage=True).",
-        ),
         commit_message: str | None = Field(
             None,
             description="If set and checks pass, auto-commit with this message. "
@@ -820,6 +839,25 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             if lint_result.agentic_hint:
                 result["lint"]["agentic_hint"] = lint_result.agentic_hint
 
+            # Fail-fast: skip tests if lint has issues
+            if lint_diagnostics > 0 and lint_status != "clean":
+                test_status = "skipped"
+                result["tests"] = {
+                    "status": "skipped",
+                    "reason": "lint failed — fix lint issues first",
+                }
+                result["summary"] = _summarize_verify(
+                    lint_status, lint_diagnostics, test_passed, test_failed, test_status
+                )
+                result["passed"] = False
+                result["agentic_hint"] = (
+                    f"STOP! Lint found {lint_diagnostics} issues. Tests were skipped. "
+                    "Fix ALL lint issues before proceeding. "
+                    "These failures are almost certainly YOUR fault — you passed changed_files "
+                    "so lint ran ONLY on code affected by YOUR changes."
+                )
+                return result
+
         # --- Phase 2: Tests ---
         if tests:
             await ctx.report_progress(phase, total_phases, "Discovering test targets")
@@ -852,44 +890,55 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                         "confidence": graph_result.confidence.tier,
                     }
                 else:
-                    # Validate coverage params
-                    if coverage and not coverage_dir:
-                        test_status = "error"
-                        result["tests"] = {
-                            "status": "error",
-                            "reason": "coverage=True requires coverage_dir",
-                        }
-                    else:
-                        # --- Tiered execution: run direct tests first, then transitive ---
-                        tiered_result = await _run_tiered_tests(
-                            app_ctx=app_ctx,
-                            ctx=ctx,
-                            graph_result=graph_result,
-                            filtered_targets=filtered,
-                            repo_root=app_ctx.repo_root,
-                            test_filter=test_filter,
-                            coverage=coverage,
-                            coverage_dir=coverage_dir,
-                            phase=phase,
-                            total_phases=total_phases,
-                        )
+                    # Auto-derive coverage_dir - coverage is always enabled
+                    import uuid
 
-                        result["tests"] = tiered_result["serialized"]
-                        test_status = tiered_result["status"]
-                        test_passed = tiered_result["passed"]
-                        test_failed = tiered_result["failed"]
+                    from codeplane.core.languages import is_test_file
 
-                        if test_failed > 0:
-                            await ctx.warning(f"Tests: {test_passed} passed, {test_failed} FAILED")
-                        elif test_passed > 0:
-                            await ctx.info(f"Tests: {test_passed} passed")
+                    coverage_dir = str(
+                        app_ctx.repo_root
+                        / ".codeplane"
+                        / "artifacts"
+                        / "coverage"
+                        / uuid.uuid4().hex[:8]
+                    )
+                    Path(coverage_dir).mkdir(parents=True, exist_ok=True)
 
-                        # Track scoped test for pattern detection
-                        session = app_ctx.session_manager.get_or_create(ctx.session_id)
-                        session.pattern_detector.record(
-                            tool_name="checkpoint",
-                            category_override="test_scoped",
-                        )
+                    # Filter changed_files to source files only (exclude tests)
+                    coverage_filter_paths = {f for f in changed_files if not is_test_file(f)}
+
+                    # --- Tiered execution: run direct tests first, then transitive ---
+                    tiered_result = await _run_tiered_tests(
+                        app_ctx=app_ctx,
+                        ctx=ctx,
+                        graph_result=graph_result,
+                        filtered_targets=filtered,
+                        repo_root=app_ctx.repo_root,
+                        test_filter=test_filter,
+                        coverage=True,
+                        coverage_dir=coverage_dir,
+                        coverage_filter_paths=coverage_filter_paths
+                        if coverage_filter_paths
+                        else None,
+                        phase=phase,
+                        total_phases=total_phases,
+                    )
+                    result["tests"] = tiered_result["serialized"]
+                    test_status = tiered_result["status"]
+                    test_passed = tiered_result["passed"]
+                    test_failed = tiered_result["failed"]
+
+                    if test_failed > 0:
+                        await ctx.warning(f"Tests: {test_passed} passed, {test_failed} FAILED")
+                    elif test_passed > 0:
+                        await ctx.info(f"Tests: {test_passed} passed")
+
+                    # Track scoped test for pattern detection
+                    session = app_ctx.session_manager.get_or_create(ctx.session_id)
+                    session.pattern_detector.record(
+                        tool_name="checkpoint",
+                        category_override="test_scoped",
+                    )
             else:
                 test_status = "skipped"
                 if not all_targets:
