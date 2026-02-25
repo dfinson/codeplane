@@ -792,8 +792,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             None,
             description="Max import-graph hop depth for test selection. "
             "0 = direct tests only, 1 = direct + 1 transitive, etc. "
-            "Default: 1 for lint+test, auto-escalates to all hops when "
-            "commit_message is set. Override to force deeper/shallower.",
+            "Default: 0 (direct only) for fast iteration; auto-escalates "
+            "to all hops when commit_message is set.",
         ),
         commit_message: str | None = Field(
             None,
