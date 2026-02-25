@@ -1,0 +1,13 @@
+[project]
+name = "cpl-bench"
+version = "0.1.0"
+description = "EVEE-native benchmarking for CodePlane recon and agent evaluation"
+requires-python = ">=3.12"
+dependencies = [
+    "evee-ms-core",
+    "httpx",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
