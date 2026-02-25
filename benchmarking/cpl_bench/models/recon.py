@@ -48,7 +48,7 @@ class ReconModel:
                 "clientInfo": {"name": "cpl-bench", "version": "1.0"},
             },
         }
-        r = httpx.post(self.mcp_url, json=payload, headers=headers, timeout=10)
+        r = httpx.post(self.mcp_url, json=payload, headers=headers, timeout=30)
         r.raise_for_status()
         session_id = r.headers.get("mcp-session-id", "")
 
@@ -58,7 +58,7 @@ class ReconModel:
             self.mcp_url,
             json=notif,
             headers={**headers, "Mcp-Session-Id": session_id},
-            timeout=10,
+            timeout=30,
         )
         return session_id
 
