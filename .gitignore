@@ -209,6 +209,3 @@ __marimo__/
 
 # Benchmark raw chatreplay exports (large)
 benchmarking/**/results/*_raw.json
-
-# Benchmark experiment output
-benchmarking/**/output/
