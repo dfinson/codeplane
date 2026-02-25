@@ -537,6 +537,7 @@ async def _run_tiered_tests(
     all_test_results: list[Any] = []
     all_batch_results: list[Any] = []
     all_batch_coverage: list[Any] = []  # Coverage artifacts from batched runs
+    all_failure_lines: list[str] = []  # Failure details across all hops
     tier_log: list[dict[str, Any]] = []
     final_status = "completed"
     stopped_at_hop: int | None = None
@@ -609,6 +610,11 @@ async def _run_tiered_tests(
                 if cov_artifact:
                     all_batch_coverage.append(cov_artifact)
 
+        # Collect per-hop batch results for tier counting (avoid cross-hop bleed)
+        hop_batch_parsed: list[Any] = (
+            [result for result, _ in hop_batch_results] if batch_groups else []
+        )
+
         # Aggregate results for this tier
         tier_passed = 0
         tier_failed = 0
@@ -624,11 +630,37 @@ async def _run_tiered_tests(
             tier_duration += rs.duration_seconds
             all_test_results.append(solo_result)
 
-        for br in all_batch_results:
+            # Collect failure details from solo result
+            if rs.failures:
+                for f in rs.failures:
+                    loc = f"{f.path}:{f.line}" if f.line else f.path
+                    all_failure_lines.append(f"{loc} {f.name}: {f.message}")
+                    if f.traceback:
+                        tb_lines = [ln for ln in f.traceback.strip().splitlines() if ln.strip()][:3]
+                        all_failure_lines.extend(f"  {ln.strip()}" for ln in tb_lines)
+
+        for br in hop_batch_parsed:
             tier_passed += br.passed
             tier_failed += br.failed
             tier_total += br.total
             tier_duration += br.duration_seconds
+
+            # Collect failure details from batch results
+            if br.tests:
+                for tc in br.tests:
+                    if tc.status in ("failed", "error"):
+                        loc = (
+                            f"{tc.file_path}:{tc.line_number}"
+                            if tc.file_path and tc.line_number
+                            else tc.file_path or tc.classname or "unknown"
+                        )
+                        msg = tc.message or "no message"
+                        all_failure_lines.append(f"{loc} {tc.name}: {msg}")
+                        if tc.traceback:
+                            tb_lines = [
+                                ln for ln in tc.traceback.strip().splitlines() if ln.strip()
+                            ][:3]
+                            all_failure_lines.extend(f"  {ln.strip()}" for ln in tb_lines)
 
         total_passed += tier_passed
         total_failed += tier_failed
@@ -699,6 +731,10 @@ async def _run_tiered_tests(
                 batch_cov_dicts,
                 filter_paths=coverage_filter_paths,
             )
+
+    # Overlay accumulated failure details from ALL hops and batch results
+    if all_failure_lines:
+        combined["failures"] = "\n".join(all_failure_lines)
 
     # Compact tier execution as text string
     tier_parts: list[str] = []
@@ -879,7 +915,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "duration": round(lint_result.duration_seconds, 2),
             }
             if issue_lines:
-                result["lint"]["issues"] = "\n".join(issue_lines)
+                result["lint"]["issues"] = issue_lines
 
             if lint_result.agentic_hint:
                 result["lint"]["agentic_hint"] = lint_result.agentic_hint

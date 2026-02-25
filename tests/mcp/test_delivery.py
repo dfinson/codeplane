@@ -393,6 +393,69 @@ class TestFetchHints:
         assert "jq" in hint
         assert "passed" in hint
 
+    def test_checkpoint_hint_with_lint_issues_list(self) -> None:
+        """Checkpoint hint generates array-sliced jq for list-based lint issues."""
+        from codeplane.mcp.delivery import _build_fetch_hint
+
+        # Small number of issues — should get direct access, no slicing
+        issues = [
+            "src/foo.py:10:1 E F401 unused import",
+            "src/bar.py:20:5 W W291 trailing whitespace",
+        ]
+        payload = {
+            "passed": False,
+            "summary": "lint: 2 issues",
+            "lint": {"status": "issues", "diagnostics": 2, "issues": issues},
+        }
+        hint = _build_fetch_hint("abc123", 2000, "checkpoint", payload)
+        assert "FAILED" in hint
+        # Should have length command and direct access
+        assert ".lint.issues | length" in hint
+        assert ".lint.issues[]" in hint
+        # Should have group-by-file command
+        assert "group_by" in hint
+
+    def test_checkpoint_hint_lint_issues_sliced(self) -> None:
+        """Large issue lists generate sliced jq commands to avoid terminal truncation."""
+        from codeplane.mcp.delivery import (
+            _AVG_ISSUE_BYTES,
+            _TERMINAL_OUTPUT_CAP_BYTES,
+            _build_fetch_hint,
+        )
+
+        safe_slice = _TERMINAL_OUTPUT_CAP_BYTES // _AVG_ISSUE_BYTES
+        # Create more issues than fit in one slice
+        issues = [f"src/mod{i}.py:{i}:1 E F401 unused" for i in range(safe_slice + 100)]
+        payload = {
+            "passed": False,
+            "summary": f"lint: {len(issues)} issues",
+            "lint": {"status": "issues", "diagnostics": len(issues), "issues": issues},
+        }
+        hint = _build_fetch_hint("abc123", 50000, "checkpoint", payload)
+        # Should have sliced access, not raw .lint.issues[]
+        assert f".lint.issues[:{safe_slice}][]" in hint
+        # Should have a second page
+        assert f".lint.issues[{safe_slice}:{safe_slice * 2}][]" in hint
+        # Should still have length + group-by
+        assert ".lint.issues | length" in hint
+        assert "group_by" in hint
+
+    def test_checkpoint_hint_lint_issues_legacy_string(self) -> None:
+        """Legacy string-format issues fall back to head-piped extraction."""
+        from codeplane.mcp.delivery import _build_fetch_hint
+
+        payload = {
+            "passed": False,
+            "summary": "lint: 5 issues",
+            "lint": {
+                "status": "issues",
+                "diagnostics": 5,
+                "issues": "a.py:1:1 E F401 x\nb.py:2:1 E F401 y",
+            },
+        }
+        hint = _build_fetch_hint("abc123", 2000, "checkpoint", payload)
+        assert "head -100" in hint
+
     def test_repo_map_hint(self) -> None:
         """Repo map hint lists sections and jq to explore each."""
         from codeplane.mcp.delivery import _build_fetch_hint

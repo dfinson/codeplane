@@ -569,6 +569,62 @@ def _extract_summary_and_commands(
     return summary, os_cmds
 
 
+# Maximum terminal output size (bytes) to stay under truncation limits.
+# Most AI coding agents truncate terminal output at ~60KB.  We target 50KB
+# to leave headroom for jq formatting overhead and JSON escaping.
+_TERMINAL_OUTPUT_CAP_BYTES = 50_000
+
+# Average bytes per lint diagnostic line (path:line:col SEV CODE message).
+# Used to compute a safe array slice size.  Conservative estimate; real
+# diagnostics average ~70-90 bytes but we budget extra for JSON wrapping.
+_AVG_ISSUE_BYTES = 120
+
+
+def _checkpoint_lint_issue_cmds(
+    issues: list[str] | str,
+    path: str,
+) -> list[str]:
+    """Build jq commands for lint issues that stay under terminal limits.
+
+    When issues is a list (new format), generates array-sliced jq commands
+    that dynamically size the slice to fit within _TERMINAL_OUTPUT_CAP_BYTES.
+    Also generates grouped-by-file commands for fast triage.
+
+    Falls back gracefully if issues is still a newline-joined string
+    (old format).
+    """
+    if isinstance(issues, str):
+        # Legacy format — fall back to head-piped extraction
+        return [f"jq -r '.lint.issues' {path} | head -100"]
+
+    total = len(issues)
+    if total == 0:
+        return []
+
+    # Compute safe slice size: how many issues fit in ~50KB of terminal output
+    safe_slice = max(1, _TERMINAL_OUTPUT_CAP_BYTES // _AVG_ISSUE_BYTES)
+
+    cmds: list[str] = [
+        f"jq '.lint.issues | length' {path}",
+    ]
+
+    if total <= safe_slice:
+        # Everything fits — emit directly
+        cmds.append(f"jq '.lint.issues[]' {path}")
+    else:
+        # Slice to fit terminal cap
+        cmds.append(f"jq '.lint.issues[:{safe_slice}][]' {path}")
+        cmds.append(f"jq '.lint.issues[{safe_slice}:{safe_slice * 2}][]' {path}")
+
+    # Group-by-file summary: count of issues per file (always small output)
+    cmds.append(
+        f'jq \'[.lint.issues[] | split(":")[0]] | group_by(.) '
+        f"| map({{file: .[0], count: length}}) | sort_by(-.count)' {path}"
+    )
+
+    return cmds
+
+
 def _extract_jq_commands(
     kind: str,
     payload: dict[str, Any],
@@ -704,8 +760,9 @@ def _extract_jq_commands(
                 f"jq '{{status: .lint.status, diagnostics: .lint.diagnostics, "
                 f"fixed_files: .lint.fixed_files}}' {path}"
             )
-            if payload["lint"].get("issues"):
-                cmds.append(f"jq '.lint.issues' {path}")
+            lint_issues = payload["lint"].get("issues")
+            if lint_issues:
+                cmds.extend(_checkpoint_lint_issue_cmds(lint_issues, path))
 
         # Test details
         if payload.get("tests"):
