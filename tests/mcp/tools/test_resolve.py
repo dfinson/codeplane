@@ -255,3 +255,103 @@ class TestReconResolve:
         assert "agentic_hint" in result
         assert "refactor_edit" in result["agentic_hint"]
         assert "checkpoint" in result["agentic_hint"]
+
+    @pytest.mark.asyncio
+    async def test_resolve_too_many_targets(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """More than _MAX_TARGETS raises MCPError."""
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        resolve_fn = tools["recon_resolve"].fn
+
+        from codeplane.mcp.errors import MCPError
+
+        targets = [ResolveTarget(path=f"f{i}.py") for i in range(11)]
+        with pytest.raises(MCPError, match="Too many targets"):
+            await resolve_fn(ctx=fastmcp_ctx, targets=targets)
+
+    @pytest.mark.asyncio
+    async def test_resolve_session_failure_bypasses_gate(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+    ) -> None:
+        """If session manager raises, flow gate is bypassed and resolve proceeds."""
+        self._write_file(tmp_path, "ok.py", "x = 1\n")
+        app_ctx.session_manager.get_or_create.side_effect = RuntimeError("boom")
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        resolve_fn = tools["recon_resolve"].fn
+
+        result: dict[str, Any] = await resolve_fn(
+            ctx=fastmcp_ctx,
+            targets=[ResolveTarget(path="ok.py")],
+        )
+
+        # Should still resolve despite session failure
+        assert len(result["resolved"]) == 1
+        assert result["resolved"][0]["path"] == "ok.py"
+
+    @pytest.mark.asyncio
+    async def test_resolve_read_failure(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+    ) -> None:
+        """File that exists but cannot be read returns error entry."""
+        fp = tmp_path / "unreadable.py"
+        fp.write_text("content", encoding="utf-8")
+        fp.chmod(0o000)
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        resolve_fn = tools["recon_resolve"].fn
+
+        result: dict[str, Any] = await resolve_fn(
+            ctx=fastmcp_ctx,
+            targets=[ResolveTarget(path="unreadable.py")],
+        )
+
+        assert len(result["errors"]) == 1
+        assert "Read failed" in result["errors"][0]["error"]
+        # Restore permissions for cleanup
+        fp.chmod(0o644)
+
+    @pytest.mark.asyncio
+    async def test_resolve_span_too_large(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+    ) -> None:
+        """Span exceeding _MAX_SPAN_LINES returns error."""
+        # _MAX_SPAN_LINES is 500, create a file with 600 lines
+        content = "\n".join(f"line{i}" for i in range(600)) + "\n"
+        self._write_file(tmp_path, "huge.py", content)
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        resolve_fn = tools["recon_resolve"].fn
+
+        result: dict[str, Any] = await resolve_fn(
+            ctx=fastmcp_ctx,
+            targets=[ResolveTarget(path="huge.py", start_line=1, end_line=600)],
+        )
+
+        assert len(result["errors"]) == 1
+        assert "Span too large" in result["errors"][0]["error"]
+
+    @pytest.mark.asyncio
+    async def test_resolve_more_than_five_files_hint(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+    ) -> None:
+        """Agentic hint shows '+N more' when >5 files resolved."""
+        for i in range(7):
+            self._write_file(tmp_path, f"f{i}.py", f"x = {i}\n")
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        resolve_fn = tools["recon_resolve"].fn
+
+        result: dict[str, Any] = await resolve_fn(
+            ctx=fastmcp_ctx,
+            targets=[ResolveTarget(path=f"f{i}.py") for i in range(7)],
+        )
+
+        assert len(result["resolved"]) == 7
+        assert "(+2 more)" in result["agentic_hint"]

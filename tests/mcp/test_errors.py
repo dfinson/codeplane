@@ -2,14 +2,18 @@
 
 from codeplane.mcp.errors import (
     ERROR_CATALOG,
+    BudgetExceededError,
+    ConfirmationRequiredError,
     DryRunExpiredError,
     DryRunRequiredError,
     ErrorResponse,
+    FileHashMismatchError,
     HashMismatchError,
     HookFailedError,
     InvalidRangeError,
     MCPError,
     MCPErrorCode,
+    SpanOverlapError,
     get_error_documentation,
 )
 
@@ -224,3 +228,83 @@ class TestErrorDocumentation:
         assert MCPErrorCode.FILE_NOT_FOUND.value in ERROR_CATALOG
         assert MCPErrorCode.HOOK_FAILED.value in ERROR_CATALOG
         assert MCPErrorCode.HOOK_FAILED.value in ERROR_CATALOG
+
+
+class TestBudgetExceededError:
+    """Tests for BudgetExceededError."""
+
+    def test_creates_with_correct_code(self) -> None:
+        err = BudgetExceededError("scope-1", "reads", "Reduce read volume")
+        assert err.code == MCPErrorCode.BUDGET_EXCEEDED
+
+    def test_message_includes_scope_and_counter(self) -> None:
+        err = BudgetExceededError("my-scope", "writes", "Write less")
+        assert "writes" in err.message
+        assert "my-scope" in err.message
+
+    def test_remediation_from_hint(self) -> None:
+        err = BudgetExceededError("s", "c", "Do something else")
+        assert err.remediation == "Do something else"
+
+
+class TestSpanOverlapError:
+    """Tests for SpanOverlapError."""
+
+    def test_creates_with_correct_code(self) -> None:
+        err = SpanOverlapError("file.py", [{"a": 1}])
+        assert err.code == MCPErrorCode.SPAN_OVERLAP
+
+    def test_message_includes_path(self) -> None:
+        err = SpanOverlapError("src/foo.py", [])
+        assert "src/foo.py" in err.message
+
+    def test_context_has_conflicts(self) -> None:
+        conflicts = [{"start": 1, "end": 10}]
+        err = SpanOverlapError("f.py", conflicts)
+        assert err.context.get("conflicts") == conflicts
+
+
+class TestFileHashMismatchError:
+    """Tests for FileHashMismatchError."""
+
+    def test_creates_with_correct_code(self) -> None:
+        err = FileHashMismatchError("f.py", expected="aaa", actual="bbb")
+        assert err.code == MCPErrorCode.FILE_HASH_MISMATCH
+
+    def test_message_includes_path(self) -> None:
+        err = FileHashMismatchError("src/x.py", expected="a", actual="b")
+        assert "src/x.py" in err.message
+
+    def test_context_has_hashes(self) -> None:
+        err = FileHashMismatchError("f.py", expected="abc", actual="def")
+        assert err.context.get("expected_file_sha256") == "abc"
+        assert err.context.get("current_file_sha256") == "def"
+
+
+class TestConfirmationRequiredError:
+    """Tests for ConfirmationRequiredError."""
+
+    def test_creates_with_correct_code(self) -> None:
+        err = ConfirmationRequiredError("Need confirm", "tok_123")
+        assert err.code == MCPErrorCode.CONFIRMATION_REQUIRED
+
+    def test_message_and_token(self) -> None:
+        err = ConfirmationRequiredError("Please confirm", "tok_abc")
+        assert err.message == "Please confirm"
+        assert err.context.get("confirmation_token") == "tok_abc"
+
+    def test_details_merged_into_context(self) -> None:
+        err = ConfirmationRequiredError("Confirm it", "tok_1", details={"reason": "destructive"})
+        assert err.context.get("reason") == "destructive"
+
+    def test_reserved_keys_filtered_from_details(self) -> None:
+        err = ConfirmationRequiredError(
+            "Confirm", "tok_2", details={"code": "STEAL", "extra": "ok"}
+        )
+        # "code" is reserved and should be filtered
+        assert err.context.get("extra") == "ok"
+        assert err.context.get("code") != "STEAL"
+
+    def test_none_details(self) -> None:
+        err = ConfirmationRequiredError("Confirm", "tok_3", details=None)
+        assert err.code == MCPErrorCode.CONFIRMATION_REQUIRED
