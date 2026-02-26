@@ -111,6 +111,71 @@ def build_compact_summary(
     return f"{header}\nuncovered: {uncovered_text}"
 
 
+def build_coverage_detail(
+    report: CoverageReport,
+    *,
+    filter_paths: set[str] | None = None,
+) -> tuple[str, dict[str, Any] | None]:
+    """Build inline summary + detailed per-file coverage data.
+
+    Returns:
+        (inline_summary, detail_dict) where:
+        - inline_summary: compact one-liner like ``coverage: 85% (170/200 lines)``
+        - detail_dict: structured per-file data (for cache), or None if no data.
+          Keys: ``summary`` (str), ``total_lines``, ``covered_lines``,
+          ``coverage_percent``, ``files`` (list of per-file dicts with
+          ``path``, ``total``, ``covered``, ``percent``, ``uncovered_ranges``).
+    """
+    if filter_paths is not None and len(filter_paths) == 0:
+        return "coverage: no source files changed", None
+
+    total_lines = 0
+    covered_lines = 0
+    file_details: list[dict[str, Any]] = []
+
+    for path in sorted(report.files.keys()):
+        if filter_paths is not None and not _path_matches(path, filter_paths):
+            continue
+
+        fc = report.files[path]
+        file_total = len(fc.lines)
+        file_covered = sum(1 for hits in fc.lines.values() if hits > 0)
+        total_lines += file_total
+        covered_lines += file_covered
+
+        missed = sorted(line for line, hits in fc.lines.items() if hits == 0)
+        pct = int(file_covered / file_total * 100) if file_total > 0 else 100
+
+        entry: dict[str, Any] = {
+            "path": path,
+            "total": file_total,
+            "covered": file_covered,
+            "percent": pct,
+        }
+        if missed:
+            entry["uncovered_ranges"] = _compress_ranges(missed)
+        file_details.append(entry)
+
+    if total_lines == 0:
+        return "coverage: no data", None
+
+    percent = int(covered_lines / total_lines * 100)
+    inline = f"coverage: {percent}% ({covered_lines}/{total_lines} lines)"
+
+    n_uncovered = sum(1 for f in file_details if "uncovered_ranges" in f)
+    if n_uncovered:
+        inline += f", {n_uncovered} file(s) with gaps"
+
+    detail: dict[str, Any] = {
+        "summary": inline,
+        "total_lines": total_lines,
+        "covered_lines": covered_lines,
+        "coverage_percent": percent,
+        "files": file_details,
+    }
+    return inline, detail
+
+
 # Legacy functions kept for backward compatibility
 
 

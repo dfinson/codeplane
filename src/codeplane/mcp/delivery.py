@@ -782,6 +782,11 @@ def _extract_jq_commands(
             if commit.get("diff"):
                 cmds.append(f"jq '.commit.diff' {path}")
 
+        # Coverage details (cached in separate file)
+        cov_hint = payload.get("coverage_hint", "")
+        if isinstance(cov_hint, str) and cov_hint:
+            cmds.append(f"jq -r '.coverage_hint' {path}")
+
         return summary, cmds
 
     if kind == "blame":

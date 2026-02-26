@@ -232,23 +232,25 @@ def _summarize_run(result: "TestResult") -> str:
 def _build_coverage_text(
     coverage_artifacts: list[dict[str, str]],
     filter_paths: set[str] | None = None,
-) -> str:
-    """Build compact coverage text from artifacts.
+) -> tuple[str, str | None]:
+    """Build compact coverage summary + cache detailed per-file report.
 
-    Returns text like:
-        coverage: 85% (170/200 lines)
-        uncovered: report.py:37,39,42-48 | merge.py:15-20,45
+    Returns:
+        (inline_summary, coverage_hint) where:
+        - inline_summary: compact one-liner (e.g. ``coverage: 85% (170/200 lines)``)
+        - coverage_hint: agentic hint with jq extraction commands for the cached
+          detail file, or None if no detail was produced.
     """
     from codeplane.testing.coverage import (
         CoverageParseError,
         CoverageReport,
-        build_compact_summary,
+        build_coverage_detail,
         merge,
         parse_artifact,
     )
 
     if not coverage_artifacts:
-        return "coverage: no data"
+        return "coverage: no data", None
 
     # Dedupe by path
     seen: set[str] = set()
@@ -278,10 +280,39 @@ def _build_coverage_text(
             log.debug("Coverage parse failed", path=path_str, error=str(e))
 
     if not reports:
-        return "coverage: parse failed"
+        return "coverage: parse failed", None
 
     merged = merge(*reports) if len(reports) > 1 else reports[0]
-    return build_compact_summary(merged, filter_paths=filter_paths)
+    inline, detail = build_coverage_detail(merged, filter_paths=filter_paths)
+
+    if detail is None:
+        return inline, None
+
+    # Cache the detailed report to disk
+    from codeplane.mcp.delivery import _resource_cache
+
+    resource_id, byte_size = _resource_cache.store(detail, "coverage")
+    rel_path = f".codeplane/cache/coverage/{resource_id}.json"
+
+    n_files = len(detail.get("files", []))
+    files_with_gaps = sum(1 for f in detail.get("files", []) if "uncovered_ranges" in f)
+
+    hint_parts = [
+        f"Detailed coverage ({byte_size:,} bytes, {n_files} files) cached at {rel_path}",
+        "Extraction commands:",
+        f"  jq '{{summary, coverage_percent, total_lines, covered_lines}}' {rel_path}",
+        f"  jq '[.files[] | select(.uncovered_ranges) | {{path: .path, percent: .percent, uncovered_ranges}}]' {rel_path}",
+    ]
+    if files_with_gaps > 5:
+        hint_parts.append(
+            f"  jq '[.files[] | select(.percent < 80) | {{path: .path, percent: .percent, uncovered_ranges}}]' {rel_path}"
+        )
+    hint_parts.append(
+        f"  jq '.files[] | select(.path | test(\"FILENAME\")) | {{path, percent, uncovered_ranges}}' {rel_path}"
+    )
+
+    coverage_hint = "\n".join(hint_parts)
+    return inline, coverage_hint
 
 
 def _serialize_test_result(
@@ -337,10 +368,13 @@ def _serialize_test_result(
             output["diagnostics"] = "\n".join(diag_lines)
 
         if status.coverage:
-            output["coverage"] = _build_coverage_text(
+            inline_cov, cov_hint = _build_coverage_text(
                 status.coverage,
                 filter_paths=coverage_filter_paths,
             )
+            output["coverage"] = inline_cov
+            if cov_hint:
+                output["coverage_hint"] = cov_hint
 
     if isinstance(result.agentic_hint, str) and result.agentic_hint:
         output["agentic_hint"] = result.agentic_hint
@@ -727,10 +761,13 @@ async def _run_tiered_tests(
                 {"format": c.format, "path": str(c.path), "pack_id": c.pack_id}
                 for c in all_batch_coverage
             ]
-            combined["coverage"] = _build_coverage_text(
+            inline_cov, cov_hint = _build_coverage_text(
                 batch_cov_dicts,
                 filter_paths=coverage_filter_paths,
             )
+            combined["coverage"] = inline_cov
+            if cov_hint:
+                combined["coverage_hint"] = cov_hint
 
     # Overlay accumulated failure details from ALL hops and batch results
     if all_failure_lines:
@@ -1027,6 +1064,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     test_status = tiered_result["status"]
                     test_passed = tiered_result["passed"]
                     test_failed = tiered_result["failed"]
+
+                    # Hoist coverage_hint to top-level for agent visibility
+                    serialized = tiered_result["serialized"]
+                    if isinstance(serialized, dict) and serialized.get("coverage_hint"):
+                        result["coverage_hint"] = serialized.pop("coverage_hint")
 
                     if test_failed > 0:
                         await ctx.warning(f"Tests: {test_passed} passed, {test_failed} FAILED")
