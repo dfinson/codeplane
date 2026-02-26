@@ -35,6 +35,7 @@ class GateSpec:
         reason_min_chars: Minimum characters required in the gate_reason.
         reason_prompt: The question posed to the agent to justify continuation.
         expires_calls: Token dies after this many non-confirming tool calls.
+        expires_seconds: Token dies after this many seconds (if set).
         message: Human-readable explanation of why the gate fired.
     """
 
@@ -42,6 +43,7 @@ class GateSpec:
     reason_min_chars: int
     reason_prompt: str
     expires_calls: int = 3
+    expires_seconds: float | None = None
     message: str = ""
 
 
@@ -101,6 +103,7 @@ class GateManager:
             "reason_min_chars": spec.reason_min_chars,
             "reason_prompt": spec.reason_prompt,
             "expires_calls": spec.expires_calls,
+            "expires_seconds": spec.expires_seconds,
             "message": spec.message,
         }
 
@@ -116,6 +119,13 @@ class GateManager:
             return GateResult(
                 ok=False,
                 error="Invalid or expired gate token. Request a new one.",
+            )
+
+        if self._is_expired(pending):
+            del self._pending[gate_token]
+            return GateResult(
+                ok=False,
+                error="Gate token expired. Request a new one.",
             )
 
         reason = gate_reason.strip()
@@ -142,11 +152,20 @@ class GateManager:
         """
         expired: list[str] = []
         for gate_id, gate in self._pending.items():
+            if self._is_expired(gate):
+                expired.append(gate_id)
+                continue
             gate.calls_remaining -= 1
             if gate.calls_remaining <= 0:
                 expired.append(gate_id)
         for gate_id in expired:
             del self._pending[gate_id]
+
+    def _is_expired(self, gate: PendingGate) -> bool:
+        """Check time-based expiration for a pending gate."""
+        if gate.spec.expires_seconds is None:
+            return False
+        return (time.monotonic() - gate.issued_at) >= gate.spec.expires_seconds
 
     def has_pending(self, kind: str | None = None) -> bool:
         """Check if any gates are pending, optionally filtered by kind."""
@@ -243,6 +262,7 @@ RECON_CONSUMPTION_GATE = GateSpec(
         "from recon is driving your next action?"
     ),
     expires_calls=3,
+    expires_seconds=10.0,
     message=(
         "Recon just returned file content, scaffolds, and extraction commands. "
         "Acknowledge consumption before making additional tool calls."
