@@ -3,7 +3,6 @@
 Targets the get_tools_sync()-based code paths:
   - action='tool' with name NOT in TOOL_DOCS (fallback to get_tools_sync)
   - action='tool' with name NOT registered (tool-not-found branch)
-  - action='capabilities' (lists all tools via get_tools_sync)
 """
 
 from __future__ import annotations
@@ -90,28 +89,3 @@ class TestDescribeToolAction:
         assert result["found"] is False
         assert "available_tools" in result
         assert "my_undocumented_tool" in result["available_tools"]
-
-
-class TestDescribeCapabilities:
-    """Tests for describe(action='capabilities') using get_tools_sync."""
-
-    @pytest.mark.asyncio
-    async def test_capabilities_lists_tools(
-        self, mcp_with_dummy_tool: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
-    ) -> None:
-        """Capabilities action lists all registered tools from get_tools_sync."""
-        introspection.register_tools(mcp_with_dummy_tool, app_ctx)
-        tools = get_tools_sync(mcp_with_dummy_tool)
-        describe_fn = tools["describe"].fn
-
-        result: dict[str, Any] = await describe_fn(
-            ctx=fastmcp_ctx,
-            action="capabilities",
-        )
-
-        assert "tools" in result
-        tool_names = [t["name"] for t in result["tools"]]
-        assert "my_undocumented_tool" in tool_names
-        assert "describe" in tool_names
-        assert "features" in result
-        assert "version" in result

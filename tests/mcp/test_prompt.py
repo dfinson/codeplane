@@ -2,9 +2,8 @@
 
 Covers:
 - Prompt size constraints (bytes and lines)
-- Contains new tool names (read_source, read_file_full)
-- Does not contain old tool names (read_files as a tool)
-- Contains enrichment parameter, not context parameter for search
+- Contains v2 tool names (recon, recon_resolve, refactor_edit, checkpoint)
+- Does not contain dead tool names
 - Tool prefix substitution
 """
 
@@ -32,20 +31,25 @@ class TestPromptSize:
 class TestPromptContent:
     """Tests for prompt content correctness."""
 
-    def test_prompt_contains_read_source(self) -> None:
-        """'read_source' appears in prompt."""
+    def test_prompt_contains_recon(self) -> None:
+        """'recon' appears as the primary entry point."""
         snippet = _make_codeplane_snippet("test_prefix")
-        assert "read_source" in snippet
+        assert "recon" in snippet
 
-    def test_prompt_contains_read_file_full(self) -> None:
-        """'read_file_full' appears in prompt."""
+    def test_prompt_contains_recon_resolve(self) -> None:
+        """'recon_resolve' appears in prompt."""
         snippet = _make_codeplane_snippet("test_prefix")
-        assert "read_file_full" in snippet
+        assert "recon_resolve" in snippet
 
-    def test_prompt_contains_enrichment(self) -> None:
-        """'enrichment' appears in prompt."""
+    def test_prompt_contains_refactor_edit(self) -> None:
+        """'refactor_edit' appears in prompt."""
         snippet = _make_codeplane_snippet("test_prefix")
-        assert "enrichment" in snippet
+        assert "refactor_edit" in snippet
+
+    def test_prompt_contains_checkpoint(self) -> None:
+        """'checkpoint' appears in prompt."""
+        snippet = _make_codeplane_snippet("test_prefix")
+        assert "checkpoint" in snippet
 
     def test_prompt_tool_prefix_substituted(self) -> None:
         """{tool_prefix} replaced with actual prefix."""
@@ -53,9 +57,14 @@ class TestPromptContent:
         assert "my_cool_prefix" in snippet
         assert "{tool_prefix}" not in snippet
 
-    def test_prompt_contains_recon_as_primary(self) -> None:
-        """Prompt prioritizes recon as the primary entry point."""
+    def test_prompt_no_dead_tool_names(self) -> None:
+        """Dead v1 tool names should not appear."""
         snippet = _make_codeplane_snippet("test_prefix")
-        assert "recon" in snippet
-        assert "Start Every Task With" in snippet
-        assert "recon(task=" in snippet
+        for dead in ["write_source", "read_file_full", "reset_budget"]:
+            assert dead not in snippet, f"Dead tool '{dead}' found in snippet"
+
+    def test_prompt_contains_scaffold_lite_tiers(self) -> None:
+        """Prompt mentions SCAFFOLD and LITE tiers."""
+        snippet = _make_codeplane_snippet("test_prefix")
+        assert "SCAFFOLD" in snippet
+        assert "LITE" in snippet
