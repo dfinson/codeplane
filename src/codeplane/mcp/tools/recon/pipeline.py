@@ -217,18 +217,60 @@ async def _file_centric_pipeline(
         paths=parsed.explicit_paths,
     )
 
+    coordinator = app_ctx.coordinator
+
     # 2. File-level embedding search (PRIMARY)
     t_file_emb = time.monotonic()
     file_candidates = await _harvest_file_embedding(app_ctx, parsed, top_k=100)
     diagnostics["file_embed_ms"] = round((time.monotonic() - t_file_emb) * 1000)
     diagnostics["file_embed_count"] = len(file_candidates)
 
+    # 2a. Auto-seed: extract top symbol names from the top embedding-ranked
+    #     files.  Replicates v3's strategy of passing seeds alongside pins.
+    #     v3 used MAX_SEEDS=5 symbol names from the most connected defs.
+    _AUTO_SEED_K = 5  # v3 used 5
+    _AUTO_SEED_FILES = 4  # same as auto-pin count
+    auto_seeds: list[str] = []
+    if file_candidates:
+        from codeplane.index._internal.indexing.graph import FactQueries
+
+        emb_top_paths = [
+            fc.path
+            for fc in sorted(file_candidates, key=lambda fc: -fc.similarity)[:_AUTO_SEED_FILES]
+        ]
+        with coordinator.db.session() as session:
+            fq = FactQueries(session)
+            seed_scored: list[tuple[str, int]] = []
+            for ep in emb_top_paths:
+                frec = fq.get_file_by_path(ep)
+                if frec is None or frec.id is None:
+                    continue
+                defs_in = fq.list_defs_in_file(frec.id, limit=20)
+                for d in defs_in:
+                    hub = min(fq.count_callers(d.def_uid), 30)
+                    seed_scored.append((d.name, hub))
+            # Deduplicate, sort by hub score (most connected first)
+            seen: set[str] = set()
+            deduped: list[tuple[str, int]] = []
+            for name, hub in sorted(seed_scored, key=lambda x: -x[1]):
+                if name not in seen:
+                    seen.add(name)
+                    deduped.append((name, hub))
+            auto_seeds = [name for name, _hub in deduped[:_AUTO_SEED_K]]
+        diagnostics["auto_seeds"] = auto_seeds
+
+    # Combine explicit seeds with auto-seeds (explicit take priority)
+    combined_seeds = list(explicit_seeds or [])
+    for s in auto_seeds:
+        if s not in combined_seeds:
+            combined_seeds.append(s)
+
     # 3. Def-level harvesters in parallel (SECONDARY enrichment)
     t_def_harvest = time.monotonic()
     term_cands, lex_cands, exp_cands = await asyncio.gather(
         _harvest_term_match(app_ctx, parsed),
         _harvest_lexical(app_ctx, parsed),
-        _harvest_explicit(app_ctx, parsed, explicit_seeds),
+        _harvest_explicit(app_ctx, parsed, combined_seeds or None),
     )
     merged_def = _merge_candidates(term_cands, lex_cands, exp_cands)
 
@@ -252,11 +294,8 @@ async def _file_centric_pipeline(
     #     (e.g. files under packages/evee-azureml/ when query says "azureml").
     #     This step fills that gap by adding path-matched indexed files to the
     #     candidate set before RRF scoring gives them a fair rank.
-    coordinator = app_ctx.coordinator
     indexed_paths: set[str] = set()
     with coordinator.db.session() as session:
-        from codeplane.index._internal.indexing.graph import FactQueries
-
         fq = FactQueries(session)
         for frec in fq.list_files(limit=50000):
             indexed_paths.add(frec.path)
