@@ -1,0 +1,334 @@
+{
+    "_comment": "V3: Embedding-filtered from v2 candidates. Each issue's task is embedded and v2's pinned_paths are cosine-ranked against it. Top-4 paths and top-5 seeds kept.",
+    "4": {
+        "seeds": [
+            "ModelEvaluator",
+            "InferenceOutput",
+            "_infer_record_async",
+            "ModelVariantConfig",
+            "_infer_record"
+        ],
+        "pinned_paths": [
+            "src/evee/evaluation/model_evaluator.py",
+            "src/evee/evaluation/evaluate.py",
+            "tests/evee/conftest.py",
+            "src/evee/core/base_model.py"
+        ]
+    },
+    "38": {
+        "seeds": [
+            "server",
+            "view_results",
+            "BaseResource",
+            "run_experiment",
+            "BaseTool"
+        ],
+        "pinned_paths": [
+            "src/evee/mcp/server.py",
+            "src/evee/mcp/tools/experiment.py",
+            "src/evee/mcp/tools/validation.py",
+            "src/evee/mcp/tools/discovery.py"
+        ]
+    },
+    "57": {
+        "seeds": [],
+        "pinned_paths": [
+            "pyproject.toml",
+            ".github/workflows/integration-tests.yml",
+            "tests/evee/conftest.py",
+            "src/evee/evaluation/evaluate.py"
+        ]
+    },
+    "63": {
+        "seeds": [
+            "ModelEvaluator",
+            "model",
+            "base_model",
+            "_run_evaluation_loop"
+        ],
+        "pinned_paths": [
+            "src/evee/evaluation/model_evaluator.py",
+            "src/evee/evaluation/evaluate.py",
+            "src/evee/core/base_model.py",
+            "src/evee/execution/experiment_runner.py"
+        ]
+    },
+    "72": {
+        "seeds": [
+            "ComputeBackend",
+            "TrackingBackend",
+            "AzureMLComputeBackend",
+            "TestCLIIntegration",
+            "TestCLI"
+        ],
+        "pinned_paths": [
+            "packages/evee-azureml/src/evee_azureml/tracking.py",
+            "packages/evee-azureml/src/evee_azureml/compute.py",
+            "src/evee/execution/experiment_runner.py",
+            "src/evee/cli/utils/metric_operations.py"
+        ]
+    },
+    "108": {
+        "seeds": [
+            "ModelEvaluator",
+            "ExperimentRunner",
+            "NoOpTrackingBackend"
+        ],
+        "pinned_paths": [
+            "tests/evee/core/test_base_model.py",
+            "tests/evee/conftest.py",
+            "src/evee/execution/experiment_runner.py",
+            "tests/evee/cli/test_model_commands.py"
+        ]
+    },
+    "172": {
+        "seeds": [
+            "server",
+            "TestCLI",
+            "TestCli",
+            "TestWorkingDirectory",
+            "BaseResource"
+        ],
+        "pinned_paths": [
+            "src/evee/mcp/server.py",
+            "tests/mcp/conftest.py",
+            "src/evee/mcp/tools/validation.py",
+            "src/evee/mcp/tools/discovery.py"
+        ]
+    },
+    "191": {
+        "seeds": [
+            "ComputeBackend",
+            "TrackingBackend",
+            "AzureMLComputeBackend",
+            "TestCLIIntegration",
+            "TestCLI"
+        ],
+        "pinned_paths": [
+            "packages/evee-azureml/src/evee_azureml/tracking.py",
+            "src/evee/tracking/factory.py",
+            "packages/evee-azureml/src/evee_azureml/compute.py",
+            "src/evee/execution/experiment_runner.py"
+        ]
+    },
+    "192": {
+        "seeds": [
+            "ComputeBackend",
+            "TrackingBackend"
+        ],
+        "pinned_paths": [
+            "packages/evee-azureml/src/evee_azureml/compute.py",
+            "packages/evee-azureml/src/evee_azureml/tracking.py",
+            "pyproject.toml",
+            "src/evee/execution/experiment_runner.py"
+        ]
+    },
+    "193": {
+        "seeds": [
+            "new",
+            "TestCLI",
+            "TestCli",
+            "_GIT_BASE",
+            "TestCLIIntegration"
+        ],
+        "pinned_paths": [
+            "src/evee/cli/commands/new.py",
+            "src/evee/cli/main.py",
+            "pyproject.toml",
+            "tests/evee/cli/test_main.py"
+        ]
+    },
+    "201": {
+        "seeds": [
+            "get_example_dir"
+        ],
+        "pinned_paths": [
+            "tests/mcp/conftest.py",
+            "tests/evee/conftest.py",
+            "tests/evee/integration/helpers.py",
+            "src/evee/mcp/tools/experiment.py"
+        ]
+    },
+    "210": {
+        "seeds": [
+            "calculate_version",
+            "TestCLIIntegration",
+            "TestCLIDocumentation",
+            "TestCLI",
+            "TestCli"
+        ],
+        "pinned_paths": [
+            "pyproject.toml",
+            "CONTRIBUTING.md",
+            "README.md",
+            "packages/evee-azureml/src/evee_azureml/tracking.py"
+        ]
+    },
+    "226": {
+        "seeds": [
+            "MLflowTrackingConfig",
+            "tracking_uri"
+        ],
+        "pinned_paths": [
+            "packages/evee-mlflow/src/evee_mlflow/tracking.py",
+            "packages/evee-azureml/src/evee_azureml/tracking.py",
+            "packages/evee-mlflow/src/evee_mlflow/config.py",
+            "packages/evee-mlflow/src/evee_mlflow/constants.py"
+        ]
+    },
+    "233": {
+        "seeds": [
+            "ModelEvaluator",
+            "_run_evaluation_loop"
+        ],
+        "pinned_paths": [
+            "src/evee/evaluation/model_evaluator.py",
+            "src/evee/evaluation/evaluate.py",
+            "src/evee/core/base_metric.py",
+            "src/evee/evaluation/metrics_aggregator.py"
+        ]
+    },
+    "234": {
+        "seeds": [
+            "view_results",
+            "run_experiment",
+            "validate_config",
+            "list_components"
+        ],
+        "pinned_paths": [
+            "src/evee/mcp/server.py",
+            "src/evee/mcp/tools/experiment.py",
+            "src/evee/mcp/tools/validation.py",
+            "src/evee/mcp/tools/discovery.py"
+        ]
+    },
+    "236": {
+        "seeds": [
+            "BaseTool",
+            "execute"
+        ],
+        "pinned_paths": [
+            "src/evee/mcp/tools/view_results.py",
+            "src/evee/mcp/tools/experiment.py",
+            "tests/mcp/conftest.py",
+            "src/evee/mcp/tools/base.py"
+        ]
+    },
+    "240": {
+        "seeds": [
+            "ComputeBackend",
+            "AzureMLComputeBackend",
+            "TestCLI",
+            "TestCli",
+            "TestCLIErrorHandling"
+        ],
+        "pinned_paths": [
+            "packages/evee-azureml/src/evee_azureml/compute.py",
+            "src/evee/compute/local_compute_backend.py",
+            "src/evee/compute/backend.py",
+            "src/evee/cli/main.py"
+        ]
+    },
+    "259": {
+        "seeds": [
+            "preflight",
+            "TestCLI",
+            "TestCli",
+            "_execute_in_project_env",
+            "TestCLIErrorHandling"
+        ],
+        "pinned_paths": [
+            "src/evee/cli/commands/run.py",
+            "src/evee/execution/preflight.py",
+            "src/evee/cli/main.py",
+            "src/evee/evaluation/evaluate.py"
+        ]
+    },
+    "260": {
+        "seeds": [
+            "ProgressTracker",
+            "is_rich_compatible_environment"
+        ],
+        "pinned_paths": [
+            "src/evee/utils/environment.py",
+            "src/evee/evaluation/progress_tracker.py",
+            "src/evee/config/models.py",
+            "src/evee/mcp/tools/validation.py"
+        ]
+    },
+    "261": {
+        "seeds": [
+            "validate_config",
+            "run_experiment",
+            "server",
+            "view_results",
+            "list_components"
+        ],
+        "pinned_paths": [
+            "tests/mcp/conftest.py",
+            "src/evee/mcp/tools/validation.py",
+            "tests/evee/conftest.py",
+            "src/evee/mcp/tools/base.py"
+        ]
+    },
+    "262": {
+        "seeds": [
+            "base_model",
+            "ModelVariantConfig",
+            "ModelWrapper",
+            "TestDelegationFunctions",
+            "TestCLIErrorHandling"
+        ],
+        "pinned_paths": [
+            "src/evee/cli/commands/model.py",
+            "src/evee/cli/utils/model_operations.py",
+            "tests/evee/core/test_base_model.py",
+            "src/evee/config/models.py"
+        ]
+    },
+    "263": {
+        "seeds": [
+            "metric",
+            "_create_azure_metric",
+            "TestCLIErrorHandling",
+            "TestCLIIntegration",
+            "TestCLIDocumentation"
+        ],
+        "pinned_paths": [
+            "src/evee/cli/commands/metric.py",
+            "src/evee/cli/utils/metric_operations.py",
+            "src/evee/cli/templates/metrics/azure_evaluator_metric.py",
+            "src/evee/core/base_metric.py"
+        ]
+    },
+    "268": {
+        "seeds": [
+            "BaseMetric",
+            "MetricConfig",
+            "TestCLI",
+            "TestCli",
+            "OrderedGroup"
+        ],
+        "pinned_paths": [
+            "src/evee/cli/utils/metric_operations.py",
+            "src/evee/cli/commands/metric.py",
+            "src/evee/core/base_metric.py",
+            "tests/evee/cli/utils/test_metric_operations.py"
+        ]
+    },
+    "275": {
+        "seeds": [
+            "BaseMetric",
+            "METRIC_REGISTRY",
+            "MetricConfig",
+            "TestCLIIntegration",
+            "TestCLIDocumentation"
+        ],
+        "pinned_paths": [
+            "src/evee/core/base_metric.py",
+            "src/evee/evaluation/metrics_aggregator.py",
+            "src/evee/cli/commands/metric.py",
+            "tests/evee/evaluation/test_metrics_aggregator.py"
+        ]
+    }
+}

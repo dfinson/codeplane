@@ -19,6 +19,8 @@ experiment:
   version: "1.0"
   output_path: experiments/output/recon_enhanced
 
+  max_workers: 4  # daemon serializes internally; 4 is safe per concurrency testing
+
   tracking_backend:
     type: local
 
@@ -26,8 +28,8 @@ experiment:
     - name: cpl-recon-enhanced
       args:
         - daemon_port: [7777]
-        - timeout: [120]
-        - seeds_path: ["data/enhanced_seeds.json", "data/enhanced_seeds_v2.json"]
+        - timeout: [300]
+        - seeds_path: ["data/enhanced_seeds.json", "data/enhanced_seeds_v2.json", "data/enhanced_seeds_v3.json"]
 
   dataset:
     name: cpl-recon-gt

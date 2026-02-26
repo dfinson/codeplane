@@ -31,7 +31,7 @@ class ReconEnhancedModel:
     def __init__(
         self,
         daemon_port: int = 7777,
-        timeout: int = 120,
+        timeout: int = 300,
         seeds_path: str = "data/enhanced_seeds.json",
         **kwargs: object,
     ) -> None:
@@ -72,7 +72,7 @@ class ReconEnhancedModel:
                 "clientInfo": {"name": "cpl-bench-enhanced", "version": "1.0"},
             },
         }
-        r = httpx.post(self.mcp_url, json=payload, headers=headers, timeout=10)
+        r = httpx.post(self.mcp_url, json=payload, headers=headers, timeout=self.timeout)
         r.raise_for_status()
         session_id = r.headers.get("mcp-session-id", "")
 
@@ -82,7 +82,7 @@ class ReconEnhancedModel:
             self.mcp_url,
             json=notif,
             headers={**headers, "Mcp-Session-Id": session_id},
-            timeout=10,
+            timeout=self.timeout,
         )
         return session_id
 

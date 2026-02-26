@@ -22,7 +22,7 @@ class ReconModel:
         timeout: MCP call timeout in seconds (default 120)
     """
 
-    def __init__(self, daemon_port: int = 7777, timeout: int = 120, **kwargs: object) -> None:
+    def __init__(self, daemon_port: int = 7777, timeout: int = 300, **kwargs: object) -> None:
         self.mcp_url = f"http://127.0.0.1:{daemon_port}/mcp"
         self.timeout = timeout
         self._target_repo = os.environ.get(
@@ -48,7 +48,7 @@ class ReconModel:
                 "clientInfo": {"name": "cpl-bench", "version": "1.0"},
             },
         }
-        r = httpx.post(self.mcp_url, json=payload, headers=headers, timeout=30)
+        r = httpx.post(self.mcp_url, json=payload, headers=headers, timeout=self.timeout)
         r.raise_for_status()
         session_id = r.headers.get("mcp-session-id", "")
 
@@ -58,7 +58,7 @@ class ReconModel:
             self.mcp_url,
             json=notif,
             headers={**headers, "Mcp-Session-Id": session_id},
-            timeout=30,
+            timeout=self.timeout,
         )
         return session_id
 

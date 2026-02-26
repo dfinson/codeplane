@@ -19,6 +19,8 @@ experiment:
   version: "1.0"
   output_path: experiments/output/recon_baseline
 
+  max_workers: 4  # daemon serializes internally; 4 is safe per concurrency testing
+
   tracking_backend:
     type: local
 
@@ -26,7 +28,7 @@ experiment:
     - name: cpl-recon
       args:
         - daemon_port: [7777]
-        - timeout: [120]
+        - timeout: [300]
 
   dataset:
     name: cpl-recon-gt

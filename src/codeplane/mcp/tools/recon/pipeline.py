@@ -169,6 +169,62 @@ def _compute_sha256(path: Path) -> str:
 
 
 # ===================================================================
+# Embedding-based pinned_paths filter
+# ===================================================================
+
+# Maximum number of pinned_paths to keep after ranking.
+# Agents often over-provide pins; capping matches v1-quality density
+# while preventing noisy pins from drowning real signal.
+_MAX_PINNED_PATHS = 4
+
+
+def _filter_pinned_paths(
+    pinned_paths: list[str],
+    file_candidates: list[FileCandidate],
+    coordinator: Any,
+    task: str,
+) -> list[str]:
+    """Rank pinned_paths by file-embedding similarity to the task, keep top-K.
+
+    Uses the embedding similarities already computed in step 2 of the
+    pipeline.  For any pinned path not in the candidate set, falls back
+    to the coordinator's file embedding index.
+
+    This prevents over-broad pinned_paths (e.g., 20-30 files from
+    programmatic mining) from flooding the scoring pipeline, matching
+    the precision profile of hand-curated seed sets.
+    """
+    if len(pinned_paths) <= _MAX_PINNED_PATHS:
+        return pinned_paths
+
+    # Build path → similarity lookup from existing file candidates
+    path_sim: dict[str, float] = {
+        fc.path: fc.similarity for fc in file_candidates if fc.similarity > 0
+    }
+
+    # For pins not already in the candidate set, query the embedding index
+    missing = [p for p in pinned_paths if p not in path_sim]
+    if missing:
+        all_ranked = coordinator.query_file_embeddings(task, top_k=500)
+        idx_sim = dict(all_ranked)
+        for p in missing:
+            path_sim[p] = idx_sim.get(p, 0.0)
+
+    # Rank by similarity descending, keep top-K
+    scored = [(p, path_sim.get(p, 0.0)) for p in pinned_paths]
+    scored.sort(key=lambda x: -x[1])
+    filtered = [p for p, _s in scored[:_MAX_PINNED_PATHS]]
+
+    log.info(
+        "recon.pinned_paths_filtered",
+        original=len(pinned_paths),
+        kept=len(filtered),
+        top_sims=[round(s, 3) for _, s in scored[:_MAX_PINNED_PATHS]],
+    )
+    return filtered
+
+
+# ===================================================================
 # File-centric pipeline (file-level embedding + two-elbow tiers)
 # ===================================================================
 
@@ -336,6 +392,18 @@ async def _file_centric_pipeline(
 
     # 4b. Enrich file candidates with RRF scoring
     _enrich_file_candidates(file_candidates, merged_def, parsed)
+
+    # 4c. Filter pinned_paths by embedding similarity to the task.
+    #     Agents may over-provide pins (20-30 from programmatic mining);
+    #     ranking by cosine similarity and capping at _MAX_PINNED_PATHS
+    #     preserves only the most task-relevant anchors.
+    if pinned_paths and len(pinned_paths) > _MAX_PINNED_PATHS:
+        pinned_paths = _filter_pinned_paths(
+            pinned_paths, file_candidates, coordinator, task
+        )
+        diagnostics["pinned_paths_filtered"] = True
+    else:
+        diagnostics["pinned_paths_filtered"] = False
 
     # Determine max RRF score for guaranteeing pinned/explicit placement.
     max_rrf = max((fc.combined_score for fc in file_candidates), default=0.0)
