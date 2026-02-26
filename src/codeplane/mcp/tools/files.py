@@ -158,6 +158,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             None,
             description="Cursor token from a previous paginated response. Pass to retrieve the next page.",
         ),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Justification for passing the gate (min chars per gate spec).",
+        ),
     ) -> dict[str, Any]:
         """Bounded semantic retrieval of source code.
 
@@ -414,6 +422,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             None,
             description="Cursor token from a previous paginated response. Pass to retrieve the next page.",
         ),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Justification for passing the gate (min chars per gate spec).",
+        ),
     ) -> dict[str, Any]:
         """Gated bulk file access with two-phase confirmation.
 
@@ -564,6 +580,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             "all", description="Filter by entry type"
         ),
         limit: int = Field(200, ge=1, le=FILES_LIST_MAX, description="Maximum entries to return"),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Justification for passing the gate (min chars per gate spec).",
+        ),
     ) -> dict[str, Any]:
         """List files and directories with optional filtering."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
@@ -617,6 +641,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             False,
             description="Include module-level constants and variables.",
         ),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Justification for passing the gate (min chars per gate spec).",
+        ),
     ) -> dict[str, Any]:
         """Semantic scaffold view of a file.
 
@@ -664,6 +696,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "Why the reset is needed. Post-mutation: >= 50 chars. "
                 "No-mutation ceiling reset: >= 250 chars."
             ),
+        ),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Justification for passing the gate (min chars per gate spec).",
         ),
     ) -> dict[str, Any]:
         """Request a budget ceiling reset.

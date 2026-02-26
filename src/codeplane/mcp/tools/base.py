@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class BaseParams(BaseModel):
@@ -15,3 +15,11 @@ class BaseParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     session_id: str | None = None
+    gate_token: str | None = Field(
+        default=None,
+        description="Gate confirmation token from a previous gate block. Required when responding to a gate.",
+    )
+    gate_reason: str | None = Field(
+        default=None,
+        description="Justification for passing the gate. Required when responding to a gate.",
+    )

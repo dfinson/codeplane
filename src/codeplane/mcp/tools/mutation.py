@@ -225,6 +225,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         edits: list[EditParam] = Field(..., description="List of file edits to apply atomically"),
         dry_run: bool = Field(False, description="Preview changes without applying"),
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Justification for passing the gate (min chars per gate spec).",
+        ),
     ) -> dict[str, Any]:
         """Create, update, or delete files atomically.
 

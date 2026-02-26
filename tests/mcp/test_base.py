@@ -57,7 +57,7 @@ class TestBaseParams:
         """model_dump works correctly."""
         params = BaseParams(session_id="sess_789")
         data = params.model_dump()
-        assert data == {"session_id": "sess_789"}
+        assert data == {"session_id": "sess_789", "gate_token": None, "gate_reason": None}
 
     def test_model_dump_exclude_none(self) -> None:
         """model_dump can exclude None values."""

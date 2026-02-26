@@ -69,6 +69,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         path: str | None = Field(None, description="Filter operations by path"),
         success_only: bool = Field(False, description="Show only successful operations"),
         limit: int = Field(50, description="Maximum operations to return"),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Justification for passing the gate (min chars per gate spec).",
+        ),
     ) -> dict[str, Any]:
         """Introspection: describe tools, errors, capabilities, workflows, or operations.
 

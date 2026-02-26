@@ -847,6 +847,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             False,
             description="Push to origin after auto-commit (only used with commit_message).",
         ),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Justification for passing the gate (min chars per gate spec).",
+        ),
     ) -> dict[str, Any]:
         """Lint, test, and optionally commit+push in one call.
 

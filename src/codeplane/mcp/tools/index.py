@@ -624,9 +624,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         confirmation_token: str | None = Field(
             None, description="Token from a previous pattern-break gate."
         ),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
         gate_reason: str | None = Field(
             None,
-            description="Reason for continuing past a pattern-break gate (min chars per gate spec).",
+            description="Reason for continuing past a gate (min chars per gate spec).",
         ),
         cursor: str | None = Field(
             None,
@@ -1087,6 +1091,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             True, description="Honor .gitignore patterns (default: true)"
         ),
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Reason for continuing past a gate (min chars per gate spec).",
+        ),
     ) -> dict[str, Any]:
         """Get repository mental model."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)

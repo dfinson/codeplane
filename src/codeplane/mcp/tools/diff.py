@@ -49,6 +49,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         target: str | None = Field(None, description="Target ref (None = working tree)"),
         paths: list[str] | None = Field(None, description="Limit to specific paths"),
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Justification for passing the gate (min chars per gate spec).",
+        ),
     ) -> dict[str, Any]:
         """Structural change summary from index facts.
 

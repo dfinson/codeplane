@@ -149,6 +149,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         new_name: str = Field(..., description="New name for the symbol"),
         include_comments: bool = Field(True, description="Include comment references"),
         contexts: list[str] | None = Field(None, description="Limit to specific contexts"),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Justification for passing the gate (min chars per gate spec).",
+        ),
     ) -> dict[str, Any]:
         """Rename a symbol across the codebase."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
@@ -167,6 +175,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         from_path: str = Field(..., description="Source file path"),
         to_path: str = Field(..., description="Destination file path"),
         include_comments: bool = Field(True, description="Include comment references"),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Justification for passing the gate (min chars per gate spec).",
+        ),
     ) -> dict[str, Any]:
         """Move a file/module, updating imports."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
@@ -183,6 +199,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ctx: Context,
         target: str = Field(..., description="Symbol or path to analyze for impact"),
         include_comments: bool = Field(True, description="Include comment references"),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Justification for passing the gate (min chars per gate spec).",
+        ),
     ) -> dict[str, Any]:
         """Find all references to a symbol/file for impact analysis before removal."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
@@ -198,6 +222,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ctx: Context,
         refactor_id: str = Field(..., description="ID of the refactoring to apply"),
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Justification for passing the gate (min chars per gate spec).",
+        ),
     ) -> dict[str, Any]:
         """Apply a previewed refactoring."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
@@ -216,6 +248,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     async def refactor_cancel(
         ctx: Context,
         refactor_id: str = Field(..., description="ID of the refactoring to cancel"),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Justification for passing the gate (min chars per gate spec).",
+        ),
     ) -> dict[str, Any]:
         """Cancel a pending refactoring."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
@@ -229,6 +269,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         refactor_id: str = Field(..., description="ID of the refactoring to inspect"),
         path: str = Field(..., description="File path to inspect"),
         context_lines: int = Field(2, description="Lines of context around matches"),
+        gate_token: str | None = Field(
+            None,
+            description="Gate confirmation token from a previous gate block.",
+        ),
+        gate_reason: str | None = Field(
+            None,
+            description="Justification for passing the gate (min chars per gate spec).",
+        ),
     ) -> dict[str, Any]:
         """Inspect low-certainty matches in a file with context."""
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)

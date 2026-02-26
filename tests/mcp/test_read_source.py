@@ -359,6 +359,33 @@ class TestReconConsumptionGate:
             session.gate_manager.tick()
         assert not session.gate_manager.has_pending("recon_consumption")
 
+    def test_gate_expires_after_seconds(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Gate expires after expires_seconds elapses."""
+        from codeplane.mcp.gate import GateManager, GateSpec
+
+        now = {"t": 100.0}
+
+        def _fake_monotonic() -> float:
+            return now["t"]
+
+        monkeypatch.setattr("codeplane.mcp.gate.time.monotonic", _fake_monotonic)
+
+        manager = GateManager()
+        spec = GateSpec(
+            kind="expiring",
+            reason_min_chars=1,
+            reason_prompt="why",
+            expires_calls=10,
+            expires_seconds=1.0,
+        )
+        gate_block = manager.issue(spec)
+        assert manager.has_pending("expiring")
+
+        now["t"] += 2.0
+        result = manager.validate(gate_block["id"], "ok")
+        assert not result.ok
+        assert not manager.has_pending("expiring")
+
     def test_session_no_last_recon_at(self) -> None:
         """SessionState no longer has last_recon_at field."""
         from codeplane.mcp.session import SessionState

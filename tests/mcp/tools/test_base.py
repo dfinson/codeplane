@@ -53,7 +53,7 @@ class TestBaseParams:
         """Can serialize to dict."""
         params = BaseParams(session_id="test")
         data = params.model_dump()
-        assert data == {"session_id": "test"}
+        assert data == {"session_id": "test", "gate_token": None, "gate_reason": None}
 
     def test_model_dump_excludes_none(self) -> None:
         """Can exclude None values."""
