@@ -179,41 +179,32 @@ def _compute_sha256(path: Path) -> str:
 _MAX_PINNED_PATHS = 4
 
 
-def _expand_and_rank_pins(
-    pinned_paths: list[str] | None,
+def _inject_expansion_candidates(
     file_candidates: list[FileCandidate],
     coordinator: Any,
     parsed: ParsedTask,
-    task: str,
     indexed_paths: set[str],
-) -> list[str]:
-    """Generate pin candidates from the task, merge with agent-supplied pins, rank, and cap.
+) -> int:
+    """Generate candidate files from the task and inject into file_candidates.
 
-    **Generation phase** (analogous to v2 mining strategies):
-    1. Symbol→file: resolve ``parsed.explicit_symbols`` to file paths via the index.
-    2. Package siblings: for each seed file and top-3 file candidates,
-       list files in the same directory as additional candidates.
-    3. Test mirrors: for each source candidate, check ``tests/test_{name}.py``
-       and ``tests/{subdir}/test_{name}.py``.
+    This runs BEFORE RRF scoring so that expanded candidates compete on merit
+    alongside embedding-retrieved files — they do NOT get hard-boosted like
+    agent-supplied pins.
 
-    **Ranking phase** (analogous to v3 embedding filter):
-    4. Pool all generated paths + incoming ``pinned_paths``.
-    5. Rank by file-embedding cosine similarity to the task.
-    6. Return top ``_MAX_PINNED_PATHS``.
+    **Generation strategies** (analogous to v2 mining):
+    1. Symbol→file: resolve ``parsed.explicit_symbols`` to file paths via
+       the structural index.
+    2. Package siblings: for each symbol file and top-3 file candidates,
+       list indexed files in the same directory.
+    3. Test mirrors: for source candidates, check ``tests/test_{stem}.py``.
 
-    Cost: one ``query_file_embeddings`` call (~5ms) + set lookups.  No new
-    model inference — file embeddings are pre-computed.
+    Returns:
+        Number of new candidates injected.
     """
-    candidate_pool: set[str] = set()
-
-    # ── Include any agent-supplied pins ──────────────────────────
-    if pinned_paths:
-        candidate_pool.update(pinned_paths)
+    existing_paths = {fc.path for fc in file_candidates}
+    new_paths: set[str] = set()
 
     # ── Strategy 1: Symbol → file ────────────────────────────────
-    #    parsed.explicit_symbols already resolves PascalCase/snake_case
-    #    identifiers from the task text.  Resolve each to its defining
-    #    file via the structural index.
     symbol_files: list[str] = []
     if parsed.explicit_symbols:
         from sqlmodel import select as _select
@@ -224,16 +215,12 @@ def _expand_and_rank_pins(
             for sym in parsed.explicit_symbols:
                 stmt = _select(_DefFact).where(_DefFact.name == sym).limit(1)
                 d = session.exec(stmt).first()
-                if d is not None and d.path:
+                if d is not None and d.path and d.path not in existing_paths:
                     symbol_files.append(d.path)
-                    candidate_pool.add(d.path)
+                    new_paths.add(d.path)
 
     # ── Strategy 2: Package siblings ─────────────────────────────
-    #    For each seed file (from symbols) and the top-3 file candidates,
-    #    add sibling files in the same directory.  This catches related
-    #    modules that the agent didn't name explicitly.
     anchor_paths: list[str] = list(symbol_files)
-    # Add top-3 file candidates (by combined_score)
     sorted_cands = sorted(file_candidates, key=lambda fc: -fc.combined_score)
     for fc in sorted_cands[:3]:
         if fc.path not in anchor_paths:
@@ -247,14 +234,14 @@ def _expand_and_rank_pins(
         seen_dirs.add(parent)
         prefix = parent + "/"
         for ip in indexed_paths:
-            if ip.startswith(prefix) and "/" not in ip[len(prefix) :]:
-                # Same directory, not a subdirectory
-                candidate_pool.add(ip)
+            if (
+                ip.startswith(prefix)
+                and "/" not in ip[len(prefix) :]
+                and ip not in existing_paths
+            ):
+                new_paths.add(ip)
 
     # ── Strategy 3: Test mirrors ─────────────────────────────────
-    #    For source files, check if the corresponding test file exists
-    #    in the indexed set.  Convention: tests/test_{stem}.py or
-    #    tests/{subdir}/test_{stem}.py.
     for apath in anchor_paths:
         if _is_test_file(apath):
             continue
@@ -265,38 +252,71 @@ def _expand_and_rank_pins(
             f"tests/{parent_name}/test_{stem}.py",
         ]
         for tp in test_patterns:
-            if tp in indexed_paths:
-                candidate_pool.add(tp)
+            if tp in indexed_paths and tp not in existing_paths:
+                new_paths.add(tp)
 
-    # ── Ranking phase ────────────────────────────────────────────
-    #    Score every candidate by file-embedding similarity to the task.
-    if not candidate_pool:
-        return []
+    # ── Inject into file_candidates with similarity=0 ────────────
+    #    These get scored by RRF just like path-injected files.
+    for np in new_paths:
+        file_candidates.append(
+            FileCandidate(
+                path=np,
+                similarity=0.0,
+                combined_score=0.0,  # will be set by RRF
+                artifact_kind=_classify_artifact(np),
+            )
+        )
+
+    if new_paths:
+        log.info(
+            "recon.expansion_candidates",
+            injected=len(new_paths),
+            symbol_files=len(symbol_files),
+            sibling_dirs=len(seen_dirs),
+        )
+    return len(new_paths)
+
+
+def _filter_pinned_paths(
+    pinned_paths: list[str],
+    file_candidates: list[FileCandidate],
+    coordinator: Any,
+    task: str,
+) -> list[str]:
+    """Rank pinned_paths by file-embedding similarity to the task, keep top-K.
+
+    Uses the embedding similarities already computed in step 2 of the
+    pipeline.  For any pinned path not in the candidate set, falls back
+    to the coordinator's file embedding index.
+
+    This prevents over-broad pinned_paths (e.g., 20-30 files from
+    programmatic mining) from flooding the scoring pipeline, matching
+    the precision profile of hand-curated seed sets.
+    """
+    if len(pinned_paths) <= _MAX_PINNED_PATHS:
+        return pinned_paths
 
     # Build path → similarity lookup from existing file candidates
     path_sim: dict[str, float] = {
         fc.path: fc.similarity for fc in file_candidates if fc.similarity > 0
     }
 
-    # For candidates not already scored, query the embedding index
-    needs_scoring = [p for p in candidate_pool if p not in path_sim]
-    if needs_scoring:
+    # For pins not already in the candidate set, query the embedding index
+    missing = [p for p in pinned_paths if p not in path_sim]
+    if missing:
         all_ranked = coordinator.query_file_embeddings(task, top_k=500)
         idx_sim = dict(all_ranked)
-        for p in needs_scoring:
+        for p in missing:
             path_sim[p] = idx_sim.get(p, 0.0)
 
     # Rank by similarity descending, keep top-K
-    scored = [(p, path_sim.get(p, 0.0)) for p in candidate_pool]
+    scored = [(p, path_sim.get(p, 0.0)) for p in pinned_paths]
     scored.sort(key=lambda x: -x[1])
     filtered = [p for p, _s in scored[:_MAX_PINNED_PATHS]]
 
     log.info(
-        "recon.expand_and_rank_pins",
-        pool_size=len(candidate_pool),
-        agent_pins=len(pinned_paths) if pinned_paths else 0,
-        symbol_files=len(symbol_files),
-        sibling_dirs=len(seen_dirs),
+        "recon.pinned_paths_filtered",
+        original=len(pinned_paths),
         kept=len(filtered),
         top_sims=[round(s, 3) for _, s in scored[:_MAX_PINNED_PATHS]],
     )
@@ -469,20 +489,34 @@ async def _file_centric_pipeline(
             )
         diagnostics["path_inject_count"] = min(len(path_inject_scored), _PATH_INJECT_MAX)
 
+    # 4a'. Inject expansion candidates from task-derived strategies.
+    #      Three generation strategies mine additional file candidates:
+    #        (1) symbol→file resolution via the structural index,
+    #        (2) package-sibling expansion from anchor files,
+    #        (3) test-mirror discovery.
+    #      Unlike pinned_paths (which get hard-boosted), these are
+    #      injected with similarity=0 and scored by RRF on merit.
+    expansion_count = _inject_expansion_candidates(
+        file_candidates, coordinator, parsed, indexed_paths
+    )
+    diagnostics["expansion_injected"] = expansion_count
+
     # 4b. Enrich file candidates with RRF scoring
     _enrich_file_candidates(file_candidates, merged_def, parsed)
 
-    # 4c. Expand + rank pins.
-    #     Three generation strategies mine pin candidates from the task:
-    #       (1) symbol→file resolution via the structural index,
-    #       (2) package-sibling expansion from anchor files,
-    #       (3) test-mirror discovery.
-    #     All candidates (including agent-supplied pins) are then ranked
-    #     by file-embedding similarity and capped at _MAX_PINNED_PATHS.
-    pinned_paths = _expand_and_rank_pins(
-        pinned_paths, file_candidates, coordinator, parsed, task, indexed_paths
-    )
-    diagnostics["expanded_pins"] = len(pinned_paths)
+    # 4c. Filter agent-supplied pinned_paths by embedding similarity.
+    #     Agents may over-provide pins (20-30 from programmatic mining);
+    #     ranking by cosine similarity and capping at _MAX_PINNED_PATHS
+    #     preserves only the most task-relevant anchors.
+    #     NOTE: expansion candidates are NOT pins — they were injected
+    #     into file_candidates in step 4pre and scored by RRF on merit.
+    if pinned_paths and len(pinned_paths) > _MAX_PINNED_PATHS:
+        pinned_paths = _filter_pinned_paths(
+            pinned_paths, file_candidates, coordinator, task
+        )
+        diagnostics["pinned_paths_filtered"] = True
+    else:
+        diagnostics["pinned_paths_filtered"] = False
 
     # Determine max RRF score for guaranteeing pinned/explicit placement.
     max_rrf = max((fc.combined_score for fc in file_candidates), default=0.0)
