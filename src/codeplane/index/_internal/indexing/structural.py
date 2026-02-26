@@ -577,8 +577,10 @@ def _extract_file(file_path: str, repo_root: str, unit_id: int) -> ExtractionRes
         if parse_result.ts_language is not None:
             string_types = _discover_string_node_types(parse_result.ts_language)
         for def_dict in result.defs:
-            sl: int = int(def_dict["start_line"])
-            el: int = int(def_dict["end_line"])
+            _sl: Any = def_dict["start_line"]
+            _el: Any = def_dict["end_line"]
+            sl = int(_sl)
+            el = int(_el)
             if string_types:
                 literals = _collect_string_literals(
                     parse_result.root_node,

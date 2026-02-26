@@ -236,8 +236,8 @@ class ReferenceResolver:
 
     def _build_module_cache(self, session: object) -> None:
         """Build mapping from module path to file_id, and file_id to path."""
-        self._module_to_file: dict[str, int] = {}
-        self._file_paths: dict[int, str] = {}
+        self._module_to_file = {}  # reset
+        self._file_paths = {}  # reset
 
         stmt = select(File.id, File.path)
         files = session.exec(stmt).all()  # type: ignore[attr-defined]

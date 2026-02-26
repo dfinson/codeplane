@@ -364,6 +364,24 @@ async def _file_centric_pipeline(
                         fc.combined_score = max(fc.combined_score, pin_floor)
                         break
 
+    # 4c. Auto-pin: replicate v3 strategy — top-4 files by embedding
+    #     similarity are treated as programmatic pins.  This activates
+    #     anchor_floor calibration (which is a no-op without anchors)
+    #     and ensures the strongest semantic matches survive tier
+    #     assignment.  v3 always used exactly 4 pins (MAX_PINS=4).
+    _AUTO_PIN_K = 4
+    emb_ranked = sorted(
+        (fc for fc in file_candidates if fc.similarity > 0),
+        key=lambda fc: -fc.similarity,
+    )
+    auto_pinned = 0
+    for fc in emb_ranked[:_AUTO_PIN_K]:
+        if not fc.has_explicit_mention:
+            fc.has_explicit_mention = True
+            auto_pinned += 1
+        fc.combined_score = max(fc.combined_score, pin_floor)
+    diagnostics["auto_pin_count"] = auto_pinned
+
     # Handle explicit paths from task text
     if parsed.explicit_paths:
         existing_paths = {fc.path for fc in file_candidates}
