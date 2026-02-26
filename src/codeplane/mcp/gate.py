@@ -167,8 +167,15 @@ class GateManager:
             return False
         return (time.monotonic() - gate.issued_at) >= gate.spec.expires_seconds
 
+    def _expire_time_based_gates(self) -> None:
+        """Remove gates that have exceeded their time-based expiry."""
+        expired = [gate_id for gate_id, gate in self._pending.items() if self._is_expired(gate)]
+        for gate_id in expired:
+            del self._pending[gate_id]
+
     def has_pending(self, kind: str | None = None) -> bool:
         """Check if any gates are pending, optionally filtered by kind."""
+        self._expire_time_based_gates()
         if kind is None:
             return bool(self._pending)
         return any(g.spec.kind == kind for g in self._pending.values())
