@@ -7,7 +7,6 @@ Three-tool read model:
 """
 
 import hashlib
-import time
 from typing import TYPE_CHECKING, Any, Literal
 
 from fastmcp import Context
@@ -181,33 +180,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             return page
 
         session = app_ctx.session_manager.get_or_create(ctx.session_id)
-
-        # ── Hard gate: refuse read_source within 5 s of a recon call ──
-        # Agents should parse recon's JSON output (jq extraction commands)
-        # rather than immediately scatter-reading individual files.
-        _RECON_COOLDOWN_SEC = 5.0
-        if session.last_recon_at is not None:
-            elapsed = time.monotonic() - session.last_recon_at
-            if elapsed < _RECON_COOLDOWN_SEC:
-                remaining = round(_RECON_COOLDOWN_SEC - elapsed, 1)
-                return {
-                    "status": "blocked",
-                    "error": {
-                        "code": "RECON_COOLDOWN",
-                        "message": (
-                            f"read_source blocked: recon was called {elapsed:.1f}s ago. "
-                            f"Wait {remaining}s or use the JSON extraction commands from "
-                            f"the recon response instead of scatter-reading."
-                        ),
-                    },
-                    "agentic_hint": (
-                        "Use the agentic_hint jq/JSON parsing commands from the recon "
-                        "response to extract file content — NOT read_source. Recon already "
-                        "returned full files, scaffolds, and summaries. Parse them with the "
-                        "extraction commands provided in the recon response."
-                    ),
-                    "cooldown_remaining_sec": remaining,
-                }
 
         # Evaluate pattern detector before executing read
         pattern_match = session.pattern_detector.evaluate()

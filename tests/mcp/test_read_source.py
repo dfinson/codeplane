@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -283,83 +282,86 @@ class TestReadSourceEnvelope:
 
 
 # =============================================================================
-# Recon cooldown gate tests
+# Recon consumption gate tests
 # =============================================================================
 
 
-class TestReconCooldownSessionState:
-    """Test last_recon_at field on SessionState."""
+class TestReconConsumptionGate:
+    """Test the post-recon consumption gate (middleware-level, call-based)."""
 
-    def test_default_none(self) -> None:
-        """last_recon_at is None by default."""
-        from codeplane.mcp.session import SessionState
+    def test_gate_spec_exists(self) -> None:
+        """RECON_CONSUMPTION_GATE is importable and has correct kind."""
+        from codeplane.mcp.gate import RECON_CONSUMPTION_GATE
 
-        s = SessionState(session_id="s1", created_at=0, last_active=0)
-        assert s.last_recon_at is None
+        assert RECON_CONSUMPTION_GATE.kind == "recon_consumption"
+        assert RECON_CONSUMPTION_GATE.reason_min_chars == 50
 
-    def test_settable(self) -> None:
-        """last_recon_at can be set to a float timestamp."""
-        import time
-
-        from codeplane.mcp.session import SessionState
-
-        s = SessionState(session_id="s1", created_at=0, last_active=0)
-        now = time.monotonic()
-        s.last_recon_at = now
-        assert s.last_recon_at == now
-
-    def test_cooldown_blocks_read_source_within_window(self) -> None:
-        """read_source returns RECON_COOLDOWN error when recon was recent."""
-        import time
-
+    def test_gate_issued_on_session(self) -> None:
+        """Gate manager can issue a recon_consumption gate."""
+        from codeplane.mcp.gate import RECON_CONSUMPTION_GATE
         from codeplane.mcp.session import SessionState
 
         session = SessionState(session_id="s1", created_at=0, last_active=0)
-        # Simulate recon just happened
-        session.last_recon_at = time.monotonic()
+        gate_block = session.gate_manager.issue(RECON_CONSUMPTION_GATE)
+        assert gate_block["kind"] == "recon_consumption"
+        assert "id" in gate_block
+        assert session.gate_manager.has_pending("recon_consumption")
 
-        # The gate check logic (mirrored from files.py)
-        _RECON_COOLDOWN_SEC = 5.0
-        elapsed = time.monotonic() - session.last_recon_at
-        assert elapsed < _RECON_COOLDOWN_SEC
-
-    def test_cooldown_allows_after_window(self) -> None:
-        """read_source proceeds when recon was >5s ago."""
-        import time
-
+    def test_gate_validates_with_good_reason(self) -> None:
+        """Gate consumed when valid token + 50+ char reason provided."""
+        from codeplane.mcp.gate import RECON_CONSUMPTION_GATE
         from codeplane.mcp.session import SessionState
 
         session = SessionState(session_id="s1", created_at=0, last_active=0)
-        # Simulate recon was 10 seconds ago
-        session.last_recon_at = time.monotonic() - 10.0
+        gate_block = session.gate_manager.issue(RECON_CONSUMPTION_GATE)
+        token = gate_block["id"]
 
-        _RECON_COOLDOWN_SEC = 5.0
-        elapsed = time.monotonic() - session.last_recon_at
-        assert elapsed >= _RECON_COOLDOWN_SEC
+        reason = "I parsed the full_file tier and identified 3 edit targets from recon output"
+        result = session.gate_manager.validate(token, reason)
+        assert result.ok
+        assert not session.gate_manager.has_pending("recon_consumption")
 
-    def test_cooldown_response_structure(self) -> None:
-        """Verify the blocked response has required fields."""
+    def test_gate_rejects_short_reason(self) -> None:
+        """Gate rejects reason shorter than 50 chars."""
+        from codeplane.mcp.gate import RECON_CONSUMPTION_GATE
+        from codeplane.mcp.session import SessionState
 
-        response: dict[str, Any] = {
-            "status": "blocked",
-            "error": {
-                "code": "RECON_COOLDOWN",
-                "message": (
-                    "read_source blocked: recon was called 0.5s ago. "
-                    "Wait 4.5s or use the JSON extraction commands from "
-                    "the recon response instead of scatter-reading."
-                ),
-            },
-            "agentic_hint": (
-                "Use the agentic_hint jq/JSON parsing commands from the recon "
-                "response to extract file content — NOT read_source."
-            ),
-            "cooldown_remaining_sec": 4.5,
-        }
-        assert response["status"] == "blocked"
-        err = response["error"]
-        assert isinstance(err, dict)
-        assert err["code"] == "RECON_COOLDOWN"
-        assert "agentic_hint" in response
-        assert "cooldown_remaining_sec" in response
-        assert "scatter-reading" in err["message"]
+        session = SessionState(session_id="s1", created_at=0, last_active=0)
+        gate_block = session.gate_manager.issue(RECON_CONSUMPTION_GATE)
+        token = gate_block["id"]
+
+        result = session.gate_manager.validate(token, "too short")
+        assert not result.ok
+        # Gate should still be pending
+        assert session.gate_manager.has_pending("recon_consumption")
+
+    def test_gate_rejects_invalid_token(self) -> None:
+        """Gate rejects unknown token."""
+        from codeplane.mcp.gate import RECON_CONSUMPTION_GATE
+        from codeplane.mcp.session import SessionState
+
+        session = SessionState(session_id="s1", created_at=0, last_active=0)
+        session.gate_manager.issue(RECON_CONSUMPTION_GATE)
+
+        result = session.gate_manager.validate("gate_bad_token", "x" * 60)
+        assert not result.ok
+
+    def test_gate_expires_after_ticks(self) -> None:
+        """Gate expires after expires_calls ticks."""
+        from codeplane.mcp.gate import RECON_CONSUMPTION_GATE
+        from codeplane.mcp.session import SessionState
+
+        session = SessionState(session_id="s1", created_at=0, last_active=0)
+        session.gate_manager.issue(RECON_CONSUMPTION_GATE)
+        assert session.gate_manager.has_pending("recon_consumption")
+
+        for _ in range(RECON_CONSUMPTION_GATE.expires_calls):
+            session.gate_manager.tick()
+        assert not session.gate_manager.has_pending("recon_consumption")
+
+    def test_session_no_last_recon_at(self) -> None:
+        """SessionState no longer has last_recon_at field."""
+        from codeplane.mcp.session import SessionState
+
+        s = SessionState(session_id="s1", created_at=0, last_active=0)
+        assert not hasattr(s, "last_recon_at")

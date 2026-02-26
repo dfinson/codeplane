@@ -1081,11 +1081,10 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             if gate_block is not None:
                 return gate_block
 
-        # Increment consecutive recon counter and record recon timestamp
+        # Increment consecutive recon counter
         try:
             session = app_ctx.session_manager.get_or_create(ctx.session_id)
             session.counters["recon_consecutive"] = session.counters.get("recon_consecutive", 0) + 1
-            session.last_recon_at = time.monotonic()
         except Exception:  # noqa: BLE001
             pass
 
@@ -1288,6 +1287,18 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                 )
 
         from codeplane.mcp.delivery import wrap_existing_response
+
+        # ── Issue recon consumption gate ──
+        # The NEXT tool call (any tool) must include gate_token + gate_reason
+        # confirming the agent consumed recon results before exploring further.
+        try:
+            session = app_ctx.session_manager.get_or_create(ctx.session_id)
+            from codeplane.mcp.gate import RECON_CONSUMPTION_GATE
+
+            gate_block = session.gate_manager.issue(RECON_CONSUMPTION_GATE)
+            response["gate"] = gate_block
+        except Exception:  # noqa: BLE001
+            pass
 
         return wrap_existing_response(
             response,

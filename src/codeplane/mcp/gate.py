@@ -233,6 +233,22 @@ FULL_SUITE_TEST_GATE = GateSpec(
     ),
 )
 
+RECON_CONSUMPTION_GATE = GateSpec(
+    kind="recon_consumption",
+    reason_min_chars=50,
+    reason_prompt=(
+        "Explain how you consumed the recon results. Did you parse the JSON "
+        "tiers (full_file, min_scaffold, lite_scaffold)? Did you use the "
+        "extraction commands from the agentic_hint? What specific information "
+        "from recon is driving your next action?"
+    ),
+    expires_calls=3,
+    message=(
+        "Recon just returned file content, scaffolds, and extraction commands. "
+        "Acknowledge consumption before making additional tool calls."
+    ),
+)
+
 
 def has_recent_scoped_test(window: deque[CallRecord]) -> bool:
     """Check if a successful scoped test run exists in the window."""
