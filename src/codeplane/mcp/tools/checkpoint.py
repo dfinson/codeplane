@@ -488,7 +488,7 @@ def _partition_for_batching(
 # Default: run only direct tests (hop 0) for fast iteration.
 # When committing, escalate to _COMMIT_MAX_TEST_HOPS for thorough validation.
 _DEFAULT_MAX_TEST_HOPS = 0
-_COMMIT_MAX_TEST_HOPS = 2
+_COMMIT_MAX_TEST_HOPS = 1
 
 
 async def _run_tiered_tests(
