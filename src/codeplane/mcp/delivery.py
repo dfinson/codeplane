@@ -1068,12 +1068,18 @@ def wrap_existing_response(
 
     payload_bytes = len(json.dumps(result, indent=2, default=str).encode("utf-8"))
 
+    # Always cache the full JSON to .codeplane/cache/ for offline access
+    # (benchmarks, debugging, replay).  The resource_id is included in the
+    # response so callers can locate the file regardless of delivery mode.
+    cache_resource_id, _ = _resource_cache.store(result, resource_kind)
+
     if payload_bytes <= inline_cap:
-        # Inline delivery
+        # Inline delivery — full payload goes in the response, cache is a bonus
         result["resource_kind"] = resource_kind
         result["delivery"] = "inline"
         result["inline_budget_bytes_used"] = payload_bytes
         result["inline_budget_bytes_limit"] = inline_cap
+        result["cache_path"] = f".codeplane/cache/{resource_kind}/{cache_resource_id}.json"
     else:
         # Try cursor pagination first for supported kinds
         # Subtract post-overhead (scope_id/scope_usage added after pagination)
@@ -1084,6 +1090,7 @@ def wrap_existing_response(
             post_overhead += len(json.dumps({"scope_usage": scope_usage}, indent=2).encode("utf-8"))
         paginated = _try_paginate(result, resource_kind, inline_cap - post_overhead, inline_summary)
         if paginated is not None:
+            paginated["cache_path"] = f".codeplane/cache/{resource_kind}/{cache_resource_id}.json"
             if scope_id:
                 paginated["scope_id"] = scope_id
             if scope_usage:
@@ -1098,11 +1105,11 @@ def wrap_existing_response(
             )
             return paginated
 
-        # Fallback: store full result on disk, return synopsis
-        resource_id, byte_size = _resource_cache.store(result, resource_kind)
+        # Fallback: use the already-cached result, return synopsis
         envelope: dict[str, Any] = {
             "resource_kind": resource_kind,
             "delivery": "resource",
+            "cache_path": f".codeplane/cache/{resource_kind}/{cache_resource_id}.json",
         }
         if inline_summary:
             envelope["summary"] = inline_summary
@@ -1114,7 +1121,9 @@ def wrap_existing_response(
             envelope["scope_id"] = scope_id
         if scope_usage:
             envelope["scope_usage"] = scope_usage
-        envelope["agentic_hint"] = _build_fetch_hint(resource_id, byte_size, resource_kind, result)
+        envelope["agentic_hint"] = _build_fetch_hint(
+            cache_resource_id, payload_bytes, resource_kind, result
+        )
 
         log.debug(
             "envelope_wrapped",

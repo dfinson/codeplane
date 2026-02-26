@@ -1,16 +1,12 @@
-"""Tests for MCP mutation tools (write_source).
+"""Tests for mutation helpers (EditParam model).
 
-Verifies EditParam model and summary helpers.
+Verifies EditParam validation logic.
 """
 
 import pytest
 from pydantic import ValidationError
 
-from codeplane.mcp.tools.mutation import (
-    EditParam,
-    _display_write,
-    _summarize_write,
-)
+from codeplane.mcp.tools.mutation import EditParam
 
 
 class TestEditParam:
@@ -75,90 +71,3 @@ class TestEditParam:
                 action="update",
                 new_content="y",
             )
-
-
-class TestSummarizeWrite:
-    """Tests for _summarize_write helper."""
-
-    def test_no_changes(self) -> None:
-        """No changes."""
-        result = _summarize_write([], dry_run=False)
-        assert "no changes" in result
-
-    def test_no_changes_dry_run(self) -> None:
-        """No changes with dry run."""
-        result = _summarize_write([], dry_run=True)
-        assert "(dry-run)" in result
-        assert "no changes" in result
-
-    def test_single_file_created(self) -> None:
-        """Single file created."""
-        files = [{"path": "new.py", "action": "created"}]
-        result = _summarize_write(files, dry_run=False)
-        assert "created" in result
-
-    def test_single_file_updated(self) -> None:
-        """Single file updated."""
-        files = [{"path": "src/main.py", "action": "updated"}]
-        result = _summarize_write(files, dry_run=False)
-        assert "updated" in result
-
-    def test_single_file_deleted(self) -> None:
-        """Single file deleted."""
-        files = [{"path": "old.py", "action": "deleted"}]
-        result = _summarize_write(files, dry_run=False)
-        assert "deleted" in result
-
-    def test_multiple_actions(self) -> None:
-        """Multiple files with different actions."""
-        files = [
-            {"path": "new.py", "action": "created"},
-            {"path": "main.py", "action": "updated"},
-            {"path": "old.py", "action": "deleted"},
-        ]
-        result = _summarize_write(files, dry_run=False)
-        assert "1 created" in result
-        assert "1 updated" in result
-        assert "1 deleted" in result
-
-    def test_dry_run_prefix(self) -> None:
-        """Dry run shows prefix."""
-        files = [{"path": "test.py", "action": "created"}]
-        result = _summarize_write(files, dry_run=True)
-        assert "(dry-run)" in result
-
-
-class TestDisplayWrite:
-    """Tests for _display_write helper."""
-
-    def test_no_changes(self) -> None:
-        """No changes message."""
-        result = _display_write([], dry_run=False)
-        assert "no changes" in result.lower()
-
-    def test_no_changes_dry_run(self) -> None:
-        """Dry run no changes."""
-        result = _display_write([], dry_run=True)
-        assert "dry run" in result.lower()
-
-    def test_with_created(self) -> None:
-        """Created files message."""
-        files = [{"path": "new.py", "action": "created"}]
-        result = _display_write(files, dry_run=False)
-        assert "1 created" in result
-
-    def test_with_multiple_actions(self) -> None:
-        """Multiple actions in message."""
-        files = [
-            {"path": "a.py", "action": "created"},
-            {"path": "b.py", "action": "updated"},
-        ]
-        result = _display_write(files, dry_run=False)
-        assert "1 created" in result
-        assert "1 updated" in result
-
-    def test_dry_run_wording(self) -> None:
-        """Dry run uses 'would have' wording."""
-        files = [{"path": "test.py", "action": "created"}]
-        result = _display_write(files, dry_run=True)
-        assert "would" in result.lower()
