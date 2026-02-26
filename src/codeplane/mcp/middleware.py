@@ -153,6 +153,7 @@ class ToolMiddleware(Middleware):
             session = self._session_manager.get_or_create(
                 context.fastmcp_context.session_id,
             )
+            session.gate_manager.expire_time_based_gates()
             if session.gate_manager.has_pending("recon_consumption"):
                 gt = arguments.get("gate_token", "")
                 gr = arguments.get("gate_reason", "")

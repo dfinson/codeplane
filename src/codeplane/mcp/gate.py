@@ -173,9 +173,12 @@ class GateManager:
         for gate_id in expired:
             del self._pending[gate_id]
 
+    def expire_time_based_gates(self) -> None:
+        """Public helper to evict time-expired gates."""
+        self._expire_time_based_gates()
+
     def has_pending(self, kind: str | None = None) -> bool:
         """Check if any gates are pending, optionally filtered by kind."""
-        self._expire_time_based_gates()
         if kind is None:
             return bool(self._pending)
         return any(g.spec.kind == kind for g in self._pending.values())
