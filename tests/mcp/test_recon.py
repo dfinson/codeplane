@@ -762,9 +762,12 @@ class TestOutputTier:
     """Test OutputTier enum values."""
 
     def test_tier_values(self) -> None:
-        assert OutputTier.FULL_FILE.value == "full_file"
-        assert OutputTier.MIN_SCAFFOLD.value == "min_scaffold"
-        assert OutputTier.SUMMARY_ONLY.value == "summary_only"
+        assert OutputTier.SCAFFOLD.value == "scaffold"
+        assert OutputTier.LITE.value == "lite"
+        # Aliases map to primary members
+        assert OutputTier.FULL_FILE.value == OutputTier.SCAFFOLD.value
+        assert OutputTier.MIN_SCAFFOLD.value == OutputTier.SCAFFOLD.value
+        assert OutputTier.SUMMARY_ONLY.value == OutputTier.LITE.value
 
     def test_tier_is_str(self) -> None:
         assert isinstance(OutputTier.FULL_FILE, str)
