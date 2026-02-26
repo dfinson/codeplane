@@ -12,9 +12,7 @@ from codeplane.daemon.lifecycle import is_server_running, read_server_info, stop
 
 
 @click.command()
-@click.argument(
-    "path", default=None, required=False, type=click.Path(exists=True, path_type=Path)
-)
+@click.argument("path", default=None, required=False, type=click.Path(exists=True, path_type=Path))
 def down_command(path: Path | None) -> None:
     """Stop the CodePlane daemon.
 

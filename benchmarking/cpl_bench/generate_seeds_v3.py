@@ -42,7 +42,15 @@ def _load_embedding_index(index_path: Path) -> object:
     import importlib.util
 
     # Direct module load to skip __init__.py import chains
-    fe_path = Path(__file__).resolve().parents[2] / "src" / "codeplane" / "index" / "_internal" / "indexing" / "file_embedding.py"
+    fe_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "codeplane"
+        / "index"
+        / "_internal"
+        / "indexing"
+        / "file_embedding.py"
+    )
     spec = importlib.util.spec_from_file_location("file_embedding", fe_path)
     if spec is None or spec.loader is None:
         print("ERROR: Could not find file_embedding.py at", fe_path)

@@ -2,7 +2,7 @@
   "servers": {
     "codeplane-codeplane": {
       "type": "http",
-      "url": "http://127.0.0.1:7778/mcp"
+      "url": "http://127.0.0.1:7654/mcp"
     },
     "codeplane-evee": {
       "type": "http",
