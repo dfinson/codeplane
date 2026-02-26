@@ -1165,19 +1165,18 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             full_path = repo_root / fc.path
 
             if fc.tier == OutputTier.FULL_FILE:
-                # Include full file content
-                content = _read_unindexed_content(repo_root, fc.path)
-                if content is not None:
-                    entry["content"] = content
-                elif full_path.exists():
+                # Include full file content (no truncation for indexed files)
+                if full_path.exists():
                     try:
                         raw = full_path.read_bytes()
                         if b"\x00" not in raw[:512]:
                             entry["content"] = raw.decode("utf-8", errors="replace")
+                            entry["file_sha256"] = _compute_sha256(full_path)
                     except Exception:  # noqa: BLE001
-                        pass
-                if full_path.exists():
-                    entry["file_sha256"] = _compute_sha256(full_path)
+                        # Fallback to capped read for problematic files
+                        content = _read_unindexed_content(repo_root, fc.path)
+                        if content is not None:
+                            entry["content"] = content
 
             elif fc.tier == OutputTier.MIN_SCAFFOLD:
                 # Include scaffold: imports + signatures
