@@ -7,12 +7,20 @@ Covers:
 - _fuzzy_find
 - _resolve_edit (exact, disambiguated, fuzzy, ambiguous, no-match)
 - _summarize_edit
+- refactor_edit handler integration tests
 """
 
 from __future__ import annotations
 
-import pytest
+import hashlib
+from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock
 
+import pytest
+from fastmcp import FastMCP
+
+from codeplane.mcp._compat import get_tools_sync
 from codeplane.mcp.errors import MCPError, MCPErrorCode
 from codeplane.mcp.tools.edit import (
     FindReplaceEdit,
@@ -21,6 +29,7 @@ from codeplane.mcp.tools.edit import (
     _offset_to_line,
     _resolve_edit,
     _summarize_edit,
+    register_tools,
 )
 
 # =============================================================================
@@ -304,3 +313,292 @@ class TestSummarizeEdit:
         assert "1 created" in summary
         assert "2 updated" in summary
         assert "1 deleted" in summary
+
+
+# =============================================================================
+# refactor_edit handler integration
+# =============================================================================
+
+
+class TestRefactorEditHandler:
+    """Integration tests for refactor_edit tool handler."""
+
+    @pytest.fixture
+    def mcp_app(self) -> FastMCP:
+        return FastMCP("test")
+
+    @pytest.fixture
+    def app_ctx(self, tmp_path: Path) -> MagicMock:
+        ctx = MagicMock()
+        ctx.coordinator.repo_root = tmp_path
+        session = MagicMock()
+        session.counters = {"recon_called": 1, "resolved_files": {}}
+        ctx.session_manager.get_or_create.return_value = session
+        ctx.mutation_ops.notify_mutation = MagicMock()
+        return ctx
+
+    @pytest.fixture
+    def fastmcp_ctx(self) -> MagicMock:
+        ctx = MagicMock(spec=["session_id"])
+        ctx.session_id = "test-session"
+        return ctx
+
+    def _write_file(self, repo_root: Path, rel_path: str, content: str) -> str:
+        fp = repo_root / rel_path
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_text(content, encoding="utf-8")
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    @pytest.mark.asyncio
+    async def test_basic_update(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+    ) -> None:
+        """Basic find-and-replace update."""
+        sha = self._write_file(tmp_path, "hello.py", "print('hello')\n")
+        session = app_ctx.session_manager.get_or_create.return_value
+        session.counters["resolved_files"] = {"hello.py": sha}
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        edit_fn = tools["refactor_edit"].fn
+
+        result: dict[str, Any] = await edit_fn(
+            ctx=fastmcp_ctx,
+            edits=[
+                FindReplaceEdit(
+                    path="hello.py",
+                    old_content="print('hello')",
+                    new_content="print('world')",
+                    expected_file_sha256=sha,
+                )
+            ],
+        )
+
+        assert result["applied"] is True
+        assert result["delta"]["files_changed"] == 1
+        assert result["delta"]["files"][0]["action"] == "updated"
+        assert "agentic_hint" in result
+        assert "checkpoint" in result["agentic_hint"]
+        # Verify file was actually written
+        assert (tmp_path / "hello.py").read_text() == "print('world')\n"
+
+    @pytest.mark.asyncio
+    async def test_sha256_mismatch(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+    ) -> None:
+        """SHA mismatch raises FileHashMismatchError."""
+        self._write_file(tmp_path, "stale.py", "old content\n")
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        edit_fn = tools["refactor_edit"].fn
+
+        from codeplane.mcp.errors import FileHashMismatchError
+
+        with pytest.raises(FileHashMismatchError):
+            await edit_fn(
+                ctx=fastmcp_ctx,
+                edits=[
+                    FindReplaceEdit(
+                        path="stale.py",
+                        old_content="old content",
+                        new_content="new content",
+                        expected_file_sha256="wrong_sha_value",
+                    )
+                ],
+            )
+
+    @pytest.mark.asyncio
+    async def test_path_traversal_raises_file_not_found(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """Path escaping repo root raises MCPError FILE_NOT_FOUND."""
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        edit_fn = tools["refactor_edit"].fn
+
+        with pytest.raises(MCPError) as exc_info:
+            await edit_fn(
+                ctx=fastmcp_ctx,
+                edits=[
+                    FindReplaceEdit(
+                        path="../../etc/passwd",
+                        old_content="x",
+                        new_content="y",
+                    )
+                ],
+            )
+        assert exc_info.value.code == MCPErrorCode.FILE_NOT_FOUND
+
+    @pytest.mark.asyncio
+    async def test_create_file_via_mutation_ops(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """File creation delegates to mutation_ops.write_source."""
+        mock_delta = MagicMock()
+        mock_delta.files = [
+            MagicMock(
+                path="new.py",
+                action="created",
+                old_hash="0000",
+                new_hash="abcd",
+                insertions=3,
+                deletions=0,
+            )
+        ]
+        mock_result = MagicMock()
+        mock_result.delta = mock_delta
+        app_ctx.mutation_ops.write_source.return_value = mock_result
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        edit_fn = tools["refactor_edit"].fn
+
+        result: dict[str, Any] = await edit_fn(
+            ctx=fastmcp_ctx,
+            edits=[
+                FindReplaceEdit(
+                    path="new.py",
+                    old_content=None,
+                    new_content="print('new')\n",
+                )
+            ],
+        )
+
+        assert result["applied"] is True
+        assert result["delta"]["files"][0]["action"] == "created"
+
+    @pytest.mark.asyncio
+    async def test_delete_file_via_mutation_ops(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """File deletion delegates to mutation_ops.write_source."""
+        mock_delta = MagicMock()
+        mock_delta.files = [
+            MagicMock(
+                path="doomed.py",
+                action="deleted",
+                old_hash="abcd",
+                new_hash="0000",
+                insertions=0,
+                deletions=5,
+            )
+        ]
+        mock_result = MagicMock()
+        mock_result.delta = mock_delta
+        app_ctx.mutation_ops.write_source.return_value = mock_result
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        edit_fn = tools["refactor_edit"].fn
+
+        result: dict[str, Any] = await edit_fn(
+            ctx=fastmcp_ctx,
+            edits=[
+                FindReplaceEdit(
+                    path="doomed.py",
+                    delete=True,
+                )
+            ],
+        )
+
+        assert result["applied"] is True
+        assert result["delta"]["files"][0]["action"] == "deleted"
+
+    @pytest.mark.asyncio
+    async def test_create_file_not_found_error(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """FileNotFoundError from mutation_ops becomes MCPError."""
+        app_ctx.mutation_ops.write_source.side_effect = FileNotFoundError("missing dir")
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        edit_fn = tools["refactor_edit"].fn
+
+        with pytest.raises(MCPError) as exc_info:
+            await edit_fn(
+                ctx=fastmcp_ctx,
+                edits=[FindReplaceEdit(path="deep/new.py", old_content=None, new_content="x")],
+            )
+        assert exc_info.value.code == MCPErrorCode.FILE_NOT_FOUND
+
+    @pytest.mark.asyncio
+    async def test_create_file_exists_error(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """FileExistsError from mutation_ops becomes MCPError."""
+        app_ctx.mutation_ops.write_source.side_effect = FileExistsError("already exists")
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        edit_fn = tools["refactor_edit"].fn
+
+        with pytest.raises(MCPError) as exc_info:
+            await edit_fn(
+                ctx=fastmcp_ctx,
+                edits=[FindReplaceEdit(path="exists.py", old_content=None, new_content="x")],
+            )
+        assert exc_info.value.code == MCPErrorCode.FILE_EXISTS
+
+    @pytest.mark.asyncio
+    async def test_session_tracks_edited_files(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+    ) -> None:
+        """Edited files are tracked in session counters."""
+        sha = self._write_file(tmp_path, "tracked.py", "old\n")
+        session = app_ctx.session_manager.get_or_create.return_value
+        session.counters = {"recon_called": 1, "resolved_files": {"tracked.py": sha}}
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        edit_fn = tools["refactor_edit"].fn
+
+        await edit_fn(
+            ctx=fastmcp_ctx,
+            edits=[FindReplaceEdit(path="tracked.py", old_content="old", new_content="new")],
+        )
+
+        edited = session.counters.get("edited_files", set())
+        assert "tracked.py" in edited
+
+    @pytest.mark.asyncio
+    async def test_resolved_files_gate_warning(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+    ) -> None:
+        """Editing a file not in resolved_files logs warning but proceeds."""
+        self._write_file(tmp_path, "unresolved.py", "x = 1\n")
+        session = app_ctx.session_manager.get_or_create.return_value
+        session.counters = {
+            "recon_called": 1,
+            "resolved_files": {"other.py": "some_sha"},
+        }
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        edit_fn = tools["refactor_edit"].fn
+
+        # Should still succeed (warning only, not error)
+        result: dict[str, Any] = await edit_fn(
+            ctx=fastmcp_ctx,
+            edits=[FindReplaceEdit(path="unresolved.py", old_content="x = 1", new_content="x = 2")],
+        )
+        assert result["applied"] is True
+
+    @pytest.mark.asyncio
+    async def test_update_without_sha(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+    ) -> None:
+        """Update without expected_file_sha256 skips hash check."""
+        self._write_file(tmp_path, "nosha.py", "a = 1\n")
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        edit_fn = tools["refactor_edit"].fn
+
+        result: dict[str, Any] = await edit_fn(
+            ctx=fastmcp_ctx,
+            edits=[FindReplaceEdit(path="nosha.py", old_content="a = 1", new_content="a = 2")],
+        )
+        assert result["applied"] is True
+        assert (tmp_path / "nosha.py").read_text() == "a = 2\n"
