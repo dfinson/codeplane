@@ -225,19 +225,49 @@ async def _file_centric_pipeline(
     diagnostics["file_embed_ms"] = round((time.monotonic() - t_file_emb) * 1000)
     diagnostics["file_embed_count"] = len(file_candidates)
 
-    # 2a. Auto-seed: extract top symbol names from the top embedding-ranked
-    #     files.  Replicates v3's strategy of passing seeds alongside pins.
-    #     v3 used MAX_SEEDS=5 symbol names from the most connected defs.
-    _AUTO_SEED_K = 5  # v3 used 5
-    _AUTO_SEED_FILES = 4  # same as auto-pin count
+    # 2a. Adaptive elbow on embedding similarities.
+    #
+    # Instead of hardcoded constants (_AUTO_PIN_K=4, _AUTO_SEED_FILES=4,
+    # _AUTO_SEED_K=5), we detect the natural breakpoint in the embedding
+    # similarity distribution.  Files above the elbow are clearly relevant;
+    # files below are speculative.  This adapts to:
+    #   - Repo size: large repos have more candidates, elbow rises.
+    #   - Task specificity: narrow tasks have sharp elbows (few pins);
+    #     broad tasks have gradual falloff (more pins).
+    #
+    # Elbow count is clamped to [2, 8]:
+    #   - <2: anchor_floor needs ≥2 anchors to calibrate MAD
+    #   - >8: diminishing returns, noise from marginal files
+    from codeplane.mcp.tools.recon.scoring import _find_elbow_raw
+
+    _MIN_AUTO_PINS = 2
+    _MAX_AUTO_PINS = 8
+
+    emb_sims = [
+        fc.similarity
+        for fc in sorted(file_candidates, key=lambda fc: -fc.similarity)
+        if fc.similarity > 0
+    ]
+    if emb_sims:
+        n_above_elbow = _find_elbow_raw(emb_sims, lo=_MIN_AUTO_PINS, hi=_MAX_AUTO_PINS)
+    else:
+        n_above_elbow = 0
+    diagnostics["emb_elbow_k"] = n_above_elbow
+
+    # 2b. Auto-seed: extract symbol names from elbow-selected files.
+    #     Seeds from the top-N embedding files (where N = elbow count).
+    #     Only symbols with ≥1 caller (not private helpers) are considered.
+    #     Cap seed count at elbow file count — more relevant files →
+    #     more seeds allowed, but capped to avoid noise.
     auto_seeds: list[str] = []
-    if file_candidates:
+    if n_above_elbow > 0 and file_candidates:
         from codeplane.index._internal.indexing.graph import FactQueries
 
         emb_top_paths = [
-            fc.path
-            for fc in sorted(file_candidates, key=lambda fc: -fc.similarity)[:_AUTO_SEED_FILES]
+            fc.path for fc in sorted(file_candidates, key=lambda fc: -fc.similarity)[:n_above_elbow]
         ]
+        _MIN_HUB_SCORE = 1  # skip zero-caller private defs
+        max_seeds = n_above_elbow  # adaptive: more relevant files → more seeds
         with coordinator.db.session() as session:
             fq = FactQueries(session)
             seed_scored: list[tuple[str, int]] = []
@@ -248,7 +278,8 @@ async def _file_centric_pipeline(
                 defs_in = fq.list_defs_in_file(frec.id, limit=20)
                 for d in defs_in:
                     hub = min(fq.count_callers(d.def_uid), 30)
-                    seed_scored.append((d.name, hub))
+                    if hub >= _MIN_HUB_SCORE:
+                        seed_scored.append((d.name, hub))
             # Deduplicate, sort by hub score (most connected first)
             seen: set[str] = set()
             deduped: list[tuple[str, int]] = []
@@ -256,21 +287,23 @@ async def _file_centric_pipeline(
                 if name not in seen:
                     seen.add(name)
                     deduped.append((name, hub))
-            auto_seeds = [name for name, _hub in deduped[:_AUTO_SEED_K]]
+            auto_seeds = [name for name, _hub in deduped[:max_seeds]]
         diagnostics["auto_seeds"] = auto_seeds
 
-    # Combine explicit seeds with auto-seeds (explicit take priority)
-    combined_seeds = list(explicit_seeds or [])
-    for s in auto_seeds:
-        if s not in combined_seeds:
-            combined_seeds.append(s)
-
     # 3. Def-level harvesters in parallel (SECONDARY enrichment)
+    #    Auto-seeds are passed separately — they get lower confidence
+    #    (no from_explicit, score=0.5) to avoid inflating file scores
+    #    while still entering the merged pool for graph expansion.
     t_def_harvest = time.monotonic()
     term_cands, lex_cands, exp_cands = await asyncio.gather(
         _harvest_term_match(app_ctx, parsed),
         _harvest_lexical(app_ctx, parsed),
-        _harvest_explicit(app_ctx, parsed, combined_seeds or None),
+        _harvest_explicit(
+            app_ctx,
+            parsed,
+            explicit_seeds=explicit_seeds or None,
+            auto_seeds=auto_seeds or None,
+        ),
     )
     merged_def = _merge_candidates(term_cands, lex_cands, exp_cands)
 
@@ -403,18 +436,17 @@ async def _file_centric_pipeline(
                         fc.combined_score = max(fc.combined_score, pin_floor)
                         break
 
-    # 4c. Auto-pin: replicate v3 strategy — top-4 files by embedding
-    #     similarity are treated as programmatic pins.  This activates
-    #     anchor_floor calibration (which is a no-op without anchors)
-    #     and ensures the strongest semantic matches survive tier
-    #     assignment.  v3 always used exactly 4 pins (MAX_PINS=4).
-    _AUTO_PIN_K = 4
+    # 4c. Auto-pin: use elbow-derived count (adaptive, not hardcoded).
+    #     Files above the embedding elbow are treated as programmatic pins.
+    #     This activates anchor_floor calibration (which is a no-op without
+    #     anchors) and ensures the strongest semantic matches survive tier
+    #     assignment.  Count adapts to repo size and task specificity.
     emb_ranked = sorted(
         (fc for fc in file_candidates if fc.similarity > 0),
         key=lambda fc: -fc.similarity,
     )
     auto_pinned = 0
-    for fc in emb_ranked[:_AUTO_PIN_K]:
+    for fc in emb_ranked[:n_above_elbow]:
         if not fc.has_explicit_mention:
             fc.has_explicit_mention = True
             auto_pinned += 1

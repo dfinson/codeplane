@@ -231,16 +231,42 @@ async def _harvest_explicit(
     app_ctx: AppContext,
     parsed: ParsedTask,
     explicit_seeds: list[str] | None = None,
+    auto_seeds: list[str] | None = None,
 ) -> dict[str, HarvestCandidate]:
     """Harvester D: Explicit mentions (paths + symbols from task text).
 
     Resolves file paths to defs and symbol names to DefFacts.
-    These bypass the dual-signal gate (trusted input).
+    Agent-provided seeds bypass the dual-signal gate (trusted input).
+    Auto-seeds (inferred from embedding top files) get lower confidence
+    and do NOT set from_explicit — they contribute to graph expansion
+    but don't inflate file-level explicit scores.
     """
     from codeplane.index._internal.indexing.graph import FactQueries
 
     coordinator = app_ctx.coordinator
     candidates: dict[str, HarvestCandidate] = {}
+
+    # D0: Auto-seed names (inferred, lower confidence)
+    #     from_explicit=False — they won't get the explicit RRF boost.
+    #     score=0.5 — weaker evidence than agent-provided seeds.
+    #     Still enter merged pool so graph harvester can expand from them.
+    if auto_seeds:
+        for name in auto_seeds:
+            d = await coordinator.get_def(name)
+            if d is not None and d.def_uid not in candidates:
+                candidates[d.def_uid] = HarvestCandidate(
+                    def_uid=d.def_uid,
+                    def_fact=d,
+                    from_explicit=False,
+                    from_term_match=True,  # counts as a term-match signal
+                    evidence=[
+                        EvidenceRecord(
+                            category="auto_seed",
+                            detail=f"auto-seed '{name}' (hub-ranked)",
+                            score=0.5,
+                        )
+                    ],
+                )
 
     # D1: Explicit seed names provided by the agent
     if explicit_seeds:
