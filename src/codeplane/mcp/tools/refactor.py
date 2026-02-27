@@ -139,7 +139,15 @@ def _serialize_refactor_result(result: "RefactorResult") -> dict[str, Any]:
 def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     """Register refactor tools with FastMCP server."""
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={
+            "title": "Rename: cross-file symbol rename",
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+    )
     async def refactor_rename(
         ctx: Context,
         symbol: str = Field(
@@ -169,7 +177,15 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         )
         return _serialize_refactor_result(result)
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={
+            "title": "Move: relocate file with import updates",
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+    )
     async def refactor_move(
         ctx: Context,
         from_path: str = Field(..., description="Source file path"),
@@ -194,7 +210,15 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         )
         return _serialize_refactor_result(result)
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={
+            "title": "Impact: reference analysis before removal",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+    )
     async def refactor_impact(
         ctx: Context,
         target: str = Field(..., description="Symbol or path to analyze for impact"),
@@ -217,10 +241,29 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         )
         return _serialize_refactor_result(result)
 
-    @mcp.tool
-    async def refactor_apply(
+    @mcp.tool(
+        annotations={
+            "title": "Commit: apply or inspect refactoring preview",
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": False,
+        },
+    )
+    async def refactor_commit(
         ctx: Context,
-        refactor_id: str = Field(..., description="ID of the refactoring to apply"),
+        refactor_id: str = Field(..., description="ID of the refactoring to apply or inspect"),
+        inspect_path: str | None = Field(
+            None,
+            description=(
+                "If provided, inspect low-certainty matches in this file "
+                "instead of applying. Returns match details with context."
+            ),
+        ),
+        context_lines: int = Field(
+            2,
+            description="Lines of context around matches (only used with inspect_path).",
+        ),
         scope_id: str | None = Field(None, description="Scope ID for budget tracking"),
         gate_token: str | None = Field(
             None,
@@ -231,9 +274,32 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             description="Justification for passing the gate (min chars per gate spec).",
         ),
     ) -> dict[str, Any]:
-        """Apply a previewed refactoring."""
+        """Apply a previewed refactoring, or inspect low-certainty matches.
+
+        Without inspect_path: applies the refactoring (like the old refactor_apply).
+        With inspect_path: inspects matches in that file (like the old refactor_inspect).
+        """
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
+        if inspect_path is not None:
+            # Inspect mode
+            inspect_result = await app_ctx.refactor_ops.inspect(
+                refactor_id,
+                inspect_path,
+                context_lines=context_lines,
+            )
+            from codeplane.core.formatting import compress_path
+
+            return {
+                "path": inspect_result.path,
+                "matches": inspect_result.matches,
+                "summary": (
+                    f"{len(inspect_result.matches)} matches in "
+                    f"{compress_path(inspect_result.path, 35)}"
+                ),
+            }
+
+        # Apply mode
         result = await app_ctx.refactor_ops.apply(refactor_id, app_ctx.mutation_ops)
 
         # Reset scope budget duplicate tracking after mutation
@@ -244,7 +310,15 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         return _serialize_refactor_result(result)
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={
+            "title": "Cancel: discard refactoring preview",
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+    )
     async def refactor_cancel(
         ctx: Context,
         refactor_id: str = Field(..., description="ID of the refactoring to cancel"),
@@ -262,35 +336,3 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         result = await app_ctx.refactor_ops.cancel(refactor_id)
         return _serialize_refactor_result(result)
-
-    @mcp.tool
-    async def refactor_inspect(
-        ctx: Context,
-        refactor_id: str = Field(..., description="ID of the refactoring to inspect"),
-        path: str = Field(..., description="File path to inspect"),
-        context_lines: int = Field(2, description="Lines of context around matches"),
-        gate_token: str | None = Field(
-            None,
-            description="Gate confirmation token from a previous gate block.",
-        ),
-        gate_reason: str | None = Field(
-            None,
-            description="Justification for passing the gate (min chars per gate spec).",
-        ),
-    ) -> dict[str, Any]:
-        """Inspect low-certainty matches in a file with context."""
-        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
-
-        result = await app_ctx.refactor_ops.inspect(
-            refactor_id,
-            path,
-            context_lines=context_lines,
-        )
-
-        from codeplane.core.formatting import compress_path
-
-        return {
-            "path": result.path,
-            "matches": result.matches,
-            "summary": f"{len(result.matches)} matches in {compress_path(result.path, 35)}",
-        }
