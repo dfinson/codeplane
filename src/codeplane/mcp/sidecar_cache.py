@@ -32,21 +32,48 @@ _MAX_PER_KEY = 3
 # Maximum total keys tracked (prevent unbounded growth across sessions)
 _MAX_KEYS = 500
 
+# Sections ≤ this size are considered "ready" — pre-computed, instant retrieval
+_SECTION_CAP_BYTES = 50_000
+
+
+@dataclass
+class CacheSection:
+    """Pre-computed section metadata for a top-level payload key."""
+
+    key: str
+    byte_size: int
+    type_desc: str  # e.g. "list(42 items)", "dict(5 keys)", "str(1200 chars)"
+    item_count: int | None  # element count for containers, None for scalars
+    ready: bool  # True if byte_size ≤ _SECTION_CAP_BYTES
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serializable metadata."""
+        d: dict[str, Any] = {
+            "key": self.key,
+            "byte_size": self.byte_size,
+            "type": self.type_desc,
+            "ready": self.ready,
+        }
+        if self.item_count is not None:
+            d["item_count"] = self.item_count
+        return d
+
 
 @dataclass
 class CacheEntry:
-    """A single cached payload with metadata."""
+    """A single cached payload with pre-computed section metadata."""
 
     cache_id: str
     session_id: str
     endpoint_key: str
     payload: dict[str, Any] | list[Any]
     byte_size: int
+    sections: dict[str, CacheSection] = field(default_factory=dict)
     created_at: float = field(default_factory=time.monotonic)
 
     def meta(self) -> dict[str, Any]:
         """Return metadata dict (excludes payload)."""
-        return {
+        d: dict[str, Any] = {
             "cache_id": self.cache_id,
             "session_id": self.session_id,
             "endpoint_key": self.endpoint_key,
@@ -54,11 +81,54 @@ class CacheEntry:
             "created_at": self.created_at,
             "top_keys": _top_keys(self.payload) if isinstance(self.payload, dict) else None,
         }
+        if self.sections:
+            d["sections"] = {k: s.to_dict() for k, s in self.sections.items()}
+        return d
 
 
 def _top_keys(d: dict[str, Any]) -> list[str]:
     """Return top-level keys of a dict."""
     return list(d.keys())
+
+
+def _build_sections(payload: dict[str, Any]) -> dict[str, CacheSection]:
+    """Pre-compute section metadata for each top-level key in a dict payload.
+
+    Each section records byte_size, type descriptor, and whether the section
+    is 'ready' (≤ _SECTION_CAP_BYTES) for instant retrieval.
+    """
+    sections: dict[str, CacheSection] = {}
+    for key, value in payload.items():
+        raw = json.dumps(value, indent=2, default=str).encode("utf-8")
+        byte_size = len(raw)
+
+        if isinstance(value, dict):
+            type_desc = f"dict({len(value)} keys)"
+            item_count = len(value)
+        elif isinstance(value, list):
+            type_desc = f"list({len(value)} items)"
+            item_count = len(value)
+        elif isinstance(value, str):
+            type_desc = f"str({len(value)} chars)"
+            item_count = len(value)
+        elif isinstance(value, bool):
+            type_desc = "bool"
+            item_count = None
+        elif isinstance(value, int | float):
+            type_desc = type(value).__name__
+            item_count = None
+        else:
+            type_desc = type(value).__name__
+            item_count = None
+
+        sections[key] = CacheSection(
+            key=key,
+            byte_size=byte_size,
+            type_desc=type_desc,
+            item_count=item_count,
+            ready=byte_size <= _SECTION_CAP_BYTES,
+        )
+    return sections
 
 
 class SidecarCache:
@@ -98,6 +168,7 @@ class SidecarCache:
             endpoint_key=endpoint_key,
             payload=payload,
             byte_size=byte_size,
+            sections=_build_sections(payload) if isinstance(payload, dict) else {},
         )
 
         key = (session_id, endpoint_key)
@@ -172,6 +243,25 @@ class SidecarCache:
         entry = self.get_entry(cache_id)
         if entry is None:
             return None
+
+        # Fast path: top-level key with a pre-computed ready section
+        if (
+            path
+            and "." not in path
+            and isinstance(entry.payload, dict)
+            and path in entry.sections
+            and entry.sections[path].ready
+        ):
+            section = entry.sections[path]
+            return {
+                "cache_id": cache_id,
+                "path": path,
+                "type": section.type_desc,
+                "value": entry.payload[path],
+                "byte_size": section.byte_size,
+                "truncated": False,
+                "ready": True,
+            }
 
         # Navigate to sub-path
         value: Any = entry.payload
@@ -267,15 +357,17 @@ class SidecarCache:
             return None
 
         meta = entry.meta()
-        # Add schema info
-        if isinstance(entry.payload, dict):
-            meta["schema"] = {k: _describe_value(v) for k, v in entry.payload.items()}
-        elif isinstance(entry.payload, list):
+        # For list payloads (no sections), add legacy schema info
+        if isinstance(entry.payload, list):
             meta["schema"] = {
                 "type": "list",
                 "length": len(entry.payload),
                 "sample_item": _describe_value(entry.payload[0]) if entry.payload else None,
             }
+        # For dict payloads without pre-computed sections (fallback)
+        elif isinstance(entry.payload, dict) and not entry.sections:
+            meta["schema"] = {k: _describe_value(v) for k, v in entry.payload.items()}
+        # Dict payloads with sections: sections already included via entry.meta()
         return meta
 
     def clear(self) -> None:

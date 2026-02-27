@@ -43,131 +43,63 @@ def set_server_port(port: int) -> None:
 # =============================================================================
 
 
-
 def _build_cpljson_hint(
     cache_id: str,
     byte_size: int,
     resource_kind: str,
     session_id: str,
-    payload: dict[str, Any] | None = None,
+    sections: dict[str, Any] | None = None,
 ) -> str:
-    """Build a cpljson terminal hint for a sidecar-cached oversized response.
+    """Build cpljson terminal hints with pre-computed section metadata.
 
-    Returns a multi-line string the agent can paste into a terminal to
-    retrieve slices of the cached payload via the cpljson binary.
+    Shows which sections are available, their byte sizes, and whether
+    they are ready for instant retrieval (≤ 50 KB) or need paginated access.
     """
+    from codeplane.mcp.sidecar_cache import CacheSection
+
     parts: list[str] = [
         f"Response too large for inline delivery ({byte_size:,} bytes).",
-        f"Cached in server memory as {cache_id} (kind: {resource_kind}).",
+        f"Cached as {cache_id} (kind: {resource_kind}).",
         "",
-        "Retrieve via terminal:",
     ]
 
-    # List what's cached for this endpoint
-    parts.append(
-        f"  cpljson list --session {session_id} --endpoint {resource_kind}"
+    if sections:
+        ready_secs = [
+            (k, s) for k, s in sections.items() if isinstance(s, CacheSection) and s.ready
+        ]
+        oversized_secs = [
+            (k, s) for k, s in sections.items() if isinstance(s, CacheSection) and not s.ready
+        ]
+
+        if ready_secs:
+            parts.append("Sections (ready, instant retrieval):")
+            for key, sec in ready_secs:
+                parts.append(
+                    f"  {key:<24} {sec.byte_size:>8,} bytes  "
+                    f"cpljson slice --cache {cache_id} --path {key}"
+                )
+
+        if oversized_secs:
+            if ready_secs:
+                parts.append("")
+            parts.append("Oversized sections (paginated retrieval):")
+            for key, sec in oversized_secs:
+                parts.append(
+                    f"  {key:<24} {sec.byte_size:>8,} bytes  "
+                    f"cpljson slice --cache {cache_id} --path {key} --max-bytes 50000"
+                )
+    else:
+        parts.append(f"  cpljson slice --cache {cache_id} --max-bytes 50000")
+
+    parts.extend(
+        [
+            "",
+            f"All entries: cpljson list --session {session_id} --endpoint {resource_kind}",
+            f"Full schema: cpljson meta --cache {cache_id}",
+        ]
     )
 
-    # Meta command to see schema
-    parts.append(f"  cpljson meta --cache {cache_id}")
-
-    # Add kind-specific slice suggestions
-    slice_cmds = _suggest_slices(resource_kind, cache_id, payload)
-    if slice_cmds:
-        parts.append("")
-        parts.append("Suggested slices:")
-        parts.extend(f"  {cmd}" for cmd in slice_cmds)
-
     return "\n".join(parts)
-
-
-def _suggest_slices(
-    kind: str,
-    cache_id: str,
-    payload: dict[str, Any] | None,
-) -> list[str]:
-    """Generate suggested cpljson slice commands based on resource kind."""
-    cmds: list[str] = []
-    if payload is None:
-        cmds.append(f"cpljson slice --cache {cache_id} --max-bytes 58000")
-        return cmds
-
-    if kind == "recon_result":
-        for tier in ("full_file", "min_scaffold", "summary_only"):
-            items = payload.get(tier, [])
-            if items:
-                cmds.append(
-                    f"cpljson slice --cache {cache_id} --path {tier} --max-bytes 58000"
-                )
-                # Suggest individual file access for the first few full_file entries
-                if tier == "full_file":
-                    for i, entry in enumerate(items[:3]):
-                        p = entry.get("path", f"index {i}")
-                        cmds.append(
-                            f"cpljson slice --cache {cache_id} --path {tier}.{i}.content"
-                            f"  # {p}"
-                        )
-
-    elif kind in ("source", "search_hits"):
-        items_key = "files" if kind == "source" else "results"
-        items = payload.get(items_key, [])
-        if items:
-            cmds.append(
-                f"cpljson slice --cache {cache_id} --path {items_key} --max-bytes 58000"
-            )
-            for i, item in enumerate(items[:3]):
-                label = item.get("path", f"index {i}")
-                cmds.append(
-                    f"cpljson slice --cache {cache_id} --path {items_key}.{i}"
-                    f"  # {label}"
-                )
-
-    elif kind == "semantic_diff":
-        for key in ("structural_changes", "changes"):
-            if key in payload:
-                cmds.append(
-                    f"cpljson slice --cache {cache_id} --path {key} --max-bytes 58000"
-                )
-                break
-
-    elif kind == "checkpoint":
-        for section in ("lint", "tests", "commit"):
-            if section in payload:
-                cmds.append(
-                    f"cpljson slice --cache {cache_id} --path {section}"
-                )
-        if payload.get("agentic_hint"):
-            cmds.append(f"cpljson slice --cache {cache_id} --path agentic_hint")
-
-    elif kind == "diff":
-        cmds.append(f"cpljson slice --cache {cache_id} --path diff --max-bytes 58000")
-
-    elif kind in ("test_output",):
-        cmds.append(
-            f"cpljson slice --cache {cache_id} --path results --max-bytes 58000"
-        )
-
-    elif kind in ("refactor_preview",):
-        cmds.append(
-            f"cpljson slice --cache {cache_id} --path matches --max-bytes 58000"
-        )
-
-    elif kind == "log" or kind == "blame":
-        cmds.append(
-            f"cpljson slice --cache {cache_id} --path results --max-bytes 58000"
-        )
-
-    elif kind == "repo_map":
-        skip = {"summary", "resource_kind", "delivery"}
-        sections = [k for k in payload if k not in skip]
-        for section in sections[:4]:
-            cmds.append(f"cpljson slice --cache {cache_id} --path {section}")
-
-    else:
-        # Generic: just slice the root
-        cmds.append(f"cpljson slice --cache {cache_id} --max-bytes 58000")
-
-    return cmds
 
 
 def _build_inline_summary(
@@ -200,7 +132,7 @@ def _build_inline_summary(
             parts.append(str(summary_text))
         commit = payload.get("commit", {})
         if isinstance(commit, dict) and commit.get("oid"):
-            parts.append(f"committed {commit["oid"][:7]}")
+            parts.append(f"committed {commit['oid'][:7]}")
         return " | ".join(parts) if parts else None
 
     if resource_kind == "semantic_diff":
@@ -262,7 +194,7 @@ def wrap_response(
     Otherwise it is stored in the sidecar cache and the response
     contains a summary + cpljson fetch hints.
     """
-    from codeplane.mcp.sidecar_cache import cache_put
+    from codeplane.mcp.sidecar_cache import cache_put, get_sidecar_cache
 
     profile = client_profile or get_current_profile()
     inline_cap = profile.inline_cap_bytes
@@ -278,6 +210,7 @@ def wrap_response(
     else:
         # Oversized — store in sidecar cache, return synopsis + cpljson hints
         cache_id = cache_put(session_id, resource_kind, result)
+        entry = get_sidecar_cache().get_entry(cache_id)
         summary = _build_inline_summary(resource_kind, result)
 
         envelope: dict[str, Any] = {
@@ -292,7 +225,11 @@ def wrap_response(
         )
         envelope["inline_budget_bytes_limit"] = inline_cap
         envelope["agentic_hint"] = _build_cpljson_hint(
-            cache_id, payload_bytes, resource_kind, session_id, result
+            cache_id,
+            payload_bytes,
+            resource_kind,
+            session_id,
+            entry.sections if entry else None,
         )
 
         log.debug(

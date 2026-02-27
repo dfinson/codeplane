@@ -16,10 +16,10 @@ from codeplane.mcp.delivery import (
     ScopeManager,
     _build_cpljson_hint,
     _build_inline_summary,
-    _suggest_slices,
     resolve_profile,
     wrap_response,
 )
+from codeplane.mcp.sidecar_cache import CacheSection
 
 # =============================================================================
 # Client Profile Tests
@@ -122,7 +122,23 @@ class TestWrapResponse:
 
 
 class TestCpljsonHints:
-    """Tests for cpljson hint builder."""
+    """Tests for section-based cpljson hint builder."""
+
+    def _section(
+        self,
+        key: str,
+        byte_size: int,
+        type_desc: str = "dict(1 keys)",
+        item_count: int | None = 1,
+        ready: bool = True,
+    ) -> CacheSection:
+        return CacheSection(
+            key=key,
+            byte_size=byte_size,
+            type_desc=type_desc,
+            item_count=item_count,
+            ready=ready,
+        )
 
     def test_hint_has_cache_id(self) -> None:
         hint = _build_cpljson_hint("abc123", 50000, "recon_result", "sess1")
@@ -142,97 +158,62 @@ class TestCpljsonHints:
         hint = _build_cpljson_hint("abc123", 50000, "recon_result", "sess1")
         assert "cpljson meta --cache abc123" in hint
 
-    def test_recon_hint_has_tier_slices(self) -> None:
-        payload: dict[str, Any] = {
-            "full_file": [
-                {"path": "a.py", "content": "..."},
-                {"path": "b.py", "content": "..."},
-            ],
-            "min_scaffold": [{"path": "c.py"}],
-            "summary_only": [],
+    def test_ready_sections_shown(self) -> None:
+        """Sections ≤ 50KB show as ready with byte sizes."""
+        sections = {
+            "lint": self._section("lint", 1234),
+            "tests": self._section("tests", 45000, type_desc="dict(5 keys)", item_count=5),
+            "commit": self._section("commit", 890),
         }
-        hint = _build_cpljson_hint("abc123", 50000, "recon_result", "s1", payload)
-        assert "full_file" in hint
-        assert "min_scaffold" in hint
-        assert "a.py" in hint  # per-file suggestion
-
-    def test_checkpoint_hint_sections(self) -> None:
-        payload: dict[str, Any] = {
-            "passed": True,
-            "lint": {"status": "clean"},
-            "tests": {"passed": 42},
-            "commit": {"oid": "abc1234"},
-            "agentic_hint": "All checks passed.",
-        }
-        hint = _build_cpljson_hint("abc123", 20000, "checkpoint", "s1", payload)
+        hint = _build_cpljson_hint("abc123", 50000, "checkpoint", "s1", sections)
+        assert "ready, instant retrieval" in hint
         assert "cpljson slice --cache abc123 --path lint" in hint
         assert "cpljson slice --cache abc123 --path tests" in hint
         assert "cpljson slice --cache abc123 --path commit" in hint
-        assert "cpljson slice --cache abc123 --path agentic_hint" in hint
+        assert "1,234 bytes" in hint
+        assert "45,000 bytes" in hint
 
-    def test_semantic_diff_hint(self) -> None:
-        payload: dict[str, Any] = {
-            "structural_changes": [
-                {"change": "added", "name": "foo"},
-            ],
+    def test_oversized_sections_shown(self) -> None:
+        """Sections > 50KB show with --max-bytes hint."""
+        sections = {
+            "small": self._section("small", 1000),
+            "big": self._section("big", 120_000, ready=False),
         }
-        hint = _build_cpljson_hint("abc123", 10000, "semantic_diff", "s1", payload)
-        assert "structural_changes" in hint
+        hint = _build_cpljson_hint("abc123", 121_000, "source", "s1", sections)
+        assert "Oversized sections" in hint
+        assert "cpljson slice --cache abc123 --path big --max-bytes 50000" in hint
+        assert "120,000 bytes" in hint
 
-    def test_diff_hint(self) -> None:
-        hint = _build_cpljson_hint("abc123", 5000, "diff", "s1", {"diff": "..."})
-        assert "cpljson slice --cache abc123 --path diff" in hint
+    def test_section_byte_sizes_in_hint(self) -> None:
+        """Each section shows its byte size."""
+        sections = {
+            "lint": self._section("lint", 1234),
+            "agentic_hint": self._section(
+                "agentic_hint", 234, type_desc="str(200 chars)", item_count=200
+            ),
+        }
+        hint = _build_cpljson_hint("abc123", 2000, "checkpoint", "s1", sections)
+        assert "1,234 bytes" in hint
+        assert "234 bytes" in hint
 
-    def test_unknown_kind_generic_slice(self) -> None:
-        hint = _build_cpljson_hint("abc123", 5000, "unknown_kind", "s1", {"data": "x"})
-        assert "cpljson slice --cache abc123 --max-bytes 58000" in hint
+    def test_no_sections_fallback(self) -> None:
+        """Without sections, generic slice command shown."""
+        hint = _build_cpljson_hint("abc123", 5000, "unknown", "s1")
+        assert "cpljson slice --cache abc123 --max-bytes 50000" in hint
 
-    def test_hint_without_payload(self) -> None:
-        hint = _build_cpljson_hint("abc123", 5000, "unknown_kind", "s1")
-        assert "cpljson slice --cache abc123" in hint
-
-
-# =============================================================================
-# _suggest_slices Tests
-# =============================================================================
-
-
-class TestSuggestSlices:
-    """Tests for kind-specific slice suggestions."""
-
-    def test_source_kind(self) -> None:
-        cmds = _suggest_slices("source", "abc", {"files": [{"path": "a.py"}]})
-        assert any("--path files" in c for c in cmds)
-
-    def test_search_hits_kind(self) -> None:
-        cmds = _suggest_slices("search_hits", "abc", {"results": [{"id": 1}]})
-        assert any("--path results" in c for c in cmds)
-
-    def test_log_kind(self) -> None:
-        cmds = _suggest_slices("log", "abc", {"results": [{"sha": "x"}]})
-        assert any("--path results" in c for c in cmds)
-
-    def test_blame_kind(self) -> None:
-        cmds = _suggest_slices("blame", "abc", {"results": [{"author": "x"}]})
-        assert any("--path results" in c for c in cmds)
-
-    def test_refactor_preview_kind(self) -> None:
-        cmds = _suggest_slices("refactor_preview", "abc", {"matches": [{"path": "a.py"}]})
-        assert any("--path matches" in c for c in cmds)
-
-    def test_repo_map_kind(self) -> None:
-        cmds = _suggest_slices(
-            "repo_map", "abc", {"structure": {}, "dependencies": {}, "summary": "x"}
-        )
-        assert any("--path structure" in c for c in cmds)
-        assert any("--path dependencies" in c for c in cmds)
-        # summary is skipped
-        assert not any("--path summary" in c for c in cmds)
-
-    def test_none_payload(self) -> None:
-        cmds = _suggest_slices("recon_result", "abc", None)
-        assert len(cmds) == 1
-        assert "--max-bytes 58000" in cmds[0]
+    def test_mixed_ready_and_oversized(self) -> None:
+        """Hint separates ready and oversized sections."""
+        sections = {
+            "passed": self._section("passed", 6, type_desc="bool", item_count=None),
+            "lint": self._section("lint", 500),
+            "coverage": self._section("coverage", 200_000, ready=False),
+        }
+        hint = _build_cpljson_hint("abc123", 201_000, "checkpoint", "s1", sections)
+        assert "ready, instant retrieval" in hint
+        assert "Oversized sections" in hint
+        assert "--path passed" in hint
+        assert "--path lint" in hint
+        assert "--path coverage --max-bytes 50000" in hint
 
 
 # =============================================================================

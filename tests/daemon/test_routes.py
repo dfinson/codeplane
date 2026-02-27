@@ -308,5 +308,5 @@ class TestSidecarCacheMetaEndpoint:
         assert resp.status_code == 200
         result = resp.json()
         assert "byte_size" in result
-        assert "schema" in result
+        assert "sections" in result
         get_sidecar_cache().clear()
