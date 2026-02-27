@@ -18,6 +18,8 @@ from codeplane.mcp.sidecar_cache import (
     _chunk_list,
     _chunk_string,
     _describe_value,
+    _find_largest_field,
+    _split_oversized_item,
     cache_list,
     cache_meta,
     cache_put,
@@ -494,6 +496,161 @@ class TestChunkList:
         for items_chunk, _ in chunks:
             reconstructed.extend(items_chunk)
         assert reconstructed == items
+
+    def test_splits_oversized_single_item_semantically(self) -> None:
+        """A single dict item larger than cap is split by its largest field."""
+        # Simulate a lite_files entry with a huge symbols list
+        big_item: dict[str, Any] = {
+            "path": "src/big_module.py",
+            "similarity": 0.9,
+            "artifact_kind": "source",
+            "summary": {
+                "total_lines": 5000,
+                "imports": ["os", "sys"],
+                "symbols": [f"function symbol_{i}" for i in range(500)],
+            },
+        }
+        # This single item serializes well over 10KB
+        item_bytes = len(json.dumps(big_item, indent=2).encode())
+        assert item_bytes > 10_000
+
+        # Chunk with a 5KB cap — must split within the item
+        chunks = _chunk_list([big_item], 5_000)
+        assert len(chunks) > 1
+
+        # Each chunk is a list of 1 partial item
+        all_symbols: list[str] = []
+        for chunk_items, _chunk_bytes in chunks:
+            assert len(chunk_items) == 1
+            partial = chunk_items[0]
+            # Envelope preserved
+            assert partial["path"] == "src/big_module.py"
+            assert partial["similarity"] == 0.9
+            # _split metadata present
+            assert "_split" in partial
+            assert partial["_split"]["field"] == "summary.symbols"
+            assert partial["_split"]["total"] == len(chunks)
+            # Collect symbols
+            all_symbols.extend(partial["summary"]["symbols"])
+
+        # All 500 symbols recovered
+        assert len(all_symbols) == 500
+        assert all_symbols == [f"function symbol_{i}" for i in range(500)]
+
+    def test_splits_oversized_scaffold_string(self) -> None:
+        """A scaffold item with a large string field is split semantically."""
+        big_scaffold: dict[str, Any] = {
+            "path": "src/huge.py",
+            "language": "python",
+            "total_lines": 10000,
+            "imports": ["os"],
+            "symbols": [],
+            "scaffold_text": "\n".join(f"def func_{i}(): pass" for i in range(500)),
+        }
+        chunks = _chunk_list([big_scaffold], 3_000)
+        assert len(chunks) > 1
+        # Each part has _split metadata
+        for chunk_items, _ in chunks:
+            assert len(chunk_items) == 1
+            partial = chunk_items[0]
+            assert partial["path"] == "src/huge.py"
+            assert "_split" in partial
+            assert partial["_split"]["field"] == "scaffold_text"
+
+    def test_mixed_normal_and_oversized_items(self) -> None:
+        """Normal items chunk normally; oversized items split semantically."""
+        small_items = [{"path": f"small_{i}.py", "data": "x"} for i in range(5)]
+        big_item: dict[str, Any] = {
+            "path": "big.py",
+            "summary": {"symbols": [f"sym_{i}" for i in range(500)]},
+        }
+        items: list[Any] = small_items + [big_item]
+        chunks = _chunk_list(items, 5_000)
+        # Check the big item was split (has _split metadata in some chunks)
+        split_chunks = [
+            c for c in chunks if any("_split" in item for item in c[0] if isinstance(item, dict))
+        ]
+        assert len(split_chunks) > 0
+        # Check small items preserved
+        all_paths = [
+            item["path"]
+            for chunk_items, _ in chunks
+            for item in chunk_items
+            if isinstance(item, dict) and "path" in item and "_split" not in item
+        ]
+        assert all(f"small_{i}.py" in all_paths for i in range(5))
+
+
+class TestFindLargestField:
+    """Tests for _find_largest_field helper."""
+
+    def test_finds_top_level_list(self) -> None:
+        obj = {"small": "x", "big": list(range(100))}
+        path, val = _find_largest_field(obj)
+        assert path == "big"
+        assert val == list(range(100))
+
+    def test_finds_nested_list(self) -> None:
+        obj = {"meta": "x", "summary": {"imports": ["os"], "symbols": list(range(200))}}
+        path, val = _find_largest_field(obj)
+        assert path == "summary.symbols"
+        assert len(val) == 200
+
+    def test_finds_large_string(self) -> None:
+        obj = {"name": "x", "content": "y" * 10000}
+        path, val = _find_largest_field(obj)
+        assert path == "content"
+        assert len(val) == 10000
+
+    def test_returns_none_for_scalars_only(self) -> None:
+        obj = {"a": 1, "b": True, "c": 3.14}
+        path, val = _find_largest_field(obj)
+        assert path is None
+
+    def test_skips_underscore_keys(self) -> None:
+        obj = {"_private": list(range(1000)), "public": [1, 2]}
+        path, val = _find_largest_field(obj)
+        assert path == "public"
+
+
+class TestSplitOversizedItem:
+    """Tests for _split_oversized_item."""
+
+    def test_splits_item_with_big_nested_list(self) -> None:
+        item: dict[str, Any] = {
+            "path": "file.py",
+            "summary": {
+                "total_lines": 100,
+                "symbols": [{"name": f"s{i}", "kind": "function"} for i in range(100)],
+            },
+        }
+        parts = _split_oversized_item(item, 3_000)
+        assert len(parts) > 1
+        # All parts have _split metadata
+        for idx, part in enumerate(parts):
+            assert part["_split"]["field"] == "summary.symbols"
+            assert part["_split"]["part"] == idx
+            assert part["_split"]["total"] == len(parts)
+            # Envelope preserved
+            assert part["path"] == "file.py"
+            assert part["summary"]["total_lines"] == 100
+
+        # All symbols recovered
+        all_syms = []
+        for part in parts:
+            all_syms.extend(part["summary"]["symbols"])
+        assert len(all_syms) == 100
+
+    def test_returns_single_for_small_item(self) -> None:
+        item: dict[str, Any] = {"path": "small.py", "data": "x"}
+        parts = _split_oversized_item(item, 50_000)
+        assert len(parts) == 1
+        assert "_split" not in parts[0]
+
+    def test_returns_single_for_scalar_only(self) -> None:
+        item: dict[str, Any] = {"a": 1, "b": 2.0, "c": True}
+        parts = _split_oversized_item(item, 10)
+        assert len(parts) == 1
 
 
 class TestChunkString:

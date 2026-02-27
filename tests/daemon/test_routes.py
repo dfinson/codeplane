@@ -276,7 +276,7 @@ class TestSidecarCacheSliceEndpoint:
         resp = client.get(f"/sidecar/cache/slice?cache={cid}&max_bytes=500")
         assert resp.status_code == 200
         result = resp.json()
-        assert "truncated" in result
+        assert "has_more" in result
         get_sidecar_cache().clear()
 
 

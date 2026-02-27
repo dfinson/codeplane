@@ -38,13 +38,27 @@ _SECTION_CAP_BYTES = 50_000
 
 @dataclass
 class CacheSection:
-    """Pre-computed section metadata for a top-level payload key."""
+    """Pre-computed section metadata for a top-level payload key.
+
+    For sections that fit within _SECTION_CAP_BYTES, ``ready=True`` and the
+    value can be served instantly via the fast path.
+
+    For oversized list/string sections the parent is marked ``ready=False``
+    and its content is pre-chunked into sub-slices (``scaffold_files.0``,
+    ``scaffold_files.1``, …) each ≤ _SECTION_CAP_BYTES.  Sub-slices are
+    stored as additional ``CacheSection`` entries with ``ready=True`` and
+    ``parent_key`` set to the original key.
+    """
 
     key: str
     byte_size: int
     type_desc: str  # e.g. "list(42 items)", "dict(5 keys)", "str(1200 chars)"
     item_count: int | None  # element count for containers, None for scalars
     ready: bool  # True if byte_size ≤ _SECTION_CAP_BYTES
+    parent_key: str | None = None  # set on sub-slices; None on top-level sections
+    chunk_index: int | None = None  # sub-slice ordinal (0, 1, …)
+    chunk_total: int | None = None  # total sub-slices for the parent
+    chunk_items: int | None = None  # items in this sub-slice (lists only)
 
     def to_dict(self) -> dict[str, Any]:
         """Serializable metadata."""
@@ -56,6 +70,14 @@ class CacheSection:
         }
         if self.item_count is not None:
             d["item_count"] = self.item_count
+        if self.parent_key is not None:
+            d["parent_key"] = self.parent_key
+        if self.chunk_index is not None:
+            d["chunk_index"] = self.chunk_index
+        if self.chunk_total is not None:
+            d["chunk_total"] = self.chunk_total
+        if self.chunk_items is not None:
+            d["chunk_items"] = self.chunk_items
         return d
 
 
@@ -69,6 +91,7 @@ class CacheEntry:
     payload: dict[str, Any] | list[Any]
     byte_size: int
     sections: dict[str, CacheSection] = field(default_factory=dict)
+    sub_slices: dict[str, Any] = field(default_factory=dict)  # sub-slice key → value
     created_at: float = field(default_factory=time.monotonic)
 
     def meta(self) -> dict[str, Any]:
@@ -91,13 +114,22 @@ def _top_keys(d: dict[str, Any]) -> list[str]:
     return list(d.keys())
 
 
-def _build_sections(payload: dict[str, Any]) -> dict[str, CacheSection]:
-    """Pre-compute section metadata for each top-level key in a dict payload.
+def _build_sections(
+    payload: dict[str, Any],
+) -> tuple[dict[str, CacheSection], dict[str, Any]]:
+    """Pre-compute section metadata and pre-chunk oversized sections.
 
-    Each section records byte_size, type descriptor, and whether the section
-    is 'ready' (≤ _SECTION_CAP_BYTES) for instant retrieval.
+    Returns:
+        (sections, sub_slices) where:
+        - sections: key → CacheSection (includes both top-level and sub-slice entries)
+        - sub_slices: sub-slice key → materialized value for fast retrieval
+
+    Sections ≤ _SECTION_CAP_BYTES are marked ``ready=True``.
+    Oversized list/string sections are split into sub-slices, each ≤ _SECTION_CAP_BYTES.
     """
     sections: dict[str, CacheSection] = {}
+    sub_slices: dict[str, Any] = {}
+
     for key, value in payload.items():
         raw = json.dumps(value, indent=2, default=str).encode("utf-8")
         byte_size = len(raw)
@@ -121,14 +153,313 @@ def _build_sections(payload: dict[str, Any]) -> dict[str, CacheSection]:
             type_desc = type(value).__name__
             item_count = None
 
-        sections[key] = CacheSection(
-            key=key,
-            byte_size=byte_size,
-            type_desc=type_desc,
-            item_count=item_count,
-            ready=byte_size <= _SECTION_CAP_BYTES,
-        )
-    return sections
+        if byte_size <= _SECTION_CAP_BYTES:
+            # Small enough — ready as-is
+            sections[key] = CacheSection(
+                key=key,
+                byte_size=byte_size,
+                type_desc=type_desc,
+                item_count=item_count,
+                ready=True,
+            )
+        elif isinstance(value, list):
+            # Pre-chunk list into sub-slices
+            chunks = _chunk_list(value, _SECTION_CAP_BYTES)
+            sections[key] = CacheSection(
+                key=key,
+                byte_size=byte_size,
+                type_desc=type_desc,
+                item_count=item_count,
+                ready=False,
+                chunk_total=len(chunks),
+            )
+            for idx, (chunk_items, chunk_bytes) in enumerate(chunks):
+                sub_key = f"{key}.{idx}"
+                sub_slices[sub_key] = chunk_items
+                sections[sub_key] = CacheSection(
+                    key=sub_key,
+                    byte_size=chunk_bytes,
+                    type_desc=f"list({len(chunk_items)} items)",
+                    item_count=len(chunk_items),
+                    ready=True,
+                    parent_key=key,
+                    chunk_index=idx,
+                    chunk_total=len(chunks),
+                    chunk_items=len(chunk_items),
+                )
+        elif isinstance(value, str):
+            # Pre-chunk string into sub-slices
+            chunks_str = _chunk_string(value, _SECTION_CAP_BYTES)
+            sections[key] = CacheSection(
+                key=key,
+                byte_size=byte_size,
+                type_desc=type_desc,
+                item_count=item_count,
+                ready=False,
+                chunk_total=len(chunks_str),
+            )
+            for idx, (chunk_text, chunk_bytes) in enumerate(chunks_str):
+                sub_key = f"{key}.{idx}"
+                sub_slices[sub_key] = chunk_text
+                sections[sub_key] = CacheSection(
+                    key=sub_key,
+                    byte_size=chunk_bytes,
+                    type_desc=f"str({len(chunk_text)} chars)",
+                    item_count=len(chunk_text),
+                    ready=True,
+                    parent_key=key,
+                    chunk_index=idx,
+                    chunk_total=len(chunks_str),
+                    chunk_items=len(chunk_text),
+                )
+        else:
+            # Oversized dict or other — mark not ready, no sub-slicing
+            # Agents can navigate via path traversal
+            sections[key] = CacheSection(
+                key=key,
+                byte_size=byte_size,
+                type_desc=type_desc,
+                item_count=item_count,
+                ready=False,
+            )
+
+    return sections, sub_slices
+
+
+def _chunk_list(items: list[Any], cap: int) -> list[tuple[list[Any], int]]:
+    """Split a list into chunks each serializing to ≤ cap bytes.
+
+    Exercises semantic intelligence: when a single dict item exceeds the cap,
+    finds its largest list or string field and splits the item into multiple
+    partial items — each carrying the full envelope (path, metadata) plus a
+    portion of the oversized field, annotated with ``_split`` metadata so
+    consumers can reconstruct.
+
+    Returns list of (chunk_items, chunk_byte_size) tuples.
+    """
+    chunks: list[tuple[list[Any], int]] = []
+    current: list[Any] = []
+    current_bytes = 2  # opening/closing []
+
+    for item in items:
+        item_json = json.dumps(item, indent=2, default=str).encode("utf-8")
+        item_bytes = len(item_json) + 2  # comma + newline overhead
+
+        if item_bytes > cap and isinstance(item, dict):
+            # Flush any accumulated items first
+            if current:
+                chunk_raw = json.dumps(current, indent=2, default=str).encode("utf-8")
+                chunks.append((current, len(chunk_raw)))
+                current = []
+                current_bytes = 2
+
+            # Split this oversized item semantically
+            parts = _split_oversized_item(item, cap)
+            for part in parts:
+                part_raw = json.dumps([part], indent=2, default=str).encode("utf-8")
+                chunks.append(([part], len(part_raw)))
+            continue
+
+        if current and current_bytes + item_bytes > cap:
+            # Flush current chunk
+            chunk_raw = json.dumps(current, indent=2, default=str).encode("utf-8")
+            chunks.append((current, len(chunk_raw)))
+            current = []
+            current_bytes = 2
+
+        current.append(item)
+        current_bytes += item_bytes
+
+    if current:
+        chunk_raw = json.dumps(current, indent=2, default=str).encode("utf-8")
+        chunks.append((current, len(chunk_raw)))
+
+    return chunks
+
+
+def _split_oversized_item(item: dict[str, Any], cap: int) -> list[dict[str, Any]]:
+    """Split an oversized dict item by finding and partitioning its largest field.
+
+    Recursively locates the largest list or string field (at any nesting depth)
+    and splits it across multiple copies of the item, each annotated with
+    ``_split`` metadata: ``{field, part, total}``.
+
+    This preserves the item envelope (path, scores, metadata) in every part
+    while distributing the heavy payload.
+    """
+    # Find the largest field path and its value
+    field_path, field_val = _find_largest_field(item)
+
+    if field_path is None:
+        # Can't split further — return as-is
+        return [item]
+
+    # Split the field value into pieces that fit
+    sub_chunks: list[Any]
+    if isinstance(field_val, list):
+        sub_chunks = _chunk_list_simple(field_val, cap)
+    elif isinstance(field_val, str):
+        sub_chunks = _chunk_string_simple(field_val, cap)
+    else:
+        return [item]
+
+    if len(sub_chunks) <= 1:
+        return [item]
+
+    # Build partial items — each gets the full envelope + a slice of the field
+    parts: list[dict[str, Any]] = []
+    for idx, chunk_val in enumerate(sub_chunks):
+        partial = _clone_with_field_replaced(item, field_path, chunk_val)
+        partial["_split"] = {
+            "field": field_path,
+            "part": idx,
+            "total": len(sub_chunks),
+        }
+        parts.append(partial)
+
+    return parts
+
+
+def _find_largest_field(
+    obj: dict[str, Any],
+    prefix: str = "",
+) -> tuple[str | None, Any]:
+    """Find the dot-path to the largest serializable field in a nested dict.
+
+    Only considers list and str fields as splittable targets.
+    Returns (dot_path, value) or (None, None) if nothing splittable found.
+    """
+    best_path: str | None = None
+    best_val: Any = None
+    best_size = 0
+
+    for key, val in obj.items():
+        if key.startswith("_"):
+            continue
+        path = f"{prefix}.{key}" if prefix else key
+
+        if isinstance(val, list | str):
+            size = len(json.dumps(val, indent=2, default=str).encode("utf-8"))
+            if size > best_size:
+                best_size = size
+                best_path = path
+                best_val = val
+        elif isinstance(val, dict):
+            # Recurse into nested dicts
+            sub_path, sub_val = _find_largest_field(val, path)
+            if sub_path is not None:
+                sub_size = len(json.dumps(sub_val, indent=2, default=str).encode("utf-8"))
+                if sub_size > best_size:
+                    best_size = sub_size
+                    best_path = sub_path
+                    best_val = sub_val
+
+    return best_path, best_val
+
+
+def _clone_with_field_replaced(
+    obj: dict[str, Any],
+    field_path: str,
+    new_value: Any,
+) -> dict[str, Any]:
+    """Deep-clone a dict, replacing the value at field_path with new_value."""
+    import copy
+
+    clone = copy.deepcopy(obj)
+    parts = field_path.split(".")
+    target = clone
+    for part in parts[:-1]:
+        target = target[part]
+    target[parts[-1]] = new_value
+    return clone
+
+
+def _chunk_list_simple(items: list[Any], cap: int) -> list[list[Any]]:
+    """Split a list into sub-lists each serializing to ≤ cap bytes.
+
+    Simpler variant (returns values only, no byte counts) for intra-item splitting.
+    """
+    chunks: list[list[Any]] = []
+    current: list[Any] = []
+    current_bytes = 2
+
+    for item in items:
+        item_bytes = len(json.dumps(item, indent=2, default=str).encode("utf-8")) + 2
+        if current and current_bytes + item_bytes > cap:
+            chunks.append(current)
+            current = []
+            current_bytes = 2
+        current.append(item)
+        current_bytes += item_bytes
+
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _chunk_string_simple(text: str, cap: int) -> list[str]:
+    """Split a string into sub-strings each ≤ cap bytes (JSON-serialized).
+
+    Splits on newline boundaries for semantic awareness.
+    """
+    full_bytes = len(json.dumps(text, default=str).encode("utf-8"))
+    if full_bytes <= cap:
+        return [text]
+
+    lines = text.split("\n")
+    chunks: list[str] = []
+    current_lines: list[str] = []
+    current_bytes = 2
+
+    for line in lines:
+        line_bytes = len(line.encode("utf-8")) + 1
+        if current_lines and current_bytes + line_bytes > cap:
+            chunks.append("\n".join(current_lines))
+            current_lines = []
+            current_bytes = 2
+        current_lines.append(line)
+        current_bytes += line_bytes
+
+    if current_lines:
+        chunks.append("\n".join(current_lines))
+    return chunks
+
+
+def _chunk_string(text: str, cap: int) -> list[tuple[str, int]]:
+    """Split a string into chunks each ≤ cap bytes when JSON-serialized.
+
+    Tries to split on newline boundaries for semantic awareness.
+    Returns list of (chunk_text, chunk_byte_size) tuples.
+    """
+    # JSON overhead: quotes + escaping.  Rough check: if the whole thing fits, skip.
+    full_bytes = len(json.dumps(text, default=str).encode("utf-8"))
+    if full_bytes <= cap:
+        return [(text, full_bytes)]
+
+    # Split on newline boundaries
+    lines = text.split("\n")
+    chunks: list[tuple[str, int]] = []
+    current_lines: list[str] = []
+    current_bytes = 2  # opening/closing quotes in JSON
+
+    for line in lines:
+        line_bytes = len(line.encode("utf-8")) + 1  # +1 for \n
+        if current_lines and current_bytes + line_bytes > cap:
+            chunk_text = "\n".join(current_lines)
+            chunk_raw = len(json.dumps(chunk_text, default=str).encode("utf-8"))
+            chunks.append((chunk_text, chunk_raw))
+            current_lines = []
+            current_bytes = 2
+
+        current_lines.append(line)
+        current_bytes += line_bytes
+
+    if current_lines:
+        chunk_text = "\n".join(current_lines)
+        chunk_raw = len(json.dumps(chunk_text, default=str).encode("utf-8"))
+        chunks.append((chunk_text, chunk_raw))
+
+    return chunks
 
 
 class SidecarCache:
@@ -162,13 +493,19 @@ class SidecarCache:
         byte_size = len(raw)
         cache_id = uuid.uuid4().hex[:12]
 
+        if isinstance(payload, dict):
+            sections, sub_slices = _build_sections(payload)
+        else:
+            sections, sub_slices = {}, {}
+
         entry = CacheEntry(
             cache_id=cache_id,
             session_id=session_id,
             endpoint_key=endpoint_key,
             payload=payload,
             byte_size=byte_size,
-            sections=_build_sections(payload) if isinstance(payload, dict) else {},
+            sections=sections,
+            sub_slices=sub_slices,
         )
 
         key = (session_id, endpoint_key)
@@ -229,13 +566,13 @@ class SidecarCache:
         max_bytes: int = 60_000,
         offset: int = 0,
     ) -> dict[str, Any] | None:
-        """Extract a sub-path from a cached payload with byte-limited output.
+        """Extract a sub-path from a cached payload with paginated output.
 
         Args:
             cache_id: The unique cache entry ID.
             path: Dot-separated JSON path (e.g. "files.0.content"). None = root.
-            max_bytes: Maximum bytes to return in the slice.
-            offset: Character offset for string values (for pagination).
+            max_bytes: Maximum bytes to return per page.
+            offset: Item offset for lists, character offset for strings.
 
         Returns:
             Dict with slice data, or None if cache_id not found.
@@ -259,8 +596,24 @@ class SidecarCache:
                 "type": section.type_desc,
                 "value": entry.payload[path],
                 "byte_size": section.byte_size,
-                "truncated": False,
+                "has_more": False,
                 "ready": True,
+            }
+
+        # Fast path: pre-chunked sub-slice (e.g. "scaffold_files.0")
+        if path and path in entry.sub_slices and path in entry.sections:
+            section = entry.sections[path]
+            return {
+                "cache_id": cache_id,
+                "path": path,
+                "type": section.type_desc,
+                "value": entry.sub_slices[path],
+                "byte_size": section.byte_size,
+                "has_more": False,
+                "ready": True,
+                "chunk_index": section.chunk_index,
+                "chunk_total": section.chunk_total,
+                "parent_key": section.parent_key,
             }
 
         # Navigate to sub-path
@@ -316,38 +669,53 @@ class SidecarCache:
                 "path": path or "(root)",
                 "type": type(value).__name__,
                 "value": value,
-                "truncated": False,
+                "has_more": False,
             }
 
-        # Truncate: for lists, return items that fit; for dicts, return keys
+        # Paginate: for lists, return a page of items starting at offset
         if isinstance(value, list):
             items: list[Any] = []
             used = 2  # []
-            for item in value:
+            for item in value[offset:]:
                 item_json = json.dumps(item, indent=2, default=str)
                 if used + len(item_json) + 2 > max_bytes:
                     break
                 items.append(item)
                 used += len(item_json) + 2
+            next_offset = offset + len(items)
             return {
                 "cache_id": cache_id,
                 "path": path or "(root)",
                 "type": "list",
                 "value": items,
+                "offset": offset,
                 "returned": len(items),
                 "total": len(value),
-                "truncated": len(items) < len(value),
+                "has_more": next_offset < len(value),
+                "next_offset": next_offset if next_offset < len(value) else None,
             }
 
-        # Dict: return what fits
-        truncated = serialized[:max_bytes]
+        # Dict: return keys so caller can navigate with path
+        if isinstance(value, dict):
+            keys = list(value.keys())
+            return {
+                "cache_id": cache_id,
+                "path": path or "(root)",
+                "type": "dict",
+                "keys": keys,
+                "total_keys": len(keys),
+                "total_bytes": len(serialized),
+                "has_more": False,
+                "hint": "Use path='<key>' or path='<parent>.<key>' to retrieve individual values.",
+            }
+
+        # Scalar fallback (int, float, bool, None)
         return {
             "cache_id": cache_id,
             "path": path or "(root)",
-            "type": "dict",
-            "value_preview": truncated,
-            "total_bytes": len(serialized),
-            "truncated": True,
+            "type": type(value).__name__,
+            "value": value,
+            "has_more": False,
         }
 
     def get_meta(self, cache_id: str) -> dict[str, Any] | None:
