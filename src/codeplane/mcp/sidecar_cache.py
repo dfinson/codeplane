@@ -286,6 +286,11 @@ def _split_oversized_item(item: dict[str, Any], cap: int) -> list[dict[str, Any]
 
     This preserves the item envelope (path, scores, metadata) in every part
     while distributing the heavy payload.
+
+    Uses post-hoc verification: after building parts, checks that each part
+    serializes to ≤ cap bytes.  If any part exceeds the cap (due to JSON
+    indentation overhead at nesting depth), the effective budget is tightened
+    and the field is re-split — up to 3 retries.
     """
     # Find the largest field path and its value
     field_path, field_val = _find_largest_field(item)
@@ -294,29 +299,56 @@ def _split_oversized_item(item: dict[str, Any], cap: int) -> list[dict[str, Any]
         # Can't split further — return as-is
         return [item]
 
-    # Split the field value into pieces that fit
-    sub_chunks: list[Any]
-    if isinstance(field_val, list):
-        sub_chunks = _chunk_list_simple(field_val, cap)
-    elif isinstance(field_val, str):
-        sub_chunks = _chunk_string_simple(field_val, cap)
-    else:
-        return [item]
+    # Calculate envelope overhead: serialize the item with an empty field,
+    # then subtract from cap so chunks + envelope stay within budget.
+    empty_val: list[Any] | str = [] if isinstance(field_val, list) else ""
+    envelope_item = _clone_with_field_replaced(item, field_path, empty_val)
+    # Add _split metadata size estimate (roughly constant)
+    envelope_item["_split"] = {"field": field_path, "part": 0, "total": 99}
+    envelope_bytes = len(json.dumps(envelope_item, indent=2, default=str).encode("utf-8"))
+    effective_cap = max(cap - envelope_bytes, 1024)  # floor at 1KB
 
-    if len(sub_chunks) <= 1:
-        return [item]
+    # Split → build parts → verify.  Retry with tighter budget if any part
+    # exceeds cap (indent nesting adds per-element overhead not captured by
+    # standalone list serialization).
+    _MAX_RETRIES = 3
+    for _attempt in range(_MAX_RETRIES):
+        sub_chunks: list[Any]
+        if isinstance(field_val, list):
+            sub_chunks = _chunk_list_simple(field_val, effective_cap)
+        elif isinstance(field_val, str):
+            sub_chunks = _chunk_string_simple(field_val, effective_cap)
+        else:
+            return [item]
 
-    # Build partial items — each gets the full envelope + a slice of the field
-    parts: list[dict[str, Any]] = []
-    for idx, chunk_val in enumerate(sub_chunks):
-        partial = _clone_with_field_replaced(item, field_path, chunk_val)
-        partial["_split"] = {
-            "field": field_path,
-            "part": idx,
-            "total": len(sub_chunks),
-        }
-        parts.append(partial)
+        if len(sub_chunks) <= 1:
+            return [item]
 
+        # Build partial items — each gets the full envelope + a slice
+        parts: list[dict[str, Any]] = []
+        for idx, chunk_val in enumerate(sub_chunks):
+            partial = _clone_with_field_replaced(item, field_path, chunk_val)
+            partial["_split"] = {
+                "field": field_path,
+                "part": idx,
+                "total": len(sub_chunks),
+            }
+            parts.append(partial)
+
+        # Post-hoc verification: every part wrapped in [part] must fit within
+        # cap — this matches how _chunk_list emits each part as a single-
+        # element list chunk, which adds JSON indent overhead.
+        max_part_bytes = max(
+            len(json.dumps([p], indent=2, default=str).encode("utf-8")) for p in parts
+        )
+        if max_part_bytes <= cap:
+            return parts
+
+        # Tighten budget by measured overshoot + safety margin
+        overshoot = max_part_bytes - cap
+        effective_cap = max(effective_cap - overshoot - 64, 512)
+
+    # Exhausted retries — return best-effort parts
     return parts
 
 

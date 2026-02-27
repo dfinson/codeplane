@@ -580,6 +580,30 @@ class TestChunkList:
         ]
         assert all(f"small_{i}.py" in all_paths for i in range(5))
 
+    def test_split_chunks_stay_within_cap(self) -> None:
+        """Every chunk from _chunk_list — including split parts — stays within cap."""
+        big_item: dict[str, Any] = {
+            "path": "src/module.py",
+            "similarity": 0.9,
+            "artifact_kind": "source",
+            "summary": {
+                "total_lines": 2000,
+                "imports": ["os", "sys"],
+                "symbols": [f"def func_{i}(a, b, c): ..." for i in range(600)],
+            },
+        }
+        cap = 5_000
+        chunks = _chunk_list([big_item], cap)
+        assert len(chunks) > 1
+
+        for chunk_items, chunk_bytes in chunks:
+            # Verify reported bytes match actual
+            actual = len(json.dumps(chunk_items, indent=2, default=str).encode("utf-8"))
+            assert chunk_bytes == actual
+            assert actual <= cap, (
+                f"Chunk with {len(chunk_items)} items is {actual} bytes, exceeds cap {cap}"
+            )
+
 
 class TestFindLargestField:
     """Tests for _find_largest_field helper."""
@@ -651,6 +675,40 @@ class TestSplitOversizedItem:
         item: dict[str, Any] = {"a": 1, "b": 2.0, "c": True}
         parts = _split_oversized_item(item, 10)
         assert len(parts) == 1
+
+    def test_envelope_aware_cap_enforcement(self) -> None:
+        """Each split part, including envelope, must stay within the cap."""
+        item: dict[str, Any] = {
+            "path": "src/heavy_module.py",
+            "similarity": 0.95,
+            "combined_score": 0.88,
+            "artifact_kind": "source",
+            "summary": {
+                "total_lines": 3000,
+                "imports": ["os", "sys", "json", "pathlib"],
+                "symbols": [
+                    f"def very_long_function_name_for_symbol_{i}(arg1, arg2, arg3): ..."
+                    for i in range(400)
+                ],
+            },
+        }
+        cap = 5_000
+        parts = _split_oversized_item(item, cap)
+        assert len(parts) > 1
+
+        for part in parts:
+            # Verify with [part] wrapping — this is how _chunk_list emits
+            wrapped_bytes = len(json.dumps([part], indent=2, default=str).encode("utf-8"))
+            assert wrapped_bytes <= cap, (
+                f"Split part {part['_split']['part']} wrapped is {wrapped_bytes} bytes, "
+                f"exceeds cap {cap}"
+            )
+
+        # All symbols recovered
+        all_syms = []
+        for part in parts:
+            all_syms.extend(part["summary"]["symbols"])
+        assert len(all_syms) == 400
 
 
 class TestChunkString:
