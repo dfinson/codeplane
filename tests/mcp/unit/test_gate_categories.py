@@ -34,21 +34,16 @@ class TestCategorizeTool:
     @pytest.mark.parametrize(
         "tool_name,expected_category",
         [
-            ("search", "search"),
-            ("read_source", "read"),
-            ("read_file_full", "read_full"),
-            ("write_source", "write"),
+            ("recon", "search"),
+            ("recon_resolve", "read"),
+            ("refactor_edit", "write"),
             ("refactor_rename", "refactor"),
             ("refactor_move", "refactor"),
             ("refactor_impact", "refactor"),
-            ("refactor_apply", "refactor"),
+            ("refactor_commit", "refactor"),
             ("refactor_cancel", "meta"),
-            ("refactor_inspect", "meta"),
             ("semantic_diff", "diff"),
-            ("map_repo", "meta"),
-            ("list_files", "meta"),
             ("describe", "meta"),
-            ("reset_budget", "meta"),
             ("checkpoint", "test"),
         ],
     )
@@ -62,7 +57,7 @@ class TestCategorizeTool:
         assert categorize_tool("") == "meta"
 
     def test_deleted_tools_are_not_in_categories(self) -> None:
-        """Tools removed in consolidation are NOT in TOOL_CATEGORIES."""
+        """Tools removed in v2 consolidation are NOT in TOOL_CATEGORIES."""
         deleted = [
             "git_status",
             "git_diff",
@@ -90,6 +85,16 @@ class TestCategorizeTool:
             "inspect_affected_tests",
             "commit",
             "verify",
+            # v1 tools killed in v2
+            "search",
+            "read_source",
+            "read_file_full",
+            "write_source",
+            "map_repo",
+            "list_files",
+            "reset_budget",
+            "refactor_apply",
+            "refactor_inspect",
         ]
         for name in deleted:
             assert name not in TOOL_CATEGORIES, f"{name} should be removed"
@@ -134,33 +139,33 @@ class TestWindowClearBehavior:
     def test_commit_clears_window(self) -> None:
         """checkpoint with clears_window clears the pattern window."""
         det = CallPatternDetector()
-        det.record("search")
-        det.record("search")
-        det.record("search")
+        det.record("recon")
+        det.record("recon")
+        det.record("recon")
         det.record("checkpoint", clears_window=True)
         assert det.window_length == 0
 
     def test_verify_no_clear(self) -> None:
         """checkpoint (test category) does NOT clear the window by default."""
         det = CallPatternDetector()
-        det.record("search")
-        det.record("search")
+        det.record("recon")
+        det.record("recon")
         det.record("checkpoint")
         assert det.window_length == 3
 
     def test_semantic_diff_no_clear(self) -> None:
         """semantic_diff (category 'diff') does NOT clear the window."""
         det = CallPatternDetector()
-        det.record("search")
-        det.record("search")
+        det.record("recon")
+        det.record("recon")
         det.record("semantic_diff")
         assert det.window_length == 3
 
     def test_clears_window_override(self) -> None:
         """clears_window=True forces clear regardless of category."""
         det = CallPatternDetector()
-        det.record("search")
-        det.record("search")
+        det.record("recon")
+        det.record("recon")
         det.record("checkpoint", clears_window=True)
         assert det.window_length == 0
 
@@ -177,8 +182,8 @@ class TestHasRecentScopedTest:
         """Returns False when no test_scoped records exist."""
         window: deque[CallRecord] = deque(
             [
-                CallRecord(category="search", tool_name="search"),
-                CallRecord(category="read", tool_name="read_source"),
+                CallRecord(category="search", tool_name="recon"),
+                CallRecord(category="read", tool_name="recon_resolve"),
             ]
         )
         assert has_recent_scoped_test(window) is False
@@ -187,9 +192,9 @@ class TestHasRecentScopedTest:
         """Returns True when a test_scoped record exists."""
         window: deque[CallRecord] = deque(
             [
-                CallRecord(category="search", tool_name="search"),
+                CallRecord(category="search", tool_name="recon"),
                 CallRecord(category="test_scoped", tool_name="checkpoint"),
-                CallRecord(category="read", tool_name="read_source"),
+                CallRecord(category="read", tool_name="recon_resolve"),
             ]
         )
         assert has_recent_scoped_test(window) is True

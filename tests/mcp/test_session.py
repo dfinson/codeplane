@@ -360,4 +360,4 @@ class TestExclusiveLock:
 
         assert "checkpoint" in EXCLUSIVE_TOOLS
         assert "semantic_diff" in EXCLUSIVE_TOOLS
-        assert "map_repo" in EXCLUSIVE_TOOLS
+        assert "map_repo" not in EXCLUSIVE_TOOLS
