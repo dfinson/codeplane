@@ -185,60 +185,6 @@ Also check for: `coverage_hint`, `display_to_user`.
 """
 
 
-def _inject_cplcache_binary(codeplane_dir: Path) -> None:
-    """Copy the pre-built cplcache binary into .codeplane/bin/.
-
-    The binary is compiled at wheel build / editable install time by the
-    hatch build hook (hatch_build.py) for all reachable platforms.  This
-    function detects the current host OS/arch, picks the matching
-    ``cplcache-{os}-{arch}[.exe]`` binary, and copies it into the per-repo
-    ``.codeplane/bin/`` directory as ``cplcache`` (or ``cplcache.exe``).
-    """
-    import platform
-    import shutil
-
-    bin_dir = codeplane_dir / "bin"
-    bin_dir.mkdir(parents=True, exist_ok=True)
-
-    os_map = {"Linux": "linux", "Darwin": "darwin", "Windows": "windows"}
-    arch_map = {"x86_64": "x86_64", "AMD64": "x86_64", "aarch64": "aarch64", "arm64": "arm64"}
-
-    host_os = os_map.get(platform.system())
-    host_arch = arch_map.get(platform.machine())
-    if not host_os or not host_arch:
-        log.warning(
-            "cplcache_unsupported_platform",
-            system=platform.system(),
-            machine=platform.machine(),
-        )
-        return
-
-    is_windows = host_os == "windows"
-    ext = ".exe" if is_windows else ""
-    src_name = f"cplcache-{host_os}-{host_arch}{ext}"
-    dest_name = f"cplcache{ext}"
-
-    # Pre-built binaries live next to cplcache.c in the installed package
-    pkg_bin_dir = Path(__file__).resolve().parent.parent / "bin"
-    src_binary = pkg_bin_dir / src_name
-
-    if not src_binary.exists():
-        log.warning(
-            "cplcache_binary_not_found",
-            expected=src_name,
-            path=str(pkg_bin_dir),
-            detail="Binary was not compiled at install time — is a C compiler available?",
-        )
-        return
-
-    dest = bin_dir / dest_name
-    shutil.copy2(src_binary, dest)
-    dest.chmod(0o755)
-
-    log.info("cplcache_installed", path=str(dest), source=src_name)
-    status(f"Installed cplcache binary → {bin_dir}", style="info")
-
-
 def _inject_agent_instructions(repo_root: Path, tool_prefix: str) -> list[str]:
     """Inject CodePlane snippet into agent instruction files.
 
@@ -542,8 +488,14 @@ def initialize_repo(
         for f in modified_agent_files:
             status(f"Updated {f} with CodePlane instructions", style="info")
 
-    # === cplcache Binary Injection ===
-    _inject_cplcache_binary(codeplane_dir)
+    # === cplcache Script Injection ===
+    from codeplane.templates import get_cplcache_script
+
+    scripts_dir = codeplane_dir / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    cplcache_path = scripts_dir / "cplcache.py"
+    cplcache_path.write_text(get_cplcache_script(), encoding="utf-8")
+    status("Installed cplcache.py → .codeplane/scripts/", style="info")
 
     # === Discovery Phase ===
     from codeplane.index._internal.grammars import (

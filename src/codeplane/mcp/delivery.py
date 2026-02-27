@@ -197,7 +197,6 @@ def _build_cplcache_hint(
     cache_id: str,
     byte_size: int,
     resource_kind: str,
-    session_id: str,
     sections: dict[str, Any] | None = None,
 ) -> str:
     """Build cplcache terminal hints with resource-kind-specific slicing strategy.
@@ -233,7 +232,7 @@ def _build_cplcache_hint(
                 desc_part = f" — {desc}" if desc else ""
                 parts.append(
                     f"  {key:<24} {sec.byte_size:>8,} bytes{desc_part}  "
-                    f"cplcache slice --cache {cache_id} --path {key}"
+                    f"python3 .codeplane/scripts/cplcache.py --cache-id {cache_id} --slice {key}"
                 )
 
         if oversized:
@@ -245,18 +244,14 @@ def _build_cplcache_hint(
                 desc_part = f" — {desc}" if desc else ""
                 parts.append(
                     f"  {key:<24} {sec.byte_size:>8,} bytes{desc_part}  "
-                    f"cplcache slice --cache {cache_id} --path {key}"
+                    f"python3 .codeplane/scripts/cplcache.py --cache-id {cache_id} --slice {key}"
                 )
     else:
-        parts.append(f"  cplcache slice --cache {cache_id}")
+        parts.append(
+            f"  python3 .codeplane/scripts/cplcache.py --cache-id {cache_id} --slice <SECTION>"
+        )
 
-    parts.extend(
-        [
-            "",
-            f"All entries: cplcache list --session {session_id} --endpoint {resource_kind}",
-            f"Full schema: cplcache meta --cache {cache_id}",
-        ]
-    )
+    parts.append("")
 
     return "\n".join(parts)
 
@@ -370,7 +365,6 @@ def wrap_response(
             cache_id,
             payload_bytes,
             resource_kind,
-            session_id,
             entry.sections if entry else None,
         )
 

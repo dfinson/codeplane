@@ -146,38 +146,33 @@ class TestCplcacheHints:
     # --- Basic envelope content ---
 
     def test_hint_has_cache_id(self) -> None:
-        hint = _build_cplcache_hint("abc123", 50000, "recon_result", "sess1")
+        hint = _build_cplcache_hint("abc123", 50000, "recon_result")
         assert "abc123" in hint
 
     def test_hint_has_byte_size(self) -> None:
-        hint = _build_cplcache_hint("abc123", 50000, "recon_result", "sess1")
+        hint = _build_cplcache_hint("abc123", 50000, "recon_result")
         assert "50,000" in hint
 
-    def test_hint_has_list_command(self) -> None:
-        hint = _build_cplcache_hint("abc123", 50000, "recon_result", "sess1")
-        assert "cplcache list" in hint
-        assert "--session sess1" in hint
-        assert "--endpoint recon_result" in hint
-
-    def test_hint_has_meta_command(self) -> None:
-        hint = _build_cplcache_hint("abc123", 50000, "recon_result", "sess1")
-        assert "cplcache meta --cache abc123" in hint
+    def test_hint_has_python_command(self) -> None:
+        hint = _build_cplcache_hint("abc123", 50000, "recon_result")
+        assert "python3 .codeplane/scripts/cplcache.py" in hint
+        assert "--cache-id abc123" in hint
 
     # --- Strategy flow ---
 
     def test_known_kind_shows_strategy_flow(self) -> None:
         """Known resource_kind includes strategy flow text."""
-        hint = _build_cplcache_hint("abc123", 50000, "checkpoint", "s1")
+        hint = _build_cplcache_hint("abc123", 50000, "checkpoint")
         assert "Strategy:" in hint
         assert "passed" in hint.lower()
 
     def test_unknown_kind_no_strategy(self) -> None:
         """Unknown resource_kind has no Strategy line."""
-        hint = _build_cplcache_hint("abc123", 50000, "unknown_kind", "s1")
+        hint = _build_cplcache_hint("abc123", 50000, "unknown_kind")
         assert "Strategy:" not in hint
 
     def test_recon_strategy_flow(self) -> None:
-        hint = _build_cplcache_hint("abc123", 50000, "recon_result", "s1")
+        hint = _build_cplcache_hint("abc123", 50000, "recon_result")
         assert "scaffold_files" in hint
         assert "lite_files" in hint
         assert "repo_map" in hint
@@ -191,11 +186,11 @@ class TestCplcacheHints:
             "tests": self._section("tests", 45000, type_desc="dict(5 keys)", item_count=5),
             "commit": self._section("commit", 890),
         }
-        hint = _build_cplcache_hint("abc123", 50000, "checkpoint", "s1", sections)
+        hint = _build_cplcache_hint("abc123", 50000, "checkpoint", sections)
         assert "Ready sections" in hint
         assert "instant retrieval" in hint
-        assert "cplcache slice --cache abc123 --path lint" in hint
-        assert "cplcache slice --cache abc123 --path commit" in hint
+        assert "python3 .codeplane/scripts/cplcache.py --cache-id abc123 --slice lint" in hint
+        assert "python3 .codeplane/scripts/cplcache.py --cache-id abc123 --slice commit" in hint
         assert "1,234 bytes" in hint
         assert "45,000 bytes" in hint
         # Descriptions from strategy
@@ -208,9 +203,12 @@ class TestCplcacheHints:
             "scaffold_files": self._section("scaffold_files", 120_000, ready=False),
             "summary": self._section("summary", 200),
         }
-        hint = _build_cplcache_hint("abc123", 121_000, "recon_result", "s1", sections)
+        hint = _build_cplcache_hint("abc123", 121_000, "recon_result", sections)
         assert "Oversized sections" in hint
-        assert "cplcache slice --cache abc123 --path scaffold_files" in hint
+        assert (
+            "python3 .codeplane/scripts/cplcache.py --cache-id abc123 --slice scaffold_files"
+            in hint
+        )
         assert "120,000 bytes" in hint
         assert "imports + signatures" in hint  # description from recon_result strategy
 
@@ -222,14 +220,14 @@ class TestCplcacheHints:
                 "agentic_hint", 234, type_desc="str(200 chars)", item_count=200
             ),
         }
-        hint = _build_cplcache_hint("abc123", 2000, "checkpoint", "s1", sections)
+        hint = _build_cplcache_hint("abc123", 2000, "checkpoint", sections)
         assert "1,234 bytes" in hint
         assert "234 bytes" in hint
 
     def test_no_sections_fallback(self) -> None:
         """Without sections, generic slice command shown."""
-        hint = _build_cplcache_hint("abc123", 5000, "unknown", "s1")
-        assert "cplcache slice --cache abc123" in hint
+        hint = _build_cplcache_hint("abc123", 5000, "unknown")
+        assert "python3 .codeplane/scripts/cplcache.py --cache-id abc123" in hint
 
     def test_mixed_ready_and_oversized(self) -> None:
         """Hint separates ready and oversized sections."""
@@ -238,13 +236,13 @@ class TestCplcacheHints:
             "lint": self._section("lint", 500),
             "coverage": self._section("coverage", 200_000, ready=False),
         }
-        hint = _build_cplcache_hint("abc123", 201_000, "checkpoint", "s1", sections)
+        hint = _build_cplcache_hint("abc123", 201_000, "checkpoint", sections)
         assert "Ready sections" in hint
         assert "instant retrieval" in hint
         assert "Oversized sections" in hint
-        assert "--path passed" in hint
-        assert "--path lint" in hint
-        assert "--path coverage" in hint
+        assert "--slice passed" in hint
+        assert "--slice lint" in hint
+        assert "--slice coverage" in hint
 
     # --- Priority ordering ---
 
@@ -258,10 +256,10 @@ class TestCplcacheHints:
             "lint": self._section("lint", 400),
             "summary": self._section("summary", 100),
         }
-        hint = _build_cplcache_hint("abc123", 50000, "checkpoint", "s1", sections)
+        hint = _build_cplcache_hint("abc123", 50000, "checkpoint", sections)
         lines = hint.split("\n")
-        section_lines = [ln for ln in lines if "--path" in ln]
-        keys = [ln.strip().split("--path ")[-1] for ln in section_lines]
+        section_lines = [ln for ln in lines if "--slice" in ln]
+        keys = [ln.strip().split("--slice ")[-1] for ln in section_lines]
         assert keys == ["passed", "summary", "agentic_hint", "lint", "tests", "commit"]
 
     def test_recon_priority_ordering(self) -> None:
@@ -272,10 +270,10 @@ class TestCplcacheHints:
             "repo_map": self._section("repo_map", 20000),
             "agentic_hint": self._section("agentic_hint", 100),
         }
-        hint = _build_cplcache_hint("abc123", 60000, "recon_result", "s1", sections)
+        hint = _build_cplcache_hint("abc123", 60000, "recon_result", sections)
         lines = hint.split("\n")
-        section_lines = [ln for ln in lines if "--path" in ln and "slice" in ln]
-        keys = [ln.strip().split("--path ")[-1].split()[0] for ln in section_lines]
+        section_lines = [ln for ln in lines if "--slice" in ln and "cplcache" in ln]
+        keys = [ln.strip().split("--slice ")[-1].split()[0] for ln in section_lines]
         # agentic_hint first, then scaffold_files, lite_files, repo_map from priority
         assert keys == ["agentic_hint", "scaffold_files", "lite_files", "repo_map"]
 
@@ -285,10 +283,10 @@ class TestCplcacheHints:
             "z_key": self._section("z_key", 100),
             "a_key": self._section("a_key", 200),
         }
-        hint = _build_cplcache_hint("abc123", 5000, "unknown_kind", "s1", sections)
+        hint = _build_cplcache_hint("abc123", 5000, "unknown_kind", sections)
         lines = hint.split("\n")
-        section_lines = [ln for ln in lines if "--path" in ln and "slice" in ln]
-        keys = [ln.strip().split("--path ")[-1].split()[0] for ln in section_lines]
+        section_lines = [ln for ln in lines if "--slice" in ln and "cplcache" in ln]
+        keys = [ln.strip().split("--slice ")[-1].split()[0] for ln in section_lines]
         assert keys == ["z_key", "a_key"]
 
 
