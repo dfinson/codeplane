@@ -39,6 +39,153 @@ def set_server_port(port: int) -> None:
 
 
 # =============================================================================
+# Slice Strategies — resource-kind-specific consumption guidance
+# =============================================================================
+
+
+@dataclass
+class SliceStrategy:
+    """Resource-kind-specific guidance for consuming cached sections.
+
+    Combines with pre-computed CacheSection metadata to produce
+    context-aware hints showing byte sizes, priority order,
+    and section descriptions.
+    """
+
+    flow: str  # one-line consumption guidance
+    priority: tuple[str, ...] = ()  # sections to surface first, in order
+    descriptions: dict[str, str] = field(default_factory=dict)  # key → contextual label
+
+
+_SLICE_STRATEGIES: dict[str, SliceStrategy] = {
+    "recon_result": SliceStrategy(
+        flow="Read full_file for edit targets, min_scaffold for context, summary_only for orientation.",
+        priority=("full_file", "min_scaffold", "summary_only"),
+        descriptions={
+            "full_file": "edit-target files with complete source",
+            "min_scaffold": "imports + signatures for context files",
+            "summary_only": "path + description for peripheral files",
+            "agentic_hint": "next-step instructions from the server",
+        },
+    ),
+    "source": SliceStrategy(
+        flow="Slice files.N for individual file contents.",
+        priority=("files", "summary", "page_info"),
+        descriptions={
+            "files": "file contents — slice files.N for each file",
+            "summary": "result summary",
+            "page_info": "pagination state",
+            "cursor": "continuation cursor for next page",
+        },
+    ),
+    "checkpoint": SliceStrategy(
+        flow="Check passed + summary first; drill into lint/tests only on failure.",
+        priority=("passed", "summary", "lint", "tests", "commit"),
+        descriptions={
+            "passed": "overall pass/fail boolean",
+            "summary": "one-line result summary",
+            "lint": "linter diagnostics",
+            "tests": "test runner output and failures",
+            "commit": "commit/push status and diff summary",
+            "coverage_hint": "coverage extraction commands",
+            "agentic_hint": "next-step instructions",
+        },
+    ),
+    "semantic_diff": SliceStrategy(
+        flow="Read summary for overview, then structural_changes for per-symbol details.",
+        priority=("summary", "structural_changes", "changes"),
+        descriptions={
+            "summary": "high-level change overview",
+            "structural_changes": "per-symbol structural diffs",
+            "changes": "per-symbol structural diffs",
+        },
+    ),
+    "repo_map": SliceStrategy(
+        flow="Independent topic sections — browse what you need.",
+        priority=("summary",),
+        descriptions={
+            "summary": "repository overview",
+        },
+    ),
+    "search_hits": SliceStrategy(
+        flow="Slice results.N to inspect individual search matches.",
+        priority=("results", "total"),
+        descriptions={
+            "results": "match list — slice results.N for each hit",
+            "total": "total match count",
+        },
+    ),
+    "diff": SliceStrategy(
+        flow="Raw diff text — may require --max-bytes pagination for large diffs.",
+        priority=("diff",),
+        descriptions={
+            "diff": "unified diff output",
+        },
+    ),
+    "log": SliceStrategy(
+        flow="Slice results.N for individual commit details.",
+        priority=("results",),
+        descriptions={
+            "results": "commit entries — slice results.N for each",
+        },
+    ),
+    "blame": SliceStrategy(
+        flow="Slice results.N for individual blame hunks.",
+        priority=("results", "path"),
+        descriptions={
+            "results": "blame hunks — slice results.N for each",
+            "path": "blamed file path",
+        },
+    ),
+    "refactor_preview": SliceStrategy(
+        flow="Review matches.N to inspect individual refactoring sites.",
+        priority=("matches", "refactor_id"),
+        descriptions={
+            "matches": "refactor sites — slice matches.N for each",
+            "refactor_id": "ID for apply/cancel",
+        },
+    ),
+    "test_output": SliceStrategy(
+        flow="Check pass/fail counts, then output for details.",
+        priority=("passed", "failed", "output"),
+        descriptions={
+            "passed": "pass count",
+            "failed": "fail count",
+            "output": "raw test runner output",
+        },
+    ),
+    "scaffold": SliceStrategy(
+        flow="Structural skeleton — imports and signatures without source bodies.",
+        priority=("files", "summary"),
+        descriptions={
+            "files": "scaffold content per file",
+            "summary": "result summary",
+        },
+    ),
+}
+
+
+def _order_sections(
+    sections: dict[str, Any],
+    strategy: SliceStrategy | None,
+) -> list[tuple[str, Any]]:
+    """Order sections by strategy priority, then remaining keys alphabetically."""
+    if not strategy or not strategy.priority:
+        return list(sections.items())
+
+    ordered: list[tuple[str, Any]] = []
+    seen: set[str] = set()
+    for key in strategy.priority:
+        if key in sections:
+            ordered.append((key, sections[key]))
+            seen.add(key)
+    for key in sorted(sections.keys()):
+        if key not in seen:
+            ordered.append((key, sections[key]))
+    return ordered
+
+
+# =============================================================================
 # cpljson Hint Builder
 # =============================================================================
 
@@ -50,42 +197,48 @@ def _build_cpljson_hint(
     session_id: str,
     sections: dict[str, Any] | None = None,
 ) -> str:
-    """Build cpljson terminal hints with pre-computed section metadata.
+    """Build cpljson terminal hints with resource-kind-specific slicing strategy.
 
-    Shows which sections are available, their byte sizes, and whether
-    they are ready for instant retrieval (≤ 50 KB) or need paginated access.
+    Combines pre-computed section metadata (byte sizes, ready flags) with
+    per-resource-kind consumption guidance (priority ordering, descriptions).
     """
     from codeplane.mcp.sidecar_cache import CacheSection
+
+    strategy = _SLICE_STRATEGIES.get(resource_kind)
 
     parts: list[str] = [
         f"Response too large for inline delivery ({byte_size:,} bytes).",
         f"Cached as {cache_id} (kind: {resource_kind}).",
-        "",
     ]
+    if strategy:
+        parts.append(f"Strategy: {strategy.flow}")
+    parts.append("")
 
     if sections:
-        ready_secs = [
-            (k, s) for k, s in sections.items() if isinstance(s, CacheSection) and s.ready
-        ]
-        oversized_secs = [
-            (k, s) for k, s in sections.items() if isinstance(s, CacheSection) and not s.ready
-        ]
+        ordered = _order_sections(sections, strategy)
 
-        if ready_secs:
-            parts.append("Sections (ready, instant retrieval):")
-            for key, sec in ready_secs:
+        ready = [(k, s) for k, s in ordered if isinstance(s, CacheSection) and s.ready]
+        oversized = [(k, s) for k, s in ordered if isinstance(s, CacheSection) and not s.ready]
+
+        if ready:
+            parts.append("Ready sections (instant retrieval):")
+            for key, sec in ready:
+                desc = strategy.descriptions.get(key, "") if strategy else ""
+                desc_part = f" — {desc}" if desc else ""
                 parts.append(
-                    f"  {key:<24} {sec.byte_size:>8,} bytes  "
+                    f"  {key:<24} {sec.byte_size:>8,} bytes{desc_part}  "
                     f"cpljson slice --cache {cache_id} --path {key}"
                 )
 
-        if oversized_secs:
-            if ready_secs:
+        if oversized:
+            if ready:
                 parts.append("")
             parts.append("Oversized sections (paginated retrieval):")
-            for key, sec in oversized_secs:
+            for key, sec in oversized:
+                desc = strategy.descriptions.get(key, "") if strategy else ""
+                desc_part = f" — {desc}" if desc else ""
                 parts.append(
-                    f"  {key:<24} {sec.byte_size:>8,} bytes  "
+                    f"  {key:<24} {sec.byte_size:>8,} bytes{desc_part}  "
                     f"cpljson slice --cache {cache_id} --path {key} --max-bytes 50000"
                 )
     else:

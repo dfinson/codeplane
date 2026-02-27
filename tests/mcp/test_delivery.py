@@ -12,10 +12,13 @@ from __future__ import annotations
 from typing import Any
 
 from codeplane.mcp.delivery import (
+    _SLICE_STRATEGIES,
     ScopeBudget,
     ScopeManager,
+    SliceStrategy,
     _build_cpljson_hint,
     _build_inline_summary,
+    _order_sections,
     resolve_profile,
     wrap_response,
 )
@@ -122,7 +125,7 @@ class TestWrapResponse:
 
 
 class TestCpljsonHints:
-    """Tests for section-based cpljson hint builder."""
+    """Tests for strategy-driven cpljson hint builder."""
 
     def _section(
         self,
@@ -139,6 +142,8 @@ class TestCpljsonHints:
             item_count=item_count,
             ready=ready,
         )
+
+    # --- Basic envelope content ---
 
     def test_hint_has_cache_id(self) -> None:
         hint = _build_cpljson_hint("abc123", 50000, "recon_result", "sess1")
@@ -158,31 +163,55 @@ class TestCpljsonHints:
         hint = _build_cpljson_hint("abc123", 50000, "recon_result", "sess1")
         assert "cpljson meta --cache abc123" in hint
 
-    def test_ready_sections_shown(self) -> None:
-        """Sections ≤ 50KB show as ready with byte sizes."""
+    # --- Strategy flow ---
+
+    def test_known_kind_shows_strategy_flow(self) -> None:
+        """Known resource_kind includes strategy flow text."""
+        hint = _build_cpljson_hint("abc123", 50000, "checkpoint", "s1")
+        assert "Strategy:" in hint
+        assert "passed" in hint.lower()
+
+    def test_unknown_kind_no_strategy(self) -> None:
+        """Unknown resource_kind has no Strategy line."""
+        hint = _build_cpljson_hint("abc123", 50000, "unknown_kind", "s1")
+        assert "Strategy:" not in hint
+
+    def test_recon_strategy_flow(self) -> None:
+        hint = _build_cpljson_hint("abc123", 50000, "recon_result", "s1")
+        assert "full_file" in hint
+        assert "min_scaffold" in hint
+
+    # --- Section descriptions ---
+
+    def test_ready_sections_with_descriptions(self) -> None:
+        """Ready sections include strategy descriptions."""
         sections = {
             "lint": self._section("lint", 1234),
             "tests": self._section("tests", 45000, type_desc="dict(5 keys)", item_count=5),
             "commit": self._section("commit", 890),
         }
         hint = _build_cpljson_hint("abc123", 50000, "checkpoint", "s1", sections)
-        assert "ready, instant retrieval" in hint
+        assert "Ready sections" in hint
+        assert "instant retrieval" in hint
         assert "cpljson slice --cache abc123 --path lint" in hint
-        assert "cpljson slice --cache abc123 --path tests" in hint
         assert "cpljson slice --cache abc123 --path commit" in hint
         assert "1,234 bytes" in hint
         assert "45,000 bytes" in hint
+        # Descriptions from strategy
+        assert "linter diagnostics" in hint
+        assert "commit/push status" in hint
 
-    def test_oversized_sections_shown(self) -> None:
-        """Sections > 50KB show with --max-bytes hint."""
+    def test_oversized_sections_with_descriptions(self) -> None:
+        """Oversized sections include descriptions + --max-bytes."""
         sections = {
-            "small": self._section("small", 1000),
-            "big": self._section("big", 120_000, ready=False),
+            "files": self._section("files", 120_000, ready=False),
+            "summary": self._section("summary", 200),
         }
         hint = _build_cpljson_hint("abc123", 121_000, "source", "s1", sections)
         assert "Oversized sections" in hint
-        assert "cpljson slice --cache abc123 --path big --max-bytes 50000" in hint
+        assert "cpljson slice --cache abc123 --path files --max-bytes 50000" in hint
         assert "120,000 bytes" in hint
+        assert "file contents" in hint  # description from source strategy
 
     def test_section_byte_sizes_in_hint(self) -> None:
         """Each section shows its byte size."""
@@ -209,11 +238,135 @@ class TestCpljsonHints:
             "coverage": self._section("coverage", 200_000, ready=False),
         }
         hint = _build_cpljson_hint("abc123", 201_000, "checkpoint", "s1", sections)
-        assert "ready, instant retrieval" in hint
+        assert "Ready sections" in hint
+        assert "instant retrieval" in hint
         assert "Oversized sections" in hint
         assert "--path passed" in hint
         assert "--path lint" in hint
         assert "--path coverage --max-bytes 50000" in hint
+
+    # --- Priority ordering ---
+
+    def test_checkpoint_priority_ordering(self) -> None:
+        """Checkpoint sections ordered: passed, summary, lint, tests, commit."""
+        sections = {
+            "commit": self._section("commit", 500),
+            "tests": self._section("tests", 800),
+            "passed": self._section("passed", 6, type_desc="bool", item_count=None),
+            "lint": self._section("lint", 400),
+            "summary": self._section("summary", 100),
+        }
+        hint = _build_cpljson_hint("abc123", 50000, "checkpoint", "s1", sections)
+        lines = hint.split("\n")
+        section_lines = [ln for ln in lines if "--path" in ln]
+        keys = [ln.strip().split("--path ")[-1] for ln in section_lines]
+        assert keys == ["passed", "summary", "lint", "tests", "commit"]
+
+    def test_recon_priority_ordering(self) -> None:
+        """Recon sections ordered: full_file, min_scaffold, summary_only."""
+        sections = {
+            "summary_only": self._section("summary_only", 300),
+            "full_file": self._section("full_file", 40000),
+            "min_scaffold": self._section("min_scaffold", 20000),
+            "agentic_hint": self._section("agentic_hint", 100),
+        }
+        hint = _build_cpljson_hint("abc123", 60000, "recon_result", "s1", sections)
+        lines = hint.split("\n")
+        section_lines = [ln for ln in lines if "--path" in ln and "slice" in ln]
+        keys = [ln.strip().split("--path ")[-1].split()[0] for ln in section_lines]
+        # full_file, min_scaffold, summary_only from priority, then agentic_hint
+        assert keys == ["full_file", "min_scaffold", "summary_only", "agentic_hint"]
+
+    def test_unknown_kind_sections_no_reorder(self) -> None:
+        """Unknown resource kind preserves insertion order (no strategy)."""
+        sections = {
+            "z_key": self._section("z_key", 100),
+            "a_key": self._section("a_key", 200),
+        }
+        hint = _build_cpljson_hint("abc123", 5000, "unknown_kind", "s1", sections)
+        lines = hint.split("\n")
+        section_lines = [ln for ln in lines if "--path" in ln and "slice" in ln]
+        keys = [ln.strip().split("--path ")[-1].split()[0] for ln in section_lines]
+        assert keys == ["z_key", "a_key"]
+
+
+class TestOrderSections:
+    """Tests for _order_sections helper."""
+
+    def _section(self, key: str, byte_size: int = 100) -> CacheSection:
+        return CacheSection(
+            key=key, byte_size=byte_size, type_desc="dict(1 keys)", item_count=1, ready=True
+        )
+
+    def test_no_strategy_preserves_order(self) -> None:
+        sections = {"b": self._section("b"), "a": self._section("a")}
+        result = _order_sections(sections, None)
+        assert [k for k, _ in result] == ["b", "a"]
+
+    def test_strategy_priority_first(self) -> None:
+        sections = {
+            "c": self._section("c"),
+            "a": self._section("a"),
+            "b": self._section("b"),
+        }
+        strategy = SliceStrategy(flow="test", priority=("b", "a"))
+        result = _order_sections(sections, strategy)
+        assert [k for k, _ in result] == ["b", "a", "c"]
+
+    def test_missing_priority_keys_skipped(self) -> None:
+        sections = {"x": self._section("x"), "y": self._section("y")}
+        strategy = SliceStrategy(flow="test", priority=("missing", "x"))
+        result = _order_sections(sections, strategy)
+        assert [k for k, _ in result] == ["x", "y"]
+
+    def test_remaining_sorted_alphabetically(self) -> None:
+        sections = {
+            "z": self._section("z"),
+            "m": self._section("m"),
+            "a": self._section("a"),
+        }
+        strategy = SliceStrategy(flow="test", priority=("m",))
+        result = _order_sections(sections, strategy)
+        assert [k for k, _ in result] == ["m", "a", "z"]
+
+    def test_empty_priority_preserves_order(self) -> None:
+        sections = {"b": self._section("b"), "a": self._section("a")}
+        strategy = SliceStrategy(flow="test", priority=())
+        result = _order_sections(sections, strategy)
+        assert [k for k, _ in result] == ["b", "a"]
+
+
+class TestSliceStrategies:
+    """Tests for the _SLICE_STRATEGIES registry."""
+
+    def test_all_major_kinds_covered(self) -> None:
+        expected = {
+            "recon_result",
+            "source",
+            "checkpoint",
+            "semantic_diff",
+            "repo_map",
+            "search_hits",
+            "diff",
+            "log",
+            "blame",
+            "refactor_preview",
+            "test_output",
+            "scaffold",
+        }
+        assert expected.issubset(set(_SLICE_STRATEGIES.keys()))
+
+    def test_every_strategy_has_flow(self) -> None:
+        for kind, strategy in _SLICE_STRATEGIES.items():
+            assert strategy.flow, f"{kind} has empty flow"
+
+    def test_every_strategy_has_priority(self) -> None:
+        for kind, strategy in _SLICE_STRATEGIES.items():
+            assert len(strategy.priority) > 0, f"{kind} has empty priority"
+
+    def test_checkpoint_priority_keys(self) -> None:
+        s = _SLICE_STRATEGIES["checkpoint"]
+        assert s.priority[:3] == ("passed", "summary", "lint")
 
 
 # =============================================================================
