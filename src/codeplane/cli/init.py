@@ -189,8 +189,10 @@ def _inject_cplcache_binary(codeplane_dir: Path) -> None:
     """Copy the pre-built cplcache binary into .codeplane/bin/.
 
     The binary is compiled at wheel build / editable install time by the
-    hatch build hook (hatch_build.py).  This function just copies the
-    pre-built artifact into the per-repo .codeplane/bin/ directory.
+    hatch build hook (hatch_build.py) for all reachable platforms.  This
+    function detects the current host OS/arch, picks the matching
+    ``cplcache-{os}-{arch}[.exe]`` binary, and copies it into the per-repo
+    ``.codeplane/bin/`` directory as ``cplcache`` (or ``cplcache.exe``).
     """
     import platform
     import shutil
@@ -198,26 +200,42 @@ def _inject_cplcache_binary(codeplane_dir: Path) -> None:
     bin_dir = codeplane_dir / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
 
-    is_windows = platform.system() == "Windows"
-    binary_name = "cplcache.exe" if is_windows else "cplcache"
+    os_map = {"Linux": "linux", "Darwin": "darwin", "Windows": "windows"}
+    arch_map = {"x86_64": "x86_64", "AMD64": "x86_64", "aarch64": "aarch64", "arm64": "arm64"}
 
-    # Pre-built binary lives next to cplcache.c in the installed package
+    host_os = os_map.get(platform.system())
+    host_arch = arch_map.get(platform.machine())
+    if not host_os or not host_arch:
+        log.warning(
+            "cplcache_unsupported_platform",
+            system=platform.system(),
+            machine=platform.machine(),
+        )
+        return
+
+    is_windows = host_os == "windows"
+    ext = ".exe" if is_windows else ""
+    src_name = f"cplcache-{host_os}-{host_arch}{ext}"
+    dest_name = f"cplcache{ext}"
+
+    # Pre-built binaries live next to cplcache.c in the installed package
     pkg_bin_dir = Path(__file__).resolve().parent.parent / "bin"
-    src_binary = pkg_bin_dir / binary_name
+    src_binary = pkg_bin_dir / src_name
 
     if not src_binary.exists():
         log.warning(
             "cplcache_binary_not_found",
-            path=str(src_binary),
+            expected=src_name,
+            path=str(pkg_bin_dir),
             detail="Binary was not compiled at install time — is a C compiler available?",
         )
         return
 
-    dest = bin_dir / binary_name
+    dest = bin_dir / dest_name
     shutil.copy2(src_binary, dest)
     dest.chmod(0o755)
 
-    log.info("cplcache_installed", path=str(dest))
+    log.info("cplcache_installed", path=str(dest), source=src_name)
     status(f"Installed cplcache binary → {bin_dir}", style="info")
 
 
