@@ -7,7 +7,7 @@ Provides:
 - ScopeBudget / ScopeManager: per-scope usage tracking
 
 Oversized payloads are stored in the in-memory sidecar cache
-(see sidecar_cache.py) and the agent is given cpljson commands
+(see sidecar_cache.py) and the agent is given cplcache commands
 to retrieve slices from the running daemon.
 """
 
@@ -28,12 +28,12 @@ from codeplane.config.user_config import DEFAULT_PORT
 
 log = structlog.get_logger(__name__)
 
-# Server port for cpljson hints (set during startup, fallback to default)
+# Server port for cplcache hints (set during startup, fallback to default)
 _server_port: int = DEFAULT_PORT
 
 
 def set_server_port(port: int) -> None:
-    """Set the server port for cpljson fetch hints."""
+    """Set the server port for cplcache fetch hints."""
     global _server_port  # noqa: PLW0603
     _server_port = port
 
@@ -116,7 +116,7 @@ _SLICE_STRATEGIES: dict[str, SliceStrategy] = {
         },
     ),
     "diff": SliceStrategy(
-        flow="Raw diff text — may require --max-bytes pagination for large diffs.",
+        flow="Raw diff text — large diffs are chunked automatically by the server.",
         priority=("diff",),
         descriptions={
             "diff": "unified diff output",
@@ -186,21 +186,24 @@ def _order_sections(
 
 
 # =============================================================================
-# cpljson Hint Builder
+# cplcache Hint Builder
 # =============================================================================
 
 
-def _build_cpljson_hint(
+def _build_cplcache_hint(
     cache_id: str,
     byte_size: int,
     resource_kind: str,
     session_id: str,
     sections: dict[str, Any] | None = None,
 ) -> str:
-    """Build cpljson terminal hints with resource-kind-specific slicing strategy.
+    """Build cplcache terminal hints with resource-kind-specific slicing strategy.
 
     Combines pre-computed section metadata (byte sizes, ready flags) with
     per-resource-kind consumption guidance (priority ordering, descriptions).
+
+    All hint commands use pre-computed server-side chunking — the client
+    never needs to specify --max-bytes.
     """
     from codeplane.mcp.sidecar_cache import CacheSection
 
@@ -227,28 +230,28 @@ def _build_cpljson_hint(
                 desc_part = f" — {desc}" if desc else ""
                 parts.append(
                     f"  {key:<24} {sec.byte_size:>8,} bytes{desc_part}  "
-                    f"cpljson slice --cache {cache_id} --path {key}"
+                    f"cplcache slice --cache {cache_id} --path {key}"
                 )
 
         if oversized:
             if ready:
                 parts.append("")
-            parts.append("Oversized sections (paginated retrieval):")
+            parts.append("Oversized sections (chunked retrieval):")
             for key, sec in oversized:
                 desc = strategy.descriptions.get(key, "") if strategy else ""
                 desc_part = f" — {desc}" if desc else ""
                 parts.append(
                     f"  {key:<24} {sec.byte_size:>8,} bytes{desc_part}  "
-                    f"cpljson slice --cache {cache_id} --path {key} --max-bytes 50000"
+                    f"cplcache slice --cache {cache_id} --path {key}"
                 )
     else:
-        parts.append(f"  cpljson slice --cache {cache_id} --max-bytes 50000")
+        parts.append(f"  cplcache slice --cache {cache_id}")
 
     parts.extend(
         [
             "",
-            f"All entries: cpljson list --session {session_id} --endpoint {resource_kind}",
-            f"Full schema: cpljson meta --cache {cache_id}",
+            f"All entries: cplcache list --session {session_id} --endpoint {resource_kind}",
+            f"Full schema: cplcache meta --cache {cache_id}",
         ]
     )
 
@@ -345,7 +348,7 @@ def wrap_response(
 
     If the payload fits within inline_cap, it is returned inline.
     Otherwise it is stored in the sidecar cache and the response
-    contains a summary + cpljson fetch hints.
+    contains a summary + cplcache fetch hints.
     """
     from codeplane.mcp.sidecar_cache import cache_put, get_sidecar_cache
 
@@ -361,7 +364,7 @@ def wrap_response(
         result["inline_budget_bytes_used"] = payload_bytes
         result["inline_budget_bytes_limit"] = inline_cap
     else:
-        # Oversized — store in sidecar cache, return synopsis + cpljson hints
+        # Oversized — store in sidecar cache, return synopsis + cplcache hints
         cache_id = cache_put(session_id, resource_kind, result)
         entry = get_sidecar_cache().get_entry(cache_id)
         summary = _build_inline_summary(resource_kind, result)
@@ -377,7 +380,7 @@ def wrap_response(
             json.dumps(envelope, indent=2, default=str).encode("utf-8")
         )
         envelope["inline_budget_bytes_limit"] = inline_cap
-        envelope["agentic_hint"] = _build_cpljson_hint(
+        envelope["agentic_hint"] = _build_cplcache_hint(
             cache_id,
             payload_bytes,
             resource_kind,

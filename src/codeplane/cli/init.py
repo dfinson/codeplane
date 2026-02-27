@@ -185,8 +185,8 @@ Also check for: `coverage_hint`, `display_to_user`.
 """
 
 
-def _inject_cpljson_binary(codeplane_dir: Path) -> None:
-    """Compile and install the cpljson binary into .codeplane/bin/.
+def _inject_cplcache_binary(codeplane_dir: Path) -> None:
+    """Compile and install the cplcache binary into .codeplane/bin/.
 
     Uses the C compiler available on the system (cc/gcc on Unix, cl on Windows).
     Falls back to copying pre-built binary if compilation fails.
@@ -199,13 +199,13 @@ def _inject_cpljson_binary(codeplane_dir: Path) -> None:
     bin_dir.mkdir(parents=True, exist_ok=True)
 
     # Locate C source (shipped with the package)
-    source_path = Path(__file__).resolve().parent.parent / "bin" / "cpljson.c"
+    source_path = Path(__file__).resolve().parent.parent / "bin" / "cplcache.c"
     if not source_path.exists():
-        log.warning("cpljson_source_not_found", path=str(source_path))
+        log.warning("cplcache_source_not_found", path=str(source_path))
         return
 
     is_windows = platform.system() == "Windows"
-    binary_name = "cpljson.exe" if is_windows else "cpljson"
+    binary_name = "cplcache.exe" if is_windows else "cplcache"
     binary_path = bin_dir / binary_name
 
     # Try to compile
@@ -230,7 +230,7 @@ def _inject_cpljson_binary(codeplane_dir: Path) -> None:
                         timeout=30,
                     )
                 else:
-                    log.warning("cpljson_no_compiler", detail="No C compiler found on Windows")
+                    log.warning("cplcache_no_compiler", detail="No C compiler found on Windows")
                     return
         else:
             # Unix: try cc, then gcc
@@ -243,13 +243,13 @@ def _inject_cpljson_binary(codeplane_dir: Path) -> None:
                     timeout=30,
                 )
             else:
-                log.warning("cpljson_no_compiler", detail="No C compiler found")
+                log.warning("cplcache_no_compiler", detail="No C compiler found")
                 return
 
-        log.info("cpljson_compiled", path=str(binary_path))
-        status(f"Compiled cpljson binary → {bin_dir}", style="info")
+        log.info("cplcache_compiled", path=str(binary_path))
+        status(f"Compiled cplcache binary → {bin_dir}", style="info")
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
-        log.warning("cpljson_compile_failed", error=str(exc))
+        log.warning("cplcache_compile_failed", error=str(exc))
         # Non-fatal: agent can still use curl/httpie fallback
 
 
@@ -556,8 +556,8 @@ def initialize_repo(
         for f in modified_agent_files:
             status(f"Updated {f} with CodePlane instructions", style="info")
 
-    # === cpljson Binary Injection ===
-    _inject_cpljson_binary(codeplane_dir)
+    # === cplcache Binary Injection ===
+    _inject_cplcache_binary(codeplane_dir)
 
     # === Discovery Phase ===
     from codeplane.index._internal.grammars import (

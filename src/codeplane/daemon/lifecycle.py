@@ -178,7 +178,7 @@ async def run_server(
 
     _print_banner(config.server.host, config.server.port, repo_root)
 
-    # Set port for cpljson delivery hints
+    # Set port for cplcache delivery hints
     from codeplane.mcp.delivery import set_server_port
 
     set_server_port(config.server.port)

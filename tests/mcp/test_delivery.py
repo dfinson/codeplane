@@ -1,9 +1,9 @@
-"""Tests for MCP delivery envelope, client profiles, and cpljson hints.
+"""Tests for MCP delivery envelope, client profiles, and cplcache hints.
 
 Covers:
 - ClientProfile + resolve_profile: profile selection logic
 - wrap_response: inline vs sidecar-cache delivery
-- cpljson hint builder: per-kind terminal commands
+- cplcache hint builder: per-kind terminal commands
 - ScopeBudget / ScopeManager (preserved from prior tests)
 """
 
@@ -16,7 +16,7 @@ from codeplane.mcp.delivery import (
     ScopeBudget,
     ScopeManager,
     SliceStrategy,
-    _build_cpljson_hint,
+    _build_cplcache_hint,
     _build_inline_summary,
     _order_sections,
     resolve_profile,
@@ -87,7 +87,7 @@ class TestWrapResponse:
         assert result["resource_kind"] == "source"
         assert "cache_id" in result
         assert "agentic_hint" in result
-        assert "cpljson" in result["agentic_hint"]
+        assert "cplcache" in result["agentic_hint"]
         # Original payload should NOT be in the envelope
         assert "content" not in result
 
@@ -120,12 +120,12 @@ class TestWrapResponse:
 
 
 # =============================================================================
-# cpljson Hint Tests
+# cplcache Hint Tests
 # =============================================================================
 
 
 class TestCpljsonHints:
-    """Tests for strategy-driven cpljson hint builder."""
+    """Tests for strategy-driven cplcache hint builder."""
 
     def _section(
         self,
@@ -146,38 +146,38 @@ class TestCpljsonHints:
     # --- Basic envelope content ---
 
     def test_hint_has_cache_id(self) -> None:
-        hint = _build_cpljson_hint("abc123", 50000, "recon_result", "sess1")
+        hint = _build_cplcache_hint("abc123", 50000, "recon_result", "sess1")
         assert "abc123" in hint
 
     def test_hint_has_byte_size(self) -> None:
-        hint = _build_cpljson_hint("abc123", 50000, "recon_result", "sess1")
+        hint = _build_cplcache_hint("abc123", 50000, "recon_result", "sess1")
         assert "50,000" in hint
 
     def test_hint_has_list_command(self) -> None:
-        hint = _build_cpljson_hint("abc123", 50000, "recon_result", "sess1")
-        assert "cpljson list" in hint
+        hint = _build_cplcache_hint("abc123", 50000, "recon_result", "sess1")
+        assert "cplcache list" in hint
         assert "--session sess1" in hint
         assert "--endpoint recon_result" in hint
 
     def test_hint_has_meta_command(self) -> None:
-        hint = _build_cpljson_hint("abc123", 50000, "recon_result", "sess1")
-        assert "cpljson meta --cache abc123" in hint
+        hint = _build_cplcache_hint("abc123", 50000, "recon_result", "sess1")
+        assert "cplcache meta --cache abc123" in hint
 
     # --- Strategy flow ---
 
     def test_known_kind_shows_strategy_flow(self) -> None:
         """Known resource_kind includes strategy flow text."""
-        hint = _build_cpljson_hint("abc123", 50000, "checkpoint", "s1")
+        hint = _build_cplcache_hint("abc123", 50000, "checkpoint", "s1")
         assert "Strategy:" in hint
         assert "passed" in hint.lower()
 
     def test_unknown_kind_no_strategy(self) -> None:
         """Unknown resource_kind has no Strategy line."""
-        hint = _build_cpljson_hint("abc123", 50000, "unknown_kind", "s1")
+        hint = _build_cplcache_hint("abc123", 50000, "unknown_kind", "s1")
         assert "Strategy:" not in hint
 
     def test_recon_strategy_flow(self) -> None:
-        hint = _build_cpljson_hint("abc123", 50000, "recon_result", "s1")
+        hint = _build_cplcache_hint("abc123", 50000, "recon_result", "s1")
         assert "full_file" in hint
         assert "min_scaffold" in hint
 
@@ -190,11 +190,11 @@ class TestCpljsonHints:
             "tests": self._section("tests", 45000, type_desc="dict(5 keys)", item_count=5),
             "commit": self._section("commit", 890),
         }
-        hint = _build_cpljson_hint("abc123", 50000, "checkpoint", "s1", sections)
+        hint = _build_cplcache_hint("abc123", 50000, "checkpoint", "s1", sections)
         assert "Ready sections" in hint
         assert "instant retrieval" in hint
-        assert "cpljson slice --cache abc123 --path lint" in hint
-        assert "cpljson slice --cache abc123 --path commit" in hint
+        assert "cplcache slice --cache abc123 --path lint" in hint
+        assert "cplcache slice --cache abc123 --path commit" in hint
         assert "1,234 bytes" in hint
         assert "45,000 bytes" in hint
         # Descriptions from strategy
@@ -202,14 +202,14 @@ class TestCpljsonHints:
         assert "commit/push status" in hint
 
     def test_oversized_sections_with_descriptions(self) -> None:
-        """Oversized sections include descriptions + --max-bytes."""
+        """Oversized sections include descriptions."""
         sections = {
             "files": self._section("files", 120_000, ready=False),
             "summary": self._section("summary", 200),
         }
-        hint = _build_cpljson_hint("abc123", 121_000, "source", "s1", sections)
+        hint = _build_cplcache_hint("abc123", 121_000, "source", "s1", sections)
         assert "Oversized sections" in hint
-        assert "cpljson slice --cache abc123 --path files --max-bytes 50000" in hint
+        assert "cplcache slice --cache abc123 --path files" in hint
         assert "120,000 bytes" in hint
         assert "file contents" in hint  # description from source strategy
 
@@ -221,14 +221,14 @@ class TestCpljsonHints:
                 "agentic_hint", 234, type_desc="str(200 chars)", item_count=200
             ),
         }
-        hint = _build_cpljson_hint("abc123", 2000, "checkpoint", "s1", sections)
+        hint = _build_cplcache_hint("abc123", 2000, "checkpoint", "s1", sections)
         assert "1,234 bytes" in hint
         assert "234 bytes" in hint
 
     def test_no_sections_fallback(self) -> None:
         """Without sections, generic slice command shown."""
-        hint = _build_cpljson_hint("abc123", 5000, "unknown", "s1")
-        assert "cpljson slice --cache abc123 --max-bytes 50000" in hint
+        hint = _build_cplcache_hint("abc123", 5000, "unknown", "s1")
+        assert "cplcache slice --cache abc123" in hint
 
     def test_mixed_ready_and_oversized(self) -> None:
         """Hint separates ready and oversized sections."""
@@ -237,13 +237,13 @@ class TestCpljsonHints:
             "lint": self._section("lint", 500),
             "coverage": self._section("coverage", 200_000, ready=False),
         }
-        hint = _build_cpljson_hint("abc123", 201_000, "checkpoint", "s1", sections)
+        hint = _build_cplcache_hint("abc123", 201_000, "checkpoint", "s1", sections)
         assert "Ready sections" in hint
         assert "instant retrieval" in hint
         assert "Oversized sections" in hint
         assert "--path passed" in hint
         assert "--path lint" in hint
-        assert "--path coverage --max-bytes 50000" in hint
+        assert "--path coverage" in hint
 
     # --- Priority ordering ---
 
@@ -256,7 +256,7 @@ class TestCpljsonHints:
             "lint": self._section("lint", 400),
             "summary": self._section("summary", 100),
         }
-        hint = _build_cpljson_hint("abc123", 50000, "checkpoint", "s1", sections)
+        hint = _build_cplcache_hint("abc123", 50000, "checkpoint", "s1", sections)
         lines = hint.split("\n")
         section_lines = [ln for ln in lines if "--path" in ln]
         keys = [ln.strip().split("--path ")[-1] for ln in section_lines]
@@ -270,7 +270,7 @@ class TestCpljsonHints:
             "min_scaffold": self._section("min_scaffold", 20000),
             "agentic_hint": self._section("agentic_hint", 100),
         }
-        hint = _build_cpljson_hint("abc123", 60000, "recon_result", "s1", sections)
+        hint = _build_cplcache_hint("abc123", 60000, "recon_result", "s1", sections)
         lines = hint.split("\n")
         section_lines = [ln for ln in lines if "--path" in ln and "slice" in ln]
         keys = [ln.strip().split("--path ")[-1].split()[0] for ln in section_lines]
@@ -283,7 +283,7 @@ class TestCpljsonHints:
             "z_key": self._section("z_key", 100),
             "a_key": self._section("a_key", 200),
         }
-        hint = _build_cpljson_hint("abc123", 5000, "unknown_kind", "s1", sections)
+        hint = _build_cplcache_hint("abc123", 5000, "unknown_kind", "s1", sections)
         lines = hint.split("\n")
         section_lines = [ln for ln in lines if "--path" in ln and "slice" in ln]
         keys = [ln.strip().split("--path ")[-1].split()[0] for ln in section_lines]

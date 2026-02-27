@@ -301,17 +301,17 @@ def _build_coverage_text(
     hint_parts = [
         f"Detailed coverage ({byte_size:,} bytes, {n_files} files) cached as {cache_id}",
         "Retrieve via terminal:",
-        f"  cpljson meta --cache {cache_id}",
-        f"  cpljson slice --cache {cache_id} --path summary",
-        f"  cpljson slice --cache {cache_id} --path files --max-bytes 58000",
+        f"  cplcache meta --cache {cache_id}",
+        f"  cplcache slice --cache {cache_id} --path summary",
+        f"  cplcache slice --cache {cache_id} --path files",
     ]
     if files_with_gaps > 5:
         hint_parts.append(
-            f"  cpljson slice --cache {cache_id} --path files --max-bytes 58000"
+            f"  cplcache slice --cache {cache_id} --path files"
             "  # filter for files with low coverage"
         )
     hint_parts.append(
-        f"  cpljson slice --cache {cache_id} --path files.0"
+        f"  cplcache slice --cache {cache_id} --path files.0"
         "  # replace 0 with the file index you need"
     )
 
