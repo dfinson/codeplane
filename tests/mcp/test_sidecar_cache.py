@@ -15,6 +15,8 @@ from codeplane.mcp.sidecar_cache import (
     _SECTION_CAP_BYTES,
     CacheSection,
     SidecarCache,
+    _chunk_list,
+    _chunk_string,
     _describe_value,
     cache_list,
     cache_meta,
@@ -127,7 +129,7 @@ class TestSidecarCacheSlice:
         cid = cache.put("s1", "ep", {"a": 1, "b": 2})
         result = cache.slice_payload(cid)
         assert result is not None
-        assert result["truncated"] is False
+        assert result["has_more"] is False
         assert result["value"] == {"a": 1, "b": 2}
 
     def test_slice_by_path(self) -> None:
@@ -188,15 +190,32 @@ class TestSidecarCacheSlice:
         assert result3 is not None
         assert result3["offset"] == 100
 
-    def test_slice_truncated_list(self) -> None:
+    def test_slice_list_pagination(self) -> None:
         cache = SidecarCache()
         big_list = [{"data": "x" * 500} for _ in range(100)]
         cid = cache.put("s1", "ep", {"items": big_list})
         result = cache.slice_payload(cid, path="items", max_bytes=2000)
         assert result is not None
-        assert result["truncated"] is True
+        assert result["has_more"] is True
         assert result["returned"] < 100
         assert result["total"] == 100
+        assert result["offset"] == 0
+        assert result["next_offset"] is not None
+
+        # Get next page using next_offset
+        result2 = cache.slice_payload(
+            cid, path="items", max_bytes=2000, offset=result["next_offset"]
+        )
+        assert result2 is not None
+        assert result2["offset"] == result["next_offset"]
+        assert result2["returned"] > 0
+        # Eventually exhaust the list
+        all_returned = result["returned"] + result2["returned"]
+        if all_returned < 100:
+            assert result2["has_more"] is True
+        else:
+            assert result2["has_more"] is False
+            assert result2["next_offset"] is None
 
 
 class TestSidecarCacheMeta:
@@ -395,7 +414,7 @@ class TestSections:
         assert result is not None
         assert result["ready"] is True
         assert result["value"] == {"status": "clean"}
-        assert result["truncated"] is False
+        assert result["has_more"] is False
         assert "byte_size" in result
 
     def test_fast_path_not_used_for_nested(self) -> None:
@@ -445,3 +464,170 @@ class TestDescribeValue:
         d = _describe_value(42)
         assert d["type"] == "int"
         assert d["value"] == 42
+
+
+class TestChunkList:
+    """Tests for _chunk_list helper."""
+
+    def test_single_chunk_when_small(self) -> None:
+        items = [{"a": i} for i in range(5)]
+        chunks = _chunk_list(items, 50_000)
+        assert len(chunks) == 1
+        assert len(chunks[0][0]) == 5  # all items in one chunk
+
+    def test_splits_oversized_list(self) -> None:
+        # Each item ~500 bytes when serialized, 200 items ~100KB
+        items = [{"data": "x" * 450, "idx": i} for i in range(200)]
+        chunks = _chunk_list(items, 50_000)
+        assert len(chunks) > 1
+        # All items accounted for
+        total_items = sum(len(c[0]) for c in chunks)
+        assert total_items == 200
+        # Each chunk ≤ cap
+        for _items, chunk_bytes in chunks:
+            assert chunk_bytes <= 55_000  # allow minor overhead tolerance
+
+    def test_preserves_item_order(self) -> None:
+        items = list(range(50))
+        chunks = _chunk_list(items, 200)
+        reconstructed = []
+        for items_chunk, _ in chunks:
+            reconstructed.extend(items_chunk)
+        assert reconstructed == items
+
+
+class TestChunkString:
+    """Tests for _chunk_string helper."""
+
+    def test_single_chunk_when_small(self) -> None:
+        chunks = _chunk_string("hello world", 50_000)
+        assert len(chunks) == 1
+        assert chunks[0][0] == "hello world"
+
+    def test_splits_on_newlines(self) -> None:
+        # Create a string with many lines, each ~100 chars
+        lines = [f"line-{i}: " + "x" * 90 for i in range(100)]
+        text = "\n".join(lines)
+        chunks = _chunk_string(text, 2_000)
+        assert len(chunks) > 1
+        # Reconstructed text should match (joining back with \n)
+        reconstructed = "\n".join(c[0] for c in chunks)
+        assert reconstructed == text
+
+    def test_each_chunk_within_cap(self) -> None:
+        lines = [f"line-{i}: " + "x" * 90 for i in range(100)]
+        text = "\n".join(lines)
+        chunks = _chunk_string(text, 2_000)
+        for _, chunk_bytes in chunks:
+            assert chunk_bytes <= 2_500  # allow minor JSON overhead tolerance
+
+
+class TestSubSlices:
+    """Tests for pre-chunked sub-slice creation and retrieval."""
+
+    def test_oversized_list_creates_sub_slices(self) -> None:
+        """Large list section is split into sub-slices at PUT time."""
+        cache = SidecarCache()
+        # Create a list oversized for the cap
+        big_list = [{"file": f"f{i}.py", "content": "x" * 400} for i in range(200)]
+        cid = cache.put("s1", "ep", {"scaffold_files": big_list})
+        entry = cache.get_entry(cid)
+        assert entry is not None
+
+        # Parent section is not ready, has chunk_total
+        parent = entry.sections["scaffold_files"]
+        assert parent.ready is False
+        assert parent.chunk_total is not None
+        assert parent.chunk_total > 1
+
+        # Sub-slices exist
+        for idx in range(parent.chunk_total):
+            sub_key = f"scaffold_files.{idx}"
+            assert sub_key in entry.sections
+            sub = entry.sections[sub_key]
+            assert sub.ready is True
+            assert sub.parent_key == "scaffold_files"
+            assert sub.chunk_index == idx
+            assert sub.chunk_total == parent.chunk_total
+            assert sub.chunk_items is not None
+            assert sub.chunk_items > 0
+
+    def test_sub_slice_fast_path_retrieval(self) -> None:
+        """Sub-slices are served via the fast path in slice_payload."""
+        cache = SidecarCache()
+        big_list = [{"file": f"f{i}.py", "content": "x" * 400} for i in range(200)]
+        cid = cache.put("s1", "ep", {"scaffold_files": big_list})
+        entry = cache.get_entry(cid)
+        assert entry is not None
+
+        chunk_total = entry.sections["scaffold_files"].chunk_total
+        assert chunk_total is not None
+
+        # Retrieve each sub-slice
+        all_items: list[Any] = []
+        for idx in range(chunk_total):
+            result = cache.slice_payload(cid, path=f"scaffold_files.{idx}")
+            assert result is not None
+            assert result["ready"] is True
+            assert result["has_more"] is False
+            assert result["chunk_index"] == idx
+            assert result["chunk_total"] == chunk_total
+            assert result["parent_key"] == "scaffold_files"
+            all_items.extend(result["value"])
+
+        # All items recovered
+        assert len(all_items) == 200
+
+    def test_oversized_string_creates_sub_slices(self) -> None:
+        """Large string section is split into sub-slices at PUT time."""
+        cache = SidecarCache()
+        lines = [f"line {i}: " + "x" * 100 for i in range(1000)]
+        big_text = "\n".join(lines)
+        cid = cache.put("s1", "ep", {"log_output": big_text})
+        entry = cache.get_entry(cid)
+        assert entry is not None
+
+        parent = entry.sections["log_output"]
+        assert parent.ready is False
+        assert parent.chunk_total is not None
+        assert parent.chunk_total > 1
+
+        # Retrieve and reconstruct
+        parts: list[str] = []
+        for idx in range(parent.chunk_total):
+            result = cache.slice_payload(cid, path=f"log_output.{idx}")
+            assert result is not None
+            assert result["ready"] is True
+            parts.append(result["value"])
+
+        reconstructed = "\n".join(parts)
+        assert reconstructed == big_text
+
+    def test_small_section_no_sub_slices(self) -> None:
+        """Small sections don't get sub-sliced."""
+        cache = SidecarCache()
+        cid = cache.put("s1", "ep", {"small": [1, 2, 3]})
+        entry = cache.get_entry(cid)
+        assert entry is not None
+        assert entry.sections["small"].ready is True
+        assert entry.sections["small"].chunk_total is None
+        assert len(entry.sub_slices) == 0
+
+    def test_sub_slice_to_dict_metadata(self) -> None:
+        """Sub-slice CacheSection.to_dict() includes chunk metadata."""
+        sec = CacheSection(
+            key="scaffold_files.0",
+            byte_size=45_000,
+            type_desc="list(30 items)",
+            item_count=30,
+            ready=True,
+            parent_key="scaffold_files",
+            chunk_index=0,
+            chunk_total=3,
+            chunk_items=30,
+        )
+        d = sec.to_dict()
+        assert d["parent_key"] == "scaffold_files"
+        assert d["chunk_index"] == 0
+        assert d["chunk_total"] == 3
+        assert d["chunk_items"] == 30
