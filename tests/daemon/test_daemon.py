@@ -1001,10 +1001,13 @@ class TestDaemonRoutes:
 
         routes = create_routes(controller)
 
-        assert len(routes) == 2
+        assert len(routes) == 5
         paths = {r.path for r in routes}
         assert "/health" in paths
         assert "/status" in paths
+        assert "/sidecar/cache/list" in paths
+        assert "/sidecar/cache/slice" in paths
+        assert "/sidecar/cache/meta" in paths
 
     def test_given_routes_when_health_called_then_returns_status(self, tmp_path: Path) -> None:
         """Health endpoint returns daemon info."""
@@ -1089,8 +1092,8 @@ class TestDaemonApp:
         app = create_app(controller, tmp_path, coordinator)
 
         assert isinstance(app, Starlette)
-        # 2 routes (health, status) + MCP mount
-        assert len(app.routes) == 3
+        # 5 routes (health, status, 3 sidecar) + MCP mount
+        assert len(app.routes) == 6
 
     def test_given_app_when_startup_then_controller_started(self, tmp_path: Path) -> None:
         """App startup triggers MCP lifespan (controller start/stop handled separately)."""
