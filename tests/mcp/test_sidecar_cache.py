@@ -12,6 +12,8 @@ import json
 from typing import Any
 
 from codeplane.mcp.sidecar_cache import (
+    _SECTION_CAP_BYTES,
+    CacheSection,
     SidecarCache,
     _describe_value,
     cache_list,
@@ -166,18 +168,25 @@ class TestSidecarCacheSlice:
         cache = SidecarCache()
         long_str = "x" * 1000
         cid = cache.put("s1", "ep", {"text": long_str})
-        # Get first 100 chars
-        result = cache.slice_payload(cid, path="text", max_bytes=100)
+        # Top-level "text" key is a ready section, fast path returns it whole
+        result = cache.slice_payload(cid, path="text")
         assert result is not None
-        assert result["type"] == "string"
-        assert len(result["value"]) == 100
-        assert result["has_more"] is True
-        assert result["total_length"] == 1000
+        assert result["ready"] is True
+        assert result["value"] == long_str
+
+        # For paginated string slicing, go through a nested path
+        cid2 = cache.put("s1", "ep2", {"wrapper": {"text": long_str}})
+        result2 = cache.slice_payload(cid2, path="wrapper.text", max_bytes=100)
+        assert result2 is not None
+        assert result2["type"] == "string"
+        assert len(result2["value"]) == 100
+        assert result2["has_more"] is True
+        assert result2["total_length"] == 1000
 
         # Get next chunk
-        result2 = cache.slice_payload(cid, path="text", max_bytes=100, offset=100)
-        assert result2 is not None
-        assert result2["offset"] == 100
+        result3 = cache.slice_payload(cid2, path="wrapper.text", max_bytes=100, offset=100)
+        assert result3 is not None
+        assert result3["offset"] == 100
 
     def test_slice_truncated_list(self) -> None:
         cache = SidecarCache()
@@ -199,10 +208,9 @@ class TestSidecarCacheMeta:
         meta = cache.get_meta(cid)
         assert meta is not None
         assert meta["cache_id"] == cid
-        assert "schema" in meta
-        assert "files" in meta["schema"]
-        assert meta["schema"]["files"]["type"] == "list"
-        assert meta["schema"]["count"]["type"] == "int"
+        assert "sections" in meta
+        assert meta["sections"]["files"]["type"] == "list(2 items)"
+        assert meta["sections"]["count"]["type"] == "int"
 
     def test_meta_list_payload(self) -> None:
         cache = SidecarCache()
@@ -266,6 +274,148 @@ class TestSidecarCacheMaxKeys:
         # Adding a 4th key evicts the 1st
         cache.put("s4", "d", {"i": 4})
         assert cache.get_entry(c1) is None
+
+
+class TestSections:
+    """Tests for pre-computed section metadata."""
+
+    def test_sections_computed_on_put(self) -> None:
+        """put() pre-computes sections for dict payloads."""
+        cache = SidecarCache()
+        cid = cache.put("s1", "ep", {"lint": {"status": "clean"}, "tests": {"passed": 42}})
+        entry = cache.get_entry(cid)
+        assert entry is not None
+        assert "lint" in entry.sections
+        assert "tests" in entry.sections
+        assert isinstance(entry.sections["lint"], CacheSection)
+
+    def test_section_byte_size(self) -> None:
+        """Each section has correct byte_size."""
+        import json
+
+        cache = SidecarCache()
+        payload: dict[str, Any] = {"data": [1, 2, 3]}
+        cid = cache.put("s1", "ep", payload)
+        entry = cache.get_entry(cid)
+        assert entry is not None
+        sec = entry.sections["data"]
+        expected = len(json.dumps([1, 2, 3], indent=2, default=str).encode("utf-8"))
+        assert sec.byte_size == expected
+
+    def test_section_type_desc_dict(self) -> None:
+        cache = SidecarCache()
+        cid = cache.put("s1", "ep", {"nested": {"a": 1, "b": 2}})
+        entry = cache.get_entry(cid)
+        assert entry is not None
+        assert entry.sections["nested"].type_desc == "dict(2 keys)"
+        assert entry.sections["nested"].item_count == 2
+
+    def test_section_type_desc_list(self) -> None:
+        cache = SidecarCache()
+        cid = cache.put("s1", "ep", {"items": [1, 2, 3]})
+        entry = cache.get_entry(cid)
+        assert entry is not None
+        assert entry.sections["items"].type_desc == "list(3 items)"
+        assert entry.sections["items"].item_count == 3
+
+    def test_section_type_desc_string(self) -> None:
+        cache = SidecarCache()
+        cid = cache.put("s1", "ep", {"text": "hello world"})
+        entry = cache.get_entry(cid)
+        assert entry is not None
+        assert entry.sections["text"].type_desc == "str(11 chars)"
+
+    def test_section_type_desc_bool(self) -> None:
+        cache = SidecarCache()
+        cid = cache.put("s1", "ep", {"passed": True})
+        entry = cache.get_entry(cid)
+        assert entry is not None
+        assert entry.sections["passed"].type_desc == "bool"
+        assert entry.sections["passed"].item_count is None
+
+    def test_section_ready_under_cap(self) -> None:
+        """Sections ≤ 50KB are marked ready."""
+        cache = SidecarCache()
+        cid = cache.put("s1", "ep", {"small": {"key": "value"}})
+        entry = cache.get_entry(cid)
+        assert entry is not None
+        assert entry.sections["small"].ready is True
+
+    def test_section_not_ready_over_cap(self) -> None:
+        """Sections > 50KB are NOT marked ready."""
+        cache = SidecarCache()
+        big_value = "x" * (_SECTION_CAP_BYTES + 10_000)
+        cid = cache.put("s1", "ep", {"big": big_value})
+        entry = cache.get_entry(cid)
+        assert entry is not None
+        assert entry.sections["big"].ready is False
+
+    def test_sections_in_meta(self) -> None:
+        """meta() includes section metadata."""
+        cache = SidecarCache()
+        cid = cache.put("s1", "ep", {"a": 1, "b": [1, 2]})
+        entry = cache.get_entry(cid)
+        assert entry is not None
+        meta = entry.meta()
+        assert "sections" in meta
+        assert "a" in meta["sections"]
+        assert "b" in meta["sections"]
+        assert meta["sections"]["a"]["ready"] is True
+        assert "byte_size" in meta["sections"]["a"]
+
+    def test_section_to_dict(self) -> None:
+        """CacheSection.to_dict() returns serializable metadata."""
+        sec = CacheSection(
+            key="items",
+            byte_size=5000,
+            type_desc="list(10 items)",
+            item_count=10,
+            ready=True,
+        )
+        d = sec.to_dict()
+        assert d["key"] == "items"
+        assert d["byte_size"] == 5000
+        assert d["type"] == "list(10 items)"
+        assert d["ready"] is True
+        assert d["item_count"] == 10
+
+    def test_list_payload_no_sections(self) -> None:
+        """List payloads have empty sections dict."""
+        cache = SidecarCache()
+        cid = cache.put("s1", "ep", [{"a": 1}, {"a": 2}])
+        entry = cache.get_entry(cid)
+        assert entry is not None
+        assert entry.sections == {}
+
+    def test_fast_path_ready_section(self) -> None:
+        """slice_payload uses fast path for ready top-level sections."""
+        cache = SidecarCache()
+        cid = cache.put("s1", "ep", {"lint": {"status": "clean"}, "tests": {"passed": 42}})
+        result = cache.slice_payload(cid, path="lint")
+        assert result is not None
+        assert result["ready"] is True
+        assert result["value"] == {"status": "clean"}
+        assert result["truncated"] is False
+        assert "byte_size" in result
+
+    def test_fast_path_not_used_for_nested(self) -> None:
+        """Fast path only applies to single-segment top-level keys."""
+        cache = SidecarCache()
+        cid = cache.put("s1", "ep", {"nested": {"deep": {"key": "val"}}})
+        result = cache.slice_payload(cid, path="nested.deep")
+        assert result is not None
+        assert "ready" not in result  # dynamic path traversal, no ready flag
+        assert result["value"] == {"key": "val"}
+
+    def test_sections_in_get_meta(self) -> None:
+        """get_meta includes sections for dict payloads."""
+        cache = SidecarCache()
+        cid = cache.put("s1", "ep", {"a": 1, "b": "hello"})
+        meta = cache.get_meta(cid)
+        assert meta is not None
+        assert "sections" in meta
+        assert meta["sections"]["a"]["ready"] is True
+        assert meta["sections"]["b"]["type"] == "str(5 chars)"
 
 
 class TestDescribeValue:
