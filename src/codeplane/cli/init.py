@@ -186,71 +186,39 @@ Also check for: `coverage_hint`, `display_to_user`.
 
 
 def _inject_cplcache_binary(codeplane_dir: Path) -> None:
-    """Compile and install the cplcache binary into .codeplane/bin/.
+    """Copy the pre-built cplcache binary into .codeplane/bin/.
 
-    Uses the C compiler available on the system (cc/gcc on Unix, cl on Windows).
-    Falls back to copying pre-built binary if compilation fails.
+    The binary is compiled at wheel build / editable install time by the
+    hatch build hook (hatch_build.py).  This function just copies the
+    pre-built artifact into the per-repo .codeplane/bin/ directory.
     """
     import platform
     import shutil
-    import subprocess
 
     bin_dir = codeplane_dir / "bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
 
-    # Locate C source (shipped with the package)
-    source_path = Path(__file__).resolve().parent.parent / "bin" / "cplcache.c"
-    if not source_path.exists():
-        log.warning("cplcache_source_not_found", path=str(source_path))
-        return
-
     is_windows = platform.system() == "Windows"
     binary_name = "cplcache.exe" if is_windows else "cplcache"
-    binary_path = bin_dir / binary_name
 
-    # Try to compile
-    try:
-        if is_windows:
-            compiler = shutil.which("cl")
-            if compiler:
-                subprocess.run(
-                    [compiler, "/O2", str(source_path), f"/Fe:{binary_path}", "ws2_32.lib"],
-                    check=True,
-                    capture_output=True,
-                    timeout=30,
-                )
-            else:
-                # Try gcc on Windows (MinGW)
-                gcc = shutil.which("gcc")
-                if gcc:
-                    subprocess.run(
-                        [gcc, "-O2", "-o", str(binary_path), str(source_path), "-lws2_32"],
-                        check=True,
-                        capture_output=True,
-                        timeout=30,
-                    )
-                else:
-                    log.warning("cplcache_no_compiler", detail="No C compiler found on Windows")
-                    return
-        else:
-            # Unix: try cc, then gcc
-            compiler = shutil.which("cc") or shutil.which("gcc")
-            if compiler:
-                subprocess.run(
-                    [compiler, "-O2", "-o", str(binary_path), str(source_path)],
-                    check=True,
-                    capture_output=True,
-                    timeout=30,
-                )
-            else:
-                log.warning("cplcache_no_compiler", detail="No C compiler found")
-                return
+    # Pre-built binary lives next to cplcache.c in the installed package
+    pkg_bin_dir = Path(__file__).resolve().parent.parent / "bin"
+    src_binary = pkg_bin_dir / binary_name
 
-        log.info("cplcache_compiled", path=str(binary_path))
-        status(f"Compiled cplcache binary → {bin_dir}", style="info")
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
-        log.warning("cplcache_compile_failed", error=str(exc))
-        # Non-fatal: agent can still use curl/httpie fallback
+    if not src_binary.exists():
+        log.warning(
+            "cplcache_binary_not_found",
+            path=str(src_binary),
+            detail="Binary was not compiled at install time — is a C compiler available?",
+        )
+        return
+
+    dest = bin_dir / binary_name
+    shutil.copy2(src_binary, dest)
+    dest.chmod(0o755)
+
+    log.info("cplcache_installed", path=str(dest))
+    status(f"Installed cplcache binary → {bin_dir}", style="info")
 
 
 def _inject_agent_instructions(repo_root: Path, tool_prefix: str) -> list[str]:

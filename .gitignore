@@ -6,6 +6,10 @@ __pycache__/
 # C extensions
 *.so
 
+# Compiled cplcache binary (built by hatch build hook)
+src/codeplane/bin/cplcache
+src/codeplane/bin/cplcache.exe
+
 # Distribution / packaging
 .Python
 build/
