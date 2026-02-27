@@ -124,7 +124,7 @@ class TestWrapResponse:
 # =============================================================================
 
 
-class TestCpljsonHints:
+class TestCplcacheHints:
     """Tests for strategy-driven cplcache hint builder."""
 
     def _section(
@@ -178,8 +178,9 @@ class TestCpljsonHints:
 
     def test_recon_strategy_flow(self) -> None:
         hint = _build_cplcache_hint("abc123", 50000, "recon_result", "s1")
-        assert "full_file" in hint
-        assert "min_scaffold" in hint
+        assert "scaffold_files" in hint
+        assert "lite_files" in hint
+        assert "repo_map" in hint
 
     # --- Section descriptions ---
 
@@ -199,19 +200,19 @@ class TestCpljsonHints:
         assert "45,000 bytes" in hint
         # Descriptions from strategy
         assert "linter diagnostics" in hint
-        assert "commit/push status" in hint
+        assert "commit SHA" in hint
 
     def test_oversized_sections_with_descriptions(self) -> None:
         """Oversized sections include descriptions."""
         sections = {
-            "files": self._section("files", 120_000, ready=False),
+            "scaffold_files": self._section("scaffold_files", 120_000, ready=False),
             "summary": self._section("summary", 200),
         }
-        hint = _build_cplcache_hint("abc123", 121_000, "source", "s1", sections)
+        hint = _build_cplcache_hint("abc123", 121_000, "recon_result", "s1", sections)
         assert "Oversized sections" in hint
-        assert "cplcache slice --cache abc123 --path files" in hint
+        assert "cplcache slice --cache abc123 --path scaffold_files" in hint
         assert "120,000 bytes" in hint
-        assert "file contents" in hint  # description from source strategy
+        assert "imports + signatures" in hint  # description from recon_result strategy
 
     def test_section_byte_sizes_in_hint(self) -> None:
         """Each section shows its byte size."""
@@ -248,11 +249,12 @@ class TestCpljsonHints:
     # --- Priority ordering ---
 
     def test_checkpoint_priority_ordering(self) -> None:
-        """Checkpoint sections ordered: passed, summary, lint, tests, commit."""
+        """Checkpoint sections ordered: passed, summary, agentic_hint, lint, tests, commit."""
         sections = {
             "commit": self._section("commit", 500),
             "tests": self._section("tests", 800),
             "passed": self._section("passed", 6, type_desc="bool", item_count=None),
+            "agentic_hint": self._section("agentic_hint", 50),
             "lint": self._section("lint", 400),
             "summary": self._section("summary", 100),
         }
@@ -260,22 +262,22 @@ class TestCpljsonHints:
         lines = hint.split("\n")
         section_lines = [ln for ln in lines if "--path" in ln]
         keys = [ln.strip().split("--path ")[-1] for ln in section_lines]
-        assert keys == ["passed", "summary", "lint", "tests", "commit"]
+        assert keys == ["passed", "summary", "agentic_hint", "lint", "tests", "commit"]
 
     def test_recon_priority_ordering(self) -> None:
-        """Recon sections ordered: full_file, min_scaffold, summary_only."""
+        """Recon sections ordered: agentic_hint, scaffold_files, lite_files, repo_map."""
         sections = {
-            "summary_only": self._section("summary_only", 300),
-            "full_file": self._section("full_file", 40000),
-            "min_scaffold": self._section("min_scaffold", 20000),
+            "lite_files": self._section("lite_files", 300),
+            "scaffold_files": self._section("scaffold_files", 40000),
+            "repo_map": self._section("repo_map", 20000),
             "agentic_hint": self._section("agentic_hint", 100),
         }
         hint = _build_cplcache_hint("abc123", 60000, "recon_result", "s1", sections)
         lines = hint.split("\n")
         section_lines = [ln for ln in lines if "--path" in ln and "slice" in ln]
         keys = [ln.strip().split("--path ")[-1].split()[0] for ln in section_lines]
-        # full_file, min_scaffold, summary_only from priority, then agentic_hint
-        assert keys == ["full_file", "min_scaffold", "summary_only", "agentic_hint"]
+        # agentic_hint first, then scaffold_files, lite_files, repo_map from priority
+        assert keys == ["agentic_hint", "scaffold_files", "lite_files", "repo_map"]
 
     def test_unknown_kind_sections_no_reorder(self) -> None:
         """Unknown resource kind preserves insertion order (no strategy)."""
@@ -339,22 +341,15 @@ class TestOrderSections:
 class TestSliceStrategies:
     """Tests for the _SLICE_STRATEGIES registry."""
 
-    def test_all_major_kinds_covered(self) -> None:
+    def test_all_endpoint_kinds_covered(self) -> None:
         expected = {
             "recon_result",
-            "source",
+            "resolve_result",
             "checkpoint",
             "semantic_diff",
-            "repo_map",
-            "search_hits",
-            "diff",
-            "log",
-            "blame",
             "refactor_preview",
-            "test_output",
-            "scaffold",
         }
-        assert expected.issubset(set(_SLICE_STRATEGIES.keys()))
+        assert set(_SLICE_STRATEGIES.keys()) == expected
 
     def test_every_strategy_has_flow(self) -> None:
         for kind, strategy in _SLICE_STRATEGIES.items():
@@ -366,7 +361,7 @@ class TestSliceStrategies:
 
     def test_checkpoint_priority_keys(self) -> None:
         s = _SLICE_STRATEGIES["checkpoint"]
-        assert s.priority[:3] == ("passed", "summary", "lint")
+        assert s.priority[:3] == ("passed", "summary", "agentic_hint")
 
 
 # =============================================================================
@@ -379,15 +374,15 @@ class TestBuildInlineSummary:
 
     def test_recon_result_summary(self) -> None:
         payload: dict[str, Any] = {
-            "full_file": [1, 2],
-            "min_scaffold": [1],
-            "summary_only": [1, 2, 3],
+            "scaffold_files": [1, 2],
+            "lite_files": [1, 2, 3],
+            "repo_map": {"overview": "..."},
         }
         s = _build_inline_summary("recon_result", payload)
         assert s is not None
-        assert "2 full file(s)" in s
-        assert "1 scaffold(s)" in s
-        assert "3 summary(ies)" in s
+        assert "2 scaffold(s)" in s
+        assert "3 lite(s)" in s
+        assert "repo_map included" in s
 
     def test_checkpoint_summary_passed(self) -> None:
         payload: dict[str, Any] = {
@@ -409,15 +404,27 @@ class TestBuildInlineSummary:
         s = _build_inline_summary("semantic_diff", {"summary": "3 changes"})
         assert s == "3 changes"
 
-    def test_diff_summary(self) -> None:
-        diff_text = "diff --git a/x.py b/x.py\n+foo\ndiff --git a/y.py b/y.py\n-bar"
-        s = _build_inline_summary("diff", {"diff": diff_text})
+    def test_resolve_result_summary(self) -> None:
+        payload: dict[str, Any] = {
+            "resolved": [{"path": "a.py"}, {"path": "b.py"}],
+            "errors": [{"path": "c.py", "error": "not found"}],
+        }
+        s = _build_inline_summary("resolve_result", payload)
         assert s is not None
-        assert "2 file(s)" in s
+        assert "2 file(s) resolved" in s
+        assert "1 error(s)" in s
 
-    def test_source_summary(self) -> None:
-        s = _build_inline_summary("source", {"files": [1, 2, 3]})
-        assert s == "3 files"
+    def test_refactor_preview_summary(self) -> None:
+        payload: dict[str, Any] = {
+            "preview": {
+                "files_affected": 3,
+                "edits": [{}, {}, {}, {}],
+            },
+        }
+        s = _build_inline_summary("refactor_preview", payload)
+        assert s is not None
+        assert "4 edit(s)" in s
+        assert "3 file(s)" in s
 
     def test_unknown_kind_returns_none(self) -> None:
         s = _build_inline_summary("never_heard_of_this", {"data": 1})

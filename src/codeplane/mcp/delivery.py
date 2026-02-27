@@ -59,107 +59,110 @@ class SliceStrategy:
 
 _SLICE_STRATEGIES: dict[str, SliceStrategy] = {
     "recon_result": SliceStrategy(
-        flow="Read full_file for edit targets, min_scaffold for context, summary_only for orientation.",
-        priority=("full_file", "min_scaffold", "summary_only"),
+        flow=(
+            "Read agentic_hint first for next steps. "
+            "scaffold_files has source for context files; "
+            "lite_files for peripheral orientation; "
+            "repo_map for repository structure."
+        ),
+        priority=(
+            "agentic_hint",
+            "scaffold_files",
+            "lite_files",
+            "repo_map",
+            "summary",
+            "scoring_summary",
+        ),
         descriptions={
-            "full_file": "edit-target files with complete source",
-            "min_scaffold": "imports + signatures for context files",
-            "summary_only": "path + description for peripheral files",
-            "agentic_hint": "next-step instructions from the server",
+            "agentic_hint": "next-step instructions — read first",
+            "scaffold_files": "imports + signatures for context files",
+            "lite_files": "path + description for peripheral files",
+            "repo_map": "repository structure overview (embedded in recon)",
+            "summary": "file count summary",
+            "scoring_summary": "pipeline scoring metadata and diagnostics",
+            "coverage_hint": "guidance when explicitly-mentioned paths are missing",
+            "recon_id": "unique identifier for this recon call",
+            "diagnostics": "timing information",
         },
     ),
-    "source": SliceStrategy(
-        flow="Slice files.N for individual file contents.",
-        priority=("files", "summary", "page_info"),
+    "resolve_result": SliceStrategy(
+        flow=(
+            "Read resolved for file contents with SHA hashes; "
+            "follow agentic_hint for edit/review workflow."
+        ),
+        priority=("resolved", "agentic_hint", "errors"),
         descriptions={
-            "files": "file contents — slice files.N for each file",
-            "summary": "result summary",
-            "page_info": "pagination state",
-            "cursor": "continuation cursor for next page",
-        },
-    ),
-    "checkpoint": SliceStrategy(
-        flow="Check passed + summary first; drill into lint/tests only on failure.",
-        priority=("passed", "summary", "lint", "tests", "commit"),
-        descriptions={
-            "passed": "overall pass/fail boolean",
-            "summary": "one-line result summary",
-            "lint": "linter diagnostics",
-            "tests": "test runner output and failures",
-            "commit": "commit/push status and diff summary",
-            "coverage_hint": "coverage extraction commands",
-            "agentic_hint": "next-step instructions",
-        },
-    ),
-    "semantic_diff": SliceStrategy(
-        flow="Read summary for overview, then structural_changes for per-symbol details.",
-        priority=("summary", "structural_changes", "changes"),
-        descriptions={
-            "summary": "high-level change overview",
-            "structural_changes": "per-symbol structural diffs",
-            "changes": "per-symbol structural diffs",
-        },
-    ),
-    "repo_map": SliceStrategy(
-        flow="Independent topic sections — browse what you need.",
-        priority=("summary",),
-        descriptions={
-            "summary": "repository overview",
-        },
-    ),
-    "search_hits": SliceStrategy(
-        flow="Slice results.N to inspect individual search matches.",
-        priority=("results", "total"),
-        descriptions={
-            "results": "match list — slice results.N for each hit",
-            "total": "total match count",
-        },
-    ),
-    "diff": SliceStrategy(
-        flow="Raw diff text — large diffs are chunked automatically by the server.",
-        priority=("diff",),
-        descriptions={
-            "diff": "unified diff output",
-        },
-    ),
-    "log": SliceStrategy(
-        flow="Slice results.N for individual commit details.",
-        priority=("results",),
-        descriptions={
-            "results": "commit entries — slice results.N for each",
-        },
-    ),
-    "blame": SliceStrategy(
-        flow="Slice results.N for individual blame hunks.",
-        priority=("results", "path"),
-        descriptions={
-            "results": "blame hunks — slice results.N for each",
-            "path": "blamed file path",
+            "resolved": "file contents with path, content, file_sha256, line_count",
+            "agentic_hint": "next-step routing (edit / rename / move / delete / review)",
+            "errors": "resolution errors, if any",
         },
     ),
     "refactor_preview": SliceStrategy(
-        flow="Review matches.N to inspect individual refactoring sites.",
-        priority=("matches", "refactor_id"),
+        flow=(
+            "Check summary + display_to_user for overview; "
+            "inspect preview.edits for per-file hunks; "
+            "use refactor_id to apply or cancel."
+        ),
+        priority=("summary", "display_to_user", "preview", "refactor_id"),
         descriptions={
-            "matches": "refactor sites — slice matches.N for each",
-            "refactor_id": "ID for apply/cancel",
+            "summary": "human-readable refactor summary",
+            "display_to_user": "user-facing refactor description",
+            "preview": "per-file edit hunks with certainty levels",
+            "refactor_id": "ID for refactor_apply or refactor_cancel",
+            "status": "pending / applied / cancelled",
+            "divergence": "conflicting hunks and resolution options",
+            "warning": "format or usage warnings",
         },
     ),
-    "test_output": SliceStrategy(
-        flow="Check pass/fail counts, then output for details.",
-        priority=("passed", "failed", "output"),
+    "semantic_diff": SliceStrategy(
+        flow=(
+            "Read summary + breaking_summary for overview; "
+            "structural_changes for per-symbol diffs; "
+            "follow agentic_hint for next steps."
+        ),
+        priority=(
+            "summary",
+            "breaking_summary",
+            "structural_changes",
+            "non_structural_changes",
+            "agentic_hint",
+        ),
         descriptions={
-            "passed": "pass count",
-            "failed": "fail count",
-            "output": "raw test runner output",
+            "summary": "high-level change overview",
+            "breaking_summary": "breaking change summary",
+            "structural_changes": "per-symbol structural diffs (compressed)",
+            "non_structural_changes": "non-structural file changes (renames, deletes)",
+            "agentic_hint": "next-step guidance",
+            "files_analyzed": "number of files analyzed",
+            "base": "base ref description",
+            "target": "target ref description",
+            "scope": "analysis scope boundaries",
         },
     ),
-    "scaffold": SliceStrategy(
-        flow="Structural skeleton — imports and signatures without source bodies.",
-        priority=("files", "summary"),
+    "checkpoint": SliceStrategy(
+        flow=(
+            "Check passed + summary first; read agentic_hint for next steps; "
+            "drill into lint/tests on failure; check commit for push status."
+        ),
+        priority=(
+            "passed",
+            "summary",
+            "agentic_hint",
+            "lint",
+            "tests",
+            "commit",
+            "coverage_hint",
+        ),
         descriptions={
-            "files": "scaffold content per file",
-            "summary": "result summary",
+            "passed": "overall pass/fail boolean — read first",
+            "summary": "one-line result summary",
+            "agentic_hint": "next-step instructions — always follow these",
+            "lint": "linter diagnostics with status, issue count, and fixes",
+            "tests": "test runner output — tiered results with pass/fail counts",
+            "commit": "commit SHA, push status, and lean semantic diff",
+            "coverage_hint": "test coverage extraction commands",
+            "action": "always 'checkpoint'",
+            "changed_files": "input file list",
         },
     ),
 }
@@ -268,69 +271,52 @@ def _build_inline_summary(
     Returns None if no meaningful summary can be constructed.
     """
     if resource_kind == "recon_result":
-        n_full = len(payload.get("full_file", []))
-        n_scaffold = len(payload.get("min_scaffold", []))
-        n_summary = len(payload.get("summary_only", []))
-        return (
-            f"{n_full} full file(s), {n_scaffold} scaffold(s), "
-            f"{n_summary} summary(ies) across {n_full + n_scaffold + n_summary} file(s)"
-        )
+        n_scaffold = len(payload.get("scaffold_files", []))
+        n_lite = len(payload.get("lite_files", []))
+        has_map = "repo_map" in payload
+        parts: list[str] = [f"{n_scaffold} scaffold(s), {n_lite} lite(s)"]
+        if has_map:
+            parts.append("repo_map included")
+        return ", ".join(parts)
+
+    if resource_kind == "resolve_result":
+        resolved = payload.get("resolved", [])
+        errors = payload.get("errors", [])
+        parts_: list[str] = [f"{len(resolved)} file(s) resolved"]
+        if errors:
+            parts_.append(f"{len(errors)} error(s)")
+        return ", ".join(parts_)
 
     if resource_kind == "checkpoint":
         passed = payload.get("passed")
-        parts: list[str] = []
+        parts_c: list[str] = []
         if passed is True:
-            parts.append("PASSED")
+            parts_c.append("PASSED")
         elif passed is False:
-            parts.append("FAILED")
+            parts_c.append("FAILED")
         summary_text = payload.get("summary", "")
         if summary_text:
-            parts.append(str(summary_text))
+            parts_c.append(str(summary_text))
         commit = payload.get("commit", {})
         if isinstance(commit, dict) and commit.get("oid"):
-            parts.append(f"committed {commit['oid'][:7]}")
-        return " | ".join(parts) if parts else None
+            parts_c.append(f"committed {commit['oid'][:7]}")
+        return " | ".join(parts_c) if parts_c else None
 
     if resource_kind == "semantic_diff":
         summary = payload.get("summary")
         if summary:
             return str(summary)
-        changes = payload.get("structural_changes", payload.get("changes", []))
+        changes = payload.get("structural_changes", [])
         return f"{len(changes)} structural change(s)"
 
-    if resource_kind in ("source", "search_hits"):
-        items_key = "files" if resource_kind == "source" else "results"
-        return f"{len(payload.get(items_key, []))} {items_key}"
-
-    if resource_kind == "diff":
-        diff_text = payload.get("diff", "")
-        n_files = diff_text.count("diff --git") if isinstance(diff_text, str) else 0
-        return f"{n_files} file(s) changed"
-
-    if resource_kind == "log":
-        results = payload.get("results", [])
-        return f"{len(results)} commit(s)"
-
-    if resource_kind == "blame":
-        results = payload.get("results", [])
-        bp = payload.get("path", "")
-        authors = {r.get("author", "") for r in results} - {""}
-        return f"Blame {bp}: {len(results)} hunk(s), {len(authors)} author(s)"
-
-    if resource_kind == "repo_map":
-        skip = {"summary", "resource_kind", "delivery"}
-        sections = [k for k in payload if k not in skip]
-        return f"Sections: {', '.join(sections)}" if sections else None
-
-    if resource_kind == "test_output":
-        passed = payload.get("passed", 0)
-        failed = payload.get("failed", 0)
-        return f"{passed} passed, {failed} failed"
-
     if resource_kind == "refactor_preview":
-        matches = payload.get("matches", [])
-        af = len({m.get("path", "") for m in matches})
-        return f"{len(matches)} match(es) across {af} file(s)"
+        preview = payload.get("preview", {})
+        if isinstance(preview, dict):
+            af = preview.get("files_affected", 0)
+            edits = preview.get("edits", [])
+            return f"{len(edits)} edit(s) across {af} file(s)"
+        summary = payload.get("summary")
+        return str(summary) if summary else None
 
     return None
 
