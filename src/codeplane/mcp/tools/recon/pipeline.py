@@ -1349,7 +1349,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                     "Use recon_resolve to examine them directly."
                 )
 
-        from codeplane.mcp.delivery import wrap_existing_response
+        from codeplane.mcp.delivery import wrap_response
 
         # ── Issue recon consumption gate ──
         try:
@@ -1363,7 +1363,8 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         except Exception:  # noqa: BLE001
             pass
 
-        return wrap_existing_response(
+        return wrap_response(
             response,
             resource_kind="recon_result",
+            session_id=ctx.session_id,
         )

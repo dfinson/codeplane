@@ -10,6 +10,7 @@ from typing import Any
 
 import click
 import json5
+import structlog
 from rich.table import Table
 
 from codeplane.config.user_config import (
@@ -28,6 +29,7 @@ from codeplane.core.progress import (
 )
 from codeplane.templates import get_cplignore_template
 
+log = structlog.get_logger(__name__)
 # =============================================================================
 # Agent Instruction Snippet
 # =============================================================================
@@ -181,6 +183,74 @@ Also check for: `coverage_hint`, `display_to_user`.
 - **DON'T** dismiss lint/test failures as "pre-existing" or "not your problem" — fix ALL issues
 <!-- /codeplane-instructions -->
 """
+
+
+def _inject_cpljson_binary(codeplane_dir: Path) -> None:
+    """Compile and install the cpljson binary into .codeplane/bin/.
+
+    Uses the C compiler available on the system (cc/gcc on Unix, cl on Windows).
+    Falls back to copying pre-built binary if compilation fails.
+    """
+    import platform
+    import shutil
+    import subprocess
+
+    bin_dir = codeplane_dir / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+
+    # Locate C source (shipped with the package)
+    source_path = Path(__file__).resolve().parent.parent / "bin" / "cpljson.c"
+    if not source_path.exists():
+        log.warning("cpljson_source_not_found", path=str(source_path))
+        return
+
+    is_windows = platform.system() == "Windows"
+    binary_name = "cpljson.exe" if is_windows else "cpljson"
+    binary_path = bin_dir / binary_name
+
+    # Try to compile
+    try:
+        if is_windows:
+            compiler = shutil.which("cl")
+            if compiler:
+                subprocess.run(
+                    [compiler, "/O2", str(source_path), f"/Fe:{binary_path}", "ws2_32.lib"],
+                    check=True,
+                    capture_output=True,
+                    timeout=30,
+                )
+            else:
+                # Try gcc on Windows (MinGW)
+                gcc = shutil.which("gcc")
+                if gcc:
+                    subprocess.run(
+                        [gcc, "-O2", "-o", str(binary_path), str(source_path), "-lws2_32"],
+                        check=True,
+                        capture_output=True,
+                        timeout=30,
+                    )
+                else:
+                    log.warning("cpljson_no_compiler", detail="No C compiler found on Windows")
+                    return
+        else:
+            # Unix: try cc, then gcc
+            compiler = shutil.which("cc") or shutil.which("gcc")
+            if compiler:
+                subprocess.run(
+                    [compiler, "-O2", "-o", str(binary_path), str(source_path)],
+                    check=True,
+                    capture_output=True,
+                    timeout=30,
+                )
+            else:
+                log.warning("cpljson_no_compiler", detail="No C compiler found")
+                return
+
+        log.info("cpljson_compiled", path=str(binary_path))
+        status(f"Compiled cpljson binary → {bin_dir}", style="info")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        log.warning("cpljson_compile_failed", error=str(exc))
+        # Non-fatal: agent can still use curl/httpie fallback
 
 
 def _inject_agent_instructions(repo_root: Path, tool_prefix: str) -> list[str]:
@@ -485,6 +555,9 @@ def initialize_repo(
     if modified_agent_files:
         for f in modified_agent_files:
             status(f"Updated {f} with CodePlane instructions", style="info")
+
+    # === cpljson Binary Injection ===
+    _inject_cpljson_binary(codeplane_dir)
 
     # === Discovery Phase ===
     from codeplane.index._internal.grammars import (

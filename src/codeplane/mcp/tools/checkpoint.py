@@ -287,27 +287,32 @@ def _build_coverage_text(
     if detail is None:
         return inline, None
 
-    # Cache the detailed report to disk
-    from codeplane.mcp.delivery import _resource_cache
+    # Cache the detailed report in sidecar cache
+    import json
 
-    resource_id, byte_size = _resource_cache.store(detail, "coverage")
-    rel_path = f".codeplane/cache/coverage/{resource_id}.json"
+    from codeplane.mcp.sidecar_cache import cache_put
+
+    byte_size = len(json.dumps(detail, indent=2, default=str).encode("utf-8"))
+    cache_id = cache_put("coverage", "coverage", detail)
 
     n_files = len(detail.get("files", []))
     files_with_gaps = sum(1 for f in detail.get("files", []) if "uncovered_ranges" in f)
 
     hint_parts = [
-        f"Detailed coverage ({byte_size:,} bytes, {n_files} files) cached at {rel_path}",
-        "Extraction commands:",
-        f"  jq '{{summary, coverage_percent, total_lines, covered_lines}}' {rel_path}",
-        f"  jq '[.files[] | select(.uncovered_ranges) | {{path: .path, percent: .percent, uncovered_ranges}}]' {rel_path}",
+        f"Detailed coverage ({byte_size:,} bytes, {n_files} files) cached as {cache_id}",
+        "Retrieve via terminal:",
+        f"  cpljson meta --cache {cache_id}",
+        f"  cpljson slice --cache {cache_id} --path summary",
+        f"  cpljson slice --cache {cache_id} --path files --max-bytes 58000",
     ]
     if files_with_gaps > 5:
         hint_parts.append(
-            f"  jq '[.files[] | select(.percent < 80) | {{path: .path, percent: .percent, uncovered_ranges}}]' {rel_path}"
+            f"  cpljson slice --cache {cache_id} --path files --max-bytes 58000"
+            "  # filter for files with low coverage"
         )
     hint_parts.append(
-        f"  jq '.files[] | select(.path | test(\"FILENAME\")) | {{path, percent, uncovered_ranges}}' {rel_path}"
+        f"  cpljson slice --cache {cache_id} --path files.0"
+        "  # replace 0 with the file index you need"
     )
 
     coverage_hint = "\n".join(hint_parts)
@@ -1216,12 +1221,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         # Checkpoint results can be large (all lint diagnostics + test output).
         # Use the same envelope pattern as semantic_diff/map_repo so large
         # results go to disk with a compact inline summary.
-        from codeplane.mcp.delivery import wrap_existing_response
+        from codeplane.mcp.delivery import wrap_response
 
-        inline_summary = result.get("summary", "checkpoint complete")
-
-        return wrap_existing_response(
+        return wrap_response(
             result,
             resource_kind="checkpoint",
-            inline_summary=inline_summary,
         )

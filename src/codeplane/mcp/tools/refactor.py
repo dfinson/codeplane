@@ -126,9 +126,9 @@ def _serialize_refactor_result(result: "RefactorResult") -> dict[str, Any]:
     if result.warning:
         output["warning"] = result.warning
 
-    from codeplane.mcp.delivery import wrap_existing_response
+    from codeplane.mcp.delivery import wrap_response
 
-    return wrap_existing_response(output, resource_kind="refactor_preview")
+    return wrap_response(output, resource_kind="refactor_preview")
 
 
 # =============================================================================

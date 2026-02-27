@@ -148,27 +148,25 @@ class TestScopeUsageInEnvelope:
 
     def test_scope_usage_echoed_in_wrap_existing_response(self) -> None:
         """scope_usage dict appears in wrap_existing_response output."""
-        from codeplane.mcp.delivery import wrap_existing_response
+        from codeplane.mcp.delivery import wrap_response
 
         usage = {"read_bytes": 500, "full_reads": 1, "search_calls": 0}
-        result = wrap_existing_response(
+        result = wrap_response(
             {"data": "test"},
             resource_kind="source",
             scope_id="test-scope",
             scope_usage=usage,
-            inline_summary="test",
         )
         assert result["scope_usage"] == usage
         assert result["scope_id"] == "test-scope"
 
     def test_no_scope_id_no_scope_fields(self) -> None:
         """Without scope_id, scope fields are absent."""
-        from codeplane.mcp.delivery import wrap_existing_response
+        from codeplane.mcp.delivery import wrap_response
 
-        result = wrap_existing_response(
+        result = wrap_response(
             {"data": "test"},
             resource_kind="source",
-            inline_summary="test",
         )
         assert "scope_id" not in result or result.get("scope_id") is None
         assert "scope_usage" not in result or result.get("scope_usage") is None

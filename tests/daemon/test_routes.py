@@ -43,7 +43,7 @@ class TestCreateRoutes:
         """Returns a list of Route objects."""
         routes = create_routes(mock_controller)
         assert isinstance(routes, list)
-        assert len(routes) == 2
+        assert len(routes) == 5
 
     def test_health_route_exists(self, mock_controller: MagicMock) -> None:
         """Health route is defined."""
@@ -56,6 +56,14 @@ class TestCreateRoutes:
         routes = create_routes(mock_controller)
         paths = [r.path for r in routes]
         assert "/status" in paths
+
+    def test_sidecar_cache_routes_exist(self, mock_controller: MagicMock) -> None:
+        """All sidecar cache routes are defined."""
+        routes = create_routes(mock_controller)
+        paths = [r.path for r in routes]
+        assert "/sidecar/cache/list" in paths
+        assert "/sidecar/cache/slice" in paths
+        assert "/sidecar/cache/meta" in paths
 
 
 class TestHealthEndpoint:
@@ -181,3 +189,124 @@ class TestStatusEndpoint:
         response = client.get("/status")
         data = response.json()
         assert data["watcher"]["running"] is False
+
+
+# =============================================================================
+# Sidecar Cache Endpoints
+# =============================================================================
+
+
+class TestSidecarCacheListEndpoint:
+    """Tests for /sidecar/cache/list endpoint."""
+
+    @pytest.fixture
+    def client(self, tmp_path: Path) -> TestClient:
+        controller = MagicMock()
+        controller.repo_root = tmp_path
+        routes = create_routes(controller)
+        app = Router(routes=routes)
+        return TestClient(app)
+
+    def test_missing_params_returns_400(self, client: TestClient) -> None:
+        resp = client.get("/sidecar/cache/list")
+        assert resp.status_code == 400
+        assert "error" in resp.json()
+
+    def test_missing_endpoint_returns_400(self, client: TestClient) -> None:
+        resp = client.get("/sidecar/cache/list?session=s1")
+        assert resp.status_code == 400
+
+    def test_empty_list(self, client: TestClient) -> None:
+        resp = client.get("/sidecar/cache/list?session=s1&endpoint=e1")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "entries" in data
+        assert isinstance(data["entries"], list)
+
+    def test_list_returns_cached_entries(self, client: TestClient) -> None:
+        from codeplane.mcp.sidecar_cache import cache_put, get_sidecar_cache
+
+        get_sidecar_cache().clear()
+        cache_put("s1", "e1", {"x": 1})
+        resp = client.get("/sidecar/cache/list?session=s1&endpoint=e1")
+        assert resp.status_code == 200
+        entries = resp.json()["entries"]
+        assert len(entries) == 1
+        assert entries[0]["session_id"] == "s1"
+        assert entries[0]["endpoint_key"] == "e1"
+        get_sidecar_cache().clear()
+
+
+class TestSidecarCacheSliceEndpoint:
+    """Tests for /sidecar/cache/slice endpoint."""
+
+    @pytest.fixture
+    def client(self, tmp_path: Path) -> TestClient:
+        controller = MagicMock()
+        controller.repo_root = tmp_path
+        routes = create_routes(controller)
+        app = Router(routes=routes)
+        return TestClient(app)
+
+    def test_missing_cache_returns_400(self, client: TestClient) -> None:
+        resp = client.get("/sidecar/cache/slice")
+        assert resp.status_code == 400
+
+    def test_not_found_returns_404(self, client: TestClient) -> None:
+        resp = client.get("/sidecar/cache/slice?cache=nonexistent")
+        assert resp.status_code == 404
+
+    def test_slice_returns_payload(self, client: TestClient) -> None:
+        from codeplane.mcp.sidecar_cache import cache_put, get_sidecar_cache
+
+        get_sidecar_cache().clear()
+        cid = cache_put("s1", "e1", {"data": [1, 2, 3]})
+        resp = client.get(f"/sidecar/cache/slice?cache={cid}&path=data")
+        assert resp.status_code == 200
+        result = resp.json()
+        assert "value" in result
+        assert result["value"] == [1, 2, 3]
+        get_sidecar_cache().clear()
+
+    def test_slice_with_max_bytes(self, client: TestClient) -> None:
+        from codeplane.mcp.sidecar_cache import cache_put, get_sidecar_cache
+
+        get_sidecar_cache().clear()
+        cid = cache_put("s1", "e1", {"data": "x" * 10_000})
+        resp = client.get(f"/sidecar/cache/slice?cache={cid}&max_bytes=500")
+        assert resp.status_code == 200
+        result = resp.json()
+        assert "truncated" in result
+        get_sidecar_cache().clear()
+
+
+class TestSidecarCacheMetaEndpoint:
+    """Tests for /sidecar/cache/meta endpoint."""
+
+    @pytest.fixture
+    def client(self, tmp_path: Path) -> TestClient:
+        controller = MagicMock()
+        controller.repo_root = tmp_path
+        routes = create_routes(controller)
+        app = Router(routes=routes)
+        return TestClient(app)
+
+    def test_missing_cache_returns_400(self, client: TestClient) -> None:
+        resp = client.get("/sidecar/cache/meta")
+        assert resp.status_code == 400
+
+    def test_not_found_returns_404(self, client: TestClient) -> None:
+        resp = client.get("/sidecar/cache/meta?cache=nonexistent")
+        assert resp.status_code == 404
+
+    def test_meta_returns_schema(self, client: TestClient) -> None:
+        from codeplane.mcp.sidecar_cache import cache_put, get_sidecar_cache
+
+        get_sidecar_cache().clear()
+        cid = cache_put("s1", "e1", {"items": [1, 2], "count": 2})
+        resp = client.get(f"/sidecar/cache/meta?cache={cid}")
+        assert resp.status_code == 200
+        result = resp.json()
+        assert "byte_size" in result
+        assert "schema" in result
+        get_sidecar_cache().clear()

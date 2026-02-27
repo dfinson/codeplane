@@ -16,7 +16,7 @@ import pytest
 from codeplane.mcp.delivery import (
     ScopeBudget,
     ScopeManager,
-    wrap_existing_response,
+    wrap_response,
 )
 
 # =============================================================================
@@ -49,7 +49,7 @@ class TestSearchDeliveryEnvelope:
     def test_envelope_fields_present(self) -> None:
         """Wrapped search response has required delivery fields."""
         result = self._make_search_result()
-        wrapped = wrap_existing_response(result, resource_kind="search_hits")
+        wrapped = wrap_response(result, resource_kind="search_hits")
         assert wrapped["resource_kind"] == "search_hits"
         assert wrapped["delivery"] == "inline"
         assert "inline_budget_bytes_used" in wrapped
@@ -58,7 +58,7 @@ class TestSearchDeliveryEnvelope:
     def test_scope_id_added_when_provided(self) -> None:
         """scope_id is injected into the envelope."""
         result = self._make_search_result()
-        wrapped = wrap_existing_response(
+        wrapped = wrap_response(
             result,
             resource_kind="search_hits",
             scope_id="test-scope",
@@ -68,14 +68,14 @@ class TestSearchDeliveryEnvelope:
     def test_scope_id_absent_when_none(self) -> None:
         """No scope_id key when not provided."""
         result = self._make_search_result()
-        wrapped = wrap_existing_response(result, resource_kind="search_hits")
+        wrapped = wrap_response(result, resource_kind="search_hits")
         assert "scope_id" not in wrapped
 
     def test_scope_usage_added_when_provided(self) -> None:
         """scope_usage dict appears in envelope."""
         result = self._make_search_result()
         usage = {"search_calls": 1, "search_hits": 3}
-        wrapped = wrap_existing_response(
+        wrapped = wrap_response(
             result,
             resource_kind="search_hits",
             scope_id="s1",
@@ -86,14 +86,14 @@ class TestSearchDeliveryEnvelope:
     def test_scope_usage_absent_when_none(self) -> None:
         """No scope_usage key when not provided."""
         result = self._make_search_result()
-        wrapped = wrap_existing_response(result, resource_kind="search_hits")
+        wrapped = wrap_response(result, resource_kind="search_hits")
         assert "scope_usage" not in wrapped
 
     def test_truncated_result_preserves_pagination_inline(self) -> None:
         """Truncated pagination metadata is preserved in inline delivery."""
         result = self._make_search_result()
         result["pagination"] = {"truncated": True, "next_cursor": "10"}
-        wrapped = wrap_existing_response(result, resource_kind="search_hits")
+        wrapped = wrap_response(result, resource_kind="search_hits")
         assert wrapped["delivery"] == "inline"
         assert wrapped["pagination"] == {"truncated": True, "next_cursor": "10"}
 

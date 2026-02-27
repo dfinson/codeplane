@@ -19,7 +19,7 @@ import structlog
 from fastmcp import Context
 from pydantic import BaseModel, Field
 
-from codeplane.mcp.delivery import wrap_existing_response
+from codeplane.mcp.delivery import wrap_response
 from codeplane.mcp.errors import MCPError, MCPErrorCode
 
 if TYPE_CHECKING:
@@ -247,7 +247,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         if errors:
             response["errors"] = errors
 
-        return wrap_existing_response(
+        return wrap_response(
             response,
             resource_kind="resolve_result",
+            session_id=ctx.session_id,
         )

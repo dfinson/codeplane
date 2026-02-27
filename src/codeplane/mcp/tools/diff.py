@@ -83,7 +83,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         else:
             result = _run_git_diff(app_ctx, base, target, paths)
 
-        from codeplane.mcp.delivery import wrap_existing_response
+        from codeplane.mcp.delivery import wrap_response
 
         result_dict = _result_to_text(result)
 
@@ -95,7 +95,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             budget = _scope_manager.get_or_create(scope_id)
             scope_usage = budget.to_usage_dict()
 
-        return wrap_existing_response(
+        return wrap_response(
             result_dict,
             resource_kind="semantic_diff",
             scope_id=scope_id,
