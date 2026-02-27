@@ -156,7 +156,7 @@ class TestCplcacheHints:
     def test_hint_has_python_command(self) -> None:
         hint = _build_cplcache_hint("abc123", 50000, "recon_result")
         assert "python3 .codeplane/scripts/cplcache.py" in hint
-        assert "--cache-id abc123" in hint
+        assert '--cache-id "abc123"' in hint
 
     # --- Strategy flow ---
 
@@ -189,8 +189,8 @@ class TestCplcacheHints:
         hint = _build_cplcache_hint("abc123", 50000, "checkpoint", sections)
         assert "Ready sections" in hint
         assert "instant retrieval" in hint
-        assert "python3 .codeplane/scripts/cplcache.py --cache-id abc123 --slice lint" in hint
-        assert "python3 .codeplane/scripts/cplcache.py --cache-id abc123 --slice commit" in hint
+        assert 'python3 .codeplane/scripts/cplcache.py --cache-id "abc123" --slice "lint"' in hint
+        assert 'python3 .codeplane/scripts/cplcache.py --cache-id "abc123" --slice "commit"' in hint
         assert "1,234 bytes" in hint
         assert "45,000 bytes" in hint
         # Descriptions from strategy
@@ -206,7 +206,7 @@ class TestCplcacheHints:
         hint = _build_cplcache_hint("abc123", 121_000, "recon_result", sections)
         assert "Oversized sections" in hint
         assert (
-            "python3 .codeplane/scripts/cplcache.py --cache-id abc123 --slice scaffold_files"
+            'python3 .codeplane/scripts/cplcache.py --cache-id "abc123" --slice "scaffold_files"'
             in hint
         )
         assert "120,000 bytes" in hint
@@ -227,7 +227,7 @@ class TestCplcacheHints:
     def test_no_sections_fallback(self) -> None:
         """Without sections, generic slice command shown."""
         hint = _build_cplcache_hint("abc123", 5000, "unknown")
-        assert "python3 .codeplane/scripts/cplcache.py --cache-id abc123" in hint
+        assert 'python3 .codeplane/scripts/cplcache.py --cache-id "abc123"' in hint
 
     def test_mixed_ready_and_oversized(self) -> None:
         """Hint separates ready and oversized sections."""
@@ -240,9 +240,9 @@ class TestCplcacheHints:
         assert "Ready sections" in hint
         assert "instant retrieval" in hint
         assert "Oversized sections" in hint
-        assert "--slice passed" in hint
-        assert "--slice lint" in hint
-        assert "--slice coverage" in hint
+        assert '--slice "passed"' in hint
+        assert '--slice "lint"' in hint
+        assert '--slice "coverage"' in hint
 
     # --- Priority ordering ---
 
@@ -259,7 +259,7 @@ class TestCplcacheHints:
         hint = _build_cplcache_hint("abc123", 50000, "checkpoint", sections)
         lines = hint.split("\n")
         section_lines = [ln for ln in lines if "--slice" in ln]
-        keys = [ln.strip().split("--slice ")[-1] for ln in section_lines]
+        keys = [ln.strip().split('--slice "')[-1].rstrip('"') for ln in section_lines]
         assert keys == ["passed", "summary", "agentic_hint", "lint", "tests", "commit"]
 
     def test_recon_priority_ordering(self) -> None:
@@ -273,7 +273,7 @@ class TestCplcacheHints:
         hint = _build_cplcache_hint("abc123", 60000, "recon_result", sections)
         lines = hint.split("\n")
         section_lines = [ln for ln in lines if "--slice" in ln and "cplcache" in ln]
-        keys = [ln.strip().split("--slice ")[-1].split()[0] for ln in section_lines]
+        keys = [ln.strip().split('--slice "')[-1].rstrip('"').split()[0] for ln in section_lines]
         # agentic_hint first, then scaffold_files, lite_files, repo_map from priority
         assert keys == ["agentic_hint", "scaffold_files", "lite_files", "repo_map"]
 
@@ -286,7 +286,7 @@ class TestCplcacheHints:
         hint = _build_cplcache_hint("abc123", 5000, "unknown_kind", sections)
         lines = hint.split("\n")
         section_lines = [ln for ln in lines if "--slice" in ln and "cplcache" in ln]
-        keys = [ln.strip().split("--slice ")[-1].split()[0] for ln in section_lines]
+        keys = [ln.strip().split('--slice "')[-1].rstrip('"').split()[0] for ln in section_lines]
         assert keys == ["z_key", "a_key"]
 
 

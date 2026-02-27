@@ -301,16 +301,16 @@ def _build_coverage_text(
     hint_parts = [
         f"Detailed coverage ({byte_size:,} bytes, {n_files} files) cached as {cache_id}",
         "Retrieve via terminal:",
-        f"  python3 .codeplane/scripts/cplcache.py --cache-id {cache_id} --slice summary",
-        f"  python3 .codeplane/scripts/cplcache.py --cache-id {cache_id} --slice files",
+        f'  python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "summary"',
+        f'  python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "files"',
     ]
     if files_with_gaps > 5:
         hint_parts.append(
-            f"  python3 .codeplane/scripts/cplcache.py --cache-id {cache_id} --slice files"
+            f'  python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "files"'
             "  # filter for files with low coverage"
         )
     hint_parts.append(
-        f"  python3 .codeplane/scripts/cplcache.py --cache-id {cache_id} --slice files.0"
+        f'  python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "files.0"'
         "  # replace 0 with the file index you need"
     )
 

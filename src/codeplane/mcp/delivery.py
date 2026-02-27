@@ -232,7 +232,7 @@ def _build_cplcache_hint(
                 desc_part = f" — {desc}" if desc else ""
                 parts.append(
                     f"  {key:<24} {sec.byte_size:>8,} bytes{desc_part}  "
-                    f"python3 .codeplane/scripts/cplcache.py --cache-id {cache_id} --slice {key}"
+                    f'python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "{key}"'
                 )
 
         if oversized:
@@ -244,11 +244,11 @@ def _build_cplcache_hint(
                 desc_part = f" — {desc}" if desc else ""
                 parts.append(
                     f"  {key:<24} {sec.byte_size:>8,} bytes{desc_part}  "
-                    f"python3 .codeplane/scripts/cplcache.py --cache-id {cache_id} --slice {key}"
+                    f'python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "{key}"'
                 )
     else:
         parts.append(
-            f"  python3 .codeplane/scripts/cplcache.py --cache-id {cache_id} --slice <SECTION>"
+            f'  python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "<SECTION>"'
         )
 
     parts.append("")
