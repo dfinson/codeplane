@@ -155,6 +155,13 @@ def up_command(path: Path | None, port: int | None, reindex: bool) -> None:
     ):
         raise click.ClickException("Failed to initialize repository")
 
+    # Always inject/update cplcache script (idempotent)
+    from codeplane.templates import get_cplcache_script
+
+    scripts_dir = codeplane_dir / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    (scripts_dir / "cplcache.py").write_text(get_cplcache_script(), encoding="utf-8")
+
     # Ensure embedding models are cached before starting the server.
     # (initialize_repo already calls this, but `cpl up` on an existing repo
     # skips init, so we check here too — it's a no-op if already cached.)
