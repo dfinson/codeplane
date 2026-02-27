@@ -98,7 +98,7 @@ class ReconModel:
             if not path:
                 continue
             returned_files.append(path)
-            returned_tiers[path] = entry.get("tier", "summary_only")
+            returned_tiers[path] = entry.get("tier", "lite")
             returned_scores[path] = float(entry.get("combined_score", 0.0))
 
         return {

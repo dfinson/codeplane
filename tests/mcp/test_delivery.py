@@ -3,7 +3,7 @@
 Covers:
 - ResourceCache: disk-backed store/retrieve
 - ClientProfile + resolve_profile: profile selection logic
-- build_envelope: inline/resource delivery decisions
+- wrap_existing_response: inline/paginated/resource delivery
 """
 
 from __future__ import annotations
@@ -17,11 +17,9 @@ import pytest
 
 import codeplane.mcp.delivery as _delivery_mod
 from codeplane.mcp.delivery import (
-    ClientProfile,
     ResourceCache,
     ScopeBudget,
     ScopeManager,
-    build_envelope,
     resolve_profile,
 )
 
@@ -102,62 +100,6 @@ class TestResourceCache:
             config_override="copilot_coding_agent",
         )
         assert profile.name == "copilot_coding_agent"
-
-
-class TestBuildEnvelope:
-    """Tests for build_envelope."""
-
-    @pytest.fixture(autouse=True)
-    def _setup_cache_dir(self, tmp_path: Path) -> Generator[None, None, None]:
-        """Point disk cache at tmp for resource delivery tests."""
-        old = _delivery_mod._cache_dir
-        _delivery_mod._cache_dir = tmp_path / ".codeplane" / "cache"
-        _delivery_mod._cache_dir.mkdir(parents=True, exist_ok=True)
-        yield
-        _delivery_mod._cache_dir = old
-
-    def _profile(self, inline_cap: int = 8000) -> ClientProfile:
-        return ClientProfile(name="test", inline_cap_bytes=inline_cap)
-
-    def test_small_payload_inline(self) -> None:
-        """Small payload -> delivery='inline', no resource_uri."""
-        payload = {"data": "x" * 500}
-        env = build_envelope(payload, resource_kind="source", client_profile=self._profile())
-        assert env["delivery"] == "inline"
-        assert "resource_uri" not in env
-
-    def test_large_payload_resource(self) -> None:
-        """Large payload -> delivery='resource', written to disk."""
-        payload = {"data": "x" * 20000}
-        env = build_envelope(payload, resource_kind="source", client_profile=self._profile())
-        assert env["delivery"] == "resource"
-        assert "resource_uri" not in env
-        assert "agentic_hint" in env
-        assert "cached at" in env["agentic_hint"]
-
-    def test_inline_budget_fields(self) -> None:
-        """Verify inline_budget_bytes_used and _limit present."""
-        payload = {"data": "small"}
-        env = build_envelope(payload, resource_kind="source", client_profile=self._profile())
-        assert "inline_budget_bytes_used" in env
-        assert "inline_budget_bytes_limit" in env
-
-    def test_resource_kind_set(self) -> None:
-        """Verify resource_kind matches the tool type."""
-        payload = {"data": "x"}
-        env = build_envelope(payload, resource_kind="search_hits", client_profile=self._profile())
-        assert env["resource_kind"] == "search_hits"
-
-    def test_scope_id_echoed(self) -> None:
-        """Pass scope_id, verify echoed in response."""
-        payload = {"data": "x"}
-        env = build_envelope(
-            payload,
-            resource_kind="source",
-            client_profile=self._profile(),
-            scope_id="s-123",
-        )
-        assert env["scope_id"] == "s-123"
 
 
 class TestScopeBudget:
@@ -704,28 +646,6 @@ class TestCursorPagination:
 
         # Clean up
         _CURSOR_STORE.pop(page["cursor"], None)
-
-    def test_build_envelope_paginates_before_disk(self) -> None:
-        """build_envelope tries pagination before falling back to disk."""
-        # A source payload with many files that exceeds inline cap
-        items = [
-            {"path": f"f{i}.py", "content": "x" * 2000, "range": [1, 50], "line_count": 50}
-            for i in range(10)
-        ]
-        payload = {"files": items, "summary": "10 files"}
-        result = build_envelope(payload, resource_kind="source", inline_summary="10 files")
-
-        # Should get paginated delivery, not resource
-        assert result["delivery"] == "inline"
-        assert "cursor" in result
-        assert result["has_more"] is True
-        assert "files" in result
-        assert len(result["files"]) < 10
-
-        # Clean up
-        from codeplane.mcp.delivery import _CURSOR_STORE
-
-        _CURSOR_STORE.pop(result["cursor"], None)
 
     def test_split_content_item_basic(self) -> None:
         """_split_content_item splits oversized content by lines."""

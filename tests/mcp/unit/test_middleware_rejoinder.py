@@ -250,8 +250,8 @@ class TestRejoinerCounterBehavior:
             mw._maybe_get_rejoinder(ctx)
         result = mw._maybe_get_rejoinder(ctx)
         assert result == _REJOINDERS[0]
-        assert "search" in result
-        assert "read_source" in result
+        assert "recon" in result
+        assert "recon_resolve" in result
 
     def test_second_fire_is_rejoinder_b(self) -> None:
         """Second rejoinder (call 10) is B (test runners)."""

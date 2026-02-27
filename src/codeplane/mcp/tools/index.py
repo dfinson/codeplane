@@ -225,7 +225,6 @@ def _map_repo_sections_to_text(
     return sections
 
 
-
 def _build_overview(result: Any) -> dict[str, Any]:
     """Build the always-fits overview block with counts."""
     overview: dict[str, Any] = {}
@@ -254,5 +253,3 @@ def _build_overview(result: Any) -> dict[str, Any]:
         overview["public_api_count"] = len(result.public_api)
 
     return overview
-
-

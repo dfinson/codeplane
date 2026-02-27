@@ -1,7 +1,7 @@
 # CodePlane Recon Enhanced Evaluation
 #
-# Tests whether per-issue seeds + pinned_paths (derived from ONE map_repo call)
-# improve recon file retrieval quality over the bare-task baseline.
+# Tests whether per-issue seeds + pinned_paths improve recon file retrieval
+# quality over the bare-task baseline.
 #
 # Prerequisites:
 #   1. Start CodePlane daemon on the target repo (port 7777)
@@ -13,9 +13,9 @@
 experiment:
   name: cpl-recon-enhanced
   description: >-
-    Evaluate CodePlane recon with per-issue seeds and pinned_paths derived
-    from a single map_repo call. Compares against the bare-task baseline
-    to measure the value of structural hints for retrieval quality.
+    Evaluate CodePlane recon with per-issue seeds and pinned_paths.
+    Compares against the bare-task baseline to measure the value of
+    structural hints for retrieval quality.
   version: "1.0"
   output_path: experiments/output/recon_enhanced
 

@@ -2,7 +2,7 @@
 
 Provides a single two-phase confirmation protocol used by all gated operations:
 - Destructive actions (git reset --hard)
-- Expensive reads (read_file_full on large files, read_source cap violations)
+- Expensive reads (recon_resolve on large files)
 - Budget resets
 - Pattern-break interventions (thrash detection)
 
@@ -201,36 +201,11 @@ EXPENSIVE_READ_GATE = GateSpec(
     kind="expensive_read",
     reason_min_chars=50,
     reason_prompt=(
-        "Why do you need the entire file? What specific information can't you "
-        "get via read_scaffold (structure/signatures) + search(mode=references) "
-        "+ read_source on the spans?"
+        "Why do you need the entire file? recon provides scaffolds "
+        "and recon_resolve fetches full content for specific files."
     ),
     expires_calls=3,
 )
-
-READ_CAP_EXCEEDED_GATE = GateSpec(
-    kind="expensive_read",
-    reason_min_chars=50,
-    reason_prompt=(
-        "Why do you need to exceed read caps? Can you split into smaller "
-        "read_source calls or use search to narrow down the relevant spans?"
-    ),
-    expires_calls=3,
-)
-
-
-def budget_reset_gate(has_mutations: bool) -> GateSpec:
-    """Create a gate spec for budget reset based on mutation state."""
-    min_chars = 50 if has_mutations else 250
-    return GateSpec(
-        kind="budget_reset",
-        reason_min_chars=min_chars,
-        reason_prompt=(
-            "What new information do you need that the previous budget window didn't provide?"
-        ),
-        expires_calls=3,
-        message=f"Budget reset (min {min_chars} char justification required).",
-    )
 
 
 BROAD_FILTER_TEST_GATE = GateSpec(
@@ -290,23 +265,17 @@ def has_recent_scoped_test(window: deque[CallRecord]) -> bool:
 # =============================================================================
 
 TOOL_CATEGORIES: dict[str, str] = {
-    "search": "search",
-    "read_source": "read",
-    "read_file_full": "read_full",
-    "write_source": "write",
+    "recon": "search",
+    "recon_resolve": "read",
+    "refactor_edit": "write",
     "refactor_rename": "refactor",
     "refactor_move": "refactor",
     "refactor_impact": "refactor",
-    "refactor_apply": "refactor",
+    "refactor_commit": "refactor",
     "refactor_cancel": "meta",
-    "refactor_inspect": "meta",
     "semantic_diff": "diff",
-    "map_repo": "meta",
-    "list_files": "meta",
     "describe": "meta",
-    "reset_budget": "meta",
     "checkpoint": "test",
-    "recon": "search",
 }
 
 # Categories that represent mutation (clear pattern window).
@@ -447,28 +416,17 @@ class CallPatternDetector:
 # =============================================================================
 
 _SEARCH_WORKFLOW: dict[str, str] = {
-    "if_exploring_structure": (
-        "Use map_repo(include=['structure','dependencies']) for overview, then one targeted search"
-    ),
-    "if_finding_references": (
-        "Use search(mode='references', enrichment='function') - "
-        "one call gets callers with full function bodies"
-    ),
-    "if_reading_code": ("Switch to read_source with multiple targets per call (up to 20)"),
-    "if_ready_to_act": ("Proceed to write_source, refactor_rename, or checkpoint"),
+    "if_exploring_structure": ("recon includes a repo_map — use it for structural orientation"),
+    "if_reading_code": ("Use recon_resolve to fetch full content for specific files"),
+    "if_ready_to_act": ("Proceed to refactor_edit, refactor_rename, or checkpoint"),
 }
 
 _READ_WORKFLOW: dict[str, str] = {
     "if_exploring_file_structure": (
-        "Use read_scaffold(path) to see imports, classes, functions, and signatures "
-        "without reading source — then read_source on specific symbols"
+        "recon returns scaffolds (imports + signatures) — use recon_resolve "
+        "for full content of specific files"
     ),
-    "if_looking_for_callers": ("Use search(mode='references') instead of reading files manually"),
-    "if_understanding_a_function": (
-        "Use search(mode='definitions', enrichment='function') for edit-ready code"
-    ),
-    "if_reading_multiple_spans": ("Batch up to 20 targets in one read_source call"),
-    "if_ready_to_act": ("Proceed to write_source, refactor_rename, or checkpoint"),
+    "if_ready_to_act": ("Proceed to refactor_edit, refactor_rename, or checkpoint"),
 }
 
 
@@ -502,9 +460,8 @@ def _check_pure_search_chain(window: deque[CallRecord]) -> PatternMatch | None:
     else:
         cause = "inefficient"
         reason_prompt = (
-            "You're making many individual searches. Can you use "
-            "search(mode='references', enrichment='function') to get "
-            "callers with bodies in one call? Or map_repo for structure?"
+            "You're making many recon calls. Do you have enough context "
+            "to proceed? Use recon_resolve to fetch specific files."
         )
 
     return PatternMatch(
@@ -523,9 +480,8 @@ def _check_pure_search_chain(window: deque[CallRecord]) -> PatternMatch | None:
 def _check_read_spiral(window: deque[CallRecord]) -> PatternMatch | None:
     """Detect 6+ reads touching <= 1 unique file (re-reading same file).
 
-    Even large files should be read with batched targets (up to 20 per
-    call). Six separate single-file reads means the agent is making
-    round-trips instead of batching.
+    Repeated recon_resolve calls on the same file indicate the agent is
+    not retaining context between calls.
     """
     recent = list(window)[-10:]
     read_records = [r for r in recent if r.category in ("read", "read_full")]
@@ -549,8 +505,8 @@ def _check_read_spiral(window: deque[CallRecord]) -> PatternMatch | None:
         ),
         reason_prompt=(
             "You've read these files multiple times. What specific uncertainty "
-            "remains? Batch up to 20 targets in one read_source call for "
-            "different spans of the same file."
+            "remains? recon_resolve returns full content — you should not "
+            "need to re-read the same file."
         ),
         suggested_workflow=_READ_WORKFLOW,
     )
@@ -574,15 +530,13 @@ def _check_scatter_read(window: deque[CallRecord]) -> PatternMatch | None:
     if single_target_reads >= 4:
         cause = "inefficient"
         reason_prompt = (
-            "You're reading files one at a time. Use read_scaffold(path) to see "
-            "a file's structure first, then read_source on specific symbols. "
-            "Batch up to 20 targets in a single read_source call."
+            "You're reading files one at a time. recon_resolve accepts up to "
+            "10 targets per call — batch your reads."
         )
     else:
         cause = "over_gathering"
         reason_prompt = (
             f"You've read {len(all_files)} different files. "
-            "Use read_scaffold to orient on a file's structure before reading. "
             "Which files are actually relevant to your change?"
         )
 
@@ -628,9 +582,9 @@ def _check_search_read_loop(window: deque[CallRecord]) -> PatternMatch | None:
             "You're bouncing between searching and reading."
         ),
         reason_prompt=(
-            "Use search(enrichment='function') to get source code with "
-            "search results directly, eliminating the search-then-read "
-            "round-trip."
+            "You're bouncing between recon and resolve calls. "
+            "recon_resolve returns full content — proceed to "
+            "refactor_edit with what you have."
         ),
         suggested_workflow=_SEARCH_WORKFLOW,
     )
@@ -653,16 +607,15 @@ def _check_zero_result_searches(window: deque[CallRecord]) -> PatternMatch | Non
             "Your search strategy needs adjustment."
         ),
         reason_prompt=(
-            "Multiple searches returned nothing. Try: mode='lexical' for "
-            "text patterns, map_repo to discover correct module/symbol names, "
-            "or list_files to verify paths exist."
+            "Multiple recon calls returned nothing. Try using more specific "
+            "terms, symbol names, or file paths in your task description."
         ),
         suggested_workflow=_SEARCH_WORKFLOW,
     )
 
 
 def _check_full_file_creep(window: deque[CallRecord]) -> PatternMatch | None:
-    """Detect 3+ read_file_full calls in the window."""
+    """Detect 3+ recon_resolve calls in the window."""
     full_reads = [r for r in window if r.category == "read_full"]
     if len(full_reads) < 3:
         return None
@@ -673,33 +626,31 @@ def _check_full_file_creep(window: deque[CallRecord]) -> PatternMatch | None:
         cause="inefficient",
         message=(
             f"{len(full_reads)} full-file reads in recent calls. "
-            "Full reads are expensive - most tasks only need specific spans."
+            "Do you have enough context to proceed?"
         ),
         reason_prompt=(
-            "Use read_scaffold(path) for structural overview (imports, signatures, "
-            "hierarchy) without downloading source. Then read_source on the "
-            "specific symbols you need."
+            "recon returns scaffolds for orientation. Use recon_resolve only "
+            "for files you actively need to read or edit."
         ),
         suggested_workflow=_READ_WORKFLOW,
     )
 
 
 _BYPASS_WORKFLOW: dict[str, str] = {
-    "for_editing": "Use write_source with span edits — NOT sed, awk, echo, or tee",
-    "for_searching": "Use search(mode='lexical') — NOT grep, rg, or ag",
-    "for_reading": "Use read_source with multiple targets — NOT cat, head, or tail",
+    "for_editing": "Use refactor_edit with find-and-replace — NOT sed, awk, echo, or tee",
+    "for_reading": "Use recon_resolve to fetch full content — NOT cat, head, or tail",
     "for_git": "Use checkpoint with commit_message for staging+committing — for other git ops, use terminal",
 }
 
 
 def _check_phantom_read(window: deque[CallRecord]) -> PatternMatch | None:
-    """Detect search followed by write with no read in between.
+    """Detect recon followed by edit with no resolve in between.
 
-    If the agent searched for code then jumped straight to editing without
-    reading via read_source/read_file_full, it likely used cat/head/grep
-    in the terminal to read the actual source content.
+    If the agent called recon then jumped straight to editing without
+    calling recon_resolve, it likely used cat/head/grep in the terminal
+    to read the actual source content.
     """
-    # Find the most recent write_source/refactor_apply
+    # Find the most recent refactor_edit/refactor_commit
     last_write_idx = None
     for i in range(len(window) - 1, -1, -1):
         if window[i].category in ("write", "refactor"):
@@ -726,15 +677,15 @@ def _check_phantom_read(window: deque[CallRecord]) -> PatternMatch | None:
         severity="warn",
         cause="tool_bypass",
         message=(
-            "You searched for code then wrote edits without reading through "
-            "read_source first. search never returns source text — you need "
-            "read_source to get file content, expected_content, and file_sha256. "
+            "You called recon then edited without using recon_resolve first. "
+            "recon only returns scaffolds — you need recon_resolve to get "
+            "full file content and sha256 before editing. "
             "If you read files via cat/head/grep, that is FORBIDDEN."
         ),
         reason_prompt=(
             "How did you obtain the source content for your edit? "
-            "read_source was never called between your search and write. "
-            "Use read_source to get expected_content and file_sha256 before editing."
+            "recon_resolve was never called between your recon and edit. "
+            "Use recon_resolve to get content and file_sha256 before editing."
         ),
         suggested_workflow=_BYPASS_WORKFLOW,
     )

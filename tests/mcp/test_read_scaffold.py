@@ -289,7 +289,7 @@ class TestBuildUnindexedFallback:
 
         result = fallback(fp, "config.yaml")
         hint = result.get("agentic_hint", "")
-        assert "read_source" in hint or "read_file_full" in hint
+        assert "recon_resolve" in hint
 
 
 # =============================================================================

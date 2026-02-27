@@ -1,9 +1,9 @@
 """Generate v3 enhanced seeds by filtering v2 candidates with embedding similarity.
 
-v2 was mined programmatically from map_repo — high recall but too many candidates
-(avg 22 pinned_paths vs v1's 3). This script uses CodePlane's file embedding index
-to cosine-rank v2 candidates against each issue's task description, keeping only
-the top-K most semantically relevant.
+v2 was mined programmatically from the repo structure — high recall but too many
+candidates (avg 22 pinned_paths vs v1's 3). This script uses CodePlane's file
+embedding index to cosine-rank v2 candidates against each issue's task description,
+keeping only the top-K most semantically relevant.
 
 Usage:
     cd benchmarking/cpl_bench

@@ -2571,11 +2571,10 @@ re-embedded.
 signal.  The pipeline:
 1. Query file-level embeddings → ranked (path, similarity) list
 2. Def-level harvesters (A–F) run as SECONDARY enrichment
-3. Two-elbow detection on combined scores → three output tiers:
-   - **FULL_FILE** (above elbow-1): full file content included
-   - **MIN_SCAFFOLD** (between elbows): imports + signatures only
-   - **SUMMARY_ONLY** (below elbow-2): path + one-line summary
-4. Noise metric → conditional `map_repo` inclusion hint
+3. Single-elbow detection on combined scores → two output tiers:
+   - **SCAFFOLD** (above elbow): imports + signatures
+   - **LITE** (below elbow): path + one-line summary
+4. `repo_map` included in every recon response
 5. Agent hint includes `expand_reason` per file
 
 **Fallback**: when file-level embeddings are not available (index not built),
@@ -2983,33 +2982,20 @@ Tools are organized into functional families. Each tool is a standalone MCP tool
 
 | Tool | Purpose |
 |------|---------|
-| `describe` | Repo metadata, language, active branch, index status, tool documentation |
+| `describe` | Tool parameter documentation and error code lookup |
 
-#### File Tools
-
-| Tool | Purpose |
-|------|---------|
-| `read_source` | Read file contents with optional line ranges (span-based, returns `file_sha256`) |
-| `read_file_full` | Gated bulk file access (two-phase confirmation, resource-first delivery) |
-| `list_files` | List directory contents with filtering |
-| `reset_budget` | Reset the read budget for the current session |
-
-#### Search & Index Tools
+#### Discovery Tools
 
 | Tool | Purpose |
-|------|---------|
-| `search` | Unified search: lexical, symbol, references, definitions (returns spans, never source text) |
-| `map_repo` | Repository structure, dependencies, and test layout |
+|------|---------|  
+| `recon` | Task-aware code discovery — returns scaffolds, lite summaries, and repo map |
+| `recon_resolve` | Fetch full file content + sha256 for files found via recon |
 
-#### Mutation Tools
-
-| Tool | Purpose |
-|------|---------|
-| `write_source` | Atomic file edits with span-based updates, SHA256 validation, and structured delta response |
-
-#### Git Tools (19 tools, consolidated action-parameter design)
+#### Edit Tools
 
 | Tool | Purpose |
+|------|---------|  
+| `refactor_edit` | Find-and-replace file editing with sha256 locking |
 |------|---------|
 | `git_status` | Repository status (staged, modified, untracked, conflicts) |
 | `git_diff` | Generate diff between refs or working tree |
@@ -3031,15 +3017,14 @@ Tools are organized into functional families. Each tool is a standalone MCP tool
 | `git_submodule` | Submodule management (init, update, add, remove, status) |
 | `git_worktree` | Worktree management (add, remove, list) |
 
-#### Refactor Tools (6 tools, structural index based)
+#### Refactor Tools (5 tools, structural index based)
 
 | Tool | Purpose |
-|------|---------|
-| `refactor_rename` | Rename symbol across codebase (preview → inspect → apply/cancel) |
+|------|---------|  
+| `refactor_rename` | Rename symbol across codebase (preview → commit/cancel) |
 | `refactor_move` | Move file or symbol to different location |
-| `refactor_impact` | Delete file or symbol |
-| `refactor_inspect` | Inspect low-certainty matches in a pending refactor |
-| `refactor_apply` | Apply a previewed refactoring |
+| `refactor_impact` | Find all references for impact analysis before removal |
+| `refactor_commit` | Apply or inspect a previewed refactoring |
 | `refactor_cancel` | Cancel a previewed refactoring |
 
 #### Analysis Tools
@@ -3063,7 +3048,7 @@ Tools are organized into functional families. Each tool is a standalone MCP tool
 | `inspect_affected_tests` | Find tests affected by specific file changes |
 | `run_test_targets` | Execute tests with `affected_by` for impact-aware selection |
 
-**Total: 40 tools**
+**Total: 36 tools**
 
 ### 23.5 Progress Reporting
 
@@ -3137,12 +3122,8 @@ Tools returning collections support cursor-based pagination for large result set
 
 | Tool | Paginates | Notes |
 |------|-----------|-------|
-| `search` | Yes | All search modes |
-| `map_repo` (structure) | Yes | File tree only |
 | `git_log` | Yes | Commit history |
 | `git_blame` | Yes | Line authorship |
-| `read_files` | No | Uses explicit line ranges |
-| `write_source` | No | Single operation |
 | `semantic_diff` | Yes | Structural changes list |
 
 ### 23.7 Tool Specifications
@@ -3151,126 +3132,9 @@ The following sections define detailed parameter and response schemas for each t
 
 ---
 
-#### `search`
+#### `recon_resolve`
 
-Unified search across lexical index, symbols, and references.
-
-**Parameters:**
-
-```typescript
-{
-  query: string;                    // Search query
-  mode: "lexical" | "symbol" | "references" | "definitions";
-  scope?: {
-    paths?: string[];               // Limit to paths (glob patterns)
-    languages?: string[];           // Limit to languages
-    kinds?: string[];               // Symbol kinds: function, class, variable, etc.
-  };
-  limit?: number;                   // Max results (default 20, max 100)
-  cursor?: string;                  // Continuation token
-  include_snippets?: boolean;       // Include code snippets (default true)
-  enrichment?: "none" | "minimal" | "standard" | "function" | "class";  // Search enrichment level
-  session_id?: string;              // Optional session override
-}
-```
-
-**Response:**
-
-```typescript
-{
-  results: Array<{
-    path: string;
-    line: number;
-    column: number;
-    snippet: string;
-    symbol?: {
-      name: string;
-      kind: string;
-      container?: string;
-    };
-    score: number;
-    match_type: "exact" | "fuzzy" | "semantic";
-  }>;
-  pagination: {
-    next_cursor?: string;
-    total_estimate?: number;
-  };
-  query_time_ms: number;
-}
-```
-
----
-
-#### `map_repo`
-
-Repository mental model — structure, languages, entry points, dependencies.
-
-Queries the existing index to build a mental model. Does NOT scan the filesystem — reflects only what's indexed.
-
-**Parameters:**
-
-```typescript
-{
-  include?: Array<"structure" | "languages" | "entry_points" | "dependencies" | "test_layout" | "public_api">;
-  depth?: number;                   // Directory depth (default 3)
-  session_id?: string;
-}
-```
-
-**Response:**
-
-```typescript
-// DirectoryNode structure
-interface DirectoryNode {
-  name: string;
-  path: string;
-  is_dir: boolean;
-  children?: DirectoryNode[];       // Only for directories
-  file_count?: number;              // Only for directories
-  line_count?: number;              // Only for files (from File.line_count)
-}
-
-{
-  structure: {
-    root: string;
-    tree: DirectoryNode[];          // Nested directory structure
-    file_count: number;
-    contexts: string[];             // Valid context root paths
-  };
-  languages: Array<{
-    language: string;               // Language family from File.language_family
-    file_count: number;
-    percentage: number;
-  }>;
-  entry_points: Array<{
-    path: string;
-    kind: string;                   // DefFact.kind (function, class, method)
-    name: string;                   // DefFact.name
-    qualified_name?: string;        // DefFact.qualified_name
-  }>;
-  dependencies: {
-    external_modules: string[];     // From ImportFact.source_literal (non-relative)
-    import_count: number;
-  };
-  test_layout: {
-    test_files: string[];           // File paths matching test patterns
-    test_count: number;
-  };
-  public_api: Array<{
-    name: string;                   // ExportEntry.exported_name
-    def_uid?: string;               // Target definition UID
-    certainty: string;              // CERTAIN or UNCERTAIN
-    evidence?: string;              // Evidence kind (e.g., __all__literal)
-  }>;
-  _session: SessionState;
-}
-```
-
----
-
-#### `read_source`
-
-Read file contents with optional line ranges. Returns `file_sha256` per file for use with `write_source` span edits.
+Fetch full file content and sha256 for files identified by `recon`.
 
 **Parameters:**
 
@@ -3281,7 +3145,6 @@ Read file contents with optional line ranges. Returns `file_sha256` per file for
     start_line?: number;            // Optional line range start
     end_line?: number;              // Optional line range end
   }>;
-  cursor?: string;                  // Continuation token for paginated results
 }
 ```
 
@@ -3289,65 +3152,23 @@ Read file contents with optional line ranges. Returns `file_sha256` per file for
 
 ```typescript
 {
-  resource_kind: "source";
-  delivery: "inline";
   files: Array<{
     path: string;
     content: string;
-    language: string;
     line_count: number;
-    range: [number, number];        // [start_line, end_line]
-    file_sha256: string;            // Use for write_source expected_file_sha256
+    sha256: string;                 // Required by refactor_edit
+    range?: [number, number];       // [start_line, end_line] when span requested
   }>;
-  cursor?: string;                  // For pagination
-  has_more: boolean;
+  summary: string;
+  agentic_hint: string;            // Routing table for next steps
 }
 ```
 
 ---
 
-#### `read_file_full`
+#### `refactor_edit`
 
-Gated bulk file access with two-phase confirmation. Use only when you need the ENTIRE file content.
-
-**Parameters:**
-
-```typescript
-{
-  path: string;                     // File to read in full
-  confirm?: boolean;                // Must be true to receive content (two-phase gate)
-}
-```
-
----
-
-#### `list_files`
-
-List directory contents with filtering.
-
-**Parameters:**
-
-```typescript
-{
-  path?: string;                    // Directory path (default: repo root)
-  depth?: number;                   // Max depth to recurse
-  pattern?: string;                 // Glob pattern filter
-}
-```
-
----
-
-#### `reset_budget`
-
-Reset the read budget for the current session.
-
-**Parameters:** None.
-
----
-
-#### `write_source`
-
-Atomic file edits with structured delta response.
+Find-and-replace file editing with sha256 locking.
 
 **Parameters:**
 
@@ -3355,15 +3176,13 @@ Atomic file edits with structured delta response.
 {
   edits: Array<{
     path: string;
-    action: "create" | "update" | "delete";
-    content?: string;               // Full content for create
-    new_content?: string;           // Replacement content for span updates
-    expected_content?: string;      // Old text at span (fuzzy-matched for line drift)
-    start_line?: number;            // Span start (for update)
-    end_line?: number;              // Span end (for update)
-    expected_file_sha256?: string;  // SHA256 from read_source (hash validation)
+    old_content: string;            // Text to find (empty string = create new file)
+    new_content: string;            // Replacement text
+    expected_file_sha256?: string;  // SHA256 from recon_resolve (required for updates)
+    start_line?: number;            // Optional hint to disambiguate
+    end_line?: number;              // Optional hint to disambiguate
+    delete?: boolean;               // Set true to delete the file
   }>;
-  dry_run?: boolean;                // Preview only (default false)
 }
 ```
 
@@ -3371,28 +3190,13 @@ Atomic file edits with structured delta response.
 
 ```typescript
 {
-  applied: boolean;
-  dry_run: boolean;
-  delta: {
-    files_changed: number;
-    insertions: number;
-    deletions: number;
-    files: Array<{
-      path: string;
-      action: "created" | "updated" | "deleted";
-      old_hash?: string;
-      new_hash?: string;
-      file_sha256: string;          // New file SHA256 after edit
-      insertions: number;
-      deletions: number;
-      line_corrections?: Array<{    // When fuzzy-match adjusted line numbers
-        original: { start_line: number; end_line: number };
-        corrected: { start_line: number; end_line: number };
-      }>;
-    }>;
-  };
+  edits: Array<{
+    path: string;
+    status: "ok" | "error";
+    sha256?: string;                // New file SHA256 after edit
+    error?: string;                 // Error message if status is "error"
+  }>;
   summary: string;
-  display_to_user?: string;
 }
 ```
 
@@ -3586,11 +3390,11 @@ The remaining git tools use a consolidated action-parameter design:
 
 #### Refactor Tools (`refactor_*`)
 
-Structural refactoring via the structural index (DefFact/RefFact). Six separate MCP tools following the preview → inspect → apply/cancel flow.
+Structural refactoring via the structural index (DefFact/RefFact). Five separate MCP tools following the preview → commit/cancel flow.
 
 ##### `refactor_rename`
 
-Rename a symbol across the codebase. Returns a `refactor_id` for inspect/apply/cancel.
+Rename a symbol across the codebase. Returns a `refactor_id` for commit/cancel.
 
 ```typescript
 // Parameters
@@ -3616,23 +3420,17 @@ Find all references to a symbol or file for impact analysis before removal.
 { target: string }
 ```
 
-##### `refactor_inspect`
+##### `refactor_commit`
 
-Inspect low-certainty matches in a pending refactoring. Call when `verification_required` is true.
-
-```typescript
-// Parameters
-{ refactor_id: string }
-```
-
-##### `refactor_apply`
-
-Apply a previewed refactoring.
+Apply a previewed refactoring, or inspect low-certainty matches in a specific file.
 
 ```typescript
 // Parameters
-{ refactor_id: string }
+{ refactor_id: string; inspect_path?: string; context_lines?: number }
 ```
+
+Without `inspect_path`: applies the refactoring.
+With `inspect_path`: returns match details with context for review.
 
 ##### `refactor_cancel`
 

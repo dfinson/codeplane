@@ -1,9 +1,9 @@
-"""Recon enhanced model — adds seeds + pinned_paths from map_repo-derived lookup.
+"""Recon enhanced model — adds seeds + pinned_paths from pre-computed lookup.
 
 Registered as ``@model("cpl-recon-enhanced")`` for EVEE evaluation.
 
 Strategy: each recon call gets seeds (symbol names) and pinned_paths (file paths)
-derived from ONE map_repo call on the evee codebase + task text analysis.
+derived from task text analysis.
 The lookup table lives in ``data/enhanced_seeds.json``.
 """
 
@@ -136,7 +136,7 @@ class ReconEnhancedModel:
             if not path:
                 continue
             returned_files.append(path)
-            returned_tiers[path] = entry.get("tier", "summary_only")
+            returned_tiers[path] = entry.get("tier", "lite")
             returned_scores[path] = float(entry.get("combined_score", 0.0))
 
         return {

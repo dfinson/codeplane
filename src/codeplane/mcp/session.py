@@ -17,7 +17,7 @@ from codeplane.mcp.gate import CallPatternDetector, GateManager
 
 # Tools that acquire an exclusive session lock while running.
 # No other tool may execute concurrently on the same session.
-EXCLUSIVE_TOOLS: frozenset[str] = frozenset({"checkpoint", "semantic_diff", "map_repo"})
+EXCLUSIVE_TOOLS: frozenset[str] = frozenset({"checkpoint", "semantic_diff"})
 
 
 @dataclass

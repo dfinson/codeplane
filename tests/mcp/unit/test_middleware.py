@@ -369,17 +369,17 @@ class TestToolMiddleware:
         assert summary["results"] == 3
         assert summary["files"] == 2
 
-    def test_extract_result_summary_search_tool(self, middleware):
-        """Test search-specific summary extraction."""
-        result = {"results": [{"path": "a.py"}, {"path": "b.py"}]}
-        summary = middleware._extract_result_summary("search", result)
-        assert summary["matches"] == 2
+    def test_extract_result_summary_recon_tool(self, middleware):
+        """Test recon-specific summary extraction."""
+        result = {"files": [{"path": "a.py"}, {"path": "b.py"}]}
+        summary = middleware._extract_result_summary("recon", result)
+        assert summary["files_returned"] == 2
 
-    def test_extract_result_summary_write_files(self, middleware):
-        """Test write_source-specific summary extraction."""
-        result = {"delta": {"files_changed": 3}}
-        summary = middleware._extract_result_summary("write_source", result)
-        assert summary["files_changed"] == 3
+    def test_extract_result_summary_refactor_edit(self, middleware):
+        """Test refactor_edit-specific summary extraction."""
+        result = {"edits": [{"status": "ok"}, {"status": "ok"}, {"status": "error"}]}
+        summary = middleware._extract_result_summary("refactor_edit", result)
+        assert summary["edits_applied"] == 2
 
     def test_extract_result_summary_test_run(self, middleware):
         """Test test run summary extraction."""
@@ -403,36 +403,29 @@ class TestToolMiddleware:
         formatted = middleware._format_tool_summary("test_tool", result)
         assert formatted == "custom summary"
 
-    def test_format_tool_summary_search(self, middleware):
-        """Test search-specific formatting."""
-        result = {"results": [1, 2, 3]}
-        formatted = middleware._format_tool_summary("search", result)
-        assert formatted == "3 results"
+    def test_format_tool_summary_recon(self, middleware):
+        """Test recon-specific formatting."""
+        result = {"files": [1, 2, 3]}
+        formatted = middleware._format_tool_summary("recon", result)
+        assert formatted == "3 files returned"
 
-    def test_format_tool_summary_write_files(self, middleware):
-        """Test write_source-specific formatting."""
-        result = {"delta": {"files_changed": 5}}
-        formatted = middleware._format_tool_summary("write_source", result)
-        assert formatted == "5 files updated"
-
-    def test_format_tool_summary_read_source(self, middleware):
-        """Test read_source-specific formatting."""
+    def test_format_tool_summary_recon_resolve(self, middleware):
+        """Test recon_resolve-specific formatting."""
         result = {"files": [{"path": "a.py"}, {"path": "b.py"}]}
-        formatted = middleware._format_tool_summary("read_source", result)
-        assert formatted == "2 files read"
+        formatted = middleware._format_tool_summary("recon_resolve", result)
+        assert formatted == "2 files resolved"
 
-    def test_format_tool_summary_list_files(self, middleware):
-        """Test list_files-specific formatting."""
-        result = {"entries": [1, 2, 3, 4, 5]}
-        formatted = middleware._format_tool_summary("list_files", result)
-        assert formatted == "5 entries"
+    def test_format_tool_summary_refactor_edit(self, middleware):
+        """Test refactor_edit-specific formatting."""
+        result = {"edits": [{"status": "ok"}, {"status": "ok"}, {"status": "error"}]}
+        formatted = middleware._format_tool_summary("refactor_edit", result)
+        assert formatted == "2/3 edits applied"
 
-    def test_format_tool_summary_map_repo(self, middleware):
-        """Test map_repo-specific formatting."""
-        result = {"entry_points": [1, 2], "languages": ["python", "javascript"]}
-        formatted = middleware._format_tool_summary("map_repo", result)
-        assert "2 languages" in formatted
-        assert "2 entry points" in formatted
+    def test_format_tool_summary_checkpoint(self, middleware):
+        """Test checkpoint-specific formatting."""
+        result = {"tests": {"passed": 10, "failed": 2}}
+        formatted = middleware._format_tool_summary("checkpoint", result)
+        assert formatted == "10 passed, 2 failed"
 
     def test_format_tool_summary_test_run_completed(self, middleware):
         """Test test run completion formatting."""

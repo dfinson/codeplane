@@ -187,12 +187,13 @@ def _find_elbow_raw(
 def assign_tiers(
     candidates: list[FileCandidate],
 ) -> list[FileCandidate]:
-    """Assign OutputTier to file candidates based on two-elbow detection.
+    """Assign OutputTier to file candidates based on single-elbow detection.
 
     Mutates candidates in-place and returns them sorted by combined_score
     descending.
 
-    Explicit mentions are always promoted to at least MIN_SCAFFOLD.
+    v2: Single elbow.  Above → SCAFFOLD, below → LITE.
+    Explicit mentions are always promoted to at least SCAFFOLD.
     """
     if not candidates:
         return candidates
@@ -201,29 +202,26 @@ def assign_tiers(
     candidates.sort(key=lambda c: -c.combined_score)
     scores = [c.combined_score for c in candidates]
 
-    n_full, n_scaffold = compute_two_elbows(scores)
+    # Single elbow: everything above is SCAFFOLD, below is LITE
+    n_scaffold = _find_elbow_raw(scores, lo=2, hi=min(len(scores), 40))
 
     for i, cand in enumerate(candidates):
-        if i < n_full:
-            cand.tier = OutputTier.FULL_FILE
-        elif i < n_scaffold:
-            cand.tier = OutputTier.MIN_SCAFFOLD
+        if i < n_scaffold:
+            cand.tier = OutputTier.SCAFFOLD
         else:
-            cand.tier = OutputTier.SUMMARY_ONLY
+            cand.tier = OutputTier.LITE
 
-    # Promote explicit mentions to at least MIN_SCAFFOLD
+    # Promote explicit mentions to at least SCAFFOLD
     for cand in candidates:
-        if cand.has_explicit_mention and cand.tier == OutputTier.SUMMARY_ONLY:
-            cand.tier = OutputTier.MIN_SCAFFOLD
+        if cand.has_explicit_mention and cand.tier == OutputTier.LITE:
+            cand.tier = OutputTier.SCAFFOLD
 
-    n_full_final = sum(1 for c in candidates if c.tier == OutputTier.FULL_FILE)
-    n_scaffold_final = sum(1 for c in candidates if c.tier == OutputTier.MIN_SCAFFOLD)
-    n_summary_final = sum(1 for c in candidates if c.tier == OutputTier.SUMMARY_ONLY)
+    n_scaffold_final = sum(1 for c in candidates if c.tier == OutputTier.SCAFFOLD)
+    n_lite_final = sum(1 for c in candidates if c.tier == OutputTier.LITE)
     log.debug(
         "recon.tier_assignment",
-        full=n_full_final,
         scaffold=n_scaffold_final,
-        summary=n_summary_final,
+        lite=n_lite_final,
     )
 
     return candidates

@@ -167,12 +167,13 @@ class TestStripToolPrefix:
 
     def test_strips_prefix(self) -> None:
         """Strips MCP server prefix from known tool names."""
-        assert ToolMiddleware._strip_tool_prefix("codeplane-copy3_search") == "search"
+        assert ToolMiddleware._strip_tool_prefix("codeplane-copy3_recon") == "recon"
 
     def test_strips_long_prefix(self) -> None:
         """Strips long prefix for known tool."""
         assert (
-            ToolMiddleware._strip_tool_prefix("mcp_codeplane-my_repo_read_source") == "read_source"
+            ToolMiddleware._strip_tool_prefix("mcp_codeplane-my_repo_recon_resolve")
+            == "recon_resolve"
         )
 
     def test_already_short(self) -> None:
@@ -188,7 +189,7 @@ class TestStripToolPrefix:
         assert ToolMiddleware._strip_tool_prefix("codeplane-cod_checkpoint") == "checkpoint"
 
     def test_write_source(self) -> None:
-        assert ToolMiddleware._strip_tool_prefix("codeplane-cod_write_source") == "write_source"
+        assert ToolMiddleware._strip_tool_prefix("codeplane-cod_refactor_edit") == "refactor_edit"
 
 
 # ---------------------------------------------------------------------------

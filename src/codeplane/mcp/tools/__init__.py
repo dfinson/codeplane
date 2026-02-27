@@ -3,21 +3,19 @@
 from codeplane.mcp.tools import (
     checkpoint,
     diff,
-    files,
-    index,
+    edit,
     introspection,
-    mutation,
     recon,
     refactor,
+    resolve,
 )
 
 __all__ = [
     "checkpoint",
     "diff",
-    "files",
-    "index",
+    "edit",
     "introspection",
-    "mutation",
     "recon",
     "refactor",
+    "resolve",
 ]

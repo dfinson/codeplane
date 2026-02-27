@@ -1,10 +1,9 @@
 """Unified delivery envelope for MCP tool responses.
 
 Provides:
-- DeliveryEnvelope: uniform response shape for all endpoints
 - ResourceCache: disk-backed cache for resource-mode payloads
 - ClientProfile: static client capability profiles
-- build_envelope: decide inline/resource delivery
+- wrap_existing_response: decide inline/paginated/resource delivery
 - resolve_profile: select client profile from connection info
 """
 
@@ -926,7 +925,7 @@ class ResourceCache:
     ) -> tuple[str, int]:
         """Serialize payload to disk and return (resource_id, byte_size)."""
         if isinstance(payload, dict | list):
-            raw = json.dumps(payload, indent=2, sort_keys=False).encode("utf-8")
+            raw = json.dumps(payload, indent=2, sort_keys=False, default=str).encode("utf-8")
         elif isinstance(payload, str):
             raw = payload.encode("utf-8")
         elif isinstance(payload, bytes):
@@ -956,98 +955,6 @@ class ResourceCache:
 
 # Global resource cache instance
 _resource_cache = ResourceCache()
-
-
-# =============================================================================
-# Delivery Envelope
-# =============================================================================
-
-
-def build_envelope(
-    payload: dict[str, Any],
-    *,
-    resource_kind: str,
-    client_profile: ClientProfile | None = None,
-    scope_id: str | None = None,
-    scope_usage: dict[str, Any] | None = None,
-    inline_summary: str | None = None,
-) -> dict[str, Any]:
-    """Build a delivery envelope around a payload.
-
-    Rules:
-    - Payload fits inline -> delivery="inline"
-    - Doesn't fit -> delivery="resource", full payload written to disk
-    """
-    profile = client_profile or get_current_profile()
-    inline_cap = profile.inline_cap_bytes
-
-    # Measure payload size
-    payload_bytes = len(json.dumps(payload, indent=2).encode("utf-8"))
-
-    # Build base envelope
-    envelope: dict[str, Any] = {
-        "resource_kind": resource_kind,
-    }
-
-    if payload_bytes <= inline_cap:
-        # Inline delivery
-        envelope["delivery"] = "inline"
-        envelope.update(payload)
-        envelope["inline_budget_bytes_used"] = payload_bytes
-        envelope["inline_budget_bytes_limit"] = inline_cap
-    else:
-        # Try cursor pagination first for supported kinds
-        # Subtract post-overhead (scope_id/scope_usage added after pagination)
-        post_overhead = 0
-        if scope_id:
-            post_overhead += len(json.dumps({"scope_id": scope_id}, indent=2).encode("utf-8"))
-        if scope_usage:
-            post_overhead += len(json.dumps({"scope_usage": scope_usage}, indent=2).encode("utf-8"))
-        paginated = _try_paginate(
-            payload, resource_kind, inline_cap - post_overhead, inline_summary
-        )
-        if paginated is not None:
-            if scope_id:
-                paginated["scope_id"] = scope_id
-            if scope_usage:
-                paginated["scope_usage"] = scope_usage
-            log.debug(
-                "envelope_built",
-                delivery="paginated",
-                resource_kind=resource_kind,
-                payload_bytes=payload_bytes,
-                inline_cap=inline_cap,
-                scope_id=scope_id,
-            )
-            return paginated
-
-        # Fallback: write full payload to disk
-        resource_id, byte_size = _resource_cache.store(payload, resource_kind)
-        envelope["delivery"] = "resource"
-        if inline_summary:
-            envelope["summary"] = inline_summary
-        envelope["inline_budget_bytes_used"] = len(
-            json.dumps(envelope, indent=2, default=str).encode("utf-8")
-        )
-        envelope["inline_budget_bytes_limit"] = inline_cap
-        envelope["agentic_hint"] = _build_fetch_hint(resource_id, byte_size, resource_kind, payload)
-
-    # Echo scope
-    if scope_id:
-        envelope["scope_id"] = scope_id
-    if scope_usage:
-        envelope["scope_usage"] = scope_usage
-
-    log.debug(
-        "envelope_built",
-        delivery=envelope["delivery"],
-        resource_kind=resource_kind,
-        payload_bytes=payload_bytes,
-        inline_cap=inline_cap,
-        scope_id=scope_id,
-    )
-
-    return envelope
 
 
 def wrap_existing_response(

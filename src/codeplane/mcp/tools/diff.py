@@ -42,7 +42,15 @@ log = structlog.get_logger(__name__)
 def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     """Register semantic_diff MCP tool."""
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={
+            "title": "Diff: structural change summary",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+    )
     async def semantic_diff(
         ctx: Context,
         base: str = Field("HEAD", description="Base ref (commit, branch, tag) or epoch:N"),

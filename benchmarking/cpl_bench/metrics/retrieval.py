@@ -1,11 +1,10 @@
-"""Retrieval metrics — Precision, Recall, F1 at three fidelity levels.
+"""Retrieval metrics — Precision, Recall, F1 at two fidelity levels.
 
 Registered as ``@metric("cpl-retrieval")`` for EVEE evaluation.
 
-Computes P/R/F1 for three views of the returned file set:
+Computes P/R/F1 for two views of the returned file set:
     all:       every returned file regardless of tier
-    high:      full_file + min_scaffold (files the agent can actually read)
-    edit:      full_file only (files the agent gets full source for)
+    scaffold:  scaffold tier only (files the agent gets imports + signatures for)
 
 The ``@metric`` wrapper handles field mapping via the config YAML.
 The inner ``compute()`` receives the mapped fields as keyword arguments:
@@ -21,8 +20,7 @@ from typing import Any
 
 from evee import metric
 
-_HIGH_TIERS = {"full_file", "min_scaffold"}
-_EDIT_TIERS = {"full_file"}
+_SCAFFOLD_TIERS = {"scaffold"}
 
 
 def _prf(returned: set[str], gt: set[str]) -> dict[str, float]:
@@ -36,37 +34,30 @@ def _prf(returned: set[str], gt: set[str]) -> dict[str, float]:
 
 @metric("cpl-retrieval")
 class RetrievalMetric:
-    """P/R/F1 at three fidelity levels: all, high (file+scaffold), edit (file only)."""
+    """P/R/F1 at two fidelity levels: all (every returned file), scaffold (scaffold tier only)."""
 
     def compute(self, returned_tiers: dict[str, str], gt_files: list[str]) -> dict[str, Any]:
-        """Compute P/R/F1 for a single query at all three levels."""
+        """Compute P/R/F1 for a single query at both levels."""
         gt = set(gt_files)
 
         all_returned = set(returned_tiers.keys())
-        high_returned = {p for p, t in returned_tiers.items() if t in _HIGH_TIERS}
-        edit_returned = {p for p, t in returned_tiers.items() if t in _EDIT_TIERS}
+        scaffold_returned = {p for p, t in returned_tiers.items() if t in _SCAFFOLD_TIERS}
 
         all_prf = _prf(all_returned, gt)
-        high_prf = _prf(high_returned, gt)
-        edit_prf = _prf(edit_returned, gt)
+        scaffold_prf = _prf(scaffold_returned, gt)
 
         return {
             # All tiers
             "all_precision": all_prf["precision"],
             "all_recall": all_prf["recall"],
             "all_f1": all_prf["f1"],
-            # High fidelity (full_file + min_scaffold)
-            "high_precision": high_prf["precision"],
-            "high_recall": high_prf["recall"],
-            "high_f1": high_prf["f1"],
-            # Edit tier (full_file only)
-            "edit_precision": edit_prf["precision"],
-            "edit_recall": edit_prf["recall"],
-            "edit_f1": edit_prf["f1"],
+            # Scaffold tier
+            "scaffold_precision": scaffold_prf["precision"],
+            "scaffold_recall": scaffold_prf["recall"],
+            "scaffold_f1": scaffold_prf["f1"],
             # Counts
             "all_count": len(all_returned),
-            "high_count": len(high_returned),
-            "edit_count": len(edit_returned),
+            "scaffold_count": len(scaffold_returned),
             "gt_count": len(gt),
         }
 
@@ -76,7 +67,7 @@ class RetrievalMetric:
             return {}
 
         result: dict[str, Number] = {}
-        for level in ("all", "high", "edit"):
+        for level in ("all", "scaffold"):
             for stat in ("precision", "recall", "f1"):
                 key = f"{level}_{stat}"
                 values = [s[key] for s in scores]

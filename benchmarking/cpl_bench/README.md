@@ -126,8 +126,8 @@ This calls `recon` for each of the 72 ground-truth queries and measures:
 - **`cpl-retrieval`** — Standard IR metrics. Aggregates to avg/median/min/max F1.
 
 - **`cpl-tier-align`** — Measures whether recon assigns the expected tier per GT
-  category: E (Edit) → `full_file`, C (Context) → `min_scaffold`,
-  S (Supplementary) → `summary_only`.
+  category: E (Edit) → `scaffold`, C (Context) → `scaffold`,
+  S (Supplementary) → `lite`.
 
 - **`cpl-efficiency`** — Aggregates efficiency stats grouped by variant with
   head-to-head deltas (codeplane − native) for turns, tool calls, and tokens.

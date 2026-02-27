@@ -140,5 +140,3 @@ def _lines_match(actual: list[str], expected: list[str]) -> bool:
     if len(actual) != len(expected):
         return False
     return all(a.rstrip() == e.rstrip() for a, e in zip(actual, expected, strict=True))
-
-

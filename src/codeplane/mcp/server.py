@@ -103,12 +103,11 @@ def create_mcp_server(context: "AppContext") -> "FastMCP":
     from codeplane.mcp.tools import (
         checkpoint,
         diff,
-        files,
-        index,
+        edit,
         introspection,
-        mutation,
         recon,
         refactor,
+        resolve,
     )
 
     log.info("mcp_server_creating", repo_root=str(context.repo_root))
@@ -132,10 +131,9 @@ def create_mcp_server(context: "AppContext") -> "FastMCP":
     # Register all tools using native FastMCP decorators
     checkpoint.register_tools(mcp, context)
     diff.register_tools(mcp, context)
-    files.register_tools(mcp, context)
-    index.register_tools(mcp, context)
-    mutation.register_tools(mcp, context)
+    edit.register_tools(mcp, context)
     recon.register_tools(mcp, context)
+    resolve.register_tools(mcp, context)
     refactor.register_tools(mcp, context)
     introspection.register_tools(mcp, context)
 

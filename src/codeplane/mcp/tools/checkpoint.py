@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 from fastmcp import Context
-from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from codeplane.git._internal.hooks import run_hook
@@ -845,14 +844,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     """Register checkpoint tool with FastMCP server."""
 
     @mcp.tool(
-        title="Checkpoint: lint, test, commit, push",
-        annotations=ToolAnnotations(
-            title="Checkpoint: lint, test, commit, push",
-            readOnlyHint=False,
-            destructiveHint=False,
-            idempotentHint=False,
-            openWorldHint=False,
-        ),
+        annotations={
+            "title": "Checkpoint: lint, test, commit, push",
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": False,
+        },
     )
     async def checkpoint(
         ctx: Context,

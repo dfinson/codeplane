@@ -35,8 +35,7 @@ _AGENT_TAG = "\\[agent] "
 # Weighted rotation: A appears twice, B once per cycle.
 _REJOINDER_INTERVAL = 5
 _REJOINDERS = (
-    "REJOINDER: search(), read_source, and read_scaffold"
-    " replace grep/rg/find/cat/head/tail/sed/wc.",
+    "REJOINDER: recon + recon_resolve replace grep/rg/find/cat/head/tail/sed/wc.",
     "REJOINDER: checkpoint replaces direct test runner and linter invocation.",
 )
 _REJOINDER_ROTATION = (0, 1, 0)
@@ -104,7 +103,7 @@ class ToolMiddleware(Middleware):
 
         # --- Exclusive tool enforcement ---
         # All tools acquire the session's exclusive lock. For exclusive tools
-        # (checkpoint, semantic_diff, map_repo) this blocks any concurrent
+        # (checkpoint, semantic_diff) this blocks any concurrent
         # tool call on the same session until the exclusive tool completes.
         # For regular tools, the lock is acquired and released quickly.
 
@@ -547,8 +546,8 @@ class ToolMiddleware(Middleware):
             clears_window=lint_mutated,
         )
 
-        # Reset consecutive recon counter when write_source is called
-        if short_name == "write_source":
+        # Reset consecutive recon counter when refactor_edit is called
+        if short_name == "refactor_edit":
             session.counters["recon_consecutive"] = 0
 
         if pattern_match and pattern_match.severity == "warn":
@@ -741,11 +740,13 @@ class ToolMiddleware(Middleware):
             summary["entries"] = len(result["entries"])
 
         # Tool-specific summaries
-        if tool_name == "search" and "results" in result:
-            summary["matches"] = len(result.get("results", []))
-        elif tool_name == "write_source" and "delta" in result:
-            delta = result["delta"]
-            summary["files_changed"] = delta.get("files_changed", 0)
+        if tool_name == "recon" and "files" in result:
+            summary["files_returned"] = len(result.get("files", []))
+        elif tool_name == "refactor_edit" and "edits" in result:
+            edits = result.get("edits", [])
+            summary["edits_applied"] = len(
+                [e for e in edits if isinstance(e, dict) and e.get("status") == "ok"]
+            )
         elif tool_name == "checkpoint" and "tests" in result:
             tests = result.get("tests", {})
             if isinstance(tests, dict):
@@ -784,24 +785,20 @@ class ToolMiddleware(Middleware):
             return str(data["display_to_user"])
 
         # Tool-specific formatting based on result structure
-        if tool_name == "search":
-            results = data.get("results", [])
-            return f"{len(results)} results"
-
-        if tool_name == "write_source":
-            delta = data.get("delta", {})
-            files_changed = delta.get("files_changed", 0)
-            return f"{files_changed} files updated"
-
-        if tool_name in ("read_source", "read_file_full"):
+        if tool_name == "recon":
             files = data.get("files", [])
-            return f"{len(files)} files read"
+            return f"{len(files)} files returned"
 
-        if tool_name == "list_files":
-            entries = data.get("entries", [])
-            return f"{len(entries)} entries"
+        if tool_name == "recon_resolve":
+            files = data.get("files", [])
+            return f"{len(files)} files resolved"
 
-        if tool_name in ("checkpoint",):
+        if tool_name == "refactor_edit":
+            edits = data.get("edits", [])
+            ok = len([e for e in edits if isinstance(e, dict) and e.get("status") == "ok"])
+            return f"{ok}/{len(edits)} edits applied"
+
+        if tool_name == "checkpoint":
             if "summary" in data:
                 return str(data["summary"])
             tests = data.get("tests", {})
@@ -809,12 +806,11 @@ class ToolMiddleware(Middleware):
                 passed = tests.get("passed", 0)
                 failed = tests.get("failed", 0)
                 return f"{passed} passed, {failed} failed"
-            return f"{tool_name} complete"
+            return "checkpoint complete"
 
-        if tool_name == "map_repo":
-            entry_points = data.get("entry_points", [])
-            languages = data.get("languages", [])
-            return f"{len(languages)} languages, {len(entry_points)} entry points"
+        if tool_name == "semantic_diff":
+            changes = data.get("changes", [])
+            return f"{len(changes)} structural changes"
 
         # Default: return empty string (no summary shown)
         return ""

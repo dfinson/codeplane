@@ -146,12 +146,12 @@ class TestScopeManager:
 class TestScopeUsageInEnvelope:
     """Scope usage tracking appears in delivery envelopes."""
 
-    def test_scope_usage_echoed_in_build_envelope(self) -> None:
-        """scope_usage dict appears in build_envelope output."""
-        from codeplane.mcp.delivery import build_envelope
+    def test_scope_usage_echoed_in_wrap_existing_response(self) -> None:
+        """scope_usage dict appears in wrap_existing_response output."""
+        from codeplane.mcp.delivery import wrap_existing_response
 
         usage = {"read_bytes": 500, "full_reads": 1, "search_calls": 0}
-        result = build_envelope(
+        result = wrap_existing_response(
             {"data": "test"},
             resource_kind="source",
             scope_id="test-scope",
@@ -163,9 +163,9 @@ class TestScopeUsageInEnvelope:
 
     def test_no_scope_id_no_scope_fields(self) -> None:
         """Without scope_id, scope fields are absent."""
-        from codeplane.mcp.delivery import build_envelope
+        from codeplane.mcp.delivery import wrap_existing_response
 
-        result = build_envelope(
+        result = wrap_existing_response(
             {"data": "test"},
             resource_kind="source",
             inline_summary="test",

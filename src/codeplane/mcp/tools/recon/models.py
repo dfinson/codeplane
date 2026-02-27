@@ -247,16 +247,27 @@ _BUILD_FILES = frozenset(
 
 
 class OutputTier(StrEnum):
-    """Output fidelity tier for a file, determined by two-elbow detection.
+    """Output fidelity tier for a file, determined by single-elbow detection.
 
-    FULL_FILE:     Above elbow-1 — include full file content.
-    MIN_SCAFFOLD:  Between elbow-1 and elbow-2 — imports + signatures.
-    SUMMARY_ONLY:  Below elbow-2 — path + one-line summary.
+    SCAFFOLD:  Above elbow — imports + signatures.
+    LITE:      Below elbow — path + description only.
+
+    v2 design: no FULL_FILE tier.  Full content is always fetched via
+    recon_resolve as a separate step.
+
+    Legacy aliases (FULL_FILE, MIN_SCAFFOLD, SUMMARY_ONLY) are kept for
+    internal pipeline compatibility — they map to the v2 values and are
+    NOT exposed in API output.
     """
 
-    FULL_FILE = "full_file"
-    MIN_SCAFFOLD = "min_scaffold"
-    SUMMARY_ONLY = "summary_only"
+    SCAFFOLD = "scaffold"
+    LITE = "lite"
+
+    # Internal aliases — pipeline scoring still uses 3-tier logic internally,
+    # but both FULL_FILE and MIN_SCAFFOLD serialize to "scaffold" on output.
+    FULL_FILE = "scaffold"
+    MIN_SCAFFOLD = "scaffold"
+    SUMMARY_ONLY = "lite"
 
 
 # ===================================================================

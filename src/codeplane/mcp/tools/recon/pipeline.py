@@ -9,7 +9,8 @@ them but adds no domain logic of its own (Dependency Inversion principle).
 File-centric pipeline: ONE call, ALL context.
 - Agent controls nothing — only ``task`` and optional ``seeds`` exposed.
 - Backend decides depth, seed count, format (no knobs).
-- Two-elbow tier assignment (FULL_FILE / MIN_SCAFFOLD / SUMMARY_ONLY).
+- Single-elbow tier assignment (SCAFFOLD / LITE).
+- Includes repo map for structural orientation.
 """
 
 from __future__ import annotations
@@ -1039,14 +1040,14 @@ def _check_recon_gate(
             f"This is recon call #{consecutive + 1}. Explain in ≥500 "
             "characters why your previous recon calls were insufficient "
             "and what specific context is still missing that cannot be "
-            "obtained via read_source or search."
+            "obtained via recon_resolve."
         ),
         expires_calls=3,
         message=(
             f"Recon call #{consecutive + 1} requires gate confirmation. "
             "You have called recon multiple times without making progress "
-            "via write_source.  Consider using read_source to expand on "
-            "specific files, or proceed to write_source with the context "
+            "via refactor_edit.  Consider using recon_resolve to expand on "
+            "specific files, or proceed to refactor_edit with the context "
             "you already have."
         ),
     )
@@ -1056,13 +1057,13 @@ def _check_recon_gate(
         "gate": gate_block,
         "agentic_hint": (
             f"This is recon call #{consecutive + 1} without a "
-            "write_source in between.  You must:\n"
+            "refactor_edit in between.  You must:\n"
             "1. Provide gate_token from the gate block below\n"
             f"2. Provide gate_reason (≥{_RECON_GATE_REASON_MIN} chars) "
             "explaining why previous recon calls were insufficient\n"
             "3. Include pinned_paths\n\n"
-            "Alternative: use read_source to expand on specific files "
-            "from previous recon results, or proceed to write_source."
+            "Alternative: use recon_resolve to expand on specific files "
+            "from previous recon results, or proceed to refactor_edit."
         ),
         "consecutive_recon_calls": consecutive + 1,
     }
@@ -1115,7 +1116,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             None,
             description=(
                 "REQUIRED on 2nd+ consecutive recon call (before any "
-                "write_source).  Explain what was missing from the "
+                "refactor_edit).  Explain what was missing from the "
                 "first call, what needs expansion, and why (~250 chars "
                 "min).  Must accompany pinned_paths and semantic "
                 "anchors in the task query."
@@ -1140,13 +1141,16 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         """Task-aware code discovery — ONE call, ALL context.
 
         Returns file-level results ranked by embedding similarity,
-        with three fidelity tiers:
-        - FULL_FILE: complete file content for top matches
-        - MIN_SCAFFOLD: imports + signatures for middle tier
-        - SUMMARY_ONLY: path + summary for tail
+        with two fidelity tiers:
+        - SCAFFOLD: imports + signatures for top matches
+        - LITE: path + description for tail
+
+        Also includes a repo_map for structural orientation.
+        Use recon_resolve to fetch full content for files you
+        want to read or edit.
 
         Pipeline: parse_task → file-level embedding harvest →
-        def-level enrichment → two-elbow tier assignment →
+        def-level enrichment → single-elbow tier assignment →
         content assembly → deliver.
         """
         recon_id = uuid.uuid4().hex[:12]
@@ -1218,38 +1222,22 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                 remaining=len(file_candidates),
             )
 
-        # ── Assemble file-centric response ──
+        # ── Assemble file-centric response (v2: scaffold + lite only) ──
         t_assemble = time.monotonic()
-        files_output: list[dict[str, Any]] = []
+        scaffold_files: list[dict[str, Any]] = []
+        lite_files: list[dict[str, Any]] = []
 
         for fc in file_candidates:
-            entry: dict[str, Any] = {
-                "path": fc.path,
-                "tier": fc.tier.value,
-                "similarity": round(fc.similarity, 4),
-                "combined_score": round(fc.combined_score, 4),
-                "evidence": fc.evidence_summary,
-                "expand_reason": fc.expand_reason,
-                "artifact_kind": fc.artifact_kind.value,
-            }
-
             full_path = repo_root / fc.path
 
-            if fc.tier == OutputTier.FULL_FILE:
-                # Include full file content (no truncation for indexed files)
-                if full_path.exists():
-                    try:
-                        raw = full_path.read_bytes()
-                        if b"\x00" not in raw[:512]:
-                            entry["content"] = raw.decode("utf-8", errors="replace")
-                            entry["file_sha256"] = _compute_sha256(full_path)
-                    except Exception:  # noqa: BLE001
-                        # Fallback to capped read for problematic files
-                        content = _read_unindexed_content(repo_root, fc.path)
-                        if content is not None:
-                            entry["content"] = content
-
-            elif fc.tier == OutputTier.MIN_SCAFFOLD:
+            if fc.tier == OutputTier.SCAFFOLD:
+                entry: dict[str, Any] = {
+                    "path": fc.path,
+                    "similarity": round(fc.similarity, 4),
+                    "combined_score": round(fc.combined_score, 4),
+                    "evidence": fc.evidence_summary,
+                    "artifact_kind": fc.artifact_kind.value,
+                }
                 # Include scaffold: imports + signatures
                 try:
                     from codeplane.mcp.tools.files import _build_scaffold
@@ -1263,54 +1251,67 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                         if content is not None:
                             lines = content.splitlines()[:100]
                             entry["scaffold_preview"] = "\n".join(lines)
-                if full_path.exists():
-                    entry["file_sha256"] = _compute_sha256(full_path)
+                scaffold_files.append(entry)
 
             else:
-                # SUMMARY_ONLY: lite scaffold (symbol names + import sources + line count)
+                # LITE: path + description only
+                lite_entry: dict[str, Any] = {
+                    "path": fc.path,
+                    "similarity": round(fc.similarity, 4),
+                    "combined_score": round(fc.combined_score, 4),
+                    "artifact_kind": fc.artifact_kind.value,
+                }
                 if full_path.exists():
                     try:
                         from codeplane.mcp.tools.files import _build_lite_scaffold
 
                         lite = await _build_lite_scaffold(app_ctx, fc.path, full_path)
-                        entry["summary"] = lite
+                        lite_entry["summary"] = lite
                     except Exception:  # noqa: BLE001
                         pass
+                lite_files.append(lite_entry)
 
-            files_output.append(entry)
+        # ── Include repo map in every recon response ──
+        repo_map: dict[str, Any] = {}
+        try:
+            map_result = await app_ctx.coordinator.map_repo(
+                include=["structure", "entry_points"],
+                depth=3,
+                limit=100,
+            )
+            from codeplane.mcp.tools.index import _build_overview, _map_repo_sections_to_text
+
+            repo_map = {
+                "overview": _build_overview(map_result),
+                **_map_repo_sections_to_text(map_result),
+            }
+        except Exception:  # noqa: BLE001
+            log.warning("recon.map_repo_failed", exc_info=True)
 
         assemble_ms = round((time.monotonic() - t_assemble) * 1000)
         diagnostics["assemble_ms"] = assemble_ms
 
-        # Group by tier for structured output
-        full_files = [f for f in files_output if f["tier"] == "full_file"]
-        scaffold_files = [f for f in files_output if f["tier"] == "min_scaffold"]
-        summary_files = [f for f in files_output if f["tier"] == "summary_only"]
-
         # Build response
-        n_files = len(files_output)
-        paths_str = ", ".join(f["path"] for f in full_files[:5])
-        if len(full_files) > 5:
-            paths_str += f" (+{len(full_files) - 5} more)"
+        n_files = len(scaffold_files) + len(lite_files)
 
         response: dict[str, Any] = {
             "recon_id": recon_id,
-            # Tier-based output (primary structure)
-            "full_file": full_files,
-            "min_scaffold": scaffold_files,
-            "summary_only": summary_files,
-            "files": files_output,
+            "repo_map": repo_map,
+            "scaffold_files": scaffold_files,
+            "lite_files": lite_files,
             "summary": (
-                f"{len(full_files)} full file(s), "
                 f"{len(scaffold_files)} scaffold(s), "
-                f"{len(summary_files)} summary(ies) "
-                f"across {n_files} file(s): {paths_str}"
+                f"{len(lite_files)} lite(s) "
+                f"across {n_files} file(s)"
             ),
             "scoring_summary": {
-                "pipeline": "file_embed→def_enrich→two_elbow→tier→assemble",
+                "pipeline": "file_embed→def_enrich→single_elbow→tier→assemble",
                 "intent": parsed_task.intent.value,
                 "file_candidates": len(file_candidates),
-                "tiers": diagnostics.get("tiers", {}),
+                "tiers": {
+                    "scaffold": len(scaffold_files),
+                    "lite": len(lite_files),
+                },
                 "parsed_terms": parsed_task.primary_terms[:8],
                 "noise_metric": session_info.get("noise_metric", 0),
             },
@@ -1321,70 +1322,44 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         if parsed_task.negative_mentions:
             response["scoring_summary"]["negative_mentions"] = parsed_task.negative_mentions
 
-        # Conditional mapRepo inclusion hint
-        if session_info.get("include_map_repo"):
-            response["include_map_repo"] = True
-
         diagnostics["total_ms"] = round((time.monotonic() - t_total) * 1000)
         response["diagnostics"] = diagnostics
 
-        # Agentic hint with expand_reason
+        # Agentic hint
         intent = parsed_task.intent
-        top_paths = [f["path"] for f in full_files[:3]]
+        top_paths = [f["path"] for f in scaffold_files[:5]]
         top_paths_str = ", ".join(top_paths) if top_paths else "(none)"
-        top_reasons = [
-            f"{fc.path}: {fc.expand_reason}"
-            for fc in file_candidates
-            if fc.tier == OutputTier.FULL_FILE
-        ][:3]
-        reasons_str = "; ".join(top_reasons) if top_reasons else ""
 
         hint_parts = [
             f"Recon found {n_files} file(s) (intent: {intent.value}).",
-            f"Full content ({len(full_files)}): {top_paths_str}.",
-            f"Scaffolds ({len(scaffold_files)}), Summaries ({len(summary_files)}).",
+            f"Scaffolds ({len(scaffold_files)}): {top_paths_str}.",
+            f"Lite ({len(lite_files)}).",
+            "NEXT: call recon_resolve with the files you want to read or edit.",
         ]
-        if reasons_str:
-            hint_parts.append(f"Top files: {reasons_str}.")
-        if summary_files:
-            cache_path = f".codeplane/cache/recon_result/{recon_id}.json"
-            hint_parts.append(
-                f"Summary entries contain lite scaffolds (symbol names + imports). "
-                f"Scan for missed edit targets: "
-                f"jq '[.summary_only[] | {{path, summary}}]' {cache_path} "
-                f"— then batch any relevant files into ONE read_source call."
-            )
-        hint_parts.append(
-            "Start with full_file entries — these have complete source. "
-            "Use read_source to expand min_scaffold files as needed. "
-            "Use checkpoint after edits."
-        )
-        if session_info.get("include_map_repo"):
-            hint_parts.append("Signal is noisy — consider calling map_repo for orientation.")
         response["agentic_hint"] = " ".join(hint_parts)
 
         # Coverage hint
         if parsed_task.explicit_paths:
-            found_paths = {f["path"] for f in files_output}
+            found_paths = {f["path"] for f in scaffold_files} | {f["path"] for f in lite_files}
             missing_paths = [p for p in parsed_task.explicit_paths if p not in found_paths]
             if missing_paths:
                 response["coverage_hint"] = (
                     "Mentioned paths not found: "
                     f"{', '.join(missing_paths)}. "
-                    "Use read_source to examine them directly."
+                    "Use recon_resolve to examine them directly."
                 )
 
         from codeplane.mcp.delivery import wrap_existing_response
 
         # ── Issue recon consumption gate ──
-        # The NEXT tool call (any tool) must include gate_token + gate_reason
-        # confirming the agent consumed recon results before exploring further.
         try:
             session = app_ctx.session_manager.get_or_create(ctx.session_id)
             from codeplane.mcp.gate import RECON_CONSUMPTION_GATE
 
             gate_block = session.gate_manager.issue(RECON_CONSUMPTION_GATE)
             response["gate"] = gate_block
+            # Mark recon as called in session state
+            session.counters["recon_called"] = 1
         except Exception:  # noqa: BLE001
             pass
 

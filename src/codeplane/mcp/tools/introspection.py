@@ -1,4 +1,9 @@
-"""Describe MCP tool - unified introspection handler."""
+"""Describe MCP tool - unified introspection handler.
+
+Stripped to two actions for v2:
+- tool: Get detailed documentation for a specific tool
+- error: Get documentation for an error code
+"""
 
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -15,42 +20,6 @@ if TYPE_CHECKING:
 
 
 # =============================================================================
-# Helpers
-# =============================================================================
-
-
-def _get_version() -> str:
-    from importlib.metadata import PackageNotFoundError
-    from importlib.metadata import version as pkg_version
-
-    try:
-        return pkg_version("codeplane")
-    except PackageNotFoundError:
-        # Package not installed in editable mode or not found
-        return "unknown"
-
-
-def _derive_features(tool_names: list[str]) -> list[str]:
-    features: set[str] = set()
-    for name in tool_names:
-        if name.startswith("git_"):
-            features.add("git_ops")
-        elif name.startswith("refactor_"):
-            features.add("refactoring")
-        elif name == "checkpoint":
-            features.add("testing")
-            features.add("linting")
-            features.add("git_ops")
-        elif name in ("search", "map_repo"):
-            features.add("indexing")
-        elif name in ("read_source", "list_files", "write_source"):
-            features.add("file_ops")
-        elif name == "describe":
-            features.add("introspection")
-    return sorted(features)
-
-
-# =============================================================================
 # Tool Registration
 # =============================================================================
 
@@ -58,17 +27,26 @@ def _derive_features(tool_names: list[str]) -> list[str]:
 def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     """Register introspection tools with FastMCP server."""
 
-    @mcp.tool
+    @mcp.tool(
+        annotations={
+            "title": "Describe: tool params and error codes",
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
+    )
     async def describe(
         ctx: Context,
-        action: Literal["tool", "error", "capabilities", "workflows", "operations"] = Field(
-            ..., description="Introspection action"
+        action: Literal["tool", "error"] = Field(
+            ..., description="Introspection action: 'tool' or 'error'"
         ),
-        name: str | None = Field(None, description="Tool name to describe"),
-        code: str | None = Field(None, description="Error code to describe"),
-        path: str | None = Field(None, description="Filter operations by path"),
-        success_only: bool = Field(False, description="Show only successful operations"),
-        limit: int = Field(50, description="Maximum operations to return"),
+        name: str | None = Field(
+            None, description="Tool name to describe (required for action='tool')"
+        ),
+        code: str | None = Field(
+            None, description="Error code to describe (required for action='error')"
+        ),
         gate_token: str | None = Field(
             None,
             description="Gate confirmation token from a previous gate block.",
@@ -78,14 +56,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             description="Justification for passing the gate (min chars per gate spec).",
         ),
     ) -> dict[str, Any]:
-        """Introspection: describe tools, errors, capabilities, workflows, or operations.
+        """Introspection: describe tool parameters or error codes.
 
         Actions:
         - tool: Get detailed documentation for a specific tool
         - error: Get documentation for an error code
-        - capabilities: List server capabilities and available tools
-        - workflows: Get common tool workflow patterns
-        - operations: Query recent mutation operations for debugging
         """
         _ = app_ctx.session_manager.get_or_create(ctx.session_id)
 
@@ -142,101 +117,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "causes": err_doc.causes,
                 "remediation": err_doc.remediation,
                 "summary": f"{err_doc.code.value}: {err_doc.description}",
-            }
-
-        if action == "capabilities":
-            from codeplane.mcp._compat import get_tools_sync
-
-            all_tools = get_tools_sync(mcp)
-            tool_names = list(all_tools.keys())
-            tool_list = [
-                {"name": name, "description": spec.description} for name, spec in all_tools.items()
-            ]
-            index_status: dict[str, Any] = {}
-            try:
-                epoch = app_ctx.coordinator.get_current_epoch()
-                index_status["current_epoch"] = epoch
-                index_status["initialized"] = app_ctx.coordinator._initialized
-            except Exception:
-                index_status["initialized"] = False
-            features = _derive_features(tool_names)
-            return {
-                "version": _get_version(),
-                "server": "codeplane",
-                "tool_count": len(tool_list),
-                "tools": tool_list,
-                "index_status": index_status,
-                "features": features,
-                "summary": f"{len(tool_list)} tools, {len(features)} feature domains",
-            }
-
-        if action == "workflows":
-            workflows = [
-                {
-                    "name": "code_review",
-                    "description": "Review code changes before commit",
-                    "steps": ["semantic_diff", "checkpoint"],
-                },
-                {
-                    "name": "refactor_symbol",
-                    "description": "Safely rename a symbol across codebase",
-                    "steps": ["refactor_rename", "refactor_inspect", "refactor_apply"],
-                    "details": {
-                        "certainty_levels": {
-                            "high": "Definition proven by structural index",
-                            "medium": "Comment/docstring references",
-                            "low": "Lexical text matches (cross-file refs, imports)",
-                        },
-                        "unique_identifiers": "For unique names (MyClassName), low-certainty matches are usually safe to apply directly",
-                        "common_words": "For common words (data, result), use refactor_inspect first to check for false positives",
-                        "response_fields": [
-                            "verification_required",
-                            "low_certainty_files",
-                            "verification_guidance",
-                        ],
-                    },
-                },
-                {
-                    "name": "explore_codebase",
-                    "description": "Understand repository structure",
-                    "steps": ["map_repo", "search", "read_source"],
-                },
-                {
-                    "name": "fix_and_commit",
-                    "description": "Edit files, verify, and commit",
-                    "steps": ["write_source", "checkpoint"],
-                },
-            ]
-            return {
-                "workflows": workflows,
-                "summary": f"{len(workflows)} workflow patterns",
-            }
-
-        if action == "operations":
-            from codeplane.mcp.ledger import get_ledger
-
-            ledger = get_ledger()
-            ops = ledger.list_operations(
-                path=path,
-                success_only=success_only,
-                limit=min(limit, 200),
-            )
-            return {
-                "operations": [
-                    {
-                        "op_id": op.op_id,
-                        "tool": op.tool,
-                        "success": op.success,
-                        "timestamp": op.timestamp,
-                        "path": op.path,
-                        "action": op.action,
-                        "error_code": op.error_code,
-                        "error_message": op.error_message,
-                    }
-                    for op in ops
-                ],
-                "count": len(ops),
-                "summary": f"{len(ops)} recent operations",
             }
 
         return {"error": f"unknown action: {action}", "summary": "error: unknown action"}
