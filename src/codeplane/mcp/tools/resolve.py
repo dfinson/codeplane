@@ -6,8 +6,9 @@ fetch full file content and sha256 hashes for the specific files they want to
 read or edit.
 
 Design:
-- Requires a prior ``recon`` call in the session (flow gate).
-- Accepts a list of file paths (and optional span ranges).
+- Requires candidate_id values from a prior ``recon`` call.
+- Raw file paths are NOT accepted — forces use of recon output.
+- Requires a justification (50+ chars) explaining the resolve batch.
 - Returns full content + sha256 for each requested file.
 - Agentic hint routes agents to the right next tool.
 """
@@ -33,15 +34,18 @@ log = structlog.get_logger(__name__)
 # ── Constants ──
 _MAX_TARGETS = 10
 _MAX_SPAN_LINES = 500
+_MIN_JUSTIFICATION_CHARS = 50
 
 
 # ── Parameter Models ──
 
 
 class ResolveTarget(BaseModel):
-    """A file (or span within a file) to resolve."""
+    """A file (or span) to resolve, identified by candidate_id from recon."""
 
-    path: str = Field(description="Repository-relative file path.")
+    candidate_id: str = Field(
+        description="candidate_id from recon scaffold_files or lite_files output.",
+    )
     start_line: int | None = Field(
         None,
         description="Optional start line (1-based). If omitted, full file is returned.",
@@ -77,8 +81,15 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ctx: Context,  # noqa: ARG001
         targets: list[ResolveTarget] = Field(
             description=(
-                "Files to resolve. Each target specifies a path and "
-                "optionally a line range. Max 10 targets per call."
+                "Files to resolve. Each target uses candidate_id from "
+                "recon output (not raw paths). Max 10 targets per call."
+            ),
+        ),
+        justification: str = Field(
+            description=(
+                "Explain your resolve batch (50+ chars): how many files, "
+                "whether this is the complete working bundle you need, "
+                "and your intent (read, edit, review)."
             ),
         ),
     ) -> dict[str, Any]:
@@ -89,14 +100,32 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         hash is required by refactor_edit to ensure edits target the
         correct file version.
 
+        Requires candidate_id values from recon output — raw file paths
+        are not accepted.  Include a justification (50+ chars) explaining
+        your resolve batch.
+
         Returns per-file: path, content (or span), sha256, line_count.
         """
+        # ── Validate justification ──
+        if not justification or len(justification.strip()) < _MIN_JUSTIFICATION_CHARS:
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message=(
+                    f"justification must be at least {_MIN_JUSTIFICATION_CHARS} "
+                    f"characters (got {len(justification.strip()) if justification else 0})."
+                ),
+                remediation=(
+                    "Explain: how many files you're requesting, whether this is "
+                    "the complete set you'll need, and your intent (read/edit/review)."
+                ),
+            )
+
         # ── Validate target count ──
         if not targets:
             raise MCPError(
                 code=MCPErrorCode.INVALID_PARAMS,
                 message="targets list must not be empty.",
-                remediation="Provide at least one ResolveTarget in the targets list.",
+                remediation="Provide at least one ResolveTarget with a candidate_id.",
             )
         if len(targets) > _MAX_TARGETS:
             raise MCPError(
@@ -105,37 +134,58 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 remediation=f"Split into batches of {_MAX_TARGETS} or fewer.",
             )
 
-        # ── Flow gate: require prior recon call ──
+        # ── Resolve candidate_ids → paths via session mapping ──
+        id_to_path: dict[str, str] = {}
         try:
             session = app_ctx.session_manager.get_or_create(ctx.session_id)
-            recon_called = session.counters.get("recon_called", 0)
-            if not recon_called:
-                return {
-                    "error": {
-                        "code": "RECON_REQUIRED",
-                        "message": (
-                            "recon_resolve requires a prior recon call. "
-                            "Call recon first to discover relevant files."
-                        ),
-                    },
-                    "tool_hint": {
-                        "tool": "recon",
-                        "params": {"task": "<describe your task>"},
-                    },
-                }
+            # Merge all recon candidate maps for this session
+            for cmap in session.candidate_maps.values():
+                id_to_path.update(cmap)
         except Exception:  # noqa: BLE001
-            pass  # If session mgmt fails, allow the call
+            pass
+
+        if not id_to_path:
+            return {
+                "error": {
+                    "code": "RECON_REQUIRED",
+                    "message": (
+                        "No candidate mappings found. "
+                        "Call recon first to discover files, then use "
+                        "candidate_id values from the recon output."
+                    ),
+                },
+                "tool_hint": {
+                    "tool": "recon",
+                    "params": {"task": "<describe your task>"},
+                },
+            }
 
         repo_root = app_ctx.coordinator.repo_root
         resolved: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
 
         for target in targets:
-            file_path = repo_root / target.path
+            # Look up path from candidate_id
+            path = id_to_path.get(target.candidate_id)
+            if path is None:
+                errors.append(
+                    {
+                        "candidate_id": target.candidate_id,
+                        "error": (
+                            f"Unknown candidate_id '{target.candidate_id}'. "
+                            "Use candidate_id values from recon scaffold_files "
+                            "or lite_files output."
+                        ),
+                    }
+                )
+                continue
+
+            file_path = repo_root / path
             if not file_path.exists():
                 errors.append(
                     {
-                        "path": target.path,
+                        "candidate_id": target.candidate_id,
+                        "path": path,
                         "error": "File not found",
                     }
                 )
@@ -147,7 +197,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             except Exception as exc:  # noqa: BLE001
                 errors.append(
                     {
-                        "path": target.path,
+                        "candidate_id": target.candidate_id,
+                        "path": path,
                         "error": f"Read failed: {exc}",
                     }
                 )
@@ -157,7 +208,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             if b"\x00" in raw[:512]:
                 errors.append(
                     {
-                        "path": target.path,
+                        "candidate_id": target.candidate_id,
+                        "path": path,
                         "error": "Binary file — cannot resolve content",
                     }
                 )
@@ -176,7 +228,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 if end - start > _MAX_SPAN_LINES:
                     errors.append(
                         {
-                            "path": target.path,
+                            "candidate_id": target.candidate_id,
+                            "path": path,
                             "error": (
                                 f"Span too large ({end - start} lines). Max is {_MAX_SPAN_LINES}."
                             ),
@@ -187,7 +240,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 span_lines = all_lines[start:end]
                 resolved.append(
                     {
-                        "path": target.path,
+                        "candidate_id": target.candidate_id,
+                        "path": path,
                         "content": "".join(span_lines),
                         "file_sha256": sha256,
                         "line_count": len(all_lines),
@@ -200,7 +254,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             else:
                 resolved.append(
                     {
-                        "path": target.path,
+                        "candidate_id": target.candidate_id,
+                        "path": path,
                         "content": content_str,
                         "file_sha256": sha256,
                         "line_count": len(all_lines),

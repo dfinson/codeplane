@@ -1227,11 +1227,17 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         scaffold_files: list[dict[str, Any]] = []
         lite_files: list[dict[str, Any]] = []
 
-        for fc in file_candidates:
+        # Mint candidate_ids and build ID→path mapping for resolve validation
+        candidate_map: dict[str, str] = {}
+
+        for idx, fc in enumerate(file_candidates):
+            fc.candidate_id = f"{recon_id}:{idx}"
+            candidate_map[fc.candidate_id] = fc.path
             full_path = repo_root / fc.path
 
             if fc.tier == OutputTier.SCAFFOLD:
                 entry: dict[str, Any] = {
+                    "candidate_id": fc.candidate_id,
                     "path": fc.path,
                     "similarity": round(fc.similarity, 4),
                     "combined_score": round(fc.combined_score, 4),
@@ -1256,6 +1262,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             else:
                 # LITE: path + description only
                 lite_entry: dict[str, Any] = {
+                    "candidate_id": fc.candidate_id,
                     "path": fc.path,
                     "similarity": round(fc.similarity, 4),
                     "combined_score": round(fc.combined_score, 4),
@@ -1334,7 +1341,9 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             f"Recon found {n_files} file(s) (intent: {intent.value}).",
             f"Scaffolds ({len(scaffold_files)}): {top_paths_str}.",
             f"Lite ({len(lite_files)}).",
-            "NEXT: call recon_resolve with the files you want to read or edit.",
+            "NEXT: call recon_resolve with candidate_id values from above.",
+            "Each target needs: candidate_id (required), optional start_line/end_line.",
+            "Include a justification (50+ chars) explaining your resolve batch.",
         ]
         response["agentic_hint"] = " ".join(hint_parts)
 
@@ -1358,6 +1367,8 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
 
             gate_block = session.gate_manager.issue(RECON_CONSUMPTION_GATE)
             response["gate"] = gate_block
+            # Store candidate mapping for resolve validation
+            session.candidate_maps[recon_id] = candidate_map
             # Mark recon as called in session state
             session.counters["recon_called"] = 1
         except Exception:  # noqa: BLE001

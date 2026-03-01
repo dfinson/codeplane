@@ -604,6 +604,11 @@ class FileCandidate:
     similarity: float = 0.0  # Cosine similarity from file-level embedding
     tier: OutputTier = OutputTier.SUMMARY_ONLY
 
+    # Unique identifier assigned during recon pipeline assembly.
+    # Used by recon_resolve to validate that the agent is requesting
+    # files that originate from a recon result (not arbitrary paths).
+    candidate_id: str = ""
+
     # Secondary signal reinforcements (from existing harvesters)
     term_match_count: int = 0  # Number of query terms found in file defs
     lexical_hit_count: int = 0  # Tantivy full-text hits in this file

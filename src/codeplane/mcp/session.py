@@ -30,6 +30,10 @@ class SessionState:
     task_id: str | None = None
     fingerprints: dict[str, str] = field(default_factory=dict)
     counters: dict[str, int] = field(default_factory=dict)
+    # Maps recon_id → {candidate_id: repo_relative_path}.
+    # Populated by recon pipeline, consumed by recon_resolve for
+    # ID-based file selection (no raw path access).
+    candidate_maps: dict[str, dict[str, str]] = field(default_factory=dict)
     gate_manager: GateManager = field(default_factory=GateManager)
     pattern_detector: CallPatternDetector = field(default_factory=CallPatternDetector)
 

@@ -3,7 +3,7 @@
 Covers:
 - ResolveTarget model validation
 - _compute_file_sha256
-- recon_resolve handler: full file, span, binary, not-found, flow gate
+- recon_resolve handler: full file, span, binary, not-found, candidate_id gate
 """
 
 from __future__ import annotations
@@ -23,6 +23,9 @@ from codeplane.mcp.tools.resolve import (
     register_tools,
 )
 
+_VALID_JUSTIFICATION = "Resolving files for test validation -- complete working bundle needed"
+
+
 # =============================================================================
 # ResolveTarget Model
 # =============================================================================
@@ -31,14 +34,14 @@ from codeplane.mcp.tools.resolve import (
 class TestResolveTarget:
     """Tests for ResolveTarget Pydantic model."""
 
-    def test_path_only(self) -> None:
-        t = ResolveTarget(path="foo.py")
-        assert t.path == "foo.py"
+    def test_candidate_id_only(self) -> None:
+        t = ResolveTarget(candidate_id="r:0")
+        assert t.candidate_id == "r:0"
         assert t.start_line is None
         assert t.end_line is None
 
     def test_with_span(self) -> None:
-        t = ResolveTarget(path="bar.py", start_line=10, end_line=20)
+        t = ResolveTarget(candidate_id="r:1", start_line=10, end_line=20)
         assert t.start_line == 10
         assert t.end_line == 20
 
@@ -77,7 +80,8 @@ class TestReconResolve:
         ctx = MagicMock()
         ctx.coordinator.repo_root = tmp_path
         session = MagicMock()
-        session.counters = {"recon_called": 1}
+        session.counters = {}
+        session.candidate_maps = {}
         ctx.session_manager.get_or_create.return_value = session
         return ctx
 
@@ -93,24 +97,44 @@ class TestReconResolve:
         fp.write_text(content, encoding="utf-8")
         return fp
 
+    def _add_candidate(
+        self,
+        app_ctx: MagicMock,
+        candidate_id: str,
+        path: str,
+        recon_id: str = "r",
+    ) -> None:
+        """Register a candidate_id -> path mapping on the mock session."""
+        session = app_ctx.session_manager.get_or_create.return_value
+        if recon_id not in session.candidate_maps:
+            session.candidate_maps[recon_id] = {}
+        session.candidate_maps[recon_id][candidate_id] = path
+
     @pytest.mark.asyncio
     async def test_resolve_full_file(
-        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+        tmp_path: Path,
     ) -> None:
-        """Resolve full file returns content and sha256."""
+        """Resolve full file returns content, sha256, and candidate_id."""
         self._write_file(tmp_path, "hello.py", "print('hello')\n")
+        self._add_candidate(app_ctx, "r:0", "hello.py")
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
         resolve_fn = tools["recon_resolve"].fn
 
         result: dict[str, Any] = await resolve_fn(
             ctx=fastmcp_ctx,
-            targets=[ResolveTarget(path="hello.py")],
+            targets=[ResolveTarget(candidate_id="r:0")],
+            justification=_VALID_JUSTIFICATION,
         )
 
         assert "resolved" in result
         assert len(result["resolved"]) == 1
         r = result["resolved"][0]
+        assert r["candidate_id"] == "r:0"
         assert r["path"] == "hello.py"
         assert r["content"] == "print('hello')\n"
         assert "file_sha256" in r
@@ -118,18 +142,24 @@ class TestReconResolve:
 
     @pytest.mark.asyncio
     async def test_resolve_span(
-        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """Resolve span returns only requested lines."""
         content = "\n".join(f"line{i}" for i in range(1, 21)) + "\n"
         self._write_file(tmp_path, "big.py", content)
+        self._add_candidate(app_ctx, "r:0", "big.py")
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
         resolve_fn = tools["recon_resolve"].fn
 
         result: dict[str, Any] = await resolve_fn(
             ctx=fastmcp_ctx,
-            targets=[ResolveTarget(path="big.py", start_line=5, end_line=10)],
+            targets=[ResolveTarget(candidate_id="r:0", start_line=5, end_line=10)],
+            justification=_VALID_JUSTIFICATION,
         )
 
         r = result["resolved"][0]
@@ -138,41 +168,53 @@ class TestReconResolve:
         assert r["span"]["end_line"] == 10
         assert "line5" in r["content"]
         assert "line10" in r["content"]
-        # Full file sha — not span sha
+        # Full file sha -- not span sha
         assert r["line_count"] == 20
 
     @pytest.mark.asyncio
     async def test_resolve_file_not_found(
-        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
     ) -> None:
-        """Non-existent file returns error entry."""
+        """Mapped candidate_id pointing to non-existent file returns error."""
+        self._add_candidate(app_ctx, "r:0", "nonexistent.py")
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
         resolve_fn = tools["recon_resolve"].fn
 
         result: dict[str, Any] = await resolve_fn(
             ctx=fastmcp_ctx,
-            targets=[ResolveTarget(path="nonexistent.py")],
+            targets=[ResolveTarget(candidate_id="r:0")],
+            justification=_VALID_JUSTIFICATION,
         )
 
         assert len(result["resolved"]) == 0
         assert len(result["errors"]) == 1
+        assert result["errors"][0]["candidate_id"] == "r:0"
         assert result["errors"][0]["path"] == "nonexistent.py"
 
     @pytest.mark.asyncio
     async def test_resolve_binary_file(
-        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """Binary file returns error entry."""
         fp = tmp_path / "image.dat"
         fp.write_bytes(b"\x00\x01\x02\x03")
+        self._add_candidate(app_ctx, "r:0", "image.dat")
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
         resolve_fn = tools["recon_resolve"].fn
 
         result: dict[str, Any] = await resolve_fn(
             ctx=fastmcp_ctx,
-            targets=[ResolveTarget(path="image.dat")],
+            targets=[ResolveTarget(candidate_id="r:0")],
+            justification=_VALID_JUSTIFICATION,
         )
 
         assert len(result["errors"]) == 1
@@ -180,9 +222,13 @@ class TestReconResolve:
 
     @pytest.mark.asyncio
     async def test_resolve_empty_targets_error(
-        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
     ) -> None:
         """Empty targets list raises MCPError."""
+        self._add_candidate(app_ctx, "r:0", "dummy.py")
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
         resolve_fn = tools["recon_resolve"].fn
@@ -190,66 +236,127 @@ class TestReconResolve:
         from codeplane.mcp.errors import MCPError
 
         with pytest.raises(MCPError, match="empty"):
-            await resolve_fn(ctx=fastmcp_ctx, targets=[])
+            await resolve_fn(
+                ctx=fastmcp_ctx,
+                targets=[],
+                justification=_VALID_JUSTIFICATION,
+            )
 
     @pytest.mark.asyncio
-    async def test_resolve_flow_gate_no_recon(
-        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+    async def test_resolve_unknown_candidate_id(
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+        tmp_path: Path,
     ) -> None:
-        """Without prior recon call, returns RECON_REQUIRED error."""
+        """Unknown candidate_id returns error entry (not in any recon map)."""
         self._write_file(tmp_path, "some.py", "content\n")
-        # Override counters to simulate no recon called
-        session = app_ctx.session_manager.get_or_create.return_value
-        session.counters = {"recon_called": 0}
-
+        self._add_candidate(app_ctx, "r:0", "some.py")
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
         resolve_fn = tools["recon_resolve"].fn
 
         result: dict[str, Any] = await resolve_fn(
             ctx=fastmcp_ctx,
-            targets=[ResolveTarget(path="some.py")],
+            targets=[ResolveTarget(candidate_id="unknown:99")],
+            justification=_VALID_JUSTIFICATION,
+        )
+
+        assert len(result["resolved"]) == 0
+        assert len(result["errors"]) == 1
+        assert result["errors"][0]["candidate_id"] == "unknown:99"
+        assert "Unknown candidate_id" in result["errors"][0]["error"]
+
+    @pytest.mark.asyncio
+    async def test_resolve_no_candidate_maps_returns_recon_required(
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+    ) -> None:
+        """With no candidate maps (no prior recon), returns RECON_REQUIRED."""
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        resolve_fn = tools["recon_resolve"].fn
+
+        result: dict[str, Any] = await resolve_fn(
+            ctx=fastmcp_ctx,
+            targets=[ResolveTarget(candidate_id="r:0")],
+            justification=_VALID_JUSTIFICATION,
         )
 
         assert "error" in result
         assert result["error"]["code"] == "RECON_REQUIRED"
 
     @pytest.mark.asyncio
+    async def test_resolve_justification_too_short(
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+    ) -> None:
+        """Justification under 50 chars raises MCPError."""
+        self._add_candidate(app_ctx, "r:0", "dummy.py")
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        resolve_fn = tools["recon_resolve"].fn
+
+        from codeplane.mcp.errors import MCPError
+
+        with pytest.raises(MCPError, match="justification"):
+            await resolve_fn(
+                ctx=fastmcp_ctx,
+                targets=[ResolveTarget(candidate_id="r:0")],
+                justification="too short",
+            )
+
+    @pytest.mark.asyncio
     async def test_resolve_tracks_sha_in_session(
-        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """Resolved files' sha256 stored in session counters."""
         content = "tracked content\n"
         self._write_file(tmp_path, "tracked.py", content)
-        session = app_ctx.session_manager.get_or_create.return_value
-        session.counters = {"recon_called": 1}
-
+        self._add_candidate(app_ctx, "r:0", "tracked.py")
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
         resolve_fn = tools["recon_resolve"].fn
 
         await resolve_fn(
             ctx=fastmcp_ctx,
-            targets=[ResolveTarget(path="tracked.py")],
+            targets=[ResolveTarget(candidate_id="r:0")],
+            justification=_VALID_JUSTIFICATION,
         )
 
+        session = app_ctx.session_manager.get_or_create.return_value
         expected_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
         resolved_files = session.counters.get("resolved_files", {})
         assert resolved_files["tracked.py"] == expected_sha
 
     @pytest.mark.asyncio
     async def test_resolve_agentic_hint(
-        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """Response includes agentic_hint with next steps."""
         self._write_file(tmp_path, "hint.py", "x = 1\n")
+        self._add_candidate(app_ctx, "r:0", "hint.py")
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
         resolve_fn = tools["recon_resolve"].fn
 
         result: dict[str, Any] = await resolve_fn(
             ctx=fastmcp_ctx,
-            targets=[ResolveTarget(path="hint.py")],
+            targets=[ResolveTarget(candidate_id="r:0")],
+            justification=_VALID_JUSTIFICATION,
         )
 
         assert "agentic_hint" in result
@@ -258,24 +365,37 @@ class TestReconResolve:
 
     @pytest.mark.asyncio
     async def test_resolve_too_many_targets(
-        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
     ) -> None:
         """More than _MAX_TARGETS raises MCPError."""
+        for i in range(11):
+            self._add_candidate(app_ctx, f"r:{i}", f"f{i}.py")
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
         resolve_fn = tools["recon_resolve"].fn
 
         from codeplane.mcp.errors import MCPError
 
-        targets = [ResolveTarget(path=f"f{i}.py") for i in range(11)]
+        targets = [ResolveTarget(candidate_id=f"r:{i}") for i in range(11)]
         with pytest.raises(MCPError, match="Too many targets"):
-            await resolve_fn(ctx=fastmcp_ctx, targets=targets)
+            await resolve_fn(
+                ctx=fastmcp_ctx,
+                targets=targets,
+                justification=_VALID_JUSTIFICATION,
+            )
 
     @pytest.mark.asyncio
-    async def test_resolve_session_failure_bypasses_gate(
-        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+    async def test_resolve_session_failure_returns_recon_required(
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+        tmp_path: Path,
     ) -> None:
-        """If session manager raises, flow gate is bypassed and resolve proceeds."""
+        """If session manager raises, no candidate maps -> RECON_REQUIRED."""
         self._write_file(tmp_path, "ok.py", "x = 1\n")
         app_ctx.session_manager.get_or_create.side_effect = RuntimeError("boom")
 
@@ -285,21 +405,26 @@ class TestReconResolve:
 
         result: dict[str, Any] = await resolve_fn(
             ctx=fastmcp_ctx,
-            targets=[ResolveTarget(path="ok.py")],
+            targets=[ResolveTarget(candidate_id="r:0")],
+            justification=_VALID_JUSTIFICATION,
         )
 
-        # Should still resolve despite session failure
-        assert len(result["resolved"]) == 1
-        assert result["resolved"][0]["path"] == "ok.py"
+        assert "error" in result
+        assert result["error"]["code"] == "RECON_REQUIRED"
 
     @pytest.mark.asyncio
     async def test_resolve_read_failure(
-        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """File that exists but cannot be read returns error entry."""
         fp = tmp_path / "unreadable.py"
         fp.write_text("content", encoding="utf-8")
         fp.chmod(0o000)
+        self._add_candidate(app_ctx, "r:0", "unreadable.py")
 
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
@@ -307,7 +432,8 @@ class TestReconResolve:
 
         result: dict[str, Any] = await resolve_fn(
             ctx=fastmcp_ctx,
-            targets=[ResolveTarget(path="unreadable.py")],
+            targets=[ResolveTarget(candidate_id="r:0")],
+            justification=_VALID_JUSTIFICATION,
         )
 
         assert len(result["errors"]) == 1
@@ -317,12 +443,17 @@ class TestReconResolve:
 
     @pytest.mark.asyncio
     async def test_resolve_span_too_large(
-        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """Span exceeding _MAX_SPAN_LINES returns error."""
         # _MAX_SPAN_LINES is 500, create a file with 600 lines
         content = "\n".join(f"line{i}" for i in range(600)) + "\n"
         self._write_file(tmp_path, "huge.py", content)
+        self._add_candidate(app_ctx, "r:0", "huge.py")
 
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
@@ -330,7 +461,8 @@ class TestReconResolve:
 
         result: dict[str, Any] = await resolve_fn(
             ctx=fastmcp_ctx,
-            targets=[ResolveTarget(path="huge.py", start_line=1, end_line=600)],
+            targets=[ResolveTarget(candidate_id="r:0", start_line=1, end_line=600)],
+            justification=_VALID_JUSTIFICATION,
         )
 
         assert len(result["errors"]) == 1
@@ -338,11 +470,16 @@ class TestReconResolve:
 
     @pytest.mark.asyncio
     async def test_resolve_more_than_five_files_hint(
-        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+        tmp_path: Path,
     ) -> None:
         """Agentic hint shows '+N more' when >5 files resolved."""
         for i in range(7):
             self._write_file(tmp_path, f"f{i}.py", f"x = {i}\n")
+            self._add_candidate(app_ctx, f"r:{i}", f"f{i}.py")
 
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
@@ -350,7 +487,8 @@ class TestReconResolve:
 
         result: dict[str, Any] = await resolve_fn(
             ctx=fastmcp_ctx,
-            targets=[ResolveTarget(path=f"f{i}.py") for i in range(7)],
+            targets=[ResolveTarget(candidate_id=f"r:{i}") for i in range(7)],
+            justification=_VALID_JUSTIFICATION,
         )
 
         assert len(result["resolved"]) == 7
