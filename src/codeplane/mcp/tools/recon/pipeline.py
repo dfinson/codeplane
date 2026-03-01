@@ -1094,6 +1094,14 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                 "structured signals automatically."
             ),
         ),
+        read_only: bool = Field(
+            description=(
+                "Declare task intent. True = research/read-only session "
+                "(mutation tools blocked, sha256/edit_tickets skipped). "
+                "False = read-write session (full edit workflow enabled). "
+                "MANDATORY — you must explicitly declare intent every time."
+            ),
+        ),
         seeds: list[str] | None = Field(
             None,
             description=(
@@ -1371,6 +1379,9 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             session.candidate_maps[recon_id] = candidate_map
             # Mark recon as called in session state
             session.counters["recon_called"] = 1
+            # Store read_only intent — gates mutation tools until
+            # a new recon call overrides it.
+            session.read_only = read_only
         except Exception:  # noqa: BLE001
             pass
 

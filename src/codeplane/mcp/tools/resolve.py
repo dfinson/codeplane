@@ -135,6 +135,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 remediation=f"Split into batches of {_MAX_TARGETS} or fewer.",
             )
 
+        # ── Read-only intent from session ──
+        is_read_only = False
         # ── Resolve candidate_ids → paths via session mapping ──
         id_to_path: dict[str, str] = {}
         try:
@@ -142,6 +144,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             # Merge all recon candidate maps for this session
             for cmap in session.candidate_maps.values():
                 id_to_path.update(cmap)
+            is_read_only = getattr(session, "read_only", None) is True
         except Exception:  # noqa: BLE001
             pass
 
@@ -217,7 +220,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 continue
 
             content_str = raw.decode("utf-8", errors="replace")
-            sha256 = _compute_file_sha256(raw)
+            sha256 = _compute_file_sha256(raw) if not is_read_only else None
             all_lines = content_str.splitlines(keepends=True)
 
             # Handle span extraction
@@ -239,57 +242,58 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     continue
 
                 span_lines = all_lines[start:end]
-                resolved.append(
-                    {
-                        "candidate_id": target.candidate_id,
-                        "path": path,
-                        "content": "".join(span_lines),
-                        "file_sha256": sha256,
-                        "line_count": len(all_lines),
-                        "span": {
-                            "start_line": start + 1,
-                            "end_line": end,
-                        },
-                    }
-                )
+                entry: dict[str, Any] = {
+                    "candidate_id": target.candidate_id,
+                    "path": path,
+                    "content": "".join(span_lines),
+                    "line_count": len(all_lines),
+                    "span": {
+                        "start_line": start + 1,
+                        "end_line": end,
+                    },
+                }
+                if sha256 is not None:
+                    entry["file_sha256"] = sha256
+                resolved.append(entry)
             else:
-                resolved.append(
-                    {
-                        "candidate_id": target.candidate_id,
-                        "path": path,
-                        "content": content_str,
-                        "file_sha256": sha256,
-                        "line_count": len(all_lines),
-                    }
-                )
+                entry = {
+                    "candidate_id": target.candidate_id,
+                    "path": path,
+                    "content": content_str,
+                    "line_count": len(all_lines),
+                }
+                if sha256 is not None:
+                    entry["file_sha256"] = sha256
+                resolved.append(entry)
 
-        # ── Mint edit tickets ──
+        # ── Mint edit tickets (skipped in read-only mode) ──
         ticket_ids: list[str] = []
-        try:
-            session = app_ctx.session_manager.get_or_create(ctx.session_id)
-            # Legacy: keep resolved_files for backward compat
-            if "resolved_files" not in session.counters:
-                session.counters["resolved_files"] = {}  # type: ignore[assignment]
-            resolved_files: dict[str, str] = session.counters["resolved_files"]  # type: ignore[assignment]
-            for r in resolved:
-                resolved_files[r["path"]] = r["file_sha256"]
+        if not is_read_only:
+            try:
+                session = app_ctx.session_manager.get_or_create(ctx.session_id)
+                # Legacy: keep resolved_files for backward compat
+                if "resolved_files" not in session.counters:
+                    session.counters["resolved_files"] = {}  # type: ignore[assignment]
+                resolved_files: dict[str, str] = session.counters["resolved_files"]  # type: ignore[assignment]
+                for r in resolved:
+                    resolved_files[r["path"]] = r["file_sha256"]
 
-            # Mint one EditTicket per resolved file
-            for r in resolved:
-                cid = r["candidate_id"]
-                sha_prefix = r["file_sha256"][:8]
-                ticket_id = f"{cid}:{sha_prefix}"
-                session.edit_tickets[ticket_id] = EditTicket(
-                    ticket_id=ticket_id,
-                    path=r["path"],
-                    sha256=r["file_sha256"],
-                    candidate_id=cid,
-                    issued_by="resolve",
-                )
-                r["edit_ticket"] = ticket_id
-                ticket_ids.append(ticket_id)
-        except Exception:  # noqa: BLE001
-            pass
+                # Mint one EditTicket per resolved file
+                for r in resolved:
+                    cid = r["candidate_id"]
+                    sha_prefix = r["file_sha256"][:8]
+                    ticket_id = f"{cid}:{sha_prefix}"
+                    session.edit_tickets[ticket_id] = EditTicket(
+                        ticket_id=ticket_id,
+                        path=r["path"],
+                        sha256=r["file_sha256"],
+                        candidate_id=cid,
+                        issued_by="resolve",
+                    )
+                    r["edit_ticket"] = ticket_id
+                    ticket_ids.append(ticket_id)
+            except Exception:  # noqa: BLE001
+                pass
 
         # ── Build agentic hint ──
         resolved_paths = [r["path"] for r in resolved]
@@ -297,26 +301,37 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         if len(resolved_paths) > 5:
             paths_str += f" (+{len(resolved_paths) - 5} more)"
 
-        ticket_str = ", ".join(ticket_ids[:5])
-        if len(ticket_ids) > 5:
-            ticket_str += f" (+{len(ticket_ids) - 5} more)"
+        if is_read_only:
+            agentic_hint = (
+                f"Resolved {len(resolved)} file(s) (READ-ONLY): {paths_str}.\n"
+                "Session is READ-ONLY — mutation tools are blocked.\n\n"
+                "NEXT STEPS:\n"
+                "RESEARCH / REVIEW → respond directly to the user.\n"
+                'semantic_diff(base="...") for branch comparison.\n'
+                "When done → checkpoint(changed_files=[]) to close the session.\n\n"
+                "To enable edits, call recon(read_only=False) for a new session."
+            )
+        else:
+            ticket_str = ", ".join(ticket_ids[:5])
+            if len(ticket_ids) > 5:
+                ticket_str += f" (+{len(ticket_ids) - 5} more)"
 
-        agentic_hint = (
-            f"Resolved {len(resolved)} file(s): {paths_str}.\n"
-            f"Edit tickets minted: {ticket_str}\n\n"
-            "NEXT STEPS — choose the action that matches your intent:\n\n"
-            "EDIT CODE → refactor_edit(edits=[{edit_ticket, old_content, "
-            "new_content}])  — use edit_ticket (NOT path+sha256)\n"
-            'RENAME A SYMBOL → refactor_rename(symbol="OldName", new_name="NewName")\n'
-            'MOVE A FILE → refactor_move(source="old/path.py", '
-            'destination="new/path.py")\n'
-            'DELETE/REMOVE CODE → refactor_impact(symbol="SymbolName") first\n'
-            "RESEARCH / REVIEW (no changes) → respond directly. "
-            'semantic_diff(base="...") for branch comparison.\n\n'
-            "After ANY code change → checkpoint(changed_files=[...], "
-            'commit_message="...")\n'
-            "  Ask the user whether they want push=True or push=False."
-        )
+            agentic_hint = (
+                f"Resolved {len(resolved)} file(s): {paths_str}.\n"
+                f"Edit tickets minted: {ticket_str}\n\n"
+                "NEXT STEPS — choose the action that matches your intent:\n\n"
+                "EDIT CODE → refactor_edit(edits=[{edit_ticket, old_content, "
+                "new_content}])  — use edit_ticket (NOT path+sha256)\n"
+                'RENAME A SYMBOL → refactor_rename(symbol="OldName", new_name="NewName")\n'
+                'MOVE A FILE → refactor_move(source="old/path.py", '
+                'destination="new/path.py")\n'
+                'DELETE/REMOVE CODE → refactor_impact(symbol="SymbolName") first\n'
+                "RESEARCH / REVIEW (no changes) → respond directly. "
+                'semantic_diff(base="...") for branch comparison.\n\n'
+                "After ANY code change → checkpoint(changed_files=[...], "
+                'commit_message="...")\n'
+                "  Ask the user whether they want push=True or push=False."
+            )
 
         response: dict[str, Any] = {
             "resolved": resolved,

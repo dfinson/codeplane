@@ -69,12 +69,15 @@ One call to `recon` returns everything you need to start working:
 - **repo_map** — structural overview of the entire repository
 
 ```
-recon(task="<describe the task in natural language>")
+recon(task="<describe the task in natural language>", read_only=<True or False>)
 ```
 
 **Parameters:**
 - `task` (required): Natural language task description. Be specific — include symbol
   names, file paths, or domain terms. The server extracts signals automatically.
+- `read_only` (required): Declare task intent. `True` = research/read-only session
+  (mutation tools blocked, sha256/edit_tickets skipped). `False` = read-write session
+  (full edit workflow enabled). You MUST explicitly declare intent every time.
 - `seeds`: Optional list of symbol names to anchor on (e.g., `["IndexCoordinator"]`).
 - `pinned_paths`: Optional file paths to force-include (e.g., `["src/core/base.py"]`).
 - `expand_reason`: REQUIRED on 2nd consecutive recon call — explain what was missing.
@@ -93,7 +96,7 @@ After recon identifies relevant files, use `recon_resolve` to get full content:
 recon_resolve(targets=[{{"path": "src/foo.py"}}])
 ```
 
-Returns full file content + `sha256` hash per file.
+Returns full file content + `sha256` hash per file (sha256 skipped in read-only mode).
 The sha256 is **required** by `refactor_edit` to ensure edits target the correct version.
 
 ### Editing Files
@@ -116,10 +119,12 @@ refactor_edit(edits=[{{
 
 ### Workflow
 
-1. `recon(task="...")` — discover relevant files
-2. `recon_resolve(targets=[...])` — get full content + sha256 for files you need
-3. `refactor_edit(edits=[...])` — make changes
-4. `checkpoint(changed_files=[...], commit_message="...")` — lint + test + commit
+1. `recon(task="...", read_only=True/False)` — discover relevant files + declare intent
+2. `recon_resolve(targets=[...])` — get full content (+ sha256/edit_tickets if read_only=False)
+3. If read_only=False: `refactor_edit(edits=[...])` — make changes
+4. `checkpoint(changed_files=[...])` — ALWAYS called:
+   - read_only=True: verifies clean working tree (no lint/test/commit)
+   - read_only=False: lint + test + optionally commit
 
 ### CRITICAL: After Every Code Change
 

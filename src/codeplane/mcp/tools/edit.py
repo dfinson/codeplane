@@ -334,6 +334,18 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ledger = get_ledger()
         repo_root = app_ctx.coordinator.repo_root
 
+        # ── Read-only gate ──
+        if getattr(session, "read_only", None) is True:
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message="Session is read-only — mutations are blocked.",
+                remediation=(
+                    "This session was started with recon(read_only=True). "
+                    'Call recon(read_only=False, task="...") to start a '
+                    "read-write session before editing files."
+                ),
+            )
+
         # ── Batch-limit gate ──
         if session.edits_since_checkpoint >= _MAX_EDIT_BATCHES:
             raise MCPError(
@@ -449,10 +461,12 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 candidate_id=ticket.candidate_id,
                 issued_by="continuation",
             )
-            continuation_tickets.append({
-                "path": edit_path,
-                "edit_ticket": new_ticket_id,
-            })
+            continuation_tickets.append(
+                {
+                    "path": edit_path,
+                    "edit_ticket": new_ticket_id,
+                }
+            )
 
             result_entry = {
                 "path": edit_path,
@@ -564,10 +578,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "Call checkpoint before editing more files."
             )
         else:
-            batch_note = (
-                f"{batches_left} edit batch(es) remaining before "
-                "checkpoint is required."
-            )
+            batch_note = f"{batches_left} edit batch(es) remaining before checkpoint is required."
 
         agentic_hint = (
             f"Edited {len(results)} file(s). {batch_note}\n"

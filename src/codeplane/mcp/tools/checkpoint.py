@@ -905,7 +905,40 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         Returns combined results with pass/fail verdict.
         """
-        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+        session = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        # ── Read-only checkpoint: clean-tree verification only ──
+        if getattr(session, "read_only", None) is True:
+            try:
+                wt_status = app_ctx.git_ops.status()
+                dirty_files = [p for p, flags in wt_status.items() if flags != 0]
+            except Exception:  # noqa: BLE001
+                dirty_files = []
+            clean = len(dirty_files) == 0
+            ro_result: dict[str, Any] = {
+                "action": "checkpoint",
+                "read_only": True,
+                "clean_tree": clean,
+                "passed": clean,
+            }
+            if not clean:
+                ro_result["dirty_files"] = dirty_files[:20]
+                ro_result["agentic_hint"] = (
+                    f"Read-only checkpoint found {len(dirty_files)} "
+                    "uncommitted file(s). This is unexpected for a "
+                    "read-only session. Investigate or call "
+                    "recon(read_only=False) to switch to a read-write session."
+                )
+            else:
+                ro_result["agentic_hint"] = (
+                    "Read-only session complete — working tree is clean. No mutations were made."
+                )
+            from codeplane.mcp.delivery import wrap_response
+
+            return wrap_response(
+                ro_result,
+                resource_kind="checkpoint",
+            )
 
         # Compute total phases for progress reporting
         total_phases = int(lint) + int(tests) * 3  # tests = discover + filter + run
