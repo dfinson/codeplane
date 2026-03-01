@@ -55,34 +55,18 @@ recon_resolve(targets=[{"path": "src/foo.py"}])
 Returns full file content + `sha256` hash per file (sha256 skipped in read-only mode).
 The sha256 is **required** by `refactor_edit` to ensure edits target the correct version.
 
-### Planning Edits
-
-Before editing, declare your intent with `refactor_plan`:
-
-```
-refactor_plan(
-    edit_targets=["candidate_id_1", "candidate_id_2"],
-    description="What you are changing and why",
-    expected_edit_calls=1   # DEFAULT — batch everything into one call
-)
-```
-
-- `expected_edit_calls` defaults to **1** — you MUST batch all edits into a single `refactor_edit` call
-- If you need multiple calls, set `expected_edit_calls` > 1 AND provide `batch_justification` (100+ chars) explaining why batching is impossible
-- The system enforces the declared budget — exceeding it blocks further edits until checkpoint
-
 ### Editing Files
 
 Use `refactor_edit` for all file modifications:
 
 ```
-refactor_edit(plan_id="<from refactor_plan>", edits=[{
+refactor_edit(edits=[{
     "path": "src/foo.py",
     "old_content": "def hello():
     pass",
     "new_content": "def hello():
     return 'world'",
-    "edit_ticket": "<from refactor_plan>"
+    "expected_file_sha256": "<sha256 from recon_resolve>"
 }])
 ```
 
@@ -90,15 +74,13 @@ refactor_edit(plan_id="<from refactor_plan>", edits=[{
 - Optional `start_line`/`end_line` hints to disambiguate if old_content appears multiple times
 - Set `old_content` to empty string to create a new file
 - Set `delete: true` to delete a file
-- **Batch ALL edits into a single `refactor_edit` call** — this is the default and expected behavior
 
 ### Workflow
 
 1. `recon(task="...", read_only=True/False)` — discover relevant files + declare intent
-2. `recon_resolve(targets=[...])` — get full content + sha256
-3. If read_only=False: `refactor_plan(edit_targets=[...], description="...")` — declare edit set, get tickets
-4. If read_only=False: `refactor_edit(plan_id="...", edits=[...])` — make ALL changes in one call
-5. `checkpoint(changed_files=[...])` — ALWAYS called:
+2. `recon_resolve(targets=[...])` — get full content (+ sha256/edit_tickets if read_only=False)
+3. If read_only=False: `refactor_edit(edits=[...])` — make changes
+4. `checkpoint(changed_files=[...])` — ALWAYS called:
    - read_only=True: verifies clean working tree (no lint/test/commit)
    - read_only=False: lint + test + optionally commit
 
@@ -124,7 +106,6 @@ Include `push=True` to push after commit (ask the user before pushing).
 | Task-aware discovery | `mcp_codeplane-codeplane_recon` | Manual search + read loops |
 | Fetch file content | `mcp_codeplane-codeplane_recon_resolve` | `cat`, `head`, `less`, `tail` |
 | Edit files | `mcp_codeplane-codeplane_refactor_edit` | `sed`, `echo >>`, `awk`, `tee` |
-| Declare edit set | `mcp_codeplane-codeplane_refactor_plan` | Direct `refactor_edit` without plan |
 | Rename symbol | `mcp_codeplane-codeplane_refactor_rename` | Find-and-replace, `sed` |
 | Move file | `mcp_codeplane-codeplane_refactor_move` | `mv` + manual import fixup |
 | Impact analysis | `mcp_codeplane-codeplane_refactor_impact` | `grep` for references |
@@ -136,12 +117,10 @@ Include `push=True` to push after commit (ask the user before pushing).
 
 ### Before You Edit: Decision Gate
 
-STOP before using `refactor_edit`:
-1. Did you call `refactor_plan` first? → REQUIRED for all edits
-2. Are ALL edits batched into ONE `refactor_edit` call? → DEFAULT expectation
-3. Changing a name across files? → `refactor_rename` (NOT refactor_edit + manual fixup)
-4. Moving a file? → `refactor_move` (NOT refactor_edit + delete)
-5. Deleting a symbol or file? → `refactor_impact` first
+STOP before using `refactor_edit` for multi-file changes:
+- Changing a name across files? → `refactor_rename` (NOT refactor_edit + manual fixup)
+- Moving a file? → `refactor_move` (NOT refactor_edit + delete)
+- Deleting a symbol or file? → `refactor_impact` first
 
 ### Refactor: preview → commit/cancel
 
@@ -163,6 +142,21 @@ terminal commands instead of the full payload. Run those commands to retrieve se
 Check `delivery` in the response: `"inline"` = full payload present, `"sidecar_cache"` =
 run the commands in `agentic_hint` to fetch content.
 
+### Reviewing Multi-Domain Changes
+
+`semantic_diff` automatically classifies changes by directory domain and includes
+a `domains` key when changes span multiple subsystems. Use this for structured review:
+
+1. `semantic_diff(base="main")` — get diff with domain groupings
+2. Read `domains` — each entry has `name`, `files`, `review_priority`, risk counts
+3. For each domain (priority order), call `recon(task="review <domain> changes", read_only=True, pinned_paths=<domain files>)`
+4. `recon_resolve` to read changed files in context
+5. Focus on breaking changes and cross-domain edges first
+6. Summarize findings per domain
+
+The `cross_domain_edges` key (when present) shows import relationships between
+domains — review these interfaces for compatibility.
+
 ### Common Mistakes (Don't Do These)
 
 - **DON'T** skip `recon` and manually search+read — `recon` is faster and more complete
@@ -172,6 +166,4 @@ run the commands in `agentic_hint` to fetch content.
 - **DON'T** ignore `agentic_hint` in responses
 - **DON'T** use raw `git add` + `git commit` — use `checkpoint` with `commit_message`
 - **DON'T** dismiss lint/test failures as "pre-existing" or "not your problem" — fix ALL issues
-- **DON'T** skip `refactor_plan` before `refactor_edit` — plan is REQUIRED for file updates
-- **DON'T** make multiple `refactor_edit` calls when one batched call would work — maximize batching
 <!-- /codeplane-instructions -->
