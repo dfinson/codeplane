@@ -72,12 +72,46 @@ def _fetch(port: int, cache_id: str, slice_name: str) -> str:
     return body.decode("utf-8", errors="replace")
 
 
+def _format_file_item(item: dict) -> str:  # type: ignore[type-arg]
+    """Format a resolved or scaffold file item with a metadata header.
+
+    Prints a concise ``# path | key=val ...`` header line followed by the
+    raw content (for resolved items) or scaffold text.
+    """
+    parts: list[str] = []
+    path = item.get("path", "")
+    if path:
+        parts.append(path)
+    cid = item.get("candidate_id", "")
+    if cid:
+        parts.append(f"candidate_id={cid}")
+    sha = item.get("file_sha256", "")
+    if sha:
+        parts.append(f"sha256={sha[:16]}")
+    lc = item.get("line_count")
+    if lc is not None:
+        parts.append(f"{lc} lines")
+    ticket = item.get("edit_ticket", "")
+    if ticket:
+        parts.append(f"edit_ticket={ticket}")
+    span = item.get("span")
+    if span:
+        parts.append(f"span={span.get('start_line')}-{span.get('end_line')}")
+
+    header = "# " + " | ".join(parts) if parts else ""
+    body = item.get("content") or item.get("scaffold") or ""
+    if header:
+        return header + "\n" + body
+    return body
+
+
 def _unwrap(body: str) -> str:
     """Extract ``value`` from the JSON envelope and format for terminal.
 
-    Strings are printed raw (no JSON quoting) so file content and scaffold
-    code appear as readable text.  Dicts/lists are printed as compact JSON.
-    If the response carries an ``error`` key, it is written to stderr.
+    Resolved and scaffold file items are printed with a concise metadata
+    header line (path, candidate_id, sha256, edit_ticket) followed by raw
+    content.  Plain strings are printed raw.  Other values are printed as
+    compact JSON.  Error payloads are written to stderr.
     """
     try:
         data = json.loads(body)
@@ -90,6 +124,9 @@ def _unwrap(body: str) -> str:
 
     if isinstance(data, dict) and "value" in data:
         val = data["value"]
+        # Resolved or scaffold file item — print metadata header + content
+        if isinstance(val, dict) and ("content" in val or "scaffold" in val):
+            return _format_file_item(val)
         if isinstance(val, str):
             return val
         return json.dumps(val, separators=(",", ":"))
