@@ -43,7 +43,6 @@ class MockDirNode:
         self.children: list[Any] = children if children is not None else []
 
 
-
 class _MockChange:
     """Minimal mock for StructuralChange used by _change_to_text."""
 
