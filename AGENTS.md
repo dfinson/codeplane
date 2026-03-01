@@ -72,7 +72,7 @@ refactor_edit(edits=[{
 
 - Find-and-replace: specify `old_content` to find and `new_content` to replace it with
 - Optional `start_line`/`end_line` hints to disambiguate if old_content appears multiple times
-- Set `old_content` to empty string to create a new file
+- Omit `old_content` (or set to null) to create a new file
 - Set `delete: true` to delete a file
 
 ### Workflow
