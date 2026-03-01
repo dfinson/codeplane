@@ -23,6 +23,77 @@ log = structlog.get_logger(__name__)
 
 
 # =============================================================================
+# Test Debt Detection
+# =============================================================================
+
+
+def _detect_test_debt(
+    changed_files: list[str],
+    repo_root: Path,
+) -> dict[str, Any] | None:
+    """Detect source files changed without corresponding test updates.
+
+    Scans ``changed_files`` for source files, uses convention-based
+    pairing to find their expected test counterparts, and reports any
+    that exist on disk but were NOT included in ``changed_files``.
+
+    Returns a dict with ``source_files``, ``missing_test_updates``, and
+    ``hint`` if debt is found, otherwise ``None``.
+    """
+    from codeplane.core.languages import find_test_pairs, is_test_file
+
+    changed_set = set(changed_files)
+
+    # Separate source files from test files
+    source_files = [f for f in changed_files if not is_test_file(f)]
+    test_files_changed = [f for f in changed_files if is_test_file(f)]
+
+    if not source_files:
+        return None
+
+    missing: list[dict[str, str]] = []
+    for src in source_files:
+        pairs = find_test_pairs(src)
+        # Find test files that exist on disk but weren't in changed_files
+        for tp in pairs:
+            if tp in changed_set:
+                break  # At least one test counterpart was updated — no debt
+        else:
+            # No test counterpart was in changed_files — check if any exist
+            existing_tests = [tp for tp in pairs if (repo_root / tp).exists()]
+            if existing_tests:
+                missing.append(
+                    {
+                        "source": src,
+                        "test_file": existing_tests[0],
+                    }
+                )
+
+    if not missing:
+        return None
+
+    sources_str = ", ".join(m["source"].split("/")[-1] for m in missing[:5])
+    tests_str = ", ".join(m["test_file"] for m in missing[:5])
+    truncated = " (and more)" if len(missing) > 5 else ""
+
+    hint = (
+        f"TEST DEBT: {len(missing)} source file(s) changed without test updates"
+        f"{truncated}. Source: {sources_str}. "
+        f"Test counterpart(s): {tests_str}. "
+        "Consider updating tests to cover your changes."
+    )
+
+    return {
+        "source_files_changed": len(source_files),
+        "test_files_changed": len(test_files_changed),
+        "missing_test_updates": [
+            {"source": m["source"], "test_file": m["test_file"]} for m in missing
+        ],
+        "hint": hint,
+    }
+
+
+# =============================================================================
 # Commit Helpers
 # =============================================================================
 
@@ -1342,6 +1413,22 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     'All checks passed. Call checkpoint again with commit_message="..." '
                     "to commit your changes."
                 )
+
+            # ── Test debt detection ──
+            # After checks pass, detect source files changed without
+            # corresponding test file updates.  This is a soft signal —
+            # it doesn't block the commit but nudges the agent toward
+            # test co-evolution.
+            if changed_files:
+                try:
+                    debt = _detect_test_debt(changed_files, app_ctx.repo_root)
+                    if debt:
+                        result["test_debt"] = debt
+                        # Append to agentic_hint so agents always see it
+                        existing = result.get("agentic_hint", "")
+                        result["agentic_hint"] = f"{existing}\n\n{debt['hint']}"
+                except Exception:  # noqa: BLE001
+                    log.debug("test_debt_detection_failed", exc_info=True)
 
         # --- Wrap with delivery envelope ---
         # Checkpoint results can be large (all lint diagnostics + test output).

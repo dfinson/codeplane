@@ -737,6 +737,80 @@ async def _file_centric_pipeline(
             source_co_added=source_co_added,
         )
 
+    # ── 5.75  Convention-based test pairing ────────────────────────
+    #   Fallback for when the import graph misses test files (e.g.
+    #   new source files with no test yet, or tests that don't import
+    #   the source directly).  Uses language-specific naming conventions
+    #   to find plausible test counterparts for surviving SCAFFOLD-tier
+    #   source files and includes them if they exist on disk.
+    t_convention = time.monotonic()
+    convention_promoted = 0
+    convention_added = 0
+    convention_test_paths: set[str] = set()
+
+    scaffold_source_for_convention = [
+        fc
+        for fc in file_candidates
+        if fc.tier in (OutputTier.FULL_FILE, OutputTier.MIN_SCAFFOLD, OutputTier.SCAFFOLD)
+        and not _is_test_file(fc.path)
+    ]
+    if scaffold_source_for_convention:
+        from codeplane.core.languages import find_test_pairs
+
+        existing_by_path = {fc.path: fc for fc in file_candidates}
+        for src_fc in scaffold_source_for_convention:
+            test_candidates_conv = find_test_pairs(src_fc.path)
+            for test_path in test_candidates_conv:
+                # Skip if already handled by import-graph co-retrieval
+                if test_path in linked_test_paths:
+                    continue
+                if test_path in existing_by_path:
+                    fc = existing_by_path[test_path]
+                    # Promote to at least the source's tier if currently lower
+                    tier_rank = {
+                        OutputTier.FULL_FILE: 0,
+                        OutputTier.MIN_SCAFFOLD: 1,
+                        OutputTier.SCAFFOLD: 1,
+                        OutputTier.SUMMARY_ONLY: 2,
+                        OutputTier.LITE: 2,
+                    }
+                    if tier_rank.get(fc.tier, 2) > tier_rank.get(src_fc.tier, 1):
+                        fc.tier = src_fc.tier
+                        fc.graph_connected = True
+                        convention_promoted += 1
+                        convention_test_paths.add(test_path)
+                elif (coordinator.repo_root / test_path).exists():
+                    # Test file exists on disk but wasn't in candidates — add it
+                    ref_scores = [
+                        c.combined_score for c in file_candidates if c.tier == src_fc.tier
+                    ]
+                    score = max(ref_scores, default=pin_floor) * 0.85
+                    new_fc = FileCandidate(
+                        path=test_path,
+                        similarity=0.0,
+                        combined_score=score,
+                        graph_connected=True,
+                        artifact_kind=_classify_artifact(test_path),
+                    )
+                    new_fc.tier = src_fc.tier
+                    file_candidates.append(new_fc)
+                    existing_by_path[test_path] = new_fc
+                    convention_added += 1
+                    convention_test_paths.add(test_path)
+
+    diagnostics["convention_test_ms"] = round((time.monotonic() - t_convention) * 1000)
+    diagnostics["convention_test_promoted"] = convention_promoted
+    diagnostics["convention_test_added"] = convention_added
+    if convention_promoted + convention_added > 0:
+        log.info(
+            "recon.convention_test_pairing",
+            promoted=convention_promoted,
+            added=convention_added,
+        )
+
+    # Store convention data for agentic hints in the tool function
+    session_info["convention_test_paths"] = convention_test_paths
+
     # ── 5.7  Directory cohesion expansion ──────────────────────────
     #   When ≥2 non-test files from the same directory survive at
     #   FULL_FILE or MIN_SCAFFOLD, pull in remaining indexed files
@@ -835,6 +909,8 @@ async def _file_centric_pipeline(
             reasons.append("structurally connected")
         if fc.path in linked_test_paths:
             reasons.append("test for surviving source")
+        if fc.path in convention_test_paths:
+            reasons.append("convention test pair")
         if fc.path in linked_source_paths:
             reasons.append("source imported by surviving test")
         # Check if this file was added by directory cohesion
@@ -1366,6 +1442,21 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             " Include a justification (50+ chars)"
             " explaining your resolve batch.",
         ]
+
+        # Test co-evolution hint for write-mode recon calls
+        if not read_only:
+            # Count convention test pairs found in scaffold tier
+            conv_paths = session_info.get("convention_test_paths", set())
+            conv_in_scaffold = [f["path"] for f in scaffold_files if f["path"] in conv_paths]
+            if conv_in_scaffold:
+                hint_parts.append("")
+                hint_parts.append(
+                    "TEST CO-EVOLUTION: Test counterparts included in scaffolds."
+                    " When editing source files, also update or create their"
+                    " test counterparts. Include BOTH source and test files in"
+                    " your checkpoint changed_files."
+                )
+
         response["agentic_hint"] = "\n".join(hint_parts)
 
         # Coverage hint

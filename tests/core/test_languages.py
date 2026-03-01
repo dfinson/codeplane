@@ -24,6 +24,7 @@ from codeplane.core.languages import (
     build_marker_definitions,
     detect_language_family,
     detect_language_family_enum,
+    find_test_pairs,
     get_all_indexable_extensions,
     get_all_indexable_filenames,
     get_grammar_name,
@@ -589,3 +590,133 @@ class TestBuildIncludeSpecs:
         specs = build_include_specs()
         for family, globs in specs.items():
             assert len(globs) > 0, f"{family} has no globs"
+
+
+# =============================================================================
+# Convention-based test pairing (find_test_pairs)
+# =============================================================================
+
+
+class TestFindTestPairs:
+    """Tests for find_test_pairs convention mapper."""
+
+    # ── Python ──
+
+    def test_python_src_to_tests(self) -> None:
+        result = find_test_pairs("src/codeplane/foo/bar.py")
+        assert "src/codeplane/foo/test_bar.py" in result
+        assert "tests/foo/test_bar.py" in result
+
+    def test_python_src_to_tests_underscore(self) -> None:
+        result = find_test_pairs("src/codeplane/foo/bar.py")
+        assert "src/codeplane/foo/bar_test.py" in result
+        assert "tests/foo/bar_test.py" in result
+
+    def test_python_plain_path(self) -> None:
+        """Source not under src/ — only same-directory pairs."""
+        result = find_test_pairs("mylib/utils.py")
+        assert "mylib/test_utils.py" in result
+        assert "mylib/utils_test.py" in result
+
+    def test_python_already_test(self) -> None:
+        """Test files should return empty."""
+        assert find_test_pairs("tests/foo/test_bar.py") == []
+
+    # ── JavaScript / TypeScript ──
+
+    def test_js_colocated(self) -> None:
+        result = find_test_pairs("src/components/Button.tsx")
+        assert "src/components/Button.test.tsx" in result
+        assert "src/components/Button.spec.tsx" in result
+
+    def test_js_dunder_tests(self) -> None:
+        result = find_test_pairs("src/components/Button.tsx")
+        assert "src/components/__tests__/Button.tsx" in result
+
+    def test_js_mirror_tests(self) -> None:
+        result = find_test_pairs("src/utils/helpers.ts")
+        assert "tests/utils/helpers.test.ts" in result
+
+    # ── Go ──
+
+    def test_go_same_dir(self) -> None:
+        result = find_test_pairs("pkg/server/handler.go")
+        assert "pkg/server/handler_test.go" in result
+
+    def test_go_single_result(self) -> None:
+        """Go convention produces exactly one candidate."""
+        result = find_test_pairs("pkg/server/handler.go")
+        assert len(result) == 1
+
+    # ── Ruby ──
+
+    def test_ruby_spec(self) -> None:
+        result = find_test_pairs("lib/models/user.rb")
+        assert "lib/models/user_spec.rb" in result
+
+    def test_ruby_spec_mirror(self) -> None:
+        result = find_test_pairs("lib/models/user.rb")
+        assert any("spec/" in p and p.endswith("_spec.rb") for p in result)
+
+    # ── Rust ──
+
+    def test_rust_tests_dir(self) -> None:
+        result = find_test_pairs("src/parser.rs")
+        assert "tests/parser.rs" in result
+
+    def test_rust_same_dir(self) -> None:
+        result = find_test_pairs("src/parser.rs")
+        assert "src/test_parser.rs" in result
+
+    # ── Java ──
+
+    def test_java_maven(self) -> None:
+        result = find_test_pairs("src/main/java/com/example/Service.java")
+        assert "src/test/java/com/example/ServiceTest.java" in result
+
+    def test_java_same_dir(self) -> None:
+        result = find_test_pairs("src/main/java/com/example/Service.java")
+        assert "src/main/java/com/example/ServiceTest.java" in result
+
+    # ── C# ──
+
+    def test_csharp(self) -> None:
+        result = find_test_pairs("src/Services/UserService.cs")
+        assert "src/Services/UserServiceTests.cs" in result
+        assert "src/Services/UserServiceTest.cs" in result
+
+    # ── PHP ──
+
+    def test_php_mirror(self) -> None:
+        result = find_test_pairs("src/Controllers/HomeController.php")
+        assert any("Test.php" in p for p in result)
+
+    # ── Elixir ──
+
+    def test_elixir(self) -> None:
+        result = find_test_pairs("lib/my_app/accounts.ex")
+        assert "test/my_app/accounts_test.exs" in result
+
+    # ── Edge cases ──
+
+    def test_unknown_extension(self) -> None:
+        """Unknown extension should return empty."""
+        assert find_test_pairs("data/config.xyz") == []
+
+    def test_no_duplicates(self) -> None:
+        """Results should have no duplicate paths."""
+        result = find_test_pairs("src/codeplane/foo/bar.py")
+        assert len(result) == len(set(result))
+
+    @pytest.mark.parametrize(
+        "test_path",
+        [
+            "tests/test_main.py",
+            "test/test_utils.py",
+            "src/__tests__/Button.test.tsx",
+            "spec/models/user_spec.rb",
+        ],
+    )
+    def test_test_files_return_empty(self, test_path: str) -> None:
+        """All test file patterns should return empty."""
+        assert find_test_pairs(test_path) == []
