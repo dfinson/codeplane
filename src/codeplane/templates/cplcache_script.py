@@ -195,107 +195,6 @@ def _unwrap(body: str) -> str:
     return json.dumps(data, separators=(",", ":"))
 
 
-# =============================================================================
-# Post-fetch filtering
-# =============================================================================
-
-
-def _filter_lines(text: str, spec: str) -> str:
-    """Extract a line range like '10-25' from text (1-based, inclusive)."""
-    parts = spec.split("-", 1)
-    try:
-        start = int(parts[0])
-        end = int(parts[1]) if len(parts) > 1 else start
-    except (ValueError, IndexError):
-        print(f"cplcache: invalid --lines spec: {spec}", file=sys.stderr)
-        sys.exit(2)
-    lines = text.splitlines(keepends=True)
-    selected = lines[max(0, start - 1) : end]
-    if not selected:
-        return ""
-    return "".join(selected)
-
-
-def _filter_context_grep(text: str, pattern: str, context: int) -> str:
-    """Grep for pattern with ±context lines, returning numbered output."""
-    try:
-        rx = re.compile(pattern, re.IGNORECASE)
-    except re.error as exc:
-        print(f"cplcache: invalid --context-grep pattern: {exc}", file=sys.stderr)
-        sys.exit(2)
-    lines = text.splitlines()
-    matches: set[int] = set()
-    for i, line in enumerate(lines):
-        if rx.search(line):
-            for j in range(max(0, i - context), min(len(lines), i + context + 1)):
-                matches.add(j)
-    if not matches:
-        return ""
-    result: list[str] = []
-    prev = -2
-    for idx in sorted(matches):
-        if idx != prev + 1 and result:
-            result.append("--")
-        result.append(f"{idx + 1}: {lines[idx]}")
-        prev = idx
-    return "\n".join(result) + "\n"
-
-
-def _filter_symbol(text: str, symbol_name: str) -> str:
-    """Extract a symbol definition span by matching def/class/CONSTANT lines.
-
-    Handles:
-    - ``class Foo:`` / ``def bar(...)`` — captures until next same-or-lower indent non-blank line
-    - ``UPPER_CASE = ...`` — captures multi-line value (parens/brackets/trailing comma)
-    """
-    lines = text.splitlines(keepends=True)
-    start_idx: int | None = None
-    indent: int = 0
-
-    # Pattern 1: def/class with the symbol name
-    pat_def = re.compile(
-        rf"^(\s*)(def\s+{re.escape(symbol_name)}\b|class\s+{re.escape(symbol_name)}\b)"
-    )
-    # Pattern 2: CONSTANT = ...
-    pat_const = re.compile(rf"^(\s*){re.escape(symbol_name)}\s*[:=]")
-
-    for i, line in enumerate(lines):
-        m = pat_def.match(line) or pat_const.match(line)
-        if m:
-            start_idx = i
-            indent = len(m.group(1))
-            break
-
-    if start_idx is None:
-        return f"# Symbol '{symbol_name}' not found\n"
-
-    # Scan forward to find end of the symbol
-    end_idx = start_idx + 1
-    paren_depth = 0
-    bracket_depth = 0
-    for i in range(start_idx, len(lines)):
-        line = lines[i]
-        paren_depth += line.count("(") - line.count(")")
-        bracket_depth += line.count("[") - line.count("]")
-        if i == start_idx:
-            continue
-        # Still inside open parens/brackets — keep going
-        if paren_depth > 0 or bracket_depth > 0:
-            end_idx = i + 1
-            continue
-        stripped = line.rstrip()
-        if not stripped:
-            end_idx = i + 1
-            continue
-        line_indent = len(line) - len(line.lstrip())
-        if line_indent <= indent and stripped and not stripped.startswith("#"):
-            break
-        end_idx = i + 1
-
-    header = f"# lines {start_idx + 1}-{end_idx} (symbol: {symbol_name})\n"
-    return header + "".join(lines[start_idx:end_idx])
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="cplcache",
@@ -303,44 +202,11 @@ def main() -> None:
     )
     parser.add_argument("--cache-id", required=True, help="Cache entry identifier")
     parser.add_argument("--slice", required=True, dest="slice_name", help="Slice name")
-    parser.add_argument(
-        "--lines",
-        default=None,
-        metavar="START-END",
-        help="Extract line range (1-based, inclusive). Example: --lines 10-25",
-    )
-    parser.add_argument(
-        "--context-grep",
-        default=None,
-        metavar="PATTERN",
-        help="Grep for PATTERN with context lines. Case-insensitive regex.",
-    )
-    parser.add_argument(
-        "--context",
-        type=int,
-        default=5,
-        metavar="N",
-        help="Number of context lines for --context-grep (default: 5).",
-    )
-    parser.add_argument(
-        "--symbol",
-        default=None,
-        metavar="NAME",
-        help="Extract a symbol definition span by name.",
-    )
     args = parser.parse_args()
 
     port = _load_port()
     body = _fetch(port, args.cache_id, args.slice_name)
     output = _unwrap(body)
-
-    # Apply post-fetch filters (mutually exclusive)
-    if args.symbol:
-        output = _filter_symbol(output, args.symbol)
-    elif args.lines:
-        output = _filter_lines(output, args.lines)
-    elif args.context_grep:
-        output = _filter_context_grep(output, args.context_grep, args.context)
 
     print(output, end="")
 
