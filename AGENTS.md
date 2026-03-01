@@ -130,6 +130,13 @@ action**, not suggestions. Always read and execute them before proceeding.
 
 Also check for: `coverage_hint`, `display_to_user`.
 
+### Large Responses (Sidecar Delivery)
+
+When a response exceeds the inline budget, it is cached server-side and you receive
+terminal commands instead of the full payload. Run those commands to retrieve sections.
+Check `delivery` in the response: `"inline"` = full payload present, `"sidecar_cache"` =
+run the commands in `agentic_hint` to fetch content.
+
 ### Common Mistakes (Don't Do These)
 
 - **DON'T** skip `recon` and manually search+read — `recon` is faster and more complete

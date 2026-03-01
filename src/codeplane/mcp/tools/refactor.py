@@ -29,7 +29,7 @@ def _summarize_refactor(status: str, files_affected: int, preview: Any) -> str:
         return "refactoring cancelled"
     if status == "applied":
         return f"applied to {files_affected} files"
-    if status == "pending" and preview:
+    if status in ("pending", "previewed") and preview:
         high = preview.high_certainty_count or 0
         med = preview.medium_certainty_count or 0
         low = preview.low_certainty_count or 0
@@ -47,7 +47,7 @@ def _display_refactor(status: str, files_affected: int, preview: Any, refactor_i
         return "Refactoring cancelled."
     if status == "applied":
         return f"Refactoring applied: {files_affected} files modified."
-    if status == "pending" and preview:
+    if status in ("pending", "previewed") and preview:
         high = preview.high_certainty_count or 0
         low = preview.low_certainty_count or 0
         total = high + (preview.medium_certainty_count or 0) + low
@@ -57,6 +57,48 @@ def _display_refactor(status: str, files_affected: int, preview: Any, refactor_i
             f"Preview ready: {total} changes in {files_affected} files. Refactor ID: {refactor_id}"
         )
     return f"Refactoring {status}."
+
+
+def _build_refactor_agentic_hint(result: "RefactorResult", files_affected: int) -> str:
+    """Build next-step instruction for the agent after a refactor operation."""
+    rid = result.refactor_id
+
+    if result.status == "cancelled":
+        return "Refactoring cancelled. No further action needed."
+
+    if result.status == "applied":
+        changed = []
+        if result.applied:
+            changed = [fd.path for fd in result.applied.files]
+        files_str = ", ".join(changed[:5]) if changed else f"{files_affected} file(s)"
+        if len(changed) > 5:
+            files_str += f" (+{len(changed) - 5} more)"
+        return (
+            f"Refactoring applied to {files_str}.\n"
+            f"NEXT: call checkpoint(changed_files=[{', '.join(repr(p) for p in changed[:5])}], "
+            'commit_message="...") to lint, test, and commit.\n'
+            "Ask the user whether they want push=True or push=False."
+        )
+
+    if result.status in ("pending", "previewed") and result.preview:
+        low = result.preview.low_certainty_count or 0
+        parts = [f"Preview ready: {files_affected} file(s). Refactor ID: {rid}\n"]
+        if low > 0:
+            low_files = sorted(
+                {fe.path for fe in result.preview.edits for h in fe.hunks if h.certainty == "low"}
+            )
+            parts.append(
+                f"{low} low-certainty match(es) require review.\n"
+                f'INSPECT: refactor_commit(refactor_id="{rid}", '
+                f'inspect_path="{low_files[0] if low_files else "<path>"}")\n'
+            )
+        parts.append(
+            f'APPLY: refactor_commit(refactor_id="{rid}")\n'
+            f'CANCEL: refactor_cancel(refactor_id="{rid}")'
+        )
+        return "".join(parts)
+
+    return f"Refactoring status: {result.status}."
 
 
 def _serialize_refactor_result(result: "RefactorResult") -> dict[str, Any]:
@@ -131,6 +173,9 @@ def _serialize_refactor_result(result: "RefactorResult") -> dict[str, Any]:
     # Include warning if present (e.g., path:line:col format detected)
     if result.warning:
         output["warning"] = result.warning
+
+    # ── Agentic hint — next-step instruction ──
+    output["agentic_hint"] = _build_refactor_agentic_hint(result, files_affected)
 
     from codeplane.mcp.delivery import wrap_response
 

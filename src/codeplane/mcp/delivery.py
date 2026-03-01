@@ -100,16 +100,18 @@ _SLICE_STRATEGIES: dict[str, SliceStrategy] = {
     "refactor_preview": SliceStrategy(
         flow=(
             "Check summary + display_to_user for overview; "
+            "follow agentic_hint for next steps (apply/inspect/cancel); "
             "inspect preview.edits for per-file hunks; "
             "use refactor_id to apply or cancel."
         ),
-        priority=("summary", "display_to_user", "preview", "refactor_id"),
+        priority=("summary", "display_to_user", "agentic_hint", "preview", "refactor_id"),
         descriptions={
             "summary": "human-readable refactor summary",
             "display_to_user": "user-facing refactor description",
+            "agentic_hint": "next-step instructions — apply, inspect, or cancel",
             "preview": "per-file edit hunks with certainty levels",
-            "refactor_id": "ID for refactor_apply or refactor_cancel",
-            "status": "pending / applied / cancelled",
+            "refactor_id": "ID for refactor_commit or refactor_cancel",
+            "status": "previewed / applied / cancelled",
             "divergence": "conflicting hunks and resolution options",
             "warning": "format or usage warnings",
         },
