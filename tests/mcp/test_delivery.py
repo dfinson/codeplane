@@ -534,7 +534,7 @@ class TestPerFileDotPathHints:
     """Tests for per-file dot-path commands in _build_cplcache_hint."""
 
     def test_resolve_per_file_content_commands(self) -> None:
-        """resolve_result with payload generates per-file resolved.N.content commands."""
+        """resolve_result with payload generates per-file resolved.N commands."""
         payload: dict[str, Any] = {
             "resolved": [
                 {"path": "src/foo.py", "line_count": 100, "content": "..."},
@@ -547,15 +547,15 @@ class TestPerFileDotPathHints:
             "resolve_result",
             payload=payload,
         )
-        assert "resolved.0.content" in hint
-        assert "resolved.1.content" in hint
+        assert 'resolved.0"' in hint
+        assert 'resolved.1"' in hint
         assert "src/foo.py" in hint
         assert "src/bar.py" in hint
         assert "100 lines" in hint
         assert "50 lines" in hint
 
     def test_recon_per_file_scaffold_commands(self) -> None:
-        """recon_result with payload generates per-file scaffold_files.N.scaffold commands."""
+        """recon_result with payload generates per-file scaffold_files.N commands."""
         payload: dict[str, Any] = {
             "scaffold_files": [
                 {"path": "src/a.py", "scaffold": "..."},
@@ -568,8 +568,8 @@ class TestPerFileDotPathHints:
             "recon_result",
             payload=payload,
         )
-        assert "scaffold_files.0.scaffold" in hint
-        assert "scaffold_files.1.scaffold" in hint
+        assert 'scaffold_files.0"' in hint
+        assert 'scaffold_files.1"' in hint
         assert "src/a.py" in hint
         assert "src/b.py" in hint
 
@@ -586,7 +586,7 @@ class TestPerFileDotPathHints:
         }
         hint = _build_cplcache_hint("abc123", 5000, "resolve_result", sections=sections)
         assert '--slice "resolved"' in hint
-        assert "resolved.0.content" not in hint
+        assert 'resolved.0"' not in hint
 
     def test_checkpoint_uses_section_level(self) -> None:
         """Non-file resource kinds use section-level hints even with payload."""
@@ -638,8 +638,8 @@ class TestPerFileDotPathHints:
             sections=sections,
             payload=payload,
         )
-        # Per-file content commands
-        assert "resolved.0.content" in hint
+        # Per-file commands
+        assert 'resolved.0"' in hint
         # Other sections listed separately
         assert "OTHER SECTIONS" in hint
         assert '--slice "agentic_hint"' in hint

@@ -230,17 +230,14 @@ def _build_cplcache_hint(
     if resource_kind == "resolve_result" and payload:
         resolved = payload.get("resolved", [])
         if resolved:
-            parts.append(
-                f"RESOLVED FILES ({len(resolved)} files) "
-                "— manifest with metadata is in the envelope above"
-            )
+            parts.append(f"RESOLVED FILES ({len(resolved)} files)")
             parts.append("")
-            parts.append("Retrieve content (run in terminal):")
+            parts.append("Retrieve per file (run in terminal):")
             for idx, item in enumerate(resolved):
                 path = item.get("path", f"file_{idx}")
                 lc = item.get("line_count", "?")
                 parts.append(f"  {path} ({lc} lines):")
-                parts.append(f"    {_cpl_cmd(cache_id, f'resolved.{idx}.content')}")
+                parts.append(f"    {_cpl_cmd(cache_id, f'resolved.{idx}')}")
             parts.append("")
         # Also list non-content sections (agentic_hint, errors)
         _append_non_content_sections(
@@ -257,11 +254,11 @@ def _build_cplcache_hint(
         if scaffold_files:
             parts.append(f"SCAFFOLD FILES ({len(scaffold_files)} files) — imports + signatures")
             parts.append("")
-            parts.append("Retrieve scaffolds (run in terminal):")
+            parts.append("Retrieve per file (run in terminal):")
             for idx, item in enumerate(scaffold_files):
                 path = item.get("path", f"file_{idx}")
                 parts.append(f"  {path}:")
-                parts.append(f"    {_cpl_cmd(cache_id, f'scaffold_files.{idx}.scaffold')}")
+                parts.append(f"    {_cpl_cmd(cache_id, f'scaffold_files.{idx}')}")
             parts.append("")
         # List remaining sections (agentic_hint, lite_files, repo_map, etc.)
         _append_non_content_sections(
