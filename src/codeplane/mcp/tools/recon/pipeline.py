@@ -1346,15 +1346,27 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         top_paths_str = ", ".join(top_paths) if top_paths else "(none)"
 
         hint_parts = [
-            f"Recon found {n_files} file(s) (intent: {intent.value}).",
-            f"Scaffolds ({len(scaffold_files)}): {top_paths_str}.",
-            f"Lite ({len(lite_files)}).",
-            "NEXT: call recon_resolve with candidate_id values from above.",
-            "Resolve ALL files you need in ONE call — incremental resolves are rate-limited (max 3 before hard block).",
-            "Each target needs: candidate_id (required), optional start_line/end_line.",
-            "Include a justification (50+ chars) explaining your resolve batch.",
+            f"Recon found {n_files} file(s) (intent: {intent.value})."
+            f" Scaffolds ({len(scaffold_files)}): {top_paths_str}."
+            f" Lite ({len(lite_files)}).",
+            "",
+            "HOW TO READ SCAFFOLDS: Each file has a header line:"
+            " '# path/to/file.py | candidate_id=XXXX | N lines'."
+            " Below the header: imports and symbol signatures"
+            " (functions, classes, methods with line numbers)."
+            " Use these to decide which files you need full content for.",
+            "",
+            "NEXT: call recon_resolve with candidate_id values"
+            " from the scaffold headers."
+            " Resolve ALL files you need in ONE call —"
+            " incremental resolves are rate-limited"
+            " (max 3 before hard block)."
+            " Each target needs: candidate_id (required),"
+            " optional start_line/end_line."
+            " Include a justification (50+ chars)"
+            " explaining your resolve batch.",
         ]
-        response["agentic_hint"] = " ".join(hint_parts)
+        response["agentic_hint"] = "\n".join(hint_parts)
 
         # Coverage hint
         if parsed_task.explicit_paths:

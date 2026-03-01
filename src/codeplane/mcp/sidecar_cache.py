@@ -841,7 +841,7 @@ class SidecarCache:
 
         # -- Navigate to sub-path for arbitrary path traversal --
         if path and isinstance(entry.payload, dict):
-            value: Any = entry.payload
+            value = entry.payload
             for segment in path.split("."):
                 if isinstance(value, dict):
                     if segment not in value:
@@ -977,6 +977,30 @@ def _render_file_item(item: dict[str, Any]) -> str:
     return body
 
 
+def _compact_symbol(sym: Any) -> str:
+    """Render a single symbol as a compact one-liner."""
+    if isinstance(sym, dict):
+        name = sym.get("name", "")
+        kind = sym.get("kind", "")
+        line = sym.get("line")
+        sig = sym.get("signature", "")
+        if sig:
+            # Collapse whitespace in multi-line signatures
+            compact = " ".join(sig.split())
+            loc = f"  [L{line}]" if line is not None else ""
+            return compact + loc
+        parts: list[str] = []
+        if kind:
+            parts.append(kind)
+        if name:
+            parts.append(name)
+        if line is not None:
+            parts.append(f"[L{line}]")
+        return " ".join(parts)
+    # Fallback: collapse multi-line str representations to single line
+    return " ".join(str(sym).split())
+
+
 def _render_scaffold(scaffold: dict[str, Any]) -> str:
     """Render a scaffold dict as concise readable text."""
     lines: list[str] = []
@@ -998,7 +1022,8 @@ def _render_scaffold(scaffold: dict[str, Any]) -> str:
         lines.append(f"imports: {', '.join(str(i) for i in imports)}")
     symbols = scaffold.get("symbols", [])
     if symbols:
-        lines.append(f"symbols: {', '.join(str(s) for s in symbols)}")
+        for s in symbols:
+            lines.append(f"  {_compact_symbol(s)}")
     return "\n".join(lines)
 
 
