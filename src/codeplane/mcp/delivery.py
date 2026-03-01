@@ -192,6 +192,17 @@ def _order_sections(
 # cplcache Hint Builder
 # =============================================================================
 
+_TERMINAL_OVERFLOW_NOTE = (
+    "NOTE: If any command output is redirected to a file "
+    '(e.g. "Large tool result written to file: /path/to/file"), '
+    "read it with: cat /path/to/file"
+)
+
+
+def _cpl_cmd(cache_id: str, slice_key: str) -> str:
+    """Format a single cplcache retrieval command."""
+    return f'python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "{slice_key}"'
+
 
 def _build_cplcache_hint(
     cache_id: str,
@@ -199,58 +210,75 @@ def _build_cplcache_hint(
     resource_kind: str,
     sections: dict[str, Any] | None = None,
 ) -> str:
-    """Build cplcache terminal hints with resource-kind-specific slicing strategy.
+    """Build cplcache terminal hints with aggressive clarity.
 
-    Combines pre-computed section metadata (byte sizes, ready flags) with
-    per-resource-kind consumption guidance (priority ordering, descriptions).
-
-    All hint commands use pre-computed server-side chunking — the client
-    never needs to specify --max-bytes.
+    The output is structured so agents cannot miss the retrieval commands:
+    - Urgent header with CACHED / RETRIEVE framing
+    - Each section on its own block with the command on a dedicated line
+    - Pre-chunked sub-slices listed individually under their parent
+    - Strategy flow promotes the right consumption order
     """
     from codeplane.mcp.sidecar_cache import CacheSection
 
     strategy = _SLICE_STRATEGIES.get(resource_kind)
 
     parts: list[str] = [
-        f"Response too large for inline delivery ({byte_size:,} bytes).",
-        f"Cached as {cache_id} (kind: {resource_kind}).",
+        ">>> RESPONSE CACHED — EXECUTE COMMANDS BELOW TO RETRIEVE <<<",
+        "",
+        f"Cache ID: {cache_id}  |  Total: {byte_size:,} bytes  |  Kind: {resource_kind}",
     ]
     if strategy:
-        parts.append(f"Strategy: {strategy.flow}")
+        parts.append(f"Retrieval plan: {strategy.flow}")
     parts.append("")
 
     if sections:
         ordered = _order_sections(sections, strategy)
 
-        ready = [(k, s) for k, s in ordered if isinstance(s, CacheSection) and s.ready]
-        oversized = [(k, s) for k, s in ordered if isinstance(s, CacheSection) and not s.ready]
+        # Collect top-level sections (not sub-slices) in priority order
+        top_level = [
+            (k, s) for k, s in ordered if isinstance(s, CacheSection) and s.parent_key is None
+        ]
 
-        if ready:
-            parts.append("Ready sections (instant retrieval):")
-            for key, sec in ready:
+        if top_level:
+            parts.append("COMMANDS — run each in terminal:")
+            parts.append("")
+            for key, sec in top_level:
                 desc = strategy.descriptions.get(key, "") if strategy else ""
-                desc_part = f" — {desc}" if desc else ""
-                parts.append(
-                    f"  {key:<24} {sec.byte_size:>8,} bytes{desc_part}  "
-                    f'python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "{key}"'
-                )
+                desc_suffix = f"  ({desc})" if desc else ""
 
-        if oversized:
-            if ready:
-                parts.append("")
-            parts.append("Oversized sections (chunked retrieval):")
-            for key, sec in oversized:
-                desc = strategy.descriptions.get(key, "") if strategy else ""
-                desc_part = f" — {desc}" if desc else ""
-                parts.append(
-                    f"  {key:<24} {sec.byte_size:>8,} bytes{desc_part}  "
-                    f'python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "{key}"'
-                )
+                if sec.ready:
+                    # Single slice — one command
+                    parts.append(f"  [{key}] {sec.byte_size:,} bytes{desc_suffix}")
+                    parts.append(f"    {_cpl_cmd(cache_id, key)}")
+                    parts.append("")
+                elif sec.chunk_total:
+                    # Pre-chunked — header + one command per chunk
+                    parts.append(
+                        f"  [{key}] {sec.byte_size:,} bytes — {sec.chunk_total} chunks{desc_suffix}"
+                    )
+                    for idx in range(sec.chunk_total):
+                        sub_key = f"{key}.{idx}"
+                        sub_sec = sections.get(sub_key)
+                        if isinstance(sub_sec, CacheSection):
+                            item_hint = (
+                                f" ({sub_sec.chunk_items} items)"
+                                if sub_sec.chunk_items is not None
+                                else ""
+                            )
+                            parts.append(f"    chunk {idx}: {sub_sec.byte_size:,} bytes{item_hint}")
+                            parts.append(f"      {_cpl_cmd(cache_id, sub_key)}")
+                    parts.append("")
+                else:
+                    # Oversized dict — navigable via path
+                    parts.append(f"  [{key}] {sec.byte_size:,} bytes{desc_suffix}")
+                    parts.append(f"    {_cpl_cmd(cache_id, key)}")
+                    parts.append("")
     else:
-        parts.append(
-            f'  python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "<SECTION>"'
-        )
+        parts.append("COMMAND — run in terminal:")
+        parts.append(f"  {_cpl_cmd(cache_id, '<SECTION>')}")
+        parts.append("")
 
+    parts.append(_TERMINAL_OVERFLOW_NOTE)
     parts.append("")
 
     return "\n".join(parts)
