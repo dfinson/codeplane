@@ -333,16 +333,16 @@ class TestRefactorEditHandler:
         ctx.coordinator.repo_root = tmp_path
         session = MagicMock()
         session.counters = {"recon_called": 1, "resolved_files": {}}
-        session.edit_tickets = {}
-        session.edits_since_checkpoint = 0
 
-        from codeplane.mcp.session import RefactorPlan
+        from codeplane.mcp.session import MutationContext, RefactorPlan
 
-        session.active_plan = RefactorPlan(
+        mutation_ctx = MutationContext()
+        mutation_ctx.plan = RefactorPlan(
             plan_id="test-plan-1",
             recon_id="r1",
             description="test plan for unit tests",
         )
+        session.mutation_ctx = mutation_ctx
         ctx.session_manager.get_or_create.return_value = session
         ctx.mutation_ops.notify_mutation = MagicMock()
         return ctx
@@ -371,7 +371,7 @@ class TestRefactorEditHandler:
         from codeplane.mcp.session import EditTicket
 
         ticket_id = "recon1:0:" + sha[:8]
-        session.edit_tickets[ticket_id] = EditTicket(
+        session.mutation_ctx.edit_tickets[ticket_id] = EditTicket(
             ticket_id=ticket_id,
             path="hello.py",
             sha256=sha,
@@ -419,7 +419,7 @@ class TestRefactorEditHandler:
 
         # Ticket with wrong sha256
         ticket_id = "r:0:deadbeef"
-        session.edit_tickets[ticket_id] = EditTicket(
+        session.mutation_ctx.edit_tickets[ticket_id] = EditTicket(
             ticket_id=ticket_id,
             path="stale.py",
             sha256="wrong_sha_value",
@@ -597,7 +597,7 @@ class TestRefactorEditHandler:
         from codeplane.mcp.session import EditTicket
 
         ticket_id = f"r:0:{sha[:8]}"
-        session.edit_tickets[ticket_id] = EditTicket(
+        session.mutation_ctx.edit_tickets[ticket_id] = EditTicket(
             ticket_id=ticket_id,
             path="tracked.py",
             sha256=sha,
@@ -653,7 +653,7 @@ class TestRefactorEditHandler:
         from codeplane.mcp.session import EditTicket
 
         ticket_id = f"r:0:{sha[:8]}"
-        session.edit_tickets[ticket_id] = EditTicket(
+        session.mutation_ctx.edit_tickets[ticket_id] = EditTicket(
             ticket_id=ticket_id,
             path="used.py",
             sha256=sha,
@@ -683,7 +683,7 @@ class TestRefactorEditHandler:
     ) -> None:
         """Exceeding batch limit raises MCPError."""
         session = app_ctx.session_manager.get_or_create.return_value
-        session.edits_since_checkpoint = 2  # Already at limit
+        session.mutation_ctx.mutations_since_checkpoint = 2  # Already at limit
 
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
@@ -704,7 +704,7 @@ class TestRefactorEditHandler:
     ) -> None:
         """Gap 3: Create-only call without active plan raises MCPError."""
         session = app_ctx.session_manager.get_or_create.return_value
-        session.active_plan = None
+        session.mutation_ctx.plan = None
 
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
@@ -725,7 +725,7 @@ class TestRefactorEditHandler:
     ) -> None:
         """Gap 3: Delete-only call without active plan raises MCPError."""
         session = app_ctx.session_manager.get_or_create.return_value
-        session.active_plan = None
+        session.mutation_ctx.plan = None
 
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
