@@ -362,9 +362,9 @@ class TestCplcacheHints:
         assert '--slice "scaffold_files.1"' in hint
         assert '--slice "scaffold_files.2"' in hint
         # Item counts shown
-        assert "(30 items)" in hint
-        assert "(28 items)" in hint
-        assert "(22 items)" in hint
+        assert "30 items" in hint
+        assert "28 items" in hint
+        assert "22 items" in hint
         # Commands on lines by themselves (not appended to metadata)
         lines = hint.split("\n")
         cmd_lines = [ln for ln in lines if "--slice" in ln]
@@ -629,8 +629,8 @@ class TestChunkAwareSectionHints:
         assert "2 chunks" in hint
         assert '--slice "scaffold_files.0"' in hint
         assert '--slice "scaffold_files.1"' in hint
-        assert "(15 items)" in hint
-        assert "(10 items)" in hint
+        assert "15 items" in hint
+        assert "10 items" in hint
 
     def test_resolve_without_sections_shows_fallback(self) -> None:
         """resolve_result without sections shows generic fallback."""

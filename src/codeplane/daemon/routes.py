@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 
 if TYPE_CHECKING:
@@ -128,26 +128,32 @@ def create_routes(controller: ServerController) -> list[Route]:
         entries = cache_list(session_id, endpoint_key)
         return JSONResponse({"entries": entries})
 
-    async def sidecar_cache_slice(request: Request) -> JSONResponse:
-        """Extract a sub-path from a cached payload."""
-        from codeplane.mcp.sidecar_cache import cache_slice
+    async def sidecar_cache_slice(request: Request) -> Response:
+        """Render a cache slice as terminal-ready plain text.
+
+        Query params:
+            cache (required): cache entry ID
+            path: dot-separated slice path (e.g. 'resolved.0')
+        """
+        from codeplane.mcp.sidecar_cache import cache_render
 
         cache_id = request.query_params.get("cache", "")
         if not cache_id:
-            return JSONResponse(
-                {"error": "'cache' query param is required."},
+            return Response(
+                "'cache' query param is required.",
                 status_code=400,
+                media_type="text/plain",
             )
+
         path = request.query_params.get("path")
-        max_bytes = int(request.query_params.get("max_bytes", "60000"))
-        offset = int(request.query_params.get("offset", "0"))
-        result = cache_slice(cache_id, path=path, max_bytes=max_bytes, offset=offset)
-        if result is None:
-            return JSONResponse(
-                {"error": f"Cache entry '{cache_id}' not found."},
+        rendered = cache_render(cache_id, path=path)
+        if rendered is None:
+            return Response(
+                f"Cache entry '{cache_id}' not found.",
                 status_code=404,
+                media_type="text/plain",
             )
-        return JSONResponse(result)
+        return Response(rendered, media_type="text/plain")
 
     async def sidecar_cache_meta(request: Request) -> JSONResponse:
         """Get metadata and schema for a cached entry."""

@@ -250,14 +250,19 @@ def _build_cplcache_hint(
                         sub_key = f"{key}.{cidx}"
                         sub_sec = sections.get(sub_key)
                         if isinstance(sub_sec, CacheSection):
-                            item_hint = (
-                                f" ({sub_sec.chunk_items} items)"
-                                if sub_sec.chunk_items is not None
-                                else ""
-                            )
-                            parts.append(
-                                f"    chunk {cidx}: {sub_sec.byte_size:,} bytes{item_hint}"
-                            )
+                            # Use content_summary for semantic description
+                            summary = sub_sec.content_summary
+                            if summary:
+                                label = summary
+                            elif sub_sec.chunk_items is not None:
+                                label = f"{sub_sec.chunk_items} items"
+                            else:
+                                label = ""
+                            size_str = f"{sub_sec.byte_size:,} bytes"
+                            if label:
+                                parts.append(f"    chunk {cidx}: {size_str} — {label}")
+                            else:
+                                parts.append(f"    chunk {cidx}: {size_str}")
                             parts.append(f"      {_cpl_cmd(cache_id, sub_key)}")
                     parts.append("")
                 else:

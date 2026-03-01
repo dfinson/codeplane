@@ -23,7 +23,7 @@ from codeplane.mcp.sidecar_cache import (
     cache_list,
     cache_meta,
     cache_put,
-    cache_slice,
+    cache_render,
     get_sidecar_cache,
 )
 
@@ -255,11 +255,11 @@ class TestSidecarCacheGlobal:
         entries = cache_list("test-session", "test-endpoint")
         assert any(e["cache_id"] == cid for e in entries)
 
-    def test_global_cache_slice(self) -> None:
+    def test_global_cache_render(self) -> None:
         cid = cache_put("test-session", "test-ep2", {"key": "val"})
-        result = cache_slice(cid, path="key")
+        result = cache_render(cid, path="key")
         assert result is not None
-        assert result["value"] == "val"
+        assert result == "val"
 
     def test_global_cache_meta(self) -> None:
         cid = cache_put("test-session", "test-ep3", {"a": 1})

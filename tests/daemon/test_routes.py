@@ -263,20 +263,22 @@ class TestSidecarCacheSliceEndpoint:
         cid = cache_put("s1", "e1", {"data": [1, 2, 3]})
         resp = client.get(f"/sidecar/cache/slice?cache={cid}&path=data")
         assert resp.status_code == 200
-        result = resp.json()
-        assert "value" in result
-        assert result["value"] == [1, 2, 3]
+        assert resp.headers["content-type"] == "text/plain; charset=utf-8"
+        # _render_list renders non-dict items via str(), joined by ---
+        assert "1" in resp.text
+        assert "2" in resp.text
+        assert "3" in resp.text
         get_sidecar_cache().clear()
 
-    def test_slice_with_max_bytes(self, client: TestClient) -> None:
+    def test_slice_root_returns_section_index(self, client: TestClient) -> None:
         from codeplane.mcp.sidecar_cache import cache_put, get_sidecar_cache
 
         get_sidecar_cache().clear()
         cid = cache_put("s1", "e1", {"data": "x" * 10_000})
-        resp = client.get(f"/sidecar/cache/slice?cache={cid}&max_bytes=500")
+        resp = client.get(f"/sidecar/cache/slice?cache={cid}&path=data")
         assert resp.status_code == 200
-        result = resp.json()
-        assert "has_more" in result
+        assert resp.headers["content-type"] == "text/plain; charset=utf-8"
+        assert "x" in resp.text
         get_sidecar_cache().clear()
 
 

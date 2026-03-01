@@ -64,6 +64,7 @@ class CacheSection:
     chunk_index: int | None = None  # sub-slice ordinal (0, 1, …)
     chunk_total: int | None = None  # total sub-slices for the parent
     chunk_items: int | None = None  # items in this sub-slice (lists only)
+    content_summary: str | None = None  # semantic description of chunk contents
 
     def to_dict(self) -> dict[str, Any]:
         """Serializable metadata."""
@@ -83,6 +84,8 @@ class CacheSection:
             d["chunk_total"] = self.chunk_total
         if self.chunk_items is not None:
             d["chunk_items"] = self.chunk_items
+        if self.content_summary is not None:
+            d["content_summary"] = self.content_summary
         return d
 
 
@@ -191,6 +194,7 @@ def _build_sections(
                     chunk_index=idx,
                     chunk_total=len(chunks),
                     chunk_items=len(chunk_items),
+                    content_summary=_summarize_list_chunk(chunk_items),
                 )
         elif isinstance(value, str):
             # Pre-chunk string into sub-slices
@@ -505,6 +509,12 @@ class SidecarCache:
     """Thread-safe in-memory cache for oversized MCP responses.
 
     Key space: (session_id, endpoint_key) → deque(maxlen=3)
+
+    Text rendering:
+      ``render_text_slice`` produces terminal-ready plain text for a given
+      slice path.  All formatting logic lives here on the server — the
+      ``cplcache`` client script is a thin facade that prints the response
+      body verbatim.
     """
 
     def __init__(
@@ -757,6 +767,116 @@ class SidecarCache:
             "has_more": False,
         }
 
+    def render_text_slice(
+        self,
+        cache_id: str,
+        path: str | None = None,
+    ) -> str | None:
+        """Render a slice as terminal-ready plain text.
+
+        This is the primary retrieval path for ``cplcache.py``.
+        Returns pre-formatted text ready to print, or None if cache_id
+        not found.  The client script prints the result verbatim —
+        all formatting decisions are made here on the server.
+
+        Includes a navigation footer for chunked slices showing what
+        adjacent chunks contain.
+        """
+        entry = self.get_entry(cache_id)
+        if entry is None:
+            return None
+
+        # -- Fast path: pre-chunked sub-slice (e.g. "resolved.0") --
+        if path and path in entry.sub_slices and path in entry.sections:
+            value = entry.sub_slices[path]
+            section = entry.sections[path]
+            body = _render_value(value)
+            footer = _render_navigation_footer(
+                cache_id,
+                section,
+                entry.sections,
+            )
+            if footer:
+                return body + "\n" + footer
+            return body
+
+        # -- Fast path: top-level ready section --
+        if (
+            path
+            and "." not in path
+            and isinstance(entry.payload, dict)
+            and path in entry.sections
+            and entry.sections[path].ready
+        ):
+            value = entry.payload[path]
+            return _render_value(value)
+
+        # -- Top-level key that is NOT ready (chunked parent) --
+        if (
+            path
+            and "." not in path
+            and isinstance(entry.payload, dict)
+            and path in entry.sections
+            and not entry.sections[path].ready
+        ):
+            section = entry.sections[path]
+            lines: list[str] = [
+                f"Section '{path}' is {section.type_desc} "
+                f"({section.byte_size:,} bytes) — too large for single retrieval.",
+                f"Split into {section.chunk_total} chunks:",
+                "",
+            ]
+            for cidx in range(section.chunk_total or 0):
+                sub_key = f"{path}.{cidx}"
+                sub_sec = entry.sections.get(sub_key)
+                if sub_sec:
+                    summary = sub_sec.content_summary or f"{sub_sec.chunk_items} item(s)"
+                    cmd = (
+                        f"python3 .codeplane/scripts/cplcache.py"
+                        f' --cache-id "{cache_id}" --slice "{sub_key}"'
+                    )
+                    lines.append(f"  chunk {cidx}: {summary}")
+                    lines.append(f"    {cmd}")
+            return "\n".join(lines)
+
+        # -- Navigate to sub-path for arbitrary path traversal --
+        if path and isinstance(entry.payload, dict):
+            value: Any = entry.payload
+            for segment in path.split("."):
+                if isinstance(value, dict):
+                    if segment not in value:
+                        avail = ", ".join(list(value.keys())[:10])
+                        return f"Key '{segment}' not found.  Available: {avail}"
+                    value = value[segment]
+                elif isinstance(value, list):
+                    try:
+                        idx = int(segment)
+                    except ValueError:
+                        return (
+                            f"Expected integer index, got '{segment}' (list length: {len(value)})"
+                        )
+                    if idx < 0 or idx >= len(value):
+                        return f"Index {idx} out of range (list length: {len(value)})"
+                    value = value[idx]
+                else:
+                    return f"Cannot traverse into {type(value).__name__}"
+            return _render_value(value)
+
+        # -- Root or fallback --
+        if isinstance(entry.payload, dict):
+            # Show top-level key index
+            lines_root: list[str] = ["Available sections:", ""]
+            for key in entry.payload:
+                sec = entry.sections.get(key)
+                if sec:
+                    status = "ready" if sec.ready else f"{sec.chunk_total} chunks"
+                    lines_root.append(f"  {key}: {sec.type_desc} ({status})")
+                else:
+                    lines_root.append(f"  {key}")
+            return "\n".join(lines_root)
+
+        return _render_value(entry.payload)
+
     def get_meta(self, cache_id: str) -> dict[str, Any] | None:
         """Get metadata + schema info for a cached entry."""
         entry = self.get_entry(cache_id)
@@ -782,6 +902,165 @@ class SidecarCache:
         with self._lock:
             self._store.clear()
             self._index.clear()
+
+
+def _summarize_list_chunk(items: list[Any]) -> str:
+    """Build a semantic summary of items in a list chunk.
+
+    For file-like items (with ``path``), lists the file paths.
+    For scaffold items, lists paths with concise metadata.
+    Falls back to item count for opaque items.
+    """
+    paths: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            path = item.get("path", "")
+            if path:
+                lc = item.get("line_count")
+                suffix = f" ({lc} lines)" if lc is not None else ""
+                paths.append(f"{path}{suffix}")
+    if paths:
+        return ", ".join(paths)
+    return f"{len(items)} item(s)"
+
+
+# =========================================================================
+# Text Rendering — server-side formatting for terminal consumption
+# =========================================================================
+# All presentation logic lives here so that cplcache.py is a pure facade
+# (fetch URL → print body → exit).  The /sidecar/cache/slice endpoint
+# returns pre-formatted text/plain when format=text.
+
+
+def _render_file_item(item: dict[str, Any]) -> str:
+    """Render a resolved or scaffold file item with a metadata header.
+
+    Produces ``# path | key=val ...`` header followed by raw content
+    (resolved items) or formatted scaffold text.
+    """
+    parts: list[str] = []
+    path = item.get("path", "")
+    if path:
+        parts.append(path)
+    cid = item.get("candidate_id", "")
+    if cid:
+        parts.append(f"candidate_id={cid}")
+    sha = item.get("file_sha256", "")
+    if sha:
+        parts.append(f"sha256={sha[:16]}")
+    lc = item.get("line_count")
+    if lc is not None:
+        parts.append(f"{lc} lines")
+    ticket = item.get("edit_ticket", "")
+    if ticket:
+        parts.append(f"edit_ticket={ticket}")
+    span = item.get("span")
+    if span:
+        parts.append(f"span={span.get('start_line')}-{span.get('end_line')}")
+
+    header = "# " + " | ".join(parts) if parts else ""
+
+    content = item.get("content")
+    if isinstance(content, str):
+        body = content
+    else:
+        scaffold = item.get("scaffold")
+        if isinstance(scaffold, dict):
+            body = _render_scaffold(scaffold)
+        elif isinstance(scaffold, str):
+            body = scaffold
+        else:
+            body = ""
+
+    if header:
+        return header + "\n" + body
+    return body
+
+
+def _render_scaffold(scaffold: dict[str, Any]) -> str:
+    """Render a scaffold dict as concise readable text."""
+    lines: list[str] = []
+    summary = scaffold.get("summary", "")
+    if summary:
+        lines.append(summary)
+    else:
+        lang = scaffold.get("language", "")
+        total = scaffold.get("total_lines")
+        meta: list[str] = []
+        if lang:
+            meta.append(lang)
+        if total is not None:
+            meta.append(f"{total} lines")
+        if meta:
+            lines.append(" | ".join(meta))
+    imports = scaffold.get("imports", [])
+    if imports:
+        lines.append(f"imports: {', '.join(str(i) for i in imports)}")
+    symbols = scaffold.get("symbols", [])
+    if symbols:
+        lines.append(f"symbols: {', '.join(str(s) for s in symbols)}")
+    return "\n".join(lines)
+
+
+def _render_list(items: list[Any]) -> str:
+    """Render a list of items to text.
+
+    File-like items (with ``content`` or ``scaffold``) get metadata headers.
+    Other dicts are compact JSON.  Non-dicts are str().
+    """
+    formatted: list[str] = []
+    for item in items:
+        if isinstance(item, dict) and ("content" in item or "scaffold" in item):
+            formatted.append(_render_file_item(item))
+        elif isinstance(item, dict):
+            formatted.append(json.dumps(item, separators=_COMPACT))
+        else:
+            formatted.append(str(item))
+    return "\n---\n".join(formatted)
+
+
+def _render_value(value: Any) -> str:
+    """Render an arbitrary value to terminal-ready text."""
+    if isinstance(value, list):
+        return _render_list(value)
+    if isinstance(value, dict) and ("content" in value or "scaffold" in value):
+        return _render_file_item(value)
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, separators=_COMPACT)
+
+
+def _render_navigation_footer(
+    cache_id: str,
+    section: CacheSection | None,
+    all_sections: dict[str, CacheSection],
+) -> str:
+    """Build a navigation footer for chunked slices.
+
+    Shows chunk position (N/M) and lists what adjacent chunks contain
+    using their content_summary.
+    """
+    if section is None or section.parent_key is None or section.chunk_total is None:
+        return ""
+
+    parts: list[str] = []
+    parts.append(f"--- chunk {(section.chunk_index or 0) + 1}/{section.chunk_total} ---")
+
+    # List adjacent chunks with their content summaries
+    for cidx in range(section.chunk_total):
+        if cidx == section.chunk_index:
+            continue
+        sub_key = f"{section.parent_key}.{cidx}"
+        peer = all_sections.get(sub_key)
+        if peer and peer.content_summary:
+            cmd = (
+                f"python3 .codeplane/scripts/cplcache.py"
+                f' --cache-id "{cache_id}" --slice "{sub_key}"'
+            )
+            parts.append(f"  chunk {cidx}: {peer.content_summary}")
+            parts.append(f"    {cmd}")
+
+    return "\n".join(parts)
 
 
 def _describe_value(v: Any) -> dict[str, Any]:
@@ -821,14 +1100,12 @@ def cache_list(session_id: str, endpoint_key: str) -> list[dict[str, Any]]:
     return _sidecar_cache.list_entries(session_id, endpoint_key)
 
 
-def cache_slice(
+def cache_render(
     cache_id: str,
     path: str | None = None,
-    max_bytes: int = 60_000,
-    offset: int = 0,
-) -> dict[str, Any] | None:
-    """Module-level convenience: slice a cached entry."""
-    return _sidecar_cache.slice_payload(cache_id, path, max_bytes, offset)
+) -> str | None:
+    """Module-level convenience: render a slice as terminal-ready text."""
+    return _sidecar_cache.render_text_slice(cache_id, path)
 
 
 def cache_meta(cache_id: str) -> dict[str, Any] | None:
