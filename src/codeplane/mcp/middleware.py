@@ -143,67 +143,6 @@ class ToolMiddleware(Middleware):
     ) -> Any:
         """Execute a tool call with structured error handling and UX."""
 
-        # ── Recon consumption gate ──────────────────────────────────
-        # After recon returns, the NEXT tool call (any tool) is gated.
-        # Agent must provide gate_token + gate_reason (50+ chars)
-        # confirming recon results were consumed before new exploration.
-        short = self._strip_tool_prefix(tool_name)
-        if short != "recon" and self._session_manager and context.fastmcp_context:
-            session = self._session_manager.get_or_create(
-                context.fastmcp_context.session_id,
-            )
-            session.gate_manager.expire_time_based_gates()
-            if session.gate_manager.has_pending("recon_consumption"):
-                gt = arguments.get("gate_token", "")
-                gr = arguments.get("gate_reason", "")
-                if gt:
-                    vr = session.gate_manager.validate(str(gt), str(gr))
-                    if not vr.ok:
-                        # Re-issue the gate — token was invalid or reason too short
-                        from codeplane.mcp.gate import RECON_CONSUMPTION_GATE
-
-                        gate_block = session.gate_manager.issue(RECON_CONSUMPTION_GATE)
-                        return ToolResult(
-                            structured_content={
-                                "status": "blocked",
-                                "error": {
-                                    "code": "RECON_CONSUMPTION_REQUIRED",
-                                    "message": vr.error,
-                                },
-                                "gate": gate_block,
-                                "agentic_hint": (
-                                    "Your gate_token or gate_reason was invalid. "
-                                    "Provide the correct gate_token from the recon "
-                                    "response and a gate_reason (50+ chars) explaining "
-                                    "how you consumed the recon results."
-                                ),
-                            }
-                        )
-                    # Gate consumed — proceed normally
-                else:
-                    return ToolResult(
-                        structured_content={
-                            "status": "blocked",
-                            "error": {
-                                "code": "RECON_CONSUMPTION_REQUIRED",
-                                "message": (
-                                    "Recon results must be consumed before calling "
-                                    f"{short}. Include gate_token and gate_reason "
-                                    "(50+ chars) confirming you parsed the recon output."
-                                ),
-                            },
-                            "agentic_hint": (
-                                "You called a tool immediately after recon without "
-                                "acknowledging the results. Recon returned full files, "
-                                "scaffolds, and extraction commands. Before making more "
-                                "tool calls, include gate_token (from recon response) "
-                                "and gate_reason (50+ chars) explaining: which files "
-                                "you identified as edit targets, what information you "
-                                "extracted, and why you need this next tool call."
-                            ),
-                        }
-                    )
-
         try:
             result = await call_next(context)
 
