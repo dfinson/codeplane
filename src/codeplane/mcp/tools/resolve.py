@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from codeplane.mcp.delivery import wrap_response
 from codeplane.mcp.errors import MCPError, MCPErrorCode
+from codeplane.mcp.session import EditTicket
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -262,14 +263,31 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     }
                 )
 
-        # Track resolved files + sha256 in session for refactor_edit gate
+        # ── Mint edit tickets ──
+        ticket_ids: list[str] = []
         try:
             session = app_ctx.session_manager.get_or_create(ctx.session_id)
+            # Legacy: keep resolved_files for backward compat
             if "resolved_files" not in session.counters:
                 session.counters["resolved_files"] = {}  # type: ignore[assignment]
             resolved_files: dict[str, str] = session.counters["resolved_files"]  # type: ignore[assignment]
             for r in resolved:
                 resolved_files[r["path"]] = r["file_sha256"]
+
+            # Mint one EditTicket per resolved file
+            for r in resolved:
+                cid = r["candidate_id"]
+                sha_prefix = r["file_sha256"][:8]
+                ticket_id = f"{cid}:{sha_prefix}"
+                session.edit_tickets[ticket_id] = EditTicket(
+                    ticket_id=ticket_id,
+                    path=r["path"],
+                    sha256=r["file_sha256"],
+                    candidate_id=cid,
+                    issued_by="resolve",
+                )
+                r["edit_ticket"] = ticket_id
+                ticket_ids.append(ticket_id)
         except Exception:  # noqa: BLE001
             pass
 
@@ -279,11 +297,16 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         if len(resolved_paths) > 5:
             paths_str += f" (+{len(resolved_paths) - 5} more)"
 
+        ticket_str = ", ".join(ticket_ids[:5])
+        if len(ticket_ids) > 5:
+            ticket_str += f" (+{len(ticket_ids) - 5} more)"
+
         agentic_hint = (
-            f"Resolved {len(resolved)} file(s): {paths_str}.\n\n"
+            f"Resolved {len(resolved)} file(s): {paths_str}.\n"
+            f"Edit tickets minted: {ticket_str}\n\n"
             "NEXT STEPS — choose the action that matches your intent:\n\n"
-            "EDIT CODE → refactor_edit(edits=[{path, old_content, new_content, "
-            "expected_file_sha256}])\n"
+            "EDIT CODE → refactor_edit(edits=[{edit_ticket, old_content, "
+            "new_content}])  — use edit_ticket (NOT path+sha256)\n"
             'RENAME A SYMBOL → refactor_rename(symbol="OldName", new_name="NewName")\n'
             'MOVE A FILE → refactor_move(source="old/path.py", '
             'destination="new/path.py")\n'

@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from codeplane.mcp.errors import MCPError, MCPErrorCode
 from codeplane.mcp.ledger import get_ledger
+from codeplane.mcp.session import _MAX_EDIT_BATCHES, EditTicket
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -46,12 +47,25 @@ class FindReplaceEdit(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    path: str = Field(..., description="File path relative to repo root")
+    edit_ticket: str | None = Field(
+        None,
+        description=(
+            "Edit ticket from recon_resolve output. Required for updates. "
+            "Not needed for file creates (old_content=None, new_content=body)."
+        ),
+    )
+    path: str | None = Field(
+        None,
+        description=(
+            "File path relative to repo root. For updates, this is derived "
+            "from the edit_ticket — only provide for creates/deletes."
+        ),
+    )
     expected_file_sha256: str | None = Field(
         None,
         description=(
-            "SHA256 of the file from recon_resolve. Required for "
-            "updates to prevent stale edits. Not needed for creates."
+            "SHA256 of the file. For updates, this is derived from the "
+            "edit_ticket — only provide for creates."
         ),
     )
     old_content: str | None = Field(
@@ -320,6 +334,20 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ledger = get_ledger()
         repo_root = app_ctx.coordinator.repo_root
 
+        # ── Batch-limit gate ──
+        if session.edits_since_checkpoint >= _MAX_EDIT_BATCHES:
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message=(
+                    f"Edit batch limit reached ({_MAX_EDIT_BATCHES} batches "
+                    "since last checkpoint). Checkpoint is required."
+                ),
+                remediation=(
+                    'Call checkpoint(changed_files=[...], commit_message="...") '
+                    "to lint, test, and commit before editing more files."
+                ),
+            )
+
         results: list[dict[str, Any]] = []
         creates: list[FindReplaceEdit] = []
         deletes: list[FindReplaceEdit] = []
@@ -333,41 +361,68 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             else:
                 updates.append(edit)
 
-        # ── Process find-and-replace updates ──
+        # ── Process find-and-replace updates (ticket-gated) ──
+        continuation_tickets: list[dict[str, str]] = []
         for edit in updates:
+            # ── Resolve edit ticket ──
+            if not edit.edit_ticket:
+                raise MCPError(
+                    code=MCPErrorCode.INVALID_PARAMS,
+                    message="edit_ticket is required for updates.",
+                    remediation=(
+                        "Call recon_resolve first to get edit_ticket values. "
+                        "Each resolved file comes with an edit_ticket."
+                    ),
+                )
+
+            ticket = session.edit_tickets.get(edit.edit_ticket)
+            if ticket is None:
+                raise MCPError(
+                    code=MCPErrorCode.INVALID_PARAMS,
+                    message=f"Unknown edit_ticket '{edit.edit_ticket}'.",
+                    remediation=(
+                        "Use an edit_ticket from recon_resolve output or "
+                        "a continuation ticket from a previous refactor_edit."
+                    ),
+                )
+            if ticket.used:
+                raise MCPError(
+                    code=MCPErrorCode.INVALID_PARAMS,
+                    message=f"Edit ticket '{edit.edit_ticket}' already used.",
+                    remediation=(
+                        "Each ticket is single-use. Use the continuation "
+                        "ticket from the previous edit response, or call "
+                        "recon_resolve again to get a fresh ticket."
+                    ),
+                )
+
+            edit_path = ticket.path
+            expected_sha = ticket.sha256
+
             try:
-                full_path = validate_path_in_repo(repo_root, edit.path)
+                full_path = validate_path_in_repo(repo_root, edit_path)
             except Exception as exc:
                 raise MCPError(
                     code=MCPErrorCode.FILE_NOT_FOUND,
-                    message=f"File not found: {edit.path}",
+                    message=f"File not found: {edit_path}",
                     remediation="Check the path. Call recon to discover files.",
                 ) from exc
 
             content = full_path.read_text(encoding="utf-8", errors="replace")
             actual_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-            # ── SHA256 verification ──
-            if edit.expected_file_sha256 and edit.expected_file_sha256 != actual_sha:
+            # ── SHA256 verification (ticket embeds expected hash) ──
+            if expected_sha != actual_sha:
                 from codeplane.mcp.errors import FileHashMismatchError
 
                 raise FileHashMismatchError(
-                    path=edit.path,
-                    expected=edit.expected_file_sha256,
+                    path=edit_path,
+                    expected=expected_sha,
                     actual=actual_sha,
                 )
 
-            # Check resolved_files gate
-            try:
-                resolved: dict[str, Any] = session.counters.get("resolved_files", {})  # type: ignore[assignment]
-                if resolved and edit.path not in resolved:
-                    log.warning(
-                        "refactor_edit.unresolved_file",
-                        path=edit.path,
-                        resolved_paths=list(resolved.keys()),
-                    )
-            except Exception:  # noqa: BLE001
-                pass
+            # Mark ticket as consumed
+            ticket.used = True
 
             # ── Resolve the edit ──
             new_content, match_meta = _resolve_edit(
@@ -385,12 +440,27 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             old_line_count = content.count("\n")
             new_line_count = new_content.count("\n")
 
+            # ── Issue continuation ticket ──
+            new_ticket_id = f"{ticket.candidate_id}:{new_sha[:8]}"
+            session.edit_tickets[new_ticket_id] = EditTicket(
+                ticket_id=new_ticket_id,
+                path=edit_path,
+                sha256=new_sha,
+                candidate_id=ticket.candidate_id,
+                issued_by="continuation",
+            )
+            continuation_tickets.append({
+                "path": edit_path,
+                "edit_ticket": new_ticket_id,
+            })
+
             result_entry = {
-                "path": edit.path,
+                "path": edit_path,
                 "action": "updated",
                 "old_hash": actual_sha[:8],
                 "new_hash": new_sha[:8],
                 "file_sha256": new_sha,
+                "edit_ticket": new_ticket_id,
                 "insertions": max(0, new_line_count - old_line_count),
                 "deletions": max(0, old_line_count - new_line_count),
                 **match_meta,
@@ -400,19 +470,25 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             ledger.log_operation(
                 tool="refactor_edit",
                 success=True,
-                path=edit.path,
+                path=edit_path,
                 action="updated",
                 before_hash=actual_sha[:8],
                 after_hash=new_sha[:8],
             )
 
             # Trigger reindex
-            app_ctx.mutation_ops.notify_mutation([Path(edit.path)])
+            app_ctx.mutation_ops.notify_mutation([Path(edit_path)])
 
         # ── Process creates and deletes via mutation_ops ──
         if creates or deletes:
             edit_list = []
             for e in creates:
+                if not e.path:
+                    raise MCPError(
+                        code=MCPErrorCode.INVALID_PARAMS,
+                        message="path is required for file creation.",
+                        remediation="Provide path for new file creates.",
+                    )
                 edit_list.append(
                     Edit(
                         path=e.path,
@@ -421,6 +497,12 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     )
                 )
             for e in deletes:
+                if not e.path:
+                    raise MCPError(
+                        code=MCPErrorCode.INVALID_PARAMS,
+                        message="path is required for file deletion.",
+                        remediation="Provide path for file to delete.",
+                    )
                 edit_list.append(
                     Edit(
                         path=e.path,
@@ -461,21 +543,34 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     remediation="File already exists. Use old_content/new_content to update.",
                 ) from exc
 
-        # Track edited files in session
+        # Track edited files in session + increment batch counter
         try:
             if "edited_files" not in session.counters:
                 session.counters["edited_files"] = set()  # type: ignore[assignment]
             edited: set[str] = session.counters["edited_files"]  # type: ignore[assignment]
             for r in results:
                 edited.add(r["path"])
+            session.edits_since_checkpoint += 1
         except Exception:  # noqa: BLE001
             pass
 
         total_insertions = sum(r.get("insertions", 0) for r in results)
         total_deletions = sum(r.get("deletions", 0) for r in results)
 
+        batches_left = _MAX_EDIT_BATCHES - session.edits_since_checkpoint
+        if batches_left <= 0:
+            batch_note = (
+                "CHECKPOINT REQUIRED: You have used all edit batches. "
+                "Call checkpoint before editing more files."
+            )
+        else:
+            batch_note = (
+                f"{batches_left} edit batch(es) remaining before "
+                "checkpoint is required."
+            )
+
         agentic_hint = (
-            f"Edited {len(results)} file(s). "
+            f"Edited {len(results)} file(s). {batch_note}\n"
             'NEXT: call checkpoint(changed_files=[...], commit_message="...") '
             "to lint, test, and commit. Ask the user whether they want "
             "push=True or push=False."
@@ -492,5 +587,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             "summary": _summarize_edit(results),
             "agentic_hint": agentic_hint,
         }
+
+        if continuation_tickets:
+            response["continuation_tickets"] = continuation_tickets
 
         return response

@@ -333,6 +333,8 @@ class TestRefactorEditHandler:
         ctx.coordinator.repo_root = tmp_path
         session = MagicMock()
         session.counters = {"recon_called": 1, "resolved_files": {}}
+        session.edit_tickets = {}
+        session.edits_since_checkpoint = 0
         ctx.session_manager.get_or_create.return_value = session
         ctx.mutation_ops.notify_mutation = MagicMock()
         return ctx
@@ -353,10 +355,21 @@ class TestRefactorEditHandler:
     async def test_basic_update(
         self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
     ) -> None:
-        """Basic find-and-replace update."""
+        """Basic find-and-replace update via edit_ticket."""
         sha = self._write_file(tmp_path, "hello.py", "print('hello')\n")
         session = app_ctx.session_manager.get_or_create.return_value
         session.counters["resolved_files"] = {"hello.py": sha}
+
+        from codeplane.mcp.session import EditTicket
+
+        ticket_id = "recon1:0:" + sha[:8]
+        session.edit_tickets[ticket_id] = EditTicket(
+            ticket_id=ticket_id,
+            path="hello.py",
+            sha256=sha,
+            candidate_id="recon1:0",
+            issued_by="resolve",
+        )
 
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
@@ -366,10 +379,9 @@ class TestRefactorEditHandler:
             ctx=fastmcp_ctx,
             edits=[
                 FindReplaceEdit(
-                    path="hello.py",
+                    edit_ticket=ticket_id,
                     old_content="print('hello')",
                     new_content="print('world')",
-                    expected_file_sha256=sha,
                 )
             ],
         )
@@ -381,13 +393,30 @@ class TestRefactorEditHandler:
         assert "checkpoint" in result["agentic_hint"]
         # Verify file was actually written
         assert (tmp_path / "hello.py").read_text() == "print('world')\n"
+        # Verify continuation ticket was issued
+        assert "continuation_tickets" in result
+        assert len(result["continuation_tickets"]) == 1
+        assert result["continuation_tickets"][0]["path"] == "hello.py"
 
     @pytest.mark.asyncio
     async def test_sha256_mismatch(
         self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
     ) -> None:
-        """SHA mismatch raises FileHashMismatchError."""
+        """SHA mismatch via stale ticket raises FileHashMismatchError."""
         self._write_file(tmp_path, "stale.py", "old content\n")
+        session = app_ctx.session_manager.get_or_create.return_value
+
+        from codeplane.mcp.session import EditTicket
+
+        # Ticket with wrong sha256
+        ticket_id = "r:0:deadbeef"
+        session.edit_tickets[ticket_id] = EditTicket(
+            ticket_id=ticket_id,
+            path="stale.py",
+            sha256="wrong_sha_value",
+            candidate_id="r:0",
+            issued_by="resolve",
+        )
 
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
@@ -400,19 +429,18 @@ class TestRefactorEditHandler:
                 ctx=fastmcp_ctx,
                 edits=[
                     FindReplaceEdit(
-                        path="stale.py",
+                        edit_ticket=ticket_id,
                         old_content="old content",
                         new_content="new content",
-                        expected_file_sha256="wrong_sha_value",
                     )
                 ],
             )
 
     @pytest.mark.asyncio
-    async def test_path_traversal_raises_file_not_found(
+    async def test_update_without_ticket_raises(
         self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
     ) -> None:
-        """Path escaping repo root raises MCPError FILE_NOT_FOUND."""
+        """Update without edit_ticket raises MCPError."""
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
         edit_fn = tools["refactor_edit"].fn
@@ -422,13 +450,14 @@ class TestRefactorEditHandler:
                 ctx=fastmcp_ctx,
                 edits=[
                     FindReplaceEdit(
-                        path="../../etc/passwd",
+                        path="foo.py",
                         old_content="x",
                         new_content="y",
                     )
                 ],
             )
-        assert exc_info.value.code == MCPErrorCode.FILE_NOT_FOUND
+        assert exc_info.value.code == MCPErrorCode.INVALID_PARAMS
+        assert "edit_ticket" in exc_info.value.message
 
     @pytest.mark.asyncio
     async def test_create_file_via_mutation_ops(
@@ -550,55 +579,102 @@ class TestRefactorEditHandler:
         session = app_ctx.session_manager.get_or_create.return_value
         session.counters = {"recon_called": 1, "resolved_files": {"tracked.py": sha}}
 
+        from codeplane.mcp.session import EditTicket
+
+        ticket_id = f"r:0:{sha[:8]}"
+        session.edit_tickets[ticket_id] = EditTicket(
+            ticket_id=ticket_id,
+            path="tracked.py",
+            sha256=sha,
+            candidate_id="r:0",
+            issued_by="resolve",
+        )
+
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
         edit_fn = tools["refactor_edit"].fn
 
         await edit_fn(
             ctx=fastmcp_ctx,
-            edits=[FindReplaceEdit(path="tracked.py", old_content="old", new_content="new")],
+            edits=[FindReplaceEdit(edit_ticket=ticket_id, old_content="old", new_content="new")],
         )
 
         edited = session.counters.get("edited_files", set())
         assert "tracked.py" in edited
 
     @pytest.mark.asyncio
-    async def test_resolved_files_gate_warning(
-        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
+    async def test_unknown_ticket_raises(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
     ) -> None:
-        """Editing a file not in resolved_files logs warning but proceeds."""
-        self._write_file(tmp_path, "unresolved.py", "x = 1\n")
-        session = app_ctx.session_manager.get_or_create.return_value
-        session.counters = {
-            "recon_called": 1,
-            "resolved_files": {"other.py": "some_sha"},
-        }
-
+        """Unknown edit_ticket raises MCPError."""
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
         edit_fn = tools["refactor_edit"].fn
 
-        # Should still succeed (warning only, not error)
-        result: dict[str, Any] = await edit_fn(
-            ctx=fastmcp_ctx,
-            edits=[FindReplaceEdit(path="unresolved.py", old_content="x = 1", new_content="x = 2")],
-        )
-        assert result["applied"] is True
+        with pytest.raises(MCPError) as exc_info:
+            await edit_fn(
+                ctx=fastmcp_ctx,
+                edits=[
+                    FindReplaceEdit(
+                        edit_ticket="bogus:0:deadbeef",
+                        old_content="x",
+                        new_content="y",
+                    )
+                ],
+            )
+        assert exc_info.value.code == MCPErrorCode.INVALID_PARAMS
+        assert "Unknown edit_ticket" in exc_info.value.message
 
     @pytest.mark.asyncio
-    async def test_update_without_sha(
+    async def test_used_ticket_raises(
         self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock, tmp_path: Path
     ) -> None:
-        """Update without expected_file_sha256 skips hash check."""
-        self._write_file(tmp_path, "nosha.py", "a = 1\n")
+        """Already-used ticket raises MCPError."""
+        sha = self._write_file(tmp_path, "used.py", "old\n")
+        session = app_ctx.session_manager.get_or_create.return_value
+
+        from codeplane.mcp.session import EditTicket
+
+        ticket_id = f"r:0:{sha[:8]}"
+        session.edit_tickets[ticket_id] = EditTicket(
+            ticket_id=ticket_id,
+            path="used.py",
+            sha256=sha,
+            candidate_id="r:0",
+            issued_by="resolve",
+            used=True,
+        )
 
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
         edit_fn = tools["refactor_edit"].fn
 
-        result: dict[str, Any] = await edit_fn(
-            ctx=fastmcp_ctx,
-            edits=[FindReplaceEdit(path="nosha.py", old_content="a = 1", new_content="a = 2")],
-        )
-        assert result["applied"] is True
-        assert (tmp_path / "nosha.py").read_text() == "a = 2\n"
+        with pytest.raises(MCPError) as exc_info:
+            await edit_fn(
+                ctx=fastmcp_ctx,
+                edits=[
+                    FindReplaceEdit(edit_ticket=ticket_id, old_content="old", new_content="new")
+                ],
+            )
+        assert exc_info.value.code == MCPErrorCode.INVALID_PARAMS
+        assert "already used" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_batch_limit_raises(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """Exceeding batch limit raises MCPError."""
+        session = app_ctx.session_manager.get_or_create.return_value
+        session.edits_since_checkpoint = 2  # Already at limit
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        edit_fn = tools["refactor_edit"].fn
+
+        with pytest.raises(MCPError) as exc_info:
+            await edit_fn(
+                ctx=fastmcp_ctx,
+                edits=[FindReplaceEdit(path="new.py", old_content=None, new_content="x")],
+            )
+        assert exc_info.value.code == MCPErrorCode.INVALID_PARAMS
+        assert "batch limit" in exc_info.value.message.lower()

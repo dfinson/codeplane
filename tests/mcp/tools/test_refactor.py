@@ -1,10 +1,15 @@
 """Tests for MCP refactor tools.
 
-Verifies summary helpers and serialization.
+Verifies summary helpers, serialization, and recon/justification gates.
 """
 
 from unittest.mock import MagicMock
 
+import pytest
+from fastmcp import FastMCP
+
+from codeplane.mcp._compat import get_tools_sync
+from codeplane.mcp.errors import MCPError, MCPErrorCode
 from codeplane.mcp.tools.refactor import (
     _display_refactor,
     _serialize_refactor_result,
@@ -204,3 +209,110 @@ class TestSerializeRefactorResult:
         assert len(output["preview"]["low_certainty_matches"]) == 1
         assert output["preview"]["low_certainty_matches"][0]["path"] == "a.py"
         assert output["preview"]["low_certainty_matches"][0]["certainty"] == "low"
+
+
+class TestRefactorReconGate:
+    """Tests for recon + justification gates on rename/move/impact."""
+
+    @pytest.fixture
+    def mcp_app(self) -> FastMCP:
+        return FastMCP("test")
+
+    @pytest.fixture
+    def app_ctx(self) -> MagicMock:
+        ctx = MagicMock()
+        session = MagicMock()
+        session.candidate_maps = {}  # Empty = no recon called
+        session.edits_since_checkpoint = 0
+        ctx.session_manager.get_or_create.return_value = session
+        return ctx
+
+    @pytest.fixture
+    def fastmcp_ctx(self) -> MagicMock:
+        ctx = MagicMock(spec=["session_id"])
+        ctx.session_id = "test-session"
+        return ctx
+
+    @pytest.mark.asyncio
+    async def test_rename_without_recon_raises(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """refactor_rename without recon raises INVALID_PARAMS."""
+        from codeplane.mcp.tools.refactor import register_tools
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        rename_fn = tools["refactor_rename"].fn
+
+        with pytest.raises(MCPError) as exc_info:
+            await rename_fn(
+                ctx=fastmcp_ctx,
+                symbol="OldName",
+                new_name="NewName",
+                justification="x" * 60,
+            )
+        assert exc_info.value.code == MCPErrorCode.INVALID_PARAMS
+        assert "Recon required" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_rename_without_justification_raises(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """refactor_rename with short justification raises INVALID_PARAMS."""
+        session = app_ctx.session_manager.get_or_create.return_value
+        session.candidate_maps = {"r1": {"r1:0": "foo.py"}}  # recon was called
+
+        from codeplane.mcp.tools.refactor import register_tools
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        rename_fn = tools["refactor_rename"].fn
+
+        with pytest.raises(MCPError) as exc_info:
+            await rename_fn(
+                ctx=fastmcp_ctx,
+                symbol="OldName",
+                new_name="NewName",
+                justification="too short",
+            )
+        assert exc_info.value.code == MCPErrorCode.INVALID_PARAMS
+        assert "justification" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_move_without_recon_raises(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """refactor_move without recon raises INVALID_PARAMS."""
+        from codeplane.mcp.tools.refactor import register_tools
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        move_fn = tools["refactor_move"].fn
+
+        with pytest.raises(MCPError) as exc_info:
+            await move_fn(
+                ctx=fastmcp_ctx,
+                from_path="old.py",
+                to_path="new.py",
+                justification="x" * 60,
+            )
+        assert exc_info.value.code == MCPErrorCode.INVALID_PARAMS
+
+    @pytest.mark.asyncio
+    async def test_impact_without_recon_raises(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """refactor_impact without recon raises INVALID_PARAMS."""
+        from codeplane.mcp.tools.refactor import register_tools
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        impact_fn = tools["refactor_impact"].fn
+
+        with pytest.raises(MCPError) as exc_info:
+            await impact_fn(
+                ctx=fastmcp_ctx,
+                target="SomeSymbol",
+                justification="x" * 60,
+            )
+        assert exc_info.value.code == MCPErrorCode.INVALID_PARAMS

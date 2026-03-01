@@ -2,6 +2,7 @@
 
 Covers:
 - SessionState dataclass and touch()
+- EditTicket dataclass
 - SessionManager.get_or_create()
 - SessionManager.get()
 - SessionManager.close()
@@ -361,3 +362,63 @@ class TestExclusiveLock:
         assert "checkpoint" in EXCLUSIVE_TOOLS
         assert "semantic_diff" in EXCLUSIVE_TOOLS
         assert "map_repo" not in EXCLUSIVE_TOOLS
+
+
+class TestEditTicket:
+    """Tests for EditTicket dataclass."""
+
+    def test_create(self) -> None:
+        from codeplane.mcp.session import EditTicket
+
+        t = EditTicket(
+            ticket_id="abc:0:deadbeef",
+            path="src/foo.py",
+            sha256="deadbeef" * 8,
+            candidate_id="abc:0",
+            issued_by="resolve",
+        )
+        assert t.ticket_id == "abc:0:deadbeef"
+        assert t.path == "src/foo.py"
+        assert t.used is False
+
+    def test_used_flag(self) -> None:
+        from codeplane.mcp.session import EditTicket
+
+        t = EditTicket(
+            ticket_id="abc:0:deadbeef",
+            path="src/foo.py",
+            sha256="deadbeef" * 8,
+            candidate_id="abc:0",
+            issued_by="resolve",
+        )
+        assert t.used is False
+        t.used = True
+        assert t.used is True
+
+
+class TestSessionStateEditTickets:
+    """Tests for edit ticket fields on SessionState."""
+
+    def test_defaults(self) -> None:
+        s = SessionState(session_id="s", created_at=0, last_active=0)
+        assert s.edit_tickets == {}
+        assert s.edits_since_checkpoint == 0
+
+    def test_ticket_storage(self) -> None:
+        from codeplane.mcp.session import EditTicket
+
+        s = SessionState(session_id="s", created_at=0, last_active=0)
+        t = EditTicket(
+            ticket_id="r:0:abcd1234",
+            path="foo.py",
+            sha256="abcd1234" * 8,
+            candidate_id="r:0",
+            issued_by="resolve",
+        )
+        s.edit_tickets[t.ticket_id] = t
+        assert "r:0:abcd1234" in s.edit_tickets
+
+    def test_max_edit_batches_constant(self) -> None:
+        from codeplane.mcp.session import _MAX_EDIT_BATCHES
+
+        assert _MAX_EDIT_BATCHES == 2

@@ -21,6 +21,27 @@ EXCLUSIVE_TOOLS: frozenset[str] = frozenset({"checkpoint", "semantic_diff"})
 
 
 @dataclass
+class EditTicket:
+    """Proof that a file was resolved — required by refactor_edit.
+
+    Minted by recon_resolve, consumed (and refreshed) by refactor_edit.
+    Format: ``{candidate_id}:{sha256_prefix}`` e.g. ``"abc123:0:3bd2b2fb"``
+    """
+
+    ticket_id: str
+    path: str
+    sha256: str
+    candidate_id: str
+    issued_by: str  # "resolve" or "continuation"
+    used: bool = False
+
+
+# Maximum edit batches (refactor_edit or refactor_commit) before
+# checkpoint is required.  Resets on successful checkpoint.
+_MAX_EDIT_BATCHES = 2
+
+
+@dataclass
 class SessionState:
     """State for a single session."""
 
@@ -34,6 +55,12 @@ class SessionState:
     # Populated by recon pipeline, consumed by recon_resolve for
     # ID-based file selection (no raw path access).
     candidate_maps: dict[str, dict[str, str]] = field(default_factory=dict)
+    # Edit tickets: ticket_id → EditTicket.  Minted by recon_resolve,
+    # consumed by refactor_edit, wiped by checkpoint.
+    edit_tickets: dict[str, EditTicket] = field(default_factory=dict)
+    # Number of edit batches (refactor_edit / refactor_commit calls)
+    # since last checkpoint.  Gate at _MAX_EDIT_BATCHES.
+    edits_since_checkpoint: int = 0
     gate_manager: GateManager = field(default_factory=GateManager)
     pattern_detector: CallPatternDetector = field(default_factory=CallPatternDetector)
 

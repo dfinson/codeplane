@@ -1137,6 +1137,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             result["passed"] = True
             await ctx.report_progress(total_phases, total_phases, "Checks passed")
 
+            # ── Reset edit tickets and batch counter ──
+            try:
+                chk_session = app_ctx.session_manager.get_or_create(ctx.session_id)
+                chk_session.edit_tickets.clear()
+                chk_session.edits_since_checkpoint = 0
+            except Exception:  # noqa: BLE001
+                pass
+
             # --- Optional: Auto-commit ---
             if commit_message:
                 _validate_commit_message(commit_message)

@@ -5,11 +5,17 @@ from typing import TYPE_CHECKING, Any
 from fastmcp import Context
 from pydantic import Field
 
+from codeplane.mcp.errors import MCPError, MCPErrorCode
+from codeplane.mcp.session import _MAX_EDIT_BATCHES
+
 if TYPE_CHECKING:
     from fastmcp import FastMCP
 
     from codeplane.mcp.context import AppContext
     from codeplane.refactor.ops import RefactorResult
+
+
+_MIN_JUSTIFICATION_CHARS = 50
 
 
 # =============================================================================
@@ -139,6 +145,26 @@ def _serialize_refactor_result(result: "RefactorResult") -> dict[str, Any]:
 def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     """Register refactor tools with FastMCP server."""
 
+    def _require_recon_and_justification(session: Any, justification: str | None) -> None:
+        """Gate: recon must have been called + justification required."""
+        if not session.candidate_maps:
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message="Recon required before refactoring.",
+                remediation=(
+                    'Call recon(task="...") first to discover files, then use refactor tools.'
+                ),
+            )
+        if not justification or len(justification.strip()) < _MIN_JUSTIFICATION_CHARS:
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message=(
+                    f"justification must be at least {_MIN_JUSTIFICATION_CHARS} "
+                    f"characters (got {len(justification.strip()) if justification else 0})."
+                ),
+                remediation=("Explain what you are renaming/moving/analyzing and why."),
+            )
+
     @mcp.tool(
         annotations={
             "title": "Rename: cross-file symbol rename",
@@ -155,6 +181,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             description="Symbol name to rename (e.g., 'MyClass', 'my_function'). Do NOT use path:line:col format.",
         ),
         new_name: str = Field(..., description="New name for the symbol"),
+        justification: str = Field(
+            ...,
+            description=("Explain what you are renaming and why (50+ chars)."),
+        ),
         include_comments: bool = Field(True, description="Include comment references"),
         contexts: list[str] | None = Field(None, description="Limit to specific contexts"),
         gate_token: str | None = Field(
@@ -167,7 +197,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ),
     ) -> dict[str, Any]:
         """Rename a symbol across the codebase."""
-        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+        session = app_ctx.session_manager.get_or_create(ctx.session_id)
+        _require_recon_and_justification(session, justification)
 
         result = await app_ctx.refactor_ops.rename(
             symbol,
@@ -190,6 +221,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ctx: Context,
         from_path: str = Field(..., description="Source file path"),
         to_path: str = Field(..., description="Destination file path"),
+        justification: str = Field(
+            ...,
+            description=("Explain what you are moving and why (50+ chars)."),
+        ),
         include_comments: bool = Field(True, description="Include comment references"),
         gate_token: str | None = Field(
             None,
@@ -201,7 +236,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ),
     ) -> dict[str, Any]:
         """Move a file/module, updating imports."""
-        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+        session = app_ctx.session_manager.get_or_create(ctx.session_id)
+        _require_recon_and_justification(session, justification)
 
         result = await app_ctx.refactor_ops.move(
             from_path,
@@ -222,6 +258,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     async def refactor_impact(
         ctx: Context,
         target: str = Field(..., description="Symbol or path to analyze for impact"),
+        justification: str = Field(
+            ...,
+            description=("Explain what you are analyzing and why (50+ chars)."),
+        ),
         include_comments: bool = Field(True, description="Include comment references"),
         gate_token: str | None = Field(
             None,
@@ -233,7 +273,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ),
     ) -> dict[str, Any]:
         """Find all references to a symbol/file for impact analysis before removal."""
-        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+        session = app_ctx.session_manager.get_or_create(ctx.session_id)
+        _require_recon_and_justification(session, justification)
 
         result = await app_ctx.refactor_ops.impact(
             target,
@@ -279,7 +320,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         Without inspect_path: applies the refactoring (like the old refactor_apply).
         With inspect_path: inspects matches in that file (like the old refactor_inspect).
         """
-        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+        session = app_ctx.session_manager.get_or_create(ctx.session_id)
 
         if inspect_path is not None:
             # Inspect mode
@@ -299,8 +340,22 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 ),
             }
 
-        # Apply mode
+        # Apply mode — counts as an edit batch
+        if session.edits_since_checkpoint >= _MAX_EDIT_BATCHES:
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message=(
+                    f"Edit batch limit reached ({_MAX_EDIT_BATCHES} batches "
+                    "since last checkpoint). Checkpoint is required."
+                ),
+                remediation=(
+                    'Call checkpoint(changed_files=[...], commit_message="...") '
+                    "to lint, test, and commit before applying refactorings."
+                ),
+            )
+
         result = await app_ctx.refactor_ops.apply(refactor_id, app_ctx.mutation_ops)
+        session.edits_since_checkpoint += 1
 
         # Reset scope budget duplicate tracking after mutation
         if scope_id:
