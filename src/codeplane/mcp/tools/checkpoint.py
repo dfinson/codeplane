@@ -369,20 +369,18 @@ def _build_coverage_text(
     n_files = len(detail.get("files", []))
     files_with_gaps = sum(1 for f in detail.get("files", []) if "uncovered_ranges" in f)
 
+    from codeplane.mcp.delivery import _cpl_cmd
+
     hint_parts = [
         f"Detailed coverage ({byte_size:,} bytes, {n_files} files) cached as {cache_id}",
         "Retrieve via terminal:",
-        f'  python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "summary"',
-        f'  python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "files"',
+        f"  {_cpl_cmd(cache_id, 'summary')}",
+        f"  {_cpl_cmd(cache_id, 'files')}",
     ]
     if files_with_gaps > 5:
-        hint_parts.append(
-            f'  python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "files"'
-            "  # filter for files with low coverage"
-        )
+        hint_parts.append(f"  {_cpl_cmd(cache_id, 'files')}  # filter for files with low coverage")
     hint_parts.append(
-        f'  python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "files.0"'
-        "  # replace 0 with the file index you need"
+        f"  {_cpl_cmd(cache_id, 'files.0')}  # replace 0 with the file index you need"
     )
 
     coverage_hint = "\n".join(hint_parts)

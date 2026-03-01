@@ -245,7 +245,11 @@ def _build_cplcache_hint(
     parts.append(f"Cmd: {_cpl_cmd_template(cache_id)}")
     parts.append("")
 
-    # ---- Section-level hints (chunk-aware) ----
+    # ---- Section-level hints (top-level only) ----
+    # Chunk-level detail (file listings per chunk) is available inside the
+    # cached JSON itself — fetch the parent key (e.g. ``scaffold_files``)
+    # to see the chunk index.  Keeping chunk detail out of the inline hint
+    # ensures the envelope stays well under INLINE_CAP_BYTES.
     if sections:
         ordered = _order_sections(sections, strategy)
         top_level = [
@@ -262,23 +266,9 @@ def _build_cplcache_hint(
                     parts.append(
                         f"  {key} ({sec.byte_size:,}b, {sec.chunk_total} chunks){desc_suffix}"
                     )
-                    for cidx in range(sec.chunk_total):
-                        sub_key = f"{key}.{cidx}"
-                        sub_sec = sections.get(sub_key)
-                        if isinstance(sub_sec, CacheSection):
-                            summary = sub_sec.content_summary
-                            if summary:
-                                label = summary
-                            elif sub_sec.chunk_items is not None:
-                                label = f"{sub_sec.chunk_items} items"
-                            else:
-                                label = ""
-                            if label:
-                                parts.append(f"    {sub_key} ({sub_sec.byte_size:,}b) {label}")
-                            else:
-                                parts.append(f"    {sub_key} ({sub_sec.byte_size:,}b)")
                 else:
                     parts.append(f"  {key} ({sec.byte_size:,}b){desc_suffix}")
+
     return "\n".join(parts)
 
 
@@ -384,15 +374,40 @@ def wrap_response(
         if summary:
             envelope["summary"] = summary
 
-        envelope["inline_budget_bytes_used"] = len(
-            json.dumps(envelope, separators=(",", ":"), default=str).encode("utf-8")
-        )
-        envelope["inline_budget_bytes_limit"] = inline_cap
         envelope["agentic_hint"] = _build_cplcache_hint(
             cache_id,
             payload_bytes,
             resource_kind,
             sections=entry.sections if entry else None,
+        )
+
+        # ── Inline resolve metadata ──
+        # When resolve goes sidecar, the agent still needs per-file metadata
+        # (path, candidate_id, sha256, line_count) to call refactor_plan /
+        # refactor_edit.  Extract it inline — only bulk content is sidecar-only.
+        if resource_kind == "resolve_result":
+            resolved_meta = []
+            for r in result.get("resolved", []):
+                meta: dict[str, Any] = {
+                    "path": r.get("path"),
+                    "candidate_id": r.get("candidate_id"),
+                    "line_count": r.get("line_count"),
+                }
+                if "file_sha256" in r:
+                    meta["file_sha256"] = r["file_sha256"]
+                if "span" in r:
+                    meta["span"] = r["span"]
+                resolved_meta.append(meta)
+            if resolved_meta:
+                envelope["resolved_meta"] = resolved_meta
+            errors = result.get("errors")
+            if errors:
+                envelope["errors"] = errors
+
+        envelope["inline_budget_bytes_limit"] = inline_cap
+        # Measure AFTER all fields are set so the count reflects reality.
+        envelope["inline_budget_bytes_used"] = len(
+            json.dumps(envelope, separators=(",", ":"), default=str).encode("utf-8")
         )
 
         log.debug(
