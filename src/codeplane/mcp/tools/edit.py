@@ -50,7 +50,7 @@ class FindReplaceEdit(BaseModel):
     edit_ticket: str | None = Field(
         None,
         description=(
-            "Edit ticket from recon_resolve output. Required for updates. "
+            "Edit ticket from refactor_plan output. Required for updates. "
             "Not needed for file creates (old_content=None, new_content=body)."
         ),
     )
@@ -309,8 +309,15 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             description=(
                 "List of find-and-replace edits. Each edit specifies "
                 "old_content to find and new_content to replace it with. "
-                "expected_file_sha256 (from recon_resolve) is required "
-                "for updates."
+                "edit_ticket (from refactor_plan) is required for updates. "
+                "Batch ALL edits into a single call."
+            ),
+        ),
+        plan_id: str | None = Field(
+            None,
+            description=(
+                "Plan ID from refactor_plan. Required for file updates. "
+                "Not needed for create-only or delete-only calls."
             ),
         ),
     ) -> dict[str, Any]:
@@ -373,6 +380,47 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             else:
                 updates.append(edit)
 
+        # ── Plan gate (updates require active plan) ──
+        if updates:
+            if session.active_plan is None:
+                raise MCPError(
+                    code=MCPErrorCode.INVALID_PARAMS,
+                    message=(
+                        "No active refactor plan. Call refactor_plan first "
+                        "to declare your edit targets and get edit tickets."
+                    ),
+                    remediation=(
+                        "Call refactor_plan(edit_targets=[...], "
+                        'description="...") to declare your edit set '
+                        "before calling refactor_edit."
+                    ),
+                )
+            if plan_id != session.active_plan.plan_id:
+                raise MCPError(
+                    code=MCPErrorCode.INVALID_PARAMS,
+                    message=(
+                        f"plan_id mismatch. Expected: "
+                        f"'{session.active_plan.plan_id}', "
+                        f"got: '{plan_id}'."
+                    ),
+                    remediation=("Use the plan_id returned by your refactor_plan call."),
+                )
+            if session.active_plan.edit_calls_made >= session.active_plan.expected_edit_calls:
+                raise MCPError(
+                    code=MCPErrorCode.INVALID_PARAMS,
+                    message=(
+                        "Edit call budget exhausted "
+                        f"({session.active_plan.edit_calls_made}/"
+                        f"{session.active_plan.expected_edit_calls} "
+                        "calls used). Checkpoint to start a new plan."
+                    ),
+                    remediation=(
+                        "Call checkpoint(changed_files=[...], "
+                        'commit_message="...") to complete this plan, '
+                        "then create a new one if needed."
+                    ),
+                )
+
         # ── Process find-and-replace updates (ticket-gated) ──
         continuation_tickets: list[dict[str, str]] = []
         for edit in updates:
@@ -382,8 +430,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     code=MCPErrorCode.INVALID_PARAMS,
                     message="edit_ticket is required for updates.",
                     remediation=(
-                        "Call recon_resolve first to get edit_ticket values. "
-                        "Each resolved file comes with an edit_ticket."
+                        "Call refactor_plan first to declare your edit set. "
+                        "Each planned file comes with an edit_ticket."
                     ),
                 )
 
@@ -393,7 +441,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     code=MCPErrorCode.INVALID_PARAMS,
                     message=f"Unknown edit_ticket '{edit.edit_ticket}'.",
                     remediation=(
-                        "Use an edit_ticket from recon_resolve output or "
+                        "Use an edit_ticket from refactor_plan output or "
                         "a continuation ticket from a previous refactor_edit."
                     ),
                 )
@@ -404,7 +452,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     remediation=(
                         "Each ticket is single-use. Use the continuation "
                         "ticket from the previous edit response, or call "
-                        "recon_resolve again to get a fresh ticket."
+                        "refactor_plan again to get fresh tickets."
                     ),
                 )
 
@@ -556,6 +604,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     message=str(exc),
                     remediation="File already exists. Use old_content/new_content to update.",
                 ) from exc
+
+        # ── Increment plan edit call counter ──
+        if session.active_plan is not None:
+            session.active_plan.edit_calls_made += 1
 
         # Track edited files in session + increment batch counter
         try:

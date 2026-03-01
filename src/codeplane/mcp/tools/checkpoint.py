@@ -1175,6 +1175,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 chk_session = app_ctx.session_manager.get_or_create(ctx.session_id)
                 chk_session.edit_tickets.clear()
                 chk_session.edits_since_checkpoint = 0
+                chk_session.active_plan = None
+                chk_session.resolve_batch_count = 0
             except Exception:  # noqa: BLE001
                 pass
 

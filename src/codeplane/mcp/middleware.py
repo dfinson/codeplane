@@ -183,22 +183,40 @@ class ToolMiddleware(Middleware):
                     from codeplane.mcp.gate import build_pattern_hint
 
                     hint_fields = build_pattern_hint(bypass_match)
+
+                    # Track per-pattern count and escalate severity
+                    pattern_count = 1
+                    if context.fastmcp_context and self._session_manager:
+                        session = self._session_manager.get_or_create(
+                            context.fastmcp_context.session_id,
+                        )
+                        pk = f"pattern_{bypass_match.pattern_name}_count"
+                        pattern_count = session.counters.get(pk, 0) + 1
+                        session.counters[pk] = pattern_count
+
+                        n = session.counters.get("pattern_detections", 0) + 1
+                        session.counters["pattern_detections"] = n
+                        if n > 1 and n % _WORKFLOW_HINT_INTERVAL != 1:
+                            hint_fields.pop("suggested_workflow", None)
+
+                    # Escalation tiers by per-pattern repeat count
+                    base_hint = hint_fields["agentic_hint"]
+                    if pattern_count >= 3:
+                        hint_fields["agentic_hint"] = (
+                            f"🚨 REPEATED PATTERN "
+                            f"({bypass_match.pattern_name}) "
+                            f"detected {pattern_count} times. STOP and "
+                            "follow the suggested workflow "
+                            "IMMEDIATELY.\n\n" + base_hint
+                        )
+                    elif pattern_count >= 2:
+                        hint_fields["agentic_hint"] = "⚠️ REPEATED WARNING: " + base_hint
+
                     existing_hint = result_dict.get("agentic_hint")
                     if existing_hint:
                         hint_fields["agentic_hint"] = (
                             existing_hint + "\n\n" + hint_fields["agentic_hint"]
                         )
-
-                    # Throttle suggested_workflow: include on first detection
-                    # and every _WORKFLOW_HINT_INTERVAL-th detection after.
-                    if context.fastmcp_context and self._session_manager:
-                        session = self._session_manager.get_or_create(
-                            context.fastmcp_context.session_id,
-                        )
-                        n = session.counters.get("pattern_detections", 0) + 1
-                        session.counters["pattern_detections"] = n
-                        if n > 1 and n % _WORKFLOW_HINT_INTERVAL != 1:
-                            hint_fields.pop("suggested_workflow", None)
 
                     result_dict.update(hint_fields)
                     needs_repack = True

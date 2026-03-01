@@ -361,7 +361,7 @@ class TestReconResolve:
         )
 
         assert "agentic_hint" in result
-        assert "refactor_edit" in result["agentic_hint"]
+        assert "refactor_plan" in result["agentic_hint"]
         assert "checkpoint" in result["agentic_hint"]
 
     @pytest.mark.asyncio
@@ -496,14 +496,14 @@ class TestReconResolve:
         assert "(+2 more)" in result["agentic_hint"]
 
     @pytest.mark.asyncio
-    async def test_resolve_mints_edit_tickets(
+    async def test_resolve_no_edit_tickets(
         self,
         mcp_app: FastMCP,
         app_ctx: MagicMock,
         fastmcp_ctx: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Resolve mints edit tickets and includes them in response."""
+        """Resolve no longer mints edit tickets (moved to refactor_plan)."""
         content = "ticket content\n"
         self._write_file(tmp_path, "ticketed.py", content)
         self._add_candidate(app_ctx, "r:0", "ticketed.py")
@@ -517,30 +517,46 @@ class TestReconResolve:
             justification=_VALID_JUSTIFICATION,
         )
 
-        # Response includes edit_ticket per resolved file
+        # Response no longer includes edit_ticket
         resolved = result["resolved"]
         assert len(resolved) == 1
-        assert "edit_ticket" in resolved[0]
-        ticket_id = resolved[0]["edit_ticket"]
-        assert ticket_id.startswith("r:0:")
-
-        # Ticket stored in session
-        session = app_ctx.session_manager.get_or_create.return_value
-        assert ticket_id in session.edit_tickets
-        ticket = session.edit_tickets[ticket_id]
-        assert ticket.path == "ticketed.py"
-        assert ticket.issued_by == "resolve"
-        assert ticket.used is False
+        assert "edit_ticket" not in resolved[0]
 
     @pytest.mark.asyncio
-    async def test_resolve_agentic_hint_mentions_tickets(
+    async def test_resolve_increments_batch_count(
         self,
         mcp_app: FastMCP,
         app_ctx: MagicMock,
         fastmcp_ctx: MagicMock,
         tmp_path: Path,
     ) -> None:
-        """Agentic hint mentions edit_ticket usage."""
+        """Resolve increments resolve_batch_count on session."""
+        self._write_file(tmp_path, "batch.py", "x = 1\n")
+        self._add_candidate(app_ctx, "r:0", "batch.py")
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        resolve_fn = tools["recon_resolve"].fn
+
+        session = app_ctx.session_manager.get_or_create.return_value
+        session.resolve_batch_count = 0
+
+        await resolve_fn(
+            ctx=fastmcp_ctx,
+            targets=[ResolveTarget(candidate_id="r:0")],
+            justification=_VALID_JUSTIFICATION,
+        )
+
+        assert session.resolve_batch_count == 1
+
+    @pytest.mark.asyncio
+    async def test_resolve_agentic_hint_mentions_plan(
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Agentic hint mentions refactor_plan (not edit_ticket)."""
         self._write_file(tmp_path, "hint2.py", "x = 1\n")
         self._add_candidate(app_ctx, "r:0", "hint2.py")
         register_tools(mcp_app, app_ctx)
@@ -554,5 +570,5 @@ class TestReconResolve:
         )
 
         hint = result["agentic_hint"]
-        assert "edit_ticket" in hint
-        assert "Edit tickets minted" in hint
+        assert "refactor_plan" in hint
+        assert "edit_ticket" not in hint

@@ -22,7 +22,6 @@ from pydantic import BaseModel, Field
 
 from codeplane.mcp.delivery import wrap_response
 from codeplane.mcp.errors import MCPError, MCPErrorCode
-from codeplane.mcp.session import EditTicket
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -266,8 +265,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     entry["file_sha256"] = sha256
                 resolved.append(entry)
 
-        # ── Mint edit tickets (skipped in read-only mode) ──
-        ticket_ids: list[str] = []
+        # ── Track resolve batch + resolved files (no edit tickets) ──
         if not is_read_only:
             try:
                 session = app_ctx.session_manager.get_or_create(ctx.session_id)
@@ -277,21 +275,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 resolved_files: dict[str, str] = session.counters["resolved_files"]  # type: ignore[assignment]
                 for r in resolved:
                     resolved_files[r["path"]] = r["file_sha256"]
-
-                # Mint one EditTicket per resolved file
-                for r in resolved:
-                    cid = r["candidate_id"]
-                    sha_prefix = r["file_sha256"][:8]
-                    ticket_id = f"{cid}:{sha_prefix}"
-                    session.edit_tickets[ticket_id] = EditTicket(
-                        ticket_id=ticket_id,
-                        path=r["path"],
-                        sha256=r["file_sha256"],
-                        candidate_id=cid,
-                        issued_by="resolve",
-                    )
-                    r["edit_ticket"] = ticket_id
-                    ticket_ids.append(ticket_id)
+                # Track resolve batch count for escalating pressure
+                session.resolve_batch_count += 1
             except Exception:  # noqa: BLE001
                 pass
 
@@ -312,16 +297,12 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "To enable edits, call recon(read_only=False) for a new session."
             )
         else:
-            ticket_str = ", ".join(ticket_ids[:5])
-            if len(ticket_ids) > 5:
-                ticket_str += f" (+{len(ticket_ids) - 5} more)"
-
             agentic_hint = (
-                f"Resolved {len(resolved)} file(s): {paths_str}.\n"
-                f"Edit tickets minted: {ticket_str}\n\n"
+                f"Resolved {len(resolved)} file(s): {paths_str}.\n\n"
                 "NEXT STEPS — choose the action that matches your intent:\n\n"
-                "EDIT CODE → refactor_edit(edits=[{edit_ticket, old_content, "
-                "new_content}])  — use edit_ticket (NOT path+sha256)\n"
+                'PLAN EDITS → refactor_plan(recon_id="...", '
+                'edit_targets=["candidate_id", ...], '
+                'description="...") — declares your edit set and mints edit tickets\n'
                 'RENAME A SYMBOL → refactor_rename(symbol="OldName", new_name="NewName")\n'
                 'MOVE A FILE → refactor_move(source="old/path.py", '
                 'destination="new/path.py")\n'
@@ -329,9 +310,27 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "RESEARCH / REVIEW (no changes) → respond directly. "
                 'semantic_diff(base="...") for branch comparison.\n\n'
                 "After ANY code change → checkpoint(changed_files=[...], "
-                'commit_message="...")\n'
-                "  Ask the user whether they want push=True or push=False."
+                'commit_message="...")'
             )
+
+        # ── Resolve pressure hints (write-mode only) ──
+        if not is_read_only:
+            try:
+                batch_count = session.resolve_batch_count
+                if batch_count >= 4:
+                    agentic_hint = (
+                        "⚠️ STOP EXPLORING — you have called recon_resolve "
+                        f"{batch_count} times. Declare your edit targets NOW "
+                        "via refactor_plan and begin editing.\n\n"
+                    ) + agentic_hint
+                elif batch_count >= 3:
+                    agentic_hint = (
+                        "NOTE: 3 resolve calls made. If you have enough "
+                        "context, call refactor_plan to commit to your "
+                        "edit targets.\n\n"
+                    ) + agentic_hint
+            except Exception:  # noqa: BLE001
+                pass
 
         response: dict[str, Any] = {
             "resolved": resolved,

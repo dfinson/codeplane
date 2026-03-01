@@ -316,3 +316,275 @@ class TestRefactorReconGate:
                 justification="x" * 60,
             )
         assert exc_info.value.code == MCPErrorCode.INVALID_PARAMS
+
+
+# =============================================================================
+# refactor_plan tool
+# =============================================================================
+
+
+class TestRefactorPlan:
+    """Tests for refactor_plan tool with batching enforcement."""
+
+    _DESCRIPTION = "Updating foo.py to fix the return value of the main function for correctness"
+
+    @pytest.fixture
+    def mcp_app(self) -> FastMCP:
+        return FastMCP("test")
+
+    @pytest.fixture
+    def app_ctx(self) -> MagicMock:
+        ctx = MagicMock()
+        session = MagicMock()
+        session.candidate_maps = {
+            "r1": {"r1:0": "foo.py", "r1:1": "bar.py"},
+        }
+        session.counters = {
+            "resolved_files": {"foo.py": "a" * 64, "bar.py": "b" * 64},
+        }
+        session.edit_tickets = {}
+        session.active_plan = None
+        session.read_only = False
+        session.edits_since_checkpoint = 0
+        ctx.session_manager.get_or_create.return_value = session
+        return ctx
+
+    @pytest.fixture
+    def fastmcp_ctx(self) -> MagicMock:
+        ctx = MagicMock(spec=["session_id"])
+        ctx.session_id = "test-session"
+        return ctx
+
+    @pytest.mark.asyncio
+    async def test_plan_creates_plan_with_tickets(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """Basic plan creation mints edit tickets and sets active_plan."""
+        from codeplane.mcp.tools.refactor import register_tools
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        plan_fn = tools["refactor_plan"].fn
+
+        result = await plan_fn(
+            ctx=fastmcp_ctx,
+            edit_targets=["r1:0"],
+            description=self._DESCRIPTION,
+            expected_edit_calls=1,
+            batch_justification=None,
+            recon_id=None,
+        )
+
+        assert "plan_id" in result
+        assert len(result["edit_targets"]) == 1
+        assert result["expected_edit_calls"] == 1
+        session = app_ctx.session_manager.get_or_create.return_value
+        assert session.active_plan is not None
+
+    @pytest.mark.asyncio
+    async def test_plan_default_one_call(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """Default expected_edit_calls is 1."""
+        from codeplane.mcp.tools.refactor import register_tools
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        plan_fn = tools["refactor_plan"].fn
+
+        result = await plan_fn(
+            ctx=fastmcp_ctx,
+            edit_targets=["r1:0"],
+            description=self._DESCRIPTION,
+            expected_edit_calls=1,
+            batch_justification=None,
+            recon_id=None,
+        )
+
+        assert result["expected_edit_calls"] == 1
+
+    @pytest.mark.asyncio
+    async def test_plan_multi_call_requires_justification(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """expected_edit_calls > 1 without batch_justification raises."""
+        from codeplane.mcp.tools.refactor import register_tools
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        plan_fn = tools["refactor_plan"].fn
+
+        with pytest.raises(MCPError) as exc_info:
+            await plan_fn(
+                ctx=fastmcp_ctx,
+                edit_targets=["r1:0"],
+                description=self._DESCRIPTION,
+                expected_edit_calls=2,
+                batch_justification=None,
+                recon_id=None,
+            )
+        assert "batch_justification" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_plan_short_justification_raises(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """batch_justification under 100 chars raises."""
+        from codeplane.mcp.tools.refactor import register_tools
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        plan_fn = tools["refactor_plan"].fn
+
+        with pytest.raises(MCPError) as exc_info:
+            await plan_fn(
+                ctx=fastmcp_ctx,
+                edit_targets=["r1:0"],
+                description=self._DESCRIPTION,
+                expected_edit_calls=2,
+                batch_justification="too short",
+                recon_id=None,
+            )
+        assert "batch_justification" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_plan_multi_with_valid_justification(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """expected_edit_calls > 1 with valid justification succeeds."""
+        from codeplane.mcp.tools.refactor import register_tools
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        plan_fn = tools["refactor_plan"].fn
+
+        result = await plan_fn(
+            ctx=fastmcp_ctx,
+            edit_targets=["r1:0", "r1:1"],
+            description=self._DESCRIPTION,
+            expected_edit_calls=2,
+            batch_justification="x" * 110,
+            recon_id=None,
+        )
+
+        assert result["expected_edit_calls"] == 2
+
+    @pytest.mark.asyncio
+    async def test_plan_rejects_unresolved_target(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """Target not resolved via recon_resolve is rejected."""
+        session = app_ctx.session_manager.get_or_create.return_value
+        session.counters = {"resolved_files": {}}
+
+        from codeplane.mcp.tools.refactor import register_tools
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        plan_fn = tools["refactor_plan"].fn
+
+        with pytest.raises(MCPError, match="not been resolved"):
+            await plan_fn(
+                ctx=fastmcp_ctx,
+                edit_targets=["r1:0"],
+                description=self._DESCRIPTION,
+                expected_edit_calls=1,
+                batch_justification=None,
+                recon_id=None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_plan_rejects_when_plan_exists(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """Cannot create plan when one already active."""
+        session = app_ctx.session_manager.get_or_create.return_value
+        session.active_plan = MagicMock(plan_id="existing")
+
+        from codeplane.mcp.tools.refactor import register_tools
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        plan_fn = tools["refactor_plan"].fn
+
+        with pytest.raises(MCPError, match="Active plan"):
+            await plan_fn(
+                ctx=fastmcp_ctx,
+                edit_targets=["r1:0"],
+                description=self._DESCRIPTION,
+                expected_edit_calls=1,
+                batch_justification=None,
+                recon_id=None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_plan_read_only_blocked(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """Read-only session cannot create plans."""
+        session = app_ctx.session_manager.get_or_create.return_value
+        session.read_only = True
+
+        from codeplane.mcp.tools.refactor import register_tools
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        plan_fn = tools["refactor_plan"].fn
+
+        with pytest.raises(MCPError, match="read-only"):
+            await plan_fn(
+                ctx=fastmcp_ctx,
+                edit_targets=["r1:0"],
+                description=self._DESCRIPTION,
+                expected_edit_calls=1,
+                batch_justification=None,
+                recon_id=None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_plan_mints_tickets_on_session(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """Plan mints edit tickets into session.edit_tickets."""
+        from codeplane.mcp.tools.refactor import register_tools
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        plan_fn = tools["refactor_plan"].fn
+
+        session = app_ctx.session_manager.get_or_create.return_value
+
+        await plan_fn(
+            ctx=fastmcp_ctx,
+            edit_targets=["r1:0"],
+            description=self._DESCRIPTION,
+            expected_edit_calls=1,
+            batch_justification=None,
+            recon_id=None,
+        )
+
+        assert len(session.edit_tickets) == 1
+        ticket = next(iter(session.edit_tickets.values()))
+        assert ticket.path == "foo.py"
+        assert ticket.issued_by == "plan"
+
+    @pytest.mark.asyncio
+    async def test_plan_empty_targets_raises(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """Empty edit_targets raises."""
+        from codeplane.mcp.tools.refactor import register_tools
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        plan_fn = tools["refactor_plan"].fn
+
+        with pytest.raises(MCPError, match="empty"):
+            await plan_fn(
+                ctx=fastmcp_ctx,
+                edit_targets=[],
+                description=self._DESCRIPTION,
+                expected_edit_calls=1,
+                batch_justification=None,
+                recon_id=None,
+            )

@@ -251,6 +251,7 @@ TOOL_CATEGORIES: dict[str, str] = {
     "recon": "search",
     "recon_resolve": "read",
     "refactor_edit": "write",
+    "refactor_plan": "write",
     "refactor_rename": "refactor",
     "refactor_move": "refactor",
     "refactor_impact": "refactor",

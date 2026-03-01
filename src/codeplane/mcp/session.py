@@ -48,6 +48,14 @@ class RefactorPlan:
     plan_id: str
     recon_id: str
     description: str
+    # How many refactor_edit calls the agent expects to make.
+    # Default 1 — agents must justify >1 with batch_justification.
+    expected_edit_calls: int = 1
+    # Required when expected_edit_calls > 1: explain why a single
+    # batched refactor_edit call is not possible.
+    batch_justification: str | None = None
+    # How many refactor_edit calls have been made against this plan.
+    edit_calls_made: int = 0
     # candidate_id → repo-relative path (files declared for editing)
     edit_targets: dict[str, str] = field(default_factory=dict)
     # ticket_id → EditTicket (minted at plan time)
