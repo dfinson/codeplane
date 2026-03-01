@@ -1165,6 +1165,84 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "dependents. These are still YOUR responsibility. "
                 "Fix ALL issues before proceeding."
             )
+
+            # ── Gap 5: Regenerate resolve cache on failure ──
+            # Re-read changed files from disk so the agent has current
+            # content + sha256 to make corrections without extra resolves.
+            try:
+                import hashlib
+
+                from codeplane.mcp.sidecar_cache import cache_put
+
+                chk_session = app_ctx.session_manager.get_or_create(ctx.session_id)
+                repo_root = app_ctx.coordinator.repo_root
+                refreshed: list[dict[str, Any]] = []
+                for cf in changed_files:
+                    fp = repo_root / cf
+                    if not fp.exists():
+                        continue
+                    try:
+                        raw = fp.read_bytes()
+                        if b"\x00" in raw[:512]:
+                            continue  # skip binary
+                        content_str = raw.decode("utf-8", errors="replace")
+                        sha = hashlib.sha256(raw).hexdigest()
+                        refreshed.append(
+                            {
+                                "path": cf,
+                                "content": content_str,
+                                "line_count": content_str.count("\n") + 1,
+                                "file_sha256": sha,
+                            }
+                        )
+                    except Exception:  # noqa: BLE001
+                        continue
+
+                if refreshed:
+                    cache_payload = {
+                        "resolved": refreshed,
+                        "agentic_hint": (
+                            "Checkpoint FAILED. Resolve cache refreshed "
+                            f"with {len(refreshed)} file(s) at current "
+                            "disk state. Your plan has been cleared.\n\n"
+                            "RECOVERY STEPS:\n"
+                            "1. Review lint/test errors above\n"
+                            "2. Call refactor_plan(edit_targets=[...], "
+                            'description="fix: ...") to declare corrections\n'
+                            "3. Call refactor_edit(plan_id=..., edits=[...]) "
+                            "to apply fixes\n"
+                            "4. Call checkpoint(changed_files=[...], "
+                            'commit_message="...") again\n\n'
+                            "Use the cache commands below to access "
+                            "current file content without re-resolving."
+                        ),
+                    }
+                    cache_id = cache_put(ctx.session_id, "resolve_refresh", cache_payload)
+                    result["resolve_cache_id"] = cache_id
+
+                    # Update resolved_files in session with refreshed sha256s
+                    if "resolved_files" not in chk_session.counters:
+                        chk_session.counters["resolved_files"] = {}  # type: ignore[assignment]
+                    resolved_files: dict[str, str] = chk_session.counters["resolved_files"]  # type: ignore[assignment]
+                    for r in refreshed:
+                        resolved_files[r["path"]] = r["file_sha256"]
+
+                    # Build cplcache hint for the refreshed cache
+                    from codeplane.mcp.delivery import _cpl_cmd
+
+                    hints.append(
+                        f"\n\nREFRESHED RESOLVE CACHE (cache_id={cache_id}):\n"
+                        f"  {_cpl_cmd(cache_id, 'resolved')}\n"
+                        "Use this to read current file content for corrections."
+                    )
+
+                # Clear plan regardless of cache success
+                chk_session.active_plan = None
+                chk_session.edit_tickets.clear()
+                chk_session.edits_since_checkpoint = 0
+            except Exception:  # noqa: BLE001
+                log.debug("checkpoint_failure_cache_failed", exc_info=True)
+
             result["agentic_hint"] = " ".join(hints)
         else:
             result["passed"] = True

@@ -503,6 +503,7 @@ class TestRefactorEditHandler:
                     new_content="print('new')\n",
                 )
             ],
+            plan_id="test-plan-1",
         )
 
         assert result["applied"] is True
@@ -540,6 +541,7 @@ class TestRefactorEditHandler:
                     delete=True,
                 )
             ],
+            plan_id="test-plan-1",
         )
 
         assert result["applied"] is True
@@ -560,6 +562,7 @@ class TestRefactorEditHandler:
             await edit_fn(
                 ctx=fastmcp_ctx,
                 edits=[FindReplaceEdit(path="deep/new.py", old_content=None, new_content="x")],
+                plan_id="test-plan-1",
             )
         assert exc_info.value.code == MCPErrorCode.FILE_NOT_FOUND
 
@@ -578,6 +581,7 @@ class TestRefactorEditHandler:
             await edit_fn(
                 ctx=fastmcp_ctx,
                 edits=[FindReplaceEdit(path="exists.py", old_content=None, new_content="x")],
+                plan_id="test-plan-1",
             )
         assert exc_info.value.code == MCPErrorCode.FILE_EXISTS
 
@@ -689,6 +693,49 @@ class TestRefactorEditHandler:
             await edit_fn(
                 ctx=fastmcp_ctx,
                 edits=[FindReplaceEdit(path="new.py", old_content=None, new_content="x")],
+                plan_id="test-plan-1",
             )
         assert exc_info.value.code == MCPErrorCode.INVALID_PARAMS
         assert "batch limit" in exc_info.value.message.lower()
+
+    @pytest.mark.asyncio
+    async def test_create_without_plan_raises(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """Gap 3: Create-only call without active plan raises MCPError."""
+        session = app_ctx.session_manager.get_or_create.return_value
+        session.active_plan = None
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        edit_fn = tools["refactor_edit"].fn
+
+        with pytest.raises(MCPError) as exc_info:
+            await edit_fn(
+                ctx=fastmcp_ctx,
+                edits=[FindReplaceEdit(path="new.py", old_content=None, new_content="x")],
+                plan_id="test-plan-1",
+            )
+        assert exc_info.value.code == MCPErrorCode.INVALID_PARAMS
+        assert "No active refactor plan" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_delete_without_plan_raises(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """Gap 3: Delete-only call without active plan raises MCPError."""
+        session = app_ctx.session_manager.get_or_create.return_value
+        session.active_plan = None
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        edit_fn = tools["refactor_edit"].fn
+
+        with pytest.raises(MCPError) as exc_info:
+            await edit_fn(
+                ctx=fastmcp_ctx,
+                edits=[FindReplaceEdit(path="doomed.py", delete=True)],
+                plan_id="test-plan-1",
+            )
+        assert exc_info.value.code == MCPErrorCode.INVALID_PARAMS
+        assert "No active refactor plan" in exc_info.value.message

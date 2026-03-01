@@ -83,6 +83,7 @@ class TestReconResolve:
         session.counters = {}
         session.candidate_maps = {}
         session.edit_tickets = {}
+        session.last_recon_id = "test-recon-id"
         ctx.session_manager.get_or_create.return_value = session
         return ctx
 
@@ -572,3 +573,119 @@ class TestReconResolve:
         hint = result["agentic_hint"]
         assert "refactor_plan" in hint
         assert "edit_ticket" not in hint
+
+    @pytest.mark.asyncio
+    async def test_resolve_without_recon_raises(
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Gap 4: Resolve before recon raises MCPError."""
+        session = app_ctx.session_manager.get_or_create.return_value
+        session.last_recon_id = None
+        session.candidate_maps = {"r": {"r:0": "nope.py"}}
+
+        self._write_file(tmp_path, "nope.py", "x\n")
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        resolve_fn = tools["recon_resolve"].fn
+
+        from codeplane.mcp.errors import MCPError
+
+        with pytest.raises(MCPError) as exc_info:
+            await resolve_fn(
+                ctx=fastmcp_ctx,
+                targets=[ResolveTarget(candidate_id="r:0")],
+                justification=_VALID_JUSTIFICATION,
+            )
+        assert "Recon must be called before resolve" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_resolve_hard_gate_at_batch_3(
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Gap 1: Resolve batch count >= 3 in write mode raises MCPError."""
+        self._write_file(tmp_path, "gate.py", "x = 1\n")
+        self._add_candidate(app_ctx, "r:0", "gate.py")
+
+        session = app_ctx.session_manager.get_or_create.return_value
+        session.resolve_batch_count = 3
+        session.read_only = False
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        resolve_fn = tools["recon_resolve"].fn
+
+        from codeplane.mcp.errors import MCPError
+
+        with pytest.raises(MCPError) as exc_info:
+            await resolve_fn(
+                ctx=fastmcp_ctx,
+                targets=[ResolveTarget(candidate_id="r:0")],
+                justification=_VALID_JUSTIFICATION,
+            )
+        assert "Resolve call limit" in exc_info.value.message
+
+    @pytest.mark.asyncio
+    async def test_resolve_warns_at_batch_2(
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Gap 1: Resolve batch count == 2 in write mode adds warning."""
+        self._write_file(tmp_path, "warn.py", "x = 1\n")
+        self._add_candidate(app_ctx, "r:0", "warn.py")
+
+        session = app_ctx.session_manager.get_or_create.return_value
+        session.resolve_batch_count = 1  # incremented to 2 inside handler
+        session.read_only = False
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        resolve_fn = tools["recon_resolve"].fn
+
+        result: dict[str, Any] = await resolve_fn(
+            ctx=fastmcp_ctx,
+            targets=[ResolveTarget(candidate_id="r:0")],
+            justification=_VALID_JUSTIFICATION,
+        )
+
+        assert "WARNING" in result["agentic_hint"]
+        assert "LAST" in result["agentic_hint"]
+
+    @pytest.mark.asyncio
+    async def test_resolve_batch_3_allowed_in_read_only(
+        self,
+        mcp_app: FastMCP,
+        app_ctx: MagicMock,
+        fastmcp_ctx: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        """Gap 1: Read-only mode bypasses resolve hard gate."""
+        self._write_file(tmp_path, "ro.py", "x = 1\n")
+        self._add_candidate(app_ctx, "r:0", "ro.py")
+
+        session = app_ctx.session_manager.get_or_create.return_value
+        session.resolve_batch_count = 5
+        session.read_only = True
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        resolve_fn = tools["recon_resolve"].fn
+
+        result: dict[str, Any] = await resolve_fn(
+            ctx=fastmcp_ctx,
+            targets=[ResolveTarget(candidate_id="r:0")],
+            justification=_VALID_JUSTIFICATION,
+        )
+
+        # Should succeed — read-only bypasses the hard gate
+        assert len(result["resolved"]) == 1

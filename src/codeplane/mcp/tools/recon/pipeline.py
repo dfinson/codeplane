@@ -1350,6 +1350,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             f"Scaffolds ({len(scaffold_files)}): {top_paths_str}.",
             f"Lite ({len(lite_files)}).",
             "NEXT: call recon_resolve with candidate_id values from above.",
+            "Resolve ALL files you need in ONE call — incremental resolves are rate-limited (max 3 before hard block).",
             "Each target needs: candidate_id (required), optional start_line/end_line.",
             "Include a justification (50+ chars) explaining your resolve batch.",
         ]
@@ -1378,6 +1379,10 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             # Store read_only intent — gates mutation tools until
             # a new recon call overrides it.
             session.read_only = read_only
+            # Track last recon_id for resolve ordering gate
+            session.last_recon_id = recon_id
+            # Reset resolve batch count on new recon call
+            session.resolve_batch_count = 0
         except Exception:  # noqa: BLE001
             pass
 

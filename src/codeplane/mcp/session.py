@@ -97,6 +97,8 @@ class SessionState:
     # False = read-write session, None = not yet declared.
     # Set by recon(read_only=...), reset on new recon call.
     read_only: bool | None = None
+    # Last recon_id — set by recon, required by resolve for ordering.
+    last_recon_id: str | None = None
     # Number of edit batches (refactor_edit / refactor_commit calls)
     # since last checkpoint.  Gate at _MAX_EDIT_BATCHES.
     edits_since_checkpoint: int = 0

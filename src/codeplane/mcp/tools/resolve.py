@@ -140,10 +140,23 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         id_to_path: dict[str, str] = {}
         try:
             session = app_ctx.session_manager.get_or_create(ctx.session_id)
+            # ── Gap 4: Recon → resolve ordering gate ──
+            if not getattr(session, "last_recon_id", None):
+                raise MCPError(
+                    code=MCPErrorCode.INVALID_PARAMS,
+                    message="Recon must be called before resolve.",
+                    remediation=(
+                        'Call recon(task="...", read_only=True/False) first '
+                        "to discover files, then call recon_resolve with "
+                        "candidate_id values from the recon output."
+                    ),
+                )
             # Merge all recon candidate maps for this session
             for cmap in session.candidate_maps.values():
                 id_to_path.update(cmap)
             is_read_only = getattr(session, "read_only", None) is True
+        except MCPError:
+            raise
         except Exception:  # noqa: BLE001
             pass
 
@@ -313,22 +326,32 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 'commit_message="...")'
             )
 
-        # ── Resolve pressure hints (write-mode only) ──
+        # ── Resolve pressure: hard gate at batch 3 (write-mode only) ──
         if not is_read_only:
             try:
                 batch_count = session.resolve_batch_count
-                if batch_count >= 4:
+                if batch_count >= 3:
+                    raise MCPError(
+                        code=MCPErrorCode.INVALID_PARAMS,
+                        message=(
+                            f"Resolve call limit reached ({batch_count} calls). "
+                            "You have enough context — proceed to refactor_plan."
+                        ),
+                        remediation=(
+                            "Call refactor_plan(edit_targets=[...], "
+                            'description="...") to declare your edit set. '
+                            "If you need different files, call recon again "
+                            "to reset the resolve counter."
+                        ),
+                    )
+                elif batch_count >= 2:
                     agentic_hint = (
-                        "⚠️ STOP EXPLORING — you have called recon_resolve "
-                        f"{batch_count} times. Declare your edit targets NOW "
-                        "via refactor_plan and begin editing.\n\n"
+                        "⚠️ WARNING: 2 resolve calls made. This is your LAST "
+                        "resolve call before the gate blocks. Resolve ALL "
+                        "remaining files NOW or proceed to refactor_plan.\n\n"
                     ) + agentic_hint
-                elif batch_count >= 3:
-                    agentic_hint = (
-                        "NOTE: 3 resolve calls made. If you have enough "
-                        "context, call refactor_plan to commit to your "
-                        "edit targets.\n\n"
-                    ) + agentic_hint
+            except MCPError:
+                raise
             except Exception:  # noqa: BLE001
                 pass
 

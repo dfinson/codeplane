@@ -143,6 +143,51 @@ class ToolMiddleware(Middleware):
     ) -> Any:
         """Execute a tool call with structured error handling and UX."""
 
+        # ── Gap 2: Pre-call pattern violation gate ──
+        # If any pattern has been detected 3+ times, block the tool
+        # call entirely (short-circuit — tool never executes).
+        if context.fastmcp_context and self._session_manager:
+            session = self._session_manager.get_or_create(
+                context.fastmcp_context.session_id,
+            )
+            short = self._strip_tool_prefix(tool_name)
+            # Check if calling this tool would trigger a 3rd+ pattern detection
+            pre_match = session.pattern_detector.evaluate(current_tool=short)
+            if pre_match and pre_match.severity == "warn":
+                pk = f"pattern_{pre_match.pattern_name}_count"
+                count = session.counters.get(pk, 0)
+                if count >= 3:
+                    from codeplane.mcp.gate import build_pattern_hint
+
+                    hard_hint = build_pattern_hint(pre_match)
+                    duration_ms = (time.perf_counter() - start_time) * 1000
+                    log.warning(
+                        "tool_blocked_pattern",
+                        tool=tool_name,
+                        pattern=pre_match.pattern_name,
+                        count=count,
+                        duration_ms=round(duration_ms, 1),
+                    )
+                    return ToolResult(
+                        structured_content={
+                            "error": {
+                                "code": "PATTERN_VIOLATION",
+                                "message": (
+                                    f"Repeated pattern "
+                                    f"'{pre_match.pattern_name}' "
+                                    f"detected {count} times. "
+                                    "Tool execution blocked."
+                                ),
+                            },
+                            "agentic_hint": hard_hint.get(
+                                "agentic_hint",
+                                "Follow the suggested workflow.",
+                            ),
+                            "suggested_workflow": hard_hint.get("suggested_workflow"),
+                            "summary": (f"error: pattern violation ({pre_match.pattern_name})"),
+                        }
+                    )
+
         try:
             result = await call_next(context)
 
@@ -200,16 +245,10 @@ class ToolMiddleware(Middleware):
                             hint_fields.pop("suggested_workflow", None)
 
                     # Escalation tiers by per-pattern repeat count
+                    # Tier 3+ is now a pre-call hard block (see _run_tool).
+                    # Tier 2: warn in response hint.
                     base_hint = hint_fields["agentic_hint"]
-                    if pattern_count >= 3:
-                        hint_fields["agentic_hint"] = (
-                            f"🚨 REPEATED PATTERN "
-                            f"({bypass_match.pattern_name}) "
-                            f"detected {pattern_count} times. STOP and "
-                            "follow the suggested workflow "
-                            "IMMEDIATELY.\n\n" + base_hint
-                        )
-                    elif pattern_count >= 2:
+                    if pattern_count >= 2:
                         hint_fields["agentic_hint"] = "⚠️ REPEATED WARNING: " + base_hint
 
                     existing_hint = result_dict.get("agentic_hint")

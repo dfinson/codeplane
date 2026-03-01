@@ -51,7 +51,7 @@ class FindReplaceEdit(BaseModel):
         None,
         description=(
             "Edit ticket from refactor_plan output. Required for updates. "
-            "Not needed for file creates (old_content=None, new_content=body)."
+            "For creates (old_content=None), use the path field instead."
         ),
     )
     path: str | None = Field(
@@ -313,11 +313,11 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "Batch ALL edits into a single call."
             ),
         ),
-        plan_id: str | None = Field(
-            None,
+        plan_id: str = Field(
+            ...,
             description=(
-                "Plan ID from refactor_plan. Required for file updates. "
-                "Not needed for create-only or delete-only calls."
+                "Plan ID from refactor_plan. REQUIRED for ALL mutations "
+                "(creates, updates, deletes). Call refactor_plan first."
             ),
         ),
     ) -> dict[str, Any]:
@@ -380,46 +380,46 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             else:
                 updates.append(edit)
 
-        # ── Plan gate (updates require active plan) ──
-        if updates:
-            if session.active_plan is None:
-                raise MCPError(
-                    code=MCPErrorCode.INVALID_PARAMS,
-                    message=(
-                        "No active refactor plan. Call refactor_plan first "
-                        "to declare your edit targets and get edit tickets."
-                    ),
-                    remediation=(
-                        "Call refactor_plan(edit_targets=[...], "
-                        'description="...") to declare your edit set '
-                        "before calling refactor_edit."
-                    ),
-                )
-            if plan_id != session.active_plan.plan_id:
-                raise MCPError(
-                    code=MCPErrorCode.INVALID_PARAMS,
-                    message=(
-                        f"plan_id mismatch. Expected: "
-                        f"'{session.active_plan.plan_id}', "
-                        f"got: '{plan_id}'."
-                    ),
-                    remediation=("Use the plan_id returned by your refactor_plan call."),
-                )
-            if session.active_plan.edit_calls_made >= session.active_plan.expected_edit_calls:
-                raise MCPError(
-                    code=MCPErrorCode.INVALID_PARAMS,
-                    message=(
-                        "Edit call budget exhausted "
-                        f"({session.active_plan.edit_calls_made}/"
-                        f"{session.active_plan.expected_edit_calls} "
-                        "calls used). Checkpoint to start a new plan."
-                    ),
-                    remediation=(
-                        "Call checkpoint(changed_files=[...], "
-                        'commit_message="...") to complete this plan, '
-                        "then create a new one if needed."
-                    ),
-                )
+        # ── Plan gate (ALL mutations require active plan) ──
+        if session.active_plan is None:
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message=(
+                    "No active refactor plan. Call refactor_plan first "
+                    "to declare your edit targets and get edit tickets."
+                ),
+                remediation=(
+                    "Call refactor_plan(edit_targets=[...], "
+                    'description="...") to declare your edit set '
+                    "before calling refactor_edit. ALL mutations "
+                    "(creates, updates, deletes) require a plan."
+                ),
+            )
+        if plan_id != session.active_plan.plan_id:
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message=(
+                    f"plan_id mismatch. Expected: "
+                    f"'{session.active_plan.plan_id}', "
+                    f"got: '{plan_id}'."
+                ),
+                remediation=("Use the plan_id returned by your refactor_plan call."),
+            )
+        if session.active_plan.edit_calls_made >= session.active_plan.expected_edit_calls:
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message=(
+                    "Edit call budget exhausted "
+                    f"({session.active_plan.edit_calls_made}/"
+                    f"{session.active_plan.expected_edit_calls} "
+                    "calls used). Checkpoint to start a new plan."
+                ),
+                remediation=(
+                    "Call checkpoint(changed_files=[...], "
+                    'commit_message="...") to complete this plan, '
+                    "then create a new one if needed."
+                ),
+            )
 
         # ── Process find-and-replace updates (ticket-gated) ──
         continuation_tickets: list[dict[str, str]] = []

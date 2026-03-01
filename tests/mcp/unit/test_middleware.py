@@ -651,3 +651,79 @@ class TestCallToolResultParsing:
 
         formatted = middleware._format_tool_summary("tool", mock_result)
         assert formatted == "formatted result"
+
+
+class TestPatternViolationGate:
+    """Gap 2: Pattern escalation tier 3+ hard error (pre-call block)."""
+
+    @pytest.fixture
+    def session_manager(self):
+        from codeplane.mcp.session import SessionManager
+
+        return SessionManager()
+
+    @pytest.fixture
+    def middleware(self, session_manager):
+        return ToolMiddleware(session_manager=session_manager)
+
+    @pytest.fixture
+    def mock_context(self, session_manager):  # noqa: ARG002
+        ctx = MagicMock(spec=MiddlewareContext)
+        ctx.message = MagicMock()
+        ctx.message.name = "search"
+        ctx.message.arguments = {}
+        ctx.fastmcp_context = MagicMock()
+        ctx.fastmcp_context.session_id = "pattern-test-session"
+        return ctx
+
+    @pytest.mark.asyncio
+    async def test_pattern_violation_blocks_tool(self, middleware, mock_context, session_manager):
+        """Tier 3+ pattern detection blocks tool execution entirely."""
+        session = session_manager.get_or_create("pattern-test-session")
+
+        # Simulate a pattern that has been detected 3 times
+        session.counters["pattern_search_loop_count"] = 3
+
+        # Mock the pattern detector to return a match
+        mock_match = MagicMock()
+        mock_match.pattern_name = "search_loop"
+        mock_match.severity = "warn"
+        mock_match.message = "Repeated search pattern"
+        mock_match.suggested_tool = "recon"
+        mock_match.tool_params = {}
+        session.pattern_detector.evaluate = MagicMock(return_value=mock_match)
+
+        async def call_next(_ctx):
+            raise AssertionError("Tool should NOT be called")
+
+        with patch("codeplane.core.progress.get_console", return_value=MagicMock()):
+            result = await middleware.on_call_tool(mock_context, call_next)
+
+        # Should return error, not call the tool
+        assert result.structured_content["error"]["code"] == "PATTERN_VIOLATION"
+        assert "search_loop" in result.structured_content["error"]["message"]
+
+    @pytest.mark.asyncio
+    async def test_pattern_count_below_3_allows_tool(
+        self, middleware, mock_context, session_manager
+    ):
+        """Pattern count < 3 allows tool to execute normally."""
+        session = session_manager.get_or_create("pattern-test-session")
+        session.counters["pattern_search_loop_count"] = 2
+
+        mock_match = MagicMock()
+        mock_match.pattern_name = "search_loop"
+        mock_match.severity = "warn"
+        session.pattern_detector.evaluate = MagicMock(return_value=mock_match)
+
+        called = False
+
+        async def call_next(_ctx):
+            nonlocal called
+            called = True
+            return ToolResult(structured_content={"ok": True})
+
+        with patch("codeplane.core.progress.get_console", return_value=MagicMock()):
+            await middleware.on_call_tool(mock_context, call_next)
+
+        assert called, "Tool should have been called when pattern count < 3"
