@@ -353,14 +353,10 @@ class TestCplcacheHints:
         # Parent shown with chunk count
         assert "scaffold_files" in hint
         assert "3 chunks" in hint
-        # Each sub-slice is listed
-        assert "scaffold_files.0" in hint
-        assert "scaffold_files.1" in hint
-        assert "scaffold_files.2" in hint
-        # Item counts shown
-        assert "30 items" in hint
-        assert "28 items" in hint
-        assert "22 items" in hint
+        # Chunk detail is NOT in the inline hint (moved to cache)
+        assert "scaffold_files.0" not in hint
+        assert "scaffold_files.1" not in hint
+        assert "scaffold_files.2" not in hint
 
     def test_hint_header_urgency(self) -> None:
         """Hint starts with an unmissable CACHED header."""
@@ -613,10 +609,9 @@ class TestChunkAwareSectionHints:
         hint = _build_cplcache_hint("abc123", 120_200, "recon_result", sections)
         assert "scaffold_files" in hint
         assert "2 chunks" in hint
-        assert "scaffold_files.0" in hint
-        assert "scaffold_files.1" in hint
-        assert "15 items" in hint
-        assert "10 items" in hint
+        # Chunk detail is NOT in the inline hint (moved to cache)
+        assert "scaffold_files.0" not in hint
+        assert "scaffold_files.1" not in hint
 
     def test_resolve_without_sections_shows_fallback(self) -> None:
         """resolve_result without sections shows generic fallback."""
@@ -636,6 +631,91 @@ class TestChunkAwareSectionHints:
             sections=sections,
         )
         assert "passed" in hint
+
+
+# =============================================================================
+# wrap_response Inline Metadata Tests
+# =============================================================================
+
+
+class TestWrapResponseResolvedMeta:
+    """Tests for inline resolved_meta on sidecar resolve_result."""
+
+    def test_sidecar_resolve_inlines_metadata(self) -> None:
+        """When resolve_result exceeds inline cap, resolved_meta is inlined."""
+        big_content = "x" * 20_000
+        payload: dict[str, Any] = {
+            "resolved": [
+                {
+                    "path": "src/foo.py",
+                    "candidate_id": "abc:0",
+                    "content": big_content,
+                    "line_count": 500,
+                    "file_sha256": "deadbeef" * 8,
+                },
+                {
+                    "path": "src/bar.py",
+                    "candidate_id": "abc:1",
+                    "content": big_content,
+                    "line_count": 200,
+                },
+            ],
+            "agentic_hint": "next steps here",
+        }
+        result = wrap_response(payload, resource_kind="resolve_result")
+        assert result["delivery"] == "sidecar_cache"
+        assert "resolved_meta" in result
+        meta = result["resolved_meta"]
+        assert len(meta) == 2
+        # First file has sha256
+        assert meta[0]["path"] == "src/foo.py"
+        assert meta[0]["candidate_id"] == "abc:0"
+        assert meta[0]["line_count"] == 500
+        assert meta[0]["file_sha256"] == "deadbeef" * 8
+        # Second file has no sha256 (read-only resolved)
+        assert meta[1]["path"] == "src/bar.py"
+        assert meta[1]["candidate_id"] == "abc:1"
+        assert meta[1]["line_count"] == 200
+        assert "file_sha256" not in meta[1]
+        # Content NOT in inline envelope
+        assert "content" not in str(meta)
+
+    def test_sidecar_resolve_inlines_errors(self) -> None:
+        """When resolve_result has errors, they appear inline too."""
+        payload: dict[str, Any] = {
+            "resolved": [
+                {
+                    "path": "src/ok.py",
+                    "candidate_id": "abc:0",
+                    "content": "x" * 20_000,
+                    "line_count": 10,
+                    "file_sha256": "aabb" * 16,
+                },
+            ],
+            "errors": [{"candidate_id": "abc:1", "error": "not found"}],
+            "agentic_hint": "hint",
+        }
+        result = wrap_response(payload, resource_kind="resolve_result")
+        assert result["delivery"] == "sidecar_cache"
+        assert "errors" in result
+        assert result["errors"][0]["candidate_id"] == "abc:1"
+
+    def test_inline_resolve_has_no_resolved_meta(self) -> None:
+        """When resolve_result fits inline, no separate resolved_meta key."""
+        payload: dict[str, Any] = {
+            "resolved": [
+                {
+                    "path": "src/tiny.py",
+                    "candidate_id": "abc:0",
+                    "content": "pass",
+                    "line_count": 1,
+                },
+            ],
+            "agentic_hint": "hint",
+        }
+        result = wrap_response(payload, resource_kind="resolve_result")
+        assert result["delivery"] == "inline"
+        assert "resolved_meta" not in result
 
 
 # =============================================================================
