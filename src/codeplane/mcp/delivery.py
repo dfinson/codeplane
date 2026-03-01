@@ -192,12 +192,6 @@ def _order_sections(
 # cplcache Hint Builder
 # =============================================================================
 
-_TERMINAL_OVERFLOW_NOTE = (
-    "NOTE: If any command output is redirected to a file "
-    '(e.g. "Large tool result written to file: /path/to/file"), '
-    "read it with: cat /path/to/file"
-)
-
 
 def _cpl_cmd(cache_id: str, slice_key: str) -> str:
     """Format a single cplcache retrieval command."""
@@ -209,13 +203,14 @@ def _build_cplcache_hint(
     byte_size: int,
     resource_kind: str,
     sections: dict[str, Any] | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> str:
     """Build cplcache terminal hints with aggressive clarity.
 
     The output is structured so agents cannot miss the retrieval commands:
     - Urgent header with CACHED / RETRIEVE framing
-    - Each section on its own block with the command on a dedicated line
-    - Pre-chunked sub-slices listed individually under their parent
+    - Per-file dot-path commands for resolve_result and recon_result
+    - Section-level commands for other resource kinds
     - Strategy flow promotes the right consumption order
     """
     from codeplane.mcp.sidecar_cache import CacheSection
@@ -231,33 +226,74 @@ def _build_cplcache_hint(
         parts.append(f"Retrieval plan: {strategy.flow}")
     parts.append("")
 
-    if sections:
-        ordered = _order_sections(sections, strategy)
+    # ---- Per-file dot-path hints for resolve_result ----
+    if resource_kind == "resolve_result" and payload:
+        resolved = payload.get("resolved", [])
+        if resolved:
+            parts.append(
+                f"RESOLVED FILES ({len(resolved)} files) "
+                "— manifest with metadata is in the envelope above"
+            )
+            parts.append("")
+            parts.append("Retrieve content (run in terminal):")
+            for idx, item in enumerate(resolved):
+                path = item.get("path", f"file_{idx}")
+                lc = item.get("line_count", "?")
+                parts.append(f"  {path} ({lc} lines):")
+                parts.append(f"    {_cpl_cmd(cache_id, f'resolved.{idx}.content')}")
+            parts.append("")
+        # Also list non-content sections (agentic_hint, errors)
+        _append_non_content_sections(
+            parts,
+            cache_id,
+            sections,
+            strategy,
+            skip_keys={"resolved"},
+        )
 
-        # Collect top-level sections (not sub-slices) in priority order
+    # ---- Per-file dot-path hints for recon_result ----
+    elif resource_kind == "recon_result" and payload:
+        scaffold_files = payload.get("scaffold_files", [])
+        if scaffold_files:
+            parts.append(f"SCAFFOLD FILES ({len(scaffold_files)} files) — imports + signatures")
+            parts.append("")
+            parts.append("Retrieve scaffolds (run in terminal):")
+            for idx, item in enumerate(scaffold_files):
+                path = item.get("path", f"file_{idx}")
+                parts.append(f"  {path}:")
+                parts.append(f"    {_cpl_cmd(cache_id, f'scaffold_files.{idx}.scaffold')}")
+            parts.append("")
+        # List remaining sections (agentic_hint, lite_files, repo_map, etc.)
+        _append_non_content_sections(
+            parts,
+            cache_id,
+            sections,
+            strategy,
+            skip_keys={"scaffold_files"},
+        )
+
+    # ---- Section-level hints for other resource kinds ----
+    elif sections:
+        ordered = _order_sections(sections, strategy)
         top_level = [
             (k, s) for k, s in ordered if isinstance(s, CacheSection) and s.parent_key is None
         ]
-
         if top_level:
             parts.append("COMMANDS — run each in terminal:")
             parts.append("")
             for key, sec in top_level:
                 desc = strategy.descriptions.get(key, "") if strategy else ""
                 desc_suffix = f"  ({desc})" if desc else ""
-
                 if sec.ready:
-                    # Single slice — one command
                     parts.append(f"  [{key}] {sec.byte_size:,} bytes{desc_suffix}")
                     parts.append(f"    {_cpl_cmd(cache_id, key)}")
                     parts.append("")
                 elif sec.chunk_total:
-                    # Pre-chunked — header + one command per chunk
                     parts.append(
                         f"  [{key}] {sec.byte_size:,} bytes — {sec.chunk_total} chunks{desc_suffix}"
                     )
-                    for idx in range(sec.chunk_total):
-                        sub_key = f"{key}.{idx}"
+                    for cidx in range(sec.chunk_total):
+                        sub_key = f"{key}.{cidx}"
                         sub_sec = sections.get(sub_key)
                         if isinstance(sub_sec, CacheSection):
                             item_hint = (
@@ -265,11 +301,12 @@ def _build_cplcache_hint(
                                 if sub_sec.chunk_items is not None
                                 else ""
                             )
-                            parts.append(f"    chunk {idx}: {sub_sec.byte_size:,} bytes{item_hint}")
+                            parts.append(
+                                f"    chunk {cidx}: {sub_sec.byte_size:,} bytes{item_hint}"
+                            )
                             parts.append(f"      {_cpl_cmd(cache_id, sub_key)}")
                     parts.append("")
                 else:
-                    # Oversized dict — navigable via path
                     parts.append(f"  [{key}] {sec.byte_size:,} bytes{desc_suffix}")
                     parts.append(f"    {_cpl_cmd(cache_id, key)}")
                     parts.append("")
@@ -278,10 +315,62 @@ def _build_cplcache_hint(
         parts.append(f"  {_cpl_cmd(cache_id, '<SECTION>')}")
         parts.append("")
 
-    parts.append(_TERMINAL_OVERFLOW_NOTE)
     parts.append("")
 
     return "\n".join(parts)
+
+
+def _append_non_content_sections(
+    parts: list[str],
+    cache_id: str,
+    sections: dict[str, Any] | None,
+    strategy: SliceStrategy | None,
+    *,
+    skip_keys: set[str],
+) -> None:
+    """Append section-level commands for non-content keys.
+
+    Used by per-file hint builders (resolve, recon) to list remaining
+    sections like agentic_hint, errors, repo_map, lite_files, etc.
+    """
+    from codeplane.mcp.sidecar_cache import CacheSection
+
+    if not sections:
+        return
+
+    ordered = _order_sections(sections, strategy)
+    top_level = [
+        (k, s)
+        for k, s in ordered
+        if isinstance(s, CacheSection) and s.parent_key is None and k not in skip_keys
+    ]
+    if not top_level:
+        return
+
+    parts.append("OTHER SECTIONS:")
+    parts.append("")
+    for key, sec in top_level:
+        desc = strategy.descriptions.get(key, "") if strategy else ""
+        desc_suffix = f"  ({desc})" if desc else ""
+        if sec.ready:
+            parts.append(f"  [{key}] {sec.byte_size:,} bytes{desc_suffix}")
+            parts.append(f"    {_cpl_cmd(cache_id, key)}")
+            parts.append("")
+        elif sec.chunk_total:
+            parts.append(
+                f"  [{key}] {sec.byte_size:,} bytes — {sec.chunk_total} chunks{desc_suffix}"
+            )
+            for cidx in range(sec.chunk_total):
+                sub_key = f"{key}.{cidx}"
+                sub_sec = sections.get(sub_key)
+                if isinstance(sub_sec, CacheSection):
+                    parts.append(f"    chunk {cidx}: {sub_sec.byte_size:,} bytes")
+                    parts.append(f"      {_cpl_cmd(cache_id, sub_key)}")
+            parts.append("")
+        else:
+            parts.append(f"  [{key}] {sec.byte_size:,} bytes{desc_suffix}")
+            parts.append(f"    {_cpl_cmd(cache_id, key)}")
+            parts.append("")
 
 
 def _build_inline_summary(
@@ -344,6 +433,64 @@ def _build_inline_summary(
     return None
 
 
+def _build_manifest(
+    resource_kind: str,
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Build a lightweight inline manifest for sidecar-cached payloads.
+
+    Returns a dict of manifest keys to include in the sidecar envelope.
+    Only metadata — no file content.  This allows agents to immediately
+    see WHICH files are available + their edit_tickets / candidate_ids
+    without fetching any content from the cache.
+
+    Returns None if no manifest is applicable for this resource kind.
+    """
+    if resource_kind == "resolve_result":
+        resolved = payload.get("resolved", [])
+        manifest = []
+        for idx, item in enumerate(resolved):
+            entry: dict[str, Any] = {
+                "idx": idx,
+                "path": item.get("path", ""),
+                "candidate_id": item.get("candidate_id", ""),
+                "sha256": item.get("file_sha256", "")[:16],
+                "line_count": item.get("line_count", 0),
+            }
+            if item.get("edit_ticket"):
+                entry["edit_ticket"] = item["edit_ticket"]
+            if item.get("span"):
+                entry["span"] = item["span"]
+            manifest.append(entry)
+        return {"manifest": manifest}
+
+    if resource_kind == "recon_result":
+        result: dict[str, Any] = {}
+        scaffold_files = payload.get("scaffold_files", [])
+        if scaffold_files:
+            result["scaffold_manifest"] = [
+                {
+                    "idx": idx,
+                    "path": item.get("path", ""),
+                    "candidate_id": item.get("candidate_id", ""),
+                }
+                for idx, item in enumerate(scaffold_files)
+            ]
+        lite_files = payload.get("lite_files", [])
+        if lite_files:
+            result["lite_manifest"] = [
+                {
+                    "idx": idx,
+                    "path": item.get("path", ""),
+                    "candidate_id": item.get("candidate_id", ""),
+                }
+                for idx, item in enumerate(lite_files)
+            ]
+        return result if result else None
+
+    return None
+
+
 def wrap_response(
     result: dict[str, Any],
     *,
@@ -364,7 +511,7 @@ def wrap_response(
     profile = client_profile or get_current_profile()
     inline_cap = profile.inline_cap_bytes
 
-    payload_bytes = len(json.dumps(result, indent=2, default=str).encode("utf-8"))
+    payload_bytes = len(json.dumps(result, separators=(",", ":"), default=str).encode("utf-8"))
 
     if payload_bytes <= inline_cap:
         # Inline delivery — full payload in the response
@@ -385,15 +532,22 @@ def wrap_response(
         }
         if summary:
             envelope["summary"] = summary
+
+        # Inject manifest (lightweight per-file metadata — no content)
+        manifest_data = _build_manifest(resource_kind, result)
+        if manifest_data:
+            envelope.update(manifest_data)
+
         envelope["inline_budget_bytes_used"] = len(
-            json.dumps(envelope, indent=2, default=str).encode("utf-8")
+            json.dumps(envelope, separators=(",", ":"), default=str).encode("utf-8")
         )
         envelope["inline_budget_bytes_limit"] = inline_cap
         envelope["agentic_hint"] = _build_cplcache_hint(
             cache_id,
             payload_bytes,
             resource_kind,
-            entry.sections if entry else None,
+            sections=entry.sections if entry else None,
+            payload=result,
         )
 
         log.debug(

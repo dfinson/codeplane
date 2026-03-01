@@ -53,7 +53,7 @@ class TestSidecarCachePut:
         cid = cache.put("s", "e", payload)
         entry = cache.get_entry(cid)
         assert entry is not None
-        expected = len(json.dumps(payload, indent=2, default=str).encode("utf-8"))
+        expected = len(json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8"))
         assert entry.byte_size == expected
 
 
@@ -320,7 +320,7 @@ class TestSections:
         entry = cache.get_entry(cid)
         assert entry is not None
         sec = entry.sections["data"]
-        expected = len(json.dumps([1, 2, 3], indent=2, default=str).encode("utf-8"))
+        expected = len(json.dumps([1, 2, 3], separators=(",", ":"), default=str).encode("utf-8"))
         assert sec.byte_size == expected
 
     def test_section_type_desc_dict(self) -> None:
@@ -511,7 +511,7 @@ class TestChunkList:
             },
         }
         # This single item serializes well over 10KB
-        item_bytes = len(json.dumps(big_item, indent=2).encode())
+        item_bytes = len(json.dumps(big_item, separators=(",", ":")).encode())
         assert item_bytes > 10_000
 
         # Chunk with a 5KB cap — must split within the item
@@ -562,7 +562,7 @@ class TestChunkList:
         small_items = [{"path": f"small_{i}.py", "data": "x"} for i in range(5)]
         big_item: dict[str, Any] = {
             "path": "big.py",
-            "summary": {"symbols": [f"sym_{i}" for i in range(500)]},
+            "summary": {"symbols": [f"sym_{i}" for i in range(1000)]},
         }
         items: list[Any] = small_items + [big_item]
         chunks = _chunk_list(items, 5_000)
@@ -598,7 +598,9 @@ class TestChunkList:
 
         for chunk_items, chunk_bytes in chunks:
             # Verify reported bytes match actual
-            actual = len(json.dumps(chunk_items, indent=2, default=str).encode("utf-8"))
+            actual = len(
+                json.dumps(chunk_items, separators=(",", ":"), default=str).encode("utf-8")
+            )
             assert chunk_bytes == actual
             assert actual <= cap, (
                 f"Chunk with {len(chunk_items)} items is {actual} bytes, exceeds cap {cap}"
@@ -698,7 +700,9 @@ class TestSplitOversizedItem:
 
         for part in parts:
             # Verify with [part] wrapping — this is how _chunk_list emits
-            wrapped_bytes = len(json.dumps([part], indent=2, default=str).encode("utf-8"))
+            wrapped_bytes = len(
+                json.dumps([part], separators=(",", ":"), default=str).encode("utf-8")
+            )
             assert wrapped_bytes <= cap, (
                 f"Split part {part['_split']['part']} wrapped is {wrapped_bytes} bytes, "
                 f"exceeds cap {cap}"

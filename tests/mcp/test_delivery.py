@@ -18,6 +18,7 @@ from codeplane.mcp.delivery import (
     SliceStrategy,
     _build_cplcache_hint,
     _build_inline_summary,
+    _build_manifest,
     _order_sections,
     resolve_profile,
     wrap_response,
@@ -523,6 +524,213 @@ class TestBuildInlineSummary:
     def test_unknown_kind_returns_none(self) -> None:
         s = _build_inline_summary("never_heard_of_this", {"data": 1})
         assert s is None
+
+
+# =============================================================================
+# _build_manifest Tests
+# =============================================================================
+
+
+class TestBuildManifest:
+    """Tests for _build_manifest — lightweight inline metadata for sidecar envelopes."""
+
+    def test_resolve_manifest(self) -> None:
+        payload: dict[str, Any] = {
+            "resolved": [
+                {
+                    "candidate_id": "abc:0",
+                    "path": "src/foo.py",
+                    "content": "import os\n",
+                    "file_sha256": "3bd2b2fb2abf0131abcdef",
+                    "line_count": 245,
+                    "edit_ticket": "abc:0:3bd2b2fb",
+                },
+                {
+                    "candidate_id": "abc:1",
+                    "path": "src/bar.py",
+                    "content": "import sys\n",
+                    "file_sha256": "a1c2d3e4f5g6h7i8jklmno",
+                    "line_count": 180,
+                },
+            ],
+        }
+        result = _build_manifest("resolve_result", payload)
+        assert result is not None
+        m = result["manifest"]
+        assert len(m) == 2
+        assert m[0]["path"] == "src/foo.py"
+        assert m[0]["candidate_id"] == "abc:0"
+        assert m[0]["sha256"] == "3bd2b2fb2abf0131"  # first 16 chars
+        assert m[0]["line_count"] == 245
+        assert m[0]["edit_ticket"] == "abc:0:3bd2b2fb"
+        assert m[0]["idx"] == 0
+        # Second item has no edit_ticket — field absent
+        assert "edit_ticket" not in m[1]
+        assert m[1]["path"] == "src/bar.py"
+        # Content is NOT in manifest
+        assert "content" not in m[0]
+        assert "content" not in m[1]
+
+    def test_recon_manifest(self) -> None:
+        payload: dict[str, Any] = {
+            "scaffold_files": [
+                {"path": "src/a.py", "candidate_id": "r:0", "scaffold": "..."},
+                {"path": "src/b.py", "candidate_id": "r:1", "scaffold": "..."},
+            ],
+            "lite_files": [
+                {"path": "src/c.py", "candidate_id": "r:10"},
+            ],
+        }
+        result = _build_manifest("recon_result", payload)
+        assert result is not None
+        assert len(result["scaffold_manifest"]) == 2
+        assert result["scaffold_manifest"][0]["path"] == "src/a.py"
+        assert result["scaffold_manifest"][0]["candidate_id"] == "r:0"
+        assert len(result["lite_manifest"]) == 1
+        assert result["lite_manifest"][0]["candidate_id"] == "r:10"
+        # No scaffold content in manifest
+        assert "scaffold" not in result["scaffold_manifest"][0]
+
+    def test_unknown_kind_returns_none(self) -> None:
+        result = _build_manifest("checkpoint", {"passed": True})
+        assert result is None
+
+    def test_resolve_span_included(self) -> None:
+        payload: dict[str, Any] = {
+            "resolved": [
+                {
+                    "candidate_id": "abc:0",
+                    "path": "src/foo.py",
+                    "content": "line1\nline2\n",
+                    "file_sha256": "abcdef1234567890abcdef",
+                    "line_count": 100,
+                    "span": {"start_line": 10, "end_line": 20},
+                },
+            ],
+        }
+        result = _build_manifest("resolve_result", payload)
+        assert result is not None
+        assert result["manifest"][0]["span"] == {"start_line": 10, "end_line": 20}
+
+
+# =============================================================================
+# Per-file dot-path hint Tests
+# =============================================================================
+
+
+class TestPerFileDotPathHints:
+    """Tests for per-file dot-path commands in _build_cplcache_hint."""
+
+    def test_resolve_per_file_content_commands(self) -> None:
+        """resolve_result with payload generates per-file resolved.N.content commands."""
+        payload: dict[str, Any] = {
+            "resolved": [
+                {"path": "src/foo.py", "line_count": 100, "content": "..."},
+                {"path": "src/bar.py", "line_count": 50, "content": "..."},
+            ],
+        }
+        hint = _build_cplcache_hint(
+            "abc123",
+            5000,
+            "resolve_result",
+            payload=payload,
+        )
+        assert "resolved.0.content" in hint
+        assert "resolved.1.content" in hint
+        assert "src/foo.py" in hint
+        assert "src/bar.py" in hint
+        assert "100 lines" in hint
+        assert "50 lines" in hint
+
+    def test_recon_per_file_scaffold_commands(self) -> None:
+        """recon_result with payload generates per-file scaffold_files.N.scaffold commands."""
+        payload: dict[str, Any] = {
+            "scaffold_files": [
+                {"path": "src/a.py", "scaffold": "..."},
+                {"path": "src/b.py", "scaffold": "..."},
+            ],
+        }
+        hint = _build_cplcache_hint(
+            "abc123",
+            5000,
+            "recon_result",
+            payload=payload,
+        )
+        assert "scaffold_files.0.scaffold" in hint
+        assert "scaffold_files.1.scaffold" in hint
+        assert "src/a.py" in hint
+        assert "src/b.py" in hint
+
+    def test_resolve_fallback_without_payload(self) -> None:
+        """resolve_result without payload falls back to section-level commands."""
+        sections = {
+            "resolved": CacheSection(
+                key="resolved",
+                byte_size=5000,
+                type_desc="list",
+                item_count=2,
+                ready=True,
+            ),
+        }
+        hint = _build_cplcache_hint("abc123", 5000, "resolve_result", sections=sections)
+        assert '--slice "resolved"' in hint
+        assert "resolved.0.content" not in hint
+
+    def test_checkpoint_uses_section_level(self) -> None:
+        """Non-file resource kinds use section-level hints even with payload."""
+        sections = {
+            "passed": CacheSection(
+                key="passed",
+                byte_size=6,
+                type_desc="bool",
+                item_count=None,
+                ready=True,
+            ),
+        }
+        hint = _build_cplcache_hint(
+            "abc123",
+            500,
+            "checkpoint",
+            sections=sections,
+            payload={"passed": True},
+        )
+        assert '--slice "passed"' in hint
+        assert "[passed]" in hint
+
+    def test_resolve_other_sections_listed(self) -> None:
+        """Non-content sections (agentic_hint, errors) listed under OTHER SECTIONS."""
+        payload: dict[str, Any] = {
+            "resolved": [{"path": "a.py", "line_count": 10, "content": "x"}],
+            "agentic_hint": "do stuff",
+        }
+        sections = {
+            "resolved": CacheSection(
+                key="resolved",
+                byte_size=5000,
+                type_desc="list",
+                item_count=1,
+                ready=True,
+            ),
+            "agentic_hint": CacheSection(
+                key="agentic_hint",
+                byte_size=200,
+                type_desc="str",
+                item_count=8,
+                ready=True,
+            ),
+        }
+        hint = _build_cplcache_hint(
+            "abc123",
+            5200,
+            "resolve_result",
+            sections=sections,
+            payload=payload,
+        )
+        # Per-file content commands
+        assert "resolved.0.content" in hint
+        # Other sections listed separately
+        assert "OTHER SECTIONS" in hint
+        assert '--slice "agentic_hint"' in hint
 
 
 # =============================================================================

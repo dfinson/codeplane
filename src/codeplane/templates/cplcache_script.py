@@ -11,17 +11,23 @@ Usage::
 
     python3 .codeplane/scripts/cplcache.py --cache-id <ID> --slice <NAME>
 
+The JSON envelope from the server is stripped automatically: the ``value``
+field is extracted and printed directly.  Strings (file content, scaffold
+code) are printed raw; dicts/lists are printed as compact JSON.
+
 Exit codes:
     0 — success (body printed to stdout)
     2 — bad CLI arguments (argparse default)
     3 — config discovery failure
     4 — connection failure / timeout
     5 — HTTP non-200 response
+    6 — server returned an error payload
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -31,6 +37,7 @@ from urllib.request import Request, urlopen
 _EX_DISCOVERY = 3
 _EX_CONNECTION = 4
 _EX_HTTP = 5
+_EX_PAYLOAD = 6
 _TIMEOUT_S = 5
 
 
@@ -65,6 +72,32 @@ def _fetch(port: int, cache_id: str, slice_name: str) -> str:
     return body.decode("utf-8", errors="replace")
 
 
+def _unwrap(body: str) -> str:
+    """Extract ``value`` from the JSON envelope and format for terminal.
+
+    Strings are printed raw (no JSON quoting) so file content and scaffold
+    code appear as readable text.  Dicts/lists are printed as compact JSON.
+    If the response carries an ``error`` key, it is written to stderr.
+    """
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        return body  # server sent non-JSON — pass through
+
+    if isinstance(data, dict) and "error" in data:
+        print(f"cplcache: {data['error']}", file=sys.stderr)
+        sys.exit(_EX_PAYLOAD)
+
+    if isinstance(data, dict) and "value" in data:
+        val = data["value"]
+        if isinstance(val, str):
+            return val
+        return json.dumps(val, separators=(",", ":"))
+
+    # No value key — return compact JSON of whatever we got
+    return json.dumps(data, separators=(",", ":"))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="cplcache",
@@ -76,7 +109,7 @@ def main() -> None:
 
     port = _load_port()
     body = _fetch(port, args.cache_id, args.slice_name)
-    print(body, end="")
+    print(_unwrap(body), end="")
 
 
 if __name__ == "__main__":

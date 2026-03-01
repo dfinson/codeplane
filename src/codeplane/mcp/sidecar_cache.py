@@ -35,6 +35,11 @@ _MAX_KEYS = 500
 # Sections ≤ this size are considered "ready" — pre-computed, instant retrieval
 _SECTION_CAP_BYTES = 50_000
 
+# Compact JSON separators — no indent, no extra whitespace.
+# All size calculations use this to match the actual wire format
+# (Starlette’s JSONResponse also uses indent=None + compact separators).
+_COMPACT: tuple[str, str] = (",", ":")
+
 
 @dataclass
 class CacheSection:
@@ -131,7 +136,7 @@ def _build_sections(
     sub_slices: dict[str, Any] = {}
 
     for key, value in payload.items():
-        raw = json.dumps(value, indent=2, default=str).encode("utf-8")
+        raw = json.dumps(value, separators=_COMPACT, default=str).encode("utf-8")
         byte_size = len(raw)
 
         if isinstance(value, dict):
@@ -242,17 +247,13 @@ def _chunk_list(items: list[Any], cap: int) -> list[tuple[list[Any], int]]:
     current_bytes = 2  # opening/closing []
 
     for item in items:
-        item_json = json.dumps(item, indent=2, default=str).encode("utf-8")
-        # When nested inside a JSON array with indent=2, each line of the
-        # item gets 2 extra spaces of indentation.  Account for this so
-        # the running total matches the real serialised size.
-        line_count = item_json.count(b"\n") + 1
-        item_bytes = len(item_json) + line_count * 2 + 2  # indent + comma/nl
+        item_json = json.dumps(item, separators=_COMPACT, default=str).encode("utf-8")
+        item_bytes = len(item_json) + 1  # comma separator
 
         if item_bytes > cap and isinstance(item, dict):
             # Flush any accumulated items first
             if current:
-                chunk_raw = json.dumps(current, indent=2, default=str).encode("utf-8")
+                chunk_raw = json.dumps(current, separators=_COMPACT, default=str).encode("utf-8")
                 chunks.append((current, len(chunk_raw)))
                 current = []
                 current_bytes = 2
@@ -260,13 +261,13 @@ def _chunk_list(items: list[Any], cap: int) -> list[tuple[list[Any], int]]:
             # Split this oversized item semantically
             parts = _split_oversized_item(item, cap)
             for part in parts:
-                part_raw = json.dumps([part], indent=2, default=str).encode("utf-8")
+                part_raw = json.dumps([part], separators=_COMPACT, default=str).encode("utf-8")
                 chunks.append(([part], len(part_raw)))
             continue
 
         if current and current_bytes + item_bytes > cap:
             # Flush current chunk
-            chunk_raw = json.dumps(current, indent=2, default=str).encode("utf-8")
+            chunk_raw = json.dumps(current, separators=_COMPACT, default=str).encode("utf-8")
             chunks.append((current, len(chunk_raw)))
             current = []
             current_bytes = 2
@@ -275,7 +276,7 @@ def _chunk_list(items: list[Any], cap: int) -> list[tuple[list[Any], int]]:
         current_bytes += item_bytes
 
     if current:
-        chunk_raw = json.dumps(current, indent=2, default=str).encode("utf-8")
+        chunk_raw = json.dumps(current, separators=_COMPACT, default=str).encode("utf-8")
         chunks.append((current, len(chunk_raw)))
 
     return chunks
@@ -292,9 +293,8 @@ def _split_oversized_item(item: dict[str, Any], cap: int) -> list[dict[str, Any]
     while distributing the heavy payload.
 
     Uses post-hoc verification: after building parts, checks that each part
-    serializes to ≤ cap bytes.  If any part exceeds the cap (due to JSON
-    indentation overhead at nesting depth), the effective budget is tightened
-    and the field is re-split — up to 3 retries.
+    serializes to ≤ cap bytes.  If any part exceeds the cap, the effective
+    budget is tightened and the field is re-split — up to 3 retries.
     """
     # Find the largest field path and its value
     field_path, field_val = _find_largest_field(item)
@@ -309,7 +309,9 @@ def _split_oversized_item(item: dict[str, Any], cap: int) -> list[dict[str, Any]
     envelope_item = _clone_with_field_replaced(item, field_path, empty_val)
     # Add _split metadata size estimate (roughly constant)
     envelope_item["_split"] = {"field": field_path, "part": 0, "total": 99}
-    envelope_bytes = len(json.dumps(envelope_item, indent=2, default=str).encode("utf-8"))
+    envelope_bytes = len(
+        json.dumps(envelope_item, separators=_COMPACT, default=str).encode("utf-8")
+    )
     effective_cap = max(cap - envelope_bytes, 1024)  # floor at 1KB
 
     # Split → build parts → verify.  Retry with tighter budget if any part
@@ -339,11 +341,10 @@ def _split_oversized_item(item: dict[str, Any], cap: int) -> list[dict[str, Any]
             }
             parts.append(partial)
 
-        # Post-hoc verification: every part wrapped in [part] must fit within
-        # cap — this matches how _chunk_list emits each part as a single-
-        # element list chunk, which adds JSON indent overhead.
+        # Post-hoc verification: every part wrapped in [part] must fit
+        # within cap.
         max_part_bytes = max(
-            len(json.dumps([p], indent=2, default=str).encode("utf-8")) for p in parts
+            len(json.dumps([p], separators=_COMPACT, default=str).encode("utf-8")) for p in parts
         )
         if max_part_bytes <= cap:
             return parts
@@ -375,7 +376,7 @@ def _find_largest_field(
         path = f"{prefix}.{key}" if prefix else key
 
         if isinstance(val, list | str):
-            size = len(json.dumps(val, indent=2, default=str).encode("utf-8"))
+            size = len(json.dumps(val, separators=_COMPACT, default=str).encode("utf-8"))
             if size > best_size:
                 best_size = size
                 best_path = path
@@ -384,7 +385,9 @@ def _find_largest_field(
             # Recurse into nested dicts
             sub_path, sub_val = _find_largest_field(val, path)
             if sub_path is not None:
-                sub_size = len(json.dumps(sub_val, indent=2, default=str).encode("utf-8"))
+                sub_size = len(
+                    json.dumps(sub_val, separators=_COMPACT, default=str).encode("utf-8")
+                )
                 if sub_size > best_size:
                     best_size = sub_size
                     best_path = sub_path
@@ -420,7 +423,7 @@ def _chunk_list_simple(items: list[Any], cap: int) -> list[list[Any]]:
     current_bytes = 2
 
     for item in items:
-        item_bytes = len(json.dumps(item, indent=2, default=str).encode("utf-8")) + 2
+        item_bytes = len(json.dumps(item, separators=_COMPACT, default=str).encode("utf-8")) + 1
         if current and current_bytes + item_bytes > cap:
             chunks.append(current)
             current = []
@@ -525,7 +528,7 @@ class SidecarCache:
 
         If the per-key deque is full, the oldest entry is evicted (FIFO).
         """
-        raw = json.dumps(payload, indent=2, default=str).encode("utf-8")
+        raw = json.dumps(payload, separators=_COMPACT, default=str).encode("utf-8")
         byte_size = len(raw)
         cache_id = uuid.uuid4().hex[:12]
 
@@ -698,7 +701,7 @@ class SidecarCache:
                 "has_more": has_more,
             }
 
-        serialized = json.dumps(value, indent=2, default=str)
+        serialized = json.dumps(value, separators=_COMPACT, default=str)
         if len(serialized) <= max_bytes:
             return {
                 "cache_id": cache_id,
@@ -713,11 +716,11 @@ class SidecarCache:
             items: list[Any] = []
             used = 2  # []
             for item in value[offset:]:
-                item_json = json.dumps(item, indent=2, default=str)
-                if used + len(item_json) + 2 > max_bytes:
+                item_json = json.dumps(item, separators=_COMPACT, default=str)
+                if used + len(item_json) + 1 > max_bytes:
                     break
                 items.append(item)
-                used += len(item_json) + 2
+                used += len(item_json) + 1
             next_offset = offset + len(items)
             return {
                 "cache_id": cache_id,
