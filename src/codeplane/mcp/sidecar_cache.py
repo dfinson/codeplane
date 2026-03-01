@@ -243,7 +243,11 @@ def _chunk_list(items: list[Any], cap: int) -> list[tuple[list[Any], int]]:
 
     for item in items:
         item_json = json.dumps(item, indent=2, default=str).encode("utf-8")
-        item_bytes = len(item_json) + 2  # comma + newline overhead
+        # When nested inside a JSON array with indent=2, each line of the
+        # item gets 2 extra spaces of indentation.  Account for this so
+        # the running total matches the real serialised size.
+        line_count = item_json.count(b"\n") + 1
+        item_bytes = len(item_json) + line_count * 2 + 2  # indent + comma/nl
 
         if item_bytes > cap and isinstance(item, dict):
             # Flush any accumulated items first
