@@ -55,13 +55,28 @@ recon_resolve(targets=[{"path": "src/foo.py"}])
 Returns full file content + `sha256` hash per file (sha256 skipped in read-only mode).
 The sha256 is **required** by `refactor_edit` to ensure edits target the correct version.
 
+### Planning Edits
+
+Before editing existing files, declare your edit set with `refactor_plan`:
+
+```
+refactor_plan(
+    edit_targets=["<candidate_id from recon>"],
+    expected_edit_calls=1,
+    description="Brief description of what you're changing"
+)
+```
+
+Returns a `plan_id` and an `edit_ticket` per file. Both are **required** by `refactor_edit`.
+
 ### Editing Files
 
 Use `refactor_edit` for all file modifications:
 
 ```
-refactor_edit(edits=[{
+refactor_edit(plan_id="<plan_id from refactor_plan>", edits=[{
     "path": "src/foo.py",
+    "edit_ticket": "<edit_ticket from refactor_plan>",
     "old_content": "def hello():
     pass",
     "new_content": "def hello():
@@ -70,17 +85,19 @@ refactor_edit(edits=[{
 }])
 ```
 
+- `plan_id` and `edit_ticket` are required for updating existing files
 - Find-and-replace: specify `old_content` to find and `new_content` to replace it with
 - Optional `start_line`/`end_line` hints to disambiguate if old_content appears multiple times
-- Omit `old_content` (or set to null) to create a new file
+- Omit `old_content` (or set to null) to create a new file (no plan or ticket needed)
 - Set `delete: true` to delete a file
 
 ### Workflow
 
 1. `recon(task="...", read_only=True/False)` — discover relevant files + declare intent
 2. `recon_resolve(targets=[...])` — get full content (+ sha256/edit_tickets if read_only=False)
-3. If read_only=False: `refactor_edit(edits=[...])` — make changes
-4. `checkpoint(changed_files=[...])` — ALWAYS called:
+3. If read_only=False: `refactor_plan(edit_targets=[...])` — declare edit set, get plan_id + tickets
+4. `refactor_edit(plan_id=..., edits=[...])` — make changes (include edit_ticket per file)
+5. `checkpoint(changed_files=[...])` — ALWAYS called:
    - read_only=True: verifies clean working tree (no lint/test/commit)
    - read_only=False: lint + test + optionally commit
 
