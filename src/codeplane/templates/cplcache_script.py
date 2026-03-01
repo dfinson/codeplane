@@ -76,7 +76,7 @@ def _format_file_item(item: dict) -> str:  # type: ignore[type-arg]
     """Format a resolved or scaffold file item with a metadata header.
 
     Prints a concise ``# path | key=val ...`` header line followed by the
-    raw content (for resolved items) or scaffold text.
+    raw content (for resolved items) or formatted scaffold text.
     """
     parts: list[str] = []
     path = item.get("path", "")
@@ -99,19 +99,76 @@ def _format_file_item(item: dict) -> str:  # type: ignore[type-arg]
         parts.append(f"span={span.get('start_line')}-{span.get('end_line')}")
 
     header = "# " + " | ".join(parts) if parts else ""
-    body = item.get("content") or item.get("scaffold") or ""
+
+    # Resolved items have content as a string
+    content = item.get("content")
+    if isinstance(content, str):
+        body = content
+    else:
+        # Scaffold items — scaffold may be a dict or a string
+        scaffold = item.get("scaffold")
+        if isinstance(scaffold, dict):
+            body = _format_scaffold(scaffold)
+        elif isinstance(scaffold, str):
+            body = scaffold
+        else:
+            body = ""
+
     if header:
         return header + "\n" + body
     return body
 
 
+def _format_scaffold(scaffold: dict) -> str:  # type: ignore[type-arg]
+    """Format a scaffold dict as concise readable text."""
+    lines: list[str] = []
+    summary = scaffold.get("summary", "")
+    if summary:
+        lines.append(summary)
+    else:
+        # Build a fallback summary line
+        lang = scaffold.get("language", "")
+        total = scaffold.get("total_lines")
+        meta = []
+        if lang:
+            meta.append(lang)
+        if total is not None:
+            meta.append(f"{total} lines")
+        if meta:
+            lines.append(" | ".join(meta))
+    imports = scaffold.get("imports", [])
+    if imports:
+        lines.append(f"imports: {', '.join(str(i) for i in imports)}")
+    symbols = scaffold.get("symbols", [])
+    if symbols:
+        lines.append(f"symbols: {', '.join(str(s) for s in symbols)}")
+    return "\n".join(lines)
+
+
+def _unwrap_list(items: list) -> str:  # type: ignore[type-arg]
+    """Format a list of items from a chunked sidecar section.
+
+    Items that look like file entries (have ``content`` or ``scaffold``)
+    are formatted with metadata headers.  Others are printed as compact JSON.
+    """
+    formatted: list[str] = []
+    for item in items:
+        if isinstance(item, dict) and ("content" in item or "scaffold" in item):
+            formatted.append(_format_file_item(item))
+        elif isinstance(item, dict):
+            formatted.append(json.dumps(item, separators=(",", ":")))
+        else:
+            formatted.append(str(item))
+    return "\n---\n".join(formatted)
+
+
 def _unwrap(body: str) -> str:
     """Extract ``value`` from the JSON envelope and format for terminal.
 
-    Resolved and scaffold file items are printed with a concise metadata
-    header line (path, candidate_id, sha256, edit_ticket) followed by raw
-    content.  Plain strings are printed raw.  Other values are printed as
-    compact JSON.  Error payloads are written to stderr.
+    Lists of file items (from chunked sections) are iterated and each item
+    is printed with a concise metadata header.  Single resolved/scaffold
+    items get the same treatment.  Plain strings are printed raw.  Other
+    values are printed as compact JSON.  Error payloads go to stderr.
     """
     try:
         data = json.loads(body)
@@ -124,7 +181,10 @@ def _unwrap(body: str) -> str:
 
     if isinstance(data, dict) and "value" in data:
         val = data["value"]
-        # Resolved or scaffold file item — print metadata header + content
+        # List of items (chunked section) — format each item
+        if isinstance(val, list):
+            return _unwrap_list(val)
+        # Single resolved or scaffold file item
         if isinstance(val, dict) and ("content" in val or "scaffold" in val):
             return _format_file_item(val)
         if isinstance(val, str):

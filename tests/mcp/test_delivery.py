@@ -526,123 +526,131 @@ class TestBuildInlineSummary:
 
 
 # =============================================================================
-# Per-file dot-path hint Tests
+# Chunk-aware Section Hint Tests
 # =============================================================================
 
 
-class TestPerFileDotPathHints:
-    """Tests for per-file dot-path commands in _build_cplcache_hint."""
+class TestChunkAwareSectionHints:
+    """Tests that all resource kinds use chunk-aware section-level hints."""
 
-    def test_resolve_per_file_content_commands(self) -> None:
-        """resolve_result with payload generates per-file resolved.N commands."""
-        payload: dict[str, Any] = {
-            "resolved": [
-                {"path": "src/foo.py", "line_count": 100, "content": "..."},
-                {"path": "src/bar.py", "line_count": 50, "content": "..."},
-            ],
-        }
-        hint = _build_cplcache_hint(
-            "abc123",
-            5000,
-            "resolve_result",
-            payload=payload,
+    def _section(
+        self,
+        key: str,
+        byte_size: int,
+        type_desc: str = "dict(1 keys)",
+        item_count: int | None = 1,
+        ready: bool = True,
+    ) -> CacheSection:
+        return CacheSection(
+            key=key,
+            byte_size=byte_size,
+            type_desc=type_desc,
+            item_count=item_count,
+            ready=ready,
         )
-        assert 'resolved.0"' in hint
-        assert 'resolved.1"' in hint
-        assert "src/foo.py" in hint
-        assert "src/bar.py" in hint
-        assert "100 lines" in hint
-        assert "50 lines" in hint
 
-    def test_recon_per_file_scaffold_commands(self) -> None:
-        """recon_result with payload generates per-file scaffold_files.N commands."""
-        payload: dict[str, Any] = {
-            "scaffold_files": [
-                {"path": "src/a.py", "scaffold": "..."},
-                {"path": "src/b.py", "scaffold": "..."},
-            ],
-        }
-        hint = _build_cplcache_hint(
-            "abc123",
-            5000,
-            "recon_result",
-            payload=payload,
-        )
-        assert 'scaffold_files.0"' in hint
-        assert 'scaffold_files.1"' in hint
-        assert "src/a.py" in hint
-        assert "src/b.py" in hint
-
-    def test_resolve_fallback_without_payload(self) -> None:
-        """resolve_result without payload falls back to section-level commands."""
+    def test_resolve_uses_section_level_hints(self) -> None:
+        """resolve_result uses section-level hints, not per-file dot-paths."""
         sections = {
-            "resolved": CacheSection(
-                key="resolved",
-                byte_size=5000,
-                type_desc="list",
-                item_count=2,
-                ready=True,
-            ),
-        }
-        hint = _build_cplcache_hint("abc123", 5000, "resolve_result", sections=sections)
-        assert '--slice "resolved"' in hint
-        assert 'resolved.0"' not in hint
-
-    def test_checkpoint_uses_section_level(self) -> None:
-        """Non-file resource kinds use section-level hints even with payload."""
-        sections = {
-            "passed": CacheSection(
-                key="passed",
-                byte_size=6,
-                type_desc="bool",
-                item_count=None,
-                ready=True,
-            ),
-        }
-        hint = _build_cplcache_hint(
-            "abc123",
-            500,
-            "checkpoint",
-            sections=sections,
-            payload={"passed": True},
-        )
-        assert '--slice "passed"' in hint
-        assert "[passed]" in hint
-
-    def test_resolve_other_sections_listed(self) -> None:
-        """Non-content sections (agentic_hint, errors) listed under OTHER SECTIONS."""
-        payload: dict[str, Any] = {
-            "resolved": [{"path": "a.py", "line_count": 10, "content": "x"}],
-            "agentic_hint": "do stuff",
-        }
-        sections = {
-            "resolved": CacheSection(
-                key="resolved",
-                byte_size=5000,
-                type_desc="list",
-                item_count=1,
-                ready=True,
-            ),
-            "agentic_hint": CacheSection(
-                key="agentic_hint",
-                byte_size=200,
-                type_desc="str",
-                item_count=8,
-                ready=True,
-            ),
+            "resolved": self._section("resolved", 5000),
+            "agentic_hint": self._section("agentic_hint", 200),
         }
         hint = _build_cplcache_hint(
             "abc123",
             5200,
             "resolve_result",
             sections=sections,
-            payload=payload,
         )
-        # Per-file commands
-        assert 'resolved.0"' in hint
-        # Other sections listed separately
-        assert "OTHER SECTIONS" in hint
-        assert '--slice "agentic_hint"' in hint
+        # Section-level command for resolved
+        assert '--slice "resolved"' in hint
+        assert "[resolved]" in hint
+        assert "[agentic_hint]" in hint
+        # No per-file dot-paths
+        assert 'resolved.0"' not in hint
+
+    def test_recon_uses_section_level_hints(self) -> None:
+        """recon_result uses section-level hints, not per-file dot-paths."""
+        sections = {
+            "agentic_hint": self._section("agentic_hint", 100),
+            "scaffold_files": self._section("scaffold_files", 40000),
+            "lite_files": self._section("lite_files", 300),
+        }
+        hint = _build_cplcache_hint(
+            "abc123",
+            40400,
+            "recon_result",
+            sections=sections,
+        )
+        assert "[scaffold_files]" in hint
+        assert '--slice "scaffold_files"' in hint
+        # No per-file dot-paths
+        assert 'scaffold_files.0"' not in hint
+
+    def test_recon_chunked_scaffold_shows_chunks(self) -> None:
+        """Chunked scaffold_files section shows chunk commands."""
+        parent = CacheSection(
+            key="scaffold_files",
+            byte_size=120_000,
+            type_desc="list(25 items)",
+            item_count=25,
+            ready=False,
+            chunk_total=2,
+        )
+        sub0 = CacheSection(
+            key="scaffold_files.0",
+            byte_size=50_000,
+            type_desc="list(15 items)",
+            item_count=15,
+            ready=True,
+            parent_key="scaffold_files",
+            chunk_index=0,
+            chunk_total=2,
+            chunk_items=15,
+        )
+        sub1 = CacheSection(
+            key="scaffold_files.1",
+            byte_size=70_000,
+            type_desc="list(10 items)",
+            item_count=10,
+            ready=True,
+            parent_key="scaffold_files",
+            chunk_index=1,
+            chunk_total=2,
+            chunk_items=10,
+        )
+        sections: dict[str, Any] = {
+            "agentic_hint": self._section("agentic_hint", 200),
+            "scaffold_files": parent,
+            "scaffold_files.0": sub0,
+            "scaffold_files.1": sub1,
+        }
+        hint = _build_cplcache_hint("abc123", 120_200, "recon_result", sections)
+        assert "[scaffold_files]" in hint
+        assert "2 chunks" in hint
+        assert '--slice "scaffold_files.0"' in hint
+        assert '--slice "scaffold_files.1"' in hint
+        assert "(15 items)" in hint
+        assert "(10 items)" in hint
+
+    def test_resolve_without_sections_shows_fallback(self) -> None:
+        """resolve_result without sections shows generic fallback."""
+        hint = _build_cplcache_hint("abc123", 5000, "resolve_result")
+        assert "COMMAND" in hint
+        assert "cplcache" in hint
+
+    def test_checkpoint_uses_section_level(self) -> None:
+        """Non-file resource kinds use section-level hints even with payload."""
+        sections = {
+            "passed": self._section("passed", 6, type_desc="bool", item_count=None),
+        }
+        hint = _build_cplcache_hint(
+            "abc123",
+            500,
+            "checkpoint",
+            sections=sections,
+        )
+        assert '--slice "passed"' in hint
+        assert "[passed]" in hint
 
 
 # =============================================================================
