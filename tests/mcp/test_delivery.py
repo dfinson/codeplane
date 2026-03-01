@@ -18,7 +18,6 @@ from codeplane.mcp.delivery import (
     SliceStrategy,
     _build_cplcache_hint,
     _build_inline_summary,
-    _build_manifest,
     _order_sections,
     resolve_profile,
     wrap_response,
@@ -524,93 +523,6 @@ class TestBuildInlineSummary:
     def test_unknown_kind_returns_none(self) -> None:
         s = _build_inline_summary("never_heard_of_this", {"data": 1})
         assert s is None
-
-
-# =============================================================================
-# _build_manifest Tests
-# =============================================================================
-
-
-class TestBuildManifest:
-    """Tests for _build_manifest — lightweight inline metadata for sidecar envelopes."""
-
-    def test_resolve_manifest(self) -> None:
-        payload: dict[str, Any] = {
-            "resolved": [
-                {
-                    "candidate_id": "abc:0",
-                    "path": "src/foo.py",
-                    "content": "import os\n",
-                    "file_sha256": "3bd2b2fb2abf0131abcdef",
-                    "line_count": 245,
-                    "edit_ticket": "abc:0:3bd2b2fb",
-                },
-                {
-                    "candidate_id": "abc:1",
-                    "path": "src/bar.py",
-                    "content": "import sys\n",
-                    "file_sha256": "a1c2d3e4f5g6h7i8jklmno",
-                    "line_count": 180,
-                },
-            ],
-        }
-        result = _build_manifest("resolve_result", payload)
-        assert result is not None
-        m = result["manifest"]
-        assert len(m) == 2
-        assert m[0]["path"] == "src/foo.py"
-        assert m[0]["candidate_id"] == "abc:0"
-        assert m[0]["sha256"] == "3bd2b2fb2abf0131"  # first 16 chars
-        assert m[0]["line_count"] == 245
-        assert m[0]["edit_ticket"] == "abc:0:3bd2b2fb"
-        assert m[0]["idx"] == 0
-        # Second item has no edit_ticket — field absent
-        assert "edit_ticket" not in m[1]
-        assert m[1]["path"] == "src/bar.py"
-        # Content is NOT in manifest
-        assert "content" not in m[0]
-        assert "content" not in m[1]
-
-    def test_recon_manifest(self) -> None:
-        payload: dict[str, Any] = {
-            "scaffold_files": [
-                {"path": "src/a.py", "candidate_id": "r:0", "scaffold": "..."},
-                {"path": "src/b.py", "candidate_id": "r:1", "scaffold": "..."},
-            ],
-            "lite_files": [
-                {"path": "src/c.py", "candidate_id": "r:10"},
-            ],
-        }
-        result = _build_manifest("recon_result", payload)
-        assert result is not None
-        assert len(result["scaffold_manifest"]) == 2
-        assert result["scaffold_manifest"][0]["path"] == "src/a.py"
-        assert result["scaffold_manifest"][0]["candidate_id"] == "r:0"
-        assert len(result["lite_manifest"]) == 1
-        assert result["lite_manifest"][0]["candidate_id"] == "r:10"
-        # No scaffold content in manifest
-        assert "scaffold" not in result["scaffold_manifest"][0]
-
-    def test_unknown_kind_returns_none(self) -> None:
-        result = _build_manifest("checkpoint", {"passed": True})
-        assert result is None
-
-    def test_resolve_span_included(self) -> None:
-        payload: dict[str, Any] = {
-            "resolved": [
-                {
-                    "candidate_id": "abc:0",
-                    "path": "src/foo.py",
-                    "content": "line1\nline2\n",
-                    "file_sha256": "abcdef1234567890abcdef",
-                    "line_count": 100,
-                    "span": {"start_line": 10, "end_line": 20},
-                },
-            ],
-        }
-        result = _build_manifest("resolve_result", payload)
-        assert result is not None
-        assert result["manifest"][0]["span"] == {"start_line": 10, "end_line": 20}
 
 
 # =============================================================================

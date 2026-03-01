@@ -433,64 +433,6 @@ def _build_inline_summary(
     return None
 
 
-def _build_manifest(
-    resource_kind: str,
-    payload: dict[str, Any],
-) -> dict[str, Any] | None:
-    """Build a lightweight inline manifest for sidecar-cached payloads.
-
-    Returns a dict of manifest keys to include in the sidecar envelope.
-    Only metadata — no file content.  This allows agents to immediately
-    see WHICH files are available + their edit_tickets / candidate_ids
-    without fetching any content from the cache.
-
-    Returns None if no manifest is applicable for this resource kind.
-    """
-    if resource_kind == "resolve_result":
-        resolved = payload.get("resolved", [])
-        manifest = []
-        for idx, item in enumerate(resolved):
-            entry: dict[str, Any] = {
-                "idx": idx,
-                "path": item.get("path", ""),
-                "candidate_id": item.get("candidate_id", ""),
-                "sha256": item.get("file_sha256", "")[:16],
-                "line_count": item.get("line_count", 0),
-            }
-            if item.get("edit_ticket"):
-                entry["edit_ticket"] = item["edit_ticket"]
-            if item.get("span"):
-                entry["span"] = item["span"]
-            manifest.append(entry)
-        return {"manifest": manifest}
-
-    if resource_kind == "recon_result":
-        result: dict[str, Any] = {}
-        scaffold_files = payload.get("scaffold_files", [])
-        if scaffold_files:
-            result["scaffold_manifest"] = [
-                {
-                    "idx": idx,
-                    "path": item.get("path", ""),
-                    "candidate_id": item.get("candidate_id", ""),
-                }
-                for idx, item in enumerate(scaffold_files)
-            ]
-        lite_files = payload.get("lite_files", [])
-        if lite_files:
-            result["lite_manifest"] = [
-                {
-                    "idx": idx,
-                    "path": item.get("path", ""),
-                    "candidate_id": item.get("candidate_id", ""),
-                }
-                for idx, item in enumerate(lite_files)
-            ]
-        return result if result else None
-
-    return None
-
-
 def wrap_response(
     result: dict[str, Any],
     *,
@@ -532,11 +474,6 @@ def wrap_response(
         }
         if summary:
             envelope["summary"] = summary
-
-        # Inject manifest (lightweight per-file metadata — no content)
-        manifest_data = _build_manifest(resource_kind, result)
-        if manifest_data:
-            envelope.update(manifest_data)
 
         envelope["inline_budget_bytes_used"] = len(
             json.dumps(envelope, separators=(",", ":"), default=str).encode("utf-8")
