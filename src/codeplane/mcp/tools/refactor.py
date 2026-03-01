@@ -1,12 +1,18 @@
 """Refactor MCP tools - refactor_* handlers."""
 
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from fastmcp import Context
 from pydantic import Field
 
 from codeplane.mcp.errors import MCPError, MCPErrorCode
-from codeplane.mcp.session import _MAX_EDIT_BATCHES
+from codeplane.mcp.session import (
+    _MAX_EDIT_BATCHES,
+    _MAX_PLAN_TARGETS,
+    EditTicket,
+    RefactorPlan,
+)
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -219,6 +225,257 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 ),
                 remediation=("Explain what you are renaming/moving/analyzing and why."),
             )
+
+    @mcp.tool(
+        annotations={
+            "title": "Plan: declare edit targets and call budget",
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": False,
+        },
+    )
+    async def refactor_plan(
+        ctx: Context,
+        edit_targets: list[str] = Field(
+            ...,
+            description=(
+                "candidate_id values of files you will edit. "
+                "Must have been resolved via recon_resolve first."
+            ),
+        ),
+        description: str = Field(
+            ...,
+            description=("Describe the edit plan: what changes you will make and why (50+ chars)."),
+        ),
+        expected_edit_calls: int = Field(
+            1,
+            ge=1,
+            description=(
+                "Number of refactor_edit calls you need. Default 1. "
+                "Batch ALL edits into a single call unless impossible."
+            ),
+        ),
+        batch_justification: str | None = Field(
+            None,
+            description=(
+                "REQUIRED if expected_edit_calls > 1. Explain why edits "
+                "cannot be batched into a single refactor_edit call "
+                "(100+ chars)."
+            ),
+        ),
+        recon_id: str | None = Field(
+            None,
+            description=(
+                "recon_id from a prior recon call. If omitted, uses the most recent recon session."
+            ),
+        ),
+    ) -> dict[str, Any]:
+        """Declare your edit set and call budget before editing.
+
+        Call this AFTER recon_resolve to commit to your edit targets.
+        This mints edit tickets required by refactor_edit.
+
+        DEFAULT: expected_edit_calls=1. You MUST batch all edits into
+        a single refactor_edit call.  If you need multiple calls, you
+        MUST provide batch_justification (100+ chars) explaining why
+        batching into one call is impossible.
+        """
+        session = app_ctx.session_manager.get_or_create(ctx.session_id)
+
+        # ── Read-only gate ──
+        if getattr(session, "read_only", None) is True:
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message="Session is read-only — refactor_plan is blocked.",
+                remediation=(
+                    'Call recon(read_only=False, task="...") to start a read-write session.'
+                ),
+            )
+
+        # ── Existing plan gate ──
+        if session.active_plan is not None:
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message=(
+                    f"Active plan already exists (plan_id="
+                    f"{session.active_plan.plan_id}). "
+                    "Checkpoint or complete the current plan first."
+                ),
+                remediation=(
+                    "Call checkpoint(changed_files=[...]) to complete the "
+                    "current plan, then create a new plan."
+                ),
+            )
+
+        # ── Validate description ──
+        if not description or len(description.strip()) < _MIN_JUSTIFICATION_CHARS:
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message=(
+                    f"description must be at least {_MIN_JUSTIFICATION_CHARS} "
+                    f"characters (got {len(description.strip()) if description else 0})."
+                ),
+                remediation="Describe what changes you plan to make and why.",
+            )
+
+        # ── Validate target count ──
+        if not edit_targets:
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message="edit_targets must not be empty.",
+                remediation="List the candidate_id values of files you will edit.",
+            )
+        if len(edit_targets) > _MAX_PLAN_TARGETS:
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message=(
+                    f"Too many edit targets ({len(edit_targets)}). Max is {_MAX_PLAN_TARGETS}."
+                ),
+                remediation=f"Limit to {_MAX_PLAN_TARGETS} files per plan.",
+            )
+
+        # ── Validate batching justification ──
+        if expected_edit_calls > 1 and (
+            not batch_justification or len(batch_justification.strip()) < 100
+        ):
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message=(
+                    "batch_justification (100+ chars) is required when "
+                    f"expected_edit_calls > 1 (got {expected_edit_calls})."
+                ),
+                remediation=(
+                    "Explain WHY you cannot batch all edits into a single "
+                    "refactor_edit call. Default is 1 — maximize batching."
+                ),
+            )
+
+        # ── Resolve candidate_ids → paths ──
+        if not session.candidate_maps:
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message="No recon data found. Call recon first.",
+                remediation=(
+                    'Call recon(task="...") first, then recon_resolve, then refactor_plan.'
+                ),
+            )
+
+        # Pick the recon to use
+        if recon_id:
+            if recon_id not in session.candidate_maps:
+                raise MCPError(
+                    code=MCPErrorCode.INVALID_PARAMS,
+                    message=f"Unknown recon_id '{recon_id}'.",
+                    remediation="Use a recon_id from a prior recon call.",
+                )
+            selected_recon_id = recon_id
+        else:
+            selected_recon_id = list(session.candidate_maps.keys())[-1]
+
+        # Merge all candidate maps for lookup
+        id_to_path: dict[str, str] = {}
+        for cmap in session.candidate_maps.values():
+            id_to_path.update(cmap)
+
+        # Get resolved files (path → sha256)
+        resolved_files: dict[str, str] = session.counters.get(  # type: ignore[assignment]
+            "resolved_files",
+            {},
+        )
+
+        # Map targets and mint tickets
+        target_paths: dict[str, str] = {}
+        minted_tickets: dict[str, EditTicket] = {}
+        ticket_list: list[dict[str, str]] = []
+
+        for cid in edit_targets:
+            path = id_to_path.get(cid)
+            if path is None:
+                raise MCPError(
+                    code=MCPErrorCode.INVALID_PARAMS,
+                    message=(f"Unknown candidate_id '{cid}'. Not found in any recon output."),
+                    remediation=(
+                        "Use candidate_id values from recon scaffold_files or lite_files."
+                    ),
+                )
+            sha256 = resolved_files.get(path)
+            if sha256 is None:
+                raise MCPError(
+                    code=MCPErrorCode.INVALID_PARAMS,
+                    message=(f"File '{path}' (candidate {cid}) has not been resolved."),
+                    remediation=(
+                        "Call recon_resolve with this candidate_id first "
+                        "to fetch content and sha256, then include it in "
+                        "the plan."
+                    ),
+                )
+            target_paths[cid] = path
+            ticket_id = f"{cid}:{sha256[:8]}"
+            ticket = EditTicket(
+                ticket_id=ticket_id,
+                path=path,
+                sha256=sha256,
+                candidate_id=cid,
+                issued_by="plan",
+            )
+            minted_tickets[ticket_id] = ticket
+            ticket_list.append(
+                {
+                    "candidate_id": cid,
+                    "path": path,
+                    "edit_ticket": ticket_id,
+                },
+            )
+
+        # ── Create plan ──
+        plan_id = f"plan_{uuid.uuid4().hex[:12]}"
+        plan = RefactorPlan(
+            plan_id=plan_id,
+            recon_id=selected_recon_id,
+            description=description.strip(),
+            expected_edit_calls=expected_edit_calls,
+            batch_justification=(batch_justification.strip() if batch_justification else None),
+            edit_targets=target_paths,
+            edit_tickets=minted_tickets,
+        )
+
+        # Store plan and tickets on session
+        session.active_plan = plan
+        session.edit_tickets.update(minted_tickets)
+
+        # ── Build response ──
+        if expected_edit_calls == 1:
+            budget_note = "Budget: 1 refactor_edit call. Batch ALL your edits into a single call."
+        else:
+            budget_note = (
+                f"Budget: {expected_edit_calls} refactor_edit call(s). "
+                "Batch edits into as few calls as possible."
+            )
+
+        agentic_hint = (
+            f"Plan created: {plan_id}\n"
+            f"{len(ticket_list)} edit ticket(s) minted for "
+            f"{len(target_paths)} file(s).\n"
+            f"{budget_note}\n\n"
+            f'NEXT: refactor_edit(plan_id="{plan_id}", edits=[...]) — '
+            "include ALL your find-and-replace edits in one call.\n"
+            "After editing → checkpoint(changed_files=[...], "
+            'commit_message="...")'
+        )
+
+        from codeplane.mcp.delivery import wrap_response
+
+        return wrap_response(
+            {
+                "plan_id": plan_id,
+                "edit_targets": ticket_list,
+                "expected_edit_calls": expected_edit_calls,
+                "agentic_hint": agentic_hint,
+            },
+            resource_kind="refactor_plan",
+            session_id=ctx.session_id,
+        )
 
     @mcp.tool(
         annotations={

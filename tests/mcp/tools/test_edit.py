@@ -335,6 +335,14 @@ class TestRefactorEditHandler:
         session.counters = {"recon_called": 1, "resolved_files": {}}
         session.edit_tickets = {}
         session.edits_since_checkpoint = 0
+
+        from codeplane.mcp.session import RefactorPlan
+
+        session.active_plan = RefactorPlan(
+            plan_id="test-plan-1",
+            recon_id="r1",
+            description="test plan for unit tests",
+        )
         ctx.session_manager.get_or_create.return_value = session
         ctx.mutation_ops.notify_mutation = MagicMock()
         return ctx
@@ -384,6 +392,7 @@ class TestRefactorEditHandler:
                     new_content="print('world')",
                 )
             ],
+            plan_id="test-plan-1",
         )
 
         assert result["applied"] is True
@@ -434,6 +443,7 @@ class TestRefactorEditHandler:
                         new_content="new content",
                     )
                 ],
+                plan_id="test-plan-1",
             )
 
     @pytest.mark.asyncio
@@ -455,6 +465,7 @@ class TestRefactorEditHandler:
                         new_content="y",
                     )
                 ],
+                plan_id="test-plan-1",
             )
         assert exc_info.value.code == MCPErrorCode.INVALID_PARAMS
         assert "edit_ticket" in exc_info.value.message
@@ -597,6 +608,7 @@ class TestRefactorEditHandler:
         await edit_fn(
             ctx=fastmcp_ctx,
             edits=[FindReplaceEdit(edit_ticket=ticket_id, old_content="old", new_content="new")],
+            plan_id="test-plan-1",
         )
 
         edited = session.counters.get("edited_files", set())
@@ -621,6 +633,7 @@ class TestRefactorEditHandler:
                         new_content="y",
                     )
                 ],
+                plan_id="test-plan-1",
             )
         assert exc_info.value.code == MCPErrorCode.INVALID_PARAMS
         assert "Unknown edit_ticket" in exc_info.value.message
@@ -655,6 +668,7 @@ class TestRefactorEditHandler:
                 edits=[
                     FindReplaceEdit(edit_ticket=ticket_id, old_content="old", new_content="new")
                 ],
+                plan_id="test-plan-1",
             )
         assert exc_info.value.code == MCPErrorCode.INVALID_PARAMS
         assert "already used" in exc_info.value.message
