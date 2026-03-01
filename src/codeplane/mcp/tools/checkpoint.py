@@ -1235,13 +1235,19 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                         f"  {_cpl_cmd(cache_id, 'resolved')}\n"
                         "Use this to read current file content for corrections."
                     )
-
-                # Clear plan regardless of cache success
-                chk_session.active_plan = None
-                chk_session.edit_tickets.clear()
-                chk_session.edits_since_checkpoint = 0
             except Exception:  # noqa: BLE001
                 log.debug("checkpoint_failure_cache_failed", exc_info=True)
+            finally:
+                # ALWAYS clear plan on checkpoint — prevents deadlock
+                # where plan budget is exhausted but lint fails, leaving
+                # no way to create a new plan or fix the issue.
+                try:
+                    chk_session = app_ctx.session_manager.get_or_create(ctx.session_id)
+                    chk_session.active_plan = None
+                    chk_session.edit_tickets.clear()
+                    chk_session.edits_since_checkpoint = 0
+                except Exception:  # noqa: BLE001
+                    pass
 
             result["agentic_hint"] = " ".join(hints)
         else:

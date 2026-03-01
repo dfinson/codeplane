@@ -93,6 +93,10 @@ class SessionState:
     active_plan: RefactorPlan | None = None
     # Resolve batch counter — used for escalating pressure hints.
     resolve_batch_count: int = 0
+    # Tracks which files the agent has already resolved in this session.
+    # Maps repo-relative path → sha256 hash.  Used by resolve hint to
+    # remind agents what they already have (anti-reread mitigation).
+    resolved_paths: dict[str, str] = field(default_factory=dict)
     # Read-only intent: True = research-only session (mutations blocked),
     # False = read-write session, None = not yet declared.
     # Set by recon(read_only=...), reset on new recon call.

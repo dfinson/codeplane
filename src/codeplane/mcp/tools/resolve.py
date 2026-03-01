@@ -288,10 +288,27 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 resolved_files: dict[str, str] = session.counters["resolved_files"]  # type: ignore[assignment]
                 for r in resolved:
                     resolved_files[r["path"]] = r["file_sha256"]
+                    # Track in session.resolved_paths for hint inventory
+                    session.resolved_paths[r["path"]] = r["file_sha256"]
                 # Track resolve batch count for escalating pressure
                 session.resolve_batch_count += 1
             except Exception:  # noqa: BLE001
                 pass
+
+        # ── Build "YOU NOW HAVE" inventory ──
+        inventory_lines: list[str] = []
+        try:
+            session = app_ctx.session_manager.get_or_create(ctx.session_id)
+            if session.resolved_paths:
+                file_list = ", ".join(sorted(session.resolved_paths.keys()))
+                inventory_lines.append(
+                    f"YOU NOW HAVE full content for: {file_list}. "
+                    "DO NOT re-read these via terminal — use the content "
+                    "from resolve responses above."
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        inventory_str = "\n".join(inventory_lines)
 
         # ── Build agentic hint ──
         resolved_paths = [r["path"] for r in resolved]
@@ -303,6 +320,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             agentic_hint = (
                 f"Resolved {len(resolved)} file(s) (READ-ONLY): {paths_str}.\n"
                 "Session is READ-ONLY — mutation tools are blocked.\n\n"
+            )
+            if inventory_str:
+                agentic_hint += inventory_str + "\n\n"
+            agentic_hint += (
                 "NEXT STEPS:\n"
                 "RESEARCH / REVIEW → respond directly to the user.\n"
                 'semantic_diff(base="...") for branch comparison.\n'
@@ -310,8 +331,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "To enable edits, call recon(read_only=False) for a new session."
             )
         else:
-            agentic_hint = (
-                f"Resolved {len(resolved)} file(s): {paths_str}.\n\n"
+            agentic_hint = f"Resolved {len(resolved)} file(s): {paths_str}.\n\n"
+            if inventory_str:
+                agentic_hint += inventory_str + "\n\n"
+            agentic_hint += (
                 "NEXT STEPS — choose the action that matches your intent:\n\n"
                 'PLAN EDITS → refactor_plan(recon_id="...", '
                 'edit_targets=["candidate_id", ...], '

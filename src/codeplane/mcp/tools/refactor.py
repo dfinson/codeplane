@@ -453,11 +453,33 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "Batch edits into as few calls as possible."
             )
 
+        # ── Build plan-scoped context reminder ──
+        context_lines: list[str] = []
+        try:
+            if session.resolved_paths:
+                plan_paths = set(target_paths.values())
+                resolved_but_not_planned = {
+                    p for p in session.resolved_paths if p not in plan_paths
+                }
+                if resolved_but_not_planned:
+                    extra = ", ".join(sorted(resolved_but_not_planned))
+                    context_lines.append(
+                        f"Also resolved (not in edit set): {extra}. "
+                        "Use content from prior resolve — do NOT re-read."
+                    )
+        except Exception:  # noqa: BLE001
+            pass
+        context_str = "\n".join(context_lines)
+
         agentic_hint = (
             f"Plan created: {plan_id}\n"
             f"{len(ticket_list)} edit ticket(s) minted for "
             f"{len(target_paths)} file(s).\n"
             f"{budget_note}\n\n"
+        )
+        if context_str:
+            agentic_hint += context_str + "\n\n"
+        agentic_hint += (
             f'NEXT: refactor_edit(plan_id="{plan_id}", edits=[...]) — '
             "include ALL your find-and-replace edits in one call.\n"
             "After editing → checkpoint(changed_files=[...], "
