@@ -19,12 +19,15 @@ from codeplane.mcp.sidecar_cache import (
     _chunk_string,
     _describe_value,
     _find_largest_field,
+    _pre_render_entry,
+    _remove_disk_cache,
     _split_oversized_item,
     cache_list,
     cache_meta,
     cache_put,
     cache_render,
     get_sidecar_cache,
+    set_cache_dir,
 )
 
 
@@ -850,3 +853,143 @@ class TestSubSlices:
         assert d["chunk_index"] == 0
         assert d["chunk_total"] == 3
         assert d["chunk_items"] == 30
+
+
+class TestDiskCache:
+    """Tests for disk-based JSON cache."""
+
+    def test_set_cache_dir_creates_directory(self, tmp_path: Any) -> None:
+        """set_cache_dir creates the directory if it doesn't exist."""
+        cache_path = tmp_path / "cache"
+        assert not cache_path.exists()
+        set_cache_dir(cache_path)
+        assert cache_path.exists()
+
+    def test_write_disk_cache_creates_json(self, tmp_path: Any) -> None:
+        """_write_disk_cache writes a JSON file with pre-rendered sections."""
+        import json
+
+        import codeplane.mcp.sidecar_cache as sc
+
+        old_dir = sc._cache_dir
+        sc._cache_dir = tmp_path
+
+        cache = SidecarCache()
+        cid = cache.put("s", "e", {"greeting": "hello", "count": 42})
+        entry = cache.get_entry(cid)
+        assert entry is not None
+
+        cache_file = tmp_path / f"{cid}.json"
+        assert cache_file.exists(), "Disk cache file not written"
+
+        data = json.loads(cache_file.read_text())
+        assert "greeting" in data
+        assert data["greeting"] == "hello"
+        assert "count" in data
+        assert data["count"] == "42"  # rendered as text
+
+        sc._cache_dir = old_dir
+
+    def test_pre_render_entry_ready_sections(self) -> None:
+        """_pre_render_entry renders ready sections as text strings."""
+        cache = SidecarCache()
+        cid = cache.put("s", "e", {"name": "Alice", "scores": [1, 2, 3]})
+        entry = cache.get_entry(cid)
+        assert entry is not None
+
+        rendered = _pre_render_entry(entry)
+        assert "name" in rendered
+        assert rendered["name"] == "Alice"
+        assert "scores" in rendered
+
+    def test_pre_render_entry_chunked_sections(self) -> None:
+        """_pre_render_entry includes sub-slice keys for chunked sections."""
+        # Create oversized payload to trigger chunking
+        big_list = [{"path": f"file{i}.py", "content": "x" * 10000} for i in range(20)]
+        cache = SidecarCache()
+        cid = cache.put("s", "e", {"files": big_list, "meta": "ok"})
+        entry = cache.get_entry(cid)
+        assert entry is not None
+
+        rendered = _pre_render_entry(entry)
+        assert "meta" in rendered
+        assert rendered["meta"] == "ok"
+        # Chunked section parent should exist
+        assert "files" in rendered
+        # Sub-slices should exist
+        has_sub = any(k.startswith("files.") for k in rendered)
+        assert has_sub, f"Expected sub-slice keys, got: {list(rendered.keys())}"
+
+    def test_remove_disk_cache(self, tmp_path: Any) -> None:
+        """_remove_disk_cache removes the cache file."""
+        import json
+
+        import codeplane.mcp.sidecar_cache as sc
+
+        old_dir = sc._cache_dir
+        sc._cache_dir = tmp_path
+
+        cache_file = tmp_path / "test123.json"
+        cache_file.write_text(json.dumps({"a": "b"}))
+        assert cache_file.exists()
+
+        _remove_disk_cache("test123")
+        assert not cache_file.exists()
+
+        sc._cache_dir = old_dir
+
+    def test_eviction_removes_disk_cache(self, tmp_path: Any) -> None:
+        """When entries are evicted from memory, disk files are removed."""
+        import codeplane.mcp.sidecar_cache as sc
+
+        old_dir = sc._cache_dir
+        sc._cache_dir = tmp_path
+
+        cache = SidecarCache(max_per_key=2)
+        cid1 = cache.put("s", "e", {"a": 1})
+        cid2 = cache.put("s", "e", {"b": 2})
+        # Both files should exist
+        assert (tmp_path / f"{cid1}.json").exists()
+        assert (tmp_path / f"{cid2}.json").exists()
+
+        # Third put should evict cid1
+        cid3 = cache.put("s", "e", {"c": 3})
+        assert not (tmp_path / f"{cid1}.json").exists(), "Evicted file not cleaned up"
+        assert (tmp_path / f"{cid2}.json").exists()
+        assert (tmp_path / f"{cid3}.json").exists()
+
+        sc._cache_dir = old_dir
+
+    def test_clear_removes_disk_files(self, tmp_path: Any) -> None:
+        """cache.clear() removes all disk cache files."""
+        import codeplane.mcp.sidecar_cache as sc
+
+        old_dir = sc._cache_dir
+        sc._cache_dir = tmp_path
+
+        cache = SidecarCache()
+        cid1 = cache.put("s", "e1", {"x": 1})
+        cid2 = cache.put("s", "e2", {"y": 2})
+        assert (tmp_path / f"{cid1}.json").exists()
+        assert (tmp_path / f"{cid2}.json").exists()
+
+        cache.clear()
+        assert not (tmp_path / f"{cid1}.json").exists()
+        assert not (tmp_path / f"{cid2}.json").exists()
+
+        sc._cache_dir = old_dir
+
+    def test_no_disk_write_when_cache_dir_unset(self) -> None:
+        """When _cache_dir is None, no disk files are written."""
+        import codeplane.mcp.sidecar_cache as sc
+
+        old_dir = sc._cache_dir
+        sc._cache_dir = None
+
+        cache = SidecarCache()
+        cid = cache.put("s", "e", {"data": "test"})
+        # Should not raise, just skip disk write
+        entry = cache.get_entry(cid)
+        assert entry is not None
+
+        sc._cache_dir = old_dir

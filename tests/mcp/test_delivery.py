@@ -87,7 +87,7 @@ class TestWrapResponse:
         assert result["resource_kind"] == "source"
         assert "cache_id" in result
         assert "agentic_hint" in result
-        assert "cplcache" in result["agentic_hint"]
+        assert "cplcache" in result["agentic_hint"] or "jq" in result["agentic_hint"]
         # Original payload should NOT be in the envelope
         assert "content" not in result
 
@@ -155,9 +155,10 @@ class TestCplcacheHints:
 
     def test_hint_has_command_template(self) -> None:
         hint = _build_cplcache_hint("abc123", 50000, "recon_result")
-        assert "python3 .codeplane/scripts/cplcache.py" in hint
-        assert '--cache-id "abc123"' in hint
+        # Template uses jq or cplcache.py depending on jq availability
+        assert "abc123" in hint
         assert "<SLICE>" in hint
+        assert ".codeplane/cache/abc123.json" in hint or "cplcache.py" in hint
 
     # --- Strategy flow ---
 
@@ -225,8 +226,9 @@ class TestCplcacheHints:
     def test_no_sections_fallback(self) -> None:
         """Without sections, command template shown."""
         hint = _build_cplcache_hint("abc123", 5000, "unknown")
-        assert 'python3 .codeplane/scripts/cplcache.py --cache-id "abc123"' in hint
+        assert "abc123" in hint
         assert "<SLICE>" in hint
+        assert ".codeplane/cache/abc123.json" in hint or "cplcache.py" in hint
 
     def test_mixed_ready_and_oversized(self) -> None:
         """Hint lists all sections in one Sections block."""
@@ -619,7 +621,7 @@ class TestChunkAwareSectionHints:
     def test_resolve_without_sections_shows_fallback(self) -> None:
         """resolve_result without sections shows generic fallback."""
         hint = _build_cplcache_hint("abc123", 5000, "resolve_result")
-        assert "cplcache" in hint
+        assert "cplcache" in hint or "jq" in hint
         assert "<SLICE>" in hint
 
     def test_checkpoint_uses_section_level(self) -> None:

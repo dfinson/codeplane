@@ -14,17 +14,44 @@ Sidecar HTTP routes in daemon/routes.py expose:
 
 from __future__ import annotations
 
+import contextlib
 import json
+import shutil
 import threading
 import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import structlog
 
 log = structlog.get_logger(__name__)
+
+# Module-level cache directory (set by daemon on startup)
+_cache_dir: Path | None = None
+
+# jq availability (checked once at import time)
+_JQ_AVAILABLE: bool = shutil.which("jq") is not None
+
+
+def set_cache_dir(path: Path) -> None:
+    """Set the disk cache directory for JSON file writes."""
+    global _cache_dir  # noqa: PLW0603
+    _cache_dir = path
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def get_cache_dir() -> Path | None:
+    """Return the current disk cache directory, or None if not set."""
+    return _cache_dir
+
+
+def jq_available() -> bool:
+    """Return True if jq is installed."""
+    return _JQ_AVAILABLE
+
 
 # Maximum entries per (session_id, endpoint_key) pair
 _MAX_PER_KEY = 3
@@ -567,6 +594,7 @@ class SidecarCache:
                     evicted = self._store.pop(oldest_key)
                     for e in evicted:
                         self._index.pop(e.cache_id, None)
+                        _remove_disk_cache(e.cache_id)
                 self._store[key] = deque(maxlen=self._max_per_key)
 
             dq = self._store[key]
@@ -574,6 +602,7 @@ class SidecarCache:
             if len(dq) >= self._max_per_key:
                 evicted_entry = dq[0]  # will be popped by deque
                 self._index.pop(evicted_entry.cache_id, None)
+                _remove_disk_cache(evicted_entry.cache_id)
 
             dq.append(entry)
             self._index[cache_id] = entry
@@ -585,6 +614,10 @@ class SidecarCache:
             endpoint_key=endpoint_key,
             byte_size=byte_size,
         )
+
+        # Write pre-rendered JSON to disk for jq / Python retrieval
+        _write_disk_cache(entry)
+
         return cache_id
 
     def list_entries(
@@ -792,7 +825,6 @@ class SidecarCache:
             section = entry.sections[path]
             body = _render_value(value)
             footer = _render_navigation_footer(
-                cache_id,
                 section,
                 entry.sections,
             )
@@ -822,8 +854,8 @@ class SidecarCache:
             section = entry.sections[path]
             lines: list[str] = [
                 f"Section '{path}' is {section.type_desc} "
-                f"({section.byte_size:,} bytes) — too large for single retrieval.",
-                f"Split into {section.chunk_total} chunks:",
+                f"({section.byte_size:,} bytes) -- split into "
+                f"{section.chunk_total} chunks.",
                 "",
             ]
             for cidx in range(section.chunk_total or 0):
@@ -831,12 +863,7 @@ class SidecarCache:
                 sub_sec = entry.sections.get(sub_key)
                 if sub_sec:
                     summary = sub_sec.content_summary or f"{sub_sec.chunk_items} item(s)"
-                    cmd = (
-                        f"python3 .codeplane/scripts/cplcache.py"
-                        f' --cache-id "{cache_id}" --slice "{sub_key}"'
-                    )
-                    lines.append(f"  chunk {cidx}: {summary}")
-                    lines.append(f"    {cmd}")
+                    lines.append(f"  {sub_key}: {summary}")
             return "\n".join(lines)
 
         # -- Navigate to sub-path for arbitrary path traversal --
@@ -898,8 +925,10 @@ class SidecarCache:
         return meta
 
     def clear(self) -> None:
-        """Clear all cached entries."""
+        """Clear all cached entries and disk cache files."""
         with self._lock:
+            for entry in self._index.values():
+                _remove_disk_cache(entry.cache_id)
             self._store.clear()
             self._index.clear()
 
@@ -1056,14 +1085,14 @@ def _render_value(value: Any) -> str:
 
 
 def _render_navigation_footer(
-    cache_id: str,
     section: CacheSection | None,
     all_sections: dict[str, CacheSection],
 ) -> str:
     """Build a navigation footer for chunked slices.
 
     Shows chunk position (N/M) and lists what adjacent chunks contain
-    using their content_summary.
+    using their content_summary.  Uses slice names only -- the agent
+    knows the retrieval command template from the hint header.
     """
     if section is None or section.parent_key is None or section.chunk_total is None:
         return ""
@@ -1078,12 +1107,7 @@ def _render_navigation_footer(
         sub_key = f"{section.parent_key}.{cidx}"
         peer = all_sections.get(sub_key)
         if peer and peer.content_summary:
-            cmd = (
-                f"python3 .codeplane/scripts/cplcache.py"
-                f' --cache-id "{cache_id}" --slice "{sub_key}"'
-            )
-            parts.append(f"  chunk {cidx}: {peer.content_summary}")
-            parts.append(f"    {cmd}")
+            parts.append(f"  {sub_key}: {peer.content_summary}")
 
     return "\n".join(parts)
 
@@ -1105,6 +1129,94 @@ def _describe_value(v: Any) -> dict[str, Any]:
     if isinstance(v, int | float):
         return {"type": type(v).__name__, "value": v}
     return {"type": type(v).__name__}
+
+
+# =========================================================================
+# Disk Cache -- pre-rendered JSON for jq / Python retrieval
+# =========================================================================
+
+
+def _pre_render_entry(entry: CacheEntry) -> dict[str, str]:
+    """Pre-render all deliverable slices to terminal-ready text.
+
+    Returns a flat dict of slice_name -> rendered_text.
+    Chunked sections use dotted keys (e.g. 'scaffold_files.0').
+    """
+    rendered: dict[str, str] = {}
+
+    if not isinstance(entry.payload, dict):
+        rendered["_root"] = _render_value(entry.payload)
+        return rendered
+
+    for key, section in entry.sections.items():
+        if section.parent_key is not None:
+            # Sub-slice (chunked) -- render with navigation footer
+            if key in entry.sub_slices:
+                value = entry.sub_slices[key]
+                body = _render_value(value)
+                footer = _render_navigation_footer(
+                    section,
+                    entry.sections,
+                )
+                rendered[key] = body + "\n" + footer if footer else body
+        elif section.ready:
+            # Top-level ready section
+            value = entry.payload.get(key)
+            if value is not None:
+                rendered[key] = _render_value(value)
+        elif section.chunk_total:
+            # Chunked parent -- provide index message
+            idx_lines: list[str] = [
+                f"Section '{key}' is {section.type_desc} "
+                f"({section.byte_size:,} bytes) -- split into "
+                f"{section.chunk_total} chunks.",
+                "",
+            ]
+            for cidx in range(section.chunk_total):
+                sub_key = f"{key}.{cidx}"
+                sub_sec = entry.sections.get(sub_key)
+                if sub_sec:
+                    summary = sub_sec.content_summary or f"{sub_sec.chunk_items} item(s)"
+                    idx_lines.append(f"  {sub_key}: {summary}")
+            rendered[key] = "\n".join(idx_lines)
+
+    return rendered
+
+
+def _write_disk_cache(entry: CacheEntry) -> None:
+    """Write pre-rendered cache entry to disk as JSON.
+
+    File: <cache_dir>/<cache_id>.json
+    Structure: flat dict of slice_name -> rendered text string.
+    """
+    if _cache_dir is None:
+        return
+
+    rendered = _pre_render_entry(entry)
+    if not rendered:
+        return
+
+    cache_file = _cache_dir / f"{entry.cache_id}.json"
+    try:
+        cache_file.write_text(
+            json.dumps(rendered, indent=None, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except OSError:
+        log.warning(
+            "disk_cache_write_failed",
+            cache_id=entry.cache_id,
+            exc_info=True,
+        )
+
+
+def _remove_disk_cache(cache_id: str) -> None:
+    """Remove a disk cache file if it exists."""
+    if _cache_dir is None:
+        return
+    cache_file = _cache_dir / f"{cache_id}.json"
+    with contextlib.suppress(OSError):
+        cache_file.unlink(missing_ok=True)
 
 
 # Global singleton

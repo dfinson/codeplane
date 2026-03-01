@@ -196,8 +196,29 @@ def _order_sections(
 
 
 def _cpl_cmd(cache_id: str, slice_key: str) -> str:
-    """Format a single cplcache retrieval command."""
+    """Format a single cplcache retrieval command.
+
+    Uses jq for direct JSON access when available, falls back to
+    cplcache.py Python script otherwise.
+    """
+    from codeplane.mcp.sidecar_cache import jq_available
+
+    if jq_available():
+        return f"jq -r '.[\"{slice_key}\"]' .codeplane/cache/{cache_id}.json"
     return f'python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "{slice_key}"'
+
+
+def _cpl_cmd_template(cache_id: str) -> str:
+    """Format a reusable command template with <SLICE> placeholder.
+
+    Uses jq-based JSON access when jq is installed, otherwise
+    falls back to the cplcache.py Python script.
+    """
+    from codeplane.mcp.sidecar_cache import jq_available
+
+    if jq_available():
+        return f"jq -r '.[\"<SLICE>\"]' .codeplane/cache/{cache_id}.json"
+    return f'python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "<SLICE>"'
 
 
 def _build_cplcache_hint(
@@ -206,51 +227,45 @@ def _build_cplcache_hint(
     resource_kind: str,
     sections: dict[str, Any] | None = None,
 ) -> str:
-    """Build cplcache terminal hints with aggressive clarity.
+    """Build compact cplcache retrieval hints.
 
-    The output is structured so agents cannot miss the retrieval commands:
-    - Urgent header with CACHED / RETRIEVE framing
-    - Chunk-aware section commands with byte sizes and item counts
-    - Strategy flow promotes the right consumption order
+    Uses a command template so slice keys are short references
+    rather than full repeated commands.
     """
     from codeplane.mcp.sidecar_cache import CacheSection
 
     strategy = _SLICE_STRATEGIES.get(resource_kind)
 
     parts: list[str] = [
-        ">>> RESPONSE CACHED — EXECUTE COMMANDS BELOW TO RETRIEVE <<<",
-        "",
-        f"Cache ID: {cache_id}  |  Total: {byte_size:,} bytes  |  Kind: {resource_kind}",
+        ">>> RESPONSE CACHED <<<",
+        f"Cache: {cache_id} | {byte_size:,} bytes | {resource_kind}",
     ]
     if strategy:
-        parts.append(f"Retrieval plan: {strategy.flow}")
+        parts.append(f"Plan: {strategy.flow}")
+    parts.append(f"Cmd: {_cpl_cmd_template(cache_id)}")
     parts.append("")
 
-    # ---- Section-level hints (chunk-aware for all resource kinds) ----
+    # ---- Section-level hints (chunk-aware) ----
     if sections:
         ordered = _order_sections(sections, strategy)
         top_level = [
             (k, s) for k, s in ordered if isinstance(s, CacheSection) and s.parent_key is None
         ]
         if top_level:
-            parts.append("COMMANDS — run each in terminal:")
-            parts.append("")
+            parts.append("Sections (replace <SLICE> above):")
             for key, sec in top_level:
                 desc = strategy.descriptions.get(key, "") if strategy else ""
-                desc_suffix = f"  ({desc})" if desc else ""
+                desc_suffix = f" \u2014 {desc}" if desc else ""
                 if sec.ready:
-                    parts.append(f"  [{key}] {sec.byte_size:,} bytes{desc_suffix}")
-                    parts.append(f"    {_cpl_cmd(cache_id, key)}")
-                    parts.append("")
+                    parts.append(f"  {key} ({sec.byte_size:,}b){desc_suffix}")
                 elif sec.chunk_total:
                     parts.append(
-                        f"  [{key}] {sec.byte_size:,} bytes — {sec.chunk_total} chunks{desc_suffix}"
+                        f"  {key} ({sec.byte_size:,}b, {sec.chunk_total} chunks){desc_suffix}"
                     )
                     for cidx in range(sec.chunk_total):
                         sub_key = f"{key}.{cidx}"
                         sub_sec = sections.get(sub_key)
                         if isinstance(sub_sec, CacheSection):
-                            # Use content_summary for semantic description
                             summary = sub_sec.content_summary
                             if summary:
                                 label = summary
@@ -258,24 +273,12 @@ def _build_cplcache_hint(
                                 label = f"{sub_sec.chunk_items} items"
                             else:
                                 label = ""
-                            size_str = f"{sub_sec.byte_size:,} bytes"
                             if label:
-                                parts.append(f"    chunk {cidx}: {size_str} — {label}")
+                                parts.append(f"    {sub_key} ({sub_sec.byte_size:,}b) {label}")
                             else:
-                                parts.append(f"    chunk {cidx}: {size_str}")
-                            parts.append(f"      {_cpl_cmd(cache_id, sub_key)}")
-                    parts.append("")
+                                parts.append(f"    {sub_key} ({sub_sec.byte_size:,}b)")
                 else:
-                    parts.append(f"  [{key}] {sec.byte_size:,} bytes{desc_suffix}")
-                    parts.append(f"    {_cpl_cmd(cache_id, key)}")
-                    parts.append("")
-    else:
-        parts.append("COMMAND — run in terminal:")
-        parts.append(f"  {_cpl_cmd(cache_id, '<SECTION>')}")
-        parts.append("")
-
-    parts.append("")
-
+                    parts.append(f"  {key} ({sec.byte_size:,}b){desc_suffix}")
     return "\n".join(parts)
 
 
