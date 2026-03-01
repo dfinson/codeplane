@@ -1368,13 +1368,9 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
 
         from codeplane.mcp.delivery import wrap_response
 
-        # ── Issue recon consumption gate ──
+        # ── Store session state ──
         try:
             session = app_ctx.session_manager.get_or_create(ctx.session_id)
-            from codeplane.mcp.gate import RECON_CONSUMPTION_GATE
-
-            gate_block = session.gate_manager.issue(RECON_CONSUMPTION_GATE)
-            response["gate"] = gate_block
             # Store candidate mapping for resolve validation
             session.candidate_maps[recon_id] = candidate_map
             # Mark recon as called in session state
