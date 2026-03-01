@@ -66,9 +66,52 @@ class RefactorPlan:
 # Soft cap: plans with more targets than this require gate_reason.
 _MAX_PLAN_TARGETS = 8
 
-# Maximum edit batches (refactor_edit or refactor_commit) before
+# Maximum mutation batches (refactor_edit or refactor_commit) before
 # checkpoint is required.  Resets on successful checkpoint.
 _MAX_EDIT_BATCHES = 2
+
+
+@dataclass
+class MutationContext:
+    """Unified lifecycle tracker for all in-flight mutations.
+
+    Replaces the old split state (active_plan + edit_tickets +
+    edits_since_checkpoint) with a single object that tracks both
+    plan+edit and refactor_* mutations under one budget.
+    """
+
+    context_id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    created_at: float = field(default_factory=time.time)
+
+    # Plan+Edit tracking
+    plan: RefactorPlan | None = None
+    edit_tickets: dict[str, EditTicket] = field(default_factory=dict)
+
+    # Refactor_* tracking: refactor_id → type ("rename"/"move"/"impact")
+    pending_refactors: dict[str, str] = field(default_factory=dict)
+
+    # Shared mutation budget (replaces edits_since_checkpoint)
+    mutations_since_checkpoint: int = 0
+
+    @property
+    def has_plan(self) -> bool:
+        return self.plan is not None
+
+    @property
+    def has_pending_refactors(self) -> bool:
+        return bool(self.pending_refactors)
+
+    @property
+    def is_empty(self) -> bool:
+        """True when no plan and no pending refactors — safe to discard."""
+        return self.plan is None and not self.pending_refactors
+
+    def clear(self) -> None:
+        """Reset all mutation state.  Called by checkpoint."""
+        self.plan = None
+        self.edit_tickets.clear()
+        self.pending_refactors.clear()
+        self.mutations_since_checkpoint = 0
 
 
 @dataclass
@@ -85,12 +128,9 @@ class SessionState:
     # Populated by recon pipeline, consumed by recon_resolve for
     # ID-based file selection (no raw path access).
     candidate_maps: dict[str, dict[str, str]] = field(default_factory=dict)
-    # Edit tickets: ticket_id → EditTicket.  Minted by refactor_plan,
-    # consumed by refactor_edit, wiped by checkpoint.
-    edit_tickets: dict[str, EditTicket] = field(default_factory=dict)
-    # Active refactor plan — locks session to a declared edit set.
-    # Set by refactor_plan, cleared by checkpoint.
-    active_plan: RefactorPlan | None = None
+    # Unified mutation lifecycle — tracks plan+edit AND refactor_*
+    # under one budget.  Created lazily, cleared by checkpoint.
+    mutation_ctx: MutationContext = field(default_factory=MutationContext)
     # Resolve batch counter — used for escalating pressure hints.
     resolve_batch_count: int = 0
     # Tracks which files the agent has already resolved in this session.
@@ -103,9 +143,6 @@ class SessionState:
     read_only: bool | None = None
     # Last recon_id — set by recon, required by resolve for ordering.
     last_recon_id: str | None = None
-    # Number of edit batches (refactor_edit / refactor_commit calls)
-    # since last checkpoint.  Gate at _MAX_EDIT_BATCHES.
-    edits_since_checkpoint: int = 0
     gate_manager: GateManager = field(default_factory=GateManager)
     pattern_detector: CallPatternDetector = field(default_factory=CallPatternDetector)
 
@@ -113,6 +150,29 @@ class SessionState:
     # long-running operations like checkpoint, semantic_diff, map_repo.
     _exclusive_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _exclusive_holder: str | None = field(default=None, repr=False)
+
+    # ── Backward-compat properties ──
+    # Delegate to mutation_ctx so existing callers keep working.
+
+    @property
+    def active_plan(self) -> RefactorPlan | None:
+        return self.mutation_ctx.plan
+
+    @active_plan.setter
+    def active_plan(self, value: RefactorPlan | None) -> None:
+        self.mutation_ctx.plan = value
+
+    @property
+    def edit_tickets(self) -> dict[str, EditTicket]:
+        return self.mutation_ctx.edit_tickets
+
+    @property
+    def edits_since_checkpoint(self) -> int:
+        return self.mutation_ctx.mutations_since_checkpoint
+
+    @edits_since_checkpoint.setter
+    def edits_since_checkpoint(self, value: int) -> None:
+        self.mutation_ctx.mutations_since_checkpoint = value
 
     def touch(self) -> None:
         """Update last active timestamp."""

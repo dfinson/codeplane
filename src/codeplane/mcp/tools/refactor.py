@@ -540,6 +540,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             _include_comments=include_comments,
             _contexts=contexts,
         )
+        session.mutation_ctx.pending_refactors[result.refactor_id] = "rename"
         return _serialize_refactor_result(result)
 
     @mcp.tool(
@@ -578,6 +579,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             to_path,
             include_comments=include_comments,
         )
+        session.mutation_ctx.pending_refactors[result.refactor_id] = "move"
         return _serialize_refactor_result(result)
 
     @mcp.tool(
@@ -614,6 +616,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             target,
             include_comments=include_comments,
         )
+        session.mutation_ctx.pending_refactors[result.refactor_id] = "impact"
         return _serialize_refactor_result(result)
 
     @mcp.tool(
@@ -675,7 +678,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             }
 
         # Apply mode — counts as an edit batch
-        if session.edits_since_checkpoint >= _MAX_EDIT_BATCHES:
+        if session.mutation_ctx.mutations_since_checkpoint >= _MAX_EDIT_BATCHES:
             raise MCPError(
                 code=MCPErrorCode.INVALID_PARAMS,
                 message=(
@@ -689,7 +692,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             )
 
         result = await app_ctx.refactor_ops.apply(refactor_id, app_ctx.mutation_ops)
-        session.edits_since_checkpoint += 1
+        session.mutation_ctx.mutations_since_checkpoint += 1
+        session.mutation_ctx.pending_refactors.pop(refactor_id, None)
 
         # Reset scope budget duplicate tracking after mutation
         if scope_id:
@@ -721,7 +725,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         ),
     ) -> dict[str, Any]:
         """Cancel a pending refactoring."""
-        _ = app_ctx.session_manager.get_or_create(ctx.session_id)
+        session = app_ctx.session_manager.get_or_create(ctx.session_id)
 
         result = await app_ctx.refactor_ops.cancel(refactor_id)
+        session.mutation_ctx.pending_refactors.pop(refactor_id, None)
         return _serialize_refactor_result(result)

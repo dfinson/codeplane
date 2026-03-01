@@ -1309,14 +1309,13 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             except Exception:  # noqa: BLE001
                 log.debug("checkpoint_failure_cache_failed", exc_info=True)
             finally:
-                # ALWAYS clear plan on checkpoint — prevents deadlock
+                # ALWAYS clear mutation state on checkpoint — prevents deadlock
                 # where plan budget is exhausted but lint fails, leaving
                 # no way to create a new plan or fix the issue.
                 try:
                     chk_session = app_ctx.session_manager.get_or_create(ctx.session_id)
-                    chk_session.active_plan = None
-                    chk_session.edit_tickets.clear()
-                    chk_session.edits_since_checkpoint = 0
+                    chk_session.mutation_ctx.clear()
+                    app_ctx.refactor_ops.clear_pending()
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -1325,13 +1324,12 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             result["passed"] = True
             await ctx.report_progress(total_phases, total_phases, "Checks passed")
 
-            # ── Reset edit tickets and batch counter ──
+            # ── Reset mutation state and batch counter ──
             try:
                 chk_session = app_ctx.session_manager.get_or_create(ctx.session_id)
-                chk_session.edit_tickets.clear()
-                chk_session.edits_since_checkpoint = 0
-                chk_session.active_plan = None
+                chk_session.mutation_ctx.clear()
                 chk_session.resolve_batch_count = 0
+                app_ctx.refactor_ops.clear_pending()
             except Exception:  # noqa: BLE001
                 pass
 

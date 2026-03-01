@@ -1299,3 +1299,11 @@ class RefactorOps:
             refactor_id=refactor_id,
             status="cancelled",
         )
+
+    def clear_pending(self) -> None:
+        """Discard all pending refactor previews.
+
+        Called by checkpoint to prevent stale previews from
+        accumulating across edit cycles.
+        """
+        self._pending.clear()
