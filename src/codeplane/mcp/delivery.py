@@ -296,6 +296,7 @@ def _build_inline_summary(
         parts_: list[str] = [f"{len(resolved)} file(s) resolved"]
         if errors:
             parts_.append(f"{len(errors)} error(s)")
+        parts_.append("resolved_meta inlined")
         return ", ".join(parts_)
 
     if resource_kind == "checkpoint":

@@ -55,6 +55,12 @@ recon_resolve(targets=[{"path": "src/foo.py"}])
 Returns full file content + `sha256` hash per file (sha256 skipped in read-only mode).
 The sha256 is **required** by `refactor_edit` to ensure edits target the correct version.
 
+When the response exceeds the inline cap (sidecar delivery), the envelope includes
+`resolved_meta` — an inline array of per-file metadata (path, candidate_id,
+line_count, file_sha256) so you can proceed to `refactor_plan` without parsing
+the sidecar.  Retrieve file content from the sidecar via the jq command in
+`agentic_hint` when you need `old_content` for edits.
+
 ### Planning Edits
 
 Before editing existing files, declare your edit set with `refactor_plan`:
