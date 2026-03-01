@@ -12,6 +12,7 @@ Resolution logic:
 """
 
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -421,10 +422,27 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 ),
             )
 
-        # ── Process find-and-replace updates (ticket-gated) ──
+        # ── Phase 1: Resolve all edits (no writes, no ticket burns) ──
+        # All edits are resolved first. If any edit fails to resolve,
+        # no files are written and no tickets are consumed.
+
+        @dataclass
+        class _ResolvedEdit:
+            full_path: Path
+            edit_path: str
+            old_sha: str
+            input_content: str  # content before this edit (for line counting)
+            new_content: str
+            match_meta: dict[str, Any]
+            ticket: EditTicket
+
         continuation_tickets: list[dict[str, str]] = []
+        resolved_edits: list[_ResolvedEdit] = []
+        # Track pending content for same-file chaining within a batch
+        pending_content: dict[str, str] = {}
+
         for edit in updates:
-            # ── Resolve edit ticket ──
+            # ── Validate edit ticket ──
             if not edit.edit_ticket:
                 raise MCPError(
                     code=MCPErrorCode.INVALID_PARAMS,
@@ -468,23 +486,28 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     remediation="Check the path. Call recon to discover files.",
                 ) from exc
 
-            content = full_path.read_text(encoding="utf-8", errors="replace")
-            actual_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
+            # Use pending content for same-file chaining, else read from disk
+            content = pending_content.get(edit_path)
+            if content is None:
+                content = full_path.read_text(encoding="utf-8", errors="replace")
+                actual_sha = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-            # ── SHA256 verification (ticket embeds expected hash) ──
-            if expected_sha != actual_sha:
-                from codeplane.mcp.errors import FileHashMismatchError
+                # ── SHA256 verification (ticket embeds expected hash) ──
+                if expected_sha != actual_sha:
+                    from codeplane.mcp.errors import FileHashMismatchError
 
-                raise FileHashMismatchError(
-                    path=edit_path,
-                    expected=expected_sha,
-                    actual=actual_sha,
-                )
+                    raise FileHashMismatchError(
+                        path=edit_path,
+                        expected=expected_sha,
+                        actual=actual_sha,
+                    )
+            else:
+                # Content already in pending buffer from earlier edit in batch;
+                # SHA was verified on first read, continuation ticket SHA
+                # matches the resolved content.
+                actual_sha = expected_sha
 
-            # Mark ticket as consumed
-            ticket.used = True
-
-            # ── Resolve the edit ──
+            # ── Resolve the edit (may raise MCPError — no side-effects yet) ──
             new_content, match_meta = _resolve_edit(
                 content,
                 edit.old_content or "",
@@ -493,53 +516,72 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 end_line=edit.end_line,
             )
 
-            # Write the file
-            full_path.write_text(new_content, encoding="utf-8")
-            new_sha = hashlib.sha256(new_content.encode("utf-8")).hexdigest()
+            # Stage resolved edit — no writes yet
+            resolved_edits.append(
+                _ResolvedEdit(
+                    full_path=full_path,
+                    edit_path=edit_path,
+                    old_sha=actual_sha,
+                    input_content=content,
+                    new_content=new_content,
+                    match_meta=match_meta,
+                    ticket=ticket,
+                )
+            )
+            # Update pending content for same-file chaining
+            pending_content[edit_path] = new_content
 
-            old_line_count = content.count("\n")
-            new_line_count = new_content.count("\n")
+        # ── Phase 2: All edits resolved — commit writes atomically ──
+        for resolved in resolved_edits:
+            resolved.full_path.write_text(resolved.new_content, encoding="utf-8")
+            new_sha = hashlib.sha256(resolved.new_content.encode("utf-8")).hexdigest()
+
+            # Mark ticket as consumed (only after successful write)
+            resolved.ticket.used = True
+
+            old_line_count = resolved.input_content.count("\n")
+            new_line_count = resolved.new_content.count("\n")
 
             # ── Issue continuation ticket ──
-            new_ticket_id = f"{ticket.candidate_id}:{new_sha[:8]}"
+            new_ticket_id = f"{resolved.ticket.candidate_id}:{new_sha[:8]}"
             session.edit_tickets[new_ticket_id] = EditTicket(
                 ticket_id=new_ticket_id,
-                path=edit_path,
+                path=resolved.edit_path,
                 sha256=new_sha,
-                candidate_id=ticket.candidate_id,
+                candidate_id=resolved.ticket.candidate_id,
                 issued_by="continuation",
             )
             continuation_tickets.append(
                 {
-                    "path": edit_path,
+                    "path": resolved.edit_path,
                     "edit_ticket": new_ticket_id,
                 }
             )
 
             result_entry = {
-                "path": edit_path,
+                "path": resolved.edit_path,
                 "action": "updated",
-                "old_hash": actual_sha[:8],
+                "old_hash": resolved.old_sha[:8],
                 "new_hash": new_sha[:8],
                 "file_sha256": new_sha,
                 "edit_ticket": new_ticket_id,
                 "insertions": max(0, new_line_count - old_line_count),
                 "deletions": max(0, old_line_count - new_line_count),
-                **match_meta,
+                **resolved.match_meta,
             }
             results.append(result_entry)
 
             ledger.log_operation(
                 tool="refactor_edit",
                 success=True,
-                path=edit_path,
+                path=resolved.edit_path,
                 action="updated",
-                before_hash=actual_sha[:8],
+                before_hash=resolved.old_sha[:8],
                 after_hash=new_sha[:8],
             )
 
             # Trigger reindex
-            app_ctx.mutation_ops.notify_mutation([Path(edit_path)])
+            app_ctx.mutation_ops.notify_mutation([Path(resolved.edit_path)])
 
         # ── Process creates and deletes via mutation_ops ──
         if creates or deletes:
