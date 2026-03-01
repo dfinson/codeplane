@@ -36,6 +36,28 @@ class EditTicket:
     used: bool = False
 
 
+@dataclass
+class RefactorPlan:
+    """Declared edit plan — gates refactor_edit to planned files.
+
+    Created by ``refactor_plan``, consumed by ``refactor_edit``,
+    cleared by ``checkpoint``.  Ensures agents commit to an edit set
+    before they can modify files.
+    """
+
+    plan_id: str
+    recon_id: str
+    description: str
+    # candidate_id → repo-relative path (files declared for editing)
+    edit_targets: dict[str, str] = field(default_factory=dict)
+    # ticket_id → EditTicket (minted at plan time)
+    edit_tickets: dict[str, EditTicket] = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)
+
+
+# Soft cap: plans with more targets than this require gate_reason.
+_MAX_PLAN_TARGETS = 8
+
 # Maximum edit batches (refactor_edit or refactor_commit) before
 # checkpoint is required.  Resets on successful checkpoint.
 _MAX_EDIT_BATCHES = 2
@@ -55,9 +77,14 @@ class SessionState:
     # Populated by recon pipeline, consumed by recon_resolve for
     # ID-based file selection (no raw path access).
     candidate_maps: dict[str, dict[str, str]] = field(default_factory=dict)
-    # Edit tickets: ticket_id → EditTicket.  Minted by recon_resolve,
+    # Edit tickets: ticket_id → EditTicket.  Minted by refactor_plan,
     # consumed by refactor_edit, wiped by checkpoint.
     edit_tickets: dict[str, EditTicket] = field(default_factory=dict)
+    # Active refactor plan — locks session to a declared edit set.
+    # Set by refactor_plan, cleared by checkpoint.
+    active_plan: RefactorPlan | None = None
+    # Resolve batch counter — used for escalating pressure hints.
+    resolve_batch_count: int = 0
     # Read-only intent: True = research-only session (mutations blocked),
     # False = read-write session, None = not yet declared.
     # Set by recon(read_only=...), reset on new recon call.
