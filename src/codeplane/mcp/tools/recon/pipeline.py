@@ -1021,14 +1021,19 @@ def _check_recon_gate(
             kind="recon_repeat",
             reason_min_chars=_RECON_GATE_REASON_MIN,
             reason_prompt=(
-                "Explain in ≥500 characters why your first recon call was "
-                "insufficient and what specific context is still missing."
+                "You MUST explain in ≥500 characters: (1) what specific "
+                "information your first recon call returned, (2) exactly "
+                "what is STILL MISSING that you cannot get by reading "
+                "files via terminal (cat/head/sed -n), and (3) why "
+                "different seeds or task framing is required."
             ),
             expires_calls=3,
             message=(
-                "Recon is hard-gated to 1 call per task.  Read files "
-                "via terminal (cat/head), then "
-                "proceed to refactor_plan → refactor_edit → checkpoint."
+                "BLOCKED: Recon is hard-gated to 1 call per task. "
+                "Your first recon already returned scaffolds, lites, "
+                "and repo_map. Use terminal (cat/head) to read files "
+                "from those results, then proceed to "
+                "refactor_plan → refactor_edit → checkpoint."
             ),
         )
         gate_block = session.gate_manager.issue(gate_spec)
@@ -1037,21 +1042,42 @@ def _check_recon_gate(
             "error": {
                 "code": "RECON_HARD_GATE",
                 "message": (
-                    "2nd consecutive recon call is blocked. recon is "
-                    "hard-gated to 1 call per task. Read files via "
-                    "terminal (cat/head) from your first recon result."
+                    "BLOCKED: 2nd recon call denied. You already have "
+                    "scaffolds, lites, and repo_map from your first "
+                    "recon. Read files via terminal (cat/head/sed -n) "
+                    "using paths from those results. Do NOT call recon "
+                    "again unless you have a genuinely different task."
                 ),
             },
             "gate": gate_block,
             "agentic_hint": (
-                "HARD GATE: recon allows 1 call per task. Your first "
-                "recon result already contains scaffolds, lites, and "
-                "repo_map. Read files via terminal (cat/head) using "
-                "paths from scaffolds.\n\n"
-                "If you genuinely need a new recon (different task, "
-                "different seeds), use the gate_token from the gate "
-                "block below on your next call along with gate_reason "
-                f"(≥{_RECON_GATE_REASON_MIN} chars) and pinned_paths."
+                "⛔ RECON HARD GATE — READ THIS COMPLETELY ⛔\n\n"
+                "Your first recon call already returned scaffolds, "
+                "lites, and repo_map. You have all the file paths and "
+                "code structure you need.\n\n"
+                "WHAT TO DO INSTEAD:\n"
+                "  1. Read files via terminal: cat, head, sed -n\n"
+                "  2. Use paths from your recon scaffolds\n"
+                "  3. Proceed to refactor_plan → refactor_edit → "
+                "checkpoint\n\n"
+                "IF YOU GENUINELY NEED ANOTHER RECON (different task, "
+                "completely different seeds), here is the unlock flow:\n"
+                "  Step 1: Copy the gate_token from the 'gate' object "
+                "below\n"
+                "  Step 2: Write a gate_reason (≥"
+                f"{_RECON_GATE_REASON_MIN} chars) that explains:\n"
+                "    - What your first recon returned\n"
+                "    - What specific context is STILL MISSING\n"
+                "    - Why terminal reads (cat/head) cannot fill the "
+                "gap\n"
+                "    - What different seeds/task you need\n"
+                "  Step 3: Include pinned_paths listing the specific "
+                "files you need\n"
+                "  Step 4: Call recon again with gate_token + "
+                "gate_reason + pinned_paths\n\n"
+                "WARNING: If your gate_reason is vague, generic, or "
+                "does not address ALL four points above, the gate "
+                "will reject it."
             ),
             "consecutive_recon_calls": consecutive + 1,
         }
@@ -1065,14 +1091,18 @@ def _check_recon_gate(
             "error": {
                 "code": "RECON_EXCESSIVE_REQUIRES_GATE",
                 "message": (
-                    "3rd+ consecutive recon call requires pinned_paths. "
-                    "Pin specific files to anchor your search."
+                    f"BLOCKED: Recon call #{consecutive + 1} requires "
+                    "pinned_paths. You must pin specific files to anchor "
+                    "your search. Use paths from your previous recon "
+                    "scaffolds."
                 ),
             },
             "agentic_hint": (
-                f"This is recon call #{consecutive + 1} without a "
-                "write_source in between.  You must provide pinned_paths "
-                "along with gate_token and gate_reason."
+                f"⛔ RECON BLOCKED — CALL #{consecutive + 1} ⛔\n\n"
+                "You must provide pinned_paths (specific file paths) "
+                "along with gate_token and gate_reason.\n\n"
+                "Get file paths from your previous recon scaffolds, "
+                "then include them in pinned_paths on your next call."
             ),
             "consecutive_recon_calls": consecutive + 1,
         }
@@ -1088,15 +1118,18 @@ def _check_recon_gate(
             kind="recon_repeat",
             reason_min_chars=_RECON_GATE_REASON_MIN,
             reason_prompt=(
-                f"This is recon call #{consecutive + 1}. Explain in ≥500 "
-                "characters why your previous recon calls were insufficient "
-                "and what specific context is still missing that cannot be "
-                "obtained via read_source or search."
+                f"This is recon call #{consecutive + 1}. Gate validation "
+                f"FAILED: {gate_result.error}. You MUST explain in ≥500 "
+                "characters: (1) what each previous recon returned, "
+                "(2) what is STILL MISSING, (3) why terminal reads "
+                "cannot fill the gap, (4) what different seeds/task "
+                "you need."
             ),
             expires_calls=3,
             message=(
-                f"Recon call #{consecutive + 1} blocked. "
-                f"Gate validation failed: {gate_result.error}"
+                f"BLOCKED: Recon call #{consecutive + 1} — gate "
+                f"validation failed: {gate_result.error}. Your "
+                "gate_reason must address ALL four required points."
             ),
         )
         gate_block = session.gate_manager.issue(gate_spec)
@@ -1115,18 +1148,18 @@ def _check_recon_gate(
         kind="recon_repeat",
         reason_min_chars=_RECON_GATE_REASON_MIN,
         reason_prompt=(
-            f"This is recon call #{consecutive + 1}. Explain in ≥500 "
-            "characters why your previous recon calls were insufficient "
-            "and what specific context is still missing that cannot be "
-            "obtained from recon scaffolds."
+            f"This is recon call #{consecutive + 1}. You MUST explain "
+            "in ≥500 characters: (1) what each previous recon call "
+            "returned, (2) what is STILL MISSING, (3) why terminal "
+            "reads cannot fill the gap, (4) what different seeds/task "
+            "you need this time."
         ),
         expires_calls=3,
         message=(
-            f"Recon call #{consecutive + 1} requires gate confirmation. "
-            "You have called recon multiple times without making progress "
-            "via refactor_edit.  Consider reading files via terminal to expand on "
-            "specific files, or proceed to refactor_edit with the context "
-            "you already have."
+            f"BLOCKED: Recon call #{consecutive + 1} denied. You have "
+            "called recon multiple times without progressing to "
+            "refactor_edit. Stop calling recon — read files via "
+            "terminal (cat/head) and proceed to edit."
         ),
     )
     gate_block = session.gate_manager.issue(gate_spec)
@@ -1134,14 +1167,23 @@ def _check_recon_gate(
         "status": "blocked",
         "gate": gate_block,
         "agentic_hint": (
-            f"This is recon call #{consecutive + 1} without a "
-            "refactor_edit in between.  You must:\n"
-            "1. Provide gate_token from the gate block below\n"
-            f"2. Provide gate_reason (≥{_RECON_GATE_REASON_MIN} chars) "
-            "explaining why previous recon calls were insufficient\n"
-            "3. Include pinned_paths\n\n"
-            "Alternative: read files via terminal to expand on specific files "
-            "from previous recon results, or proceed to refactor_edit."
+            f"⛔ RECON BLOCKED — CALL #{consecutive + 1} ⛔\n\n"
+            "You have called recon multiple times without making "
+            "any edits. STOP calling recon.\n\n"
+            "WHAT TO DO INSTEAD:\n"
+            "  1. Read files via terminal (cat/head/sed -n)\n"
+            "  2. Proceed to refactor_plan → refactor_edit → "
+            "checkpoint\n\n"
+            "TO UNLOCK (only if genuinely necessary):\n"
+            "  Step 1: Copy gate_token from the 'gate' object below\n"
+            f"  Step 2: Write gate_reason (≥{_RECON_GATE_REASON_MIN} "
+            "chars) explaining:\n"
+            "    - What each previous recon returned\n"
+            "    - What is STILL MISSING\n"
+            "    - Why terminal reads cannot fill the gap\n"
+            "    - What different seeds/task you need\n"
+            "  Step 3: Include pinned_paths\n"
+            "  Step 4: Call recon with all three params"
         ),
         "consecutive_recon_calls": consecutive + 1,
     }
