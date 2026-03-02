@@ -460,3 +460,28 @@ class RebaseResult:
     conflict_paths: tuple[str, ...] = field(default_factory=tuple)
     current_commit: str | None = None  # For edit_pause
     new_head: str | None = None  # Final HEAD after successful rebase
+
+
+def validate_branch_name(name: str) -> str:
+    """Validate and clean a Git branch name.
+
+    Args:
+        name: The branch name to validate.
+
+    Returns:
+        The cleaned (stripped) branch name.
+
+    Raises:
+        ValueError: If the name is empty, contains spaces, starts with '-',
+            or contains '..'.
+    """
+    cleaned = name.strip()
+    if not cleaned:
+        raise ValueError("Branch name must not be empty")
+    if " " in cleaned:
+        raise ValueError(f"Branch name must not contain spaces: {cleaned!r}")
+    if cleaned.startswith("-"):
+        raise ValueError(f"Branch name must not start with '-': {cleaned!r}")
+    if ".." in cleaned:
+        raise ValueError(f"Branch name must not contain '..': {cleaned!r}")
+    return cleaned

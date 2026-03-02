@@ -34,6 +34,7 @@ from codeplane.git.models import (
     TagInfo,
     WorktreeInfo,
     _count_words,
+    validate_branch_name,
 )
 
 # =============================================================================
@@ -598,3 +599,45 @@ class TestMiscTypes:
             commit_sha="stash123",
         )
         assert stash.index == 0
+
+
+# =============================================================================
+# Tests for validate_branch_name
+# =============================================================================
+
+
+class TestValidateBranchName:
+    """Tests for validate_branch_name."""
+
+    def test_valid_simple_name(self) -> None:
+        """Valid simple branch name is returned cleaned."""
+        assert validate_branch_name("main") == "main"
+
+    def test_valid_name_with_slashes(self) -> None:
+        """Valid name with slashes (e.g., feature/foo) is accepted."""
+        assert validate_branch_name("feature/foo") == "feature/foo"
+
+    def test_empty_string_raises(self) -> None:
+        """Empty string raises ValueError."""
+        with pytest.raises(ValueError, match="must not be empty"):
+            validate_branch_name("")
+
+    def test_whitespace_only_raises(self) -> None:
+        """Whitespace-only string raises ValueError."""
+        with pytest.raises(ValueError, match="must not be empty"):
+            validate_branch_name("   ")
+
+    def test_name_with_spaces_raises(self) -> None:
+        """Name with spaces raises ValueError."""
+        with pytest.raises(ValueError, match="must not contain spaces"):
+            validate_branch_name("my branch")
+
+    def test_name_starting_with_dash_raises(self) -> None:
+        """Name starting with '-' raises ValueError."""
+        with pytest.raises(ValueError, match="must not start with"):
+            validate_branch_name("-bad-name")
+
+    def test_name_with_double_dots_raises(self) -> None:
+        """Name containing '..' raises ValueError."""
+        with pytest.raises(ValueError, match="must not contain"):
+            validate_branch_name("main..develop")
