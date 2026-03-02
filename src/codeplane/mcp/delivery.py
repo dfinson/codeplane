@@ -443,10 +443,19 @@ def _build_checkpoint_hint(
         # ── Fix plan ──
         fix_plan = payload.get("fix_plan")
         if isinstance(fix_plan, dict):
+            plan_id = fix_plan.get("plan_id", "?")
+            n_tickets = len(fix_plan.get("edit_tickets", []))
             parts.append(
-                f"STEP {step} — FIX: Edit tickets are pre-minted — call refactor_edit directly"
+                f"STEP {step} — FIX: fix_plan is INLINED in this response "
+                f"(plan_id={plan_id}, {n_tickets} ticket(s))"
             )
-            parts.append(f"  {_cpl_json_cmd(cache_id, 'fix_plan')}")
+            parts.append(
+                "  Edit tickets are pre-minted — call refactor_edit directly "
+                "with plan_id and edit_tickets from the fix_plan field below."
+            )
+            parts.append(
+                "  Budget is RESET. Batch ALL fixes into ONE refactor_edit call."
+            )
             parts.append("")
             step += 1
 
@@ -586,6 +595,9 @@ def _build_inline_summary(
         commit = payload.get("commit", {})
         if isinstance(commit, dict) and commit.get("oid"):
             parts_c.append(f"committed {commit['oid'][:7]}")
+        fix_plan = payload.get("fix_plan")
+        if isinstance(fix_plan, dict):
+            parts_c.append("fix_plan inlined")
         return " | ".join(parts_c) if parts_c else None
 
     if resource_kind == "semantic_diff":
@@ -679,6 +691,17 @@ def wrap_response(
             errors = result.get("errors")
             if errors:
                 envelope["errors"] = errors
+
+        # ── Inline fix_plan for checkpoint failures ──
+        # When checkpoint fails with a fix_plan, the agent needs plan_id
+        # and edit_tickets IMMEDIATELY to call refactor_edit.  Without
+        # these inline, the agent is deadlocked — it can't proceed with
+        # edits and has no way to reference the plan.  The fix_plan data
+        # is tiny (~200-500 bytes) so inlining is safe.
+        if resource_kind == "checkpoint":
+            fix_plan = result.get("fix_plan")
+            if isinstance(fix_plan, dict):
+                envelope["fix_plan"] = fix_plan
 
         envelope["inline_budget_bytes_limit"] = inline_cap
         # Measure AFTER all fields are set so the count reflects reality.

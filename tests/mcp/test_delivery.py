@@ -723,6 +723,71 @@ class TestWrapResponseResolvedMeta:
         assert "resolved_meta" not in result
 
 
+class TestWrapResponseCheckpointFixPlan:
+    """Tests for inline fix_plan on sidecar checkpoint."""
+
+    def test_sidecar_checkpoint_inlines_fix_plan(self) -> None:
+        """When checkpoint fails with fix_plan, it must be inlined in envelope."""
+        payload: dict[str, Any] = {
+            "passed": False,
+            "summary": "lint failed",
+            "lint": {"status": "failed", "diagnostics": 2},
+            "agentic_hint": "fix things",
+            "fix_plan": {
+                "plan_id": "fix_abc123",
+                "edit_tickets": [
+                    {"candidate_id": "c:0", "path": "src/a.py", "edit_ticket": "t1"},
+                    {"candidate_id": "c:1", "path": "src/b.py", "edit_ticket": "t2"},
+                ],
+                "expected_edit_calls": 1,
+            },
+            # Pad to force sidecar
+            "failure_snippets": {"src/a.py": "x" * 20_000},
+        }
+        result = wrap_response(payload, resource_kind="checkpoint")
+        assert result["delivery"] == "sidecar_cache"
+        # fix_plan MUST be inline
+        assert "fix_plan" in result
+        assert result["fix_plan"]["plan_id"] == "fix_abc123"
+        assert len(result["fix_plan"]["edit_tickets"]) == 2
+        assert result["fix_plan"]["expected_edit_calls"] == 1
+
+    def test_sidecar_checkpoint_no_fix_plan_when_passed(self) -> None:
+        """Passed checkpoint has no fix_plan to inline."""
+        payload: dict[str, Any] = {
+            "passed": True,
+            "summary": "all good",
+            "commit": {"oid": "abc1234"},
+            # Pad to force sidecar
+            "tests": {"output": "x" * 20_000},
+        }
+        result = wrap_response(payload, resource_kind="checkpoint")
+        assert result["delivery"] == "sidecar_cache"
+        assert "fix_plan" not in result
+
+    def test_inline_checkpoint_keeps_fix_plan(self) -> None:
+        """Small failing checkpoint that fits inline keeps fix_plan naturally."""
+        payload: dict[str, Any] = {
+            "passed": False,
+            "summary": "lint failed",
+            "fix_plan": {"plan_id": "fp1", "edit_tickets": []},
+        }
+        result = wrap_response(payload, resource_kind="checkpoint")
+        assert result["delivery"] == "inline"
+        assert result["fix_plan"]["plan_id"] == "fp1"
+
+    def test_inline_summary_mentions_fix_plan(self) -> None:
+        """Inline summary for failed checkpoint with fix_plan says 'inlined'."""
+        payload: dict[str, Any] = {
+            "passed": False,
+            "summary": "tests failed",
+            "fix_plan": {"plan_id": "fix_x", "edit_tickets": []},
+        }
+        summary = _build_inline_summary("checkpoint", payload)
+        assert summary is not None
+        assert "fix_plan inlined" in summary
+
+
 class TestWrapResponseReconNoInlineMeta:
     """Recon sidecar must NOT inline candidate metadata (it's in the cache)."""
 
@@ -1007,12 +1072,18 @@ class TestCheckpointHint:
             "passed": False,
             "summary": "lint failed",
             "lint": {"status": "failed", "diagnostics": 1},
-            "fix_plan": {"plan_id": "fix-123", "tickets": []},
+            "fix_plan": {
+                "plan_id": "fix-123",
+                "edit_tickets": [{"path": "a.py", "edit_ticket": "t1"}],
+            },
         }
         hint = _build_checkpoint_hint("cid1", 5000, payload)
-        assert "FIX" in hint
-        assert "edit tickets" in hint.lower() or "refactor_edit" in hint
-        assert "fix_plan" in hint
+        assert "INLINED" in hint
+        assert "fix-123" in hint
+        assert "refactor_edit" in hint
+        assert "RESET" in hint
+        # Must NOT point to cache for fix_plan
+        assert "cpl json" not in hint or "fix_plan" not in hint.split("cpl json")[-1]
 
     def test_checkpoint_failed_with_snippets(self) -> None:
         """Changed files with failure_snippets produce snippet steps."""
