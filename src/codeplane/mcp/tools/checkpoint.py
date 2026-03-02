@@ -1235,13 +1235,16 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "Fix ALL issues before proceeding."
             )
 
-            # ── Gap 5: Regenerate resolve cache on failure ──
-            # Re-read changed files from disk so the agent has current
-            # content + sha256 to make corrections without extra resolves.
+            # ── Gap 5: Regenerate resolve cache + edit tickets on failure ──
+            # Re-read changed files from disk with scaffolds so the agent
+            # has current content + sha256 + table of contents to make
+            # corrections without extra resolves.  Pre-mint edit tickets
+            # so the agent can call refactor_edit directly.
             try:
                 import hashlib
+                import uuid as _uuid
 
-                from codeplane.mcp.sidecar_cache import cache_put
+                from codeplane.mcp.session import EditTicket
 
                 chk_session = app_ctx.session_manager.get_or_create(ctx.session_id)
                 repo_root = app_ctx.coordinator.repo_root
@@ -1256,60 +1259,137 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                             continue  # skip binary
                         content_str = raw.decode("utf-8", errors="replace")
                         sha = hashlib.sha256(raw).hexdigest()
-                        refreshed.append(
-                            {
-                                "path": cf,
-                                "content": content_str,
-                                "line_count": content_str.count("\n") + 1,
-                                "file_sha256": sha,
-                            }
-                        )
+                        entry: dict[str, Any] = {
+                            "path": cf,
+                            "content": content_str,
+                            "line_count": content_str.count("\n") + 1,
+                            "file_sha256": sha,
+                        }
+                        # Build scaffold (table of contents with symbol line ranges)
+                        try:
+                            from codeplane.mcp.tools.files import _build_scaffold
+
+                            scaffold = await _build_scaffold(app_ctx, cf, fp)
+                            entry["scaffold"] = scaffold
+                        except Exception:  # noqa: BLE001
+                            pass  # scaffold is best-effort
+                        refreshed.append(entry)
                     except Exception:  # noqa: BLE001
                         continue
 
                 if refreshed:
-                    cache_payload = {
-                        "resolved": refreshed,
-                        "agentic_hint": (
-                            "Checkpoint FAILED. Resolve cache refreshed "
-                            f"with {len(refreshed)} file(s) at current "
-                            "disk state. Your plan has been cleared.\n\n"
-                            "RECOVERY STEPS:\n"
-                            "1. Review lint/test errors above\n"
-                            "2. Call refactor_plan(edit_targets=[...], "
-                            'description="fix: ...") to declare corrections\n'
-                            "3. Call refactor_edit(plan_id=..., edits=[...]) "
-                            "to apply fixes\n"
-                            "4. Call checkpoint(changed_files=[...], "
-                            'commit_message="...") again\n\n'
-                            "Use the cache commands below to access "
-                            "current file content without re-resolving."
-                        ),
-                    }
-                    cache_id = cache_put(ctx.session_id, "resolve_refresh", cache_payload)
-                    result["resolve_cache_id"] = cache_id
+                    # ── Pre-mint edit tickets ──
+                    # Clear old mutation state, create fresh plan + tickets
+                    chk_session.mutation_ctx.clear()
+                    app_ctx.refactor_ops.clear_pending()
 
-                    # Update resolved_files in session with refreshed sha256s
+                    plan_id = f"fix_{_uuid.uuid4().hex[:12]}"
+                    minted_tickets: dict[str, EditTicket] = {}
+                    ticket_list: list[dict[str, str]] = []
+                    # Build candidate_id mapping from existing recon data
+                    id_to_path: dict[str, str] = {}
+                    for cmap in chk_session.candidate_maps.values():
+                        id_to_path.update(cmap)
+                    path_to_id = {v: k for k, v in id_to_path.items()}
+
+                    for r in refreshed:
+                        path = r["path"]
+                        sha = r["file_sha256"]
+                        cid = path_to_id.get(path, f"fix:{path}")
+                        ticket_id = f"{cid}:{sha[:8]}"
+                        ticket = EditTicket(
+                            ticket_id=ticket_id,
+                            path=path,
+                            sha256=sha,
+                            candidate_id=cid,
+                            issued_by="checkpoint_fix",
+                        )
+                        minted_tickets[ticket_id] = ticket
+                        ticket_list.append(
+                            {
+                                "candidate_id": cid,
+                                "path": path,
+                                "edit_ticket": ticket_id,
+                            }
+                        )
+
+                    # Store plan and tickets on session
+                    from codeplane.mcp.session import RefactorPlan
+
+                    fix_plan = RefactorPlan(
+                        plan_id=plan_id,
+                        recon_id=chk_session.last_recon_id or "fix",
+                        description="Fix lint/test failures from checkpoint",
+                        expected_edit_calls=1,
+                        edit_targets={
+                            path_to_id.get(r["path"], f"fix:{r['path']}"): r["path"]
+                            for r in refreshed
+                        },
+                        edit_tickets=minted_tickets,
+                    )
+                    chk_session.mutation_ctx.plan = fix_plan
+                    chk_session.mutation_ctx.edit_tickets.update(minted_tickets)
+
+                    # Update resolved_files/resolved_paths with refreshed sha256s
                     if "resolved_files" not in chk_session.counters:
                         chk_session.counters["resolved_files"] = {}  # type: ignore[assignment]
                     resolved_files: dict[str, str] = chk_session.counters["resolved_files"]  # type: ignore[assignment]
                     for r in refreshed:
                         resolved_files[r["path"]] = r["file_sha256"]
+                        chk_session.resolved_paths[r["path"]] = r["file_sha256"]
 
-                    # Build cplcache hint for the refreshed cache
-                    from codeplane.mcp.delivery import _cpl_cmd
+                    # Build fix_plan response for inline + cache
+                    fix_plan_data: dict[str, Any] = {
+                        "plan_id": plan_id,
+                        "edit_tickets": ticket_list,
+                        "expected_edit_calls": 1,
+                    }
+                    result["fix_plan"] = fix_plan_data
+
+                    # Cache refreshed content with structured format
+                    from codeplane.mcp.sidecar_cache import cache_put
+
+                    cache_payload: dict[str, Any] = {
+                        "resolved": refreshed,
+                        "agentic_hint": (
+                            "Checkpoint FAILED. Resolve cache refreshed "
+                            f"with {len(refreshed)} file(s) at current "
+                            "disk state.\n\n"
+                            "RECOVERY (no exploration needed):\n"
+                            f"1. Read errors: lint/tests sections above\n"
+                            "2. Read scaffold for the file to fix "
+                            "(jq shows symbol + line ranges)\n"
+                            "3. Read file content at the failing lines "
+                            "(use sed -n to slice)\n"
+                            f'4. Call refactor_edit(plan_id="{plan_id}", '
+                            "edits=[...]) with edit_ticket from fix_plan\n"
+                            "5. Call checkpoint again\n\n"
+                            "Edit tickets are PRE-MINTED — skip refactor_plan."
+                        ),
+                    }
+                    cache_id = cache_put(ctx.session_id, "resolve_refresh", cache_payload)
+                    result["resolve_cache_id"] = cache_id
 
                     hints.append(
-                        f"\n\nREFRESHED RESOLVE CACHE (cache_id={cache_id}):\n"
-                        f"  {_cpl_cmd(cache_id, 'resolved')}\n"
-                        "Use this to read current file content for corrections."
+                        f"\n\nFIX PLAN (plan_id={plan_id}, "
+                        f"{len(ticket_list)} ticket(s)):\n"
+                        "Edit tickets are pre-minted — call refactor_edit "
+                        "directly (skip refactor_plan).\n"
+                        f"\nREFRESHED FILES (cache_id={cache_id}):"
                     )
+                    # Add per-file jq commands
+                    for r in refreshed[:5]:
+                        from codeplane.mcp.delivery import _cpl_cmd
+
+                        rpath = r["path"]
+                        hints.append(f"  {_cpl_cmd(cache_id, f'scaffold:{rpath}')}")
+                        hints.append(f"  {_cpl_cmd(cache_id, f'file:{rpath}')}")
+                    if len(refreshed) > 5:
+                        hints.append(f"  ... and {len(refreshed) - 5} more file(s)")
+
             except Exception:  # noqa: BLE001
                 log.debug("checkpoint_failure_cache_failed", exc_info=True)
-            finally:
-                # ALWAYS clear mutation state on checkpoint — prevents deadlock
-                # where plan budget is exhausted but lint fails, leaving
-                # no way to create a new plan or fix the issue.
+                # Fallback: still clear mutation state
                 try:
                     chk_session = app_ctx.session_manager.get_or_create(ctx.session_id)
                     chk_session.mutation_ctx.clear()

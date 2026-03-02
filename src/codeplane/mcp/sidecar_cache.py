@@ -933,11 +933,11 @@ class SidecarCache:
             self._index.clear()
 
 
-def _summarize_list_chunk(items: list[Any]) -> str:
+def _summarize_list_chunk(items: list[Any], *, max_chars: int = 120) -> str:
     """Build a semantic summary of items in a list chunk.
 
-    For file-like items (with ``path``), lists the file paths.
-    For scaffold items, lists paths with concise metadata.
+    For file-like items (with ``path``), lists file paths, truncated
+    to *max_chars* so the summary stays compact in agentic hints.
     Falls back to item count for opaque items.
     """
     paths: list[str] = []
@@ -945,12 +945,25 @@ def _summarize_list_chunk(items: list[Any]) -> str:
         if isinstance(item, dict):
             path = item.get("path", "")
             if path:
-                lc = item.get("line_count")
-                suffix = f" ({lc} lines)" if lc is not None else ""
-                paths.append(f"{path}{suffix}")
-    if paths:
-        return ", ".join(paths)
-    return f"{len(items)} item(s)"
+                paths.append(path)
+    if not paths:
+        return f"{len(items)} item(s)"
+    joined = ", ".join(paths)
+    if len(joined) <= max_chars:
+        return joined
+    # Truncate: include as many full paths as fit
+    truncated: list[str] = []
+    length = 0
+    for p in paths:
+        needed = len(p) + (2 if truncated else 0)  # ", " separator
+        if length + needed + 8 > max_chars:  # 8 = " + N more"
+            break
+        truncated.append(p)
+        length += needed
+    remaining = len(paths) - len(truncated)
+    if remaining > 0:
+        return ", ".join(truncated) + f" + {remaining} more"
+    return ", ".join(truncated)
 
 
 # =========================================================================
@@ -1136,6 +1149,204 @@ def _describe_value(v: Any) -> dict[str, Any]:
 # =========================================================================
 
 
+def _render_recon_cache(payload: dict[str, Any]) -> dict[str, Any]:
+    """Structure recon cache for jq: candidates array + per-file scaffolds.
+
+    Disk JSON keys:
+    - ``candidates``: JSON array with compact per-file metadata
+    - ``scaffold:<path>``: rendered scaffold text (imports + symbols + line numbers)
+    - ``repo_map``: repository structure text
+    - ``agentic_hint``, ``summary``, ``scoring_summary``, etc.: as-is
+    """
+    result: dict[str, Any] = {}
+    candidates: list[dict[str, Any]] = []
+
+    for f in payload.get("scaffold_files", []):
+        scaffold = f.get("scaffold", {})
+        c: dict[str, Any] = {
+            "path": f.get("path", ""),
+            "id": f.get("candidate_id", ""),
+            "tier": "scaffold",
+            "kind": f.get("artifact_kind", ""),
+        }
+        if isinstance(scaffold, dict):
+            c["lines"] = scaffold.get("total_lines", 0)
+            c["desc"] = scaffold.get("summary", "")
+            path = f.get("path", "")
+            if path:
+                result[f"scaffold:{path}"] = _render_scaffold(scaffold)
+        candidates.append(c)
+
+    for f in payload.get("lite_files", []):
+        summary = f.get("summary", {})
+        c = {
+            "path": f.get("path", ""),
+            "id": f.get("candidate_id", ""),
+            "tier": "lite",
+            "kind": f.get("artifact_kind", ""),
+        }
+        if isinstance(summary, dict):
+            c["lines"] = summary.get("total_lines", 0)
+            c["desc"] = summary.get("summary", "")
+        candidates.append(c)
+
+    result["candidates"] = candidates
+
+    # Text keys for other payload sections
+    for key in (
+        "repo_map",
+        "agentic_hint",
+        "summary",
+        "scoring_summary",
+        "diagnostics",
+        "coverage_hint",
+    ):
+        val = payload.get(key)
+        if val is not None:
+            result[key] = _render_value(val)
+
+    return result
+
+
+def _render_resolve_cache(payload: dict[str, Any]) -> dict[str, Any]:
+    """Structure resolve cache for jq: manifest + per-file content & scaffolds.
+
+    Disk JSON keys:
+    - ``manifest``: JSON array with path, id, sha256, lines, size_bytes
+    - ``file:<path>``: raw file content text
+    - ``scaffold:<path>``: scaffold text (when included by resolve)
+    - ``agentic_hint``: text string
+    - ``errors``: JSON array (preserved as-is for filtering)
+    """
+    result: dict[str, Any] = {}
+    manifest: list[dict[str, Any]] = []
+
+    for r in payload.get("resolved", []):
+        path = r.get("path", "")
+        content = r.get("content", "")
+        m: dict[str, Any] = {
+            "path": path,
+            "id": r.get("candidate_id", ""),
+            "lines": r.get("line_count", 0),
+        }
+        if "file_sha256" in r:
+            m["sha256"] = r["file_sha256"]
+        if isinstance(content, str):
+            m["size_bytes"] = len(content.encode("utf-8"))
+            if path:
+                result[f"file:{path}"] = content
+        if "span" in r:
+            m["span"] = r["span"]
+        # Include scaffold if present (added by resolve or checkpoint)
+        scaffold = r.get("scaffold")
+        if isinstance(scaffold, dict):
+            if path:
+                result[f"scaffold:{path}"] = _render_scaffold(scaffold)
+            m["has_scaffold"] = True
+        manifest.append(m)
+
+    result["manifest"] = manifest
+
+    hint = payload.get("agentic_hint")
+    if hint is not None:
+        result["agentic_hint"] = _render_value(hint)
+
+    errors = payload.get("errors")
+    if errors:
+        result["errors"] = errors
+
+    return result
+
+
+def _render_checkpoint_cache(payload: dict[str, Any]) -> dict[str, Any]:
+    """Structure checkpoint cache for jq consumption.
+
+    On failure, surfaces lint issues and test failures as structured data
+    alongside refreshed file content (if present).
+
+    Disk JSON keys (failure):
+    - ``passed``: boolean
+    - ``summary``: one-line result summary
+    - ``lint``: lint section (dict with status, issues list)
+    - ``tests``: test section (dict with failures, summary)
+    - ``manifest``: JSON array of refreshed files (when resolve_cache_id present)
+    - ``file:<path>``: refreshed file content text
+    - ``scaffold:<path>``: scaffold text for changed files
+    - ``agentic_hint``, ``coverage_hint``: text strings
+    - ``fix_plan``: plan_id + edit tickets for immediate correction
+    """
+    result: dict[str, Any] = {}
+
+    # Core checkpoint fields — keep as native JSON for jq filtering
+    for key in ("passed", "action", "summary", "read_only", "clean_tree"):
+        if key in payload:
+            result[key] = payload[key]
+
+    # Lint section — keep structured for jq filtering
+    lint = payload.get("lint")
+    if isinstance(lint, dict):
+        result["lint"] = lint
+
+    # Test section — keep structured for jq filtering
+    tests = payload.get("tests")
+    if isinstance(tests, dict):
+        result["tests"] = tests
+
+    # Commit section
+    commit = payload.get("commit")
+    if commit is not None:
+        result["commit"] = commit
+
+    # Text hints
+    for key in ("agentic_hint", "coverage_hint"):
+        val = payload.get(key)
+        if val is not None:
+            result[key] = val
+
+    # Fix plan (injected by checkpoint failure enrichment)
+    fix_plan = payload.get("fix_plan")
+    if fix_plan is not None:
+        result["fix_plan"] = fix_plan
+
+    # Test debt
+    test_debt = payload.get("test_debt")
+    if test_debt is not None:
+        result["test_debt"] = test_debt
+
+    # Changed files list
+    changed_files = payload.get("changed_files")
+    if changed_files is not None:
+        result["changed_files"] = changed_files
+
+    return result
+
+
+def _structured_render_entry(entry: CacheEntry) -> dict[str, Any]:
+    """Render cache entry as structured JSON for jq consumption.
+
+    Returns a mixed dict where metadata stays as JSON (for ``jq '.candidates'``,
+    ``jq '.manifest'`` queries) and content/scaffolds are text strings (for
+    ``jq -r '.["file:<path>"]'`` output).
+
+    Dispatches to endpoint-specific renderers for recon, resolve, and
+    checkpoint.  Falls back to text-only rendering for other endpoints.
+    """
+    if not isinstance(entry.payload, dict):
+        return {"_root": _render_value(entry.payload)}
+
+    endpoint = entry.endpoint_key
+
+    if endpoint == "recon_result":
+        return _render_recon_cache(entry.payload)
+    if endpoint in ("resolve_result", "resolve_refresh"):
+        return _render_resolve_cache(entry.payload)
+    if endpoint == "checkpoint":
+        return _render_checkpoint_cache(entry.payload)
+
+    # All other endpoints: text rendering (existing behavior)
+    return _pre_render_entry(entry)
+
+
 def _pre_render_entry(entry: CacheEntry) -> dict[str, str]:
     """Pre-render all deliverable slices to terminal-ready text.
 
@@ -1184,15 +1395,16 @@ def _pre_render_entry(entry: CacheEntry) -> dict[str, str]:
 
 
 def _write_disk_cache(entry: CacheEntry) -> None:
-    """Write pre-rendered cache entry to disk as JSON.
+    """Write structured cache entry to disk as JSON.
 
     File: <cache_dir>/<cache_id>.json
-    Structure: flat dict of slice_name -> rendered text string.
+    Structure: mixed dict with JSON metadata (candidates, manifest) and
+    text strings (file content, scaffolds) — optimized for jq consumption.
     """
     if _cache_dir is None:
         return
 
-    rendered = _pre_render_entry(entry)
+    rendered = _structured_render_entry(entry)
     if not rendered:
         return
 

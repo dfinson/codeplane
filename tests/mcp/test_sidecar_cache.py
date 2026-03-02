@@ -21,7 +21,11 @@ from codeplane.mcp.sidecar_cache import (
     _find_largest_field,
     _pre_render_entry,
     _remove_disk_cache,
+    _render_checkpoint_cache,
+    _render_recon_cache,
+    _render_resolve_cache,
     _split_oversized_item,
+    _structured_render_entry,
     cache_list,
     cache_meta,
     cache_put,
@@ -991,5 +995,335 @@ class TestDiskCache:
         # Should not raise, just skip disk write
         entry = cache.get_entry(cid)
         assert entry is not None
+
+        sc._cache_dir = old_dir
+
+
+# =============================================================================
+# Structured Cache Rendering Tests
+# =============================================================================
+
+
+class TestRenderReconCache:
+    """Tests for _render_recon_cache — structured recon output."""
+
+    def test_candidates_array_from_scaffold_and_lite(self) -> None:
+        payload: dict[str, Any] = {
+            "scaffold_files": [
+                {
+                    "path": "src/a.py",
+                    "candidate_id": "r1:0",
+                    "artifact_kind": "source",
+                    "scaffold": {
+                        "total_lines": 100,
+                        "summary": "Module A",
+                        "imports": ["os"],
+                        "symbols": [{"name": "foo", "kind": "function", "line": 10}],
+                    },
+                },
+            ],
+            "lite_files": [
+                {
+                    "path": "src/b.py",
+                    "candidate_id": "r1:1",
+                    "artifact_kind": "source",
+                    "summary": {"total_lines": 50, "summary": "Module B"},
+                },
+            ],
+        }
+        result = _render_recon_cache(payload)
+        candidates = result["candidates"]
+        assert isinstance(candidates, list)
+        assert len(candidates) == 2
+        assert candidates[0]["path"] == "src/a.py"
+        assert candidates[0]["tier"] == "scaffold"
+        assert candidates[0]["lines"] == 100
+        assert candidates[1]["path"] == "src/b.py"
+        assert candidates[1]["tier"] == "lite"
+
+    def test_scaffold_keys_created(self) -> None:
+        payload: dict[str, Any] = {
+            "scaffold_files": [
+                {
+                    "path": "src/a.py",
+                    "candidate_id": "r1:0",
+                    "scaffold": {
+                        "total_lines": 100,
+                        "imports": ["os"],
+                        "symbols": [{"name": "foo", "kind": "function", "line": 10}],
+                    },
+                },
+            ],
+            "lite_files": [],
+        }
+        result = _render_recon_cache(payload)
+        assert "scaffold:src/a.py" in result
+        assert isinstance(result["scaffold:src/a.py"], str)
+
+    def test_text_keys_preserved(self) -> None:
+        payload: dict[str, Any] = {
+            "scaffold_files": [],
+            "lite_files": [],
+            "repo_map": "the repo map text",
+            "agentic_hint": "do something",
+            "summary": "2 files found",
+        }
+        result = _render_recon_cache(payload)
+        assert result["repo_map"] == "the repo map text"
+        assert result["agentic_hint"] == "do something"
+        assert result["summary"] == "2 files found"
+
+    def test_empty_payload(self) -> None:
+        result = _render_recon_cache({"scaffold_files": [], "lite_files": []})
+        assert result["candidates"] == []
+
+
+class TestRenderResolveCache:
+    """Tests for _render_resolve_cache — structured resolve output."""
+
+    def test_manifest_array(self) -> None:
+        payload: dict[str, Any] = {
+            "resolved": [
+                {
+                    "path": "src/a.py",
+                    "candidate_id": "r1:0",
+                    "content": "import os\ndef foo(): pass",
+                    "line_count": 2,
+                    "file_sha256": "abcd" * 16,
+                },
+            ],
+        }
+        result = _render_resolve_cache(payload)
+        manifest = result["manifest"]
+        assert isinstance(manifest, list)
+        assert len(manifest) == 1
+        assert manifest[0]["path"] == "src/a.py"
+        assert manifest[0]["sha256"] == "abcd" * 16
+        assert manifest[0]["lines"] == 2
+        assert "size_bytes" in manifest[0]
+
+    def test_file_content_keys(self) -> None:
+        payload: dict[str, Any] = {
+            "resolved": [
+                {
+                    "path": "src/a.py",
+                    "candidate_id": "r1:0",
+                    "content": "import os\ndef foo(): pass",
+                    "line_count": 2,
+                },
+            ],
+        }
+        result = _render_resolve_cache(payload)
+        assert result["file:src/a.py"] == "import os\ndef foo(): pass"
+
+    def test_scaffold_keys_when_present(self) -> None:
+        payload: dict[str, Any] = {
+            "resolved": [
+                {
+                    "path": "src/a.py",
+                    "candidate_id": "r1:0",
+                    "content": "pass",
+                    "line_count": 1,
+                    "scaffold": {
+                        "total_lines": 1,
+                        "imports": [],
+                        "symbols": [],
+                    },
+                },
+            ],
+        }
+        result = _render_resolve_cache(payload)
+        assert "scaffold:src/a.py" in result
+        assert result["manifest"][0]["has_scaffold"] is True
+
+    def test_errors_preserved(self) -> None:
+        payload: dict[str, Any] = {
+            "resolved": [],
+            "errors": [{"candidate_id": "r1:0", "error": "not found"}],
+        }
+        result = _render_resolve_cache(payload)
+        assert "errors" in result
+        assert result["errors"][0]["error"] == "not found"
+
+    def test_agentic_hint_preserved(self) -> None:
+        payload: dict[str, Any] = {
+            "resolved": [],
+            "agentic_hint": "plan your edits",
+        }
+        result = _render_resolve_cache(payload)
+        assert result["agentic_hint"] == "plan your edits"
+
+
+class TestRenderCheckpointCache:
+    """Tests for _render_checkpoint_cache — structured checkpoint output."""
+
+    def test_passed_checkpoint(self) -> None:
+        payload: dict[str, Any] = {
+            "passed": True,
+            "summary": "all clean",
+            "action": "checkpoint",
+            "lint": {"status": "clean", "diagnostics": 0},
+            "tests": {"passed": 10, "failed": 0},
+            "commit": {"oid": "abc1234", "message": "fix"},
+        }
+        result = _render_checkpoint_cache(payload)
+        # Core fields as native JSON
+        assert result["passed"] is True
+        assert result["summary"] == "all clean"
+        # Lint/tests as structured JSON (not text)
+        assert isinstance(result["lint"], dict)
+        assert result["lint"]["diagnostics"] == 0
+        assert isinstance(result["tests"], dict)
+        assert result["tests"]["passed"] == 10
+        assert isinstance(result["commit"], dict)
+
+    def test_failed_checkpoint_with_fix_plan(self) -> None:
+        payload: dict[str, Any] = {
+            "passed": False,
+            "summary": "lint failed",
+            "lint": {"status": "failed", "diagnostics": 2},
+            "fix_plan": {"plan_id": "fp-1", "tickets": [{"path": "a.py"}]},
+        }
+        result = _render_checkpoint_cache(payload)
+        assert result["passed"] is False
+        assert "fix_plan" in result
+        assert result["fix_plan"]["plan_id"] == "fp-1"
+
+    def test_changed_files_preserved(self) -> None:
+        payload: dict[str, Any] = {
+            "passed": False,
+            "summary": "failed",
+            "changed_files": ["src/a.py", "src/b.py"],
+        }
+        result = _render_checkpoint_cache(payload)
+        assert result["changed_files"] == ["src/a.py", "src/b.py"]
+
+
+class TestStructuredRenderEntry:
+    """Tests for _structured_render_entry dispatcher."""
+
+    def test_routes_recon_result(self) -> None:
+        cache = SidecarCache()
+        payload: dict[str, Any] = {
+            "scaffold_files": [{"path": "a.py", "scaffold": {"total_lines": 10}}],
+            "lite_files": [],
+        }
+        cid = cache.put("s", "recon_result", payload)
+        entry = cache.get_entry(cid)
+        assert entry is not None
+        result = _structured_render_entry(entry)
+        assert "candidates" in result
+        assert isinstance(result["candidates"], list)
+
+    def test_routes_resolve_result(self) -> None:
+        cache = SidecarCache()
+        payload: dict[str, Any] = {
+            "resolved": [{"path": "a.py", "content": "pass", "line_count": 1}],
+        }
+        cid = cache.put("s", "resolve_result", payload)
+        entry = cache.get_entry(cid)
+        assert entry is not None
+        result = _structured_render_entry(entry)
+        assert "manifest" in result
+        assert "file:a.py" in result
+
+    def test_routes_checkpoint(self) -> None:
+        cache = SidecarCache()
+        payload: dict[str, Any] = {
+            "passed": True,
+            "summary": "ok",
+            "lint": {"status": "clean"},
+        }
+        cid = cache.put("s", "checkpoint", payload)
+        entry = cache.get_entry(cid)
+        assert entry is not None
+        result = _structured_render_entry(entry)
+        assert result["passed"] is True
+        assert isinstance(result["lint"], dict)
+
+    def test_unknown_endpoint_uses_text_fallback(self) -> None:
+        cache = SidecarCache()
+        cid = cache.put("s", "unknown_tool", {"data": "hello"})
+        entry = cache.get_entry(cid)
+        assert entry is not None
+        result = _structured_render_entry(entry)
+        # Falls back to _pre_render_entry which produces text strings
+        assert result["data"] == "hello"
+
+    def test_disk_cache_uses_structured_rendering(self, tmp_path: Any) -> None:
+        """Disk cache for known endpoints uses structured rendering."""
+        import codeplane.mcp.sidecar_cache as sc
+
+        old_dir = sc._cache_dir
+        sc._cache_dir = tmp_path
+
+        cache = SidecarCache()
+        payload: dict[str, Any] = {
+            "resolved": [
+                {"path": "src/a.py", "content": "import os", "line_count": 1},
+            ],
+        }
+        cid = cache.put("s", "resolve_result", payload)
+
+        cache_file = tmp_path / f"{cid}.json"
+        assert cache_file.exists()
+
+        data = json.loads(cache_file.read_text())
+        # Should have structured keys, not just text blobs
+        assert "manifest" in data
+        assert isinstance(data["manifest"], list)
+        assert "file:src/a.py" in data
+        assert data["file:src/a.py"] == "import os"
+
+        sc._cache_dir = old_dir
+
+    def test_disk_cache_recon_structured(self, tmp_path: Any) -> None:
+        """Disk cache for recon uses candidates array."""
+        import codeplane.mcp.sidecar_cache as sc
+
+        old_dir = sc._cache_dir
+        sc._cache_dir = tmp_path
+
+        cache = SidecarCache()
+        payload: dict[str, Any] = {
+            "scaffold_files": [
+                {"path": "src/a.py", "candidate_id": "r:0", "scaffold": {"total_lines": 50}},
+            ],
+            "lite_files": [],
+            "repo_map": "tree output",
+        }
+        cid = cache.put("s", "recon_result", payload)
+
+        data = json.loads((tmp_path / f"{cid}.json").read_text())
+        assert "candidates" in data
+        assert isinstance(data["candidates"], list)
+        assert data["candidates"][0]["path"] == "src/a.py"
+        assert data["repo_map"] == "tree output"
+
+        sc._cache_dir = old_dir
+
+    def test_disk_cache_checkpoint_structured(self, tmp_path: Any) -> None:
+        """Disk cache for checkpoint keeps lint as JSON."""
+        import codeplane.mcp.sidecar_cache as sc
+
+        old_dir = sc._cache_dir
+        sc._cache_dir = tmp_path
+
+        cache = SidecarCache()
+        payload: dict[str, Any] = {
+            "passed": False,
+            "summary": "lint failed",
+            "lint": {"status": "failed", "diagnostics": 3},
+            "tests": {"passed": 5, "failed": 1},
+        }
+        cid = cache.put("s", "checkpoint", payload)
+
+        data = json.loads((tmp_path / f"{cid}.json").read_text())
+        assert data["passed"] is False
+        # lint/tests stay as dicts, not strings
+        assert isinstance(data["lint"], dict)
+        assert data["lint"]["diagnostics"] == 3
+        assert isinstance(data["tests"], dict)
+        assert data["tests"]["failed"] == 1
 
         sc._cache_dir = old_dir

@@ -208,11 +208,23 @@ def _cpl_cmd(cache_id: str, slice_key: str) -> str:
     return f'python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "{slice_key}"'
 
 
+def _cpl_json_cmd(cache_id: str, slice_key: str) -> str:
+    """Format a cplcache command that outputs structured JSON (not raw text).
+
+    Used for metadata arrays (candidates, manifest) where the agent wants
+    parseable JSON, not raw string output.
+    """
+    from codeplane.mcp.sidecar_cache import jq_available
+
+    if jq_available():
+        return f"jq '.[\"{slice_key}\"]' .codeplane/cache/{cache_id}.json"
+    return f'python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "{slice_key}"'
+
+
 def _cpl_cmd_template(cache_id: str) -> str:
     """Format a reusable command template with <SLICE> placeholder.
 
-    Uses jq-based JSON access when jq is installed, otherwise
-    falls back to the cplcache.py Python script.
+    Used by the generic fallback hint for unknown endpoint types.
     """
     from codeplane.mcp.sidecar_cache import jq_available
 
@@ -226,12 +238,212 @@ def _build_cplcache_hint(
     byte_size: int,
     resource_kind: str,
     sections: dict[str, Any] | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> str:
-    """Build compact cplcache retrieval hints.
+    """Build menu-style cache retrieval hints with numbered steps.
 
-    Uses a command template so slice keys are short references
-    rather than full repeated commands.
+    Each endpoint type gets a tailored sequence of jq commands with
+    contextual explanations.  The agent reads the steps in order —
+    no template substitution or guessing required.
     """
+    if resource_kind == "recon_result" and payload:
+        return _build_recon_hint(cache_id, byte_size, payload)
+    if resource_kind in ("resolve_result", "resolve_refresh") and payload:
+        return _build_resolve_hint(cache_id, byte_size, payload)
+    if resource_kind == "checkpoint" and payload:
+        return _build_checkpoint_hint(cache_id, byte_size, payload)
+    if resource_kind == "semantic_diff" and payload:
+        return _build_semantic_diff_hint(cache_id, byte_size, payload)
+
+    # Generic fallback for unknown/other resource kinds
+    return _build_generic_hint(cache_id, byte_size, resource_kind, sections)
+
+
+def _build_recon_hint(cache_id: str, byte_size: int, payload: dict[str, Any]) -> str:
+    scaffold_files = payload.get("scaffold_files", [])
+    lite_files = payload.get("lite_files", [])
+    n_scaffold = len(scaffold_files)
+    n_lite = len(lite_files)
+
+    parts: list[str] = [
+        ">>> RESPONSE CACHED <<<",
+        f"Cache: {cache_id} | {byte_size:,} bytes | recon_result",
+        f"Files: {n_scaffold} scaffold(s), {n_lite} lite(s)",
+        "",
+        "STEP 1 — CANDIDATES: Read the candidate list to see all discovered files",
+        f"  {_cpl_json_cmd(cache_id, 'candidates')}",
+        "",
+    ]
+
+    if scaffold_files:
+        paths = [f.get("path", "") for f in scaffold_files[:3]]
+        parts.append(
+            "STEP 2 — SCAFFOLD: Read scaffold for each file you need "
+            "(imports + symbols + line numbers)"
+        )
+        parts.append(f"  {_cpl_cmd(cache_id, f'scaffold:{paths[0]}')}")
+        if len(paths) > 1:
+            parts.append(f"  Replace path for others: {', '.join(paths[1:])}")
+    else:
+        parts.append("STEP 2 — No scaffolds available")
+    parts.append("")
+
+    parts.append("STEP 3 — REPO MAP: Verify coverage — ensure recon found all relevant areas")
+    parts.append(f"  {_cpl_cmd(cache_id, 'repo_map')}")
+    parts.append("")
+
+    parts.append(
+        "NEXT: Call recon_resolve with candidate_id values for the files you need. "
+        "Resolve ALL files in ONE call — incremental resolves are rate-limited."
+    )
+
+    return "\n".join(parts)
+
+
+def _build_resolve_hint(
+    cache_id: str,
+    byte_size: int,
+    payload: dict[str, Any],
+) -> str:
+    resolved = payload.get("resolved", [])
+    n_files = len(resolved)
+    paths = [r.get("path", "") for r in resolved[:5]]
+
+    parts: list[str] = [
+        ">>> RESPONSE CACHED <<<",
+        f"Cache: {cache_id} | {byte_size:,} bytes | resolve_result",
+        f"Resolved: {n_files} file(s)",
+        "",
+        "STEP 1 — MANIFEST: See all resolved files with paths, sha256, and line counts",
+        f"  {_cpl_json_cmd(cache_id, 'manifest')}",
+        "",
+    ]
+
+    if paths:
+        # Check if scaffolds are present
+        has_scaffolds = any(isinstance(r.get("scaffold"), dict) for r in resolved)
+        if has_scaffolds:
+            parts.append(
+                "STEP 2 — SCAFFOLD: Read scaffold for a file "
+                "(symbol index with line numbers — use as table of contents)"
+            )
+            parts.append(f"  {_cpl_cmd(cache_id, f'scaffold:{paths[0]}')}")
+            parts.append("")
+            step_num = 3
+        else:
+            step_num = 2
+
+        parts.append(f"STEP {step_num} — CONTENT: Read full file content")
+        parts.append(f"  {_cpl_cmd(cache_id, f'file:{paths[0]}')}")
+        if len(paths) > 1:
+            parts.append(f"  Replace path for others: {', '.join(paths[1:])}")
+        parts.append("  For specific lines: ... | sed -n '<start>,<end>p'")
+    parts.append("")
+
+    parts.append("NEXT: Plan & edit. Call refactor_plan → refactor_edit → checkpoint.")
+
+    return "\n".join(parts)
+
+
+def _build_checkpoint_hint(
+    cache_id: str,
+    byte_size: int,
+    payload: dict[str, Any],
+) -> str:
+    passed = payload.get("passed")
+    summary = payload.get("summary", "")
+
+    parts: list[str] = [
+        ">>> RESPONSE CACHED <<<" if passed else ">>> CHECKPOINT FAILED <<<",
+        f"Cache: {cache_id} | {byte_size:,} bytes | checkpoint",
+        f"Result: {summary}",
+        "",
+    ]
+
+    if passed:
+        parts.append("STEP 1 — SUMMARY: Read the result summary")
+        parts.append(f"  {_cpl_cmd(cache_id, 'summary')}")
+        parts.append("")
+        commit = payload.get("commit", {})
+        if isinstance(commit, dict) and commit.get("oid"):
+            parts.append("STEP 2 — COMMIT: View commit details and semantic diff")
+            parts.append(f"  {_cpl_json_cmd(cache_id, 'commit')}")
+            parts.append("")
+        parts.append("All checks passed.")
+    else:
+        step = 1
+        lint = payload.get("lint", {})
+        if isinstance(lint, dict) and lint.get("diagnostics", 0) > 0:
+            parts.append(f"STEP {step} — LINT ISSUES: {lint.get('diagnostics', 0)} issue(s) to fix")
+            parts.append(f"  {_cpl_json_cmd(cache_id, 'lint')}")
+            parts.append("")
+            step += 1
+
+        tests = payload.get("tests", {})
+        if isinstance(tests, dict) and tests.get("failed", 0) > 0:
+            parts.append(f"STEP {step} — TEST FAILURES: {tests.get('failed', 0)} failure(s) to fix")
+            parts.append(f"  {_cpl_json_cmd(cache_id, 'tests')}")
+            parts.append("")
+            step += 1
+
+        # Refreshed file content (if available from checkpoint failure enrichment)
+        changed_files = payload.get("changed_files", [])
+        if changed_files:
+            sample_path = changed_files[0] if isinstance(changed_files, list) else ""
+            parts.append(f"STEP {step} — FILE CONTENT: Read current file content to fix issues")
+            if sample_path:
+                parts.append(f"  {_cpl_cmd(cache_id, f'file:{sample_path}')}")
+                parts.append("  For specific lines: ... | sed -n '<start>,<end>p'")
+            parts.append("")
+            step += 1
+
+        fix_plan = payload.get("fix_plan")
+        if isinstance(fix_plan, dict):
+            parts.append(
+                f"STEP {step} — FIX: Edit tickets are pre-minted — call refactor_edit directly"
+            )
+            parts.append(f"  {_cpl_json_cmd(cache_id, 'fix_plan')}")
+            parts.append("")
+
+        parts.append("NEXT: Fix the issues above, then call checkpoint again.")
+
+    return "\n".join(parts)
+
+
+def _build_semantic_diff_hint(
+    cache_id: str,
+    byte_size: int,
+    payload: dict[str, Any],
+) -> str:
+    summary = payload.get("summary", "")
+
+    parts: list[str] = [
+        ">>> RESPONSE CACHED <<<",
+        f"Cache: {cache_id} | {byte_size:,} bytes | semantic_diff",
+        f"Summary: {summary}",
+        "",
+        "STEP 1 — SUMMARY: High-level change overview",
+        f"  {_cpl_cmd(cache_id, 'summary')}",
+        "",
+        "STEP 2 — BREAKING: Check for breaking changes",
+        f"  {_cpl_cmd(cache_id, 'breaking_summary')}",
+        "",
+        "STEP 3 — STRUCTURAL: Per-symbol diffs",
+        f"  {_cpl_json_cmd(cache_id, 'structural_changes')}",
+        "",
+        "NEXT: Review changes and proceed with your task.",
+    ]
+
+    return "\n".join(parts)
+
+
+def _build_generic_hint(
+    cache_id: str,
+    byte_size: int,
+    resource_kind: str,
+    sections: dict[str, Any] | None,
+) -> str:
+    """Fallback hint for unknown resource kinds — lists sections with commands."""
     from codeplane.mcp.sidecar_cache import CacheSection
 
     strategy = _SLICE_STRATEGIES.get(resource_kind)
@@ -245,11 +457,6 @@ def _build_cplcache_hint(
     parts.append(f"Cmd: {_cpl_cmd_template(cache_id)}")
     parts.append("")
 
-    # ---- Section-level hints (top-level only) ----
-    # Chunk-level detail (file listings per chunk) is available inside the
-    # cached JSON itself — fetch the parent key (e.g. ``scaffold_files``)
-    # to see the chunk index.  Keeping chunk detail out of the inline hint
-    # ensures the envelope stays well under INLINE_CAP_BYTES.
     if sections:
         ordered = _order_sections(sections, strategy)
         top_level = [
@@ -380,6 +587,7 @@ def wrap_response(
             payload_bytes,
             resource_kind,
             sections=entry.sections if entry else None,
+            payload=result,
         )
 
         # ── Inline resolve metadata ──

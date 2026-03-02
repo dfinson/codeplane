@@ -278,6 +278,23 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     entry["file_sha256"] = sha256
                 resolved.append(entry)
 
+        # ── Attach scaffolds as table of contents ──
+        # Each resolved file gets its scaffold (imports + symbols + line numbers)
+        # included alongside content.  In the sidecar cache, this becomes
+        # ``scaffold:<path>`` — the agent reads the TOC first, then slices
+        # into the file content at the relevant symbol/line range.
+        for r in resolved:
+            try:
+                from codeplane.mcp.tools.files import _build_scaffold
+
+                path = r["path"]
+                full_path = repo_root / path
+                if full_path.exists():
+                    scaffold = await _build_scaffold(app_ctx, path, full_path)
+                    r["scaffold"] = scaffold
+            except Exception:  # noqa: BLE001
+                pass  # scaffold is optional — content is what matters
+
         # ── Track resolve batch + resolved files (no edit tickets) ──
         if not is_read_only:
             try:

@@ -16,8 +16,13 @@ from codeplane.mcp.delivery import (
     ScopeBudget,
     ScopeManager,
     SliceStrategy,
+    _build_checkpoint_hint,
     _build_cplcache_hint,
+    _build_generic_hint,
     _build_inline_summary,
+    _build_recon_hint,
+    _build_resolve_hint,
+    _build_semantic_diff_hint,
     _order_sections,
     resolve_profile,
     wrap_response,
@@ -782,3 +787,274 @@ class TestScopeBudget:
         budget.increment_full_read("file.py", 100)
         warning = budget.check_duplicate_read("file.py")
         assert warning is None
+
+
+# =============================================================================
+# Structured Hint Builder Tests (payload-driven dispatch)
+# =============================================================================
+
+
+class TestReconHint:
+    """Tests for _build_recon_hint with payload."""
+
+    def test_recon_hint_has_candidates_step(self) -> None:
+        payload: dict[str, Any] = {
+            "scaffold_files": [
+                {"path": "src/a.py", "candidate_id": "r1:0", "scaffold": {"total_lines": 100}},
+            ],
+            "lite_files": [
+                {"path": "src/b.py", "candidate_id": "r1:1", "summary": {"total_lines": 50}},
+            ],
+        }
+        hint = _build_recon_hint("cid1", 10000, payload)
+        assert "STEP 1" in hint
+        assert "CANDIDATES" in hint
+        assert "candidates" in hint  # jq key
+
+    def test_recon_hint_has_scaffold_step(self) -> None:
+        payload: dict[str, Any] = {
+            "scaffold_files": [
+                {"path": "src/a.py", "candidate_id": "r1:0", "scaffold": {}},
+            ],
+            "lite_files": [],
+        }
+        hint = _build_recon_hint("cid1", 10000, payload)
+        assert "STEP 2" in hint
+        assert "SCAFFOLD" in hint
+        assert "scaffold:src/a.py" in hint
+
+    def test_recon_hint_has_repo_map_step(self) -> None:
+        payload: dict[str, Any] = {"scaffold_files": [], "lite_files": []}
+        hint = _build_recon_hint("cid1", 10000, payload)
+        assert "STEP 3" in hint
+        assert "REPO MAP" in hint
+        assert "repo_map" in hint
+
+    def test_recon_hint_has_next_instruction(self) -> None:
+        payload: dict[str, Any] = {"scaffold_files": [], "lite_files": []}
+        hint = _build_recon_hint("cid1", 10000, payload)
+        assert "NEXT:" in hint
+        assert "recon_resolve" in hint
+
+    def test_recon_hint_file_counts(self) -> None:
+        payload: dict[str, Any] = {
+            "scaffold_files": [{"path": f"f{i}.py"} for i in range(3)],
+            "lite_files": [{"path": f"l{i}.py"} for i in range(5)],
+        }
+        hint = _build_recon_hint("cid1", 10000, payload)
+        assert "3 scaffold(s)" in hint
+        assert "5 lite(s)" in hint
+
+    def test_dispatch_routes_to_recon(self) -> None:
+        payload: dict[str, Any] = {"scaffold_files": [], "lite_files": []}
+        hint = _build_cplcache_hint("cid1", 10000, "recon_result", payload=payload)
+        assert "CANDIDATES" in hint
+        assert "<SLICE>" not in hint  # not generic fallback
+
+
+class TestResolveHint:
+    """Tests for _build_resolve_hint with payload."""
+
+    def test_resolve_hint_has_manifest_step(self) -> None:
+        payload: dict[str, Any] = {
+            "resolved": [
+                {"path": "src/a.py", "candidate_id": "r1:0", "content": "x", "line_count": 10},
+            ],
+        }
+        hint = _build_resolve_hint("cid1", 10000, payload)
+        assert "STEP 1" in hint
+        assert "MANIFEST" in hint
+        assert "manifest" in hint
+
+    def test_resolve_hint_has_content_step(self) -> None:
+        payload: dict[str, Any] = {
+            "resolved": [
+                {"path": "src/a.py", "candidate_id": "r1:0", "content": "x", "line_count": 10},
+            ],
+        }
+        hint = _build_resolve_hint("cid1", 10000, payload)
+        assert "CONTENT" in hint
+        assert "file:src/a.py" in hint
+
+    def test_resolve_hint_with_scaffolds(self) -> None:
+        payload: dict[str, Any] = {
+            "resolved": [
+                {
+                    "path": "src/a.py",
+                    "candidate_id": "r1:0",
+                    "content": "x",
+                    "line_count": 10,
+                    "scaffold": {"total_lines": 10, "symbols": []},
+                },
+            ],
+        }
+        hint = _build_resolve_hint("cid1", 10000, payload)
+        assert "SCAFFOLD" in hint
+        assert "scaffold:src/a.py" in hint
+        # Content step should be STEP 3 (after scaffold)
+        assert "STEP 3" in hint
+
+    def test_resolve_hint_no_scaffold_step2(self) -> None:
+        payload: dict[str, Any] = {
+            "resolved": [
+                {"path": "src/a.py", "candidate_id": "r1:0", "content": "x", "line_count": 10},
+            ],
+        }
+        hint = _build_resolve_hint("cid1", 10000, payload)
+        # Without scaffolds, content is STEP 2
+        assert "STEP 2" in hint
+
+    def test_resolve_hint_multiple_files(self) -> None:
+        payload: dict[str, Any] = {
+            "resolved": [
+                {"path": "src/a.py", "content": "x", "line_count": 10},
+                {"path": "src/b.py", "content": "y", "line_count": 20},
+            ],
+        }
+        hint = _build_resolve_hint("cid1", 10000, payload)
+        assert "2 file(s)" in hint
+        assert "src/b.py" in hint  # listed as alternative path
+
+    def test_dispatch_routes_to_resolve(self) -> None:
+        payload: dict[str, Any] = {
+            "resolved": [{"path": "src/a.py", "content": "x", "line_count": 10}],
+        }
+        hint = _build_cplcache_hint("cid1", 10000, "resolve_result", payload=payload)
+        assert "MANIFEST" in hint
+        assert "<SLICE>" not in hint
+
+
+class TestCheckpointHint:
+    """Tests for _build_checkpoint_hint with payload."""
+
+    def test_checkpoint_passed_hint(self) -> None:
+        payload: dict[str, Any] = {
+            "passed": True,
+            "summary": "lint: clean, tests: 42 passed",
+            "commit": {"oid": "abc1234567890"},
+        }
+        hint = _build_checkpoint_hint("cid1", 5000, payload)
+        assert ">>> RESPONSE CACHED <<<" in hint
+        assert "All checks passed" in hint
+        assert "COMMIT" in hint
+
+    def test_checkpoint_failed_lint_hint(self) -> None:
+        payload: dict[str, Any] = {
+            "passed": False,
+            "summary": "lint failed",
+            "lint": {"status": "failed", "diagnostics": 3},
+        }
+        hint = _build_checkpoint_hint("cid1", 5000, payload)
+        assert "CHECKPOINT FAILED" in hint
+        assert "LINT ISSUES" in hint
+        assert "3 issue(s)" in hint
+        assert "lint" in hint  # jq key
+
+    def test_checkpoint_failed_tests_hint(self) -> None:
+        payload: dict[str, Any] = {
+            "passed": False,
+            "summary": "tests failed",
+            "tests": {"failed": 2, "passed": 8},
+        }
+        hint = _build_checkpoint_hint("cid1", 5000, payload)
+        assert "TEST FAILURES" in hint
+        assert "2 failure(s)" in hint
+
+    def test_checkpoint_failed_with_fix_plan(self) -> None:
+        payload: dict[str, Any] = {
+            "passed": False,
+            "summary": "lint failed",
+            "lint": {"status": "failed", "diagnostics": 1},
+            "fix_plan": {"plan_id": "fix-123", "tickets": []},
+        }
+        hint = _build_checkpoint_hint("cid1", 5000, payload)
+        assert "FIX" in hint
+        assert "edit tickets" in hint.lower() or "refactor_edit" in hint
+        assert "fix_plan" in hint
+
+    def test_checkpoint_failed_with_changed_files(self) -> None:
+        payload: dict[str, Any] = {
+            "passed": False,
+            "summary": "lint failed",
+            "lint": {"status": "failed", "diagnostics": 1},
+            "changed_files": ["src/foo.py"],
+        }
+        hint = _build_checkpoint_hint("cid1", 5000, payload)
+        assert "FILE CONTENT" in hint
+        assert "file:src/foo.py" in hint
+
+    def test_dispatch_routes_to_checkpoint(self) -> None:
+        payload: dict[str, Any] = {"passed": True, "summary": "all good"}
+        hint = _build_cplcache_hint("cid1", 5000, "checkpoint", payload=payload)
+        assert "All checks passed" in hint
+        assert "<SLICE>" not in hint
+
+
+class TestSemanticDiffHint:
+    """Tests for _build_semantic_diff_hint with payload."""
+
+    def test_semantic_diff_hint_steps(self) -> None:
+        payload: dict[str, Any] = {
+            "summary": "3 files changed",
+            "breaking_summary": "no breaking changes",
+            "structural_changes": [{"symbol": "foo", "kind": "modified"}],
+        }
+        hint = _build_semantic_diff_hint("cid1", 10000, payload)
+        assert "STEP 1" in hint
+        assert "SUMMARY" in hint
+        assert "STEP 2" in hint
+        assert "BREAKING" in hint
+        assert "STEP 3" in hint
+        assert "STRUCTURAL" in hint
+        assert "structural_changes" in hint
+
+    def test_dispatch_routes_to_semantic_diff(self) -> None:
+        payload: dict[str, Any] = {"summary": "1 change"}
+        hint = _build_cplcache_hint("cid1", 10000, "semantic_diff", payload=payload)
+        assert "SUMMARY" in hint
+        assert "<SLICE>" not in hint
+
+
+class TestGenericHintFallback:
+    """Tests for the generic fallback path."""
+
+    def _section(
+        self,
+        key: str,
+        byte_size: int,
+        type_desc: str = "dict(1 keys)",
+        item_count: int | None = 1,
+        ready: bool = True,
+    ) -> CacheSection:
+        return CacheSection(
+            key=key,
+            byte_size=byte_size,
+            type_desc=type_desc,
+            item_count=item_count,
+            ready=ready,
+        )
+
+    def test_generic_has_slice_template(self) -> None:
+        hint = _build_generic_hint("cid1", 5000, "unknown_kind", None)
+        assert "<SLICE>" in hint
+        assert "cid1" in hint
+
+    def test_generic_with_sections(self) -> None:
+        sections = {
+            "data": self._section("data", 1000),
+            "meta": self._section("meta", 200),
+        }
+        hint = _build_generic_hint("cid1", 1200, "unknown_kind", sections)
+        assert "Sections" in hint
+        assert "data" in hint
+        assert "meta" in hint
+
+    def test_fallback_when_no_payload(self) -> None:
+        """Without payload, _build_cplcache_hint uses generic fallback."""
+        hint = _build_cplcache_hint("cid1", 5000, "recon_result")
+        assert "<SLICE>" in hint  # generic path
+
+    def test_fallback_for_unknown_kind(self) -> None:
+        payload: dict[str, Any] = {"some": "data"}
+        hint = _build_cplcache_hint("cid1", 5000, "totally_unknown", payload=payload)
+        assert "<SLICE>" in hint  # generic path
