@@ -97,10 +97,6 @@ is issued on the 2nd block for emergencies only.
 Batch source + test edits into ONE call. On checkpoint failure: budget RESETS, `fix_plan` with
 pre-minted edit tickets returned inline — call `refactor_edit` directly (no new plan needed).
 
-**Session reset:** `checkpoint` resets ALL session state (mutation budget, pattern detection,
-resolve counts). Call `checkpoint(changed_files=[])` after read-only flows to reset the session
-before starting the next task.
-
 ### Reviewing Changes
 
 `semantic_diff(base="main")` for structural overview, then `recon_resolve` changed files to review.
@@ -150,6 +146,7 @@ If `delivery` = `"sidecar_cache"`, run `agentic_hint` commands to fetch content 
 ```
 recon(task="...", read_only=True)
 → recon_resolve(targets=[{{"candidate_id": "<id>"}}], justification="...")
+→ checkpoint(changed_files=[])                      # reset session state
 ```
 
 **Edit a file:**
@@ -213,6 +210,8 @@ Budget resets on failure. `fix_plan` is always in the checkpoint response — no
 - **DON'T** panic on checkpoint failure — budget resets, use the `fix_plan` tickets provided
 - **DON'T** grep/filter scaffold metadata to find files — scaffolds are a TABLE OF CONTENTS,
   not a search index. Use `refactor_impact` to find all usages of a symbol
+- **DON'T** skip `checkpoint(changed_files=[])` after read-only flows — session state
+  (recon gate, mutation budget, resolve counts) carries over and blocks the next task
 <!-- /codeplane-instructions -->
 """
 
