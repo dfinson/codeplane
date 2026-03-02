@@ -1102,6 +1102,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 ro_result["agentic_hint"] = (
                     "Read-only session complete — working tree is clean. No mutations were made."
                 )
+
+            # ── Reset session state so next task starts clean ──
+            session.mutation_ctx.clear()
+            session.resolve_batch_count = 0
+            session.pattern_detector.clear()
+            session.counters.pop("recon_consecutive", None)
+            app_ctx.refactor_ops.clear_pending()
+
             from codeplane.mcp.delivery import wrap_response
 
             return wrap_response(
