@@ -387,6 +387,89 @@ def _build_coverage_text(
     return inline, coverage_hint
 
 
+# =============================================================================
+# Failure-focused snippet extraction
+# =============================================================================
+
+_SNIPPET_CONTEXT_LINES = 15  # lines of context above/below each failure point
+
+
+def _extract_traceback_locations(traceback: str | None) -> list[tuple[str, int]]:
+    """Extract (file_path, line_number) pairs from a pytest traceback string.
+
+    Looks for patterns like ``path/to/file.py:123: in function_name``.
+    Returns all unique (path, line) tuples found.
+    """
+    if not traceback:
+        return []
+    import re
+
+    locations: list[tuple[str, int]] = []
+    for m in re.finditer(r"(\S+\.py):(\d+):", traceback):
+        path, line = m.group(1), int(m.group(2))
+        locations.append((path, line))
+    return locations
+
+
+def _build_failure_snippets(
+    failure_list: list[dict[str, Any]],
+    file_contents: dict[str, str],
+    context_lines: int = _SNIPPET_CONTEXT_LINES,
+) -> dict[str, str]:
+    """Build focused code snippets around failure locations.
+
+    For each file referenced in failures, extracts the lines around each
+    failure point (± context_lines).  Adjacent/overlapping ranges are merged.
+    Returns a dict of ``{path: rendered_snippet_text}``.
+
+    Each snippet includes line numbers and ``>`` markers at failure lines,
+    so the agent sees exactly where the problem is.
+    """
+    # Collect all (path, line) locations from failures
+    locations_by_file: dict[str, list[int]] = {}
+    for f in failure_list:
+        path = f.get("path", "")
+        line = f.get("line")
+        if path and line and path in file_contents:
+            locations_by_file.setdefault(path, []).append(line)
+        # Also extract locations from traceback
+        for tb_path, tb_line in _extract_traceback_locations(f.get("traceback")):
+            if tb_path in file_contents:
+                locations_by_file.setdefault(tb_path, []).append(tb_line)
+
+    snippets: dict[str, str] = {}
+    for path, lines_list in locations_by_file.items():
+        content = file_contents[path]
+        file_lines = content.splitlines()
+        total = len(file_lines)
+        failure_lines_set = set(lines_list)
+
+        # Build merged ranges
+        ranges: list[tuple[int, int]] = []
+        for line_no in sorted(set(lines_list)):
+            start = max(1, line_no - context_lines)
+            end = min(total, line_no + context_lines)
+            if ranges and start <= ranges[-1][1] + 2:
+                # Merge with previous range (allow 1-line gap)
+                ranges[-1] = (ranges[-1][0], end)
+            else:
+                ranges.append((start, end))
+
+        # Render snippet with line numbers and failure markers
+        parts: list[str] = []
+        for i, (start, end) in enumerate(ranges):
+            if i > 0:
+                parts.append("  ...")
+            for ln in range(start, end + 1):
+                marker = ">" if ln in failure_lines_set else " "
+                line_text = file_lines[ln - 1] if ln <= total else ""
+                parts.append(f"{ln:4d} {marker}| {line_text}")
+
+        snippets[path] = "\n".join(parts)
+
+    return snippets
+
+
 def _serialize_test_result(
     result: "TestResult",
     coverage_filter_paths: set[str] | None = None,
@@ -428,6 +511,19 @@ def _serialize_test_result(
                     tb_lines = [ln for ln in f.traceback.strip().splitlines() if ln.strip()][:3]
                     lines.extend(f"  {ln.strip()}" for ln in tb_lines)
             output["failures"] = "\n".join(lines)
+
+            # Structured failure list for sidecar rendering — each failure
+            # becomes its own cache entry so agents can read one at a time
+            output["failure_list"] = [
+                {
+                    "name": f.name,
+                    "path": f.path,
+                    "line": f.line,
+                    "message": f.message,
+                    "traceback": (f.traceback.strip() if f.traceback else None),
+                }
+                for f in status.failures
+            ]
 
         if status.diagnostics:
             diag_lines: list[str] = []
@@ -1346,46 +1442,56 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     }
                     result["fix_plan"] = fix_plan_data
 
-                    # Cache refreshed content with structured format
-                    from codeplane.mcp.sidecar_cache import cache_put
+                    # ── Build failure-focused enrichment ──
+                    # Instead of caching full file content (which can be
+                    # 100KB+), extract focused snippets around failure
+                    # locations so the agent sees exactly what broke.
+                    file_contents = {r["path"]: r["content"] for r in refreshed}
 
-                    cache_payload: dict[str, Any] = {
-                        "resolved": refreshed,
-                        "agentic_hint": (
-                            "Checkpoint FAILED. Resolve cache refreshed "
-                            f"with {len(refreshed)} file(s) at current "
-                            "disk state.\n\n"
-                            "RECOVERY (no exploration needed):\n"
-                            f"1. Read errors: lint/tests sections above\n"
-                            "2. Read scaffold for the file to fix "
-                            "(jq shows symbol + line ranges)\n"
-                            "3. Read file content at the failing lines "
-                            "(use sed -n to slice)\n"
-                            f'4. Call refactor_edit(plan_id="{plan_id}", '
-                            "edits=[...]) with edit_ticket from fix_plan\n"
-                            "5. Call checkpoint again\n\n"
-                            "Edit tickets are PRE-MINTED — skip refactor_plan."
-                        ),
-                    }
-                    cache_id = cache_put(ctx.session_id, "resolve_refresh", cache_payload)
-                    result["resolve_cache_id"] = cache_id
+                    # Extract failure list from test results
+                    tests_section = result.get("tests", {})
+                    fl = (
+                        tests_section.get("failure_list", [])
+                        if isinstance(tests_section, dict)
+                        else []
+                    )
+
+                    # Build snippets around failure locations
+                    failure_snippets = _build_failure_snippets(fl, file_contents) if fl else {}
+
+                    # Build scaffolds (compact symbol index)
+                    from codeplane.mcp.sidecar_cache import _render_scaffold
+
+                    failure_scaffolds: dict[str, str] = {}
+                    for r in refreshed:
+                        raw_scaffold: object = r.get("scaffold")
+                        if isinstance(raw_scaffold, dict):
+                            failure_scaffolds[r["path"]] = _render_scaffold(raw_scaffold)
+
+                    # File manifest (path + sha256 for edit tickets)
+                    file_manifest = [
+                        {
+                            "path": r["path"],
+                            "sha256": r["file_sha256"],
+                            "lines": r["line_count"],
+                        }
+                        for r in refreshed
+                    ]
+
+                    # Merge enrichment into checkpoint result —
+                    # everything in one cache, no separate resolve_refresh
+                    result["failure_snippets"] = failure_snippets
+                    result["failure_scaffolds"] = failure_scaffolds
+                    result["file_manifest"] = file_manifest
 
                     hints.append(
                         f"\n\nFIX PLAN (plan_id={plan_id}, "
                         f"{len(ticket_list)} ticket(s)):\n"
                         "Edit tickets are pre-minted — call refactor_edit "
                         "directly (skip refactor_plan).\n"
-                        f"\nREFRESHED FILES (cache_id={cache_id}):"
+                        "Mutation budget is RESET — you have fresh batches.\n"
+                        "Batch ALL fix edits (source + tests) into ONE call."
                     )
-                    # Add per-file jq commands
-                    for r in refreshed[:5]:
-                        from codeplane.mcp.delivery import _cpl_cmd
-
-                        rpath = r["path"]
-                        hints.append(f"  {_cpl_cmd(cache_id, f'scaffold:{rpath}')}")
-                        hints.append(f"  {_cpl_cmd(cache_id, f'file:{rpath}')}")
-                    if len(refreshed) > 5:
-                        hints.append(f"  ... and {len(refreshed) - 5} more file(s)")
 
             except Exception:  # noqa: BLE001
                 log.debug("checkpoint_failure_cache_failed", exc_info=True)
