@@ -138,7 +138,10 @@ STOP before using `refactor_edit` for multi-file changes:
 `agentic_hint` in responses = **direct instructions for your next action**. Always execute
 before proceeding. Also check: `coverage_hint`, `display_to_user`.
 
-If `delivery` = `"sidecar_cache"`, run `agentic_hint` commands to fetch content sections.
+If `delivery` = `"sidecar_cache"`, run `agentic_hint` commands **verbatim** to fetch content.
+Cache keys: `candidates` (file list with .id), `scaffold:<path>` (imports + signatures),
+`lite:<path>` (path + description), `repo_map` (every tracked file — file inventory only).
+**repo_map** = file existence check. **scaffold** = code structure. **refactor_impact** = symbol usages.
 
 ### Common Patterns (copy-paste these)
 
