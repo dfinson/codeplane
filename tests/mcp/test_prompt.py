@@ -2,7 +2,7 @@
 
 Covers:
 - Prompt size constraints (bytes and lines)
-- Contains v2 tool names (recon, recon_resolve, refactor_edit, checkpoint)
+- Contains v2 tool names (recon, refactor_edit, checkpoint)
 - Does not contain dead tool names
 - Tool prefix substitution
 """
@@ -35,11 +35,6 @@ class TestPromptContent:
         """'recon' appears as the primary entry point."""
         snippet = _make_codeplane_snippet("test_prefix")
         assert "recon" in snippet
-
-    def test_prompt_contains_recon_resolve(self) -> None:
-        """'recon_resolve' appears in prompt."""
-        snippet = _make_codeplane_snippet("test_prefix")
-        assert "recon_resolve" in snippet
 
     def test_prompt_contains_refactor_edit(self) -> None:
         """'refactor_edit' appears in prompt."""

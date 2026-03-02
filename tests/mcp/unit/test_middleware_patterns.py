@@ -172,8 +172,8 @@ class TestStripToolPrefix:
     def test_strips_long_prefix(self) -> None:
         """Strips long prefix for known tool."""
         assert (
-            ToolMiddleware._strip_tool_prefix("mcp_codeplane-my_repo_recon_resolve")
-            == "recon_resolve"
+            ToolMiddleware._strip_tool_prefix("mcp_codeplane-my_repo_refactor_edit")
+            == "refactor_edit"
         )
 
     def test_already_short(self) -> None:

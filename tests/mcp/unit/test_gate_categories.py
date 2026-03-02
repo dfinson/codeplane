@@ -35,7 +35,6 @@ class TestCategorizeTool:
         "tool_name,expected_category",
         [
             ("recon", "search"),
-            ("recon_resolve", "read"),
             ("refactor_edit", "write"),
             ("refactor_rename", "refactor"),
             ("refactor_move", "refactor"),
@@ -183,7 +182,7 @@ class TestHasRecentScopedTest:
         window: deque[CallRecord] = deque(
             [
                 CallRecord(category="search", tool_name="recon"),
-                CallRecord(category="read", tool_name="recon_resolve"),
+                CallRecord(category="meta", tool_name="describe"),
             ]
         )
         assert has_recent_scoped_test(window) is False
@@ -194,7 +193,7 @@ class TestHasRecentScopedTest:
             [
                 CallRecord(category="search", tool_name="recon"),
                 CallRecord(category="test_scoped", tool_name="checkpoint"),
-                CallRecord(category="read", tool_name="recon_resolve"),
+                CallRecord(category="meta", tool_name="describe"),
             ]
         )
         assert has_recent_scoped_test(window) is True

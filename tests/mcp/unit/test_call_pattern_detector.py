@@ -49,8 +49,8 @@ class TestRecord:
         det = CallPatternDetector()
         det.record("recon")
         assert det._window[-1].category == "search"
-        det.record("recon_resolve")
-        assert det._window[-1].category == "read"
+        det.record("describe")
+        assert det._window[-1].category == "meta"
         det.record("refactor_edit")
         # write clears the window, so only scoped records remain
         # but the write call itself was recorded before clear
@@ -79,7 +79,7 @@ class TestRecordActionClear:
         det = CallPatternDetector()
         det.record("recon")
         det.record("recon")
-        det.record("recon_resolve")
+        det.record("describe")
         assert det.window_length == 3
 
         det.record("refactor_edit")  # "write" is in ACTION_CATEGORIES
@@ -91,7 +91,7 @@ class TestRecordActionClear:
         det = CallPatternDetector()
         det.record("checkpoint", category_override="test_scoped")
         det.record("recon")
-        det.record("recon_resolve")
+        det.record("describe")
         assert det.window_length == 3
 
         det.record("refactor_edit")  # clears window
@@ -105,7 +105,7 @@ class TestRecordActionClear:
         det.record("checkpoint", category_override="test_scoped")
         det.record("recon")
         det.record("checkpoint", category_override="test_scoped")
-        det.record("recon_resolve")
+        det.record("describe")
         assert det.window_length == 4
 
         det.record("refactor_rename")  # "refactor" is in ACTION_CATEGORIES
@@ -116,7 +116,7 @@ class TestRecordActionClear:
         """Non-action categories don't clear the window."""
         det = CallPatternDetector()
         det.record("recon")
-        det.record("recon_resolve")
+        det.record("describe")
         det.record("describe")
         assert det.window_length == 3
 
@@ -198,14 +198,17 @@ class TestEvaluate:
         assert match.pattern_name == "pure_search_chain"
         assert match.severity == "break"
 
-    def test_detects_read_spiral(self) -> None:
-        """evaluate() fires read_spiral for 6+ reads of 1 file."""
+    def test_detects_zero_result_searches(self) -> None:
+        """evaluate() fires zero_result_searches for 3+ fruitless searches."""
         det = CallPatternDetector()
-        for _ in range(6):
-            det.record("recon_resolve", files=["same.py"])
+        det.record("recon", hit_count=0)
+        det.record("recon", hit_count=0)
+        det.record("recon", hit_count=0)
+        det.record("describe")
+        det.record("describe")
         match = det.evaluate()
         assert match is not None
-        assert match.pattern_name == "read_spiral"
+        assert match.pattern_name == "zero_result_searches"
 
     def test_break_priority_over_warn(self) -> None:
         """Break patterns take priority over warn patterns."""
@@ -219,20 +222,18 @@ class TestEvaluate:
         assert match.severity == "break"
         assert match.pattern_name == "pure_search_chain"
 
-    def test_bypass_priority_over_general_warn(self) -> None:
-        """Bypass warn patterns (phantom_read) take priority over general warn."""
+    def test_warn_patterns_detected(self) -> None:
+        """Warn patterns fire when conditions are met."""
         det = CallPatternDetector()
-        # Build a window with zero-result searches AND a phantom_read bypass
         det.record("recon", hit_count=0)
         det.record("recon", hit_count=0)
         det.record("recon", hit_count=0)
-        det.record("meta", category_override="meta")
         det.record("describe")
-        # Now evaluate with refactor_edit — phantom_read (bypass) should fire
-        # over zero_result_searches (general warn) since bypass comes first
-        match = det.evaluate(current_tool="refactor_edit")
-        if match is not None and match.pattern_name == "phantom_read":
-            assert match.cause == "tool_bypass"
+        det.record("describe")
+        match = det.evaluate()
+        assert match is not None
+        assert match.severity == "warn"
+        assert match.pattern_name == "zero_result_searches"
 
 
 class TestEvaluateCurrentTool:
@@ -252,16 +253,16 @@ class TestEvaluateCurrentTool:
     def test_current_tool_visible_to_patterns(self) -> None:
         """current_tool record IS visible to pattern checks during evaluation."""
         det = CallPatternDetector()
-        # Set up: searches + meta, no reads or writes
-        det.record("recon")
-        det.record("meta")
-        det.record("recon")
-        det.record("meta")
-        # 4 entries. With current_tool=refactor_edit, total = 5
-        # phantom_read should detect recon → edit with no resolve
-        match = det.evaluate(current_tool="refactor_edit")
+        # 6 search records — not enough for pure_search_chain (needs 7)
+        for _ in range(6):
+            det.record("recon")
+        original_len = det.window_length
+        # Adding current_tool="recon" makes 7 → triggers pure_search_chain
+        match = det.evaluate(current_tool="recon")
         assert match is not None
-        assert match.pattern_name == "phantom_read"
+        assert match.pattern_name == "pure_search_chain"
+        # Window should remain unchanged after evaluate
+        assert det.window_length == original_len
 
     def test_current_tool_removed_on_exception(self) -> None:
         """current_tool is popped even if pattern check raises."""
@@ -300,9 +301,9 @@ class TestClear:
         det = CallPatternDetector()
         det.record("recon")
         det.clear()
-        det.record("recon_resolve")
+        det.record("describe")
         assert det.window_length == 1
-        assert det._window[0].category == "read"
+        assert det._window[0].category == "meta"
 
 
 class TestWindowLength:
@@ -314,7 +315,7 @@ class TestWindowLength:
     def test_after_records(self) -> None:
         det = CallPatternDetector()
         det.record("recon")
-        det.record("recon_resolve")
+        det.record("describe")
         assert det.window_length == 2
 
     def test_after_clear(self) -> None:

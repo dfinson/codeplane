@@ -332,7 +332,7 @@ class TestRefactorEditHandler:
         ctx = MagicMock()
         ctx.coordinator.repo_root = tmp_path
         session = MagicMock()
-        session.counters = {"recon_called": 1, "resolved_files": {}}
+        session.counters = {"recon_called": 1}
         session.edits_since_checkpoint = 0
         session.read_only = False
 
@@ -371,7 +371,7 @@ class TestRefactorEditHandler:
         """Basic find-and-replace update via edit_ticket."""
         sha = self._write_file(tmp_path, "hello.py", "print('hello')\n")
         session = app_ctx.session_manager.get_or_create.return_value
-        session.counters["resolved_files"] = {"hello.py": sha}
+        # sha256 now computed from disk by refactor_plan
 
         from codeplane.mcp.session import EditTicket
 
@@ -597,7 +597,7 @@ class TestRefactorEditHandler:
         """Edited files are tracked in session counters."""
         sha = self._write_file(tmp_path, "tracked.py", "old\n")
         session = app_ctx.session_manager.get_or_create.return_value
-        session.counters = {"recon_called": 1, "resolved_files": {"tracked.py": sha}}
+        session.counters = {"recon_called": 1}
 
         from codeplane.mcp.session import EditTicket
 

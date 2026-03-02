@@ -289,7 +289,7 @@ class TestBuildUnindexedFallback:
 
         result = fallback(fp, "config.yaml")
         hint = result.get("agentic_hint", "")
-        assert "recon_resolve" in hint
+        assert "terminal" in hint or "cat" in hint
 
 
 # =============================================================================

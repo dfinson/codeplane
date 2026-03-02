@@ -940,7 +940,7 @@ class TestReconHint:
         payload: dict[str, Any] = {"scaffold_files": [], "lite_files": []}
         hint = _build_recon_hint("cid1", 10000, payload)
         assert "NEXT:" in hint
-        assert "recon_resolve" in hint
+        assert "refactor_plan" in hint
 
     def test_recon_hint_file_counts(self) -> None:
         payload: dict[str, Any] = {
