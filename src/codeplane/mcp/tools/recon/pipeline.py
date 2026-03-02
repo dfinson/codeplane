@@ -1379,6 +1379,14 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         except Exception:  # noqa: BLE001
             log.warning("recon.map_repo_failed", exc_info=True)
 
+        # Build set of all tracked paths for exhaustiveness checks
+        tracked_paths: set[str] = set()
+        try:
+            if map_result and map_result.structure and map_result.structure.all_paths:
+                tracked_paths = {p for p, _lc in map_result.structure.all_paths}
+        except Exception:  # noqa: BLE001
+            pass
+
         assemble_ms = round((time.monotonic() - t_assemble) * 1000)
         diagnostics["assemble_ms"] = assemble_ms
 
@@ -1388,6 +1396,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         response: dict[str, Any] = {
             "recon_id": recon_id,
             "repo_map": repo_map,
+            "repo_map_exhaustive": bool(tracked_paths),
             "scaffold_files": scaffold_files,
             "lite_files": lite_files,
             "summary": (
@@ -1457,6 +1466,18 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
                     " your checkpoint changed_files."
                 )
 
+        # Missing path warnings — check pinned/explicit paths against tracked files
+        if tracked_paths:
+            requested_paths = set(pinned_paths or []) | set(parsed_task.explicit_paths or [])
+            missing_from_repo = sorted(requested_paths - tracked_paths)
+            if missing_from_repo:
+                hint_parts.append("")
+                hint_parts.append(
+                    "WARNING: These paths do not exist in the repository: "
+                    + ", ".join(missing_from_repo)
+                    + ". Do NOT search for them — they are confirmed absent from repo_map."
+                )
+
         response["agentic_hint"] = "\n".join(hint_parts)
 
         # Coverage hint
@@ -1465,9 +1486,9 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             missing_paths = [p for p in parsed_task.explicit_paths if p not in found_paths]
             if missing_paths:
                 response["coverage_hint"] = (
-                    "Mentioned paths not found: "
+                    "These paths do not exist in the repository: "
                     f"{', '.join(missing_paths)}. "
-                    "Use recon_resolve to examine them directly."
+                    "Do NOT search for them — repo_map is exhaustive."
                 )
 
         from codeplane.mcp.delivery import wrap_response
