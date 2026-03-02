@@ -52,7 +52,7 @@ cpl up --port 7655  # Or specify a port
 
 That's it. `cpl up` automatically:
 - Creates `.vscode/mcp.json` with the MCP server config
-- Injects agent instructions into `AGENTS.md` and `.github/copilot-instructions.md`
+- Injects agent instructions into `.github/copilot-instructions.md`
 - Syncs the port if you change it later (`cpl up --port 8000`)
 
 ### CLI Reference
@@ -82,8 +82,7 @@ CodePlane provides a **full stacked index**:
 | File | Purpose |
 |------|---------|
 | `.vscode/mcp.json` | VS Code MCP server config (native HTTP transport) |
-| `AGENTS.md` | Tool reference for AI agents (tool names, parameters, patterns) |
-| `.github/copilot-instructions.md` | Same instructions for GitHub Copilot |
+| `.github/copilot-instructions.md` | Agent instructions (tool names, parameters, patterns) |
 
 The server name follows the pattern `codeplane-{repo_name}`, so tools appear as `mcp_codeplane_myrepo_read_files`, etc.
 

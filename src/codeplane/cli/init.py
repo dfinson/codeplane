@@ -170,7 +170,14 @@ Budget resets on failure. `fix_plan` is always in the checkpoint response — no
 
 
 def _inject_agent_instructions(repo_root: Path, tool_prefix: str) -> list[str]:
-    """Inject CodePlane snippet into agent instruction files.
+    """Inject CodePlane snippet into .github/copilot-instructions.md.
+
+    If the file already exists, the snippet is appended (or an existing
+    snippet block is replaced in-place).  If it does not exist the file
+    is created with a minimal header.
+
+    AGENTS.md is intentionally left untouched — we avoid duplicating
+    instructions across two files.
 
     Args:
         repo_root: Path to the repository root
@@ -181,42 +188,37 @@ def _inject_agent_instructions(repo_root: Path, tool_prefix: str) -> list[str]:
     modified: list[str] = []
     snippet = _make_codeplane_snippet(tool_prefix)
 
-    # Target both AGENTS.md and .github/copilot-instructions.md
-    targets = [
-        repo_root / "AGENTS.md",
-        repo_root / ".github" / "copilot-instructions.md",
-    ]
+    target = repo_root / ".github" / "copilot-instructions.md"
 
-    for target in targets:
-        if target.exists():
-            content = target.read_text()
-            # Check if snippet already present
-            if _CODEPLANE_SNIPPET_MARKER in content:
-                # Replace existing snippet with updated one
-                import re
+    if target.exists():
+        content = target.read_text()
+        # Check if snippet already present
+        if _CODEPLANE_SNIPPET_MARKER in content:
+            # Replace existing snippet with updated one
+            import re
 
-                new_content = re.sub(
-                    r"<!-- codeplane-instructions -->.*?<!-- /codeplane-instructions -->",
-                    snippet.strip(),
-                    content,
-                    flags=re.DOTALL,
-                )
-                if new_content != content:
-                    target.write_text(new_content)
-                    modified.append(str(target.relative_to(repo_root)))
-            else:
-                # Append snippet
-                new_content = content.rstrip() + "\n" + snippet
+            new_content = re.sub(
+                r"<!-- codeplane-instructions -->.*?<!-- /codeplane-instructions -->",
+                snippet.strip(),
+                content,
+                flags=re.DOTALL,
+            )
+            if new_content != content:
                 target.write_text(new_content)
                 modified.append(str(target.relative_to(repo_root)))
         else:
-            # Create file with snippet
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(
-                "# Agent Instructions\n\n"
-                "Instructions for AI coding agents working in this repository.\n" + snippet
-            )
+            # Append snippet
+            new_content = content.rstrip() + "\n" + snippet
+            target.write_text(new_content)
             modified.append(str(target.relative_to(repo_root)))
+    else:
+        # Create file with snippet
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            "# Copilot Instructions\n\n"
+            "Instructions for GitHub Copilot working in this repository.\n" + snippet
+        )
+        modified.append(str(target.relative_to(repo_root)))
 
     return modified
 
