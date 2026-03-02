@@ -1152,8 +1152,25 @@ class TestReconCallGating:
         )
         assert result is None
 
-    def test_second_call_without_reason_blocked(self) -> None:
-        """2nd call without expand_reason should be blocked."""
+    def test_second_call_hard_blocked(self) -> None:
+        """2nd call is always hard-blocked regardless of params."""
+        from codeplane.mcp.tools.recon.pipeline import _check_recon_gate
+
+        # Even with valid expand_reason + pinned_paths, 2nd call is blocked
+        result = _check_recon_gate(
+            self._make_app_ctx(1),
+            self._make_ctx(),
+            expand_reason="x" * 300,
+            pinned_paths=["src/core/base.py"],
+            gate_token=None,
+            gate_reason=None,
+        )
+        assert result is not None
+        assert result["status"] == "blocked"
+        assert result["error"]["code"] == "RECON_HARD_GATE"
+
+    def test_second_call_issues_gate_token(self) -> None:
+        """2nd call hard-block includes gate for 3rd-call escape."""
         from codeplane.mcp.tools.recon.pipeline import _check_recon_gate
 
         result = _check_recon_gate(
@@ -1165,54 +1182,8 @@ class TestReconCallGating:
             gate_reason=None,
         )
         assert result is not None
-        assert result["status"] == "blocked"
-        assert "RECON_FOLLOW_UP" in result["error"]["code"]
-
-    def test_second_call_short_reason_blocked(self) -> None:
-        """2nd call with too-short expand_reason should be blocked."""
-        from codeplane.mcp.tools.recon.pipeline import _check_recon_gate
-
-        result = _check_recon_gate(
-            self._make_app_ctx(1),
-            self._make_ctx(),
-            expand_reason="too short",
-            pinned_paths=["src/foo.py"],
-            gate_token=None,
-            gate_reason=None,
-        )
-        assert result is not None
-        assert result["status"] == "blocked"
-
-    def test_second_call_no_pinned_paths_blocked(self) -> None:
-        """2nd call without pinned_paths should be blocked."""
-        from codeplane.mcp.tools.recon.pipeline import _check_recon_gate
-
-        reason = "x" * 300  # meets min length
-        result = _check_recon_gate(
-            self._make_app_ctx(1),
-            self._make_ctx(),
-            expand_reason=reason,
-            pinned_paths=None,
-            gate_token=None,
-            gate_reason=None,
-        )
-        assert result is not None
-        assert result["status"] == "blocked"
-
-    def test_second_call_with_valid_reason_passes(self) -> None:
-        """2nd call with valid expand_reason + pinned_paths passes."""
-        from codeplane.mcp.tools.recon.pipeline import _check_recon_gate
-
-        reason = "x" * 300
-        result = _check_recon_gate(
-            self._make_app_ctx(1),
-            self._make_ctx(),
-            expand_reason=reason,
-            pinned_paths=["src/core/base.py"],
-            gate_token=None,
-            gate_reason=None,
-        )
-        assert result is None
+        assert "gate" in result
+        assert "id" in result["gate"]  # gate_token for escape
 
     def test_third_call_no_gate_token_blocked(self) -> None:
         """3rd call without gate_token should issue a gate."""
@@ -1283,14 +1254,10 @@ class TestReconCallGating:
         )
         assert result is None
 
-    def test_env_var_bypass(self) -> None:
-        """CODEPLANE_RECON_GATE_BYPASS=1 should skip gating logic."""
+    def test_high_consecutive_without_gate_blocked(self) -> None:
+        """High consecutive count without gate token is always blocked."""
         from codeplane.mcp.tools.recon.pipeline import _check_recon_gate
 
-        # Counter=5 would normally block hard
-        # But _check_recon_gate is not called when bypass is active —
-        # the bypass is in the recon() function itself. Verify the
-        # gating function properly blocks when bypass is NOT active.
         result = _check_recon_gate(
             self._make_app_ctx(5),
             self._make_ctx(),
@@ -1299,4 +1266,5 @@ class TestReconCallGating:
             gate_token=None,
             gate_reason=None,
         )
-        assert result is not None  # Should block without bypass
+        assert result is not None
+        assert result["status"] == "blocked"

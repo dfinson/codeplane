@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import os
 import re
 import time
 import uuid
@@ -1015,44 +1014,48 @@ def _check_recon_gate(
         return None
 
     if consecutive == 1:
-        # 2nd call — require expand_reason + pinned_paths
-        errors: list[str] = []
+        # 2nd call — HARD BLOCK.  Issue gate_token for 3rd-call escape.
+        from codeplane.mcp.gate import GateSpec
 
-        if not expand_reason or len(expand_reason.strip()) < _RECON_EXPAND_REASON_MIN:
-            got = len((expand_reason or "").strip())
-            errors.append(
-                f"expand_reason must be at least {_RECON_EXPAND_REASON_MIN} "
-                f"characters explaining what was missing from the first "
-                f"recon call and what needs expansion (got {got})."
-            )
-
-        if not pinned_paths:
-            errors.append(
-                "pinned_paths is required on 2nd consecutive recon call. "
-                "Pin specific files you want to expand on as semantic anchors."
-            )
-
-        if errors:
-            return {
-                "status": "blocked",
-                "error": {
-                    "code": "RECON_FOLLOW_UP_REQUIRES_JUSTIFICATION",
-                    "message": " ".join(errors),
-                },
-                "agentic_hint": (
-                    "This is your 2nd consecutive recon call without a "
-                    "write_source in between.  You must provide:\n"
-                    "1. expand_reason (≥250 chars) explaining what was "
-                    "missing and what needs expansion\n"
-                    "2. pinned_paths with specific files to anchor on\n"
-                    "3. A task query with semantic anchors (symbol names, "
-                    "file paths, or domain terms)\n\n"
-                    "If you have enough context, proceed to write_source "
-                    "instead of calling recon again."
+        gate_spec = GateSpec(
+            kind="recon_repeat",
+            reason_min_chars=_RECON_GATE_REASON_MIN,
+            reason_prompt=(
+                "Explain in ≥500 characters why your first recon call was "
+                "insufficient and what specific context is still missing "
+                "that cannot be obtained via recon_resolve."
+            ),
+            expires_calls=3,
+            message=(
+                "Recon is hard-gated to 1 call per task.  Use recon_resolve "
+                "to read specific files from your first recon result, or "
+                "proceed to refactor_plan → refactor_edit → checkpoint."
+            ),
+        )
+        gate_block = session.gate_manager.issue(gate_spec)
+        return {
+            "status": "blocked",
+            "error": {
+                "code": "RECON_HARD_GATE",
+                "message": (
+                    "2nd consecutive recon call is blocked. recon is "
+                    "hard-gated to 1 call per task. Use recon_resolve "
+                    "to fetch file content from your first recon result."
                 ),
-                "consecutive_recon_calls": consecutive + 1,
-            }
-        return None
+            },
+            "gate": gate_block,
+            "agentic_hint": (
+                "HARD GATE: recon allows 1 call per task. Your first "
+                "recon result already contains scaffolds, lites, and "
+                "repo_map. Use recon_resolve to read full content for "
+                "any file from that result.\n\n"
+                "If you genuinely need a new recon (different task, "
+                "different seeds), use the gate_token from the gate "
+                "block below on your next call along with gate_reason "
+                f"(≥{_RECON_GATE_REASON_MIN} chars) and pinned_paths."
+            ),
+            "consecutive_recon_calls": consecutive + 1,
+        }
 
     # 3rd+ call — require gate token + gate_reason + pinned_paths
     from codeplane.mcp.gate import GateSpec
@@ -1241,22 +1244,16 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
         t_total = time.monotonic()
 
         # ── Consecutive recon call gating ──
-        # TODO(dave01): Remove this override before merging to main.
-        # Temporarily force-bypass gating for development/testing.
-        os.environ["CODEPLANE_RECON_GATE_BYPASS"] = "1"
-        gate_bypass = os.environ.get("CODEPLANE_RECON_GATE_BYPASS", "") == "1"
-
-        if not gate_bypass:
-            gate_block = _check_recon_gate(
-                app_ctx,
-                ctx,
-                expand_reason=expand_reason,
-                pinned_paths=pinned_paths,
-                gate_token=gate_token,
-                gate_reason=gate_reason,
-            )
-            if gate_block is not None:
-                return gate_block
+        gate_block = _check_recon_gate(
+            app_ctx,
+            ctx,
+            expand_reason=expand_reason,
+            pinned_paths=pinned_paths,
+            gate_token=gate_token,
+            gate_reason=gate_reason,
+        )
+        if gate_block is not None:
+            return gate_block
 
         # Increment consecutive recon counter
         try:

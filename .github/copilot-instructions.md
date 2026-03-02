@@ -201,6 +201,10 @@ recon(task="<describe the task>", seeds=["SymA", "SymB", ...], read_only=<True o
 
 **ONE recon call handles multiple symbols** — put ALL names in `seeds`, never loop.
 
+**Recon is hard-gated to 1 call per task.** The 2nd call is blocked unconditionally.
+Use `recon_resolve` to read files from your first result. A gate escape (gate_token)
+is issued on the 2nd block for emergencies only.
+
 ### After Recon: Resolve, Plan, Edit, Checkpoint
 
 1. `recon_resolve(targets=[...], justification="...")` — full content + sha256. **ALL files in ONE call** (uses candidate_id, not raw paths)
