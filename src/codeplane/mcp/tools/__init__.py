@@ -11,7 +11,7 @@ Two budgets constrain mutation calls:
     explaining why a single batched call is impossible.  This forces the
     agent to consider batching BEFORE it starts editing.
 
-**Session budget** (``_MAX_EDIT_BATCHES``, hard limit, currently 2):
+**Session budget** (``_MAX_EDIT_BATCHES``, hard limit, currently 4):
     Total mutation batches allowed before ``checkpoint`` is required.
     Resets on ANY checkpoint call (pass or fail).  The plan budget must
     never exceed this — ``refactor_plan`` should clamp or reject.

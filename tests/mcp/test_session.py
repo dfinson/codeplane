@@ -421,7 +421,7 @@ class TestSessionStateEditTickets:
     def test_max_edit_batches_constant(self) -> None:
         from codeplane.mcp.session import _MAX_EDIT_BATCHES
 
-        assert _MAX_EDIT_BATCHES == 2
+        assert _MAX_EDIT_BATCHES == 4
 
     def test_last_recon_id_default(self) -> None:
         """Gap 4: last_recon_id defaults to None."""

@@ -2,7 +2,7 @@
 
 Covers:
 - refactor_move: import path updates
-- refactor_impact: reference discovery
+- recon_impact: reference discovery
 - Helper methods: _path_to_module, _build_preview
 """
 
@@ -198,7 +198,7 @@ class TestRefactorMove:
 
 @pytest.mark.asyncio
 class TestRefactorImpact:
-    """Test refactor_impact operation."""
+    """Test recon_impact operation (RefactorOps.impact backend)."""
 
     @pytest.fixture
     def mock_coordinator(self) -> MagicMock:

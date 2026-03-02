@@ -367,10 +367,10 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             },
         ],
     ),
-    "refactor_impact": ToolDocumentation(
-        name="refactor_impact",
-        description="Find all references to a symbol/file for impact analysis before removal.",
-        category=ToolCategory.REFACTOR,
+    "recon_impact": ToolDocumentation(
+        name="recon_impact",
+        description="Find all references to a symbol/file for read-only impact analysis.",
+        category=ToolCategory.SEARCH,
         when_to_use=[
             "Removing deprecated code",
             "Finding all usages before deletion",

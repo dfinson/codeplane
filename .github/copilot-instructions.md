@@ -39,7 +39,7 @@ Do NOT continue editing files after a failed or unread checkpoint.
 
 ## ⛔ Mutation Budget — Batching Rules ⛔
 
-**Session hard limit: 2 mutation batches before checkpoint.**
+**Session hard limit: 4 mutation batches before checkpoint.**
 
 Each `refactor_edit` call = 1 batch, regardless of how many files or edits it contains.
 
@@ -212,7 +212,7 @@ is issued on the 2nd block for emergencies only.
 3. `refactor_edit(plan_id=..., edits=[...])` — find-and-replace with sha256 locking (one call can edit MULTIPLE files)
 4. `checkpoint(changed_files=[...], commit_message="...")` — lint → test → commit → push
 
-**Budget:** 2 mutation batches max before checkpoint. Each `refactor_edit` call = 1 batch.
+**Budget:** 4 mutation batches max before checkpoint. Each `refactor_edit` call = 1 batch.
 Batch source + test edits into ONE call. On checkpoint failure: budget RESETS, `fix_plan` with
 pre-minted edit tickets returned inline — call `refactor_edit` directly (no new plan needed).
 
@@ -230,7 +230,7 @@ pre-minted edit tickets returned inline — call `refactor_edit` directly (no ne
 | Delete file | `mcp_codeplane-codeplane_refactor_edit(delete=True)` | `git rm`, `rm` |
 | Rename symbol | `mcp_codeplane-codeplane_refactor_rename` | Find-and-replace, `sed` |
 | Move file | `mcp_codeplane-codeplane_refactor_move` | `mv` + manual import fixup |
-| Find all references | `mcp_codeplane-codeplane_refactor_impact` | `grep`, `rg`, scaffold iteration |
+| Find all references | `mcp_codeplane-codeplane_recon_impact` | `grep`, `rg`, scaffold iteration |
 | Apply/inspect refactor | `mcp_codeplane-codeplane_refactor_commit` | Manual verification |
 | Cancel refactor | `mcp_codeplane-codeplane_refactor_cancel` | — |
 | Lint + test + commit | `mcp_codeplane-codeplane_checkpoint` | Running linters/test runners/git directly |
@@ -242,13 +242,13 @@ pre-minted edit tickets returned inline — call `refactor_edit` directly (no ne
 STOP before using `refactor_edit` for multi-file changes:
 - Changing a name across files? → `refactor_rename` (NOT refactor_edit + manual fixup)
 - Moving a file? → `refactor_move` (NOT refactor_edit + delete)
-- Deleting a file? → `refactor_impact` first, then `refactor_edit(delete=True)`
-- Finding all usages of a symbol? → `refactor_impact` (NOT grep/scaffold iteration)
+- Deleting a file? → `recon_impact` first, then `refactor_edit(delete=True)`
+- Finding all usages of a symbol? → `recon_impact` (NOT grep/scaffold iteration)
 
 ### Refactor: preview → commit/cancel
 
 1. `refactor_rename(symbol="Name", new_name="NewName", justification="...")` — `justification` is **required**
-   `refactor_move`/`refactor_impact` — same pattern, preview with `refactor_id`
+   `refactor_move` — same pattern, preview with `refactor_id`
 2. If `verification_required`: `refactor_commit(refactor_id=..., inspect_path=...)` — review low-certainty matches
 3. `refactor_commit(refactor_id=...)` to apply, or `refactor_cancel(refactor_id=...)` to discard
 
@@ -288,14 +288,14 @@ recon(task="...", read_only=False)
 **Find all usages of a symbol (audit/trace):**
 ```
 recon(task="...", seeds=["SymbolName"], read_only=True)
-→ refactor_impact(target="SymbolName")         # returns ALL reference sites
+→ recon_impact(target="SymbolName")         # returns ALL reference sites
 → cat src/path/file.py                         # read files you need via terminal
 ```
 
 **Delete a file:**
 ```
 recon(task="...", read_only=False)
-→ refactor_impact(target="file/to/delete.py")          # check dependents first
+→ recon_impact(target="file/to/delete.py")          # check dependents first
 → refactor_plan(edit_targets=["<candidate_id>"])
 → refactor_edit(plan_id="...", edits=[{
       "edit_ticket": "...", "path": "file/to/delete.py",
@@ -327,7 +327,7 @@ Budget resets on failure. `fix_plan` is always in the checkpoint response — no
 - **DON'T** use one `refactor_edit` call per file — batch ALL edits into ONE call
 - **DON'T** panic on checkpoint failure — budget resets, use the `fix_plan` tickets provided
 - **DON'T** grep/filter scaffold metadata to find files — scaffolds are a TABLE OF CONTENTS,
-  not a search index. Use `refactor_impact` to find all usages of a symbol
+  not a search index. Use `recon_impact` to find all usages of a symbol
 - **DON'T** skip `checkpoint(changed_files=[])` after read-only flows — session state
   (recon gate, mutation budget) carries over and blocks the next task
 <!-- /codeplane-instructions -->

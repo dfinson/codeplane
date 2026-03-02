@@ -189,6 +189,44 @@ def _serialize_refactor_result(result: "RefactorResult") -> dict[str, Any]:
     return wrap_response(output, resource_kind="refactor_preview")
 
 
+def _serialize_impact_result(result: "RefactorResult") -> dict[str, Any]:
+    """Convert impact RefactorResult to a read-only reference list.
+
+    Unlike _serialize_refactor_result, this does NOT include a refactor_id
+    or suggest refactor_commit/cancel — impact analysis is read-only.
+    """
+    references: list[dict[str, Any]] = []
+    if result.preview:
+        for fe in result.preview.edits:
+            for h in fe.hunks:
+                references.append({
+                    "path": fe.path,
+                    "line": h.line,
+                    "match_text": h.old[:120] if h.old else "",
+                    "certainty": h.certainty,
+                })
+
+    files_affected = result.preview.files_affected if result.preview else 0
+    from codeplane.mcp.delivery import wrap_response
+
+    return wrap_response(
+        {
+            "references": references,
+            "total_references": len(references),
+            "files_affected": files_affected,
+            "summary": (
+                f"Found {len(references)} reference(s) across "
+                f"{files_affected} file(s)."
+            ),
+            "agentic_hint": (
+                "Impact analysis complete (read-only). "
+                "Use this data to plan your edits. No refactor_commit needed."
+            ),
+        },
+        resource_kind="impact_analysis",
+    )
+
+
 # =============================================================================
 # Tool Registration
 # =============================================================================
@@ -258,7 +296,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "Number of refactor_edit calls you need. Default 1. "
                 "Each call can edit MULTIPLE files — batch ALL edits "
                 "(source + tests) into one call. The session hard limit "
-                "is 2 mutation batches before checkpoint. Your plan budget "
+                "is 4 mutation batches before checkpoint. Your plan budget "
                 "cannot exceed the remaining session budget."
             ),
         ),
@@ -289,7 +327,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         calls, you MUST provide batch_justification (100+ chars)
         explaining why batching into one call is impossible.
 
-        Session hard limit: 2 mutation batches before checkpoint.
+        Session hard limit: 4 mutation batches before checkpoint.
         Your expected_edit_calls cannot exceed the remaining session
         budget.  If it does, it will be clamped.
 
@@ -608,14 +646,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
     @mcp.tool(
         annotations={
-            "title": "Impact: reference analysis before removal",
+            "title": "Recon: read-only reference analysis",
             "readOnlyHint": True,
             "destructiveHint": False,
             "idempotentHint": True,
             "openWorldHint": False,
         },
     )
-    async def refactor_impact(
+    async def recon_impact(
         ctx: Context,
         target: str = Field(..., description="Symbol or path to analyze for impact"),
         justification: str = Field(
@@ -632,7 +670,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             description="Justification for passing the gate (min chars per gate spec).",
         ),
     ) -> dict[str, Any]:
-        """Find all references to a symbol/file for impact analysis before removal."""
+        """Find all references to a symbol/file for read-only impact analysis."""
         session = app_ctx.session_manager.get_or_create(ctx.session_id)
         _require_recon_and_justification(session, justification, allow_read_only=True)
 
@@ -640,8 +678,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             target,
             include_comments=include_comments,
         )
-        session.mutation_ctx.pending_refactors[result.refactor_id] = "impact"
-        return _serialize_refactor_result(result)
+        # Read-only: do NOT store as pending refactor
+        return _serialize_impact_result(result)
 
     @mcp.tool(
         annotations={

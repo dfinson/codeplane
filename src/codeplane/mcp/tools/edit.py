@@ -20,7 +20,7 @@ together — rather than using separate calls per file.
 
 Budget model
 ------------
-- Session hard limit: ``_MAX_EDIT_BATCHES`` (2) mutation batches
+- Session hard limit: ``_MAX_EDIT_BATCHES`` (4) mutation batches
   before ``checkpoint`` is required.
 - Each ``refactor_edit`` call counts as 1 batch regardless of how
   many files or edits it contains.

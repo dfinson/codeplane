@@ -9,7 +9,7 @@ The mutation pipeline has **three** gates that agents must understand:
    tickets.  ``expected_edit_calls`` is an *agent promise*: it must be
    justified (100+ chars) if >1, and the plan-level budget is enforced.
 
-2. **Session gate** — ``_MAX_EDIT_BATCHES`` (currently 2) caps the total
+2. **Session gate** — ``_MAX_EDIT_BATCHES`` (currently 4) caps the total
    number of mutation batches (``refactor_edit`` or ``refactor_commit``)
    before ``checkpoint`` is required.  This is the *hard* limit.  The
    plan-level budget must never exceed the remaining session budget.

@@ -2989,7 +2989,7 @@ Tools are organized into functional families. Each tool is a standalone MCP tool
 | Tool | Purpose |
 |------|---------|  
 | `recon` | Task-aware code discovery — returns scaffolds, lite summaries, and repo map |
-| `recon_resolve` | Fetch full file content + sha256 for files found via recon |
+| `recon_impact` | Find all references to a symbol or file for read-only impact analysis |
 
 #### Edit Tools
 
@@ -3017,13 +3017,12 @@ Tools are organized into functional families. Each tool is a standalone MCP tool
 | `git_submodule` | Submodule management (init, update, add, remove, status) |
 | `git_worktree` | Worktree management (add, remove, list) |
 
-#### Refactor Tools (5 tools, structural index based)
+#### Refactor Tools (4 tools, structural index based)
 
 | Tool | Purpose |
 |------|---------|  
 | `refactor_rename` | Rename symbol across codebase (preview → commit/cancel) |
 | `refactor_move` | Move file or symbol to different location |
-| `refactor_impact` | Find all references for impact analysis before removal |
 | `refactor_commit` | Apply or inspect a previewed refactoring |
 | `refactor_cancel` | Cancel a previewed refactoring |
 
@@ -3132,40 +3131,6 @@ The following sections define detailed parameter and response schemas for each t
 
 ---
 
-#### `recon_resolve`
-
-Fetch full file content and sha256 for files identified by `recon`.
-
-**Parameters:**
-
-```typescript
-{
-  targets: Array<{
-    path: string;
-    start_line?: number;            // Optional line range start
-    end_line?: number;              // Optional line range end
-  }>;
-}
-```
-
-**Response:**
-
-```typescript
-{
-  files: Array<{
-    path: string;
-    content: string;
-    line_count: number;
-    sha256: string;                 // Required by refactor_edit
-    range?: [number, number];       // [start_line, end_line] when span requested
-  }>;
-  summary: string;
-  agentic_hint: string;            // Routing table for next steps
-}
-```
-
----
-
 #### `refactor_edit`
 
 Find-and-replace file editing with sha256 locking.
@@ -3178,7 +3143,7 @@ Find-and-replace file editing with sha256 locking.
     path: string;
     old_content: string;            // Text to find (empty string = create new file)
     new_content: string;            // Replacement text
-    expected_file_sha256?: string;  // SHA256 from recon_resolve (required for updates)
+    expected_file_sha256?: string;  // SHA256 computed from disk by refactor_plan
     start_line?: number;            // Optional hint to disambiguate
     end_line?: number;              // Optional hint to disambiguate
     delete?: boolean;               // Set true to delete the file
@@ -3411,13 +3376,13 @@ Move a file or symbol to a new location.
 { from_path: string; to_path: string }
 ```
 
-##### `refactor_impact`
+##### `recon_impact`
 
-Find all references to a symbol or file for impact analysis before removal.
+Find all references to a symbol or file for read-only impact analysis. This is a discovery tool — no `refactor_commit` or `refactor_cancel` needed.
 
 ```typescript
 // Parameters
-{ target: string }
+{ target: string; include_comments?: boolean }
 ```
 
 ##### `refactor_commit`

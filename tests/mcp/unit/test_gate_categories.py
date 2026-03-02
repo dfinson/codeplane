@@ -38,7 +38,7 @@ class TestCategorizeTool:
             ("refactor_edit", "write"),
             ("refactor_rename", "refactor"),
             ("refactor_move", "refactor"),
-            ("refactor_impact", "refactor"),
+            ("recon_impact", "search"),
             ("refactor_commit", "refactor"),
             ("refactor_cancel", "meta"),
             ("semantic_diff", "diff"),

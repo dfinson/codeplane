@@ -304,12 +304,12 @@ class TestRefactorReconGate:
     async def test_impact_without_recon_raises(
         self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
     ) -> None:
-        """refactor_impact without recon raises INVALID_PARAMS."""
+        """recon_impact without recon raises INVALID_PARAMS."""
         from codeplane.mcp.tools.refactor import register_tools
 
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
-        impact_fn = tools["refactor_impact"].fn
+        impact_fn = tools["recon_impact"].fn
 
         with pytest.raises(MCPError) as exc_info:
             await impact_fn(

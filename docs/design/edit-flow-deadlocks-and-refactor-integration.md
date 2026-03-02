@@ -15,7 +15,7 @@ The edit flow has three layers of gating:
    cleared by `checkpoint`)
 2. **Edit call budget** — `plan.edit_calls_made < plan.expected_edit_calls`
    (incremented per `refactor_edit` call)
-3. **Batch limit** — `session.edits_since_checkpoint < _MAX_EDIT_BATCHES` (2)
+3. **Batch limit** — `session.edits_since_checkpoint < _MAX_EDIT_BATCHES` (4)
    (reset by `checkpoint`)
 
 The only escape valve for all three is `checkpoint`, which always clears
@@ -83,7 +83,7 @@ refactor_edit(plan_id=..., edits=[...])  → edits_since_checkpoint = 2
   → no more edits possible
 ```
 
-**Impact:** LOW-MEDIUM — `_MAX_EDIT_BATCHES=2` is a deliberately tight
+**Impact:** LOW-MEDIUM — `_MAX_EDIT_BATCHES=4` is a deliberately tight
 limit, but the agent doesn't know that `refactor_commit` consumes one
 of those slots. The two systems share the counter but have no
 coordination.

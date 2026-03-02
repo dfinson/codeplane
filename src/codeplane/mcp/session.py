@@ -68,7 +68,7 @@ _MAX_PLAN_TARGETS = 8
 
 # Maximum mutation batches (refactor_edit or refactor_commit) before
 # checkpoint is required.  Resets on successful checkpoint.
-_MAX_EDIT_BATCHES = 2
+_MAX_EDIT_BATCHES = 4
 
 
 @dataclass

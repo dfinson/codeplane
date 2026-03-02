@@ -97,7 +97,7 @@ CodePlane exposes 35+ MCP tools organized by domain:
 | **Index** | `search`, `map_repo` | Lexical/symbol search, repository mental model |
 | **Analysis** | `semantic_diff` | Structural change summary with blast-radius enrichment |
 | **Mutation** | `write_source` | Atomic file create/update/delete with content-addressed edits |
-| **Refactor** | `refactor_rename`, `refactor_move`, `refactor_impact`, `refactor_apply`, `refactor_cancel`, `refactor_inspect` | Index-based refactoring with preview and certainty levels |
+| **Refactor** | `refactor_rename`, `refactor_move`, `recon_impact`, `refactor_apply`, `refactor_cancel`, `refactor_inspect` | Index-based refactoring with preview and certainty levels |
 | **Testing** | `discover_test_targets`, `run_test_targets` | Multi-language test discovery and execution |
 | **Lint** | `lint_check`, `lint_tools` | Auto-detected linters, formatters, type checkers |
 | **Introspection** | `describe` | Self-documenting tool schemas |
