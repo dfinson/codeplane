@@ -723,23 +723,22 @@ class TestWrapResponseResolvedMeta:
         assert "resolved_meta" not in result
 
 
-class TestWrapResponseReconCandidatesMeta:
-    """Tests for inline candidates_meta on sidecar recon_result."""
+class TestWrapResponseReconNoInlineMeta:
+    """Recon sidecar must NOT inline candidate metadata (it's in the cache)."""
 
-    def test_sidecar_recon_inlines_candidates_meta(self) -> None:
-        """When recon_result exceeds inline cap, candidates_meta is inlined."""
-        big_scaffold = {
-            "imports": ["import os"] * 50,
-            "symbols": [],
-            "total_lines": 200,
-            "summary": "big",
-        }
+    def test_sidecar_recon_has_no_candidates_meta(self) -> None:
+        """candidates_meta must not appear — agent reads candidates from cache."""
         payload: dict[str, Any] = {
             "scaffold_files": [
                 {
                     "candidate_id": "abc:0",
                     "path": "src/foo.py",
-                    "scaffold": big_scaffold,
+                    "scaffold": {
+                        "imports": ["import os"] * 50,
+                        "symbols": [],
+                        "total_lines": 200,
+                        "summary": "big",
+                    },
                     "similarity": 0.9,
                     "combined_score": 0.85,
                     "artifact_kind": "code",
@@ -759,44 +758,10 @@ class TestWrapResponseReconCandidatesMeta:
         }
         result = wrap_response(payload, resource_kind="recon_result")
         assert result["delivery"] == "sidecar_cache"
-        assert "candidates_meta" in result
-        meta = result["candidates_meta"]
-        assert len(meta) == 2
-        assert meta[0]["candidate_id"] == "abc:0"
-        assert meta[0]["path"] == "src/foo.py"
-        assert meta[0]["tier"] == "scaffold"
-        assert meta[1]["candidate_id"] == "abc:1"
-        assert meta[1]["path"] == "src/bar.py"
-        assert meta[1]["tier"] == "lite"
-        # No scaffold content dict in inline envelope
-        assert all(
-            "scaffold" not in m or isinstance(m.get("scaffold"), type(None))
-            for m in meta
-            if "scaffold" in m
-        )
-        # Each entry only has candidate_id, path, tier — no bulky data
-        for m in meta:
-            assert set(m.keys()) == {"candidate_id", "path", "tier"}
-
-    def test_inline_recon_has_no_candidates_meta(self) -> None:
-        """When recon_result fits inline, no separate candidates_meta key."""
-        payload: dict[str, Any] = {
-            "scaffold_files": [
-                {
-                    "candidate_id": "abc:0",
-                    "path": "src/tiny.py",
-                    "scaffold": {"imports": [], "symbols": [], "total_lines": 5, "summary": "tiny"},
-                    "similarity": 0.9,
-                    "combined_score": 0.85,
-                    "artifact_kind": "code",
-                },
-            ],
-            "lite_files": [],
-            "agentic_hint": "hint",
-        }
-        result = wrap_response(payload, resource_kind="recon_result")
-        assert result["delivery"] == "inline"
         assert "candidates_meta" not in result
+        # Hint must tell agent how to read candidates from cache
+        assert "candidates" in result["agentic_hint"]
+        assert ".id" in result["agentic_hint"]
 
 
 # =============================================================================

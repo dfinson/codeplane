@@ -274,16 +274,16 @@ def _build_recon_hint(cache_id: str, byte_size: int, payload: dict[str, Any]) ->
         f"Cache: {cache_id} | {byte_size:,} bytes | recon_result",
         f"Files: {n_scaffold} scaffold(s), {n_lite} lite(s)",
         "",
-        "STEP 1 — CANDIDATES: Read the candidate list to see all discovered files",
+        "STEP 1 — CANDIDATES: Read the full candidate list (each entry has .id and .path)",
         f"  {_cpl_json_cmd(cache_id, 'candidates')}",
+        "  Parse the .id field from each candidate — you need these to call recon_resolve.",
         "",
     ]
 
     if scaffold_files:
         paths = [f.get("path", "") for f in scaffold_files[:3]]
         parts.append(
-            "STEP 2 — SCAFFOLD: Read scaffold for each file you need "
-            "(imports + symbols + line numbers)"
+            "STEP 2 — SCAFFOLD: Read scaffold for files you need (imports + symbols + line numbers)"
         )
         parts.append(f"  {_cpl_cmd(cache_id, f'scaffold:{paths[0]}')}")
         if len(paths) > 1:
@@ -297,7 +297,7 @@ def _build_recon_hint(cache_id: str, byte_size: int, payload: dict[str, Any]) ->
     parts.append("")
 
     parts.append(
-        "NEXT: Call recon_resolve with candidate_id values for the files you need. "
+        "NEXT: Call recon_resolve with the .id values from candidates as candidate_id. "
         "Resolve ALL files in ONE call — incremental resolves are rate-limited."
     )
 
@@ -679,30 +679,6 @@ def wrap_response(
             errors = result.get("errors")
             if errors:
                 envelope["errors"] = errors
-
-        # ── Inline recon candidates metadata ──
-        # When recon goes sidecar, inline compact candidate metadata so the
-        # agent can immediately call recon_resolve without reading the cache.
-        if resource_kind == "recon_result":
-            candidates_meta: list[dict[str, str]] = []
-            for f in result.get("scaffold_files", []):
-                candidates_meta.append(
-                    {
-                        "candidate_id": f.get("candidate_id", ""),
-                        "path": f.get("path", ""),
-                        "tier": "scaffold",
-                    }
-                )
-            for f in result.get("lite_files", []):
-                candidates_meta.append(
-                    {
-                        "candidate_id": f.get("candidate_id", ""),
-                        "path": f.get("path", ""),
-                        "tier": "lite",
-                    }
-                )
-            if candidates_meta:
-                envelope["candidates_meta"] = candidates_meta
 
         envelope["inline_budget_bytes_limit"] = inline_cap
         # Measure AFTER all fields are set so the count reflects reality.
