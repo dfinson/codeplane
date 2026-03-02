@@ -55,34 +55,17 @@ recon_resolve(targets=[{"path": "src/foo.py"}])
 Returns full file content + `sha256` hash per file (sha256 skipped in read-only mode).
 The sha256 is **required** by `refactor_edit` to ensure edits target the correct version.
 
-When the response exceeds the inline cap (sidecar delivery), the envelope includes
-`resolved_meta` — an inline array of per-file metadata (path, candidate_id,
-line_count, file_sha256) so you can proceed to `refactor_plan` without parsing
-the sidecar.  Retrieve file content from the sidecar via the jq command in
-`agentic_hint` when you need `old_content` for edits.
+### Planning and Editing Files
 
-### Planning Edits
+Before editing, declare your edit set:
+`refactor_plan(edit_targets=["<candidate_id from recon>"])` → returns `plan_id` + `edit_ticket` per file.
 
-Before editing existing files, declare your edit set with `refactor_plan`:
+Then apply changes with `refactor_edit`:
 
 ```
-refactor_plan(
-    edit_targets=["<candidate_id from recon>"],
-    expected_edit_calls=1,
-    description="Brief description of what you're changing"
-)
-```
-
-Returns a `plan_id` and an `edit_ticket` per file. Both are **required** by `refactor_edit`.
-
-### Editing Files
-
-Use `refactor_edit` for all file modifications:
-
-```
-refactor_edit(plan_id="<plan_id from refactor_plan>", edits=[{
+refactor_edit(plan_id="<plan_id>", edits=[{
     "path": "src/foo.py",
-    "edit_ticket": "<edit_ticket from refactor_plan>",
+    "edit_ticket": "<ticket from plan>",
     "old_content": "def hello():
     pass",
     "new_content": "def hello():
@@ -91,21 +74,23 @@ refactor_edit(plan_id="<plan_id from refactor_plan>", edits=[{
 }])
 ```
 
-- `plan_id` and `edit_ticket` are required for updating existing files
-- Find-and-replace: specify `old_content` to find and `new_content` to replace it with
-- Optional `start_line`/`end_line` hints to disambiguate if old_content appears multiple times
-- Omit `old_content` (or set to null) to create a new file (no plan or ticket needed)
-- Set `delete: true` to delete a file
+- Omit `old_content` to create a new file (no plan/ticket needed). Set `delete: true` to delete.
+- One call can edit **multiple files** — each edit has its own `path` via `edit_ticket`.
+
+### Edit Budget
+
+- **2 mutation batches** max before checkpoint. Each `refactor_edit` call = 1 batch.
+- Batch source + test edits into ONE call. Prefer 1 batch.
+- On checkpoint failure: budget RESETS, `fix_plan` with pre-minted tickets returned.
+  Batch ALL fixes into one `refactor_edit` call, then retry checkpoint.
 
 ### Workflow
 
 1. `recon(task="...", read_only=True/False)` — discover relevant files + declare intent
-2. `recon_resolve(targets=[...])` — get full content (+ sha256/edit_tickets if read_only=False)
-3. If read_only=False: `refactor_plan(edit_targets=[...])` — declare edit set, get plan_id + tickets
-4. `refactor_edit(plan_id=..., edits=[...])` — make changes (include edit_ticket per file)
-5. `checkpoint(changed_files=[...])` — ALWAYS called:
-   - read_only=True: verifies clean working tree (no lint/test/commit)
-   - read_only=False: lint + test + optionally commit
+2. `recon_resolve(targets=[...])` — get full content + sha256
+3. `refactor_plan(edit_targets=[...])` — declare edit set, get plan_id + tickets
+4. `refactor_edit(plan_id=..., edits=[...])` — make changes (batch into ONE call)
+5. `checkpoint(changed_files=[...])` — lint + test + optionally commit
 
 ### CRITICAL: After Every Code Change
 
@@ -118,9 +103,7 @@ Include `push=True` to push after commit (ask the user before pushing).
 
 ### Reviewing Changes
 
-1. `semantic_diff(base="main")` — structural overview of all changes vs main
-2. `recon_resolve` on changed files — review each change in context
-3. `checkpoint(changed_files=[...])` — lint + affected tests
+`semantic_diff(base="main")` for structural overview, then `recon_resolve` changed files to review.
 
 ### Required Tool Mapping
 
@@ -151,34 +134,12 @@ STOP before using `refactor_edit` for multi-file changes:
 2. If `verification_required`: `refactor_commit(refactor_id=..., inspect_path=...)` — review low-certainty matches
 3. `refactor_commit(refactor_id=...)` to apply, or `refactor_cancel(refactor_id=...)` to discard
 
-### CRITICAL: Follow Agentic Hints
+### Follow Agentic Hints
 
-Responses may include `agentic_hint` — these are **direct instructions for your next
-action**, not suggestions. Always read and execute them before proceeding.
+`agentic_hint` in responses = **direct instructions for your next action**. Always execute
+before proceeding. Also check: `coverage_hint`, `display_to_user`.
 
-Also check for: `coverage_hint`, `display_to_user`.
-
-### Large Responses (Sidecar Delivery)
-
-When a response exceeds the inline budget, it is cached server-side and you receive
-terminal commands instead of the full payload. Run those commands to retrieve sections.
-Check `delivery` in the response: `"inline"` = full payload present, `"sidecar_cache"` =
-run the commands in `agentic_hint` to fetch content.
-
-### Reviewing Multi-Domain Changes
-
-`semantic_diff` automatically classifies changes by directory domain and includes
-a `domains` key when changes span multiple subsystems. Use this for structured review:
-
-1. `semantic_diff(base="main")` — get diff with domain groupings
-2. Read `domains` — each entry has `name`, `files`, `review_priority`, risk counts
-3. For each domain (priority order), call `recon(task="review <domain> changes", read_only=True, pinned_paths=<domain files>)`
-4. `recon_resolve` to read changed files in context
-5. Focus on breaking changes and cross-domain edges first
-6. Summarize findings per domain
-
-The `cross_domain_edges` key (when present) shows import relationships between
-domains — review these interfaces for compatibility.
+If `delivery` = `"sidecar_cache"`, run `agentic_hint` commands to fetch content sections.
 
 ### Common Mistakes (Don't Do These)
 
@@ -189,4 +150,6 @@ domains — review these interfaces for compatibility.
 - **DON'T** ignore `agentic_hint` in responses
 - **DON'T** use raw `git add` + `git commit` — use `checkpoint` with `commit_message`
 - **DON'T** dismiss lint/test failures as "pre-existing" or "not your problem" — fix ALL issues
+- **DON'T** use one `refactor_edit` call per file — batch ALL edits into ONE call
+- **DON'T** panic on checkpoint failure — budget resets, use the `fix_plan` tickets provided
 <!-- /codeplane-instructions -->

@@ -10,6 +10,7 @@ from fastmcp import FastMCP
 
 from codeplane.mcp._compat import get_tools_sync
 from codeplane.mcp.errors import MCPError, MCPErrorCode
+from codeplane.mcp.session import MutationContext
 from codeplane.mcp.tools.refactor import (
     _display_refactor,
     _serialize_refactor_result,
@@ -346,6 +347,7 @@ class TestRefactorPlan:
         session.active_plan = None
         session.read_only = False
         session.edits_since_checkpoint = 0
+        session.mutation_ctx = MutationContext()
         ctx.session_manager.get_or_create.return_value = session
         return ctx
 
@@ -583,6 +585,58 @@ class TestRefactorPlan:
             await plan_fn(
                 ctx=fastmcp_ctx,
                 edit_targets=[],
+                description=self._DESCRIPTION,
+                expected_edit_calls=1,
+                batch_justification=None,
+                recon_id=None,
+            )
+
+    @pytest.mark.asyncio
+    async def test_plan_clamps_edit_calls_to_session_budget(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """expected_edit_calls > remaining budget is clamped, not rejected."""
+        session = app_ctx.session_manager.get_or_create.return_value
+        # 1 batch already used → only 1 remains
+        session.mutation_ctx.mutations_since_checkpoint = 1
+
+        from codeplane.mcp.tools.refactor import register_tools
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        plan_fn = tools["refactor_plan"].fn
+
+        result = await plan_fn(
+            ctx=fastmcp_ctx,
+            edit_targets=["r1:0"],
+            description=self._DESCRIPTION,
+            expected_edit_calls=2,
+            batch_justification=None,  # clamped to 1, so no justification needed
+            recon_id=None,
+        )
+
+        # Should be clamped to 1, not 2
+        assert result["expected_edit_calls"] == 1
+        assert "clamped" in result.get("agentic_hint", "").lower()
+
+    @pytest.mark.asyncio
+    async def test_plan_rejects_when_budget_exhausted(
+        self, mcp_app: FastMCP, app_ctx: MagicMock, fastmcp_ctx: MagicMock
+    ) -> None:
+        """Zero remaining budget rejects plan creation."""
+        session = app_ctx.session_manager.get_or_create.return_value
+        session.mutation_ctx.mutations_since_checkpoint = 2  # fully spent
+
+        from codeplane.mcp.tools.refactor import register_tools
+
+        register_tools(mcp_app, app_ctx)
+        tools = get_tools_sync(mcp_app)
+        plan_fn = tools["refactor_plan"].fn
+
+        with pytest.raises(MCPError, match="No mutation budget"):
+            await plan_fn(
+                ctx=fastmcp_ctx,
+                edit_targets=["r1:0"],
                 description=self._DESCRIPTION,
                 expected_edit_calls=1,
                 batch_justification=None,

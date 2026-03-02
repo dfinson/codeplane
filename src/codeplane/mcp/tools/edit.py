@@ -9,6 +9,23 @@ Resolution logic:
 2. Multiple exact matches + span hint → disambiguate within range
 3. Zero exact matches → fuzzy whitespace-normalized search within span or whole file
 4. Multiple matches + no span → reject with match locations
+
+Multi-file batching
+-------------------
+Each ``FindReplaceEdit`` has its own ``path``.  A single
+``refactor_edit`` call can modify files across both source and test
+directories.  Agents should batch ALL edits for a logical change into
+one call — e.g. editing ``src/foo.py`` and ``tests/test_foo.py``
+together — rather than using separate calls per file.
+
+Budget model
+------------
+- Session hard limit: ``_MAX_EDIT_BATCHES`` (2) mutation batches
+  before ``checkpoint`` is required.
+- Each ``refactor_edit`` call counts as 1 batch regardless of how
+  many files or edits it contains.
+- On checkpoint failure: the budget resets and a ``fix_plan`` with
+  pre-minted tickets is returned — no new ``refactor_plan`` needed.
 """
 
 import hashlib
@@ -311,7 +328,9 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 "List of find-and-replace edits. Each edit specifies "
                 "old_content to find and new_content to replace it with. "
                 "edit_ticket (from refactor_plan) is required for updates. "
-                "Batch ALL edits into a single call."
+                "Each edit has its own path — one call can edit MULTIPLE "
+                "files (source + tests). Batch ALL edits into a single "
+                "call to minimize batch count."
             ),
         ),
         plan_id: str = Field(
@@ -334,6 +353,16 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         Also supports file creation (old_content=None, new_content=body)
         and file deletion (delete=True).
+
+        MULTI-FILE BATCHING: The ``edits`` list can contain edits for
+        different files — each edit has its own ``path`` via its
+        ``edit_ticket``.  Batch source + test edits in ONE call to
+        minimize batch count.  Each call = 1 batch regardless of
+        how many files it touches.
+
+        BUDGET: Session limit is 2 batches before checkpoint.
+        If checkpoint fails, the budget resets and a fix_plan with
+        pre-minted tickets is returned — call refactor_edit directly.
         """
         from codeplane.files.ops import validate_path_in_repo
         from codeplane.mutation.ops import Edit
@@ -669,17 +698,38 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         if batches_left <= 0:
             batch_note = (
                 "CHECKPOINT REQUIRED: You have used all edit batches. "
-                "Call checkpoint before editing more files."
+                "Call checkpoint now. If it fails, the budget resets "
+                "and a fix_plan with pre-minted tickets is returned — "
+                "you can call refactor_edit immediately to fix issues."
+            )
+            agentic_hint = (
+                f"Edited {len(results)} file(s). {batch_note}\n"
+                'NEXT: call checkpoint(changed_files=[...], commit_message="...") '
+                "to lint, test, and commit. Ask the user whether they want "
+                "push=True or push=False."
+            )
+        elif batches_left == 1:
+            batch_note = (
+                "\u26a0 LAST BATCH: 1 edit batch remaining. Your NEXT "
+                "refactor_edit call is the FINAL one before checkpoint. "
+                "Include ALL remaining edits (source + tests) in that "
+                "single call \u2014 each edit can target a different file."
+            )
+            agentic_hint = (
+                f"Edited {len(results)} file(s). {batch_note}\n"
+                "If you have more edits, batch them ALL into one final "
+                "refactor_edit call (source + tests together).\n"
+                "If you are done editing \u2192 checkpoint(changed_files=[...], "
+                'commit_message="..."). Ask the user about push=True/False.'
             )
         else:
             batch_note = f"{batches_left} edit batch(es) remaining before checkpoint is required."
-
-        agentic_hint = (
-            f"Edited {len(results)} file(s). {batch_note}\n"
-            'NEXT: call checkpoint(changed_files=[...], commit_message="...") '
-            "to lint, test, and commit. Ask the user whether they want "
-            "push=True or push=False."
-        )
+            agentic_hint = (
+                f"Edited {len(results)} file(s). {batch_note}\n"
+                'NEXT: call checkpoint(changed_files=[...], commit_message="...") '
+                "to lint, test, and commit. Ask the user whether they want "
+                "push=True or push=False."
+            )
 
         response: dict[str, Any] = {
             "applied": True,

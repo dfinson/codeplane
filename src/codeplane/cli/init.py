@@ -99,32 +99,40 @@ recon_resolve(targets=[{{"path": "src/foo.py"}}])
 Returns full file content + `sha256` hash per file (sha256 skipped in read-only mode).
 The sha256 is **required** by `refactor_edit` to ensure edits target the correct version.
 
-### Editing Files
+### Planning and Editing Files
 
-Use `refactor_edit` for all file modifications:
+Before editing, declare your edit set:
+`refactor_plan(edit_targets=["<candidate_id from recon>"])` → returns `plan_id` + `edit_ticket` per file.
+
+Then apply changes with `refactor_edit`:
 
 ```
-refactor_edit(edits=[{{
+refactor_edit(plan_id="<plan_id>", edits=[{{
     "path": "src/foo.py",
+    "edit_ticket": "<ticket from plan>",
     "old_content": "def hello():\\n    pass",
     "new_content": "def hello():\\n    return 'world'",
     "expected_file_sha256": "<sha256 from recon_resolve>"
 }}])
 ```
 
-- Find-and-replace: specify `old_content` to find and `new_content` to replace it with
-- Optional `start_line`/`end_line` hints to disambiguate if old_content appears multiple times
-- Set `old_content` to empty string to create a new file
-- Set `delete: true` to delete a file
+- Omit `old_content` to create a new file (no plan/ticket needed). Set `delete: true` to delete.
+- One call can edit **multiple files** — each edit has its own `path` via `edit_ticket`.
+
+### Edit Budget
+
+- **2 mutation batches** max before checkpoint. Each `refactor_edit` call = 1 batch.
+- Batch source + test edits into ONE call. Prefer 1 batch.
+- On checkpoint failure: budget RESETS, `fix_plan` with pre-minted tickets returned.
+  Batch ALL fixes into one `refactor_edit` call, then retry checkpoint.
 
 ### Workflow
 
 1. `recon(task="...", read_only=True/False)` — discover relevant files + declare intent
-2. `recon_resolve(targets=[...])` — get full content (+ sha256/edit_tickets if read_only=False)
-3. If read_only=False: `refactor_edit(edits=[...])` — make changes
-4. `checkpoint(changed_files=[...])` — ALWAYS called:
-   - read_only=True: verifies clean working tree (no lint/test/commit)
-   - read_only=False: lint + test + optionally commit
+2. `recon_resolve(targets=[...])` — get full content + sha256
+3. `refactor_plan(edit_targets=[...])` — declare edit set, get plan_id + tickets
+4. `refactor_edit(plan_id=..., edits=[...])` — make changes (batch into ONE call)
+5. `checkpoint(changed_files=[...])` — lint + test + optionally commit
 
 ### CRITICAL: After Every Code Change
 
@@ -137,9 +145,7 @@ Include `push=True` to push after commit (ask the user before pushing).
 
 ### Reviewing Changes
 
-1. `semantic_diff(base="main")` — structural overview of all changes vs main
-2. `recon_resolve` on changed files — review each change in context
-3. `checkpoint(changed_files=[...])` — lint + affected tests
+`semantic_diff(base="main")` for structural overview, then `recon_resolve` changed files to review.
 
 ### Required Tool Mapping
 
@@ -170,19 +176,12 @@ STOP before using `refactor_edit` for multi-file changes:
 2. If `verification_required`: `refactor_commit(refactor_id=..., inspect_path=...)` — review low-certainty matches
 3. `refactor_commit(refactor_id=...)` to apply, or `refactor_cancel(refactor_id=...)` to discard
 
-### CRITICAL: Follow Agentic Hints
+### Follow Agentic Hints
 
-Responses may include `agentic_hint` — these are **direct instructions for your next
-action**, not suggestions. Always read and execute them before proceeding.
+`agentic_hint` in responses = **direct instructions for your next action**. Always execute
+before proceeding. Also check: `coverage_hint`, `display_to_user`.
 
-Also check for: `coverage_hint`, `display_to_user`.
-
-### Large Responses (Sidecar Delivery)
-
-When a response exceeds the inline budget, it is cached server-side and you receive
-terminal commands instead of the full payload. Run those commands to retrieve sections.
-Check `delivery` in the response: `"inline"` = full payload present, `"sidecar_cache"` =
-run the commands in `agentic_hint` to fetch content.
+If `delivery` = `"sidecar_cache"`, run `agentic_hint` commands to fetch content sections.
 
 ### Common Mistakes (Don't Do These)
 
@@ -193,6 +192,8 @@ run the commands in `agentic_hint` to fetch content.
 - **DON'T** ignore `agentic_hint` in responses
 - **DON'T** use raw `git add` + `git commit` — use `checkpoint` with `commit_message`
 - **DON'T** dismiss lint/test failures as "pre-existing" or "not your problem" — fix ALL issues
+- **DON'T** use one `refactor_edit` call per file — batch ALL edits into ONE call
+- **DON'T** panic on checkpoint failure — budget resets, use the `fix_plan` tickets provided
 <!-- /codeplane-instructions -->
 """
 
@@ -209,10 +210,10 @@ def _inject_agent_instructions(repo_root: Path, tool_prefix: str) -> list[str]:
     modified: list[str] = []
     snippet = _make_codeplane_snippet(tool_prefix)
 
-    # Target: AGENTS.md only (copilot-instructions.md should reference AGENTS.md,
-    # not duplicate CodePlane tool instructions)
+    # Target both AGENTS.md and .github/copilot-instructions.md
     targets = [
         repo_root / "AGENTS.md",
+        repo_root / ".github" / "copilot-instructions.md",
     ]
 
     for target in targets:

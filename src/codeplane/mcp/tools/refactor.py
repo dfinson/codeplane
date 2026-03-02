@@ -253,7 +253,10 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             ge=1,
             description=(
                 "Number of refactor_edit calls you need. Default 1. "
-                "Batch ALL edits into a single call unless impossible."
+                "Each call can edit MULTIPLE files — batch ALL edits "
+                "(source + tests) into one call. The session hard limit "
+                "is 2 mutation batches before checkpoint. Your plan budget "
+                "cannot exceed the remaining session budget."
             ),
         ),
         batch_justification: str | None = Field(
@@ -277,9 +280,19 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         This mints edit tickets required by refactor_edit.
 
         DEFAULT: expected_edit_calls=1. You MUST batch all edits into
-        a single refactor_edit call.  If you need multiple calls, you
-        MUST provide batch_justification (100+ chars) explaining why
-        batching into one call is impossible.
+        a single refactor_edit call.  Each call can edit MULTIPLE
+        files (source + tests) — one call with edits across 5 files
+        is better than 5 single-file calls.  If you need multiple
+        calls, you MUST provide batch_justification (100+ chars)
+        explaining why batching into one call is impossible.
+
+        Session hard limit: 2 mutation batches before checkpoint.
+        Your expected_edit_calls cannot exceed the remaining session
+        budget.  If it does, it will be clamped.
+
+        If checkpoint fails: the budget resets automatically and
+        a fix_plan with pre-minted edit tickets is returned.  You
+        do NOT need a new refactor_plan to fix lint/test failures.
         """
         session = app_ctx.session_manager.get_or_create(ctx.session_id)
 
@@ -334,6 +347,29 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 ),
                 remediation=f"Limit to {_MAX_PLAN_TARGETS} files per plan.",
             )
+
+        # ── Clamp expected_edit_calls to remaining session budget ──
+        remaining_budget = _MAX_EDIT_BATCHES - session.mutation_ctx.mutations_since_checkpoint
+        if remaining_budget < 1:
+            raise MCPError(
+                code=MCPErrorCode.INVALID_PARAMS,
+                message=(
+                    "No mutation budget remaining. Call checkpoint to "
+                    "reset the budget before creating a new plan."
+                ),
+                remediation=(
+                    'Call checkpoint(changed_files=[...], commit_message="...") '
+                    "to reset the mutation budget, then retry refactor_plan."
+                ),
+            )
+        budget_warnings: list[str] = []
+        if expected_edit_calls > remaining_budget:
+            budget_warnings.append(
+                f"expected_edit_calls clamped from {expected_edit_calls} to "
+                f"{remaining_budget} (session budget: {remaining_budget} "
+                f"batch(es) remain before checkpoint is required)."
+            )
+            expected_edit_calls = remaining_budget
 
         # ── Validate batching justification ──
         if expected_edit_calls > 1 and (
@@ -446,12 +482,18 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
 
         # ── Build response ──
         if expected_edit_calls == 1:
-            budget_note = "Budget: 1 refactor_edit call. Batch ALL your edits into a single call."
+            budget_note = (
+                "Budget: 1 refactor_edit call. Batch ALL your edits "
+                "(source + tests, multiple files) into a single call."
+            )
         else:
             budget_note = (
                 f"Budget: {expected_edit_calls} refactor_edit call(s). "
-                "Batch edits into as few calls as possible."
+                "Each call can edit multiple files. Batch edits into "
+                "as few calls as possible."
             )
+        if budget_warnings:
+            budget_note += "\n\u26a0 " + " ".join(budget_warnings)
 
         # ── Build plan-scoped context reminder ──
         context_lines: list[str] = []
@@ -480,10 +522,14 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
         if context_str:
             agentic_hint += context_str + "\n\n"
         agentic_hint += (
-            f'NEXT: refactor_edit(plan_id="{plan_id}", edits=[...]) — '
-            "include ALL your find-and-replace edits in one call.\n"
+            f'NEXT: refactor_edit(plan_id="{plan_id}", edits=[...])\n'
+            "BATCHING: Each edit has its own path — one call can edit "
+            "MULTIPLE files. Batch source + test edits together.\n"
             "After editing → checkpoint(changed_files=[...], "
-            'commit_message="...")'
+            'commit_message="...")\n\n'
+            "RECOVERY: If checkpoint fails, the budget resets and a "
+            "fix_plan with pre-minted tickets is returned. You can "
+            "call refactor_edit immediately without a new refactor_plan."
         )
 
         from codeplane.mcp.delivery import wrap_response

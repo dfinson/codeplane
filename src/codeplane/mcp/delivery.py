@@ -144,14 +144,16 @@ _SLICE_STRATEGIES: dict[str, SliceStrategy] = {
     "checkpoint": SliceStrategy(
         flow=(
             "Check passed + summary first; read agentic_hint for next steps; "
-            "drill into lint/tests on failure; check commit for push status."
+            "on failure: failure_index → failure:<N> → snippet:<path> → fix_plan."
         ),
         priority=(
             "passed",
             "summary",
             "agentic_hint",
+            "failure_index",
             "lint",
             "tests",
+            "fix_plan",
             "commit",
             "coverage_hint",
         ),
@@ -159,8 +161,10 @@ _SLICE_STRATEGIES: dict[str, SliceStrategy] = {
             "passed": "overall pass/fail boolean — read first",
             "summary": "one-line result summary",
             "agentic_hint": "next-step instructions — always follow these",
+            "failure_index": "compact array of all failures (name, location, error)",
             "lint": "linter diagnostics with status, issue count, and fixes",
-            "tests": "test runner output — tiered results with pass/fail counts",
+            "tests": "test summary (pass/fail counts — failures split into failure:<N>)",
+            "fix_plan": "plan_id + pre-minted edit tickets for immediate correction",
             "commit": "commit SHA, push status, and lean semantic diff",
             "coverage_hint": "test coverage extraction commands",
             "action": "always 'checkpoint'",
@@ -350,6 +354,12 @@ def _build_checkpoint_hint(
     byte_size: int,
     payload: dict[str, Any],
 ) -> str:
+    """Build targeted diagnostic menu for checkpoint results.
+
+    On failure, guides the agent through a focused flow:
+    failure index → individual failures → source snippets → fix_plan.
+    The agent reads exactly what it needs to fix — no re-reading entire files.
+    """
     passed = payload.get("passed")
     summary = payload.get("summary", "")
 
@@ -372,31 +382,65 @@ def _build_checkpoint_hint(
         parts.append("All checks passed.")
     else:
         step = 1
+
+        # ── Lint issues ──
         lint = payload.get("lint", {})
         if isinstance(lint, dict) and lint.get("diagnostics", 0) > 0:
-            parts.append(f"STEP {step} — LINT ISSUES: {lint.get('diagnostics', 0)} issue(s) to fix")
+            n_issues = lint.get("diagnostics", 0)
+            parts.append(f"STEP {step} — LINT: {n_issues} issue(s) — read file:line + fix")
             parts.append(f"  {_cpl_json_cmd(cache_id, 'lint')}")
             parts.append("")
             step += 1
 
+        # ── Failure index (what broke) ──
         tests = payload.get("tests", {})
-        if isinstance(tests, dict) and tests.get("failed", 0) > 0:
-            parts.append(f"STEP {step} — TEST FAILURES: {tests.get('failed', 0)} failure(s) to fix")
-            parts.append(f"  {_cpl_json_cmd(cache_id, 'tests')}")
+        n_failed = tests.get("failed", 0) if isinstance(tests, dict) else 0
+        # Check for failure_list (structured) to show failure index
+        failure_list = tests.get("failure_list", []) if isinstance(tests, dict) else []
+        if failure_list or n_failed > 0:
+            parts.append(
+                f"STEP {step} — FAILURE INDEX: See all {n_failed} failure(s) "
+                f"at a glance (name + error + location)"
+            )
+            parts.append(f"  {_cpl_json_cmd(cache_id, 'failure_index')}")
             parts.append("")
             step += 1
 
-        # Refreshed file content (if available from checkpoint failure enrichment)
-        changed_files = payload.get("changed_files", [])
-        if changed_files:
-            sample_path = changed_files[0] if isinstance(changed_files, list) else ""
-            parts.append(f"STEP {step} — FILE CONTENT: Read current file content to fix issues")
-            if sample_path:
-                parts.append(f"  {_cpl_cmd(cache_id, f'file:{sample_path}')}")
-                parts.append("  For specific lines: ... | sed -n '<start>,<end>p'")
+            # ── Individual failure detail ──
+            parts.append(f"STEP {step} — FAILURE DETAIL: Read one failure's full traceback")
+            parts.append(f"  {_cpl_cmd(cache_id, 'failure:1')}")
+            if n_failed > 1:
+                parts.append(f"  Replace 1 with failure number (1-{n_failed})")
             parts.append("")
             step += 1
 
+        # ── Source snippets (code around failure points) ──
+        # Collect snippet paths from enrichment data
+        snippet_paths = _extract_snippet_paths(payload)
+        if snippet_paths:
+            parts.append(
+                f"STEP {step} — SOURCE CONTEXT: Code around failure "
+                f"locations (line numbers + markers)"
+            )
+            parts.append(f"  {_cpl_cmd(cache_id, f'snippet:{snippet_paths[0]}')}")
+            if len(snippet_paths) > 1:
+                other_paths = ", ".join(snippet_paths[1:4])
+                parts.append(f"  Other files: {other_paths}")
+                if len(snippet_paths) > 4:
+                    parts.append(f"  ... and {len(snippet_paths) - 4} more")
+            parts.append("")
+            step += 1
+
+        # ── Scaffolds (symbol navigation) ──
+        scaffold_paths = _extract_scaffold_paths(payload)
+        if scaffold_paths and not snippet_paths:
+            # Only show scaffold step if no snippets (otherwise redundant)
+            parts.append(f"STEP {step} — SCAFFOLD: Symbol index with line ranges")
+            parts.append(f"  {_cpl_cmd(cache_id, f'scaffold:{scaffold_paths[0]}')}")
+            parts.append("")
+            step += 1
+
+        # ── Fix plan ──
         fix_plan = payload.get("fix_plan")
         if isinstance(fix_plan, dict):
             parts.append(
@@ -404,10 +448,33 @@ def _build_checkpoint_hint(
             )
             parts.append(f"  {_cpl_json_cmd(cache_id, 'fix_plan')}")
             parts.append("")
+            step += 1
 
-        parts.append("NEXT: Fix the issues above, then call checkpoint again.")
+        parts.append(
+            "NEXT: Read failure index + details, fix the code, then call checkpoint again."
+        )
+        parts.append(
+            "DO NOT re-read entire files — use snippets above. "
+            "Call recon_resolve ONLY if you need more context."
+        )
 
     return "\n".join(parts)
+
+
+def _extract_snippet_paths(payload: dict[str, Any]) -> list[str]:
+    """Extract paths that have failure snippets from checkpoint payload."""
+    snippets = payload.get("failure_snippets")
+    if isinstance(snippets, dict):
+        return sorted(snippets.keys())
+    return []
+
+
+def _extract_scaffold_paths(payload: dict[str, Any]) -> list[str]:
+    """Extract paths that have scaffolds from checkpoint payload."""
+    scaffolds = payload.get("failure_scaffolds")
+    if isinstance(scaffolds, dict):
+        return sorted(scaffolds.keys())
+    return []
 
 
 def _build_semantic_diff_hint(
@@ -612,6 +679,30 @@ def wrap_response(
             errors = result.get("errors")
             if errors:
                 envelope["errors"] = errors
+
+        # ── Inline recon candidates metadata ──
+        # When recon goes sidecar, inline compact candidate metadata so the
+        # agent can immediately call recon_resolve without reading the cache.
+        if resource_kind == "recon_result":
+            candidates_meta: list[dict[str, str]] = []
+            for f in result.get("scaffold_files", []):
+                candidates_meta.append(
+                    {
+                        "candidate_id": f.get("candidate_id", ""),
+                        "path": f.get("path", ""),
+                        "tier": "scaffold",
+                    }
+                )
+            for f in result.get("lite_files", []):
+                candidates_meta.append(
+                    {
+                        "candidate_id": f.get("candidate_id", ""),
+                        "path": f.get("path", ""),
+                        "tier": "lite",
+                    }
+                )
+            if candidates_meta:
+                envelope["candidates_meta"] = candidates_meta
 
         envelope["inline_budget_bytes_limit"] = inline_cap
         # Measure AFTER all fields are set so the count reflects reality.

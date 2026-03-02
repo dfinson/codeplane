@@ -1198,6 +1198,77 @@ class TestRenderCheckpointCache:
         result = _render_checkpoint_cache(payload)
         assert result["changed_files"] == ["src/a.py", "src/b.py"]
 
+    def test_failure_list_split_into_individual_entries(self) -> None:
+        """failure_list is split into failure_index + failure:<N> entries."""
+        payload: dict[str, Any] = {
+            "passed": False,
+            "summary": "2 failed",
+            "tests": {
+                "passed": 10,
+                "failed": 2,
+                "failure_list": [
+                    {
+                        "name": "test_foo",
+                        "path": "tests/test_a.py",
+                        "line": 42,
+                        "message": "AssertionError: 1 != 2",
+                        "traceback": "tests/test_a.py:42: in test_foo\n  assert 1 == 2",
+                    },
+                    {
+                        "name": "test_bar",
+                        "path": "tests/test_b.py",
+                        "line": 10,
+                        "message": "ValueError: bad",
+                        "traceback": None,
+                    },
+                ],
+            },
+        }
+        result = _render_checkpoint_cache(payload)
+
+        # failure_index has compact entries
+        assert "failure_index" in result
+        assert len(result["failure_index"]) == 2
+        assert result["failure_index"][0]["name"] == "test_foo"
+        assert result["failure_index"][0]["location"] == "tests/test_a.py:42"
+
+        # Individual failure entries
+        assert "failure:1" in result
+        assert "test_foo" in result["failure:1"]
+        assert "AssertionError" in result["failure:1"]
+        assert "Traceback:" in result["failure:1"]
+
+        assert "failure:2" in result
+        assert "test_bar" in result["failure:2"]
+
+        # tests section has counts but NOT the bulk failures/failure_list
+        assert result["tests"]["passed"] == 10
+        assert result["tests"]["failed"] == 2
+        assert "failures" not in result["tests"]
+        assert "failure_list" not in result["tests"]
+
+    def test_failure_snippets_and_scaffolds_in_cache(self) -> None:
+        """failure_snippets and failure_scaffolds become snippet:/scaffold: entries."""
+        payload: dict[str, Any] = {
+            "passed": False,
+            "summary": "1 failed",
+            "tests": {"failed": 1, "passed": 5},
+            "failure_snippets": {
+                "src/foo.py": "  10  | def foo():\n  11 >|     raise ValueError",
+            },
+            "failure_scaffolds": {
+                "src/foo.py": "== src/foo.py ==\nfoo (10-15)",
+            },
+            "file_manifest": [
+                {"path": "src/foo.py", "sha256": "abc123", "lines": 20},
+            ],
+        }
+        result = _render_checkpoint_cache(payload)
+        assert "snippet:src/foo.py" in result
+        assert "scaffold:src/foo.py" in result
+        assert "manifest" in result
+        assert result["manifest"][0]["sha256"] == "abc123"
+
 
 class TestStructuredRenderEntry:
     """Tests for _structured_render_entry dispatcher."""

@@ -333,6 +333,8 @@ class TestRefactorEditHandler:
         ctx.coordinator.repo_root = tmp_path
         session = MagicMock()
         session.counters = {"recon_called": 1, "resolved_files": {}}
+        session.edits_since_checkpoint = 0
+        session.read_only = False
 
         from codeplane.mcp.session import MutationContext, RefactorPlan
 
@@ -343,6 +345,9 @@ class TestRefactorEditHandler:
             description="test plan for unit tests",
         )
         session.mutation_ctx = mutation_ctx
+        # MagicMock doesn't honor @property — mirror mutation_ctx fields
+        session.active_plan = mutation_ctx.plan
+        session.edit_tickets = mutation_ctx.edit_tickets
         ctx.session_manager.get_or_create.return_value = session
         ctx.mutation_ops.notify_mutation = MagicMock()
         return ctx
@@ -683,7 +688,7 @@ class TestRefactorEditHandler:
     ) -> None:
         """Exceeding batch limit raises MCPError."""
         session = app_ctx.session_manager.get_or_create.return_value
-        session.mutation_ctx.mutations_since_checkpoint = 2  # Already at limit
+        session.edits_since_checkpoint = 2  # Already at limit
 
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
@@ -705,6 +710,7 @@ class TestRefactorEditHandler:
         """Gap 3: Create-only call without active plan raises MCPError."""
         session = app_ctx.session_manager.get_or_create.return_value
         session.mutation_ctx.plan = None
+        session.active_plan = None
 
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)
@@ -726,6 +732,7 @@ class TestRefactorEditHandler:
         """Gap 3: Delete-only call without active plan raises MCPError."""
         session = app_ctx.session_manager.get_or_create.return_value
         session.mutation_ctx.plan = None
+        session.active_plan = None
 
         register_tools(mcp_app, app_ctx)
         tools = get_tools_sync(mcp_app)

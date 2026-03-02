@@ -723,6 +723,82 @@ class TestWrapResponseResolvedMeta:
         assert "resolved_meta" not in result
 
 
+class TestWrapResponseReconCandidatesMeta:
+    """Tests for inline candidates_meta on sidecar recon_result."""
+
+    def test_sidecar_recon_inlines_candidates_meta(self) -> None:
+        """When recon_result exceeds inline cap, candidates_meta is inlined."""
+        big_scaffold = {
+            "imports": ["import os"] * 50,
+            "symbols": [],
+            "total_lines": 200,
+            "summary": "big",
+        }
+        payload: dict[str, Any] = {
+            "scaffold_files": [
+                {
+                    "candidate_id": "abc:0",
+                    "path": "src/foo.py",
+                    "scaffold": big_scaffold,
+                    "similarity": 0.9,
+                    "combined_score": 0.85,
+                    "artifact_kind": "code",
+                },
+            ],
+            "lite_files": [
+                {
+                    "candidate_id": "abc:1",
+                    "path": "src/bar.py",
+                    "similarity": 0.5,
+                    "combined_score": 0.4,
+                    "artifact_kind": "code",
+                },
+            ],
+            "repo_map": "x" * 20_000,
+            "agentic_hint": "next steps",
+        }
+        result = wrap_response(payload, resource_kind="recon_result")
+        assert result["delivery"] == "sidecar_cache"
+        assert "candidates_meta" in result
+        meta = result["candidates_meta"]
+        assert len(meta) == 2
+        assert meta[0]["candidate_id"] == "abc:0"
+        assert meta[0]["path"] == "src/foo.py"
+        assert meta[0]["tier"] == "scaffold"
+        assert meta[1]["candidate_id"] == "abc:1"
+        assert meta[1]["path"] == "src/bar.py"
+        assert meta[1]["tier"] == "lite"
+        # No scaffold content dict in inline envelope
+        assert all(
+            "scaffold" not in m or isinstance(m.get("scaffold"), type(None))
+            for m in meta
+            if "scaffold" in m
+        )
+        # Each entry only has candidate_id, path, tier — no bulky data
+        for m in meta:
+            assert set(m.keys()) == {"candidate_id", "path", "tier"}
+
+    def test_inline_recon_has_no_candidates_meta(self) -> None:
+        """When recon_result fits inline, no separate candidates_meta key."""
+        payload: dict[str, Any] = {
+            "scaffold_files": [
+                {
+                    "candidate_id": "abc:0",
+                    "path": "src/tiny.py",
+                    "scaffold": {"imports": [], "symbols": [], "total_lines": 5, "summary": "tiny"},
+                    "similarity": 0.9,
+                    "combined_score": 0.85,
+                    "artifact_kind": "code",
+                },
+            ],
+            "lite_files": [],
+            "agentic_hint": "hint",
+        }
+        result = wrap_response(payload, resource_kind="recon_result")
+        assert result["delivery"] == "inline"
+        assert "candidates_meta" not in result
+
+
 # =============================================================================
 # Scope Budget Tests (preserved)
 # =============================================================================
@@ -946,7 +1022,7 @@ class TestCheckpointHint:
         }
         hint = _build_checkpoint_hint("cid1", 5000, payload)
         assert "CHECKPOINT FAILED" in hint
-        assert "LINT ISSUES" in hint
+        assert "LINT" in hint
         assert "3 issue(s)" in hint
         assert "lint" in hint  # jq key
 
@@ -957,8 +1033,9 @@ class TestCheckpointHint:
             "tests": {"failed": 2, "passed": 8},
         }
         hint = _build_checkpoint_hint("cid1", 5000, payload)
-        assert "TEST FAILURES" in hint
+        assert "FAILURE INDEX" in hint
         assert "2 failure(s)" in hint
+        assert "FAILURE DETAIL" in hint
 
     def test_checkpoint_failed_with_fix_plan(self) -> None:
         payload: dict[str, Any] = {
@@ -972,16 +1049,19 @@ class TestCheckpointHint:
         assert "edit tickets" in hint.lower() or "refactor_edit" in hint
         assert "fix_plan" in hint
 
-    def test_checkpoint_failed_with_changed_files(self) -> None:
+    def test_checkpoint_failed_with_snippets(self) -> None:
+        """Changed files with failure_snippets produce snippet steps."""
         payload: dict[str, Any] = {
             "passed": False,
-            "summary": "lint failed",
-            "lint": {"status": "failed", "diagnostics": 1},
+            "summary": "tests failed",
+            "tests": {"failed": 1, "passed": 8},
+            "failure_snippets": {"src/foo.py": " 10  | code here"},
             "changed_files": ["src/foo.py"],
         }
         hint = _build_checkpoint_hint("cid1", 5000, payload)
-        assert "FILE CONTENT" in hint
-        assert "file:src/foo.py" in hint
+        assert "SOURCE CONTEXT" in hint
+        assert "snippet:src/foo.py" in hint
+        assert "DO NOT re-read entire files" in hint
 
     def test_dispatch_routes_to_checkpoint(self) -> None:
         payload: dict[str, Any] = {"passed": True, "summary": "all good"}

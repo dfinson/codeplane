@@ -1261,19 +1261,25 @@ def _render_resolve_cache(payload: dict[str, Any]) -> dict[str, Any]:
 def _render_checkpoint_cache(payload: dict[str, Any]) -> dict[str, Any]:
     """Structure checkpoint cache for jq consumption.
 
-    On failure, surfaces lint issues and test failures as structured data
-    alongside refreshed file content (if present).
+    On failure, surfaces lint issues and test failures as individual entries
+    with failure-focused code snippets — the agent reads exactly what it
+    needs to diagnose and fix each failure, without re-reading entire files.
 
     Disk JSON keys (failure):
     - ``passed``: boolean
     - ``summary``: one-line result summary
     - ``lint``: lint section (dict with status, issues list)
-    - ``tests``: test section (dict with failures, summary)
-    - ``manifest``: JSON array of refreshed files (when resolve_cache_id present)
-    - ``file:<path>``: refreshed file content text
-    - ``scaffold:<path>``: scaffold text for changed files
-    - ``agentic_hint``, ``coverage_hint``: text strings
+    - ``tests``: test summary (passed/failed/skipped counts — NO bulk string)
+    - ``failure_index``: JSON array — compact entry per failure (name, error,
+      file, line) — read this first to see what broke
+    - ``failure:<N>``: individual failure detail text (1-based) — traceback
+      and error for just that one test
+    - ``snippet:<path>``: code lines around failure locations in that file,
+      with line numbers and ``>`` markers at failure points
+    - ``scaffold:<path>``: symbol table of contents for the file
+    - ``manifest``: JSON array of refreshed files (path, sha256, lines)
     - ``fix_plan``: plan_id + edit tickets for immediate correction
+    - ``agentic_hint``, ``coverage_hint``: text strings
     """
     result: dict[str, Any] = {}
 
@@ -1287,9 +1293,49 @@ def _render_checkpoint_cache(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(lint, dict):
         result["lint"] = lint
 
-    # Test section — keep structured for jq filtering
+    # ── Test section — split failures into individual entries ──
     tests = payload.get("tests")
     if isinstance(tests, dict):
+        failure_list = tests.get("failure_list", [])
+        if failure_list:
+            # Build failure_index: compact manifest of all failures
+            failure_index: list[dict[str, Any]] = []
+            for i, f in enumerate(failure_list, 1):
+                loc = f"{f['path']}:{f['line']}" if f.get("line") else f.get("path", "")
+                # Truncate message to first line for the index
+                msg = f.get("message", "")
+                short_msg = msg.split("\n")[0][:120] if msg else ""
+                failure_index.append(
+                    {
+                        "n": i,
+                        "name": f.get("name", ""),
+                        "location": loc,
+                        "error": short_msg,
+                    }
+                )
+                # Individual failure entry with full traceback
+                detail_parts: list[str] = [
+                    f"FAILURE #{i}: {f.get('name', '')}",
+                    f"Location: {loc}",
+                    f"Error: {msg}",
+                ]
+                tb = f.get("traceback")
+                if tb:
+                    detail_parts.append("")
+                    detail_parts.append("Traceback:")
+                    detail_parts.append(tb)
+                result[f"failure:{i}"] = "\n".join(detail_parts)
+
+            result["failure_index"] = failure_index
+
+            # Store tests section WITHOUT the bulk failures/failure_list
+            cleaned_tests = {
+                k: v for k, v in tests.items() if k not in ("failures", "failure_list")
+            }
+            result["tests"] = cleaned_tests
+        else:
+            result["tests"] = tests
+    elif tests is not None:
         result["tests"] = tests
 
     # Commit section
@@ -1307,6 +1353,24 @@ def _render_checkpoint_cache(payload: dict[str, Any]) -> dict[str, Any]:
     fix_plan = payload.get("fix_plan")
     if fix_plan is not None:
         result["fix_plan"] = fix_plan
+
+    # ── Failure-focused enrichment ──
+    # Snippets: code around failure points (NOT full files)
+    failure_snippets = payload.get("failure_snippets")
+    if isinstance(failure_snippets, dict):
+        for path, snippet_text in failure_snippets.items():
+            result[f"snippet:{path}"] = snippet_text
+
+    # Scaffolds: symbol table of contents
+    failure_scaffolds = payload.get("failure_scaffolds")
+    if isinstance(failure_scaffolds, dict):
+        for path, scaffold_text in failure_scaffolds.items():
+            result[f"scaffold:{path}"] = scaffold_text
+
+    # File manifest with sha256 (for edit tickets)
+    file_manifest = payload.get("file_manifest")
+    if file_manifest:
+        result["manifest"] = file_manifest
 
     # Test debt
     test_debt = payload.get("test_debt")
