@@ -193,6 +193,7 @@ CodePlane equivalent (`docker`, `curl` to external services, etc.).
 
 **`recon` is the PRIMARY entry point.** It replaces manual search + read loops.
 One call returns SCAFFOLD (imports + signatures), LITE (path + description), and repo_map.
+repo_map lists **every tracked file** — if a path is not in repo_map, the file does not exist.
 
 ```
 recon(task="<describe the task>", seeds=["SymA", "SymB", ...], read_only=<True or False>)
