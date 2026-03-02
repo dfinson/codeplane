@@ -87,6 +87,12 @@ class FileOps:
     """File operations for read_files and list_files tools."""
 
     def __init__(self, repo_root: Path) -> None:
+        """Initialize file operations.
+
+        Args:
+            repo_root: Absolute path to the repository root directory.
+                All file paths are resolved relative to this root.
+        """
         self._repo_root = repo_root
 
     def list_files(
