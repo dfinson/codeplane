@@ -1,8 +1,10 @@
 """Data collection orchestrator — ground truth phase.
 
 Drives the stable, run-once portion of §5.3:
-  Phase 1: Solve — coding agent solves task (SOLVE_PROMPT)
-  Phase 2: Reflect — agent produces ground truth (REFLECT_PROMPT)
+  Phase 1: Solve — coding agent solves task
+  Phase 2: Reflect — agent produces ground truth
+
+Exact prompts are defined in docs/ranking-design.md §5.3.
 
 Output per task: one Run + N TouchedObjects + 3-6 Queries, written as
 JSONL to data/{repo_id}/ground_truth/.
@@ -10,9 +12,6 @@ JSONL to data/{repo_id}/ground_truth/.
 The retrieval signal collection (recon_raw_signals) is a separate step
 in ``collect_signals.py`` — it depends on the current state of
 codeplane's harvesters and will be re-collected as we iterate.
-
-Prompts are defined in ``prompts.py``.
-See §5 of ranking-design.md.
 """
 
 from __future__ import annotations

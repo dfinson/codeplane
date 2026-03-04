@@ -385,50 +385,109 @@ Per repo, per task:
 
 #### Phase 1: Solve
 
-A coding agent receives the task and solves it using native tools (file reads,
-edits, terminal commands). Full tool-use trace captured.
+A coding agent (VS Code agent chat) receives the task and solves it using
+standard tools (file reads, edits, terminal commands).
+
+**Solve prompt** (sent with `{repo_id}`, `{repo_path}`, `{task_text}` filled):
+
+```
+You are working on the repository {repo_id} (cloned at {repo_path}).
+
+Your task:
+
+{task_text}
+
+Solve this task. Read the code you need to understand, make the necessary
+edits, and verify your changes work. Use the tools available to you
+(file reads, edits, terminal commands).
+
+When you are confident the task is complete, stop and say "DONE".
+Do not explain your changes — just make them.
+```
+
+After the agent finishes, the diff is captured. Changed lines are mapped
+to DefFacts via the codeplane index — these are the "edited"
+TouchedObjects (deterministic).
 
 #### Phase 2: Post-hoc Reflection (Ground Truth)
 
-The same agent, with full solve context still loaded:
+The same agent session, full solve context still loaded.
 
-**2a. Ground truth classification:**
+**Reflect prompt** (sent with `{repo_id}` filled):
 
-- **Edited objects**: Which DefFacts did the agent modify? (Extracted from
-  diffs — deterministic, mapped to DefFacts via the codeplane index.)
-- **Read-necessary objects**: The agent lists files it read that were
-  genuinely necessary to understand or solve the task. This is an LLM
-  judgment call from the reflect prompt. Edited files are excluded
-  (they're tracked separately via diff).
+```
+You just solved a task on {repo_id}. Now produce ground truth data
+for a code retrieval system. This is a separate step — do not make
+any more edits.
 
-**2b. OK query authoring (3 queries):**
+Answer the following in a single JSON object (no markdown fencing):
 
-- **L0**: High-level task description. The agent verifies that the repo's
-  structure makes this unambiguous despite lack of specifics.
-- **L1**: + concrete identifiers (symbols, error strings) drawn from the
-  actual touched set.
-- **L2**: + anchors/constraints (paths, modules, behavioral constraints)
-  that further narrow scope.
+1. "read_necessary": List the file paths you read that were necessary
+   to understand or solve this task. Include only files that were
+   genuinely needed — not files you opened and immediately closed, or
+   explored out of curiosity. Edited files are tracked separately;
+   do not include them here.
 
-Instruction: *"Write a query where a developer familiar with this repo would
-know exactly which code to look at."*
+2. "queries": An array of query objects. Each query has:
+   - "query_type": one of "L0", "L1", "L2", "UNSAT", "BROAD", "AMBIG"
+   - "query_text": the query string
 
-**2c. Bad query authoring (up to 3 queries, one per non-OK class):**
+   Author exactly these queries:
 
-Each is in the **logical neighborhood** of the task:
+   Three OK queries at increasing specificity:
 
-- **UNSAT**: *"Write a query related to the same area of this repo, but that
-  makes a plausible assumption about the architecture that is factually wrong."*
-- **BROAD**: *"Think of a large refactoring effort that this task would have
-  been part of — one that touches many files and cross-cutting concerns across
-  this repo."*
-- **AMBIG**: *"Write a query in the same domain as this task, but where this
-  repo has multiple subsystems that could plausibly be the target, and the
-  query doesn't resolve between them."*
+   - L0: A high-level task description. No identifiers, no file paths.
+     Just describe what needs to be done in domain terms. Verify that
+     this repo's structure makes the query unambiguous — a developer
+     familiar with the codebase would know exactly where to look.
 
-Not every task can produce all three. If the agent determines a class doesn't
-have a natural example in the neighborhood of this task, it skips it. Forced
-examples are worse than fewer examples.
+   - L1: The L0 query plus concrete identifiers — symbol names, error
+     strings, function names — drawn from the code you actually touched.
+
+   - L2: The L1 query plus anchoring constraints — file paths, module
+     names, behavioral constraints — that further narrow the scope.
+
+   Up to three non-OK queries (skip any that feel forced):
+
+   - UNSAT: A query related to the same area of this repo, but that
+     makes a plausible assumption about the architecture that is
+     factually wrong. A developer would say "that's not how it works."
+
+   - BROAD: Think of a large effort this task would have been part of —
+     one touching many files across subsystems. Describe that effort.
+     A developer would say "that's 20 tasks, not one."
+
+   - AMBIG: A query in the same domain, but where this repo has multiple
+     subsystems that could plausibly be the target, and the query does
+     not resolve between them. A developer would ask "which one?"
+
+   You MUST produce all three OK queries (L0, L1, L2).
+   For non-OK queries, produce only those that arise naturally from this
+   task's neighborhood. Do not force them — fewer is better than fake.
+```
+
+**Reflect output schema:**
+
+```json
+{
+  "read_necessary": ["src/auth/config.py", "src/auth/middleware.py"],
+  "queries": [
+    {"query_type": "L0", "query_text": "Fix the auth middleware to handle expired tokens gracefully"},
+    {"query_type": "L1", "query_text": "Fix AuthMiddleware.process_request to catch TokenExpiredError from jwt_decode"},
+    {"query_type": "L2", "query_text": "Fix AuthMiddleware.process_request in src/auth/middleware.py to catch TokenExpiredError and return 401"},
+    {"query_type": "UNSAT", "query_text": "Update the OAuth2 refresh endpoint to retry with the backup auth server"},
+    {"query_type": "BROAD", "query_text": "Migrate the entire authentication system from JWT to session-based auth with Redis"}
+  ]
+}
+```
+
+Validation rules:
+- `read_necessary`: array of strings (file paths, not including edited files)
+- `queries`: 3–6 items, each with `query_type` ∈ {L0, L1, L2, UNSAT, BROAD, AMBIG} and `query_text` (string)
+- Exactly one L0, one L1, one L2. At most one each of UNSAT, BROAD, AMBIG.
+
+The read-necessary paths are mapped to DefFacts via the codeplane index,
+producing "read_necessary" TouchedObjects.
 
 **Output:** `runs.jsonl`, `touched_objects.jsonl`, `queries.jsonl` under
 `data/{repo_id}/ground_truth/`. This data is permanent — it never needs

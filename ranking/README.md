@@ -22,7 +22,6 @@ ranking/
 ├── clones/                # Cloned repos (gitignored)
 ├── src/cpl_ranking/
 │   ├── schema.py          # §7 dataset table schemas
-│   ├── prompts.py         # Solve + reflect prompts for the agent
 │   ├── collector.py       # Ground truth collection (stable, run once)
 │   ├── collect_signals.py # Retrieval signal collection (re-runnable)
 │   ├── train_ranker.py    # §8.1 LambdaMART training
