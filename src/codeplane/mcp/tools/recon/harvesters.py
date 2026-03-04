@@ -353,7 +353,7 @@ async def _harvest_explicit(
     return candidates
 
 
-from codeplane.mcp.tools.recon.merge import (
+from codeplane.mcp.tools.recon.merge import (  # noqa: E402
     _add_file_defs_as_candidates,
     _infer_test_paths,
     _select_graph_seeds,

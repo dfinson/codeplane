@@ -11,7 +11,7 @@ from fastmcp import FastMCP
 
 from codeplane.mcp._compat import get_tools_sync
 from codeplane.mcp.errors import MCPError, MCPErrorCode
-from codeplane.mcp.session import MutationContext, _MAX_EDIT_BATCHES
+from codeplane.mcp.session import _MAX_EDIT_BATCHES, MutationContext
 from codeplane.mcp.tools.refactor import (
     _display_refactor,
     _serialize_refactor_result,

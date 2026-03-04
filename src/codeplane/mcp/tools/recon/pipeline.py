@@ -16,7 +16,6 @@ File-centric pipeline: ONE call, ALL context.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import re
 import time
 import uuid
@@ -29,8 +28,6 @@ from pydantic import Field
 
 from codeplane.mcp.tools.recon.assembly import (
     _build_failure_actions,
-    build_agentic_hint,
-    build_gate_hint,
 )
 from codeplane.mcp.tools.recon.harvesters import (
     _harvest_explicit,

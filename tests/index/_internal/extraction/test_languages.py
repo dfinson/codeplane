@@ -10,23 +10,31 @@ from codeplane.index._internal.parsing.packs import (
     get_pack,
 )
 
-# Convenience aliases — access type_config from each pack
-PYTHON_CONFIG = PACKS["python"].type_config
-TYPESCRIPT_CONFIG = PACKS["typescript"].type_config
-GO_CONFIG = PACKS["go"].type_config
-RUST_CONFIG = PACKS["rust"].type_config
-JAVA_CONFIG = PACKS["java"].type_config
-KOTLIN_CONFIG = PACKS["kotlin"].type_config
-SCALA_CONFIG = PACKS["scala"].type_config
-CSHARP_CONFIG = PACKS["csharp"].type_config
-CPP_CONFIG = PACKS["cpp"].type_config
-RUBY_CONFIG = PACKS["ruby"].type_config
-PHP_CONFIG = PACKS["php"].type_config
-SWIFT_CONFIG = PACKS["swift"].type_config
-ELIXIR_CONFIG = PACKS["elixir"].type_config
-HASKELL_CONFIG = PACKS["haskell"].type_config
-OCAML_CONFIG = PACKS["ocaml"].type_config
-ZIG_CONFIG = PACKS["zig"].type_config
+
+# Convenience aliases — access type_config from each pack.
+# All supported languages are guaranteed to have type_config; assert to narrow.
+def _get_config(lang: str) -> TypeExtractionConfig:
+    cfg = PACKS[lang].type_config
+    assert cfg is not None, f"{lang} pack must have type_config"
+    return cfg
+
+
+PYTHON_CONFIG = _get_config("python")
+TYPESCRIPT_CONFIG = _get_config("typescript")
+GO_CONFIG = _get_config("go")
+RUST_CONFIG = _get_config("rust")
+JAVA_CONFIG = _get_config("java")
+KOTLIN_CONFIG = _get_config("kotlin")
+SCALA_CONFIG = _get_config("scala")
+CSHARP_CONFIG = _get_config("csharp")
+CPP_CONFIG = _get_config("cpp")
+RUBY_CONFIG = _get_config("ruby")
+PHP_CONFIG = _get_config("php")
+SWIFT_CONFIG = _get_config("swift")
+ELIXIR_CONFIG = _get_config("elixir")
+HASKELL_CONFIG = _get_config("haskell")
+OCAML_CONFIG = _get_config("ocaml")
+ZIG_CONFIG = _get_config("zig")
 
 
 class TestPackTypeConfigs:

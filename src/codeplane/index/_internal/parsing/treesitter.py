@@ -633,6 +633,16 @@ class TreeSitterParser:
 
     # ---- Package/module declaration extractors ----
 
+    def _extract_java_scoped_path(self, node: Any) -> list[str]:
+        """Extract path parts from a Java scoped_identifier."""
+        if node.type == "identifier":
+            return [node.text.decode("utf-8") if node.text else ""]
+        parts: list[str] = []
+        for child in node.children:
+            if child.type in ("scoped_identifier", "identifier"):
+                parts.extend(self._extract_java_scoped_path(child))
+        return parts
+
     def _declared_module_java_node(self, node: Any) -> str | None:
         """Extract module from a package_declaration node."""
         for child in node.children:
@@ -922,6 +932,7 @@ class TreeSitterParser:
         if node.text:
             text: str = node.text.decode("utf-8")
             return text
+        return ""
 
     def _process_python_dynamic_node(self, node: Any) -> list[DynamicAccess]:
         """Process a single Python dynamic-access node found by query."""
@@ -1334,222 +1345,6 @@ class TreeSitterParser:
                             break
 
         return imports
-
-    def _process_python_dynamic_node(self, node: Any) -> list[DynamicAccess]:
-        """Process a single Python dynamic-access node found by query."""
-        dynamics: list[DynamicAccess] = []
-
-        if node.type == "call":
-            func_node = node.child_by_field_name("function")
-            if func_node and func_node.type == "identifier":
-                func_name = func_node.text.decode("utf-8") if func_node.text else ""
-                if func_name in ("getattr", "setattr", "hasattr", "delattr"):
-                    args_node = node.child_by_field_name("arguments")
-                    literals: list[str] = []
-                    has_dynamic = False
-                    if args_node:
-                        for i, arg in enumerate(args_node.children):
-                            if i == 1:
-                                if arg.type == "string":
-                                    literal = (
-                                        arg.text.decode("utf-8").strip("'\"") if arg.text else ""
-                                    )
-                                    literals.append(literal)
-                                else:
-                                    has_dynamic = True
-                    dynamics.append(
-                        DynamicAccess(
-                            pattern_type="getattr",
-                            start_line=node.start_point[0] + 1,
-                            start_col=node.start_point[1],
-                            extracted_literals=literals,
-                            has_non_literal_key=has_dynamic,
-                        )
-                    )
-                elif func_name in ("eval", "exec"):
-                    dynamics.append(
-                        DynamicAccess(
-                            pattern_type="eval",
-                            start_line=node.start_point[0] + 1,
-                            start_col=node.start_point[1],
-                            has_non_literal_key=True,
-                        )
-                    )
-
-        elif node.type == "subscript":
-            subscript_node = node.child_by_field_name("subscript")
-            sub_literals: list[str] = []
-            sub_has_dynamic = True
-            if subscript_node and subscript_node.type == "string":
-                literal = (
-                    subscript_node.text.decode("utf-8").strip("'\"") if subscript_node.text else ""
-                )
-                sub_literals.append(literal)
-                sub_has_dynamic = False
-            dynamics.append(
-                DynamicAccess(
-                    pattern_type="bracket_access",
-                    start_line=node.start_point[0] + 1,
-                    start_col=node.start_point[1],
-                    extracted_literals=sub_literals,
-                    has_non_literal_key=sub_has_dynamic,
-                )
-            )
-
-        return dynamics
-
-    def _process_js_dynamic_node(self, node: Any) -> list[DynamicAccess]:
-        """Process a single JS/TS dynamic-access node found by query."""
-        dynamics: list[DynamicAccess] = []
-
-        if node.type == "subscript_expression":
-            index_node = node.child_by_field_name("index")
-            literals: list[str] = []
-            has_dynamic = True
-            if index_node and index_node.type == "string":
-                literal = index_node.text.decode("utf-8").strip("'\"") if index_node.text else ""
-                literals.append(literal)
-                has_dynamic = False
-            dynamics.append(
-                DynamicAccess(
-                    pattern_type="bracket_access",
-                    start_line=node.start_point[0] + 1,
-                    start_col=node.start_point[1],
-                    extracted_literals=literals,
-                    has_non_literal_key=has_dynamic,
-                )
-            )
-
-        elif node.type == "call_expression":
-            func_node = node.child_by_field_name("function")
-            if func_node and func_node.type == "identifier":
-                func_name = func_node.text.decode("utf-8") if func_node.text else ""
-                if func_name == "eval":
-                    dynamics.append(
-                        DynamicAccess(
-                            pattern_type="eval",
-                            start_line=node.start_point[0] + 1,
-                            start_col=node.start_point[1],
-                            has_non_literal_key=True,
-                        )
-                    )
-
-        return dynamics
-
-    def compute_interface_hash(self, symbols: list[SyntacticSymbol]) -> str:
-        """
-        Compute a hash of the public interface of symbols.
-
-        Used for dependency change detection: if a file's interface hash
-        changes, dependents may need to be reindexed.
-
-        Args:
-            symbols: List of symbols from extract_symbols()
-
-        Returns:
-            SHA-256 hash of the interface signature.
-        """
-        # Sort symbols by name for determinism
-        sorted_symbols = sorted(symbols, key=lambda s: (s.kind, s.name, s.line))
-
-        # Build interface string
-        parts: list[str] = []
-        for sym in sorted_symbols:
-            sig = sym.signature or ""
-            parts.append(f"{sym.kind}:{sym.name}:{sig}")
-
-        interface_str = "\n".join(parts)
-        return hashlib.sha256(interface_str.encode()).hexdigest()
-
-    def validate_code_file(self, result: ParseResult) -> ProbeValidation:
-        """
-        Validate a code file for context probing.
-
-        Code families require:
-        - Error nodes < 10% of total nodes
-        - Has meaningful named nodes (not just comments/whitespace)
-
-        Args:
-            result: ParseResult from parse()
-
-        Returns:
-            ProbeValidation indicating if file is valid.
-        """
-        if result.total_nodes == 0:
-            return ProbeValidation(
-                is_valid=False,
-                error_count=0,
-                total_nodes=0,
-                has_meaningful_content=False,
-                error_ratio=0.0,
-            )
-
-        error_ratio = result.error_count / result.total_nodes
-        has_meaningful = self._has_meaningful_nodes(result.root_node)
-
-        # Valid if: error ratio < 10% AND has meaningful content
-        is_valid = error_ratio < 0.10 and has_meaningful
-
-        return ProbeValidation(
-            is_valid=is_valid,
-            error_count=result.error_count,
-            total_nodes=result.total_nodes,
-            has_meaningful_content=has_meaningful,
-            error_ratio=error_ratio,
-        )
-
-    def validate_data_file(self, result: ParseResult) -> ProbeValidation:
-        """
-        Validate a data file for context probing.
-
-        Data families require:
-        - Valid tree (root has children)
-        - Zero ERROR nodes
-
-        Args:
-            result: ParseResult from parse()
-
-        Returns:
-            ProbeValidation indicating if file is valid.
-        """
-        has_content = result.root_node is not None and len(result.root_node.children) > 0
-        is_valid = has_content and result.error_count == 0
-
-        return ProbeValidation(
-            is_valid=is_valid,
-            error_count=result.error_count,
-            total_nodes=result.total_nodes,
-            has_meaningful_content=has_content,
-            error_ratio=(result.error_count / result.total_nodes if result.total_nodes > 0 else 0),
-        )
-
-    def _detect_language_from_ext(self, ext: str) -> str | None:
-        """Detect language from file extension -- delegates to packs."""
-        pack = get_pack_for_ext(ext)
-        return pack.name if pack is not None else None
-
-    def _detect_language_from_filename(self, filename: str) -> str | None:
-        """Detect language from filename -- delegates to packs."""
-        pack = get_pack_for_filename(filename)
-        return pack.name if pack is not None else None
-
-    def _has_meaningful_nodes(self, node: Any) -> bool:
-        """Check if tree has meaningful (non-comment, non-whitespace) nodes."""
-        meaningless_types = {
-            "comment",
-            "line_comment",
-            "block_comment",
-            "ERROR",
-            "MISSING",
-        }
-
-        def check(n: Any) -> bool:
-            if n.is_named and n.type not in meaningless_types:
-                # Has at least one meaningful named node
-                return True
-            return any(check(child) for child in n.children)
-
-        return check(node)
 
     # ------------------------------------------------------------------
     # Unified query-based symbol extraction

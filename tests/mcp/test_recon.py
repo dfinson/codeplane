@@ -766,7 +766,7 @@ class TestOutputTier:
         assert OutputTier.MIN_SCAFFOLD.value == "min_scaffold"
         assert OutputTier.SUMMARY_ONLY.value == "summary_only"
         # Aliases
-        assert OutputTier.SCAFFOLD is OutputTier.MIN_SCAFFOLD
+        assert OutputTier.SCAFFOLD is OutputTier.MIN_SCAFFOLD  # type: ignore[comparison-overlap]
         assert OutputTier.LITE is OutputTier.SUMMARY_ONLY
 
     def test_tier_rank(self) -> None:
