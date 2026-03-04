@@ -376,6 +376,11 @@ to start, (b) grounded in the actual codebase, (c) scoped as intended.
 
 ### 5.3 Data Collection Pipeline
 
+Two independent phases with separate outputs:
+
+- **Ground truth** (Phase 1+2a-c): run once, output is permanent.
+- **Retrieval signals** (Phase 3): re-run whenever harvesters change.
+
 Per repo, per task:
 
 #### Phase 1: Solve
@@ -383,7 +388,7 @@ Per repo, per task:
 A coding agent receives the task and solves it using native tools (file reads,
 edits, terminal commands). Full tool-use trace captured.
 
-#### Phase 2: Post-hoc Reflection
+#### Phase 2: Post-hoc Reflection (Ground Truth)
 
 The same agent, with full solve context still loaded:
 
@@ -424,17 +429,26 @@ Not every task can produce all three. If the agent determines a class doesn't
 have a natural example in the neighborhood of this task, it skips it. Forced
 examples are worse than fewer examples.
 
-**2d. Raw signal collection:**
+**Output:** `runs.jsonl`, `touched_objects.jsonl`, `queries.jsonl` under
+`data/{repo_id}/ground_truth/`. This data is permanent — it never needs
+re-collection.
 
-For **each query** (3 OK + up to 3 bad), the agent calls
+#### Phase 3: Retrieval Signal Collection (Re-runnable)
+
+A separate step, run against the indexed repo:
+
+**3a. Raw signal collection:**
+
+For **each query** in the ground truth (3 OK + up to 3 bad), call
 `recon_raw_signals(query)`. This returns the candidate pool with per-retriever
 scores for all queries — including bad ones, because the gate model needs to
 learn what each class looks like from the retrieval distribution.
 
-**2e. Dataset assembly and label validation:**
+**3b. Label joining and validation:**
 
-The agent joins raw signal output with ground-truth labels. For gate labels,
-validates that the retrieval distribution is consistent with the authored label:
+Join raw signal output with ground-truth labels to compute `label_rank`
+per candidate. For gate labels, validate that the retrieval distribution
+is consistent with the authored label:
 
 - **OK**: top candidates concentrate around the touched set.
 - **UNSAT**: top candidates are low-confidence or irrelevant.
@@ -442,7 +456,12 @@ validates that the retrieval distribution is consistent with the authored label:
   would touch.
 - **AMBIG**: top candidates cluster in multiple disjoint regions.
 
-If inconsistent, the agent re-authors or discards the query.
+If inconsistent, flag for review (ground truth is not re-authored —
+the signals are what changed).
+
+**Output:** `candidates_rank.jsonl` under `data/{repo_id}/signals/`.
+This data is re-collected whenever embeddings, harvesters, or scoring
+change.
 
 ---
 
@@ -753,15 +772,19 @@ ranking/
 └── src/
     └── cpl_ranking/
         ├── __init__.py
-        ├── schema.py        # §7 dataset table schemas
-        ├── collector.py     # §5.3 data collection orchestrator
-        ├── train_ranker.py  # §8.1 LambdaMART training
-        ├── train_cutoff.py  # §8.2 no-leakage K-fold cutoff training
-        ├── train_gate.py    # §8.3 multiclass gate training
-        └── train_all.py     # Orchestrates all 3 training stages
+        ├── schema.py            # §7 dataset table schemas
+        ├── collector.py         # Ground truth collection (stable, run once)
+        ├── collect_signals.py   # Retrieval signal collection (re-runnable)
+        ├── train_ranker.py      # §8.1 LambdaMART training
+        ├── train_cutoff.py      # §8.2 no-leakage K-fold cutoff training
+        ├── train_gate.py        # §8.3 multiclass gate training
+        └── train_all.py         # Orchestrates all 3 training stages
 ```
 
-Training data (gitignored) lives under `ranking/data/{repo_id}/`.
+Training data (gitignored) lives under `ranking/data/{repo_id}/`:
+- `ground_truth/` — stable: runs, touched_objects, queries (collected once)
+- `signals/` — re-collectable: candidates_rank (re-run when harvesters change)
+
 Produced model artifacts get copied into `src/codeplane/ranking/data/`
 for release.
 
@@ -806,26 +829,27 @@ benchmarking/
 │  │  Phase 1: Solve                              │      │
 │  │    Coding agent solves task with native tools │      │
 │  │                                              │      │
-│  │  Phase 2: Reflect                            │      │
+│  │  Phase 2: Reflect (GROUND TRUTH — run once)  │      │
 │  │    2a. Classify touched objects               │      │
 │  │        → edited (from diff)                   │      │
 │  │        → read-necessary (agent judgment)      │      │
 │  │        → read-unnecessary (agent judgment)    │      │
-│  │                                              │      │
 │  │    2b. Author 3 OK queries (L0/L1/L2)        │      │
 │  │    2c. Author up to 3 bad queries             │      │
 │  │        (UNSAT/BROAD/AMBIG, skip if unnatural) │      │
 │  │                                              │      │
-│  │    2d. Call recon_raw_signals() per query ×6  │      │
+│  │  Output: ground_truth/                        │      │
+│  │    runs, touched_objects, queries             │      │
+│  └──────────────────────────────────────────────┘      │
+│                                                        │
+│  ┌──────────────────────────────────────────────┐      │
+│  │  Phase 3: Signals (RE-RUNNABLE)              │      │
+│  │    3a. Call recon_raw_signals() per query     │      │
 │  │        → candidate pools with per-retriever   │      │
 │  │          scores for all queries               │      │
+│  │    3b. Join with ground truth, validate       │      │
 │  │                                              │      │
-│  │    2e. Assemble dataset rows                  │      │
-│  │        → Validate gate labels vs retrieval    │      │
-│  │        → Discard/re-author if inconsistent    │      │
-│  │                                              │      │
-│  │  Output:                                     │      │
-│  │    runs, touched_objects, queries,            │      │
+│  │  Output: signals/                             │      │
 │  │    candidates_rank (all queries)              │      │
 │  └──────────────────────────────────────────────┘      │
 │                                                        │

@@ -1,18 +1,28 @@
 """Dataset table schemas for ranking model training.
 
-Defines the six tables from §7 of ranking-design.md:
+Two groups of tables, collected separately:
 
+**Ground truth** (stable, collected once per task):
 - ``Run``             — one row per task run
 - ``TouchedObject``   — ground-truth touched DefFacts per run
 - ``Query``           — authored queries (OK and non-OK) per run
+
+**Retrieval signals** (re-collected when harvesters change):
 - ``CandidateRank``   — per-candidate retrieval features per query
+
+**Derived at training time** (computed from the above):
 - ``QueryCutoff``     — per-query cutoff features (OK queries only)
 - ``QueryGate``       — per-query gate features (all query types)
+
+See §7 of ranking-design.md.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+
+# ── Ground truth (stable, collected once) ────────────────────────
 
 
 @dataclass(frozen=True)
@@ -53,6 +63,9 @@ class Query:
     label_gate: str  # OK | UNSAT | BROAD | AMBIG
 
 
+# ── Retrieval signals (re-collected when harvesters change) ──────
+
+
 @dataclass(frozen=True)
 class CandidateRank:
     """§7.4 — per-candidate retrieval features for ranker training."""
@@ -78,6 +91,9 @@ class CandidateRank:
     has_identifier: bool
     has_path: bool
     label_rank: int  # graded: edited > read_necessary > untouched
+
+
+# ── Derived at training time ─────────────────────────────────────
 
 
 @dataclass(frozen=True)

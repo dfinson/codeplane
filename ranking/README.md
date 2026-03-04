@@ -22,18 +22,25 @@ ranking/
 ├── clones/                # Cloned repos (gitignored)
 ├── src/cpl_ranking/
 │   ├── schema.py          # §7 dataset table schemas
-│   ├── collector.py       # §5.3 data collection orchestrator
+│   ├── collector.py       # Ground truth collection (stable, run once)
+│   ├── collect_signals.py # Retrieval signal collection (re-runnable)
 │   ├── train_ranker.py    # §8.1 LambdaMART training
 │   ├── train_cutoff.py    # §8.2 no-leakage K-fold cutoff training
 │   ├── train_gate.py      # §8.3 multiclass gate training
 │   └── train_all.py       # Orchestrates all 3 training stages
 └── data/                  # Generated training data (gitignored)
     └── {repo_id}/
+        ├── ground_truth/  # Stable: runs, touched_objects, queries
+        └── signals/       # Re-collectable: candidates_rank
 ```
 
 ## Workflow
 
-1. **Collect data** — `collector.py` drives a coding agent per repo/task,
-   then calls `recon_raw_signals()` to harvest retrieval features.
-2. **Train models** — `train_all.py` runs K-fold ranker → cutoff → gate.
-3. **Deploy** — copy `*.lgbm` into `src/codeplane/ranking/data/`.
+1. **Collect ground truth** (once) — `collector.py` drives a coding agent
+   per repo/task: solve, reflect, classify touched objects, author queries.
+   Output is stable and never needs re-collection.
+2. **Collect signals** (re-runnable) — `collect_signals.py` calls
+   `recon_raw_signals()` for each query. Re-run whenever harvesters,
+   embeddings, or scoring change.
+3. **Train models** — `train_all.py` runs K-fold ranker → cutoff → gate.
+4. **Deploy** — copy `*.lgbm` into `src/codeplane/ranking/data/`.
