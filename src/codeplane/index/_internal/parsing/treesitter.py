@@ -459,7 +459,7 @@ class TreeSitterParser:
                 # Strip common prefixes and trailing semicolons
                 for prefix in ("import static ", "import ", "using static ", "using "):
                     if raw.startswith(prefix):
-                        raw = raw[len(prefix):]
+                        raw = raw[len(prefix) :]
                         break
                 source = raw.rstrip("; \n\t")
                 # Handle aliased imports (e.g. "MyAlias = System.Collections.X")
@@ -1554,7 +1554,6 @@ class TreeSitterParser:
     # ------------------------------------------------------------------
     # Unified query-based symbol extraction
     # ------------------------------------------------------------------
-
 
     def _extract_symbols_via_query(
         self,

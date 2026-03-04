@@ -216,7 +216,6 @@ class TestTypeScriptImports:
 
 
 class TestGoImportsRegression:
-
     def test_single_import(self, parser: TreeSitterParser, tmp_path: Path) -> None:
         code = b'package main\n\nimport "fmt"\n'
         f = tmp_path / "t.go"
@@ -262,7 +261,6 @@ class TestGoImportsRegression:
 
 
 class TestRustImportsRegression:
-
     def test_simple_use(self, parser: TreeSitterParser, tmp_path: Path) -> None:
         code = b"use std::io;\n"
         f = tmp_path / "t.rs"
@@ -315,7 +313,6 @@ class TestRustImportsRegression:
 
 
 class TestJavaImportsRegression:
-
     def test_simple_import(self, parser: TreeSitterParser, tmp_path: Path) -> None:
         code = b"import java.util.List;\n"
         f = tmp_path / "T.java"
@@ -347,7 +344,6 @@ class TestJavaImportsRegression:
 
 
 class TestKotlinImportsRegression:
-
     def test_simple_import(self, parser: TreeSitterParser, tmp_path: Path) -> None:
         code = b"import kotlin.collections.List\n"
         f = tmp_path / "t.kt"
@@ -375,7 +371,6 @@ class TestKotlinImportsRegression:
 
 
 class TestScalaImportsRegression:
-
     def test_simple_import(self, parser: TreeSitterParser, tmp_path: Path) -> None:
         code = b"import scala.collection.mutable.ListBuffer\n"
         f = tmp_path / "t.scala"
@@ -409,7 +404,6 @@ class TestScalaImportsRegression:
 
 
 class TestCSharpImportsRegression:
-
     def test_using_directive(self, parser: TreeSitterParser, tmp_path: Path) -> None:
         code = b"using System;\nusing System.Collections.Generic;\n"
         f = tmp_path / "t.cs"
@@ -444,7 +438,6 @@ class TestCSharpImportsRegression:
 
 
 class TestRubyImportsRegression:
-
     def test_require(self, parser: TreeSitterParser, tmp_path: Path) -> None:
         code = b"require 'json'\nrequire 'yaml'\n"
         f = tmp_path / "t.rb"
@@ -470,7 +463,6 @@ class TestRubyImportsRegression:
 
 
 class TestPHPImportsRegression:
-
     def test_use_statement(self, parser: TreeSitterParser, tmp_path: Path) -> None:
         code = b"<?php\nuse App\\Models\\User;\nuse App\\Http\\Controllers\\Controller;\n"
         f = tmp_path / "t.php"
@@ -486,7 +478,6 @@ class TestPHPImportsRegression:
 
 
 class TestSwiftImportsRegression:
-
     def test_import_module(self, parser: TreeSitterParser, tmp_path: Path) -> None:
         code = b"import Foundation\nimport UIKit\n"
         f = tmp_path / "t.swift"
@@ -504,9 +495,8 @@ class TestSwiftImportsRegression:
 
 
 class TestCImportsRegression:
-
     def test_include_angle(self, parser: TreeSitterParser, tmp_path: Path) -> None:
-        code = b'#include <stdio.h>\n#include <stdlib.h>\n'
+        code = b"#include <stdio.h>\n#include <stdlib.h>\n"
         f = tmp_path / "t.c"
         f.write_bytes(code)
         result = parser.parse(f, code)
@@ -522,7 +512,7 @@ class TestCImportsRegression:
         assert len(imports) == 1
 
     def test_cpp_include(self, parser: TreeSitterParser, tmp_path: Path) -> None:
-        code = b'#include <iostream>\n#include <vector>\n'
+        code = b"#include <iostream>\n#include <vector>\n"
         f = tmp_path / "t.cpp"
         f.write_bytes(code)
         result = parser.parse(f, code)
@@ -536,7 +526,6 @@ class TestCImportsRegression:
 
 
 class TestElixirImportsRegression:
-
     def test_import(self, parser: TreeSitterParser, tmp_path: Path) -> None:
         code = b"defmodule MyApp do\n  import Ecto.Query\n  alias MyApp.Repo\nend\n"
         f = tmp_path / "t.ex"
@@ -560,7 +549,6 @@ class TestElixirImportsRegression:
 
 
 class TestHaskellImportsRegression:
-
     def test_simple_import(self, parser: TreeSitterParser, tmp_path: Path) -> None:
         code = b"import Data.Map\nimport Data.List\n"
         f = tmp_path / "t.hs"
@@ -588,7 +576,6 @@ class TestHaskellImportsRegression:
 
 
 class TestOCamlImportsRegression:
-
     def test_open(self, parser: TreeSitterParser, tmp_path: Path) -> None:
         code = b"open Printf\nopen List\n"
         f = tmp_path / "t.ml"
@@ -607,7 +594,6 @@ class TestOCamlImportsRegression:
 
 
 class TestJuliaImportsRegression:
-
     def test_using(self, parser: TreeSitterParser, tmp_path: Path) -> None:
         code = b"using LinearAlgebra\nusing Statistics\n"
         f = tmp_path / "t.jl"
@@ -631,7 +617,6 @@ class TestJuliaImportsRegression:
 
 
 class TestLuaImportsRegression:
-
     def test_require(self, parser: TreeSitterParser, tmp_path: Path) -> None:
         code = b'local json = require("cjson")\nlocal http = require("socket.http")\n'
         f = tmp_path / "t.lua"

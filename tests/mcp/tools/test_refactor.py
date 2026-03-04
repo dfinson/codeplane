@@ -11,7 +11,7 @@ from fastmcp import FastMCP
 
 from codeplane.mcp._compat import get_tools_sync
 from codeplane.mcp.errors import MCPError, MCPErrorCode
-from codeplane.mcp.session import MutationContext
+from codeplane.mcp.session import MutationContext, _MAX_EDIT_BATCHES
 from codeplane.mcp.tools.refactor import (
     _display_refactor,
     _serialize_refactor_result,
@@ -603,8 +603,8 @@ class TestRefactorPlan:
     ) -> None:
         """expected_edit_calls > remaining budget is clamped, not rejected."""
         session = app_ctx.session_manager.get_or_create.return_value
-        # 1 batch already used → only 1 remains
-        session.mutation_ctx.mutations_since_checkpoint = 1
+        # All but 1 batch used → only 1 remains
+        session.mutation_ctx.mutations_since_checkpoint = _MAX_EDIT_BATCHES - 1
 
         from codeplane.mcp.tools.refactor import register_tools
 
@@ -631,7 +631,7 @@ class TestRefactorPlan:
     ) -> None:
         """Zero remaining budget rejects plan creation."""
         session = app_ctx.session_manager.get_or_create.return_value
-        session.mutation_ctx.mutations_since_checkpoint = 2  # fully spent
+        session.mutation_ctx.mutations_since_checkpoint = _MAX_EDIT_BATCHES  # fully spent
 
         from codeplane.mcp.tools.refactor import register_tools
 

@@ -21,7 +21,7 @@ from codeplane.testing.coverage.models import CoverageReport, FileCoverage
 # ---------------------------------------------------------------------------
 # Tier thresholds
 # ---------------------------------------------------------------------------
-_LOW_COVERAGE_THRESHOLD = 20   # files below this: percent only
+_LOW_COVERAGE_THRESHOLD = 20  # files below this: percent only
 _FULL_COVERAGE_THRESHOLD = 100  # files at this: omitted
 
 # _compress_ranges_tolerant: bridge gaps up to this many non-instrumented lines
@@ -191,9 +191,7 @@ def _file_coverage_detail(fc: FileCoverage) -> str:
         return f"  {filename}: {pct}%"
 
     # Mid-tier: prefer semantic (function names), fall back to ranges
-    uncovered_fns = [
-        fn.name for fn in fc.functions.values() if fn.hits == 0
-    ]
+    uncovered_fns = [fn.name for fn in fc.functions.values() if fn.hits == 0]
     if uncovered_fns:
         names = ", ".join(uncovered_fns)
         return f"  {filename}: {pct}% — uncovered: {names}"

@@ -199,12 +199,14 @@ def _serialize_impact_result(result: "RefactorResult") -> dict[str, Any]:
     if result.preview:
         for fe in result.preview.edits:
             for h in fe.hunks:
-                references.append({
-                    "path": fe.path,
-                    "line": h.line,
-                    "match_text": h.old[:120] if h.old else "",
-                    "certainty": h.certainty,
-                })
+                references.append(
+                    {
+                        "path": fe.path,
+                        "line": h.line,
+                        "match_text": h.old[:120] if h.old else "",
+                        "certainty": h.certainty,
+                    }
+                )
 
     files_affected = result.preview.files_affected if result.preview else 0
     from codeplane.mcp.delivery import wrap_response
@@ -214,10 +216,7 @@ def _serialize_impact_result(result: "RefactorResult") -> dict[str, Any]:
             "references": references,
             "total_references": len(references),
             "files_affected": files_affected,
-            "summary": (
-                f"Found {len(references)} reference(s) across "
-                f"{files_affected} file(s)."
-            ),
+            "summary": (f"Found {len(references)} reference(s) across {files_affected} file(s)."),
             "agentic_hint": (
                 "Impact analysis complete (read-only). "
                 "Use this data to plan your edits. No refactor_commit needed."

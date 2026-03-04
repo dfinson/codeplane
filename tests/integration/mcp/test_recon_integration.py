@@ -12,8 +12,6 @@ and runs the pipeline with a real AppContext.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
-from unittest.mock import MagicMock
 
 import pygit2
 import pytest
@@ -26,7 +24,6 @@ from codeplane.mcp.tools.recon.assembly import (
     build_gate_hint,
 )
 from codeplane.mcp.tools.recon.merge import (
-    _enrich_candidates,
     _merge_candidates,
     _select_graph_seeds,
 )
@@ -128,7 +125,9 @@ class Message:
         return bool(self.body.strip()) and self.sender.active
 ''')
 
-    (repo_path / "src" / "utils.py").write_text('''"""Utility functions used across the application."""
+    (
+        repo_path / "src" / "utils.py"
+    ).write_text('''"""Utility functions used across the application."""
 
 import hashlib
 
@@ -558,16 +557,8 @@ class TestMergeIntegration:
 
     def test_merge_accumulates_evidence(self) -> None:
         """Merging two harvests for the same uid accumulates evidence."""
-        h1 = {
-            "uid1": HarvestCandidate(
-                def_uid="uid1", from_term_match=True, matched_terms={"foo"}
-            )
-        }
-        h2 = {
-            "uid1": HarvestCandidate(
-                def_uid="uid1", from_lexical=True, lexical_hit_count=3
-            )
-        }
+        h1 = {"uid1": HarvestCandidate(def_uid="uid1", from_term_match=True, matched_terms={"foo"})}
+        h2 = {"uid1": HarvestCandidate(def_uid="uid1", from_lexical=True, lexical_hit_count=3)}
         merged = _merge_candidates(h1, h2)
         assert merged["uid1"].from_term_match
         assert merged["uid1"].from_lexical
@@ -612,8 +603,11 @@ class TestRRFIntegration:
         ]
         defs = {
             "uid1": HarvestCandidate(
-                def_uid="uid1", from_term_match=True, from_lexical=True,
-                matched_terms={"test"}, lexical_hit_count=5,
+                def_uid="uid1",
+                from_term_match=True,
+                from_lexical=True,
+                matched_terms={"test"},
+                lexical_hit_count=5,
             ),
         }
         defs["uid1"].file_path = "multi.py"

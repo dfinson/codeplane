@@ -8,19 +8,15 @@ Open/Closed: New harvesters can be added without modifying existing ones.
 
 from __future__ import annotations
 
-import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import structlog
 
 from codeplane.mcp.tools.recon.models import (
-    _PATH_STOP_TOKENS,
     EvidenceRecord,
     FileCandidate,
     HarvestCandidate,
     _classify_artifact,
-    _is_barrel_file,
-    _is_test_file,
 )
 
 if TYPE_CHECKING:
@@ -362,7 +358,6 @@ from codeplane.mcp.tools.recon.merge import (
     _infer_test_paths,
     _select_graph_seeds,
 )
-
 
 # ===================================================================
 # Harvester E: Graph walk (structural adjacency from top candidates)

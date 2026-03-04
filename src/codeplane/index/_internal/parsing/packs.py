@@ -527,10 +527,14 @@ PYTHON_PACK = LanguagePack(
 (import_from_statement module_name: (relative_import) @source (wildcard_import) @name) @node
 """,
         pattern_kinds={
-            0: "python_import", 1: "python_import",
-            2: "python_from", 3: "python_from",
-            4: "python_from", 5: "python_from",
-            6: "python_from", 7: "python_from",
+            0: "python_import",
+            1: "python_import",
+            2: "python_from",
+            3: "python_from",
+            4: "python_from",
+            5: "python_from",
+            6: "python_from",
+            7: "python_from",
         },
     ),
     dynamic_query="""
@@ -681,7 +685,13 @@ JAVASCRIPT_PACK = LanguagePack(
 (import_statement (import_clause (namespace_import (identifier) @alias)) source: (string) @source) @node
 (variable_declarator name: (identifier) @name value: (call_expression function: (identifier) @_fn arguments: (arguments (string) @source) (#eq? @_fn "require"))) @node
 """,
-        pattern_kinds={0: "js_import", 1: "js_import", 2: "js_import", 3: "js_import", 4: "js_require"},
+        pattern_kinds={
+            0: "js_import",
+            1: "js_import",
+            2: "js_import",
+            3: "js_import",
+            4: "js_require",
+        },
         strip_quotes=True,
     ),
     dynamic_query="""
@@ -762,7 +772,13 @@ TYPESCRIPT_PACK = LanguagePack(
 (import_statement (import_clause (namespace_import (identifier) @alias)) source: (string) @source) @node
 (variable_declarator name: (identifier) @name value: (call_expression function: (identifier) @_fn arguments: (arguments (string) @source) (#eq? @_fn "require"))) @node
 """,
-        pattern_kinds={0: "js_import", 1: "js_import", 2: "js_import", 3: "js_import", 4: "js_require"},
+        pattern_kinds={
+            0: "js_import",
+            1: "js_import",
+            2: "js_import",
+            3: "js_import",
+            4: "js_require",
+        },
         strip_quotes=True,
     ),
     dynamic_query="""
@@ -792,7 +808,13 @@ TSX_PACK = LanguagePack(
 (import_statement (import_clause (namespace_import (identifier) @alias)) source: (string) @source) @node
 (variable_declarator name: (identifier) @name value: (call_expression function: (identifier) @_fn arguments: (arguments (string) @source) (#eq? @_fn "require"))) @node
 """,
-        pattern_kinds={0: "js_import", 1: "js_import", 2: "js_import", 3: "js_import", 4: "js_require"},
+        pattern_kinds={
+            0: "js_import",
+            1: "js_import",
+            2: "js_import",
+            3: "js_import",
+            4: "js_require",
+        },
         strip_quotes=True,
     ),
     dynamic_query="""
@@ -1088,7 +1110,14 @@ RUST_PACK = LanguagePack(
 ; use name (bare identifier)
 (use_declaration argument: (identifier) @name) @node
 """,
-        pattern_kinds={0: "rust_use", 1: "rust_use", 2: "rust_use", 3: "rust_use", 4: "rust_use", 5: "rust_use"},
+        pattern_kinds={
+            0: "rust_use",
+            1: "rust_use",
+            2: "rust_use",
+            3: "rust_use",
+            4: "rust_use",
+            5: "rust_use",
+        },
         name_overrides={4: "*"},
         name_from_source_segment=True,
         source_segment_sep="::",
@@ -1381,7 +1410,6 @@ CSHARP_PACK = LanguagePack(
     symbol_config=_CSHARP_SYMBOLS,
     scope_types=_CSHARP_SCOPES,
     type_config=_CSHARP_TYPES,
-
     sem_query="""
     (invocation_expression function: (identifier) @sem_call)
     (invocation_expression function: (member_access_expression name: (identifier) @sem_call))
@@ -1500,7 +1528,6 @@ KOTLIN_PACK = LanguagePack(
     symbol_config=_KOTLIN_SYMBOLS,
     scope_types=_KOTLIN_SCOPES,
     type_config=_KOTLIN_TYPES,
-
     sem_query="""
     (call_expression (identifier) @sem_call)
     (call_expression (navigation_expression (identifier) @sem_call))
@@ -1618,7 +1645,6 @@ SCALA_PACK = LanguagePack(
     symbol_config=_SCALA_SYMBOLS,
     scope_types=_SCALA_SCOPES,
     type_config=_SCALA_TYPES,
-
     sem_query="""
     (call_expression function: (identifier) @sem_call)
     (call_expression function: (field_expression field: (identifier) @sem_call))
@@ -1812,7 +1838,6 @@ C_PACK = LanguagePack(
     symbol_config=_CPP_SYMBOLS,
     scope_types=_C_CPP_SCOPES,
     type_config=_CPP_TYPES,
-
     sem_query="""
     (call_expression function: (identifier) @sem_call)
     (call_expression function: (field_expression field: (field_identifier) @sem_call))
@@ -1908,7 +1933,6 @@ RUBY_PACK = LanguagePack(
     symbol_config=_RUBY_SYMBOLS,
     scope_types=_RUBY_SCOPES,
     type_config=_RUBY_TYPES,
-
     sem_query="""
     (call method: (identifier) @sem_call)
     (return (argument_list (identifier) @sem_return))
@@ -2044,7 +2068,6 @@ PHP_PACK = LanguagePack(
     symbol_config=_PHP_SYMBOLS,
     scope_types=_PHP_SCOPES,
     type_config=_PHP_TYPES,
-
     sem_query="""
     (function_call_expression function: (name) @sem_call)
     (member_call_expression name: (name) @sem_call)
@@ -2185,7 +2208,6 @@ SWIFT_PACK = LanguagePack(
     symbol_config=_SWIFT_SYMBOLS,
     scope_types=_SWIFT_SCOPES,
     type_config=_SWIFT_TYPES,
-
     sem_query="""
     (call_expression (simple_identifier) @sem_call)
     (call_expression (navigation_expression (navigation_suffix (simple_identifier) @sem_call)))
@@ -2323,7 +2345,6 @@ ELIXIR_PACK = LanguagePack(
     symbol_config=_ELIXIR_SYMBOLS,
     scope_types=_ELIXIR_SCOPES,
     type_config=_ELIXIR_TYPES,
-
     sem_query="""
     (call (identifier) @sem_call)
     (call (dot (alias) @sem_call))
@@ -2443,7 +2464,6 @@ HASKELL_PACK = LanguagePack(
     symbol_config=_HASKELL_SYMBOLS,
     scope_types=_HASKELL_SCOPES,
     type_config=_HASKELL_TYPES,
-
     sem_query="""
     (apply (variable) @sem_call)
 """,
@@ -2539,7 +2559,6 @@ OCAML_PACK = LanguagePack(
     symbol_config=_OCAML_SYMBOLS,
     scope_types=_OCAML_SCOPES,
     type_config=_OCAML_TYPES,
-
     sem_query="""
     (application_expression (value_path) @sem_call)
 """,
@@ -2736,7 +2755,6 @@ LUA_PACK = LanguagePack(
     extensions=frozenset({"lua"}),
     symbol_config=_LUA_SYMBOLS,
     scope_types=_LUA_SCOPES,
-
     sem_query="""
     (function_call (identifier) @sem_call)
     (function_call (dot_index_expression field: (identifier) @sem_call))
@@ -2998,8 +3016,8 @@ HCL_PACK = LanguagePack(
     grammar_module="tree_sitter_hcl",
     min_version="1.0.0",
     extensions=frozenset({"hcl", "tf", "tfvars"}),
-    symbol_config=_HCL_SYMBOLS,    scope_types={"block": "block", "body": "body"},
-
+    symbol_config=_HCL_SYMBOLS,
+    scope_types={"block": "block", "body": "body"},
 )
 SQL_PACK = LanguagePack(
     name="sql",
@@ -3043,8 +3061,8 @@ DOCKERFILE_PACK = LanguagePack(
     grammar_module="tree_sitter_dockerfile",
     min_version="0.2.0",
     filenames=frozenset({"dockerfile"}),
-    symbol_config=_DOCKERFILE_SYMBOLS,    scope_types={"stage": "stage"},
-
+    symbol_config=_DOCKERFILE_SYMBOLS,
+    scope_types={"stage": "stage"},
 )
 REGEX_PACK = LanguagePack(
     name="regex",

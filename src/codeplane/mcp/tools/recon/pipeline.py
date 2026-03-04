@@ -168,7 +168,6 @@ def _read_unindexed_content(repo_root: Path, rel_path: str) -> str | None:
         return None
 
 
-
 # ===================================================================
 # File-centric pipeline (file-level embedding + two-elbow tiers)
 # ===================================================================
@@ -707,10 +706,7 @@ async def _file_centric_pipeline(
     convention_test_paths: set[str] = set()
 
     scaffold_source_for_convention = [
-        fc
-        for fc in file_candidates
-        if fc.tier.is_scaffold
-        and not _is_test_file(fc.path)
+        fc for fc in file_candidates if fc.tier.is_scaffold and not _is_test_file(fc.path)
     ]
     if scaffold_source_for_convention:
         from codeplane.core.languages import find_test_pairs
