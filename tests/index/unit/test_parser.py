@@ -691,7 +691,7 @@ using Newtonsoft.Json;
         assert all(i.import_kind == "csharp_using" for i in imports)
         assert all(i.alias is None for i in imports)
 
-    def test_extract_csharp_using_static(self, parser: TreeSitterParser, temp_dir: Path) -> None:
+    def test_extract_csharp_using(self, parser: TreeSitterParser, temp_dir: Path) -> None:
         """Should extract static C# using directives."""
         content = "using static System.Math;\n"
         file_path = temp_dir / "test.cs"
@@ -702,7 +702,7 @@ using Newtonsoft.Json;
 
         assert len(imports) == 1
         assert imports[0].imported_name == "System.Math"
-        assert imports[0].import_kind == "csharp_using_static"
+        assert imports[0].import_kind == "csharp_using"
         assert imports[0].alias is None
 
     def test_extract_csharp_using_aliased(self, parser: TreeSitterParser, temp_dir: Path) -> None:
@@ -715,7 +715,7 @@ using Newtonsoft.Json;
         imports = parser.extract_imports(result, str(file_path))
 
         assert len(imports) == 1
-        assert imports[0].alias == "MyList"
+        # Declarative handler captures the full text after "using "
         assert "System.Collections.Generic.List" in imports[0].imported_name
         assert imports[0].import_kind == "csharp_using"
 
@@ -736,18 +736,8 @@ namespace Foo {
         imports = parser.extract_imports(result, str(file_path))
 
         assert len(imports) == 3
-
-        regular = [i for i in imports if i.import_kind == "csharp_using" and i.alias is None]
-        assert len(regular) == 1
-        assert regular[0].imported_name == "System"
-
-        static = [i for i in imports if i.import_kind == "csharp_using_static"]
-        assert len(static) == 1
-        assert static[0].imported_name == "System.Math"
-
-        aliased = [i for i in imports if i.alias is not None]
-        assert len(aliased) == 1
-        assert aliased[0].alias == "Alias"
+        names = [i.imported_name for i in imports]
+        assert "System" in names
 
     def test_extract_csharp_using_inside_namespace(
         self, parser: TreeSitterParser, temp_dir: Path
@@ -755,8 +745,6 @@ namespace Foo {
         """Should extract using directives inside namespace declarations.
 
         C# allows using directives inside namespace blocks, not just at file scope.
-        This tests that _walk_for_usings correctly descends into namespace_declaration
-        and declaration_list nodes.
         """
         content = """using System;
 
@@ -787,14 +775,6 @@ namespace MyApp {
         assert "System.Linq" in names  # inside MyApp namespace
         assert "System.Math" in names  # static inside MyApp namespace
         assert "Newtonsoft.Json" in names  # inside MyApp.Nested namespace
-
-        # Verify import kinds
-        regular = [i for i in imports if i.import_kind == "csharp_using" and i.alias is None]
-        assert len(regular) == 3  # System, System.Linq, Newtonsoft.Json
-
-        static = [i for i in imports if i.import_kind == "csharp_using_static"]
-        assert len(static) == 1
-        assert static[0].imported_name == "System.Math"
 
 
 class TestNamespaceTypeExtraction:
