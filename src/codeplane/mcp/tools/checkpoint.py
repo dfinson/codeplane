@@ -303,18 +303,17 @@ def _build_coverage_text(
     coverage_artifacts: list[dict[str, str]],
     filter_paths: set[str] | None = None,
 ) -> tuple[str, str | None]:
-    """Build compact coverage summary + cache detailed per-file report.
+    """Build tiered inline coverage summary.
 
     Returns:
         (inline_summary, coverage_hint) where:
-        - inline_summary: compact one-liner (e.g. ``coverage: 85% (170/200 lines)``)
-        - coverage_hint: agentic hint with jq extraction commands for the cached
-          detail file, or None if no detail was produced.
+        - inline_summary: tiered multi-line coverage text
+        - coverage_hint: always None (sidecar cache eliminated)
     """
     from codeplane.testing.coverage import (
         CoverageParseError,
         CoverageReport,
-        build_coverage_detail,
+        build_tiered_coverage,
         merge,
         parse_artifact,
     )
@@ -353,38 +352,9 @@ def _build_coverage_text(
         return "coverage: parse failed", None
 
     merged = merge(*reports) if len(reports) > 1 else reports[0]
-    inline, detail = build_coverage_detail(merged, filter_paths=filter_paths)
+    inline = build_tiered_coverage(merged, filter_paths=filter_paths)
 
-    if detail is None:
-        return inline, None
-
-    # Cache the detailed report in sidecar cache
-    import json
-
-    from codeplane.mcp.sidecar_cache import cache_put
-
-    byte_size = len(json.dumps(detail, indent=2, default=str).encode("utf-8"))
-    cache_id = cache_put("coverage", "coverage", detail)
-
-    n_files = len(detail.get("files", []))
-    files_with_gaps = sum(1 for f in detail.get("files", []) if "uncovered_ranges" in f)
-
-    from codeplane.mcp.delivery import _cpl_cmd
-
-    hint_parts = [
-        f"Detailed coverage ({byte_size:,} bytes, {n_files} files) cached as {cache_id}",
-        "Retrieve via terminal:",
-        f"  {_cpl_cmd(cache_id, 'summary')}",
-        f"  {_cpl_cmd(cache_id, 'files')}",
-    ]
-    if files_with_gaps > 5:
-        hint_parts.append(f"  {_cpl_cmd(cache_id, 'files')}  # filter for files with low coverage")
-    hint_parts.append(
-        f"  {_cpl_cmd(cache_id, 'files.0')}  # replace 0 with the file index you need"
-    )
-
-    coverage_hint = "\n".join(hint_parts)
-    return inline, coverage_hint
+    return inline, None
 
 
 # =============================================================================

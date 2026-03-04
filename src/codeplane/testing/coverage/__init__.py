@@ -52,6 +52,7 @@ from codeplane.testing.coverage.report import (
     build_compact_summary,
     build_coverage_detail,
     build_summary,
+    build_tiered_coverage,
     compute_file_stats,
 )
 
@@ -77,5 +78,6 @@ __all__ = [
     "build_compact_summary",
     "build_coverage_detail",
     "build_summary",
+    "build_tiered_coverage",
     "compute_file_stats",
 ]

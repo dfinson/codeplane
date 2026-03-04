@@ -155,7 +155,7 @@ _SLICE_STRATEGIES: dict[str, SliceStrategy] = {
             "tests",
             "fix_plan",
             "commit",
-            "coverage_hint",
+            "coverage",
         ),
         descriptions={
             "passed": "overall pass/fail boolean — read first",
@@ -166,7 +166,7 @@ _SLICE_STRATEGIES: dict[str, SliceStrategy] = {
             "tests": "test summary (pass/fail counts — failures split into failure:<N>)",
             "fix_plan": "plan_id + pre-minted edit tickets for immediate correction",
             "commit": "commit SHA, push status, and lean semantic diff",
-            "coverage_hint": "test coverage extraction commands",
+            "coverage": "inline tiered test coverage summary",
             "action": "always 'checkpoint'",
             "changed_files": "input file list",
         },

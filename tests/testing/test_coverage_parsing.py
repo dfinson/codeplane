@@ -16,11 +16,17 @@ from codeplane.testing.coverage import (
     CoverageParseError,
     CoverageReport,
     FileCoverage,
+    FunctionCoverage,
     build_compact_summary,
+    build_tiered_coverage,
     merge,
     parse_artifact,
 )
-from codeplane.testing.coverage.report import _compress_ranges, _path_matches
+from codeplane.testing.coverage.report import (
+    _compress_ranges,
+    _compress_ranges_tolerant,
+    _path_matches,
+)
 
 # =============================================================================
 # _compress_ranges tests
@@ -226,6 +232,153 @@ class TestBuildCompactSummary:
         result = build_compact_summary(report, filter_paths={"src/b.py"})
         assert "coverage: 100% (2/2 lines)" in result
         assert "a.py" not in result
+
+
+# =============================================================================
+# _compress_ranges_tolerant tests
+# =============================================================================
+
+
+class TestCompressRangesTolerant:
+    """Tests for gap-tolerant range compression."""
+
+    def test_empty_list(self) -> None:
+        assert _compress_ranges_tolerant([], set()) == ""
+
+    def test_no_gaps(self) -> None:
+        assert _compress_ranges_tolerant([1, 2, 3], {1, 2, 3}) == "1-3"
+
+    def test_bridges_non_instrumented_gap(self) -> None:
+        # Lines 4 is a blank (not instrumented), should bridge
+        assert _compress_ranges_tolerant([1, 2, 3, 5, 6], {1, 2, 3, 5, 6}) == "1-6"
+
+    def test_does_not_bridge_instrumented_gap(self) -> None:
+        # Line 4 IS instrumented (covered) — don't bridge
+        assert _compress_ranges_tolerant([1, 2, 3, 5, 6], {1, 2, 3, 4, 5, 6}) == "1-3,5-6"
+
+    def test_does_not_bridge_large_gap(self) -> None:
+        # Gap of 4 lines (> default limit of 3)
+        assert _compress_ranges_tolerant([1, 2, 7, 8], {1, 2, 7, 8}) == "1-2,7-8"
+
+    def test_bridges_gap_of_exactly_limit(self) -> None:
+        # Gap of 3 non-instrumented lines (exactly at limit)
+        assert _compress_ranges_tolerant([1, 5], {1, 5}) == "1-5"
+
+    def test_mixed_bridgeable_and_not(self) -> None:
+        # Gap at 4 (blank, bridge), gap at 8 (instrumented, don't bridge)
+        uncovered = [1, 2, 3, 5, 6, 9, 10]
+        instrumented = {1, 2, 3, 5, 6, 8, 9, 10}
+        result = _compress_ranges_tolerant(uncovered, instrumented)
+        assert result == "1-6,9-10"
+
+
+# =============================================================================
+# build_tiered_coverage tests
+# =============================================================================
+
+
+class TestBuildTieredCoverage:
+    """Tests for tiered coverage output."""
+
+    def test_empty_report(self) -> None:
+        report = CoverageReport(source_format="lcov")
+        assert build_tiered_coverage(report) == "coverage: no data"
+
+    def test_no_source_files_changed(self) -> None:
+        report = CoverageReport(source_format="lcov")
+        result = build_tiered_coverage(report, filter_paths=set())
+        assert result == "coverage: no source files changed"
+
+    def test_fully_covered_files_omitted(self) -> None:
+        fc = FileCoverage(path="foo.py", lines={1: 5, 2: 3, 3: 1})
+        report = CoverageReport(source_format="lcov", files={"foo.py": fc})
+        result = build_tiered_coverage(report)
+        # 100% covered — no per-file detail, just header
+        assert result == "coverage: 100% (3/3 lines)"
+        assert "foo.py" not in result
+
+    def test_low_coverage_shows_percent_only(self) -> None:
+        # 10% coverage (1/10 lines) — below 20% threshold
+        lines = {i: (1 if i == 1 else 0) for i in range(1, 11)}
+        fc = FileCoverage(path="src/big.py", lines=lines)
+        report = CoverageReport(source_format="lcov", files={"src/big.py": fc})
+        result = build_tiered_coverage(report)
+        assert "big.py: 10%" in result
+        assert "uncovered" not in result  # No line detail for low coverage
+
+    def test_mid_coverage_with_functions_shows_names(self) -> None:
+        # 50% coverage with function data
+        lines = {1: 1, 2: 1, 3: 0, 4: 0}
+        fc = FileCoverage(path="src/mod.py", lines=lines)
+        fc.functions["do_thing"] = FunctionCoverage(
+            name="do_thing",
+            start_line=3,
+            hits=0,
+        )
+        fc.functions["helper"] = FunctionCoverage(
+            name="helper",
+            start_line=1,
+            hits=5,
+        )
+        report = CoverageReport(source_format="lcov", files={"src/mod.py": fc})
+        result = build_tiered_coverage(report)
+        assert "mod.py: 50%" in result
+        assert "do_thing" in result
+        assert "helper" not in result  # covered function not listed
+
+    def test_mid_coverage_without_functions_shows_ranges(self) -> None:
+        # 50% coverage, no function data — fallback to ranges
+        lines = {1: 1, 2: 1, 3: 0, 4: 0}
+        fc = FileCoverage(path="src/mod.py", lines=lines)
+        report = CoverageReport(source_format="lcov", files={"src/mod.py": fc})
+        result = build_tiered_coverage(report)
+        assert "mod.py: 50%" in result
+        assert "uncovered: 3-4" in result
+
+    def test_filter_paths(self) -> None:
+        fc1 = FileCoverage(path="src/a.py", lines={1: 0, 2: 0, 3: 0, 4: 0, 5: 1})
+        fc2 = FileCoverage(path="src/b.py", lines={1: 1, 2: 1})
+        report = CoverageReport(
+            source_format="lcov",
+            files={"src/a.py": fc1, "src/b.py": fc2},
+        )
+        result = build_tiered_coverage(report, filter_paths={"src/b.py"})
+        assert "100%" in result
+        assert "a.py" not in result
+
+    def test_multi_file_mixed_tiers(self) -> None:
+        # File at 100% (omitted), file at 5% (percent only), file at 50% (ranges)
+        fc_full = FileCoverage(path="full.py", lines={1: 1, 2: 1})
+        fc_low = FileCoverage(
+            path="low.py",
+            lines={i: (1 if i == 1 else 0) for i in range(1, 21)},
+        )
+        fc_mid = FileCoverage(
+            path="mid.py",
+            lines={1: 1, 2: 1, 3: 0, 4: 0},
+        )
+        report = CoverageReport(
+            source_format="lcov",
+            files={"full.py": fc_full, "low.py": fc_low, "mid.py": fc_mid},
+        )
+        result = build_tiered_coverage(report)
+        assert "full.py" not in result  # 100% omitted
+        assert "low.py: 5%" in result
+        assert "uncovered" not in result.split("\n")[1]  # low tier: no ranges
+        assert "mid.py: 50%" in result
+        assert "uncovered: 3-4" in result
+
+    def test_gap_tolerant_compression_in_output(self) -> None:
+        # Lines 1,2,3 uncovered, line 4 is blank (not instrumented), line 5 uncovered
+        # Should produce "1-5" not "1-3,5"
+        fc = FileCoverage(
+            path="gaps.py",
+            lines={1: 0, 2: 0, 3: 0, 5: 0, 6: 1, 7: 1, 8: 1, 9: 1, 10: 1},
+        )
+        report = CoverageReport(source_format="lcov", files={"gaps.py": fc})
+        result = build_tiered_coverage(report)
+        # 55% coverage (5/9), mid-tier, line 4 not instrumented so bridge
+        assert "uncovered: 1-5" in result
 
 
 # =============================================================================
