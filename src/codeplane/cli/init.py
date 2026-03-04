@@ -595,6 +595,7 @@ def initialize_repo(
     embedding_task_id: Any = None
     embedding_total: int = 0  # track actual embedding count for display
     embedding_start: float = 0.0  # track embedding phase timing
+    embedding_elapsed: float = 0.0  # actual embedding phase duration
     refs_task_id: Any = None
     types_task_id: Any = None
     indexing_elapsed = 0.0
@@ -680,9 +681,9 @@ def initialize_repo(
 
                 # Close embedding phase if it was open
                 if embedding_phase is not None:
-                    embed_elapsed = time.time() - embedding_start
+                    embedding_elapsed = time.time() - embedding_start
                     embedding_phase.complete(
-                        f"{embedding_total} definitions embedded ({embed_elapsed:.1f}s)"
+                        f"{embedding_total} definitions embedded ({embedding_elapsed:.1f}s)"
                     )
                     embedding_phase.__exit__(None, None, None)
                     embedding_phase = None
@@ -728,16 +729,16 @@ def initialize_repo(
 
         # Close embedding phase box if it was opened but resolution didn't close it
         if embedding_phase is not None:
-            embed_elapsed = time.time() - embedding_start if embedding_start else 0.0
+            embedding_elapsed = time.time() - embedding_start if embedding_start else 0.0
             embedding_phase.complete(
-                f"{embedding_total} definitions embedded ({embed_elapsed:.1f}s)"
+                f"{embedding_total} definitions embedded ({embedding_elapsed:.1f}s)"
             )
             embedding_phase.__exit__(None, None, None)
 
         # Close resolution phase box if it was opened
         if resolution_phase is not None:
             total_elapsed = time.time() - start_time
-            resolution_elapsed = total_elapsed - indexing_elapsed
+            resolution_elapsed = total_elapsed - indexing_elapsed - embedding_elapsed
             resolution_phase.complete(f"Done ({resolution_elapsed:.1f}s)")
             resolution_phase.__exit__(None, None, None)
 

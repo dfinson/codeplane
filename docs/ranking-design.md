@@ -378,116 +378,97 @@ to start, (b) grounded in the actual codebase, (c) scoped as intended.
 
 Two independent phases with separate outputs:
 
-- **Ground truth** (Phase 1+2a-c): run once, output is permanent.
+- **Ground truth** (Phase 1+2): run once per repo, output is permanent.
 - **Retrieval signals** (Phase 3): re-run whenever harvesters change.
 
-Per repo, per task:
+#### Phase 1+2: Solve + Reflect (Ground Truth)
 
-#### Phase 1: Solve
+One agent session per repo. The agent receives a single prompt pointing
+it at the repo's MD file (`ranking/repos/{name}.md`) and the output
+directory. It reads the file, works through every task sequentially,
+and writes structured output per task.
 
-A coding agent (VS Code agent chat) receives the task and solves it using
-standard tools (file reads, edits, terminal commands).
-
-**Solve prompt** (sent with `{repo_id}`, `{repo_path}`, `{task_text}` filled):
-
-```
-You are working on the repository {repo_id} (cloned at {repo_path}).
-
-Your task:
-
-{task_text}
-
-Solve this task. Read the code you need to understand, make the necessary
-edits, and verify your changes work. Use the tools available to you
-(file reads, edits, terminal commands).
-
-When you are confident the task is complete, stop and say "DONE".
-Do not explain your changes — just make them.
-```
-
-After the agent finishes, the diff is captured. Changed lines are mapped
-to DefFacts via the codeplane index — these are the "edited"
-TouchedObjects (deterministic).
-
-#### Phase 2: Post-hoc Reflection (Ground Truth)
-
-The same agent session, full solve context still loaded.
-
-**Reflect prompt** (sent with `{repo_id}` filled):
+**Agent prompt** (one per repo, sent once):
 
 ```
-You just solved a task on {repo_id}. Now produce ground truth data
-for a code retrieval system. This is a separate step — do not make
-any more edits.
+You are a coding agent working on the repository cloned at
+ranking/clones/{clone_name}/.
 
-Answer the following in a single JSON object (no markdown fencing):
+Read the file ranking/repos/{name}.md — it contains a description of the
+repository structure and a list of tasks (sections N1, N2, ..., M1, ...,
+W1, ...).
 
-1. "read_necessary": List the file paths you read that were necessary
-   to understand or solve this task. Include only files that were
-   genuinely needed — not files you opened and immediately closed, or
-   explored out of curiosity. Edited files are tracked separately;
-   do not include them here.
+For EACH task in the file, do the following:
 
-2. "queries": An array of query objects. Each query has:
-   - "query_type": one of "L0", "L1", "L2", "UNSAT", "BROAD", "AMBIG"
-   - "query_text": the query string
+  STEP 1 — SOLVE: Read the code you need, make the necessary edits, and
+  verify they work. Use the tools available to you (file reads, edits,
+  terminal). When the task is complete, capture a git diff, then
+  `git stash` to restore the repo to its clean state before starting
+  the next task.
 
-   Author exactly these queries:
+  STEP 2 — REFLECT: After solving (but before stashing), write a JSON
+  file to ranking/data/{repo_id}/ground_truth/{task_id}.json with this
+  exact structure:
 
-   Three OK queries at increasing specificity:
+  {
+    "task_id": "N1",
+    "task_text": "<the full task description from the md file>",
+    "edited_files": ["path/to/file1.py", "path/to/file2.py"],
+    "read_necessary": ["path/to/file3.py", "path/to/file4.py"],
+    "queries": [
+      {"query_type": "L0", "query_text": "..."},
+      {"query_type": "L1", "query_text": "..."},
+      {"query_type": "L2", "query_text": "..."},
+      {"query_type": "UNSAT", "query_text": "..."},
+      {"query_type": "BROAD", "query_text": "..."}
+    ]
+  }
 
-   - L0: A high-level task description. No identifiers, no file paths.
-     Just describe what needs to be done in domain terms. Verify that
-     this repo's structure makes the query unambiguous — a developer
-     familiar with the codebase would know exactly where to look.
+  Fields:
+  - task_id: the task ID from the heading (N1, M1, W2, etc.)
+  - task_text: the full task description text
+  - edited_files: files you modified (from your diff)
+  - read_necessary: files you read that were genuinely necessary to
+    understand or solve the task — NOT files you opened and immediately
+    closed or explored out of curiosity. Do NOT include edited files
+    here (they are tracked separately).
+  - queries: 3 to 6 query objects:
 
-   - L1: The L0 query plus concrete identifiers — symbol names, error
-     strings, function names — drawn from the code you actually touched.
+    THREE OK queries at increasing specificity:
+    - L0: High-level task description. No identifiers, no paths. A
+      developer familiar with the codebase would know where to look.
+    - L1: L0 plus concrete identifiers — symbol names, error strings,
+      function names — drawn from the code you actually touched.
+    - L2: L1 plus anchoring constraints — file paths, module names,
+      behavioral constraints.
 
-   - L2: The L1 query plus anchoring constraints — file paths, module
-     names, behavioral constraints — that further narrow the scope.
+    UP TO THREE non-OK queries (skip any that feel forced):
+    - UNSAT: A plausible query about the same area that makes a
+      factually wrong assumption about the architecture.
+    - BROAD: A large effort this task is part of — touching many files
+      across subsystems. Too big for one task.
+    - AMBIG: Same domain, but this repo has multiple subsystems that
+      could be the target and the query doesn't resolve between them.
 
-   Up to three non-OK queries (skip any that feel forced):
+    You MUST produce L0, L1, L2. Non-OK queries are optional — produce
+    only those that arise naturally. Fewer is better than forced.
 
-   - UNSAT: A query related to the same area of this repo, but that
-     makes a plausible assumption about the architecture that is
-     factually wrong. A developer would say "that's not how it works."
-
-   - BROAD: Think of a large effort this task would have been part of —
-     one touching many files across subsystems. Describe that effort.
-     A developer would say "that's 20 tasks, not one."
-
-   - AMBIG: A query in the same domain, but where this repo has multiple
-     subsystems that could plausibly be the target, and the query does
-     not resolve between them. A developer would ask "which one?"
-
-   You MUST produce all three OK queries (L0, L1, L2).
-   For non-OK queries, produce only those that arise naturally from this
-   task's neighborhood. Do not force them — fewer is better than fake.
+Work through every task in the file. After completing all tasks, say
+"ALL TASKS COMPLETE".
 ```
 
-**Reflect output schema:**
+The `{name}`, `{clone_name}`, and `{repo_id}` placeholders are filled
+from the repo's MD file metadata. The agent produces one JSON file per
+task under `ranking/data/{repo_id}/ground_truth/`.
 
-```json
-{
-  "read_necessary": ["src/auth/config.py", "src/auth/middleware.py"],
-  "queries": [
-    {"query_type": "L0", "query_text": "Fix the auth middleware to handle expired tokens gracefully"},
-    {"query_type": "L1", "query_text": "Fix AuthMiddleware.process_request to catch TokenExpiredError from jwt_decode"},
-    {"query_type": "L2", "query_text": "Fix AuthMiddleware.process_request in src/auth/middleware.py to catch TokenExpiredError and return 401"},
-    {"query_type": "UNSAT", "query_text": "Update the OAuth2 refresh endpoint to retry with the backup auth server"},
-    {"query_type": "BROAD", "query_text": "Migrate the entire authentication system from JWT to session-based auth with Redis"}
-  ]
-}
-```
+After all JSON files are written, a post-processing step:
 
-Validation rules:
-- `read_necessary`: array of strings (file paths, not including edited files)
-- `queries`: 3–6 items, each with `query_type` ∈ {L0, L1, L2, UNSAT, BROAD, AMBIG} and `query_text` (string)
-- Exactly one L0, one L1, one L2. At most one each of UNSAT, BROAD, AMBIG.
-
-The read-necessary paths are mapped to DefFacts via the codeplane index,
-producing "read_necessary" TouchedObjects.
+1. Extracts `edited_files` per task, maps changed lines to DefFacts via
+   the codeplane index → "edited" TouchedObjects.
+2. Maps `read_necessary` paths to DefFacts → "read_necessary"
+   TouchedObjects.
+3. Assembles `runs.jsonl`, `touched_objects.jsonl`, `queries.jsonl`
+   from the per-task JSON files.
 
 **Output:** `runs.jsonl`, `touched_objects.jsonl`, `queries.jsonl` under
 `data/{repo_id}/ground_truth/`. This data is permanent — it never needs
@@ -876,30 +857,26 @@ benchmarking/
 ┌────────────────────────────────────────────────────────┐
 │                    PER REPO (×30)                      │
 │                                                        │
-│  Task Author Agent                                     │
+│  One agent session per repo                            │
 │    │                                                   │
-│    ├─ Explores repo structure via codeplane index       │
-│    ├─ Studies commit/PR history for flavor              │
-│    └─ Generates tasks (narrow/medium/wide mix)          │
-│         │                                              │
-│         ▼                                              │
-│  ┌──────────────────────────────────────────────┐      │
-│  │           PER TASK (many per repo)           │      │
-│  │                                              │      │
-│  │  Phase 1: Solve                              │      │
-│  │    Coding agent solves task with native tools │      │
-│  │                                              │      │
-│  │  Phase 2: Reflect (GROUND TRUTH — run once)  │      │
-│  │    2a. Classify touched objects               │      │
-│  │        → edited (from diff, deterministic)    │      │
-│  │        → read-necessary (agent judgment)      │      │
-│  │    2b. Author 3 OK queries (L0/L1/L2)        │      │
-│  │    2c. Author up to 3 bad queries             │      │
-│  │        (UNSAT/BROAD/AMBIG, skip if unnatural) │      │
-│  │                                              │      │
-│  │  Output: ground_truth/                        │      │
-│  │    runs, touched_objects, queries             │      │
-│  └──────────────────────────────────────────────┘      │
+│    ├─ Reads ranking/repos/{name}.md                    │
+│    ├─ Repo cloned at ranking/clones/{clone}/           │
+│    │                                                   │
+│    ├─ FOR EACH TASK in the md file:                    │
+│    │    1. Solve: read code, make edits, verify        │
+│    │    2. Reflect: write {task_id}.json with:         │
+│    │       - edited_files (from diff)                  │
+│    │       - read_necessary (agent judgment)           │
+│    │       - queries: L0, L1, L2 + optional            │
+│    │         UNSAT, BROAD, AMBIG                       │
+│    │    3. git stash → clean for next task             │
+│    │                                                   │
+│    └─ Output: data/{repo_id}/ground_truth/*.json       │
+│                                                        │
+│  Post-processing (automated):                          │
+│    Map edited/read files → DefFacts via codeplane      │
+│    Assemble runs.jsonl, touched_objects.jsonl,          │
+│    queries.jsonl                                       │
 │                                                        │
 │  ┌──────────────────────────────────────────────┐      │
 │  │  Phase 3: Signals (RE-RUNNABLE)              │      │
