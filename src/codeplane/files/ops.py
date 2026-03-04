@@ -1,7 +1,6 @@
-"""File operations - read_files, list_files tool implementation.
+"""File operations — internal utilities for path validation and file access.
 
 Pure filesystem I/O. No index dependency.
-Per SPEC.md §23.7 read_files tool specification.
 """
 
 from __future__ import annotations
@@ -84,7 +83,7 @@ def validate_path_in_repo(repo_root: Path, user_path: str) -> Path:
 
 
 class FileOps:
-    """File operations for read_files and list_files tools."""
+    """File operations for path validation and file access."""
 
     def __init__(self, repo_root: Path) -> None:
         """Initialize file operations.

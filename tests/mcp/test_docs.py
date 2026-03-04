@@ -29,13 +29,8 @@ class TestToolCategory:
     def test_all_categories(self) -> None:
         """All expected categories exist."""
         expected = {
-            "git",
-            "files",
-            "search",
             "mutation",
             "refactor",
-            "testing",
-            "lint",
             "session",
             "introspection",
         }
@@ -44,9 +39,9 @@ class TestToolCategory:
 
     def test_is_str_enum(self) -> None:
         """Categories are string-based (StrEnum)."""
-        assert ToolCategory.GIT.value == "git"
+        assert ToolCategory.MUTATION.value == "mutation"
         # StrEnum: str() returns the value, not the qualified name
-        assert str(ToolCategory.FILES) == "files"
+        assert str(ToolCategory.REFACTOR) == "refactor"
 
 
 class TestBehaviorFlags:
@@ -82,18 +77,18 @@ class TestToolDocumentation:
         doc = ToolDocumentation(
             name="test_tool",
             description="A test tool.",
-            category=ToolCategory.FILES,
+            category=ToolCategory.INTROSPECTION,
         )
         assert doc.name == "test_tool"
         assert doc.description == "A test tool."
-        assert doc.category == ToolCategory.FILES
+        assert doc.category == ToolCategory.INTROSPECTION
 
     def test_default_lists_are_empty(self) -> None:
         """Default list fields are empty."""
         doc = ToolDocumentation(
             name="x",
             description="y",
-            category=ToolCategory.GIT,
+            category=ToolCategory.MUTATION,
         )
         assert doc.when_to_use == []
         assert doc.when_not_to_use == []
@@ -106,19 +101,19 @@ class TestToolDocumentation:
     def test_to_dict(self) -> None:
         """Converts to dictionary."""
         doc = ToolDocumentation(
-            name="read_source",
-            description="Read file contents.",
-            category=ToolCategory.FILES,
-            when_to_use=["Reading code"],
-            behavior=BehaviorFlags(idempotent=True),
+            name="recon",
+            description="Task-aware file discovery.",
+            category=ToolCategory.INTROSPECTION,
+            when_to_use=["Starting a task"],
+            behavior=BehaviorFlags(idempotent=False),
         )
         data = doc.to_dict()
 
-        assert data["name"] == "read_source"
-        assert data["description"] == "Read file contents."
-        assert data["category"] == "files"
-        assert data["when_to_use"] == ["Reading code"]
-        assert data["behavior"]["idempotent"] is True
+        assert data["name"] == "recon"
+        assert data["description"] == "Task-aware file discovery."
+        assert data["category"] == "introspection"
+        assert data["when_to_use"] == ["Starting a task"]
+        assert data["behavior"]["idempotent"] is False
 
     def test_to_dict_includes_all_fields(self) -> None:
         """to_dict includes all documentation fields."""
@@ -147,7 +142,7 @@ class TestToolDocs:
 
     def test_contains_core_tools(self) -> None:
         """Contains documentation for core tools."""
-        expected = ["read_source", "write_source", "map_repo", "search"]
+        expected = ["recon", "refactor_plan", "refactor_edit", "checkpoint"]
         for tool in expected:
             assert tool in TOOL_DOCS, f"Missing doc for {tool}"
 
@@ -167,9 +162,9 @@ class TestGetToolDocumentation:
 
     def test_returns_documentation_for_known_tool(self) -> None:
         """Returns documentation for known tools."""
-        doc = get_tool_documentation("read_source")
+        doc = get_tool_documentation("recon")
         assert doc is not None
-        assert doc.name == "read_source"
+        assert doc.name == "recon"
 
     def test_returns_none_for_unknown_tool(self) -> None:
         """Returns None for unknown tools."""
@@ -189,9 +184,9 @@ class TestGetToolsByCategory:
         """Tools are grouped by their category."""
         result = get_tools_by_category()
 
-        # Check that files category exists and contains expected tools
-        if "files" in result:
-            assert "read_source" in result["files"]
+        # Check that introspection category exists and contains expected tools
+        if "introspection" in result:
+            assert "recon" in result["introspection"]
 
     def test_all_tools_categorized(self) -> None:
         """All documented tools appear in exactly one category."""

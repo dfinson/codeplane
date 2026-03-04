@@ -130,14 +130,14 @@ class TestEnrichToolDescriptions:
         mcp = FastMCP("test")
 
         @mcp.tool()
-        def search(query: str) -> str:
+        def checkpoint(changed_files: list[str]) -> str:
             """Original description."""
-            return query
+            return str(changed_files)
 
         _enrich_tool_descriptions(mcp)
         tools = get_tools_sync(mcp)
-        # 'search' has TOOL_DOCS entry, description should be enriched
-        desc = tools["search"].description or ""
+        # 'checkpoint' has TOOL_DOCS entry, description should be enriched
+        desc = tools["checkpoint"].description or ""
         assert len(desc) > len("Original description.")
 
     def test_no_change_for_unknown_tool(self) -> None:

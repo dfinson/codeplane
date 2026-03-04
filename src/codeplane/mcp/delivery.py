@@ -1003,7 +1003,7 @@ class ScopeBudget:
             "full_reads": (
                 self.full_file_reads,
                 self.max_full_file_reads,
-                "Use read_source with spans instead of full file reads.",
+                "Use targeted reads instead of full file reads.",
             ),
             "read_calls": (
                 self.read_calls,

@@ -142,7 +142,7 @@ class SessionState:
     pattern_detector: CallPatternDetector = field(default_factory=CallPatternDetector)
 
     # Exclusive-tool lock: prevents concurrent tool execution during
-    # long-running operations like checkpoint, semantic_diff, map_repo.
+    # long-running operations like checkpoint, semantic_diff.
     _exclusive_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _exclusive_holder: str | None = field(default=None, repr=False)
 

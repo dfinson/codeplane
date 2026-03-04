@@ -156,7 +156,7 @@ class DryRunRequiredError(MCPError):
         super().__init__(
             code=MCPErrorCode.DRY_RUN_REQUIRED,
             message=f"Line-range edit on {path} requires prior dry_run",
-            remediation="Call write_source with dry_run=True first to get content_hash, then call again with the hash.",
+            remediation="Call with dry_run=True first to get content_hash, then call again with the hash.",
             path=path,
         )
 
@@ -207,7 +207,7 @@ class FileHashMismatchError(MCPError):
         super().__init__(
             code=MCPErrorCode.FILE_HASH_MISMATCH,
             message=f"File {path} was modified since last read (hash mismatch)",
-            remediation="Re-read the file with read_source to get the current file_sha256, then retry.",
+            remediation="Re-read the file to get the current file_sha256, then retry.",
             path=path,
             expected_file_sha256=expected,
             current_file_sha256=actual,
@@ -292,14 +292,14 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
         category="state",
         description="expected_content does not match actual file content at the given span.",
         causes=[
-            "File was modified after read_source but before write_source",
+            "File was modified between read and edit",
             "Agent line numbers drifted beyond fuzzy-match window (±5 lines)",
-            "expected_content was fabricated instead of copied from read_source",
+            "expected_content was fabricated instead of copied from file",
         ],
         remediation=[
-            "Re-read the target span with read_source to get current content",
-            "Use the returned file_sha256 and actual content for the next write",
-            "Ensure expected_content is copied verbatim from read_source output",
+            "Re-read the target span to get current content",
+            "Use the returned file_sha256 and actual content for the next edit",
+            "Ensure expected_content is copied verbatim from file content",
         ],
     ),
     MCPErrorCode.DRY_RUN_REQUIRED.value: ErrorDocumentation(
@@ -311,7 +311,7 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
             "Missing content_hash parameter",
         ],
         remediation=[
-            "First call write_source with dry_run=True to preview and get content_hash",
+            "First call dry_run=True to preview and get content_hash",
             "Then call again with the content_hash to apply",
             "Or use 'exact' mode which doesn't require dry_run",
         ],
@@ -327,7 +327,7 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
         ],
         remediation=[
             "Line numbers are 1-indexed",
-            "Use read_files to check file length first",
+            "Check file length before editing",
             "Ensure start <= end",
         ],
     ),
@@ -341,7 +341,7 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
             "Path is absolute instead of relative to repo root",
         ],
         remediation=[
-            "Use map_repo to see available files",
+            "Use recon to discover available files",
             "Ensure path is relative to repository root",
             "Check for typos in directory names",
         ],
@@ -385,7 +385,7 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
         ],
         remediation=[
             "Use more targeted queries to reduce resource usage",
-            "Use read_source with spans instead of read_file_full",
+            "Use targeted reads instead of full file access",
             "Start a new scope if the current one is exhausted",
         ],
     ),
@@ -407,11 +407,11 @@ ERROR_CATALOG: dict[str, ErrorDocumentation] = {
         description="File was modified since last read (SHA256 mismatch).",
         causes=[
             "Another process modified the file",
-            "A previous write_source call changed the file",
+            "A previous edit call changed the file",
             "Auto-formatter or pre-commit hook modified the file",
         ],
         remediation=[
-            "Re-read the file with read_source to get current file_sha256",
+            "Re-read the file to get current file_sha256",
             "Retry the span edit with the updated hash",
         ],
     ),

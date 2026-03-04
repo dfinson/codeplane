@@ -13,13 +13,8 @@ from typing import Any
 class ToolCategory(StrEnum):
     """Categories for grouping tools."""
 
-    GIT = "git"
-    FILES = "files"
-    SEARCH = "search"
     MUTATION = "mutation"
     REFACTOR = "refactor"
-    TESTING = "testing"
-    LINT = "lint"
     SESSION = "session"
     INTROSPECTION = "introspection"
 
@@ -96,148 +91,97 @@ class ToolDocumentation:
 
 
 TOOL_DOCS: dict[str, ToolDocumentation] = {
-    "read_source": ToolDocumentation(
-        name="read_source",
-        description="Read file contents with optional line ranges.",
-        category=ToolCategory.FILES,
-        when_to_use=[
-            "Reading source code for analysis",
-            "Fetching config files",
-            "Getting partial file content with line ranges",
-        ],
-        when_not_to_use=[
-            "Large binary files",
-            "Files outside the repository",
-            "When you need to find content - use 'search' instead",
-        ],
-        hints_before="Use map_repo first if you're unsure which files exist.",
-        hints_after=None,
-        alternatives=["search"],
-        commonly_preceded_by=["map_repo", "search"],
-        commonly_followed_by=["write_source"],
-        behavior=BehaviorFlags(idempotent=True, has_side_effects=False, atomic=True),
-        possible_errors=["FILE_NOT_FOUND", "ENCODING_ERROR", "INVALID_RANGE"],
-        examples=[
-            {
-                "description": "Read specific lines (10-50)",
-                "params": {"targets": [{"path": "src/main.py", "start_line": 10, "end_line": 50}]},
-            },
-            {
-                "description": "Read multiple spans in one call",
-                "params": {
-                    "targets": [
-                        {"path": "src/foo.py", "start_line": 1, "end_line": 30},
-                        {"path": "src/bar.py", "start_line": 100, "end_line": 150},
-                    ]
-                },
-            },
-        ],
-    ),
-    "write_source": ToolDocumentation(
-        name="write_source",
-        description="Atomic file edits with structured delta response.",
-        category=ToolCategory.MUTATION,
-        when_to_use=[
-            "Making precise code changes",
-            "Creating new files",
-            "Deleting files",
-        ],
-        when_not_to_use=[
-            "Renaming symbols across files - use refactor_rename",
-            "Large-scale refactoring",
-            "When you haven't read the file recently",
-        ],
-        hints_before="Read the target file first to ensure you have current content.",
-        hints_after="Use checkpoint to lint, test, and commit your changes.",
-        alternatives=["refactor_rename (for symbol renames)"],
-        commonly_preceded_by=["read_source"],
-        commonly_followed_by=["checkpoint"],
-        possible_errors=[
-            "FILE_NOT_FOUND",
-            "FILE_EXISTS",
-            "HASH_MISMATCH",
-        ],
-        examples=[
-            {
-                "description": "Span-based update (replace lines 10-15)",
-                "params": {
-                    "edits": [
-                        {
-                            "path": "src/foo.py",
-                            "action": "update",
-                            "start_line": 10,
-                            "end_line": 15,
-                            "expected_file_sha256": "<sha256 from read_source>",
-                            "new_content": "def new_name():\n    pass\n",
-                        }
-                    ]
-                },
-            },
-        ],
-    ),
-    "map_repo": ToolDocumentation(
-        name="map_repo",
-        description="Build repository mental model from indexed data.",
+    "recon": ToolDocumentation(
+        name="recon",
+        description="Task-aware file discovery. Returns scaffolds, lite descriptions, and repo_map.",
         category=ToolCategory.INTROSPECTION,
         when_to_use=[
-            "Starting work on unfamiliar codebase",
-            "Understanding project structure",
-            "Finding entry points and key files",
+            "Starting any task — the primary entry point",
+            "Understanding what files are relevant to a task",
+            "Getting scaffolds (imports + signatures) for key files",
         ],
         when_not_to_use=[
-            "Looking for specific content - use 'search'",
-            "Already familiar with the codebase structure",
+            "Already called recon this task (hard-gated to 1 call per task)",
         ],
         hints_before=None,
-        hints_after="Use read_source to dive into specific files of interest.",
-        alternatives=["search"],
+        hints_after="Read files via terminal (cat, head) using paths from scaffolds.",
         commonly_preceded_by=[],
-        commonly_followed_by=["read_source", "search"],
-        behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
+        commonly_followed_by=["refactor_plan", "refactor_rename"],
+        behavior=BehaviorFlags(idempotent=False, has_side_effects=True),
         possible_errors=[],
         examples=[
             {
-                "description": "Get repository overview",
-                "params": {"include": ["structure", "languages", "entry_points"]},
+                "description": "Research a task",
+                "params": {"task": "Fix the broken import in coordinator.py", "read_only": True},
+            },
+            {
+                "description": "Prepare for edits",
+                "params": {
+                    "task": "Rename UserService to AccountService",
+                    "seeds": ["UserService"],
+                    "read_only": False,
+                },
             },
         ],
     ),
-    "search": ToolDocumentation(
-        name="search",
-        description="Search code, symbols, or references with configurable context.",
-        category=ToolCategory.SEARCH,
+    "refactor_plan": ToolDocumentation(
+        name="refactor_plan",
+        description="Declare edit targets, get plan_id + edit_tickets with SHA256 locks.",
+        category=ToolCategory.MUTATION,
         when_to_use=[
-            "Finding where a function is defined",
-            "Finding usages of a symbol",
-            "Text search across codebase",
-            "Getting edit-ready code snippets with context=function/class",
+            "Before editing files — declare what you intend to change",
+            "Getting SHA256-locked edit tickets for safe concurrent editing",
         ],
         when_not_to_use=[
-            "When you know the exact file - use read_source",
+            "For symbol renames across files — use refactor_rename",
+            "For file moves — use refactor_move",
         ],
-        hints_before=None,
-        hints_after="Use context='function' or 'class' for edit-ready results. Use context='rich' for 20 lines. Only use read_source if you need more context than search provides.",
-        alternatives=["map_repo (for structure overview)"],
-        commonly_preceded_by=["map_repo"],
-        commonly_followed_by=["write_source", "read_source"],
-        behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
+        hints_before="Call recon first to discover candidate files.",
+        hints_after="Use refactor_edit with the returned edit_tickets.",
+        commonly_preceded_by=["recon"],
+        commonly_followed_by=["refactor_edit"],
+        behavior=BehaviorFlags(has_side_effects=True),
         possible_errors=[],
         examples=[
             {
-                "description": "Find symbol definition",
-                "params": {"query": "UserService", "mode": "symbol"},
+                "description": "Plan edits to specific files",
+                "params": {"edit_targets": ["candidate_id_1", "candidate_id_2"]},
             },
+        ],
+    ),
+    "refactor_edit": ToolDocumentation(
+        name="refactor_edit",
+        description="Find-and-replace edits with SHA256 locking. One call can edit multiple files.",
+        category=ToolCategory.MUTATION,
+        when_to_use=[
+            "Making precise code changes after refactor_plan",
+            "Batch editing multiple files in one call",
+        ],
+        when_not_to_use=[
+            "Renaming symbols across files — use refactor_rename",
+            "Without a plan — call refactor_plan first",
+        ],
+        hints_before="Get edit_tickets from refactor_plan first.",
+        hints_after="Call checkpoint to lint, test, and commit your changes.",
+        commonly_preceded_by=["refactor_plan"],
+        commonly_followed_by=["checkpoint"],
+        behavior=BehaviorFlags(has_side_effects=True, atomic=True),
+        possible_errors=["HASH_MISMATCH"],
+        examples=[
             {
-                "description": "Find all references",
-                "params": {"query": "handle_request", "mode": "references"},
-            },
-            {
-                "description": "Search with enclosing function body (edit-ready)",
-                "params": {"query": "handle_request", "enrichment": "function"},
-            },
-            {
-                "description": "Search with enclosing class body",
-                "params": {"query": "UserService", "mode": "symbol", "enrichment": "class"},
+                "description": "Edit a file",
+                "params": {
+                    "plan_id": "...",
+                    "edits": [
+                        {
+                            "edit_ticket": "...",
+                            "path": "src/foo.py",
+                            "old_content": "old code",
+                            "new_content": "new code",
+                            "expected_file_sha256": "...",
+                        }
+                    ],
+                },
             },
         ],
     ),
@@ -245,101 +189,79 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         name="checkpoint",
         description=(
             "Lint, test, and optionally commit+push in one call. "
-            "BLOCKING: this tool acquires an exclusive session lock. "
-            "No other tools execute until it completes. "
-            "You MUST fully process the result (status, lint, tests, commit, agentic_hint) "
-            "before doing any other work."
+            "BLOCKING: acquires exclusive session lock. "
+            "You MUST fully process the result before doing any other work."
         ),
-        category=ToolCategory.TESTING,
+        category=ToolCategory.SESSION,
         when_to_use=[
             "After making code changes — validates and optionally saves",
-            "Quick lint + affected-tests check",
             "One-shot lint → test → commit → push workflow",
+            "Resetting session state after read-only flows",
         ],
-        when_not_to_use=[
-            "When you only need git status/log/diff/branch — use terminal",
-        ],
+        when_not_to_use=[],
         hints_before=None,
-        hints_after="Pass commit_message to auto-commit on success.",
-        alternatives=[],
-        commonly_preceded_by=["write_source"],
+        hints_after="On failure, budget resets and fix_plan with pre-minted tickets is returned.",
+        commonly_preceded_by=["refactor_edit"],
         commonly_followed_by=[],
         behavior=BehaviorFlags(has_side_effects=True, may_be_slow=True),
         possible_errors=["HOOK_FAILED", "HOOK_FAILED_AFTER_RETRY"],
         examples=[
             {
-                "description": "Check after editing files",
-                "params": {"changed_files": ["src/foo.py", "src/bar.py"]},
-            },
-            {
-                "description": "One-shot: lint, test, commit, push",
+                "description": "Lint, test, commit, push",
                 "params": {
                     "changed_files": ["src/foo.py"],
                     "commit_message": "feat: add feature",
                     "push": True,
                 },
             },
-            {
-                "description": "Lint only, skip tests",
-                "params": {"changed_files": ["src/foo.py"], "tests": False},
-            },
         ],
     ),
-    # =========================================================================
-    # Files Tools
-    # =========================================================================
-    "list_files": ToolDocumentation(
-        name="list_files",
-        description="List files and directories with optional filtering.",
-        category=ToolCategory.FILES,
+    "semantic_diff": ToolDocumentation(
+        name="semantic_diff",
+        description="Structural change summary with blast-radius enrichment.",
+        category=ToolCategory.INTROSPECTION,
         when_to_use=[
-            "Exploring directory contents",
-            "Finding files matching a pattern",
-            "Checking if a path exists",
+            "Reviewing changes before committing",
+            "Understanding structural impact of edits",
         ],
-        when_not_to_use=[
-            "When you need file contents - use read_source",
-            "When you need repository overview - use map_repo",
-        ],
+        when_not_to_use=[],
         hints_before=None,
-        hints_after="Use read_source to examine specific files of interest.",
-        alternatives=["map_repo (for tree structure)"],
-        commonly_preceded_by=["map_repo"],
-        commonly_followed_by=["read_source"],
+        hints_after="Read changed files via terminal for full context.",
+        commonly_preceded_by=["refactor_edit"],
+        commonly_followed_by=["checkpoint"],
         behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
-        possible_errors=["FILE_NOT_FOUND"],
+        possible_errors=[],
         examples=[
             {
-                "description": "List Python files recursively",
-                "params": {"path": "src", "pattern": "*.py", "recursive": True},
+                "description": "Diff against main",
+                "params": {"base": "main"},
             },
         ],
     ),
-    # =========================================================================
-    # Refactor Tools
-    # =========================================================================
     "refactor_rename": ToolDocumentation(
         name="refactor_rename",
-        description="Rename a symbol across the codebase. Returns a preview with certainty levels: high (definition proven by index), medium (comments/docstrings), low (lexical matches). Use refactor_inspect to review low-certainty matches before refactor_apply.",
+        description="Rename a symbol across the codebase with certainty-leveled preview.",
         category=ToolCategory.REFACTOR,
         when_to_use=[
             "Renaming functions, classes, or variables across multiple files",
-            "Ensuring all references (imports, usages, comments) are updated",
         ],
         when_not_to_use=[
-            "Simple find/replace in one file - use write_source",
-            "File renames - use refactor_move",
+            "File moves — use refactor_move",
         ],
-        hints_before="Ensure the codebase is indexed. For unique identifiers (MyClassName), low-certainty matches are usually safe. For common words (data, result), inspect before applying.",
-        hints_after="Check verification_required and low_certainty_files in response. If true, use refactor_inspect(refactor_id, path) to review matches with context, then refactor_apply or refactor_cancel.",
-        commonly_preceded_by=["search"],
-        commonly_followed_by=["refactor_inspect", "refactor_apply"],
+        hints_before="Call recon first. Justification is required.",
+        hints_after="Use refactor_commit to apply or refactor_cancel to discard.",
+        commonly_preceded_by=["recon"],
+        commonly_followed_by=["refactor_commit"],
         behavior=BehaviorFlags(has_side_effects=False),
         possible_errors=[],
         examples=[
             {
                 "description": "Rename a function",
-                "params": {"symbol": "old_function_name", "new_name": "new_function_name"},
+                "params": {
+                    "symbol": "old_name",
+                    "new_name": "new_name",
+                    "justification": "Clarify intent",
+                },
             },
         ],
     ),
@@ -352,12 +274,12 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             "Moving modules to different packages",
         ],
         when_not_to_use=[
-            "Simple symbol renames - use refactor_rename",
+            "Symbol renames — use refactor_rename",
         ],
-        hints_before="Ensure the codebase is indexed.",
-        hints_after="Review with refactor_inspect, then apply with refactor_apply.",
-        commonly_preceded_by=["map_repo"],
-        commonly_followed_by=["refactor_inspect", "refactor_apply"],
+        hints_before="Call recon first.",
+        hints_after="Use refactor_commit to apply or refactor_cancel to discard.",
+        commonly_preceded_by=["recon"],
+        commonly_followed_by=["refactor_commit"],
         behavior=BehaviorFlags(has_side_effects=False),
         possible_errors=["FILE_NOT_FOUND"],
         examples=[
@@ -370,71 +292,41 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
     "recon_impact": ToolDocumentation(
         name="recon_impact",
         description="Find all references to a symbol/file for read-only impact analysis.",
-        category=ToolCategory.SEARCH,
-        when_to_use=[
-            "Removing deprecated code",
-            "Finding all usages before deletion",
-        ],
-        when_not_to_use=[
-            "When you want automatic deletion - this just finds references",
-        ],
-        hints_before=None,
-        hints_after="Review references in the preview before manual cleanup.",
-        commonly_preceded_by=["search"],
-        commonly_followed_by=["write_source"],
-        behavior=BehaviorFlags(has_side_effects=False),
-        possible_errors=[],
-        examples=[
-            {
-                "description": "Find references to deprecated function",
-                "params": {"target": "deprecated_function"},
-            },
-        ],
-    ),
-    "refactor_inspect": ToolDocumentation(
-        name="refactor_inspect",
-        description="Inspect low-certainty matches in a file with surrounding context. Returns line numbers, snippets, and context_before/context_after for each match. Use to verify lexical matches are actual symbol references before applying.",
         category=ToolCategory.REFACTOR,
         when_to_use=[
-            "Reviewing low-certainty matches before applying refactor",
-            "Verifying matches in files listed in low_certainty_files",
-            "When verification_required is true in refactor preview",
+            "Auditing all usages of a symbol before changes",
+            "Finding dependents before file deletion",
         ],
         when_not_to_use=[
-            "For high-certainty matches (definitions proven by index)",
+            "When grep/scaffold iteration would suffice — this is for symbol-level analysis",
         ],
-        hints_before="Run refactor_rename/move/impact first. Check low_certainty_files in response to know which files need inspection.",
-        hints_after="If matches look correct, use refactor_apply. If false positives found, use refactor_cancel and handle manually with write_source.",
-        commonly_preceded_by=["refactor_rename", "refactor_move"],
-        commonly_followed_by=["refactor_apply", "refactor_cancel"],
+        hints_before=None,
+        hints_after="Read affected files via terminal.",
+        commonly_preceded_by=["recon"],
+        commonly_followed_by=["refactor_plan"],
         behavior=BehaviorFlags(idempotent=True, has_side_effects=False),
         possible_errors=[],
         examples=[
             {
-                "description": "Inspect matches in a file",
-                "params": {"refactor_id": "abc123", "path": "src/module.py"},
-            },
-            {
-                "description": "Inspect with more context lines",
-                "params": {"refactor_id": "abc123", "path": "src/module.py", "context_lines": 5},
+                "description": "Find all usages of a symbol",
+                "params": {"target": "deprecated_function"},
             },
         ],
     ),
-    "refactor_apply": ToolDocumentation(
-        name="refactor_apply",
-        description="Apply a previewed refactoring atomically. All edits are applied or none. The refactor_id expires after apply or cancel.",
+    "refactor_commit": ToolDocumentation(
+        name="refactor_commit",
+        description="Apply or inspect a previewed refactoring. With inspect_path: reviews matches. Without: applies all changes.",
         category=ToolCategory.REFACTOR,
         when_to_use=[
-            "After reviewing preview and confirming matches are correct",
-            "For unique identifiers where low-certainty matches are safe",
+            "After reviewing a refactor_rename/move preview",
+            "Inspecting low-certainty matches in a specific file",
         ],
         when_not_to_use=[
-            "Before checking verification_required in preview response",
-            "If low_certainty_files contains files with potential false positives",
+            "Without first calling refactor_rename or refactor_move",
         ],
-        hints_before="For common words (data, result, value), use refactor_inspect first. For unique identifiers, usually safe to apply directly.",
-        hints_after="Run checkpoint to confirm the changes compile and tests pass.",
-        commonly_preceded_by=["refactor_inspect", "refactor_rename"],
+        hints_before="Check verification_required in the preview response.",
+        hints_after="Run checkpoint to validate and commit.",
+        commonly_preceded_by=["refactor_rename", "refactor_move"],
         commonly_followed_by=["checkpoint"],
         behavior=BehaviorFlags(has_side_effects=True, atomic=True),
         possible_errors=[],
@@ -443,21 +335,24 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
                 "description": "Apply refactoring",
                 "params": {"refactor_id": "abc123"},
             },
+            {
+                "description": "Inspect matches in a file first",
+                "params": {"refactor_id": "abc123", "inspect_path": "src/module.py"},
+            },
         ],
     ),
     "refactor_cancel": ToolDocumentation(
         name="refactor_cancel",
-        description="Cancel a pending refactoring and discard the preview. Use when false positives are detected or you want to start over.",
+        description="Cancel a pending refactoring and discard the preview.",
         category=ToolCategory.REFACTOR,
         when_to_use=[
-            "After finding false positives in refactor_inspect",
-            "When you want to try different refactor parameters",
-            "Cleaning up unused previews",
+            "After finding false positives in preview",
+            "When you want to try different parameters",
         ],
         when_not_to_use=[],
         hints_before=None,
-        hints_after="If false positives exist, use write_source to make changes manually.",
-        commonly_preceded_by=["refactor_inspect"],
+        hints_after=None,
+        commonly_preceded_by=["refactor_commit"],
         commonly_followed_by=[],
         behavior=BehaviorFlags(has_side_effects=True),
         possible_errors=[],
@@ -468,9 +363,6 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             },
         ],
     ),
-    # =========================================================================
-    # Introspection Tools
-    # =========================================================================
     "describe": ToolDocumentation(
         name="describe",
         description="Introspection: describe tools, errors, capabilities, workflows, or operations.",
@@ -479,7 +371,6 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
             "Learning how to use a specific tool",
             "Understanding error codes",
             "Discovering available capabilities",
-            "Debugging recent operations",
         ],
         when_not_to_use=[],
         hints_before=None,
@@ -491,19 +382,11 @@ TOOL_DOCS: dict[str, ToolDocumentation] = {
         examples=[
             {
                 "description": "Get tool documentation",
-                "params": {"action": "tool", "name": "write_source"},
+                "params": {"action": "tool", "name": "recon"},
             },
             {
                 "description": "Understand an error code",
                 "params": {"action": "error", "code": "CONTENT_NOT_FOUND"},
-            },
-            {
-                "description": "List all capabilities",
-                "params": {"action": "capabilities"},
-            },
-            {
-                "description": "View recent operations",
-                "params": {"action": "operations", "limit": 10},
             },
         ],
     ),
@@ -532,17 +415,17 @@ def get_common_workflows() -> list[dict[str, Any]]:
         {
             "name": "exploration",
             "description": "Understanding a codebase",
-            "tools": ["map_repo", "search", "read_source"],
+            "tools": ["recon", "describe"],
         },
         {
             "name": "modification",
             "description": "Making code changes",
-            "tools": ["read_source", "write_source", "checkpoint"],
+            "tools": ["recon", "refactor_plan", "refactor_edit", "checkpoint"],
         },
         {
             "name": "refactoring",
             "description": "Renaming and restructuring",
-            "tools": ["search", "refactor_rename", "semantic_diff", "checkpoint"],
+            "tools": ["recon", "refactor_rename", "refactor_commit", "checkpoint"],
         },
         {
             "name": "review",

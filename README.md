@@ -84,23 +84,23 @@ CodePlane provides a **full stacked index**:
 | `.vscode/mcp.json` | VS Code MCP server config (native HTTP transport) |
 | `.github/copilot-instructions.md` | Agent instructions (tool names, parameters, patterns) |
 
-The server name follows the pattern `codeplane-{repo_name}`, so tools appear as `mcp_codeplane_myrepo_read_files`, etc.
+The server name follows the pattern `codeplane-{repo_name}`, so tools appear as `mcp_codeplane-myrepo_recon`, etc.
 
 ## MCP Tools
 
-CodePlane exposes 35+ MCP tools organized by domain:
-
-| Domain | Tools | Description |
-|--------|-------|-------------|
-| **Files** | `read_files`, `list_files` | Read content, list directories with filtering |
-| **Git** | `git_status`, `git_diff`, `git_stage_and_commit`, `git_commit`, `git_log`, `git_push`, `git_pull`, `git_checkout`, `git_merge`, `git_reset`, `git_stage`, `git_branch`, `git_remote`, `git_stash`, `git_rebase`, `git_inspect`, `git_history`, `git_submodule`, `git_worktree` | Complete git operations with structured output |
-| **Index** | `search`, `map_repo` | Lexical/symbol search, repository mental model |
-| **Analysis** | `semantic_diff` | Structural change summary with blast-radius enrichment |
-| **Mutation** | `write_source` | Atomic file create/update/delete with content-addressed edits |
-| **Refactor** | `refactor_rename`, `refactor_move`, `recon_impact`, `refactor_apply`, `refactor_cancel`, `refactor_inspect` | Index-based refactoring with preview and certainty levels |
-| **Testing** | `discover_test_targets`, `run_test_targets` | Multi-language test discovery and execution |
-| **Lint** | `lint_check`, `lint_tools` | Auto-detected linters, formatters, type checkers |
-| **Introspection** | `describe` | Self-documenting tool schemas |
+| Tool | Description |
+|------|-------------|
+| `recon` | Task-aware file discovery — returns scaffolds, lite descriptions, and repo map |
+| `refactor_plan` | Declare edit targets, get SHA256-locked edit tickets |
+| `refactor_edit` | Find-and-replace edits with SHA256 locking (batch multiple files) |
+| `checkpoint` | Lint + test + commit + push in one call |
+| `semantic_diff` | Structural change summary with blast-radius enrichment |
+| `refactor_rename` | Index-based symbol rename with certainty-leveled preview |
+| `refactor_move` | Move file/module with automatic import updates |
+| `recon_impact` | Find all references to a symbol/file (read-only impact analysis) |
+| `refactor_commit` | Apply or inspect a previewed refactoring |
+| `refactor_cancel` | Cancel a pending refactoring preview |
+| `describe` | Self-documenting tool schemas, errors, and workflows |
 
 ## Contributing
 

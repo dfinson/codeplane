@@ -716,8 +716,8 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     ) -> dict[str, Any]:
         """Apply a previewed refactoring, or inspect low-certainty matches.
 
-        Without inspect_path: applies the refactoring (like the old refactor_apply).
-        With inspect_path: inspects matches in that file (like the old refactor_inspect).
+        Without inspect_path: applies the refactoring.
+        With inspect_path: inspects matches in that file.
         """
         session = app_ctx.session_manager.get_or_create(ctx.session_id)
 

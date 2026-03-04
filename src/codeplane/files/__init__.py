@@ -1,4 +1,4 @@
-"""File operations module - read_files, list_files tools."""
+"""File operations module — internal utilities for path validation and file access."""
 
 from codeplane.files.ops import (
     FileEntry,
