@@ -1,0 +1,50 @@
+# CodePlane Ranking Pipeline Evaluation
+#
+# Evaluates the full ranking pipeline (gate + ranker + cutoff) against
+# def-level ground truth.
+#
+# Prerequisites:
+#   1. Start CodePlane daemon on the target repo
+#   2. Generate ranking ground truth via ranking/src/cpl_ranking/collector.py
+#
+# Run:
+#   cd benchmarking && python run.py experiments/recon_ranking.yaml
+
+experiment:
+  name: cpl-ranking-eval
+  description: >-
+    Evaluate the ranking pipeline end-to-end: gate classification,
+    ranker NDCG/Hit@K, and cutoff F1/P/R against def-level ground
+    truth touched objects.
+  version: "1.0"
+  output_path: experiments/output/recon_ranking
+
+  max_workers: 4
+
+  tracking_backend:
+    type: local
+
+  models:
+    - name: cpl-ranking
+      args:
+        - daemon_port: [7777]
+        - timeout: [300]
+
+  dataset:
+    name: cpl-ranking-gt
+    type: custom
+    args:
+      data_dir: data/ranking_ground_truth
+
+  metrics:
+    - name: cpl-ranking
+      mapping:
+        ranked_def_uids: model.ranked_def_uids
+        predicted_relevances: model.predicted_relevances
+        predicted_n: model.predicted_n
+        gt_edited: dataset.gt_edited
+        gt_read_necessary: dataset.gt_read_necessary
+    - name: cpl-gate
+      mapping:
+        predicted_gate: model.predicted_gate
+        gt_gate: dataset.label_gate

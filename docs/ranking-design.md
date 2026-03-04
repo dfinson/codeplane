@@ -722,32 +722,67 @@ Key metrics for comparison:
 
 ### 9.5 Project Structure
 
-The evaluation lives within the existing `benchmarking/` directory:
+The ranking system spans three locations, each with a distinct concern:
+
+**Runtime inference** — ships with the `codeplane` package:
+
+```
+src/codeplane/ranking/
+├── __init__.py              # Public API: rank_candidates(), classify_gate()
+├── ranker.py                # Model 1: LambdaMART object ranker (load + score)
+├── cutoff.py                # Model 2: Regressor for N(q) prediction
+├── gate.py                  # Model 3: Multiclass gate classifier
+├── features.py              # Feature extraction from raw signals
+├── models.py                # Types: GateLabel, RankingResult, etc.
+└── data/                    # Serialized model artifacts (package data)
+    ├── ranker.lgbm
+    ├── cutoff.lgbm
+    └── gate.lgbm
+```
+
+`lightgbm` becomes a runtime dependency (inference only). Model artifacts
+are package data — they ship with `codeplane` releases, not stored in the
+target repo's `.codeplane/` directory.
+
+**Training pipeline** — separate top-level project, produces model artifacts:
+
+```
+ranking/
+├── pyproject.toml           # Own deps: lightgbm, scikit-learn, pandas, httpx
+├── README.md
+└── src/
+    └── cpl_ranking/
+        ├── __init__.py
+        ├── schema.py        # §7 dataset table schemas
+        ├── collector.py     # §5.3 data collection orchestrator
+        ├── train_ranker.py  # §8.1 LambdaMART training
+        ├── train_cutoff.py  # §8.2 no-leakage K-fold cutoff training
+        ├── train_gate.py    # §8.3 multiclass gate training
+        └── train_all.py     # Orchestrates all 3 training stages
+```
+
+Training data (gitignored) lives under `ranking/data/{repo_id}/`.
+Produced model artifacts get copied into `src/codeplane/ranking/data/`
+for release.
+
+**EVEE evaluation** — extends the existing `benchmarking/` framework:
 
 ```
 benchmarking/
-├── models/
-│   ├── recon.py                     # existing — file-level recon
-│   ├── recon_ranking.py             # NEW — ranking pipeline wrapper
-│   └── ...
 ├── datasets/
 │   ├── recon_gt.py                  # existing — file-level ground truth
-│   ├── ranking_gt.py                # NEW — def-level ground truth
-│   └── ...
+│   └── ranking_gt.py                # NEW — def-level ground truth
+├── models/
+│   ├── recon.py                     # existing — heuristic recon
+│   └── recon_ranking.py             # NEW — ranking pipeline wrapper
 ├── metrics/
 │   ├── retrieval.py                 # existing — file-level P/R/F1
 │   ├── ranking.py                   # NEW — NDCG, hit@K, cutoff F1
-│   ├── gate.py                      # NEW — gate accuracy, confusion
-│   └── ...
-├── experiments/
-│   ├── recon_baseline.yaml          # existing
-│   ├── recon_ranking.yaml           # NEW — ranking evaluation
-│   ├── ranking_vs_heuristic.yaml    # NEW — head-to-head comparison
-│   └── ...
-└── data/
-    ├── ground_truth.json            # existing — file-level
-    ├── ranking_ground_truth/        # NEW — def-level per repo
-    └── ...
+│   └── gate.py                      # NEW — gate accuracy, confusion
+└── experiments/
+    ├── recon_baseline.yaml          # existing
+    ├── recon_ranking.yaml           # NEW — ranking evaluation
+    └── ranking_vs_heuristic.yaml    # NEW — head-to-head comparison
 ```
 
 ---
@@ -836,7 +871,9 @@ benchmarking/
 | **Production recon path** | None for v1. Continues using RRF + elbow. Models replace it later. | Zero |
 | **Embedding query** | Add def-level matrix query alongside file-level. Union results into single candidate pool with `emb_score` per `def_uid`. | Small |
 | **Index storage** | Add `def_embeddings.npz` + `def_meta.json` alongside existing file embedding files. | Small |
-| **EVEE evaluation** | New experiment configs, dataset loader, model wrapper, and metrics for def-level ranking evaluation. | Medium |
+| **Runtime inference (`src/codeplane/ranking/`)** | New package. Loads serialized LightGBM models, extracts features from raw signals, runs ranker + cutoff + gate inference. Ships as package data with `codeplane`. | Medium |
+| **Training pipeline (`ranking/`)** | New top-level project. Dataset schemas (§7), data collection orchestrator (§5.3), K-fold LightGBM training scripts (§8). Separate `pyproject.toml` and dependency set. | Large |
+| **EVEE evaluation (`benchmarking/`)** | New experiment configs, dataset loader, model wrapper, and metrics for def-level ranking evaluation. | Medium |
 
 ---
 
