@@ -5,3 +5,6 @@ benchmarking/results/recon_*.json
 
 # Benchmark experiment output (EVEE results)
 benchmarking/experiments/output/
+
+# Cloned repos for ranking training (large, external)
+ranking/clones/
