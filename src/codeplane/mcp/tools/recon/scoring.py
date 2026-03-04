@@ -213,11 +213,11 @@ def assign_tiers(
 
     # Promote explicit mentions to at least SCAFFOLD
     for cand in candidates:
-        if cand.has_explicit_mention and cand.tier == OutputTier.LITE:
+        if cand.has_explicit_mention and not cand.tier.is_scaffold:
             cand.tier = OutputTier.SCAFFOLD
 
-    n_scaffold_final = sum(1 for c in candidates if c.tier == OutputTier.SCAFFOLD)
-    n_lite_final = sum(1 for c in candidates if c.tier == OutputTier.LITE)
+    n_scaffold_final = sum(1 for c in candidates if c.tier.is_scaffold)
+    n_lite_final = sum(1 for c in candidates if not c.tier.is_scaffold)
     log.debug(
         "recon.tier_assignment",
         scaffold=n_scaffold_final,

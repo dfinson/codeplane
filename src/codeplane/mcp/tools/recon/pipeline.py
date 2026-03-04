@@ -29,19 +29,23 @@ from pydantic import Field
 
 from codeplane.mcp.tools.recon.assembly import (
     _build_failure_actions,
+    build_agentic_hint,
+    build_gate_hint,
 )
 from codeplane.mcp.tools.recon.harvesters import (
-    _enrich_candidates,
-    _enrich_file_candidates,
     _harvest_explicit,
     _harvest_file_embedding,
     _harvest_graph,
     _harvest_imports,
     _harvest_lexical,
     _harvest_term_match,
+)
+from codeplane.mcp.tools.recon.merge import (
+    _enrich_candidates,
     _merge_candidates,
 )
 from codeplane.mcp.tools.recon.models import (
+    _PATH_STOP_TOKENS,
     FileCandidate,
     OutputTier,
     ParsedTask,
@@ -49,6 +53,7 @@ from codeplane.mcp.tools.recon.models import (
     _is_test_file,
 )
 from codeplane.mcp.tools.recon.parsing import parse_task
+from codeplane.mcp.tools.recon.rrf import _enrich_file_candidates
 from codeplane.mcp.tools.recon.scoring import (
     assign_tiers,
     compute_anchor_floor,
@@ -162,10 +167,6 @@ def _read_unindexed_content(repo_root: Path, rel_path: str) -> str | None:
     except Exception:  # noqa: BLE001
         return None
 
-
-def _compute_sha256(path: Path) -> str:
-    """Compute file SHA-256 for write_source compatibility."""
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 # ===================================================================
@@ -338,38 +339,6 @@ async def _file_centric_pipeline(
     # too common (config, model, test, etc.) and match nearly every file.
     # Also require len≥4 to avoid short noise tokens.
     path_inject_terms: set[str] = set()
-    # Common path tokens that match too many files — skip these.
-    _PATH_STOP_TOKENS = frozenset(
-        {
-            "src",
-            "test",
-            "tests",
-            "config",
-            "models",
-            "utils",
-            "core",
-            "cli",
-            "docs",
-            "init",
-            "main",
-            "base",
-            "common",
-            "tools",
-            "commands",
-            "templates",
-            "integration",
-            "lib",
-            "internal",
-            "helpers",
-            "types",
-            "api",
-            "app",
-            "pkg",
-            "evee",
-            "codeplane",
-            "python",
-        }
-    )
     for t in parsed.primary_terms:
         tl = t.lower()
         if len(tl) >= 4 and tl not in _PATH_STOP_TOKENS:
@@ -599,12 +568,7 @@ async def _file_centric_pipeline(
             if test_path in existing_by_path:
                 fc = existing_by_path[test_path]
                 # Promote if current tier is worse than target
-                tier_rank = {
-                    OutputTier.FULL_FILE: 0,
-                    OutputTier.MIN_SCAFFOLD: 1,
-                    OutputTier.SUMMARY_ONLY: 2,
-                }
-                if tier_rank.get(fc.tier, 2) > tier_rank[target_tier]:
+                if fc.tier.rank > target_tier.rank:
                     fc.tier = target_tier
                     fc.graph_connected = True
                     test_co_promoted += 1
@@ -705,12 +669,7 @@ async def _file_centric_pipeline(
         for src_path, target_tier in source_target_tier.items():
             if src_path in existing_by_path:
                 fc = existing_by_path[src_path]
-                tier_rank = {
-                    OutputTier.FULL_FILE: 0,
-                    OutputTier.MIN_SCAFFOLD: 1,
-                    OutputTier.SUMMARY_ONLY: 2,
-                }
-                if tier_rank.get(fc.tier, 2) > tier_rank[target_tier]:
+                if fc.tier.rank > target_tier.rank:
                     fc.tier = target_tier
                     fc.graph_connected = True
                     source_co_promoted += 1
@@ -750,7 +709,7 @@ async def _file_centric_pipeline(
     scaffold_source_for_convention = [
         fc
         for fc in file_candidates
-        if fc.tier in (OutputTier.FULL_FILE, OutputTier.MIN_SCAFFOLD, OutputTier.SCAFFOLD)
+        if fc.tier.is_scaffold
         and not _is_test_file(fc.path)
     ]
     if scaffold_source_for_convention:
@@ -766,14 +725,7 @@ async def _file_centric_pipeline(
                 if test_path in existing_by_path:
                     fc = existing_by_path[test_path]
                     # Promote to at least the source's tier if currently lower
-                    tier_rank = {
-                        OutputTier.FULL_FILE: 0,
-                        OutputTier.MIN_SCAFFOLD: 1,
-                        OutputTier.SCAFFOLD: 1,
-                        OutputTier.SUMMARY_ONLY: 2,
-                        OutputTier.LITE: 2,
-                    }
-                    if tier_rank.get(fc.tier, 2) > tier_rank.get(src_fc.tier, 1):
+                    if fc.tier.rank > src_fc.tier.rank:
                         fc.tier = src_fc.tier
                         fc.graph_connected = True
                         convention_promoted += 1
@@ -1357,7 +1309,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext) -> None:
             candidate_map[fc.candidate_id] = fc.path
             full_path = repo_root / fc.path
 
-            if fc.tier == OutputTier.SCAFFOLD:
+            if fc.tier.is_scaffold:
                 entry: dict[str, Any] = {
                     "candidate_id": fc.candidate_id,
                     "path": fc.path,

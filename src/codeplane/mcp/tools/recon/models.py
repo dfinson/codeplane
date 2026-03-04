@@ -240,6 +240,36 @@ _BUILD_FILES = frozenset(
     }
 )
 
+# Path tokens too common to be useful for file-path matching
+_PATH_STOP_TOKENS = frozenset(
+    {
+        "src",
+        "test",
+        "tests",
+        "config",
+        "models",
+        "utils",
+        "core",
+        "cli",
+        "docs",
+        "init",
+        "main",
+        "base",
+        "common",
+        "tools",
+        "commands",
+        "templates",
+        "integration",
+        "lib",
+        "internal",
+        "helpers",
+        "types",
+        "api",
+        "app",
+        "pkg",
+    }
+)
+
 
 # ===================================================================
 # OutputTier — file-level output fidelity tier
@@ -247,27 +277,44 @@ _BUILD_FILES = frozenset(
 
 
 class OutputTier(StrEnum):
-    """Output fidelity tier for a file, determined by single-elbow detection.
+    """Output fidelity tier for a file.
 
-    SCAFFOLD:  Above elbow — imports + signatures.
-    LITE:      Below elbow — path + description only.
+    Internal model uses 3 tiers for co-retrieval decisions:
+      FULL_FILE    — above elbow-1 (highest priority, rank 0)
+      MIN_SCAFFOLD — between elbows (medium priority, rank 1)
+      SUMMARY_ONLY — below elbow-2 (lowest priority, rank 2)
 
-    v2 design: no FULL_FILE tier.  Full content is read via terminal
-    (cat, head, sed -n) after recon identifies relevant files.
+    API output uses 2 tiers (via ``api_value``):
+      "scaffold" (FULL_FILE or MIN_SCAFFOLD)
+      "lite"     (SUMMARY_ONLY)
 
-    Legacy aliases (FULL_FILE, MIN_SCAFFOLD, SUMMARY_ONLY) are kept for
-    internal pipeline compatibility — they map to the v2 values and are
-    NOT exposed in API output.
+    Use ``tier.rank`` for tier precedence comparisons (lower = higher priority).
+    Use ``tier.api_value`` for the 2-tier output label.
     """
 
-    SCAFFOLD = "scaffold"
-    LITE = "lite"
+    FULL_FILE = "full_file"
+    MIN_SCAFFOLD = "min_scaffold"
+    SUMMARY_ONLY = "summary_only"
 
-    # Internal aliases — pipeline scoring still uses 3-tier logic internally,
-    # but both FULL_FILE and MIN_SCAFFOLD serialize to "scaffold" on output.
-    FULL_FILE = "scaffold"
-    MIN_SCAFFOLD = "scaffold"
-    SUMMARY_ONLY = "lite"
+    # Convenience aliases for the 2-tier output model
+    SCAFFOLD = "min_scaffold"
+    LITE = "summary_only"
+
+    @property
+    def rank(self) -> int:
+        """Tier precedence: lower = higher priority."""
+        _RANKS = {"full_file": 0, "min_scaffold": 1, "summary_only": 2}
+        return _RANKS.get(self.value, 2)
+
+    @property
+    def api_value(self) -> str:
+        """2-tier label for API output: 'scaffold' or 'lite'."""
+        return "scaffold" if self.rank <= 1 else "lite"
+
+    @property
+    def is_scaffold(self) -> bool:
+        """True if this tier maps to 'scaffold' in API output."""
+        return self.rank <= 1
 
 
 # ===================================================================

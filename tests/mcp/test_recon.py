@@ -654,19 +654,19 @@ class TestFailureActions:
 
     def test_with_terms(self) -> None:
         actions = _build_failure_actions(["search", "handler"], [])
-        assert any(a["action"] == "search" for a in actions)
+        assert any(a["action"] == "recon" for a in actions)
 
     def test_with_paths(self) -> None:
         actions = _build_failure_actions([], ["src/handler.py"])
-        assert any(a["action"] == "read_source" for a in actions)
+        assert any(a["action"] == "terminal" for a in actions)
 
     def test_always_has_recon_retry(self) -> None:
         actions = _build_failure_actions([], [])
         assert any(a["action"] == "recon" for a in actions)
 
-    def test_always_has_map_repo(self) -> None:
+    def test_always_has_describe(self) -> None:
         actions = _build_failure_actions([], [])
-        assert any(a["action"] == "map_repo" for a in actions)
+        assert any(a["action"] == "describe" for a in actions)
 
 
 # ---------------------------------------------------------------------------
@@ -762,12 +762,27 @@ class TestOutputTier:
     """Test OutputTier enum values."""
 
     def test_tier_values(self) -> None:
-        assert OutputTier.SCAFFOLD.value == "scaffold"
-        assert OutputTier.LITE.value == "lite"
-        # Aliases map to primary members
-        assert OutputTier.FULL_FILE.value == OutputTier.SCAFFOLD.value
-        assert OutputTier.MIN_SCAFFOLD.value == OutputTier.SCAFFOLD.value
-        assert OutputTier.SUMMARY_ONLY.value == OutputTier.LITE.value
+        assert OutputTier.FULL_FILE.value == "full_file"
+        assert OutputTier.MIN_SCAFFOLD.value == "min_scaffold"
+        assert OutputTier.SUMMARY_ONLY.value == "summary_only"
+        # Aliases
+        assert OutputTier.SCAFFOLD is OutputTier.MIN_SCAFFOLD
+        assert OutputTier.LITE is OutputTier.SUMMARY_ONLY
+
+    def test_tier_rank(self) -> None:
+        assert OutputTier.FULL_FILE.rank == 0
+        assert OutputTier.MIN_SCAFFOLD.rank == 1
+        assert OutputTier.SUMMARY_ONLY.rank == 2
+
+    def test_api_value(self) -> None:
+        assert OutputTier.FULL_FILE.api_value == "scaffold"
+        assert OutputTier.MIN_SCAFFOLD.api_value == "scaffold"
+        assert OutputTier.SUMMARY_ONLY.api_value == "lite"
+
+    def test_is_scaffold(self) -> None:
+        assert OutputTier.FULL_FILE.is_scaffold is True
+        assert OutputTier.MIN_SCAFFOLD.is_scaffold is True
+        assert OutputTier.SUMMARY_ONLY.is_scaffold is False
 
     def test_tier_is_str(self) -> None:
         assert isinstance(OutputTier.FULL_FILE, str)
@@ -1071,7 +1086,7 @@ class TestAssignTiers:
         ]
         result = assign_tiers(candidates)
         tiers = [c.tier for c in result]
-        assert OutputTier.FULL_FILE in tiers
+        assert any(t.is_scaffold for t in tiers)
         # Should be sorted by score descending
         scores = [c.combined_score for c in result]
         assert scores == sorted(scores, reverse=True)
