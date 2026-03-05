@@ -76,7 +76,7 @@ modules/
 
 ## Tasks
 
-10 tasks (3 narrow, 4 medium, 3 wide) for the C++ computer vision library.
+30 tasks (10 narrow, 10 medium, 10 wide).
 
 ## Narrow
 
@@ -101,6 +101,52 @@ Creating and releasing `VideoCapture` objects in a loop leaks memory
 because the FFmpeg backend does not fully release codec contexts on
 close. The leak grows at ~100KB per open/close cycle. Fix the FFmpeg
 backend's release logic to free all allocated codec and format contexts.
+
+### N4: Fix `cv::imread` ignoring EXIF rotation for WEBP images
+
+`cv::imread` auto-rotates JPEG images based on EXIF orientation but
+does not handle EXIF data in WEBP files. The WEBP decoder skips the
+EXIF metadata block. Fix the WEBP reader to extract and apply EXIF
+orientation.
+
+### N5: Fix `cv::warpAffine` producing black border artifacts at image edges
+
+When using `cv::warpAffine` with `BORDER_REFLECT`, single-pixel black
+lines appear at the image edges. The reflection calculation has an
+off-by-one error at the boundary. Fix the border interpolation logic.
+
+### N6: Add `cv::equalizeHistColor` for color histogram equalization
+
+`cv::equalizeHist` only works on grayscale images. Add a convenience
+function that converts to YCrCb, equalizes only the Y channel, and
+converts back. Preserve the color saturation.
+
+### N7: Fix `cv::VideoWriter` on Linux not honoring FPS for MJPEG codec
+
+When writing MJPEG video on Linux with `VideoWriter`, the output file
+metadata shows the requested FPS but the actual frame timing is wrong
+because the MJPEG container doesn't embed per-frame timestamps. Fix
+the MJPEG writer to embed correct frame durations.
+
+### N8: Fix `cv::resize` with `INTER_NEAREST` not matching OpenCV 3.x behavior
+
+`cv::resize` with `INTER_NEAREST` produces different results from
+OpenCV 3.x for images with odd dimensions. The pixel selection formula
+was changed. Add `INTER_NEAREST_EXACT` that matches the old behavior
+for backward compatibility.
+
+### N9: Add `cv::connectedComponentsWithContours` for combined labeling and contour extraction
+
+Currently connected component labeling (`connectedComponents`) and
+contour finding (`findContours`) are separate operations that must be
+run sequentially. Add a combined function that produces both labeled
+regions and their contours in a single pass.
+
+### N10: Fix `cv::dnn::readNet` memory leak when loading invalid ONNX models
+
+When `readNet` fails to parse an invalid ONNX file, the partially
+constructed network layers are not freed. The error path skips the
+cleanup of already-allocated layer buffers. Fix the error cleanup path.
 
 ## Medium
 
@@ -139,6 +185,52 @@ rotate/flip the image to the correct display orientation. Add an
 `IMREAD_ORIENT` flag (default ON) that controls this behavior. Support
 EXIF orientation in JPEG, TIFF, WebP, and HEIC formats.
 
+### M5: Implement GPU-accelerated image augmentation pipeline
+
+Add a composable image augmentation pipeline for ML training data that
+runs on GPU (CUDA). Support: random crop, flip, color jitter, affine
+transform, Gaussian blur, elastic deformation, and CutMix/MixUp.
+The pipeline should be configurable via a builder pattern and
+serializable for reproducibility.
+
+### M6: Add automatic image type detection and decoding
+
+Implement `cv::decodeAuto(buffer)` that detects the image format from
+magic bytes (JPEG, PNG, WEBP, TIFF, BMP, GIF, AVIF) and routes to
+the appropriate decoder. Support decoding from in-memory buffers
+without file extension hints. Include format detection for truncated
+or corrupted headers.
+
+### M7: Implement video stabilization module
+
+Add a video stabilization pipeline: feature detection across frames,
+motion estimation (affine or homography), motion smoothing (Gaussian
+or Kalman filter), and compensatory frame warping. Support real-time
+processing. Include quality metrics (stability score, crop ratio).
+
+### M8: Add image quality assessment metrics
+
+Implement image quality assessment functions: SSIM (structural
+similarity), PSNR (peak signal-to-noise ratio), BRISQUE (blind
+image quality), and NIQE (natural image quality). Support batch
+evaluation for comparing sets of images. Include GPU-accelerated
+paths for SSIM and PSNR.
+
+### M9: Implement zero-copy Mat interop with NumPy
+
+Add zero-copy bidirectional data sharing between `cv::Mat` and NumPy
+`ndarray` via the Python buffer protocol. Handle stride differences,
+dtype mapping (CV_8UC3 ↔ uint8 shape (H,W,3)), and reference counting
+to prevent use-after-free. Support both contiguous and non-contiguous
+arrays.
+
+### M10: Add structured video annotation support
+
+Implement a video annotation data structure that associates per-frame
+metadata (bounding boxes, labels, keypoints, segmentation masks) with
+video frames. Support serialization to/from JSON and protocol buffers.
+Include rendering annotations onto frames with configurable styles.
+
 ## Wide
 
 ### W1: Implement zero-copy interop with NumPy/PyTorch/TensorFlow
@@ -169,3 +261,70 @@ SharedArrayBuffer for multi-threaded Mat operations, SIMD.js for
 vectorized image processing, and OffscreenCanvas for rendering.
 Support tree-shaking so users can include only the modules they need.
 Add TypeScript type definitions.
+
+### W4: Implement WebGPU compute backend for browser deployment
+
+Add a WebGPU compute backend alongside the existing CUDA and OpenCL
+backends. Implement core operations (matrix multiply, convolution,
+resize, color conversion) as WebGPU compute shaders. Support the DNN
+module's inference path. Integrate with the Emscripten/WASM build.
+Changes span the HAL (hardware abstraction layer), operation dispatch,
+DNN backend, and build system.
+
+### W5: Add streaming video processing pipeline framework
+
+Implement a video processing pipeline: concurrent decode → process →
+encode using a producer-consumer pattern with configurable pipeline
+depth. Support multiple input streams (synchronized multi-camera),
+GPU-accelerated decode (NVDEC), frame-rate conversion, temporal
+filtering across frames, and adaptive quality based on CPU/GPU load.
+Changes span videoio, imgproc, core threading, and add a pipeline module.
+
+### W6: Implement model optimization and deployment toolkit
+
+Add tools for DNN model deployment: model quantization (FP32→FP16→INT8
+with calibration), operator fusion (Conv+BN+ReLU), dead layer pruning,
+input shape inference, and model benchmarking with per-layer timing.
+Support ONNX model manipulation. Changes span the DNN module's
+optimization passes, layer implementations, quantization infrastructure,
+and add benchmarking tools.
+
+### W7: Add 3D point cloud processing module
+
+Implement `cv::ppf3d` replacement with modern algorithms: point cloud
+I/O (PLY, PCD, OBJ), point cloud filtering (voxel grid, SOR, radius
+outlier), registration (ICP, RANSAC, feature-based), surface
+reconstruction (Poisson, ball pivoting), and visualization. Support
+organized and unorganized point clouds. Changes span core data
+structures, add I/O handlers, algorithm implementations, and
+visualization.
+
+### W8: Implement federated learning support for vision models
+
+Add privacy-preserving distributed training for CV models. Support
+federated averaging across multiple DNN training sessions, differential
+privacy noise injection, secure aggregation protocol, and model
+compression for communication efficiency. Include a coordinator server
+and worker client. Changes span the DNN training infrastructure,
+add networking, privacy mechanisms, and aggregation protocols.
+
+### W9: Add automated test generation for image processing functions
+
+Implement a testing framework that automatically generates test inputs
+for image processing functions: edge cases (empty images, 1-pixel
+images, extreme aspect ratios), numerical boundary cases (overflow,
+underflow), format variations (all supported depths and channel
+counts), and property-based testing (verify invariants like
+resize(resize(img, s1), s2) ≈ resize(img, s1*s2)). Changes span
+the test infrastructure, add input generators, property definitions,
+and a test runner.
+
+### W10: Implement real-time object tracking with re-identification
+
+Add a multi-object tracking pipeline: detection (from DNN module),
+track initialization, motion prediction (Kalman filter), data
+association (Hungarian, IoU-based), track lifecycle management
+(tentative/confirmed/lost), and re-identification (feature-based
+matching for track recovery after occlusion). Include evaluation
+metrics (MOTA, IDF1). Changes span the DNN module, add a tracking
+module, association algorithms, and evaluation tools.
