@@ -61,20 +61,22 @@ src/
 
 ## Narrow
 
-### N1: Fix `fmt::format` compile error with `std::optional<std::string>`
+### N1: Fix `ostream::print` in `os.h` not flushing on newline characters
 
-`fmt::format("{}", std::optional<std::string>("hello"))` fails to
-compile because `fmt::formatter<std::optional<T>>` is not specialized
-by default. Add a formatter for `std::optional<T>` that formats the
-contained value when present and `"none"` (or a configurable string)
-when empty.
+The `ostream` class in `os.h` buffers output for performance but does
+not flush when the formatted output contains newline characters, unlike
+standard C `stdio` behavior with line-buffered streams. When writing
+log lines via `fmt::output_file`, the output may not be visible until
+the buffer fills or the file is explicitly closed. Add an optional
+line-buffering mode that flushes after each newline.
 
-### N2: Add `%b` format specifier for binary integer output
+### N2: Fix `printf.h` not rejecting invalid conversion specifiers
 
-The library supports `{:x}` (hex), `{:o}` (octal), and `{:d}` (decimal)
-but not `{:b}` for binary representation. Add the `b`/`B` format
-specifier for integral types that outputs the value in binary. Support
-the `#` flag for `0b` prefix. Match the C++23 `std::format` specification.
+The `printf_formatter` in `printf.h` silently ignores unrecognized
+conversion specifiers like `%q` or `%K` instead of reporting an error.
+Standard printf implementations reject non-standard specifiers;
+`printf_arg_formatter` should validate the conversion character against
+the known set and produce a clear `format_error` for invalid ones.
 
 ### N3: Fix `fmt::join` not working with move-only range elements
 
@@ -89,25 +91,30 @@ When formatting a value whose `fmt::formatter` specialization recursively
 calls `fmt::format` on nested data, the recursive calls overflow the stack
 at ~100 levels deep. Add a recursion depth limit with a clear error.
 
-### N5: Fix `{:>20}` alignment producing wrong width for multi-byte UTF-8 chars
+### N5: Fix `compile.h` compiled format not supporting dynamic width arguments
 
-Right-aligning text that contains multi-byte UTF-8 characters (e.g., emoji)
-produces incorrect padding because the width calculation counts bytes
-instead of display columns. Fix the width calculation to use Unicode
-East Asian Width properties.
+`FMT_COMPILE("{:{}}")` with a dynamic width argument fails to compile
+because the compile-time format string parser in `compile.h` does not
+handle runtime width references. Only static widths are supported in
+compiled format strings. Extend the compiled format handler to resolve
+dynamic width and precision arguments at runtime.
 
-### N6: Add `{:?}` debug format for standard library container types
+### N6: Fix `ranges.h` tuple formatting with `const`-qualified pair element types
 
-Implement a debug format specifier for `std::vector`, `std::map`,
-`std::set`, and `std::pair` that produces Python-like debug output
-(e.g., `[1, 2, 3]` for vectors, `{"a": 1}` for maps).
+`fmt::format("{}", std::pair<const std::string, int>{"key", 42})`
+fails to compile because the tuple formatter in `ranges.h` applies
+`remove_cvref_t` inconsistently, leaving `const` qualifiers on
+pair element types that prevent formatter lookup. Normalize element
+types before looking up formatters in the tuple formatting path.
 
-### N7: Fix `fmt::join` with empty range producing trailing separator
+### N7: Fix `args.h` `dynamic_format_arg_store` dangling reference for string_view
 
-When using `fmt::join` on an empty iterable, the output contains a
-trailing separator instead of being empty. The join implementation
-emits the separator before checking for end-of-range. Fix the loop
-condition.
+When adding `string_view` arguments to `dynamic_format_arg_store` in
+`args.h`, the stored argument references external string data without
+extending its lifetime. If the original string is destroyed before
+formatting, the stored argument becomes a dangling reference. Add
+internal string storage to `dynamic_format_arg_store` for `string_view`
+arguments to ensure the data outlives the store.
 
 ### N8: Fix `FMT_ENFORCE_COMPILE_STRING` not catching all runtime strings
 
@@ -115,36 +122,42 @@ When `FMT_ENFORCE_COMPILE_STRING` is defined, some overloads still
 accept runtime strings because the enforcement check doesn't cover
 `fmt::vformat` and `fmt::vprint`. Extend the check to all entry points.
 
-### N9: Add `{:c}` format specifier for character output of integers
+### N9: Fix error message for out-of-range positional argument index
 
-Add a `c` format specifier that interprets an integer as a character
-and outputs the corresponding Unicode codepoint, including multi-byte
-UTF-8 encoding for values > 127.
+When `fmt::format("{5}", 42)` raises an error for an out-of-range
+argument index, the error message says "argument not found" without
+indicating how many arguments were actually provided. Improve the
+error reporting in `base.h` `format_string` validation to include
+the valid argument range (e.g., "argument index 5 out of range,
+only 1 argument provided").
 
-### N10: Fix chrono formatting producing wrong month name for `std::chrono::year_month`
+### N10: Fix `chrono.h` `{:%H:%M:%S}` producing incorrect output for negative durations
 
-When formatting `std::chrono::year_month` with `{:%B}`, the month name
-is offset by one (January shows as February). The month value extraction
-does not account for `std::chrono::month` being 1-indexed vs the
-internal 0-indexed lookup table.
+When formatting a negative `std::chrono::duration` with `{:%H:%M:%S}`,
+the negative sign is applied only to the hours component, producing
+`"-1:00:05"` instead of correctly representing -5 seconds as
+`"-0:00:05"`. The sign handling in `chrono.h` `tm_writer` does not
+correctly distribute the negative across all time components.
 
 ## Medium
 
-### M1: Implement locale-aware number formatting
+### M1: Implement configurable truncation indicator for `format_to_n`
 
-Add locale-aware formatting via the `L` specifier: `fmt::format(loc, "{:L}", 1234567)` → `"1,234,567"` (US) or `"1.234.567"` (DE). Support
-thousands separators for integers, decimal separators for floats,
-and currency formatting. Use `std::locale` or a custom locale
-abstraction. Include common locale definitions as compile-time
-constants.
+When `format_to_n` truncates output, there is no way to signal
+truncation to the reader. Add a `format_to_n_with_suffix` variant in
+`base.h` that accepts an optional truncation suffix (e.g., `"..."`)
+which replaces the last characters when output exceeds the buffer.
+Requires modifying the output counting logic in `format.h` and the
+`format_to_n_result` struct in `base.h`.
 
-### M2: Add color and style formatting for terminal output
+### M2: Add runtime format string caching for repeated formatting
 
-Implement rich terminal formatting: `fmt::print(fg(color::red) | bold, "Error: {}", msg)`. Support 4-bit, 8-bit, and 24-bit (true color)
-terminal colors. Add named colors, RGB/HSL color specification, and
-style modifiers (bold, italic, underline, strikethrough). Auto-detect
-terminal capabilities. Support style composition and nesting. Add
-`fmt::styled(value, style)` for inline styling within format strings.
+When the same format string is used repeatedly (e.g., in a logging
+loop), the format string is re-parsed on every call. Implement
+`fmt::runtime_format_cache` that parses a runtime format string once
+into a reusable compiled representation. Changes span `base.h` (parsed
+format representation), `format.h` (cached format dispatch), and
+`format-inl.h` (parse result storage).
 
 ### M3: Implement compile-time format string checking improvements
 
@@ -161,26 +174,32 @@ define custom format spec syntax beyond the standard mini-language. The
 parser should support a `parse_custom_specs()` helper that parses
 additional specifiers after the standard width/precision/fill handling.
 
-### M5: Add buffered file output with configurable buffer size
+### M5: Implement `fmt::format` support for `std::source_location` formatting
 
-Implement `fmt::buffered_output_file` that wraps file I/O with a
-configurable write buffer. Batching small `fmt::print` calls into
-larger writes for file output. Support automatic flushing on newline
-and manual flush control. Include an RAII guard that flushes on
-destruction.
+Add a `formatter<std::source_location>` specialization in `std.h` that
+formats a source location as `"file.cpp:42:function_name"`. Support
+custom format specs to control which components are included: `{:f}`
+for file only, `{:l}` for file:line, `{:c}` for file:line:column,
+and default for file:line:function. Add supporting presentation type
+handling in `format.h`.
 
-### M6: Implement named argument support with compile-time validation
+### M6: Implement `fmt::format` support for `std::stacktrace` formatting
 
-Extend `fmt::format` to support named arguments: `fmt::format("{name}
-is {age}", fmt::arg("name", "Alice"), fmt::arg("age", 30))`. Validate
-at compile time that all referenced names have corresponding `arg()`
-calls. Support mixing positional and named args.
+Add `formatter<std::stacktrace>` and `formatter<std::stacktrace_entry>`
+specializations in `std.h` that format stack traces with configurable
+verbosity. Support `{:s}` for short (function names only), `{:f}` for
+full (file:line + function), and `{:n}` for numbered frames. Add
+depth-limiting and frame filtering support. Changes span `std.h` and
+`format.h`.
 
-### M7: Add `fmt::group_digits` for number formatting with separators
+### M7: Add XML/HTML entity escaping mode for format output
 
-Implement a digit grouping wrapper: `fmt::format("{}", fmt::group_digits(1000000))` → `"1,000,000"`. Support configurable separator
-character and group size. Support both integral and floating-point types.
-Default to locale-independent formatting (comma separator, groups of 3).
+Implement `fmt::xml_escape(value)` wrapper that escapes `<`, `>`, `&`,
+`"`, `'` characters in the formatted output for safe embedding in XML
+or HTML. Add corresponding `fmt::html_escape(value)` alias. Changes
+span `format.h` (escape wrapper and character escaping logic), `base.h`
+(escaped value type registration), and `color.h` (interaction with
+styled output).
 
 ### M8: Implement format string syntax highlighting for diagnostics
 
@@ -189,12 +208,14 @@ the string with a caret pointer and a colored highlight of the
 problematic specifier. Support terminal color output for `static_assert`
 messages (via ANSI codes in the error text for terminals that support it).
 
-### M9: Add `fmt::styled` for applying multiple styles to a single value
+### M9: Implement `fmt::to_string` fast path for common integral types
 
-Implement `fmt::styled(value, fg(red) | bg(blue) | bold | underline)`
-that applies multiple terminal styles atomically. Support style
-composition via operator overloading. Auto-detect whether the output
-supports ANSI color codes. Include a `text_style` builder pattern.
+When calling `fmt::to_string(integer)`, the current code path allocates
+a `memory_buffer` and goes through the full format machinery including
+spec parsing. Add an optimized fast path in `format.h` for small
+integers that uses a stack-allocated buffer with direct digit
+generation, bypassing the format spec parsing in `base.h`. Support
+`int`, `long`, `unsigned`, and `long long` with the fast path.
 
 ### M10: Implement zero-allocation formatting for embedded environments
 
@@ -206,24 +227,25 @@ provably too small.
 
 ## Wide
 
-### W1: Add structured logging backend
+### W1: Implement format string extension system for domain-specific sublanguages
 
-Implement `fmt::log` as a lightweight structured logging library
-built on fmt. Support log levels (trace, debug, info, warn, error,
-fatal), structured fields (`fmt::log::info("request completed", "status"_a=200, "duration_ms"_a=42)`), configurable sinks (console,
-file, syslog), log rotation, async logging with a dedicated thread,
-and compile-time log level filtering. The API should compose
-naturally with existing fmt format strings.
+Add a plugin architecture where domain-specific formatters register
+custom format syntax via type prefixes (e.g., `{:sql:...}`,
+`{:json:...}`) that dispatch to registered formatter extensions.
+Changes span the format string parser in `base.h`, formatter dispatch
+in `format.h`, compile-time validation in `compile.h`, the runtime
+format system in `format-inl.h`, and add a registration module in a
+new `ext.h` header.
 
-### W2: Implement Unicode-aware text formatting
+### W2: Add memory-mapped file output with concurrent formatting
 
-Add comprehensive Unicode support: proper text width calculation
-(accounting for East Asian wide characters, combining characters,
-zero-width joiners), word-wrapping at Unicode word boundaries (UAX #29),
-bidirectional text handling for mixed LTR/RTL content, Unicode
-normalization (NFC/NFD), and grapheme cluster-aware truncation.
-Update the width calculation used by alignment specifiers (`{:<20}`)
-to use Unicode text width instead of byte count.
+Implement `fmt::mmap_output(path, size_hint)` that writes formatted
+output directly to a memory-mapped file, eliminating double-buffering.
+Support dynamically growing the mapping, concurrent writes from
+multiple threads using partitioned regions, and crash-safe atomic
+commit via rename. Changes span `os.h` (memory mapping and file
+management), `format.h` (mmap-aware output iterator), the buffer
+system in `base.h`, and platform-specific implementation in `os.cc`.
 
 ### W3: Implement a `fmt::print` interceptor system for testing
 

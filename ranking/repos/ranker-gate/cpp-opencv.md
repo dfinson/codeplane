@@ -102,12 +102,13 @@ because the FFmpeg backend does not fully release codec contexts on
 close. The leak grows at ~100KB per open/close cycle. Fix the FFmpeg
 backend's release logic to free all allocated codec and format contexts.
 
-### N4: Fix `cv::imread` ignoring EXIF rotation for WEBP images
+### N4: Fix `cv::imread` not supporting 16-bit PNG with alpha channel
 
-`cv::imread` auto-rotates JPEG images based on EXIF orientation but
-does not handle EXIF data in WEBP files. The WEBP decoder skips the
-EXIF metadata block. Fix the WEBP reader to extract and apply EXIF
-orientation.
+When reading a 16-bit RGBA PNG file with `cv::imread` using
+`IMREAD_UNCHANGED`, the alpha channel is silently discarded. The PNG
+decoder in `modules/imgcodecs/src/grfmt_png.cpp` only preserves alpha
+for 8-bit images. Fix the PNG reader to retain the alpha channel for
+16-bit images and return a 4-channel `CV_16UC4` Mat.
 
 ### N5: Fix `cv::warpAffine` producing black border artifacts at image edges
 
@@ -128,12 +129,14 @@ metadata shows the requested FPS but the actual frame timing is wrong
 because the MJPEG container doesn't embed per-frame timestamps. Fix
 the MJPEG writer to embed correct frame durations.
 
-### N8: Fix `cv::resize` with `INTER_NEAREST` not matching OpenCV 3.x behavior
+### N8: Fix `cv::calcHist` ignoring mask for multi-channel images
 
-`cv::resize` with `INTER_NEAREST` produces different results from
-OpenCV 3.x for images with odd dimensions. The pixel selection formula
-was changed. Add `INTER_NEAREST_EXACT` that matches the old behavior
-for backward compatibility.
+When computing a histogram with `cv::calcHist` on a multi-channel
+image with a mask, the mask is applied correctly for single-channel
+images but ignored for multi-channel inputs. The histogram calculation
+in `modules/imgproc/src/histogram.cpp` skips the mask check in the
+multi-channel code path. Fix the multi-channel histogram loop to
+respect the mask.
 
 ### N9: Add `cv::connectedComponentsWithContours` for combined labeling and contour extraction
 
@@ -177,29 +180,35 @@ random erasing, Gaussian blur, and Cutout/CutMix. The pipeline should
 be configurable via a builder pattern, serializable to YAML for
 reproducibility, and parallelizable across CPU cores.
 
-### M4: Add automatic EXIF orientation handling
+### M4: Add multi-format image batch decoding API
 
-Implement automatic EXIF orientation detection and correction in
-`cv::imread`. Detect the EXIF orientation tag and automatically
-rotate/flip the image to the correct display orientation. Add an
-`IMREAD_ORIENT` flag (default ON) that controls this behavior. Support
-EXIF orientation in JPEG, TIFF, WebP, and HEIC formats.
+Implement `cv::decodeBatch(buffers)` that decodes multiple images in
+parallel using a thread pool. Each buffer is routed to the appropriate
+format decoder based on magic bytes via the existing `findDecoder`
+mechanism in `modules/imgcodecs/src/loadsave.cpp`. Support
+heterogeneous formats within a single batch. Add configurable
+thread count and optional GPU-accelerated JPEG decoding. Return
+partial results when individual images fail to decode.
 
-### M5: Implement GPU-accelerated image augmentation pipeline
+### M5: Implement image tiling and reassembly for large image processing
 
-Add a composable image augmentation pipeline for ML training data that
-runs on GPU (CUDA). Support: random crop, flip, color jitter, affine
-transform, Gaussian blur, elastic deformation, and CutMix/MixUp.
-The pipeline should be configurable via a builder pattern and
-serializable for reproducibility.
+Add `cv::TileProcessor` that splits large images into overlapping
+tiles, processes each tile independently (with configurable overlap
+for seamless stitching), and reassembles the result. Support
+configurable tile size, overlap region, and blending mode (linear,
+feather). Enable parallel tile processing via the `parallel_for_`
+infrastructure in `modules/core/src/parallel.cpp`. Support both
+CPU and GPU (UMat) processing paths.
 
-### M6: Add automatic image type detection and decoding
+### M6: Add AVIF image format read/write support
 
-Implement `cv::decodeAuto(buffer)` that detects the image format from
-magic bytes (JPEG, PNG, WEBP, TIFF, BMP, GIF, AVIF) and routes to
-the appropriate decoder. Support decoding from in-memory buffers
-without file extension hints. Include format detection for truncated
-or corrupted headers.
+Add AVIF (AV1 Image File Format) codec support to
+`modules/imgcodecs/`. Implement `AvifDecoder` and `AvifEncoder`
+classes following the existing codec pattern (e.g., `grfmt_png.cpp`).
+Register the codec with the decoder/encoder factory in
+`loadsave.cpp`. Support 8-bit and 10-bit images, alpha channel,
+and ICC color profile embedding. Add signature-based format detection
+for AVIF files.
 
 ### M7: Implement video stabilization module
 
@@ -216,13 +225,16 @@ image quality), and NIQE (natural image quality). Support batch
 evaluation for comparing sets of images. Include GPU-accelerated
 paths for SSIM and PSNR.
 
-### M9: Implement zero-copy Mat interop with NumPy
+### M9: Add DNN model input preprocessing pipeline
 
-Add zero-copy bidirectional data sharing between `cv::Mat` and NumPy
-`ndarray` via the Python buffer protocol. Handle stride differences,
-dtype mapping (CV_8UC3 ↔ uint8 shape (H,W,3)), and reference counting
-to prevent use-after-free. Support both contiguous and non-contiguous
-arrays.
+Implement a configurable preprocessing pipeline for DNN inference
+that chains common operations: resize, crop, color conversion,
+normalization (mean subtraction, scale), and channel reordering
+(HWC→CHW). Define preprocessing configs via `cv::dnn::PreprocessParams`
+struct. Integrate with `cv::dnn::Net::setInput` to apply preprocessing
+automatically. Support loading preprocessing configs from ONNX model
+metadata. Changes span `modules/dnn/src/dnn.cpp` and
+`modules/dnn/include/opencv2/dnn/dnn.hpp`.
 
 ### M10: Add structured video annotation support
 
@@ -271,14 +283,16 @@ module's inference path. Integrate with the Emscripten/WASM build.
 Changes span the HAL (hardware abstraction layer), operation dispatch,
 DNN backend, and build system.
 
-### W5: Add streaming video processing pipeline framework
+### W5: Implement hardware-accelerated video transcoding pipeline
 
-Implement a video processing pipeline: concurrent decode → process →
-encode using a producer-consumer pattern with configurable pipeline
-depth. Support multiple input streams (synchronized multi-camera),
-GPU-accelerated decode (NVDEC), frame-rate conversion, temporal
-filtering across frames, and adaptive quality based on CPU/GPU load.
-Changes span videoio, imgproc, core threading, and add a pipeline module.
+Add a video transcoding pipeline that leverages hardware acceleration
+(NVENC/NVDEC, VA-API, VideoToolbox) for decode → filter → encode
+workflows. Support zero-copy GPU frame transfer between decode and
+encode stages. Add a filter graph for applying imgproc operations
+(resize, color conversion, overlay) on GPU frames without CPU
+readback. Changes span `modules/videoio/` (hardware codec backends),
+`modules/core/` (GPU buffer management), `modules/imgproc/` (GPU
+filter paths), and add a transcoding pipeline module.
 
 ### W6: Implement model optimization and deployment toolkit
 

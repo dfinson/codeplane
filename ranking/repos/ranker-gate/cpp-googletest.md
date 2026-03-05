@@ -72,13 +72,14 @@ googlemock/
 
 ## Narrow
 
-### N1: Fix `EXPECT_THAT` with `ContainerEq` not showing element diff for sets
+### N1: Fix `EXPECT_EQ` producing unhelpful diff for long multi-line strings
 
-When using `EXPECT_THAT(actual_set, ContainerEq(expected_set))`, the
-failure message shows "which has these unexpected elements: {3}" but
-does not show which expected elements are missing. For set-like
-containers (where element order is irrelevant), show both "unexpected"
-and "missing" elements. The matchers currently only handle vector diffs.
+When `EXPECT_EQ(actual_string, expected_string)` fails with long
+multi-line strings, the failure output dumps both strings in full
+without highlighting which lines differ. The printer in
+`gtest-printers.cc` does not generate a line-by-line diff. Add
+line-diffing to the string comparison output in `gtest.cc` and
+`gtest-printers.cc`.
 
 ### N2: Add `EXPECT_NEAR` for `std::chrono::duration` types
 
@@ -110,17 +111,21 @@ the failure to the fixture class rather than the specific test case.
 Fix the XML reporter to attribute `SetUp()` failures to the currently
 running test case.
 
-### N6: Add `EXPECT_THAT` matcher for `std::variant` types
+### N6: Fix `EXPECT_THAT` with `Each` matcher not showing the failing element value
 
-`EXPECT_THAT` has no built-in matcher for `std::variant`. Add
-`VariantWith<T>(inner_matcher)` that checks the variant holds type T
-and the value matches the inner matcher.
+When `EXPECT_THAT(container, Each(Gt(0)))` fails, the error message
+says "whose element #2 doesn't match" but does not show the actual
+value of the failing element. The `Each` matcher implementation in
+`gmock-matchers.h` should include the failing element's value and
+its formatted representation in the match explanation.
 
-### N7: Fix death test child process output truncated on Windows
+### N7: Fix `TEST_P` parameter values truncated in failure output on MSVC
 
-On Windows, death test output captured from the child process is
-truncated at 4096 bytes. The pipe buffer size is hardcoded. Increase
-the pipe buffer and implement chunked reading.
+On MSVC, parameterized test failures (`TEST_P`) do not include the
+full parameter value in the failure output because `PrintToString` in
+`gtest-printers.h` truncates output at a short fixed limit. Increase
+the truncation threshold for test parameter printing and add an
+ellipsis indicator when values are truncated.
 
 ### N8: Add `SCOPED_TRACE` with automatic variable capture
 
@@ -128,28 +133,32 @@ the pipe buffer and implement chunked reading.
 `SCOPED_TRACE_AUTO()` that automatically captures the current source
 location and local variable values in the trace output.
 
-### N9: Fix `--gtest_random_seed` not affecting typed test ordering
+### N9: Fix `TYPED_TEST` not including type name in assertion failure messages
 
-When using `--gtest_shuffle` with `--gtest_random_seed`, typed test
-suites (`TYPED_TEST_SUITE`) are not shuffled. The shuffle logic skips
-type-parameterized test suites. Fix the shuffler to include all test
-suite types.
+When a `TYPED_TEST` assertion fails, the failure message does not
+include which type instantiation caused the failure. The type
+information is available via `GetTypeName()` in `gtest-type-util.h`
+but the default assertion output in `gtest.cc` omits it. Add the
+concrete type name to `TYPED_TEST` failure messages.
 
-### N10: Fix mock function matcher error messages showing raw type names
+### N10: Fix `GTEST_SKIP()` not setting correct status in JSON reporter
 
-When a GMock matcher fails, the error message shows mangled C++ type
-names (e.g., `St6vectorIiSaIiEE`) instead of human-readable names.
-Apply `abi::__cxa_demangle` on platforms that support it.
+When `GTEST_SKIP()` is used, the JSON output (`--gtest_output=json`)
+reports the test as `"RUN"` with a `"COMPLETED"` status instead of
+`"SKIPPED"`. The JSON reporter in `gtest.cc` does not check for skipped
+status when emitting test result entries. Fix the JSON output handler
+to include a `"skipped"` field.
 
 ## Medium
 
-### M1: Implement test fixture parameterization with named cases
+### M1: Implement parameterized test combination filtering
 
-Add named parameterized test cases:
-`INSTANTIATE_TEST_SUITE_P(Cases, MyTest, ValuesIn({{"empty", {}}, {"single", {1}}, {"many", {1,2,3}}}))`
-where each test case has a human-readable name that appears in test
-output instead of the default `0`, `1`, `2` indices. Support custom
-name generators that produce descriptive names from parameter values.
+Add `Combine(gen1, gen2, ...).Where(predicate)` that filters invalid
+parameter combinations before test instantiation. Currently
+`Combine()` in `gtest-param-test.h` produces the full Cartesian
+product, forcing users to skip invalid combos inside the test body.
+Add a predicate-based filter in `gtest-param-util.h` that excludes
+combinations during generation. Include the filter in test name output.
 
 ### M2: Add async test support with timeout
 
@@ -160,14 +169,14 @@ that polls a condition with configurable interval and timeout:
 takes longer than the specified duration. Support integration with
 common async patterns (futures, callbacks, condition variables).
 
-### M3: Implement mock call sequence expectations
+### M3: Implement test retry mechanism for flaky tests
 
-Add `InSequence` improvements for GMock: support partial ordering
-(some calls must be ordered relative to each other but others can
-interleave), add `After(other_expectation)` for DAG-style ordering,
-and provide a visual sequence diagram in the failure output showing
-the expected vs actual call order. The current `InSequence` only
-supports total ordering within a group.
+Add `--gtest_retry_failed=N` that re-runs failed tests up to N times,
+only reporting failure if all retries fail. Track per-test flakiness
+statistics (pass/fail counts across retries). Include retry information
+in XML and JSON output. Changes span `gtest.cc` (test runner retry
+loop), `gtest-internal-inl.h` (result aggregation), `gtest.h` (retry
+configuration flag), and the XML/JSON reporters.
 
 ### M4: Implement snapshot testing for complex output
 
@@ -204,13 +213,15 @@ Add `TEST_TAG(test, "tag1", "tag2")` for categorizing tests. Support
 Support tag-based exclusion `--gtest_exclude_tags=flaky`. Tags are
 orthogonal to the existing name-based filtering.
 
-### M9: Add custom test reporter interface
+### M9: Implement GMock expectation call-site tracking
 
-Implement a `TestReporter` interface that receives structured test
-events (suite start, test start, assertion result, test end, suite end)
-and produces output. Include built-in reporters: console (default),
-JUnit XML (existing), JSON, TAP, and TeamCity. Support multiple
-simultaneous reporters.
+When a GMock expectation is violated, the error message shows where
+the expectation was set but not where the violating call occurred.
+Add call-site tracking that records the source location of each mock
+function invocation. Show both the expectation location and the call
+location in failure messages. Changes span `gmock-spec-builders.h`
+(call recording), `gmock-spec-builders.cc` (source location capture),
+and `gmock-function-mocker.h` (call-site propagation).
 
 ### M10: Implement test fixture inheritance with scope control
 
@@ -221,15 +232,17 @@ shared state accessor for suite-scoped fixtures.
 
 ## Wide
 
-### W1: Add built-in code coverage integration
+### W1: Implement contract testing framework for mock verification
 
-Implement `--gtest_coverage` that instruments test execution for code
-coverage without external tools. Use compiler-provided coverage
-instrumentation (`__gcov_flush`, `__llvm_profile_write_file`). After
-all tests complete, generate a coverage report showing line and branch
-coverage per source file. Support per-test-case coverage (which test
-covers which code) for identifying gaps. Add coverage diff mode for
-CI that shows coverage changes.
+Add a contract testing mode where GMock expectations recorded in one
+test suite can be exported as contracts and verified against a real
+implementation in a separate suite. Support
+`EXPORT_CONTRACT(mock_obj, "contract.json")` to serialize all
+expectations and `VERIFY_CONTRACT(real_obj, "contract.json")` to
+replay expected calls. Changes span `gmock-spec-builders.h`
+(expectation serialization), `gmock-spec-builders.cc` (contract
+export/import), `gmock-matchers.h` (matcher serialization), `gtest.cc`
+(contract verification runner), and add contract I/O infrastructure.
 
 ### W2: Implement property-based testing extension
 
