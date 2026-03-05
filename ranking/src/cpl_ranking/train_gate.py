@@ -7,7 +7,6 @@ Optimizes cross-entropy.
 
 from __future__ import annotations
 
-import json
 import math
 from collections import Counter
 from pathlib import Path
@@ -109,51 +108,37 @@ def _compute_gate_features(
 
 
 def train_gate(
-    data_dirs: list[Path],
+    merged_dir: Path,
     output_path: Path,
     params: dict | None = None,
 ) -> dict:
     """Train the gate classifier.
 
     Args:
-        data_dirs: List of ``data/{repo_id}/`` directories.
+        merged_dir: Path to ``data/merged/`` with Parquet files.
         output_path: Where to save ``gate.lgbm``.
         params: LightGBM parameters override.
 
     Returns:
         Training summary dict.
     """
-    # Load all queries with their gate labels
+    queries_df = pd.read_parquet(merged_dir / "queries.parquet")
+    candidates_df = pd.read_parquet(merged_dir / "candidates_rank.parquet")
+
+    # Group candidates by query_id
+    candidates_by_query: dict[str, list[dict]] = {}
+    for _, row in candidates_df.iterrows():
+        qid = row["query_id"]
+        candidates_by_query.setdefault(qid, []).append(row.to_dict())
+
+    repo_features = {"object_count": 0, "file_count": 0}
+
     rows: list[dict] = []
-
-    for d in data_dirs:
-        queries_file = d / "ground_truth" / "queries.jsonl"
-        signals_dir = d / "signals"
-
-        if not queries_file.exists():
-            continue
-
-        queries = [json.loads(ln) for ln in queries_file.read_text().splitlines() if ln.strip()]
-
-        # Load candidates per query from signals
-        candidates_by_query: dict[str, list[dict]] = {}
-        cand_file = signals_dir / "candidates_rank.jsonl"
-        if cand_file.exists():
-            for ln in cand_file.read_text().splitlines():
-                if not ln.strip():
-                    continue
-                c = json.loads(ln)
-                qid = c["query_id"]
-                candidates_by_query.setdefault(qid, []).append(c)
-
-        # Repo features (approximate from first candidate if available)
-        repo_features = {"object_count": 0, "file_count": 0}
-
-        for q in queries:
-            cands = candidates_by_query.get(q["query_id"], [])
-            feat = _compute_gate_features(cands, q, repo_features)
-            feat["label_gate"] = q["label_gate"]
-            rows.append(feat)
+    for _, q in queries_df.iterrows():
+        cands = candidates_by_query.get(q["query_id"], [])
+        feat = _compute_gate_features(cands, q.to_dict(), repo_features)
+        feat["label_gate"] = q["label_gate"]
+        rows.append(feat)
 
     if not rows:
         raise ValueError("No gate training data found")

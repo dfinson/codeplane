@@ -7,7 +7,6 @@ Only OK-labeled queries participate.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import lightgbm as lgb
@@ -33,36 +32,18 @@ RANKER_FEATURES = [
 ]
 
 
-def _load_candidates(data_dirs: list[Path], queries_path: str = "ground_truth/queries.jsonl") -> pd.DataFrame:
-    """Load candidates_rank.jsonl from all repos, filter to OK queries."""
-    # Collect OK query_ids
-    ok_query_ids: set[str] = set()
-    for d in data_dirs:
-        qf = d / queries_path
-        if not qf.exists():
-            continue
-        for ln in qf.read_text().splitlines():
-            if not ln.strip():
-                continue
-            q = json.loads(ln)
-            if q["query_type"] in OK_QUERY_TYPES:
-                ok_query_ids.add(q["query_id"])
+def _load_candidates_from_parquet(merged_dir: Path) -> pd.DataFrame:
+    """Load candidates from merged Parquet, filter to OK queries."""
+    candidates_df = pd.read_parquet(merged_dir / "candidates_rank.parquet")
+    queries_df = pd.read_parquet(merged_dir / "queries.parquet")
 
-    # Load candidates
-    rows: list[dict] = []
-    for d in data_dirs:
-        cf = d / "signals" / "candidates_rank.jsonl"
-        if not cf.exists():
-            continue
-        for ln in cf.read_text().splitlines():
-            if not ln.strip():
-                continue
-            row = json.loads(ln)
-            if row["query_id"] in ok_query_ids:
-                rows.append(row)
+    ok_query_ids = set(
+        queries_df.loc[
+            queries_df["query_type"].isin(OK_QUERY_TYPES), "query_id"
+        ]
+    )
 
-    df = pd.DataFrame(rows)
-    return df
+    return candidates_df[candidates_df["query_id"].isin(ok_query_ids)].copy()
 
 
 def _prepare_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -104,21 +85,21 @@ def _prepare_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def train_ranker(
-    data_dirs: list[Path],
+    merged_dir: Path,
     output_path: Path,
     params: dict | None = None,
 ) -> dict:
     """Train the LambdaMART object ranker.
 
     Args:
-        data_dirs: List of ``data/{repo_id}/`` directories.
+        merged_dir: Path to ``data/merged/`` with Parquet files.
         output_path: Where to save ``ranker.lgbm``.
         params: LightGBM parameters override.
 
     Returns:
         Training summary dict.
     """
-    df = _load_candidates(data_dirs)
+    df = _load_candidates_from_parquet(merged_dir)
     if df.empty:
         raise ValueError("No candidate data found")
 

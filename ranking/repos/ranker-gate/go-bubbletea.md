@@ -24,17 +24,20 @@
 
 ```
 .
-├── tea.go               # Core Program, Model, Cmd types
-├── commands.go          # Built-in commands (Quit, Batch, Sequence)
-├── renderer.go          # Terminal renderer
-├── screen.go            # Screen management (alt screen, mouse)
-├── signals.go           # OS signal handling
-├── key.go               # Key event types
-├── mouse.go             # Mouse event types
-├── input.go             # Input reading and parsing
-├── cursor/              # Cursor model/component
-├── standard_renderer.go # Standard rendering strategy
-└── options.go           # Program options
+├── tea.go               # Core Program, Model, Cmd types; event loop, Run()
+├── commands.go          # Built-in commands (Quit, Batch, Sequence, Tick, Every)
+├── renderer.go          # Renderer interface + Println/Printf commands
+├── cursed_renderer.go   # Primary rendering implementation (alt screen, flush)
+├── nil_renderer.go      # No-op renderer for non-TUI mode
+├── screen.go            # WindowSizeMsg, ClearScreen, ModeReportMsg
+├── signals_unix.go      # SIGWINCH resize listener (Unix)
+├── key.go               # Key event types (KeyPressMsg, KeyReleaseMsg)
+├── mouse.go             # Mouse event types (MouseClickMsg, MouseWheelMsg)
+├── input.go             # Input event translation (ultraviolet → tea types)
+├── tty.go               # TTY init, raw mode, read loop, checkResize
+├── exec.go              # ExecProcess / ExecCommand for spawning processes
+├── options.go           # ProgramOption functions (WithInput, WithFPS, etc.)
+└── logging.go           # LogToFile helpers
 ```
 
 ## Scale indicators
@@ -52,13 +55,14 @@
 
 ## Narrow
 
-### N1: Fix cursor blink timer leaking on program exit
+### N1: Fix `handleSignals` sending on unbuffered channel without context check
 
-When a program using a blinking cursor exits, the blink timer goroutine
-continues running briefly after the program's `Quit` command is processed.
-This causes occasional panics when the timer tries to send on a closed
-channel. Fix the shutdown sequence to cancel the blink timer before
-closing the program's message channel.
+In `tea.go`, `handleSignals()` sends `InterruptMsg{}` and `QuitMsg{}`
+directly to `p.msgs` using a bare channel send (`p.msgs <- InterruptMsg{}`).
+Unlike `Send()` which uses a `select` on `p.ctx.Done()`, this can block
+indefinitely if the event loop has already exited and no one is reading
+from the channel. Wrap the signal sends in a `select` with `p.ctx.Done()`
+to prevent the goroutine from hanging on shutdown.
 
 ### N2: Add `WindowSizeMsg` debouncing
 
@@ -68,26 +72,33 @@ configurable debouncing to window size events so the program only
 receives the final size after the resize gesture completes. Default
 debounce interval should be 50ms.
 
-### N3: Fix mouse click coordinates wrong with alt screen scrollback
+### N3: Fix `checkResize` race condition on width/height fields
 
-When using the alt screen buffer with mouse support enabled, mouse click
-coordinates are reported relative to the visible viewport but the program
-interprets them relative to the scrollback buffer origin. Fix the mouse
-coordinate translation to account for the alt screen offset.
+In `tty.go`, `checkResize()` writes to `p.width` and `p.height` without
+holding `p.mu`, while these fields may be read concurrently by the
+renderer or other goroutines. The `startRenderer` goroutine also reads
+these values. Add proper mutex protection around the width/height
+updates in `checkResize()` to prevent data races.
 
-### N4: Fix `tea.Quit` not flushing pending output before exit
+### N4: Fix `Println` command silently dropping output with `nilRenderer`
 
-When a model returns `tea.Quit`, any pending `View()` output in the
-renderer buffer is discarded. The last frame before exit is never
-displayed. Fix the shutdown sequence to flush the renderer buffer
-before closing the program.
+When a program is created with `WithoutRenderer()`, the `nilRenderer`
+in `nil_renderer.go` implements `insertAbove` as a no-op (`return nil`).
+This means the `Println` command in `renderer.go` sends a
+`printLineMessage` that gets dispatched to `insertAbove` in the event
+loop, but the message is silently discarded. Add a fallback in the
+`nilRenderer.insertAbove` that writes directly to the program's output
+writer so that `Println` still produces visible output.
 
-### N5: Fix alt screen restoration leaving terminal in raw mode
+### N5: Add `WithLogger` program option to inject a custom logger
 
-When the program panics while the alt screen is active, the terminal
-is left in raw mode because the cleanup handler doesn't run. Add a
-panic recovery handler that restores the terminal state before
-re-panicking.
+The `Program` struct in `tea.go` has a `logger` field (`uv.Logger`)
+that is only populated when the `TEA_TRACE` environment variable is
+set (in `NewProgram`). There is no `ProgramOption` to inject a logger
+programmatically. Add a `WithLogger(logger)` option in `options.go`
+so callers can provide their own logger instance without relying on
+environment variables. This should integrate with the existing
+`setLogger` call on `cursedRenderer` in `Run()`.
 
 ### N6: Add `tea.Tick` with custom ID for cancellable timers
 
@@ -95,34 +106,48 @@ The current `tea.Tick` returns a `Cmd` with no way to cancel it. Add
 `tea.TickWithID(duration, id)` that returns a cancellable tick. Add
 `tea.CancelTick(id)` to cancel a pending tick by ID.
 
-### N7: Fix pasted text containing escape sequences interpreted as key events
+### N7: Fix `ExecProcess` swallowing `RestoreTerminal` error on command failure
 
-When bracketed paste mode is enabled and the pasted text contains
-ANSI escape sequences (e.g., colored text from a terminal), the paste
-handler interprets them as key events instead of literal characters.
-Fix the paste handler to treat all characters within the bracketed
-paste markers as literal text.
+In `exec.go`, the `exec` method calls `p.RestoreTerminal()` after a
+failed `c.Run()`, but discards the restore error and only sends the
+command error via the callback. If both the spawned command and the
+terminal restore fail, the caller only sees the command error while
+the terminal may be left in a broken state. Chain the errors using
+`errors.Join` so the callback receives both failures.
 
-### N8: Add `tea.Println` for output outside the TUI rendering area
+### N8: Add `RequestWindowSize` as a public command
 
-There's no way to print non-TUI output (debug messages, log lines)
-without corrupting the rendered view. Add `tea.Println(msg)` that
-outputs text above the TUI render area, scrolling the output region
-while keeping the TUI fixed at the bottom.
+In `commands.go`, `windowSizeMsg` is an unexported type and
+`RequestWindowSize()` returns a `Msg` directly (not a `Cmd`). This
+means callers cannot request a fresh window size from within `Update`
+using the standard command pattern. Rename the internal
+`windowSizeMsg` to a public message type and convert
+`RequestWindowSize` into a proper `Cmd`-returning function that
+triggers `checkResize()` in `tty.go` and delivers a new
+`WindowSizeMsg` to the update loop.
 
-### N9: Fix `tea.EnterAltScreen` not working when called from `Init()`
+### N9: Fix `View.AltScreen` toggle causing double alt-screen enter on startup
 
-When a model returns `tea.EnterAltScreen` from `Init()`, the alt
-screen is not entered because the renderer hasn't started yet. The
-command is processed before the terminal is ready. Fix the startup
-sequence to defer alt screen commands until after renderer initialization.
+In `cursed_renderer.go`, the `flush` method checks
+`shouldUpdateAltScreen` by comparing `view.AltScreen` against
+`s.lastView.AltScreen`. On the very first render, `s.lastView` is nil
+and the code enters `enableAltScreen` unconditionally when
+`view.AltScreen` is true. But the `start()` method in
+`cursed_renderer.go` also initializes screen state. If a model sets
+`AltScreen = true` in its first `View()` call, the alt screen
+sequence may be emitted twice—once during `start()` initialization
+and once in the first `flush`. Guard the initial alt-screen transition
+to avoid the redundant escape sequence.
 
-### N10: Fix mouse wheel events reporting wrong direction on macOS Terminal.app
+### N10: Fix `waitForReadLoop` timeout not propagating a diagnostic error
 
-On macOS Terminal.app, mouse wheel up/down events are reported with
-inverted direction compared to iTerm2 and other terminals. The mouse
-event parser uses the wrong bit for direction detection in the SGR
-mouse protocol. Fix the mouse parser to handle Terminal.app's encoding.
+In `tty.go`, `waitForReadLoop()` has a 500ms timeout fallback when the
+cancel reader's `readLoopDone` channel doesn't close in time. When the
+timeout fires, the function returns silently—no error is logged and no
+diagnostic is surfaced. This makes it hard to debug hangs in the input
+layer. Add a log message via `p.logger` (when set) and optionally
+surface a non-fatal error so callers of `shutdown` and
+`releaseTerminal` can detect that the read loop did not exit cleanly.
 
 ## Medium
 

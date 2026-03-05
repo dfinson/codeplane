@@ -13,7 +13,6 @@ Pipeline:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import lightgbm as lgb
@@ -23,8 +22,6 @@ from sklearn.model_selection import GroupKFold
 
 from cpl_ranking.train_ranker import (
     RANKER_FEATURES,
-    _load_candidates,
-    _prepare_features,
 )
 
 
@@ -104,7 +101,7 @@ CUTOFF_FEATURES = [
 
 
 def train_cutoff(
-    data_dirs: list[Path],
+    merged_dir: Path,
     output_path: Path,
     n_folds: int = 5,
     params: dict | None = None,
@@ -112,7 +109,7 @@ def train_cutoff(
     """Train the cutoff regressor with no-leakage K-fold.
 
     Args:
-        data_dirs: List of ``data/{repo_id}/`` directories.
+        merged_dir: Path to ``data/merged/`` with Parquet files.
         output_path: Where to save ``cutoff.lgbm``.
         n_folds: Number of folds for K-fold split.
         params: LightGBM parameters override.
@@ -120,7 +117,9 @@ def train_cutoff(
     Returns:
         Training summary dict.
     """
-    df = _load_candidates(data_dirs)
+    from cpl_ranking.train_ranker import _load_candidates_from_parquet, _prepare_features
+
+    df = _load_candidates_from_parquet(merged_dir)
     if df.empty:
         raise ValueError("No candidate data found")
 

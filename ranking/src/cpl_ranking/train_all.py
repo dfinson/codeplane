@@ -4,7 +4,12 @@ Usage::
 
     python -m cpl_ranking.train_all --data-dir ranking/data --output-dir output/
 
+Pre-requisites:
+  - merge_ground_truth.py has been run once (writes merged/*.parquet)
+  - merge_signals.py has been run after signal collection
+
 Pipeline:
+  0. Merge signals (re-derives labels from ground truth parquet)
   1. Train gate (multiclass, all query types — ships first)
   2. Train ranker (LambdaMART, OK queries only)
   3. Train cutoff (K-fold, out-of-fold scoring — depends on ranker)
@@ -19,46 +24,74 @@ import sys
 from pathlib import Path
 
 
-def train_all(data_dir: Path, output_dir: Path) -> None:
+def train_all(data_dir: Path, output_dir: Path, skip_merge: bool = False) -> None:
     """Run the full training pipeline.
 
     Args:
-        data_dir: Root data directory containing ``{repo_id}/`` subdirs.
+        data_dir: Root data directory containing ``{repo_id}/`` subdirs
+            and ``merged/`` with pre-merged parquet files.
         output_dir: Where to write model artifacts.
+        skip_merge: If True, skip signal merge (use existing parquet).
     """
     from cpl_ranking.train_cutoff import train_cutoff
     from cpl_ranking.train_gate import train_gate
     from cpl_ranking.train_ranker import train_ranker
 
-    # Find all repo data directories
-    repo_dirs = sorted([
-        d for d in data_dir.iterdir()
-        if d.is_dir() and (d / "ground_truth" / "queries.jsonl").exists()
-    ])
+    merged_dir = data_dir / "merged"
 
-    if not repo_dirs:
-        print(f"No repo data found in {data_dir}", file=sys.stderr)
-        sys.exit(1)
+    # Validate pre-merged ground truth exists
+    for required in ("queries.parquet", "touched_objects.parquet"):
+        if not (merged_dir / required).exists():
+            print(
+                f"Missing {merged_dir / required} — "
+                f"run merge_ground_truth.py first",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
-    print(f"Found {len(repo_dirs)} repos with ground truth data")
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 0. Merge signals (re-runnable, re-derives labels)
+    if not skip_merge:
+        from cpl_ranking.merge_signals import merge_signals
+
+        print("=== Merging Signals ===")
+        sig_summary = merge_signals(data_dir)
+        print(f"  {sig_summary['total_candidates']} candidates, "
+              f"positive rate: {sig_summary['positive_rate']:.3f}")
+
+    # Load merged data
+    candidates_path = merged_dir / "candidates_rank.parquet"
+    queries_path = merged_dir / "queries.parquet"
+    if not candidates_path.exists():
+        print(f"Missing {candidates_path}", file=sys.stderr)
+        sys.exit(1)
 
     # 1. Gate (ships first, no dependency on ranker)
     print("\n=== Training Gate ===")
-    gate_summary = train_gate(repo_dirs, output_dir / "gate.lgbm")
+    gate_summary = train_gate(
+        merged_dir=merged_dir,
+        output_path=output_dir / "gate.lgbm",
+    )
     print(f"  Gate: {gate_summary['total_queries']} queries, "
           f"distribution: {gate_summary['label_distribution']}")
 
     # 2. Ranker
     print("\n=== Training Ranker ===")
-    ranker_summary = train_ranker(repo_dirs, output_dir / "ranker.lgbm")
+    ranker_summary = train_ranker(
+        merged_dir=merged_dir,
+        output_path=output_dir / "ranker.lgbm",
+    )
     print(f"  Ranker: {ranker_summary['total_candidates']} candidates, "
           f"{ranker_summary['total_groups']} groups, "
           f"positive rate: {ranker_summary['positive_rate']:.3f}")
 
     # 3. Cutoff (depends on ranker — uses K-fold out-of-fold scoring)
     print("\n=== Training Cutoff ===")
-    cutoff_summary = train_cutoff(repo_dirs, output_dir / "cutoff.lgbm")
+    cutoff_summary = train_cutoff(
+        merged_dir=merged_dir,
+        output_path=output_dir / "cutoff.lgbm",
+    )
     print(f"  Cutoff: {cutoff_summary['cutoff_rows']} rows, "
           f"N* mean: {cutoff_summary['n_star_mean']:.1f} ± {cutoff_summary['n_star_std']:.1f}")
 
@@ -76,5 +109,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train all ranking models")
     parser.add_argument("--data-dir", type=Path, required=True, help="Root data directory")
     parser.add_argument("--output-dir", type=Path, required=True, help="Output directory for models")
+    parser.add_argument("--skip-merge", action="store_true", help="Skip signal merge step")
     args = parser.parse_args()
-    train_all(args.data_dir, args.output_dir)
+    train_all(args.data_dir, args.output_dir, skip_merge=args.skip_merge)
