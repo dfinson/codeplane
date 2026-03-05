@@ -41,6 +41,23 @@ Five retrieval sources produce candidates:
 | Graph | 1-hop structural walk (callees, callers, siblings) | Per DefFact |
 | Symbol/Explicit | Direct symbol/path resolution from query text | Per DefFact |
 
+### 1.3 Query Tiers
+
+Five OK query tiers, each designed to exercise a different retrieval signal
+combination:
+
+| Tier | Name | Design intent | Primary harvester exercised |
+|------|------|--------------|----------------------------|
+| **Q-semantic** | Semantic | Domain-level description only — no identifiers, no paths, no code terms | Embedding (must match on meaning alone) |
+| **Q-lexical** | Lexical | Uses terms/phrases that appear literally in the code — error messages, log strings, comments, docstrings | Lexical / Tantivy (full-text hits) |
+| **Q-identifier** | Identifier | Uses exact symbol names — function, class, method, variable names from the touched code | Term match (SQL LIKE + IDF on DefFact names) |
+| **Q-structural** | Structural | References callers, callees, parent classes, inheritance, module relationships | Graph (1-hop structural walk) |
+| **Q-navigational** | Navigational | Uses file paths, module paths, or explicit symbol resolution anchors | Symbol/explicit (direct path/symbol resolution) |
+
+Each tier isolates a different harvester as the primary signal source. The
+ranker sees training examples where each retriever has the strongest signal,
+and examples where multiple retrievers agree or disagree.
+
 ### 1.3 Gate Taxonomy
 
 Four labels, defined as properties of the **(query, repo) pair**:
@@ -318,11 +335,22 @@ non-OK avoids returning a bad result set.
 
 ### 5.1 Repo Selection
 
-**Scope:** 10 languages (codeplane's first-class citizens) × 3 repos per
-language = 30 repos.
+Two repo sets serve different models:
 
-**Selection criteria** (qualitative, applied once by human or agent with
-human review):
+**Ranker + Gate set** (30 repos): 10 languages × 3 repos per language
+(small/medium/large scale). Trains the object ranker and gate classifier.
+30 tasks per repo (10 narrow / 10 medium / 10 wide), each with 5 OK
+queries + up to 9 bad queries.
+
+**Cutoff set** (20 repos): 10 languages × 2 repos per language.
+Trains the cutoff predictor (N* estimation). 30 tasks per repo, each
+with 5 OK queries only (no bad queries — they are gated before cutoff).
+Repos are chosen for **varied touched-set sizes** so the cutoff model
+sees a wide range of N* values.
+
+**Total:** 50 repos, 1,500 tasks, 7,500+ queries.
+
+**Selection criteria** (both sets):
 
 1. **Scale diversity within each language:**
    - One focused library/tool — a single developer could hold the entire
@@ -345,13 +373,16 @@ human review):
 4. **Open source and permissively licensed** — training data must be usable
    under the repo's license.
 
-**Validation (one-time, post-selection):** After indexing all 30 repos, confirm
+**Validation (one-time, post-selection):** After indexing all 50 repos, confirm
 that the distribution of semantic object counts spans a wide range. If it
 clusters, swap repos to increase diversity.
 
 ### 5.2 Task Generation
 
 **Who:** A "task author" reasoning agent, operating per repo.
+
+**Task count:** 30 tasks per repo (10 narrow / 10 medium / 10 wide),
+for both ranker+gate and cutoff repo sets.
 
 **Process:**
 
@@ -416,11 +447,14 @@ For EACH task in the file, do the following:
     "edited_files": ["path/to/file1.py", "path/to/file2.py"],
     "read_necessary": ["path/to/file3.py", "path/to/file4.py"],
     "queries": [
-      {"query_type": "L0", "query_text": "..."},
-      {"query_type": "L1", "query_text": "..."},
-      {"query_type": "L2", "query_text": "..."},
+      {"query_type": "Q_SEMANTIC", "query_text": "..."},
+      {"query_type": "Q_LEXICAL", "query_text": "..."},
+      {"query_type": "Q_IDENTIFIER", "query_text": "..."},
+      {"query_type": "Q_STRUCTURAL", "query_text": "..."},
+      {"query_type": "Q_NAVIGATIONAL", "query_text": "..."},
       {"query_type": "UNSAT", "query_text": "..."},
-      {"query_type": "BROAD", "query_text": "..."}
+      {"query_type": "BROAD", "query_text": "..."},
+      {"query_type": "AMBIG", "query_text": "..."}
     ]
   }
 
@@ -432,26 +466,45 @@ For EACH task in the file, do the following:
     understand or solve the task — NOT files you opened and immediately
     closed or explored out of curiosity. Do NOT include edited files
     here (they are tracked separately).
-  - queries: 3 to 6 query objects:
+  - queries: 5 to 14 query objects:
 
-    THREE OK queries at increasing specificity:
-    - L0: High-level task description. No identifiers, no paths. A
-      developer familiar with the codebase would know where to look.
-    - L1: L0 plus concrete identifiers — symbol names, error strings,
-      function names — drawn from the code you actually touched.
-    - L2: L1 plus anchoring constraints — file paths, module names,
-      behavioral constraints.
+    FIVE OK queries, each targeting a different retrieval signal:
 
-    UP TO THREE non-OK queries (skip any that feel forced):
-    - UNSAT: A plausible query about the same area that makes a
-      factually wrong assumption about the architecture.
-    - BROAD: A large effort this task is part of — touching many files
-      across subsystems. Too big for one task.
-    - AMBIG: Same domain, but this repo has multiple subsystems that
-      could be the target and the query doesn't resolve between them.
+    - Q_SEMANTIC: Domain-level description only. No identifiers, no
+      file paths, no code-specific terms. Describe the problem in
+      plain English so that only semantic similarity can find the
+      right code.
 
-    You MUST produce L0, L1, L2. Non-OK queries are optional — produce
-    only those that arise naturally. Fewer is better than forced.
+    - Q_LEXICAL: Use terms or phrases that appear literally in the
+      source code — error messages, log strings, comments, docstrings,
+      string literals — so that full-text search would find matches.
+
+    - Q_IDENTIFIER: Use exact symbol names — function, class, method,
+      or variable names — from the code you actually touched. These
+      are the names a developer would type into a symbol search.
+
+    - Q_STRUCTURAL: Reference structural relationships — "the callers
+      of X", "methods that override Y", "the class that implements Z",
+      "siblings of W in the module hierarchy." Describe the code via
+      its call graph or inheritance relationships.
+
+    - Q_NAVIGATIONAL: Use explicit file paths, module paths, or
+      directory locations — "in src/auth/middleware.py",
+      "the handlers under api/v2/". A developer who knows the
+      file system layout would navigate directly.
+
+    UP TO THREE of EACH non-OK query type (skip any that feel forced):
+
+    - UNSAT (up to 3): Plausible queries about the same area that make
+      factually wrong assumptions about the architecture.
+    - BROAD (up to 3): Large efforts this task is part of — touching
+      many files across subsystems. Too big for one task.
+    - AMBIG (up to 3): Same domain, but this repo has multiple
+      subsystems that could be the target and the query doesn't
+      resolve between them.
+
+    You MUST produce all 5 OK queries. Non-OK queries are optional —
+    produce only those that arise naturally. Fewer is better than forced.
 
 Work through every task in the file. After completing all tasks, say
 "ALL TASKS COMPLETE".
@@ -608,7 +661,7 @@ truncate the candidate pool. Returns the raw union.
 | `run_id` | str | Task run identifier |
 | `query_id` | str | Unique query identifier |
 | `query_text` | str | Full query text |
-| `query_type` | str | `L0` / `L1` / `L2` (for OK) or `UNSAT` / `BROAD` / `AMBIG` |
+| `query_type` | str | `Q_SEMANTIC` / `Q_LEXICAL` / `Q_IDENTIFIER` / `Q_STRUCTURAL` / `Q_NAVIGATIONAL` (for OK) or `UNSAT` / `BROAD` / `AMBIG` |
 | `label_gate` | str | `OK` / `UNSAT` / `BROAD` / `AMBIG` |
 
 ### 7.4 `candidates_rank`
@@ -855,20 +908,22 @@ benchmarking/
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│                    PER REPO (×30)                      │
+│          PER REPO (×30 ranker+gate, ×20 cutoff)       │
 │                                                        │
 │  One agent session per repo                            │
 │    │                                                   │
 │    ├─ Reads ranking/repos/{name}.md                    │
 │    ├─ Repo cloned at ranking/clones/{clone}/           │
 │    │                                                   │
-│    ├─ FOR EACH TASK in the md file:                    │
+│    ├─ FOR EACH TASK (30 per repo, 10N/10M/10W):       │
 │    │    1. Solve: read code, make edits, verify        │
 │    │    2. Reflect: write {task_id}.json with:         │
 │    │       - edited_files (from diff)                  │
 │    │       - read_necessary (agent judgment)           │
-│    │       - queries: L0, L1, L2 + optional            │
-│    │         UNSAT, BROAD, AMBIG                       │
+│    │       - 5 OK queries (semantic, lexical,          │
+│    │         identifier, structural, navigational)     │
+│    │       - up to 9 bad queries (3× UNSAT/BROAD/     │
+│    │         AMBIG) [ranker+gate repos only]           │
 │    │    3. git stash → clean for next task             │
 │    │                                                   │
 │    └─ Output: data/{repo_id}/ground_truth/*.json       │

@@ -59,7 +59,7 @@ class Query:
     run_id: str
     query_id: str
     query_text: str
-    query_type: str  # L0 | L1 | L2 | UNSAT | BROAD | AMBIG
+    query_type: str  # Q_SEMANTIC | Q_LEXICAL | Q_IDENTIFIER | Q_STRUCTURAL | Q_NAVIGATIONAL | UNSAT | BROAD | AMBIG
     label_gate: str  # OK | UNSAT | BROAD | AMBIG
 
 
