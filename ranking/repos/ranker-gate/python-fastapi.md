@@ -54,58 +54,78 @@ fastapi/
 
 ## Narrow
 
-### N1: Fix `Depends()` with `yield` not closing on WebSocket disconnect
+### N1: Fix `generate_unique_id` nondeterminism when route has multiple HTTP methods
 
-When a WebSocket connection drops unexpectedly, dependencies that use
-`yield` (generator dependencies) do not have their cleanup code executed.
-The `finally` block of the dependency generator is never reached because
-the WebSocket disconnect exception propagates before the dependency
-manager can finalize. Fix the WebSocket route handling to ensure generator
-dependencies are always cleaned up on disconnect.
+`generate_unique_id` in `utils.py` builds the operation ID using
+`list(route.methods)[0]`, but `route.methods` is a `set` and sets have
+no guaranteed iteration order. When a route is registered with multiple
+methods via `add_api_route(methods=["GET", "POST"])`, the generated
+operation ID varies across process restarts, producing nondeterministic
+OpenAPI schemas. Fix by sorting the methods before selecting one for the
+operation ID.
 
-### N2: Add `deprecated` parameter to `APIRouter`
+### N2: Fix `OpenIdConnect.__call__` returning raw `Authorization` header with scheme prefix
 
-FastAPI supports marking individual routes as deprecated via
-`@app.get("/path", deprecated=True)`, but there's no way to mark an
-entire router as deprecated. Add a `deprecated` parameter to `APIRouter`
-that applies to all routes registered on that router. Routes should
-inherit the router's deprecated status unless they explicitly override it.
+`OpenIdConnect.__call__` in `security/open_id_connect_url.py` returns the
+entire `Authorization` header value (e.g., `"Bearer abc123"`). Unlike
+`HTTPBearer` and `HTTPBase`, which use `get_authorization_scheme_param`
+from `security/utils.py` to split the scheme from the credentials,
+`OpenIdConnect` returns the unsplit string. Fix `OpenIdConnect.__call__`
+to parse the header and return only the credentials portion, consistent
+with the other security scheme classes.
 
-### N3: Fix OpenAPI schema for `Optional[List[str]]` query parameter
+### N3: Fix `format_sse_event` not validating newlines in `id` and `event` fields
 
-When a query parameter is typed as `Optional[List[str]]`, the generated
-OpenAPI schema incorrectly sets `required: true` instead of `required: false`.
-The optionality is lost during schema generation. Fix the parameter schema
-generation to correctly handle `Optional` wrapping around collection types.
+`format_sse_event` in `sse.py` correctly splits `data` and `comment`
+fields across multiple lines via `splitlines()`, but it places `id` and
+`event` values on a single line without any newline handling. If either
+value contains a `\n`, the SSE wire framing breaks — the premature
+newline terminates the current field and corrupts the event stream.
+The SSE specification forbids newlines in `id` and `event` fields.
+Fix by validating that these fields do not contain newline characters
+and raising `ValueError` if they do.
 
-### N4: Fix `Query` parameter with `alias` not reflected in OpenAPI
+### N4: Fix `_endpoint_context_cache` unbounded memory growth
 
-When a query parameter uses `Query(alias="q")`, the OpenAPI schema shows
-the original parameter name instead of the alias. The alias is used for
-request parsing but not propagated to the schema generator. Fix the
-schema generation to use the alias as the parameter name.
+`_extract_endpoint_context` in `routing.py` caches endpoint context
+information in a module-level `dict` keyed by `id(func)`. In
+applications that create endpoints dynamically (e.g., using factory
+functions or closures in a loop), the cache grows without bound.
+Additionally, Python can reuse `id()` values after an object is
+garbage-collected, causing the cache to return stale context for a
+different function. Replace the plain dict with a bounded LRU cache
+or use `weakref` to allow eviction of unused entries.
 
-### N5: Fix `BackgroundTasks` not running when response is streamed
+### N5: Add `description` parameter to `APIWebSocketRoute` and WebSocket decorators
 
-When a route returns a `StreamingResponse`, background tasks added via
-`BackgroundTasks` never execute. The task runner waits for the response
-to complete, but streaming responses close the ASGI connection before
-the background task hook fires. Fix the ASGI lifecycle to run background
-tasks after streaming completes.
+`APIRoute` accepts a `description` parameter that appears in the
+generated OpenAPI operation, but `APIWebSocketRoute` in `routing.py`
+only accepts `path`, `endpoint`, `name`, and `dependencies`. The
+`@app.websocket()` and `add_api_websocket_route` methods likewise lack
+a `description` parameter. Add `description` to `APIWebSocketRoute.__init__`
+and propagate it through the decorator and `include_router` WebSocket
+branch, so WebSocket routes carry descriptive metadata for documentation
+generators and introspection tools.
 
-### N6: Add `HEAD` method support in `TestClient`
+### N6: Improve `DependencyScopeError` to include the full dependency chain
 
-The `TestClient` does not properly handle HEAD requests — it returns a
-body despite the HTTP spec requiring an empty body for HEAD responses.
-Fix the test client to strip the response body for HEAD requests while
-preserving the Content-Length header.
+`DependencyScopeError` raised in `dependencies/utils.py` includes only
+the name of the dependency that triggered the scope violation (e.g.,
+`'The dependency "get_db" has a scope of "request"...'`). In deeply
+nested dependency graphs, this makes it hard to trace which parent
+dependency path led to the invalid scope combination. Enhance the error
+message to include the full chain of dependency calls from the endpoint
+down to the violating dependency.
 
-### N7: Fix `Form` data not validated when mixed with `Body` JSON
+### N7: Fix `websocket_request_validation_exception_handler` passing list as close reason
 
-When a route accepts both `Form()` and `Body()` parameters, the form
-data parameters bypass Pydantic validation. The request body parser
-detects JSON content-type and skips form field validation. Fix the
-parameter resolver to validate form fields regardless of body type.
+The default WebSocket validation error handler in `exception_handlers.py`
+calls `websocket.close(reason=jsonable_encoder(exc.errors()))`. This
+passes a Python list as the close `reason`, but RFC 6455 requires the
+close reason to be a UTF-8 string of at most 123 bytes. Large validation
+error lists either fail silently or get truncated unpredictably. Fix the
+handler to serialize errors to a JSON string and truncate to fit within
+the WebSocket close reason size limit.
 
 ### N8: Add `status_code` parameter to dependency injection error responses
 
@@ -114,12 +134,15 @@ what the dependency specifies. Add a way for the route decorator to
 specify a default error status code for dependency failures:
 `@app.get("/", dependency_error_status=503)`.
 
-### N9: Fix path parameter regex validation not working with `Path(regex=...)`
+### N9: Fix `ValidationException.__str__` producing unreadable error output
 
-The `regex` parameter on `Path()` is accepted but never actually applied
-to validate the incoming path segment. The regex is included in OpenAPI
-but not enforced at runtime. Fix the path parameter resolver to validate
-incoming values against the regex.
+`ValidationException.__str__` in `exceptions.py` formats each error with
+a bare `f"  {err}\n"`, which prints raw error dicts like
+`{'loc': ('query', 'name'), 'msg': '...', 'type': '...'}`. This makes
+server logs hard to scan when validation errors occur. Improve the
+formatting to display each error's location path (e.g., `query -> name`),
+message, and error type in a human-readable layout, similar to Pydantic's
+own `ValidationError.__str__`.
 
 ### N10: Fix duplicate `422` response in OpenAPI when custom error handler is set
 
@@ -147,21 +170,30 @@ a context-scoped override mechanism (using contextvars) so that dependency
 overrides in one test don't leak into another test running concurrently.
 Provide both a context manager and a pytest fixture for test authors.
 
-### M3: Add response model validation in debug mode
+### M3: Add per-route middleware support via route decorators
 
-Currently, FastAPI validates request inputs but does not validate response
-bodies against the declared `response_model`. Add an optional debug mode
-that validates outgoing responses against the response model and raises a
-detailed error if the response doesn't match. This should be off by default
-and configurable via an application setting. Include the validation error
-details in the error response.
+Currently, middleware in FastAPI is applied globally via
+`app.add_middleware()`. There is no way to scope middleware to a single
+route or router. Add a `middleware` parameter to `@app.get()`,
+`@app.post()`, and other HTTP method decorators (and to `APIRoute`) that
+applies middleware only to that route. Route-level middleware should
+execute between the global middleware stack and the endpoint handler.
+Requires changes to `routing.py` (`APIRoute.__init__`,
+`get_request_handler`, and the HTTP method decorators) and
+`applications.py` (middleware stack integration).
 
-### M4: Implement WebSocket dependency injection
+### M4: Implement lazy dependency resolution with `Depends(lazy=True)`
 
-WebSocket routes don't support FastAPI's dependency injection system.
-`Depends()` is silently ignored in WebSocket handlers. Implement full
-DI support for WebSocket routes including generator dependencies with
-cleanup, sub-dependencies, and security dependencies.
+Add a `lazy=True` parameter to `Depends()` that defers dependency
+resolution until the result is actually accessed in the endpoint
+function. Currently, all dependencies in the graph are resolved eagerly
+before the endpoint runs, even if some are only needed in certain code
+paths. A lazy dependency should return a lightweight proxy that calls
+the real dependency on first attribute access or invocation. This
+requires changes to `params.py` (add `lazy` to `Depends`),
+`dependencies/models.py` (track lazy flag in `Dependant`), and
+`dependencies/utils.py` (`solve_dependencies` must skip lazy deps
+and inject proxy objects instead).
 
 ### M5: Add automatic request ID propagation
 
@@ -246,14 +278,19 @@ available as a dependency. Add tenant-scoped database connections
 (via dependency injection), tenant-scoped caching, and tenant-specific
 configuration. Include OpenAPI schema generation per tenant.
 
-### W5: Add server-sent events (SSE) with typed channels
+### W5: Expose WebSocket routes in the OpenAPI schema with full metadata
 
-Implement a typed SSE system. Define event channels with Pydantic
-models for event data. Support multiple subscribers per channel,
-automatic reconnection handling (via `Last-Event-ID`), heartbeat
-pings, and backpressure when subscribers are slow. Add test utilities
-for asserting SSE event sequences. Changes span routing, response
-handling, and a new SSE module.
+Currently, `get_openapi_path` in `openapi/utils.py` silently skips
+`APIWebSocketRoute` instances — only `APIRoute` (HTTP) routes appear
+in the generated OpenAPI schema. Implement WebSocket operation
+advertising so that WebSocket endpoints are documented alongside REST
+endpoints. This requires: adding metadata parameters (`tags`,
+`summary`, `description`, `deprecated`, `responses`) to
+`APIWebSocketRoute` in `routing.py`; defining WebSocket-specific
+schema models in `openapi/models.py`; extending `get_openapi_path`
+and `get_openapi` in `openapi/utils.py` to generate operation objects
+for WebSocket routes; and wiring the new schemas into the
+`FastAPI.openapi()` method in `applications.py`.
 
 ### W6: Implement request/response transformation pipeline
 
@@ -281,14 +318,20 @@ client fingerprinting (by API key, user agent). Store in a pluggable
 backend (in-memory, Redis, PostgreSQL). Add an admin endpoint for
 querying analytics data. Support real-time streaming of analytics events.
 
-### W9: Migrate to Pydantic v3 with backward compatibility
+### W9: Add AsyncAPI schema generation for WebSocket and SSE endpoints
 
-Update FastAPI to support Pydantic v3's new API while maintaining
-backward compatibility with Pydantic v2 models. This affects model
-validation, schema generation, serialization, dependency injection
-type resolution, and the OpenAPI schema output. Add a compatibility
-layer that detects the Pydantic version at import time and dispatches
-to the appropriate code path.
+FastAPI generates OpenAPI schemas for HTTP endpoints, but WebSocket
+and SSE endpoints have no machine-readable API documentation. Implement
+AsyncAPI 3.0 schema generation that documents WebSocket message
+formats (inferred from dependency-injected params and return types),
+SSE event channel metadata (from `EventSourceResponse` routes and
+`ServerSentEvent` models), and subscription protocols. This requires:
+a new `asyncapi/` subpackage with schema models and a generation
+function; changes to `routing.py` to capture message type annotations
+on `APIWebSocketRoute`; changes to `sse.py` to expose channel
+metadata; changes to `applications.py` to serve the AsyncAPI schema
+at a configurable path; and changes to `openapi/docs.py` to add an
+AsyncAPI documentation UI endpoint.
 
 ### W10: Implement plugin system for FastAPI extensions
 

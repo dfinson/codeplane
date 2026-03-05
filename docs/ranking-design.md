@@ -522,7 +522,7 @@ ranking/                        # Training pipeline (separate project)
 │   ├── collector.py, collect_signals.py
 │   ├── train_ranker.py, train_cutoff.py, train_gate.py
 │   └── schema.py
-└── data/{repo_id}/             # Ground truth + signals (gitignored)
+└── data/{repo_id}/             # Ground truth + signals (tracked in git)
 
 benchmarking/                   # EVEE evaluation
 ├── datasets/ranking_gt.py

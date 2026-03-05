@@ -27,6 +27,7 @@ from codeplane.mcp.tools.recon.merge import (
     _enrich_candidates,
     _merge_candidates,
 )
+from codeplane.mcp.tools.recon.models import HarvestCandidate
 from codeplane.mcp.tools.recon.parsing import parse_task
 
 if TYPE_CHECKING:
@@ -40,6 +41,8 @@ log = structlog.get_logger(__name__)
 async def _raw_signals_pipeline(
     app_ctx: AppContext,
     query: str,
+    seeds: list[str] | None = None,
+    pins: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run all retrievers and return raw per-def signals without model inference.
 
@@ -61,11 +64,47 @@ async def _raw_signals_pipeline(
     # C: Lexical
     lex_candidates = await _harvest_lexical(app_ctx, parsed)
 
-    # D: Explicit (symbols/paths from query text, no agent seeds)
-    explicit_candidates = await _harvest_explicit(app_ctx, parsed)
+    # D: Explicit (symbols/paths from query text + agent seeds)
+    explicit_candidates = await _harvest_explicit(
+        app_ctx, parsed, explicit_seeds=seeds or None,
+    )
 
     # Merge A-D
     merged = _merge_candidates(emb_candidates, term_candidates, lex_candidates, explicit_candidates)
+
+    # D2: Pin injection — add all defs from pinned files
+    if pins:
+        from codeplane.index._internal.indexing.graph import FactQueries
+        from codeplane.mcp.tools.recon.models import EvidenceRecord
+
+        coordinator = app_ctx.coordinator
+        with coordinator.db.session() as session:
+            fq = FactQueries(session)
+            for pin_path in pins:
+                frec = fq.get_file_by_path(pin_path)
+                if frec is None or frec.id is None:
+                    continue
+                defs_in = fq.list_defs_in_file(frec.id, limit=200)
+                for d in defs_in:
+                    if d.def_uid not in merged:
+                        merged[d.def_uid] = HarvestCandidate(
+                            def_uid=d.def_uid,
+                            def_fact=d,
+                            from_explicit=True,
+                            symbol_source="pin",
+                            evidence=[
+                                EvidenceRecord(
+                                    category="explicit",
+                                    detail=f"pinned path '{pin_path}'",
+                                    score=1.0,
+                                )
+                            ],
+                        )
+                    else:
+                        existing = merged[d.def_uid]
+                        existing.from_explicit = True
+                        if existing.symbol_source is None:
+                            existing.symbol_source = "pin"
 
     # E: Graph walk from top merged candidates
     graph_candidates = await _harvest_graph(app_ctx, merged, parsed)
@@ -232,6 +271,14 @@ def register_raw_signals_tool(mcp: FastMCP, app_ctx: AppContext) -> None:
                 "Used for ranking model training data collection."
             ),
         ),
+        seeds: list[str] = Field(
+            default_factory=list,
+            description="Symbol names to inject as explicit seed candidates.",
+        ),
+        pins: list[str] = Field(
+            default_factory=list,
+            description="File paths to inject as pinned candidates (all defs in each file).",
+        ),
     ) -> dict[str, Any]:
         """Raw retrieval signals for ranking model training.
 
@@ -243,7 +290,11 @@ def register_raw_signals_tool(mcp: FastMCP, app_ctx: AppContext) -> None:
         Does NOT filter, sort, or truncate the candidate pool.
         Returns the raw union of all retriever outputs.
         """
-        result = await _raw_signals_pipeline(app_ctx, query)
+        result = await _raw_signals_pipeline(
+            app_ctx, query,
+            seeds=seeds or None,
+            pins=pins or None,
+        )
 
         from codeplane.mcp.delivery import wrap_response
 
