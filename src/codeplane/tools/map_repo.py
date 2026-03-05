@@ -245,9 +245,12 @@ class RepoMapper:
 
         path_to_lines: dict[str, int | None] = {path: lines for path, _, lines in filtered_files}
 
-        # Get valid contexts
+        # Get valid contexts (deduplicated, empty root renamed)
         ctx_stmt = select(Context.root_path).where(Context.probe_status == ProbeStatus.VALID.value)
-        contexts = list(self._session.exec(ctx_stmt).all())
+        raw_contexts = list(self._session.exec(ctx_stmt).all())
+        contexts = sorted(set(
+            c if c else "root" for c in raw_contexts
+        ))
 
         # Build tree
         root_node = DirectoryNode(

@@ -36,7 +36,7 @@ def wrap_response(
         The response dict, possibly trimmed.
     """
     serialized = json.dumps(data, default=str)
-    if len(serialized) <= max_bytes:
+    if resource_kind == "raw_signals" or len(serialized) <= max_bytes:
         return data
 
     # Trim based on resource kind
@@ -100,17 +100,8 @@ def _trim_repo_map(data: dict[str, Any], budget: int) -> dict[str, Any]:
 
 
 def _trim_raw_signals(data: dict[str, Any], budget: int) -> dict[str, Any]:
-    """Raw signals is dev-mode only. Return summary, not full candidates."""
-    return {
-        "query_features": data.get("query_features"),
-        "repo_features": data.get("repo_features"),
-        "diagnostics": data.get("diagnostics"),
-        "candidate_count": len(data.get("candidates", [])),
-        "hint": (
-            "Raw signals response too large for inline delivery. "
-            "Use collect_signals.py to write candidates to disk instead."
-        ),
-    }
+    """Raw signals has no budget — always return full inline."""
+    return data
 
 
 def _trim_generic(data: dict[str, Any], budget: int) -> dict[str, Any]:

@@ -236,11 +236,9 @@ async def _recon_pipeline(
 
     result_candidates = []
     for idx, (c, s) in enumerate(top_n):
+        loc = f"{c['kind']} {c['name']} {c['path']}:{c['start_line']}-{c['end_line']}"
         entry: dict[str, Any] = {
-            "path": c["path"],
-            "name": c["name"],
-            "kind": c["kind"],
-            "lines": [c["start_line"], c["end_line"]],
+            "loc": loc,
             "score": round(s, 4),
         }
 
@@ -347,12 +345,21 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext, *, dev_mode: bool = False)
         }
 
         if gate == "OK" and results:
-            top_paths = list(dict.fromkeys(r["path"] for r in results[:8]))
+            # Extract unique file paths from loc strings
+            paths = []
+            for r in results[:8]:
+                loc = r.get("loc", "")
+                # loc format: "kind name path:start-end"
+                parts = loc.rsplit(":", 1)
+                if parts:
+                    path = parts[0].rsplit(" ", 1)[-1] if " " in parts[0] else parts[0]
+                    if path not in paths:
+                        paths.append(path)
             n_full = sum(1 for r in results if "snippet" in r)
             n_sig = sum(1 for r in results if "sig" in r)
             hint = (
                 f"{len(results)} spans ({n_full} full, {n_sig} sig-only) "
-                f"in {', '.join(top_paths)}."
+                f"in {', '.join(paths)}."
             )
             if hints:
                 hint += " " + " ".join(hints[:2])
