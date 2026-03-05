@@ -48,78 +48,107 @@ httpx/
 
 ## Narrow
 
-### N1: Fix timeout not propagated on redirect
+### N1: Fix `Content-Type` header not stripped when POST becomes GET on redirect
 
-When a request with a custom timeout follows a 3xx redirect, the timeout
-configuration from the original request is not carried forward to the
-redirected request. The redirected request falls back to the client's default
-timeout instead. Fix the redirect handling to preserve the per-request timeout
-across redirects.
+When a POST request receives a 303 See Other (or a 302/301 that converts to
+GET), `_redirect_headers` in `_client.py` correctly strips `Content-Length`
+and `Transfer-Encoding`, but leaves the `Content-Type` header intact. A
+redirected GET request that carries `Content-Type: application/json` with no
+body is semantically incorrect and confuses some servers. Add `Content-Type`
+to the set of headers stripped in `_redirect_headers` when the method changes
+to GET.
 
-### N2: Add support for reading `.netrc` credentials
+### N2: Add `reason_phrase` fallback for non-standard status codes
 
-httpx should be able to read `~/.netrc` files for automatic authentication
-when no explicit auth is provided. Implement a `.netrc` lookup that runs
-after explicit auth checks but before sending unauthenticated requests.
-Respect the `NETRC` environment variable for custom file paths.
+`codes.get_reason_phrase()` in `_status_codes.py` returns an empty string
+for any status code not in the `codes` IntEnum (e.g., 499, 520). When such
+a response is printed via `Response.__repr__` or used in error messages, the
+empty reason phrase produces output like `<Response [499 ]>`. Add a
+class-based fallback in `get_reason_phrase` — e.g., `"Informational"` for
+1xx, `"Success"` for 2xx, `"Redirection"` for 3xx, `"Client Error"` for
+4xx, `"Server Error"` for 5xx — instead of returning an empty string.
 
-### N3: Fix Content-Length header not removed on 303 redirect
+### N3: Fix `Client.__exit__` not ensuring proxy transport cleanup on error
 
-When a POST request gets a 303 See Other redirect, the method changes to GET
-and the body is dropped — but the `Content-Length` header from the original
-POST is still present in the redirected GET request. Strip `Content-Length`
-(and `Content-Type`) headers when the method changes due to a 303 redirect.
+In both `Client.__exit__` and `AsyncClient.__aexit__`, transport cleanup
+calls are not wrapped in `try/finally`. If `self._transport.__exit__()` (or
+its async variant) raises an exception, the proxy transports in
+`self._mounts` are never closed, leaking connections. Wrap the cleanup
+sequence so that all transports are closed even if one of them raises during
+shutdown.
 
-### N4: Fix proxy CONNECT tunnel not using proxy auth credentials
+### N4: Add `max_redirects` per-request override
 
-When connecting through an HTTP proxy with `proxy_auth`, the CONNECT
-request for HTTPS tunneling does not include the `Proxy-Authorization`
-header. The proxy rejects the tunnel with 407. Fix the proxy transport
-to attach proxy credentials to CONNECT requests.
+The `max_redirects` setting is client-level only (set in the `Client`
+constructor). Unlike `follow_redirects` and `timeout`, which can be
+overridden per-request through `client.get(url, follow_redirects=...)` or
+`client.get(url, timeout=...)`, there is no per-request `max_redirects`
+parameter. Add `max_redirects` as an optional keyword argument on `send()`,
+`request()`, `stream()`, and the convenience methods (`get`, `post`, etc.)
+in both `Client` and `AsyncClient`. When provided, it should override the
+client-level default for that single request.
 
-### N5: Fix `AsyncClient` context manager not closing transport on exception
+### N5: Implement `auth-int` Quality of Protection in `DigestAuth`
 
-If an exception occurs during request processing inside an
-`async with httpx.AsyncClient()` block, the transport connections are
-not properly closed. The `__aexit__` method swallows the close error
-instead of ensuring cleanup. Fix the async context manager to guarantee
-transport closure even when the body raises.
+`DigestAuth._resolve_qop` in `_auth.py` raises `NotImplementedError` when
+the server requires `qop=auth-int`. Implement `auth-int` support per
+RFC 7616 §3.4.3 by changing the A2 computation to
+`method:uri:H(entity-body)` (where `H` is the digest hash of the request
+body). The code currently has a `# TODO: implement auth-int` comment and
+computes A2 as `method:uri` for `qop=auth` only. The request body is
+available via `request.content`.
 
-### N6: Add `follow_redirects` per-request override
+### N6: Add `BearerAuth` authentication class
 
-The `follow_redirects` setting is client-level only. Add support for
-overriding it per request: `client.get(url, follow_redirects=False)`.
-The per-request value should take precedence over the client default.
+The auth module (`_auth.py`) provides `BasicAuth`, `DigestAuth`,
+`FunctionAuth`, and `NetRCAuth`, but has no built-in class for OAuth 2.0
+Bearer token authentication. Add a `BearerAuth(Auth)` class that sets the
+`Authorization: Bearer <token>` header on outgoing requests. Support an
+optional `token_getter` callable parameter: when provided, if the initial
+request gets a 401 response, `BearerAuth` should call `token_getter()` to
+obtain a fresh token and retry the request. Export `BearerAuth` in
+`__init__.py`.
 
-### N7: Fix HTTP/2 connection not reused after receiving GOAWAY
+### N7: Add `default_encoding` parameter to top-level convenience functions
 
-After receiving an HTTP/2 GOAWAY frame, the connection pool creates a
-new connection but doesn't remove the goaway'd connection from the pool.
-Subsequent requests may still be dispatched to the stale connection,
-causing stream errors. Fix the connection pool to evict connections
-that have received GOAWAY.
+The `Client` and `AsyncClient` constructors accept a `default_encoding`
+parameter that controls how response text is decoded when the Content-Type
+header doesn't specify a charset. The top-level convenience functions
+(`httpx.get()`, `httpx.post()`, `httpx.request()`, `httpx.stream()`, etc.)
+in `_api.py` create a temporary `Client` but do not pass `default_encoding`
+through. Add `default_encoding` as an optional parameter on all functions
+in `_api.py` and forward it to the `Client` constructor.
 
-### N8: Add `client.head()` convenience method
+### N8: Add `secure`, `expires`, and `httponly` parameters to `Cookies.set()`
 
-The client has `get()`, `post()`, `put()`, `delete()`, `patch()`, and
-`options()` convenience methods but not `head()`. Add `client.head()`
-and `async_client.head()` that send HEAD requests with the same
-parameter signature as `get()`.
+`Cookies.set()` in `_models.py` accepts only `name`, `value`, `domain`, and
+`path`. The underlying `Cookie` kwargs hardcode `secure=False`,
+`expires=None`, and `rest={"HttpOnly": None}` with no way for users to
+control these attributes. Add optional `secure: bool = False`,
+`expires: int | None = None`, and `httponly: bool = False` parameters to
+`Cookies.set()`, wiring them through to the `Cookie` constructor call.
 
-### N9: Fix URL encoding of path segments with unicode characters
+### N9: Fix `WSGITransport` not forwarding reason phrase from WSGI status line
 
-URLs with unicode characters in path segments (e.g., `/api/users/José`)
-are double-encoded when the path is already percent-encoded. The URL
-parser applies percent-encoding without checking if the segment is
-already encoded. Fix `_urls.py` to detect and skip already-encoded
-segments.
+`WSGITransport.handle_request()` in `_transports/wsgi.py` parses the WSGI
+status string (e.g., `"200 OK"`) and extracts only the integer status code
+via `int(seen_status.split()[0])`, discarding the reason phrase. The
+returned `Response` has no `extensions` dict, so `response.reason_phrase`
+falls back to the built-in lookup in `_status_codes.py` rather than using
+the actual phrase from the WSGI app. Parse the reason phrase from the status
+string and include it (along with `http_version`) in
+`Response(extensions={"reason_phrase": ..., "http_version": ...})`.
 
-### N10: Fix `Response.raise_for_status()` losing response body
+### N10: Fix `_guess_content_type` returning `None` for files without extensions
 
-When `raise_for_status()` raises an `HTTPStatusError`, the response body
-has already been consumed and cannot be read from the exception's
-`response` attribute. Capture the body text before raising so it's
-available via `exc.response.text`.
+In `_multipart.py`, `_guess_content_type(filename)` returns `None` when
+`mimetypes.guess_type()` cannot determine the type — for example when the
+filename has no extension (like `"upload"` or `"Makefile"`). When this
+happens, `FileField` omits the `Content-Type` header entirely from that
+multipart part, which is non-conformant with RFC 2388 §3 (which specifies
+a default of `application/octet-stream`). Add a fallback to
+`application/octet-stream` in `_guess_content_type` when the file content
+is binary and the type cannot be guessed from the filename.
 
 ## Medium
 
@@ -140,13 +169,18 @@ transport layer stops reading from the socket. This requires changes to the
 transport interface, the response streaming API, and the HTTP/1.1 and HTTP/2
 transport implementations.
 
-### M3: Add request/response event hooks
+### M3: Extend event hooks with `on_error` and `on_redirect` lifecycle events
 
-Add an event hook system that fires callbacks at key points in the request
-lifecycle: before-request, after-response, on-error, on-redirect. Hooks
-should be configurable at both the client level and per-request level.
-Per-request hooks should run in addition to (not replacing) client-level
-hooks. Async hooks should be supported in the async client.
+The existing event hook system in `_client.py` supports only `request` and
+`response` hooks (registered via `event_hooks={"request": [...], "response":
+[...]}`). Add two new hook types: `on_error` hooks that fire when a request
+fails with a `TransportError` or other exception (receiving the request and
+the exception), and `on_redirect` hooks that fire when a redirect is followed
+(receiving the original request, the redirect response, and the new URL).
+Update the `_event_hooks` dict initialization, the `event_hooks` property
+setter validation, the redirect handling loop in
+`_send_handling_redirects`, and the error paths in `_send_handling_auth`.
+Support async hook callables in `AsyncClient`.
 
 ### M4: Implement connection pool warm-up
 
@@ -170,12 +204,17 @@ Add a `PersistentCookieJar` that saves and loads cookies to/from a file
 scoping, and secure-only cookies. The jar should auto-save on changes
 and load on initialization. Add a `clear_session_cookies()` method.
 
-### M7: Add SOCKS5 proxy support
+### M7: Add transport-level request/response logging wrapper
 
-Implement SOCKS5 proxy support in the transport layer. Support
-SOCKS5 with username/password authentication and SOCKS5 without auth.
-Support both IPv4 and IPv6 through the SOCKS proxy. Add configuration
-via `proxy="socks5://host:port"` in the client constructor.
+Implement a `LoggingTransport` that wraps any `BaseTransport` or
+`AsyncBaseTransport` and logs structured information about each
+request/response cycle using Python's `logging` module. Log the request
+method, URL, headers (with sensitive headers obfuscated using the existing
+`_obfuscate_sensitive_headers` helper from `_models.py`), response status,
+response headers, and elapsed time. Support configurable log level and
+logger name. Add a `log_transport: bool = False` option to `Client` and
+`AsyncClient` that automatically wraps the configured transport with
+`LoggingTransport`. Place the new transport in `_transports/logging.py`.
 
 ### M8: Implement request signing for AWS Signature V4
 
@@ -255,14 +294,22 @@ Support both recording and playback (useful for testing). Changes
 span the transport layer, response model (timing metadata), and
 a new HAR serialization module.
 
-### W7: Add mutual TLS (mTLS) client certificate support
+### W7: Add per-request SSL context selection and TLS diagnostics
 
-Implement client certificate authentication. Support PEM and PKCS#12
-certificate formats, passphrase-protected keys, certificate chain
-validation, and per-request certificate selection. The implementation
-needs changes to SSL configuration, transport TLS setup, and connection
-pool management (certificates affect connection reuse). Add certificate
-rotation without client restart.
+The current SSL configuration in `_config.py` uses a single
+`create_ssl_context()` at client construction time, shared by all requests.
+Implement per-request SSL context override via a new
+`request.extensions["ssl_context"]` key, allowing different client
+certificates and verification settings for different endpoints. Add a
+`CertificatePool` class in `_config.py` that maps URL patterns to SSL
+contexts, integrated with the existing `_mounts` routing system in
+`_client.py`. Expose TLS connection metadata (peer certificate, cipher
+suite, TLS version) on responses via `response.extensions["tls_info"]` by
+extending the `HTTPTransport` and `AsyncHTTPTransport` wrappers in
+`_transports/default.py`. Update the `WSGITransport` and `ASGITransport`
+to populate stub TLS info for testing. This crosses `_config.py`,
+`_types.py`, `_client.py`, `_transports/default.py`, `_transports/wsgi.py`,
+`_transports/asgi.py`, and `_models.py`.
 
 ### W8: Implement HTTP caching proxy mode
 

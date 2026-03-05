@@ -43,22 +43,45 @@ Five retrieval sources produce candidates:
 
 ### 1.3 Query Tiers
 
-Five OK query tiers, each designed to exercise a different retrieval signal
-combination:
+Eight OK query tiers: five isolation tiers (each exercises a single retrieval
+signal) and three combination tiers (exercise multi-signal agreement).
+Seeds and pins are passed as separate arguments alongside the query text,
+matching the production `recon` and `recon_raw_signals` API signatures.
 
-| Tier | Name | Design intent | Primary harvester exercised |
-|------|------|--------------|----------------------------|
-| **Q-semantic** | Semantic | Domain-level description only — no identifiers, no paths, no code terms | Embedding (must match on meaning alone) |
-| **Q-lexical** | Lexical | Uses terms/phrases that appear literally in the code — error messages, log strings, comments, docstrings | Lexical / Tantivy (full-text hits) |
-| **Q-identifier** | Identifier | Uses exact symbol names — function, class, method, variable names from the touched code | Term match (SQL LIKE + IDF on DefFact names) |
-| **Q-structural** | Structural | References callers, callees, parent classes, inheritance, module relationships | Graph (1-hop structural walk) |
-| **Q-navigational** | Navigational | Uses file paths, module paths, or explicit symbol resolution anchors | Symbol/explicit (direct path/symbol resolution) |
+**Isolation tiers** (one signal each):
 
-Each tier isolates a different harvester as the primary signal source. The
-ranker sees training examples where each retriever has the strongest signal,
-and examples where multiple retrievers agree or disagree.
+| Tier | Name | Primary signal | Seeds | Pins |
+|------|------|---------------|-------|------|
+| **Q_SEMANTIC** | Semantic | Embedding | none | none |
+| **Q_LEXICAL** | Lexical | Full-text / Tantivy | none | none |
+| **Q_IDENTIFIER** | Identifier | Term match (SQL LIKE) | none | none |
+| **Q_STRUCTURAL** | Structural | Graph (1-hop walk) | 1–2 | none |
+| **Q_NAVIGATIONAL** | Navigational | Explicit path/symbol resolution | none | 2–4 |
 
-### 1.3 Gate Taxonomy
+**Combination tiers** (multi-signal):
+
+| Tier | Name | Signals combined | Seeds | Pins |
+|------|------|-----------------|-------|------|
+| **Q_SEM_IDENT** | Semantic + Identifier | Embedding + term match | 2–3 | none |
+| **Q_IDENT_NAV** | Identifier + Navigational | Term match + explicit | 2–4 | 2–4 |
+| **Q_FULL** | Full signal | All signals | 2–4 | 2–4 |
+
+Isolation tiers ensure the ranker sees examples where individual signals
+dominate. Combination tiers ensure it learns when multi-signal agreement
+is predictive. Q_IDENT_NAV and Q_FULL mirror how agents actually call
+recon in production (after `map_repo` provides symbols and paths).
+
+**Non-OK tiers** (up to 2 each, optional — skip if forced):
+
+| Tier | Definition |
+|------|------------|
+| **UNSAT** | Query makes factually wrong assumptions about the repo |
+| **BROAD** | Work spanning 15+ files in 3+ unrelated directories |
+| **AMBIG** | 2+ subsystems could be the target; query doesn’t specify which |
+
+Total per task: 8 required OK + 0–6 optional non-OK = 8–14 queries.
+
+### 1.4 Gate Taxonomy
 
 Four labels, defined as properties of the **(query, repo) pair**:
 
@@ -208,10 +231,10 @@ $P(\text{touched} \mid q, o)$.
 | `query_len` | Query | Query character length |
 | `has_identifier` | Query | Query contains identifier-like tokens |
 | `has_path` | Query | Query contains file path references |
-| `label_rank` | Ground truth | Graded: edited > read-necessary > untouched (ordinal) |
+| `label_relevant` | Ground truth | Binary: relevant (1) or irrelevant (0) |
 
-**Training:** Group by `(run_id, query_id)`. Optimize NDCG. Only OK-labeled
-queries participate.
+**Training:** Group by `(run_id, query_id)`. Optimize NDCG with binary gain.
+Only OK-labeled queries participate.
 
 **Inference:** Score all candidates in the pool, sort descending, pass to cutoff.
 
@@ -371,11 +394,7 @@ as ranker+gate. Held out from training for unbiased evaluation.
    - Code is reasonably well-structured (not a single monolithic file,
      not entirely generated code).
 
-3. **History richness:**
-   - Repo has meaningful commit/PR history — enough that a task-authoring
-     agent can study real development patterns to generate realistic tasks.
-
-4. **Open source and permissively licensed** — training data must be usable
+3. **Open source and permissively licensed** — training data must be usable
    under the repo's license.
 
 **Validation (one-time, post-selection):** After indexing all 65 repos, confirm
@@ -390,10 +409,9 @@ clusters, swap repos to increase diversity.
 
 **Process:**
 
-1. Index the repo via codeplane. Explore structure: module layout, key
-   abstractions, patterns.
-2. Read recent commit messages and PR descriptions for flavor of real work.
-3. Generate tasks across a range of scopes:
+1. Read the cloned source code. Explore module layout, key abstractions,
+   file organization, and code patterns.
+2. Generate tasks across a range of scopes:
    - **Narrow** — bug fix or small feature touching one or two files.
    - **Medium** — feature or refactor spanning a module or subsystem.
    - **Wide** — cross-cutting change touching multiple subsystems.
@@ -406,8 +424,16 @@ clusters, swap repos to increase diversity.
    an issue or task assignment. No code, no diffs, no hints about which files
    to touch.
 
-**Quality gate:** A review pass verifies each task is (a) well-defined enough
-to start, (b) grounded in the actual codebase, (c) scoped as intended.
+**Quality gate:** Each task must be:
+(a) well-defined enough to start without clarifying questions,
+(b) grounded in the actual source tree — referencing real modules,
+    real architectural boundaries, and real behavioral patterns that
+    exist in the cloned code,
+(c) scoped correctly for its tier (narrow: 1-2 files, medium: one
+    module/subsystem, wide: cross-cutting across multiple subsystems),
+(d) designed to produce good queries — the agent solving the task
+    should be able to write queries that exercise all eight query
+    tiers (5 isolation + 3 combination, see §1.3).
 
 ### 5.3 Data Collection Pipeline
 
@@ -418,114 +444,215 @@ Two independent phases with separate outputs:
 
 #### Phase 1+2: Solve + Reflect (Ground Truth)
 
-One agent session per repo. The agent receives a single prompt pointing
-it at the repo's MD file (`ranking/repos/{name}.md`) and the output
-directory. It reads the file, works through every task sequentially,
-and writes structured output per task.
+One agent session per repo. The agent receives a single prompt and works
+through every task sequentially, producing structured ground truth output.
 
 **Agent prompt** (one per repo, sent once):
 
 ```
-You are a coding agent working on the repository cloned at
-ranking/clones/{clone_name}/.
+Read the file at ../../repos/{name}.md and understand it fully.
 
-Read the file ranking/repos/{name}.md — it contains a description of the
-repository structure and a list of tasks (sections N1, N2, ..., M1, ...,
-W1, ...).
+Solve each task using native tools. After solving each task (but before
+stashing), produce the ground truth record.
 
-For EACH task in the file, do the following:
+For EACH task in the file:
 
-  STEP 1 — SOLVE: Read the code you need, make the necessary edits, and
-  verify they work. Use the tools available to you (file reads, edits,
-  terminal). When the task is complete, capture a git diff, then
-  `git stash` to restore the repo to its clean state before starting
-  the next task.
+  STEP 1 — SOLVE
+  Read the code, make edits, verify they work. Capture a git diff.
+  Then git stash to restore clean state before the next task.
 
-  STEP 2 — REFLECT: After solving (but before stashing), write a JSON
-  file to ranking/data/{repo_id}/ground_truth/{task_id}.json with this
-  exact structure:
+  STEP 2 — REFLECT
+  Write a JSON file to ../../data/{repo_id}/ground_truth/{task_id}.json.
+
+  GROUND TRUTH FORMAT:
 
   {
     "task_id": "N1",
-    "task_text": "<the full task description from the md file>",
-    "edited_files": ["path/to/file1.py", "path/to/file2.py"],
-    "read_necessary": ["path/to/file3.py", "path/to/file4.py"],
+    "task_text": "<full task description from the md file>",
+    "relevant_defs": [
+      {"path": "<repo-relative path>", "name": "<def name>", "kind": "<kind>"}
+    ],
     "queries": [
-      {"query_type": "Q_SEMANTIC", "query_text": "..."},
-      {"query_type": "Q_LEXICAL", "query_text": "..."},
-      {"query_type": "Q_IDENTIFIER", "query_text": "..."},
-      {"query_type": "Q_STRUCTURAL", "query_text": "..."},
-      {"query_type": "Q_NAVIGATIONAL", "query_text": "..."},
-      {"query_type": "UNSAT", "query_text": "..."},
-      {"query_type": "BROAD", "query_text": "..."},
-      {"query_type": "AMBIG", "query_text": "..."}
+      {"query_type": "Q_SEMANTIC", "query_text": "...", "seeds": [], "pins": []},
+      ...
     ]
   }
 
-  Fields:
-  - task_id: the task ID from the heading (N1, M1, W2, etc.)
-  - task_text: the full task description text
-  - edited_files: files you modified (from your diff)
-  - read_necessary: files you read that were genuinely necessary to
-    understand or solve the task — NOT files you opened and immediately
-    closed or explored out of curiosity. Do NOT include edited files
-    here (they are tracked separately).
-  - queries: 5 to 14 query objects:
+  FIELD DEFINITIONS:
 
-    FIVE OK queries, each targeting a different retrieval signal:
+  task_id: The heading ID from the md file (N1, M1, W2, etc.)
 
-    - Q_SEMANTIC: Domain-level description only. No identifiers, no
-      file paths, no code-specific terms. Describe the problem in
-      plain English so that only semantic similarity can find the
-      right code.
+  task_text: The full task description text, verbatim.
 
-    - Q_LEXICAL: Use terms or phrases that appear literally in the
-      source code — error messages, log strings, comments, docstrings,
-      string literals — so that full-text search would find matches.
+  relevant_defs: Every function, method, class, or definition that was
+  RELEVANT to solving this task. This includes:
+    - Defs you EDITED (changed their code)
+    - Defs you READ because understanding them was necessary to make
+      the correct change (contracts, interfaces, callers, base classes,
+      related config)
 
-    - Q_IDENTIFIER: Use exact symbol names — function, class, method,
-      or variable names — from the code you actually touched. These
-      are the names a developer would type into a symbol search.
+  Do NOT include:
+    - Defs you opened and immediately closed without using
+    - Defs you skimmed out of curiosity but didn't need
+    - Entire files — list specific defs, not "everything in file X"
 
-    - Q_STRUCTURAL: Reference structural relationships — "the callers
-      of X", "methods that override Y", "the class that implements Z",
-      "siblings of W in the module hierarchy." Describe the code via
-      its call graph or inheritance relationships.
+  Each entry has:
+    - path: repo-relative file path (e.g. "src/auth/middleware.py")
+    - name: the definition's simple name (e.g. "check_rate")
+    - kind: one of: function, method, class, struct, interface, trait,
+      enum, variable, constant, module, property, pair, key, table,
+      target, heading
 
-    - Q_NAVIGATIONAL: Use explicit file paths, module paths, or
-      directory locations — "in src/auth/middleware.py",
-      "the handlers under api/v2/". A developer who knows the
-      file system layout would navigate directly.
+  If you edited a method inside a class, list the METHOD. Only list
+  the parent class if you also needed its class-level code (class
+  variables, __init__, decorators, etc.).
 
-    UP TO THREE of EACH non-OK query type (skip any that feel forced):
+  WHY THIS MATTERS: This list becomes the ground truth label for
+  training a ranking model. Every def you list will be labeled
+  "relevant." Every def you omit will be labeled "irrelevant." If
+  you include junk, the model learns to surface junk. If you miss
+  something genuinely needed, the model learns to miss it. Be precise.
 
-    - UNSAT (up to 3): Plausible queries about the same area that make
-      factually wrong assumptions about the architecture.
-    - BROAD (up to 3): Large efforts this task is part of — touching
-      many files across subsystems. Too big for one task.
-    - AMBIG (up to 3): Same domain, but this repo has multiple
-      subsystems that could be the target and the query doesn't
-      resolve between them.
+  SEED AND PIN RULES:
+  - seeds: symbol names from the code you touched. Pick the 1-4 MOST
+    CENTRAL ones — what a developer would know from the task
+    description or from running map_repo before starting work.
+    Do NOT include every helper that got touched.
+  - pins: repo-relative file paths. Pick the 2-4 MOST OBVIOUS files
+    — what a developer could identify from the task description or
+    repo structure before starting work.
+  - Seeds and pins represent what a developer knows GOING IN, not
+    perfect hindsight of the full answer.
 
-    You MUST produce all 5 OK queries. Non-OK queries are optional —
-    produce only those that arise naturally. Fewer is better than forced.
+  THE 8 OK QUERY TYPES (ALL 8 REQUIRED):
 
-Work through every task in the file. After completing all tasks, say
+  Q_SEMANTIC (isolation — embedding only):
+    Describe the problem using ONLY domain/business concepts.
+    FORBIDDEN: symbol names, file paths, code terms, language keywords.
+    REQUIRED: a description that a non-programmer could understand.
+    seeds: []  pins: []
+    Example: "The component that limits how many API requests a client
+    can make within a time window"
+
+  Q_LEXICAL (isolation — full-text only):
+    Use strings that appear LITERALLY in the source code.
+    REQUIRED: at least one phrase in quotes that grep would find —
+    an error message, log string, comment, docstring, or string literal.
+    FORBIDDEN: symbol names that don't appear as literal strings.
+    seeds: []  pins: []
+    Example: 'The code that raises "rate limit exceeded for client"'
+
+  Q_IDENTIFIER (isolation — term match only):
+    List exact symbol names from the code you touched.
+    REQUIRED: at least 3 symbol names, comma-separated.
+    FORBIDDEN: file paths, English descriptions, relationship words.
+    seeds: []  pins: []
+    Example: "RateLimiter, check_rate, _sliding_window_count,
+    MAX_REQUESTS_PER_WINDOW"
+
+  Q_STRUCTURAL (isolation — graph only):
+    Describe the code through structural relationships.
+    REQUIRED: at least one concrete symbol AND a relationship word
+    (callers, callees, subclasses, implementors, siblings, imports,
+    parent class).
+    seeds: 1-2 (the entry points for graph traversal)
+    pins: []
+    Example: "The callers of RateLimiter.check_rate and the class
+    that RateLimiter inherits from"
+
+  Q_NAVIGATIONAL (isolation — explicit/path only):
+    Use explicit file paths and directory locations.
+    REQUIRED: at least 2 file paths from the files you touched.
+    FORBIDDEN: domain descriptions, relationship words.
+    seeds: []
+    pins: 2-4 file paths from your solution
+    Example: "In src/auth/middleware.py, src/auth/config.py, and
+    tests/auth/test_middleware.py"
+
+  Q_SEM_IDENT (combination — embedding + term match):
+    Domain description that also names key symbols naturally.
+    REQUIRED: mix domain concepts with 2-3 exact symbol names in a
+    natural sentence.
+    seeds: 2-3 of the symbols mentioned
+    pins: []
+    Example: "The rate limiting middleware, specifically
+    RateLimiter.check_rate and the sliding window logic"
+
+  Q_IDENT_NAV (combination — term match + explicit):
+    Symbol names with file paths. This is how agents typically call
+    recon after running map_repo.
+    REQUIRED: 2+ symbol names AND 2+ file paths.
+    seeds: 2-4 symbol names
+    pins: 2-4 file paths
+    Example: "RateLimiter and check_rate in src/auth/middleware.py,
+    with tests in tests/auth/test_middleware.py"
+
+  Q_FULL (combination — all signals):
+    Natural developer query. No constraints. Use whatever information
+    a developer who understood the task would write.
+    seeds: 2-4 central symbol names
+    pins: 2-4 key file paths
+    Example: "I need to fix the rate limiting in
+    src/auth/middleware.py — the RateLimiter.check_rate method uses
+    a sliding window but doesn't handle the counter wrap edge case.
+    The callers in the API handlers need updating too."
+
+  NON-OK QUERIES (optional — only those that arise naturally):
+
+  UNSAT (up to 2):
+    A plausible query with a FACTUALLY WRONG assumption about this
+    repo — references a class, module, or dependency that doesn't
+    exist. Must sound believable.
+    seeds: []  pins: []
+    SKIP if you can't think of a natural one.
+
+  BROAD (up to 2):
+    Work requiring changes across 15+ files in 3+ unrelated
+    directories. Must be plausible for this repo.
+    seeds: []  pins: []
+    SKIP if the task doesn't suggest a broader effort.
+
+  AMBIG (up to 2):
+    A query where this repo has 2+ subsystems that could each be
+    the target, and the query doesn't specify which.
+    seeds: []  pins: []
+    SKIP if the repo lacks genuine ambiguity for this task.
+
+  STEP 3 — VALIDATE (second pass, do this AFTER writing the JSON)
+  Re-read your JSON file and verify:
+    1. relevant_defs: Did you include every def you genuinely needed?
+       Did you accidentally include defs you only glanced at? Open
+       your diff — every changed function/method/class should appear.
+       Then check: what did you READ to understand the change? Those
+       should appear too. Remove anything you didn't actually use.
+    2. queries: Does each query follow its REQUIRED/FORBIDDEN rules?
+       Read each query aloud — would a different developer, given
+       only that query (plus its seeds/pins), find the same code?
+    3. seeds/pins: Are they what you'd know BEFORE solving, not after?
+       If a seed or pin only became apparent during implementation,
+       remove it.
+    4. Completeness: Do you have exactly 8 OK queries? Are query_type
+       values exact strings (Q_SEMANTIC, Q_LEXICAL, etc.)?
+
+  Fix any issues found in validation before moving to the next task.
+
+Work through every task sequentially. After all tasks, say
 "ALL TASKS COMPLETE".
 ```
 
-The `{name}`, `{clone_name}`, and `{repo_id}` placeholders are filled
-from the repo's MD file metadata. The agent produces one JSON file per
-task under `ranking/data/{repo_id}/ground_truth/`.
+The `{name}` and `{repo_id}` placeholders are filled from the repo's
+MD file metadata. The agent produces one JSON file per task under
+`../../data/{repo_id}/ground_truth/`.
 
-After all JSON files are written, a post-processing step:
+**Post-processing** (automated, after agent completes all tasks):
 
-1. Extracts `edited_files` per task, maps changed lines to DefFacts via
-   the codeplane index → "edited" TouchedObjects.
-2. Maps `read_necessary` paths to DefFacts → "read_necessary"
-   TouchedObjects.
-3. Assembles `runs.jsonl`, `touched_objects.jsonl`, `queries.jsonl`
+1. For each `(path, name, kind)` in `relevant_defs`: look up in the
+   codeplane index → resolve `def_uid`, `start_line`, `end_line`.
+2. If a triple doesn't match any indexed def, flag for review (typo,
+   unindexed file, or hallucination).
+3. Assemble `runs.jsonl`, `touched_objects.jsonl`, `queries.jsonl`
    from the per-task JSON files.
+4. Summary report: N tasks, N defs total, N unmatched (should be <2%).
 
 **Output:** `runs.jsonl`, `touched_objects.jsonl`, `queries.jsonl` under
 `data/{repo_id}/ground_truth/`. This data is permanent — it never needs
@@ -537,21 +664,34 @@ A separate step, run against the indexed repo:
 
 **3a. Raw signal collection:**
 
-For **each query** in the ground truth (3 OK + up to 3 bad), call
-`recon_raw_signals(query)`. This returns the candidate pool with per-retriever
-scores for all queries — including bad ones, because the gate model needs to
-learn what each class looks like from the retrieval distribution.
+For **each query** in the ground truth, call `recon_raw_signals` with
+the query's seeds and pins as separate arguments:
+
+```
+recon_raw_signals(query=query_text, seeds=seeds, pins=pins)
+```
+
+This returns the candidate pool with per-retriever signals for all
+queries — including non-OK ones, because the gate model needs to learn
+what each class looks like from the retrieval distribution.
+
+Seeds and pins affect the candidate pool: seeded symbols enter via
+the explicit harvester (`symbol_source="agent_seed"`), pinned file
+paths inject all defs from those files (`symbol_source="pin"`). This
+means the candidate pool differs per query type — which is exactly
+what the ranker needs for learning.
 
 **3b. Label joining and validation:**
 
-Join raw signal output with ground-truth labels to compute `label_rank`
-per candidate. For gate labels, validate that the retrieval distribution
+Join raw signal output with ground-truth labels to compute
+`label_relevant` per candidate (binary: def_uid in touched_objects
+or not). For gate labels, validate that the retrieval distribution
 is consistent with the authored label:
 
-- **OK**: top candidates concentrate around the touched set.
+- **OK**: top candidates overlap with the relevant set.
 - **UNSAT**: top candidates are low-confidence or irrelevant.
-- **BROAD**: top candidates cover only a fraction of what the broad task
-  would touch.
+- **BROAD**: top candidates cover only a fraction of what the broad
+  task would touch.
 - **AMBIG**: top candidates cluster in multiple disjoint regions.
 
 If inconsistent, flag for review (ground truth is not re-authored —
@@ -647,16 +787,19 @@ truncate the candidate pool. Returns the raw union.
 
 ### 7.2 `touched_objects`
 
+One row per relevant def per task. Only relevant defs appear — absence
+means irrelevant. No edit/read distinction: recon answers “what context
+is relevant,” not “what will be edited.”
+
 | Column | Type | Description |
 |--------|------|-------------|
 | `run_id` | str | Task run identifier |
-| `def_uid` | str | DefFact stable identity |
+| `def_uid` | str | DefFact stable identity (joined from index via path+name+kind) |
 | `path` | str | File path |
 | `kind` | str | DefFact kind |
 | `name` | str | DefFact name |
-| `start_line` | int | Span start |
-| `end_line` | int | Span end |
-| `touch_type` | str | `edited` / `read_necessary` |
+| `start_line` | int | Span start (from index) |
+| `end_line` | int | Span end (from index) |
 
 ### 7.3 `queries`
 
@@ -665,7 +808,9 @@ truncate the candidate pool. Returns the raw union.
 | `run_id` | str | Task run identifier |
 | `query_id` | str | Unique query identifier |
 | `query_text` | str | Full query text |
-| `query_type` | str | `Q_SEMANTIC` / `Q_LEXICAL` / `Q_IDENTIFIER` / `Q_STRUCTURAL` / `Q_NAVIGATIONAL` (for OK) or `UNSAT` / `BROAD` / `AMBIG` |
+| `query_type` | str | `Q_SEMANTIC` / `Q_LEXICAL` / `Q_IDENTIFIER` / `Q_STRUCTURAL` / `Q_NAVIGATIONAL` / `Q_SEM_IDENT` / `Q_IDENT_NAV` / `Q_FULL` / `UNSAT` / `BROAD` / `AMBIG` |
+| `seeds` | list[str] | Symbol names passed as seeds (empty for isolation queries without seeds) |
+| `pins` | list[str] | File paths passed as pins (empty for queries without pins) |
 | `label_gate` | str | `OK` / `UNSAT` / `BROAD` / `AMBIG` |
 
 ### 7.4 `candidates_rank`
@@ -695,7 +840,7 @@ training (OK queries only) and gate feature computation (all queries).
 | `query_len` | int | Query length |
 | `has_identifier` | bool | Query has identifiers |
 | `has_path` | bool | Query has paths |
-| `label_rank` | int | Graded: edited > read-necessary > untouched |
+| `label_relevant` | bool | True if this def_uid is in touched_objects for this run |
 
 ### 7.5 `queries_cutoff`
 
@@ -732,7 +877,7 @@ One row per query. All query types.
 
 1. Filter to OK-labeled queries only.
 2. Train LightGBM LambdaMART grouped by `(run_id, query_id)`.
-3. Optimize NDCG with graded relevance labels.
+3. Optimize NDCG with binary relevance labels.
 
 ### 8.2 Cutoff (no-leakage K-fold across all 50 repos)
 
@@ -1097,17 +1242,17 @@ retriever_hits        # count of retrievers that found this def (0-6)
 ### 13.4 Binary Relevance Output
 
 The system is a **context retrieval** tool. The agent decides what to edit.
-The system surfaces the full working set.
+The system surfaces the full working set — everything relevant to the task.
 
-**Training label:** binary `relevant` (1) vs `irrelevant` (0). A def is
-relevant if it was edited OR read-necessary.
+**Ground truth label:** binary `relevant` (1) vs `irrelevant` (0). A def
+is relevant if it appears in `relevant_defs` for this task. There is no
+edit/read distinction — recon answers "what context is needed," not "what
+will be edited."
 
-**Training objective:** NDCG with graded gain (edited=3, read_necessary=2,
-irrelevant=0) for richer learning signal. But the output is a single
-ranked list with no edit/read distinction.
+**Training objective:** LambdaMART with binary gain.
 
-**Output to agent:** ranked defs grouped by file. No "edit first" /
-"read before edit" split.
+**Output to agent:** ranked defs grouped by file. Single list, no
+categories.
 
 ### 13.5 Non-Code File Handling
 
