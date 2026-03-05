@@ -272,52 +272,6 @@ _PATH_STOP_TOKENS = frozenset(
 
 
 # ===================================================================
-# OutputTier — file-level output fidelity tier
-# ===================================================================
-
-
-class OutputTier(StrEnum):
-    """Output fidelity tier for a file.
-
-    Internal model uses 3 tiers for co-retrieval decisions:
-      FULL_FILE    — above elbow-1 (highest priority, rank 0)
-      MIN_SCAFFOLD — between elbows (medium priority, rank 1)
-      SUMMARY_ONLY — below elbow-2 (lowest priority, rank 2)
-
-    API output uses 2 tiers (via ``api_value``):
-      "scaffold" (FULL_FILE or MIN_SCAFFOLD)
-      "lite"     (SUMMARY_ONLY)
-
-    Use ``tier.rank`` for tier precedence comparisons (lower = higher priority).
-    Use ``tier.api_value`` for the 2-tier output label.
-    """
-
-    FULL_FILE = "full_file"
-    MIN_SCAFFOLD = "min_scaffold"
-    SUMMARY_ONLY = "summary_only"
-
-    # Convenience aliases for the 2-tier output model
-    SCAFFOLD = "min_scaffold"
-    LITE = "summary_only"
-
-    @property
-    def rank(self) -> int:
-        """Tier precedence: lower = higher priority."""
-        _RANKS = {"full_file": 0, "min_scaffold": 1, "summary_only": 2}
-        return _RANKS.get(self.value, 2)
-
-    @property
-    def api_value(self) -> str:
-        """2-tier label for API output: 'scaffold' or 'lite'."""
-        return "scaffold" if self.rank <= 1 else "lite"
-
-    @property
-    def is_scaffold(self) -> bool:
-        """True if this tier maps to 'scaffold' in API output."""
-        return self.rank <= 1
-
-
-# ===================================================================
 # ArtifactKind — classify what kind of artifact a definition lives in
 # ===================================================================
 
@@ -516,8 +470,6 @@ class HarvestCandidate:
     # Harvester-specific scores
     matched_terms: set[str] = field(default_factory=set)
     lexical_hit_count: int = 0
-    term_idf_score: float = 0.0  # IDF-weighted term relevance (used by production RRF)
-    graph_quality: float = 0.0  # Graded edge quality (used by production RRF)
 
     # Raw signal fields for ranking model training
     term_match_count: int = 0  # Raw count of query terms matching this def's name
@@ -643,58 +595,6 @@ class ParsedTask:
 
 
 # ===================================================================
-# FileCandidate — file-level candidate from embedding + secondary signals
-# ===================================================================
-
-
-@dataclass
-class FileCandidate:
-    """A file-level candidate produced by file-embedding search + secondary signals.
-
-    Unlike def-level ``HarvestCandidate``, this represents an entire file.
-    The ``tier`` is assigned by two-elbow detection after scoring.
-    """
-
-    path: str
-    similarity: float = 0.0  # Cosine similarity from file-level embedding
-    tier: OutputTier = OutputTier.SUMMARY_ONLY
-
-    # Unique identifier assigned during recon pipeline assembly.
-    # Used by refactor_plan to validate that the agent is requesting
-    # files that originate from a recon result (not arbitrary paths).
-    candidate_id: str = ""
-
-    # Secondary signal reinforcements (from existing harvesters)
-    term_match_count: int = 0  # Number of query terms found in file defs
-    lexical_hit_count: int = 0  # Tantivy full-text hits in this file
-    has_explicit_mention: bool = False  # Agent mentioned this file
-    graph_connected: bool = False  # Connected via graph walk
-    graph_quality: float = 0.0  # Graded edge quality for RRF ranking
-    artifact_kind: ArtifactKind = ArtifactKind.code
-
-    # Composite score (similarity + secondary signals)
-    combined_score: float = 0.0
-
-    # Expand reason for agent hint
-    expand_reason: str = ""
-
-    @property
-    def evidence_summary(self) -> str:
-        """Compact one-line evidence string."""
-        parts: list[str] = []
-        if self.similarity > 0:
-            parts.append(f"sim({self.similarity:.2f})")
-        if self.term_match_count > 0:
-            parts.append(f"terms({self.term_match_count})")
-        if self.lexical_hit_count > 0:
-            parts.append(f"lex({self.lexical_hit_count})")
-        if self.has_explicit_mention:
-            parts.append("explicit")
-        if self.graph_connected:
-            parts.append("graph")
-        return " ".join(parts)
-
-
 # ===================================================================
 # File-type classifiers
 # ===================================================================

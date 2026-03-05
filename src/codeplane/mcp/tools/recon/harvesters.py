@@ -14,7 +14,6 @@ import structlog
 
 from codeplane.mcp.tools.recon.models import (
     EvidenceRecord,
-    FileCandidate,
     HarvestCandidate,
     _classify_artifact,
 )
@@ -30,79 +29,6 @@ log = structlog.get_logger(__name__)
 # Harvester A2: File-level embedding (Jina v2 base — PRIMARY)
 # ===================================================================
 
-
-async def _harvest_file_embedding(
-    app_ctx: AppContext,
-    parsed: ParsedTask,
-    *,
-    top_k: int = 100,
-) -> list[FileCandidate]:
-    """Hybrid embedding harvest: per-def for code, per-file for non-code.
-
-    Queries both embedding indices:
-    - DefEmbeddingIndex: per-def vectors for code objects → aggregated to
-      file level (max similarity across defs in each file).
-    - FileEmbeddingIndex: per-file vectors for non-code files (config, docs).
-
-    Returns FileCandidate objects ranked by similarity.
-    """
-    coordinator = app_ctx.coordinator
-    query_text = parsed.query_text or parsed.raw
-
-    # File-level scores aggregated from both indices
-    path_best: dict[str, float] = {}
-
-    # 1. Per-def embedding results (code files) → aggregate to file level
-    def_results = coordinator.query_def_embeddings(query_text, top_k=top_k * 2)
-    if def_results:
-        # Need def_uid → file_path mapping
-        from codeplane.index._internal.indexing.graph import FactQueries
-
-        uids = [uid for uid, _ in def_results]
-        uid_sims = dict(def_results)
-
-        with coordinator.db.session() as session:
-            fq = FactQueries(session)
-            for uid in uids:
-                d = fq.get_def(uid)
-                if d is not None:
-                    from codeplane.index.models import File as FileModel
-
-                    frec = session.get(FileModel, d.file_id)
-                    if frec is not None:
-                        sim = uid_sims[uid]
-                        if sim > path_best.get(frec.path, -1.0):
-                            path_best[frec.path] = sim
-
-    # 2. File-level embedding results (non-code files)
-    file_results = coordinator.query_file_embeddings(query_text, top_k=top_k)
-    for path, sim in file_results:
-        if sim > path_best.get(path, -1.0):
-            path_best[path] = sim
-
-    # Build candidates sorted by similarity
-    sorted_pairs = sorted(path_best.items(), key=lambda x: -x[1])
-
-    candidates: list[FileCandidate] = []
-    for path, sim in sorted_pairs[:top_k]:
-        if sim <= 0:
-            break
-        cand = FileCandidate(
-            path=path,
-            similarity=sim,
-            combined_score=sim,
-            artifact_kind=_classify_artifact(path),
-        )
-        candidates.append(cand)
-
-    log.debug(
-        "recon.harvest.file_embedding",
-        count=len(candidates),
-        def_hits=len(def_results) if def_results else 0,
-        file_hits=len(file_results),
-        top5=[(c.path, round(c.similarity, 3)) for c in candidates[:5]],
-    )
-    return candidates
 
 
 async def _harvest_def_embedding(
@@ -204,9 +130,7 @@ async def _harvest_term_match(
         for term in all_terms:
             matching_defs = fq.find_defs_matching_term(term)
             n_matches = len(matching_defs)
-            # Keep IDF for production RRF compat
-            import math
-            idf = 1.0 / math.log1p(n_matches) if n_matches else 0.0
+
             for d in matching_defs:
                 uid = d.def_uid
                 if uid not in candidates:
@@ -214,13 +138,11 @@ async def _harvest_term_match(
                         def_uid=uid,
                         def_fact=d,
                         from_term_match=True,
-                        term_idf_score=idf,
                         term_match_count=1,
                         term_total_matches=n_matches,
                     )
                 else:
                     candidates[uid].from_term_match = True
-                    candidates[uid].term_idf_score += idf
                     candidates[uid].term_match_count += 1
                     candidates[uid].term_total_matches = max(
                         candidates[uid].term_total_matches, n_matches
@@ -232,7 +154,7 @@ async def _harvest_term_match(
                     EvidenceRecord(
                         category="term_match",
                         detail=f"name matches term '{term}'",
-                        score=0.5 * idf,
+                        score=1.0,
                     )
                 )
 
@@ -310,7 +232,7 @@ async def _harvest_lexical(
                                     EvidenceRecord(
                                         category="lexical",
                                         detail=f"full-text hit in {file_path}:{line}",
-                                        score=0.4,
+                                        score=1.0,
                                     )
                                 ],
                             )
@@ -370,7 +292,7 @@ async def _harvest_explicit(
                         EvidenceRecord(
                             category="auto_seed",
                             detail=f"auto-seed '{name}' (hub-ranked)",
-                            score=0.5,
+                            score=1.0,
                         )
                     ],
                 )
@@ -414,7 +336,7 @@ async def _harvest_explicit(
                                 EvidenceRecord(
                                     category="explicit",
                                     detail=f"in mentioned path '{epath}'",
-                                    score=0.9,
+                                    score=1.0,
                                 )
                             ],
                         )
@@ -448,7 +370,7 @@ async def _harvest_explicit(
                         EvidenceRecord(
                             category="explicit",
                             detail=f"task-extracted symbol '{sym}'",
-                            score=0.7,
+                            score=1.0,
                         )
                     ],
                 )
@@ -586,16 +508,12 @@ async def _harvest_graph(
         if uid not in best_edges or edge[3] < best_edges[uid][3]:
             best_edges[uid] = edge
 
-    # Compute production-compat graph_quality from edge type and seed rank
-    _EDGE_COMPAT = {"callee": 1.0, "caller": 0.85, "sibling": 0.7}
 
     for uid, (_, def_fact, edge_type, seed_rank, detail) in best_edges.items():
-        quality = _EDGE_COMPAT.get(edge_type, 0.5) / seed_rank
 
         if uid in merged:
             existing = merged[uid]
             existing.from_graph = True
-            existing.graph_quality = max(existing.graph_quality, quality)
             if existing.graph_edge_type is None:
                 existing.graph_edge_type = edge_type
                 existing.graph_seed_rank = seed_rank
@@ -605,16 +523,13 @@ async def _harvest_graph(
                 )
             continue
         if uid in candidates:
-            if quality > candidates[uid].graph_quality:
-                candidates[uid].graph_quality = quality
-                candidates[uid].graph_edge_type = edge_type
-                candidates[uid].graph_seed_rank = seed_rank
+            candidates[uid].graph_edge_type = edge_type
+            candidates[uid].graph_seed_rank = seed_rank
             continue
         candidates[uid] = HarvestCandidate(
             def_uid=uid,
             def_fact=def_fact,  # type: ignore[arg-type]
             from_graph=True,
-            graph_quality=quality,
             graph_edge_type=edge_type,
             graph_seed_rank=seed_rank,
             evidence=[EvidenceRecord(category="graph", detail=detail, score=quality)],
@@ -716,8 +631,7 @@ async def _harvest_imports(
                     merged,
                     category="import_forward",
                     detail=f"imported by {seed_file_paths.get(fid, '?')}",
-                    score=0.45,
-                    graph_quality=0.5,
+                    score=1.0,
                     import_direction="forward",
                 )
 
@@ -744,8 +658,7 @@ async def _harvest_imports(
                     merged,
                     category="import_reverse",
                     detail=f"imports a seed file ({rfile.path})",
-                    score=0.40,
-                    graph_quality=0.4,
+                    score=1.0,
                     import_direction="reverse",
                 )
 
@@ -772,8 +685,7 @@ async def _harvest_imports(
                     merged,
                     category="import_barrel",
                     detail=f"package init/conftest in {dir_path}",
-                    score=0.35,
-                    graph_quality=0.3,
+                    score=1.0,
                     import_direction="barrel",
                 )
 
@@ -790,8 +702,7 @@ async def _harvest_imports(
                         merged,
                         category="import_test",
                         detail=f"test file for {seed_path}",
-                        score=0.35,
-                        graph_quality=0.35,
+                        score=1.0,
                         import_direction="test_pair",
                     )
 

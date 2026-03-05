@@ -1076,7 +1076,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
             # ── Reset session state so next task starts clean ──
             session.mutation_ctx.clear()
             session.pattern_detector.clear()
-            session.counters.pop("recon_consecutive", None)
             app_ctx.refactor_ops.clear_pending()
 
             from codeplane.mcp.delivery import wrap_response
@@ -1351,7 +1350,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     # Clear old mutation state, create fresh plan + tickets
                     chk_session.mutation_ctx.clear()
                     chk_session.pattern_detector.clear()
-                    chk_session.counters.pop("recon_consecutive", None)
                     app_ctx.refactor_ops.clear_pending()
 
                     plan_id = f"fix_{_uuid.uuid4().hex[:12]}"
@@ -1467,7 +1465,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     chk_session = app_ctx.session_manager.get_or_create(ctx.session_id)
                     chk_session.mutation_ctx.clear()
                     chk_session.pattern_detector.clear()
-                    chk_session.counters.pop("recon_consecutive", None)
                     app_ctx.refactor_ops.clear_pending()
                 except Exception:  # noqa: BLE001
                     pass
@@ -1482,7 +1479,6 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                 chk_session = app_ctx.session_manager.get_or_create(ctx.session_id)
                 chk_session.mutation_ctx.clear()
                 chk_session.pattern_detector.clear()
-                chk_session.counters.pop("recon_consecutive", None)
                 app_ctx.refactor_ops.clear_pending()
             except Exception:  # noqa: BLE001
                 pass

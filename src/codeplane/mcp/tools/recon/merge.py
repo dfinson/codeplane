@@ -194,7 +194,6 @@ def _add_file_defs_as_candidates(
     category: str,
     detail: str,
     score: float,
-    graph_quality: float = 0.0,
     import_direction: str | None = None,
 ) -> None:
     """Add defs from a file as import-discovered candidates."""
@@ -212,7 +211,6 @@ def _add_file_defs_as_candidates(
             existing = merged[d.def_uid]
             if not existing.from_graph:
                 existing.from_graph = True
-                existing.graph_quality = max(existing.graph_quality, graph_quality)
                 if existing.import_direction is None:
                     existing.import_direction = import_direction
                 existing.evidence.append(
@@ -220,9 +218,6 @@ def _add_file_defs_as_candidates(
                 )
             continue
         if d.def_uid in candidates:
-            candidates[d.def_uid].graph_quality = max(
-                candidates[d.def_uid].graph_quality, graph_quality
-            )
             if candidates[d.def_uid].import_direction is None:
                 candidates[d.def_uid].import_direction = import_direction
             continue
@@ -230,7 +225,6 @@ def _add_file_defs_as_candidates(
             def_uid=d.def_uid,
             def_fact=d,
             from_graph=True,
-            graph_quality=graph_quality,
             import_direction=import_direction,
             evidence=[EvidenceRecord(category=category, detail=detail, score=score)],
         )

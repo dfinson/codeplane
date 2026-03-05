@@ -237,17 +237,7 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
     def _require_recon_and_justification(
         session: Any, justification: str | None, *, allow_read_only: bool = False
     ) -> None:
-        """Gate: recon must have been called + justification required + not read-only."""
-        if not allow_read_only and getattr(session, "read_only", None) is True:
-            raise MCPError(
-                code=MCPErrorCode.INVALID_PARAMS,
-                message="Session is read-only — refactor tools are blocked.",
-                remediation=(
-                    "This session was started with recon(read_only=True). "
-                    'Call recon(read_only=False, task="...") to start a '
-                    "read-write session before refactoring."
-                ),
-            )
+        """Gate: recon must have been called + justification required."""
         if not session.candidate_maps:
             raise MCPError(
                 code=MCPErrorCode.INVALID_PARAMS,

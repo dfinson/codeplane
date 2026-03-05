@@ -55,8 +55,8 @@ async def _raw_signals_pipeline(
     parsed = parse_task(query)
 
     # Run all harvesters in parallel-safe order
-    # A: Embedding (per-def + per-file, both indices)
-    emb_candidates = await _harvest_def_embedding(app_ctx, parsed, top_k=200)
+    # A: Embedding (per-def + per-file, both indices) — no cap
+    emb_candidates = await _harvest_def_embedding(app_ctx, parsed, top_k=100000)
 
     # B: Term match
     term_candidates = await _harvest_term_match(app_ctx, parsed)

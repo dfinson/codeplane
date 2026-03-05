@@ -1,61 +1,19 @@
-"""Pipeline orchestrator and MCP tool registration.
+"""Recon pipeline — ML-based context retrieval + tool registration.
 
-Single Responsibility: Wire the full recon pipeline together and register
-the ``recon`` tool with FastMCP.
-
-This is the only module that imports from all sub-modules — it composes
-them but adds no domain logic of its own (Dependency Inversion principle).
-
-File-centric pipeline: ONE call, ALL context.
-- Agent controls nothing — only ``task`` and optional ``seeds`` exposed.
-- Backend decides depth, seed count, format (no knobs).
-- Single-elbow tier assignment (SCAFFOLD / LITE).
-- Includes repo map for structural orientation.
+Composes: raw_signals pipeline → gate → ranker → cutoff → output.
+Also registers the ``recon``, ``recon_map``, and optionally
+``recon_raw_signals`` MCP tools.
 """
 
 from __future__ import annotations
 
-import asyncio
-import re
 import time
 import uuid
-from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 import structlog
 from fastmcp import Context
 from pydantic import Field
-
-from codeplane.mcp.tools.recon.assembly import (
-    _build_failure_actions,
-)
-from codeplane.mcp.tools.recon.harvesters import (
-    _harvest_explicit,
-    _harvest_file_embedding,
-    _harvest_graph,
-    _harvest_imports,
-    _harvest_lexical,
-    _harvest_term_match,
-)
-from codeplane.mcp.tools.recon.merge import (
-    _enrich_candidates,
-    _merge_candidates,
-)
-from codeplane.mcp.tools.recon.models import (
-    _PATH_STOP_TOKENS,
-    FileCandidate,
-    OutputTier,
-    ParsedTask,
-    _classify_artifact,
-    _is_test_file,
-)
-from codeplane.mcp.tools.recon.parsing import parse_task
-from codeplane.mcp.tools.recon.rrf import _enrich_file_candidates
-from codeplane.mcp.tools.recon.scoring import (
-    assign_tiers,
-    compute_anchor_floor,
-    compute_noise_metric,
-)
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
@@ -64,1079 +22,100 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger(__name__)
 
-# Max content bytes to include for unindexed files
-_UNINDEXED_MAX_BYTES = 8192
-_UNINDEXED_MAX_FILES = 15
 
-
-# ===================================================================
-# Unindexed file discovery (path-based)
-# ===================================================================
-
-
-def _find_unindexed_files(
-    app_ctx: Any,
-    parsed: ParsedTask,
-    indexed_paths: set[str],
-) -> list[tuple[str, float]]:
-    """Find git-tracked files NOT in the structural index whose paths match query terms.
-
-    This catches .yaml, .md, .toml, .json, dotfiles, Makefiles, etc. that
-    the tree-sitter-based index never processes.  Uses the same terms the
-    harvesters use so the query drives inclusion.
-
-    Returns:
-        List of ``(repo_relative_path, match_score)`` sorted descending
-        by score, capped at ``_UNINDEXED_MAX_FILES``.
-    """
-    # Collect terms to match against file paths
-    terms: set[str] = set()
-    for t in parsed.primary_terms:
-        if len(t) >= 3:
-            terms.add(t.lower())
-    for t in parsed.secondary_terms:
-        if len(t) >= 3:
-            terms.add(t.lower())
-    for sym in parsed.explicit_symbols or []:
-        if len(sym) >= 3:
-            terms.add(sym.lower())
-    # Path fragments from explicit mentions
-    for p in parsed.explicit_paths or []:
-        for component in re.split(r"[/._\-]", p):
-            if len(component) >= 3:
-                terms.add(component.lower())
-
-    if not terms:
-        return []
-
-    # Get all git-tracked files
-    try:
-        all_files = app_ctx.git_ops.tracked_files()
-    except Exception:  # noqa: BLE001
-        log.debug("recon.unindexed_files.git_error")
-        return []
-
-    # Filter to files NOT in the structural index
-    unindexed = [f for f in all_files if f not in indexed_paths]
-
-    matches: list[tuple[str, float]] = []
-    for fpath in unindexed:
-        # Tokenize path components
-        fpath_lower = fpath.lower()
-        path_tokens = set(re.split(r"[/._\-]", fpath_lower))
-        path_tokens = {t for t in path_tokens if len(t) >= 2}
-
-        # Token overlap
-        hits = terms & path_tokens
-
-        # Also substring match (catches partial matches like "mlflow" in path)
-        if not hits:
-            hits = {t for t in terms if t in fpath_lower}
-
-        if hits:
-            # Score: fraction of query terms that match + bonus for
-            # filename (leaf) matches
-            fname = PurePosixPath(fpath).name.lower()
-            fname_tokens = set(re.split(r"[._\-]", fname))
-            leaf_hits = terms & fname_tokens
-            score = (len(hits) + len(leaf_hits) * 0.5) / max(len(terms), 1)
-            matches.append((fpath, score))
-
-    # Sort by score desc, cap
-    matches.sort(key=lambda x: (-x[1], x[0]))
-    return matches[:_UNINDEXED_MAX_FILES]
-
-
-def _read_unindexed_content(repo_root: Path, rel_path: str) -> str | None:
-    """Read content of a non-indexed file, capped for budget."""
-    full = repo_root / rel_path
-    if not full.exists() or not full.is_file():
-        return None
-    try:
-        raw = full.read_bytes()
-        # Skip binary files
-        if b"\x00" in raw[:512]:
-            return None
-        text = raw.decode("utf-8", errors="replace")
-        if len(text) > _UNINDEXED_MAX_BYTES:
-            text = text[:_UNINDEXED_MAX_BYTES] + "\n... (truncated)"
-        return text
-    except Exception:  # noqa: BLE001
-        return None
-
-
-# ===================================================================
-# File-centric pipeline (file-level embedding + two-elbow tiers)
-# ===================================================================
-
-
-async def _file_centric_pipeline(
+async def _recon_pipeline(
     app_ctx: AppContext,
     task: str,
-    explicit_seeds: list[str] | None = None,
-    *,
-    pinned_paths: list[str] | None = None,
-) -> tuple[
-    list[FileCandidate],
-    ParsedTask,
-    dict[str, Any],
-    dict[str, Any],
-]:
-    """File-centric recon pipeline using file-level embeddings as primary signal.
+    seeds: list[str] | None = None,
+    pins: list[str] | None = None,
+) -> dict[str, Any]:
+    """Run the full recon pipeline: retrieve → gate → rank → cut.
 
-    v6 pipeline — file-level embedding + two-elbow tiers:
-    1. Parse task → ParsedTask
-    2. File-level embedding search (PRIMARY) → ranked files
-    3. Def-level harvesters in parallel (SECONDARY) → enrichment signals
-    4a. Inject indexed files with path-token matches (≥2 query terms in path)
-    4b. Enrich file candidates with 6-source RRF scoring
-    5. Two-elbow tier assignment (FULL_FILE / MIN_SCAFFOLD / SUMMARY_ONLY)
-    5.5. Test co-retrieval via direct imports (source → test)
-    5.6. Reverse co-retrieval (test → source, promote-only)
-    5.7. Directory cohesion (≥2 siblings → pull in rest of package)
-    6. Noise metric → conditional mapRepo inclusion
-
-    Returns:
-        (file_candidates, parsed_task, diagnostics, session_info)
+    Returns a dict with gate_label, ranked candidates, and diagnostics.
     """
-    diagnostics: dict[str, Any] = {}
-    session_info: dict[str, Any] = {}
+    from codeplane.mcp.tools.recon.raw_signals import _raw_signals_pipeline
+    from codeplane.ranking.cutoff import load_cutoff
+    from codeplane.ranking.features import (
+        extract_cutoff_features,
+        extract_gate_features,
+        extract_ranker_features,
+    )
+    from codeplane.ranking.gate import load_gate
+    from codeplane.ranking.models import GateLabel
+    from codeplane.ranking.ranker import load_ranker
+
     t0 = time.monotonic()
 
-    # 1. Parse task
-    parsed = parse_task(task)
-    diagnostics["intent"] = parsed.intent.value
+    # 1. Get raw signals
+    raw = await _raw_signals_pipeline(app_ctx, task, seeds=seeds, pins=pins)
+    candidates = raw.get("candidates", [])
+    query_features = raw.get("query_features", {})
+    repo_features = raw.get("repo_features", {})
+    diagnostics = raw.get("diagnostics", {})
 
-    log.debug(
-        "recon.v6.parsed_task",
-        intent=parsed.intent.value,
-        primary=parsed.primary_terms[:5],
-        paths=parsed.explicit_paths,
+    # 2. Gate
+    gate = load_gate()
+    gate_features = extract_gate_features(candidates, query_features, repo_features)
+    gate_label = gate.classify(gate_features)
+
+    if gate_label != GateLabel.OK:
+        return {
+            "gate_label": gate_label.value,
+            "candidates": [],
+            "predicted_n": 0,
+            "diagnostics": {
+                **diagnostics,
+                "gate_label": gate_label.value,
+                "total_ms": round((time.monotonic() - t0) * 1000),
+            },
+        }
+
+    # 3. Rank
+    ranker = load_ranker()
+    ranker_features = extract_ranker_features(candidates, query_features)
+    scores = ranker.score(ranker_features)
+
+    # Pair candidates with scores and sort descending
+    scored = sorted(
+        zip(candidates, scores),
+        key=lambda x: -x[1],
     )
 
-    coordinator = app_ctx.coordinator
-
-    # 2. File-level embedding search (PRIMARY)
-    t_file_emb = time.monotonic()
-    file_candidates = await _harvest_file_embedding(app_ctx, parsed, top_k=100)
-    diagnostics["file_embed_ms"] = round((time.monotonic() - t_file_emb) * 1000)
-    diagnostics["file_embed_count"] = len(file_candidates)
-
-    # 2a. Adaptive elbow on embedding similarities.
-    #
-    # Instead of hardcoded constants (_AUTO_PIN_K=4, _AUTO_SEED_FILES=4,
-    # _AUTO_SEED_K=5), we detect the natural breakpoint in the embedding
-    # similarity distribution.  Files above the elbow are clearly relevant;
-    # files below are speculative.  This adapts to:
-    #   - Repo size: large repos have more candidates, elbow rises.
-    #   - Task specificity: narrow tasks have sharp elbows (few pins);
-    #     broad tasks have gradual falloff (more pins).
-    #
-    # Elbow count is clamped to [2, 8]:
-    #   - <2: anchor_floor needs ≥2 anchors to calibrate MAD
-    #   - >8: diminishing returns, noise from marginal files
-    from codeplane.mcp.tools.recon.scoring import _find_elbow_raw
-
-    _MIN_AUTO_PINS = 2
-    _MAX_AUTO_PINS = 8
-
-    emb_sims = [
-        fc.similarity
-        for fc in sorted(file_candidates, key=lambda fc: -fc.similarity)
-        if fc.similarity > 0
-    ]
-    if emb_sims:
-        n_above_elbow = _find_elbow_raw(emb_sims, lo=_MIN_AUTO_PINS, hi=_MAX_AUTO_PINS)
-    else:
-        n_above_elbow = 0
-    diagnostics["emb_elbow_k"] = n_above_elbow
-
-    # 2b. Auto-seed: extract symbol names from elbow-selected files.
-    #     Seeds from the top-N embedding files (where N = elbow count).
-    #     Only symbols with ≥1 caller (not private helpers) are considered.
-    #     Cap seed count at elbow file count — more relevant files →
-    #     more seeds allowed, but capped to avoid noise.
-    auto_seeds: list[str] = []
-    if n_above_elbow > 0 and file_candidates:
-        from codeplane.index._internal.indexing.graph import FactQueries
-
-        emb_top_paths = [
-            fc.path for fc in sorted(file_candidates, key=lambda fc: -fc.similarity)[:n_above_elbow]
-        ]
-        _MIN_HUB_SCORE = 1  # skip zero-caller private defs
-        max_seeds = n_above_elbow  # adaptive: more relevant files → more seeds
-        with coordinator.db.session() as session:
-            fq = FactQueries(session)
-            seed_scored: list[tuple[str, int]] = []
-            for ep in emb_top_paths:
-                frec = fq.get_file_by_path(ep)
-                if frec is None or frec.id is None:
-                    continue
-                defs_in = fq.list_defs_in_file(frec.id, limit=20)
-                for d in defs_in:
-                    hub = min(fq.count_callers(d.def_uid), 30)
-                    if hub >= _MIN_HUB_SCORE:
-                        seed_scored.append((d.name, hub))
-            # Deduplicate, sort by hub score (most connected first)
-            seen: set[str] = set()
-            deduped: list[tuple[str, int]] = []
-            for name, hub in sorted(seed_scored, key=lambda x: -x[1]):
-                if name not in seen:
-                    seen.add(name)
-                    deduped.append((name, hub))
-            auto_seeds = [name for name, _hub in deduped[:max_seeds]]
-        diagnostics["auto_seeds"] = auto_seeds
-
-    # 3. Def-level harvesters in parallel (SECONDARY enrichment)
-    #    Auto-seeds are passed separately — they get lower confidence
-    #    (no from_explicit, score=0.5) to avoid inflating file scores
-    #    while still entering the merged pool for graph expansion.
-    t_def_harvest = time.monotonic()
-    term_cands, lex_cands, exp_cands = await asyncio.gather(
-        _harvest_term_match(app_ctx, parsed),
-        _harvest_lexical(app_ctx, parsed),
-        _harvest_explicit(
-            app_ctx,
-            parsed,
-            explicit_seeds=explicit_seeds or None,
-            auto_seeds=auto_seeds or None,
-        ),
+    # 4. Cutoff
+    cutoff = load_cutoff()
+    ranked_for_cutoff = [{**c, "ranker_score": s} for c, s in scored]
+    cutoff_features = extract_cutoff_features(
+        ranked_for_cutoff, query_features, repo_features,
     )
-    merged_def = _merge_candidates(term_cands, lex_cands, exp_cands)
+    predicted_n = cutoff.predict(cutoff_features)
 
-    # Graph + import harvesters for structural signal
-    graph_cands = await _harvest_graph(app_ctx, merged_def, parsed)
-    if graph_cands:
-        merged_def = _merge_candidates(merged_def, graph_cands)
-    import_cands = await _harvest_imports(app_ctx, merged_def, parsed)
-    if import_cands:
-        merged_def = _merge_candidates(merged_def, import_cands)
-
-    # Enrich def-level candidates with structural metadata
-    await _enrich_candidates(app_ctx, merged_def)
-
-    diagnostics["def_harvest_ms"] = round((time.monotonic() - t_def_harvest) * 1000)
-    diagnostics["def_candidates"] = len(merged_def)
-
-    # 4a. Inject indexed files whose paths match query terms.
-    #     term_match only checks def names, lexical only searches code content.
-    #     Neither finds indexed files whose PATH components match the query
-    #     (e.g. files under packages/evee-azureml/ when query says "azureml").
-    #     This step fills that gap by adding path-matched indexed files to the
-    #     candidate set before RRF scoring gives them a fair rank.
-    indexed_paths: set[str] = set()
-    with coordinator.db.session() as session:
-        fq = FactQueries(session)
-        for frec in fq.list_files(limit=50000):
-            indexed_paths.add(frec.path)
-
-    _PATH_INJECT_MAX = 10
-    # Only use primary terms for path injection — secondary terms are
-    # too common (config, model, test, etc.) and match nearly every file.
-    # Also require len≥4 to avoid short noise tokens.
-    path_inject_terms: set[str] = set()
-    for t in parsed.primary_terms:
-        tl = t.lower()
-        if len(tl) >= 4 and tl not in _PATH_STOP_TOKENS:
-            path_inject_terms.add(tl)
-
-    if path_inject_terms:
-        existing_paths = {fc.path for fc in file_candidates}
-        path_inject_scored: list[tuple[str, int]] = []
-        for ip in indexed_paths:
-            if ip in existing_paths:
-                continue
-            path_lower = ip.lower()
-            path_tokens = set(re.split(r"[/._\-]", path_lower))
-            path_tokens = {t for t in path_tokens if len(t) >= 2}
-
-            hits = path_inject_terms & path_tokens
-            if not hits:
-                hits = {t for t in path_inject_terms if t in path_lower}
-
-            # Require ≥2 distinctive path-token matches to avoid noise
-            if len(hits) >= 2:
-                path_inject_scored.append((ip, len(hits)))
-
-        # Sort by match count desc, cap
-        path_inject_scored.sort(key=lambda x: -x[1])
-        for ip, _score in path_inject_scored[:_PATH_INJECT_MAX]:
-            file_candidates.append(
-                FileCandidate(
-                    path=ip,
-                    similarity=0.0,
-                    combined_score=0.0,  # will be set by RRF
-                    artifact_kind=_classify_artifact(ip),
-                )
-            )
-        diagnostics["path_inject_count"] = min(len(path_inject_scored), _PATH_INJECT_MAX)
-
-    # 4b. Enrich file candidates with RRF scoring
-    _enrich_file_candidates(file_candidates, merged_def, parsed)
-
-    # Determine max RRF score for guaranteeing pinned/explicit placement.
-    max_rrf = max((fc.combined_score for fc in file_candidates), default=0.0)
-    # Ensure a minimum floor so pinned/explicit paths always surface.
-    _RRF_K = 60
-    pin_floor = max(max_rrf, 1.0 / (_RRF_K + 1))
-
-    # Handle pinned paths: guarantee top-tier placement
-    if pinned_paths:
-        existing_paths = {fc.path for fc in file_candidates}
-        for pp in pinned_paths:
-            if pp not in existing_paths:
-                file_candidates.append(
-                    FileCandidate(
-                        path=pp,
-                        similarity=0.0,
-                        combined_score=pin_floor,
-                        has_explicit_mention=True,
-                        artifact_kind=_classify_artifact(pp),
-                    )
-                )
-            else:
-                for fc in file_candidates:
-                    if fc.path == pp:
-                        fc.has_explicit_mention = True
-                        fc.combined_score = max(fc.combined_score, pin_floor)
-                        break
-
-    # 4c. Auto-pin: use elbow-derived count (adaptive, not hardcoded).
-    #     Files above the embedding elbow are treated as programmatic pins.
-    #     This activates anchor_floor calibration (which is a no-op without
-    #     anchors) and ensures the strongest semantic matches survive tier
-    #     assignment.  Count adapts to repo size and task specificity.
-    emb_ranked = sorted(
-        (fc for fc in file_candidates if fc.similarity > 0),
-        key=lambda fc: -fc.similarity,
-    )
-    auto_pinned = 0
-    for fc in emb_ranked[:n_above_elbow]:
-        if not fc.has_explicit_mention:
-            fc.has_explicit_mention = True
-            auto_pinned += 1
-        fc.combined_score = max(fc.combined_score, pin_floor)
-    diagnostics["auto_pin_count"] = auto_pinned
-
-    # Handle explicit paths from task text
-    if parsed.explicit_paths:
-        existing_paths = {fc.path for fc in file_candidates}
-        for ep in parsed.explicit_paths:
-            if ep not in existing_paths:
-                file_candidates.append(
-                    FileCandidate(
-                        path=ep,
-                        similarity=0.0,
-                        combined_score=pin_floor,
-                        has_explicit_mention=True,
-                        artifact_kind=_classify_artifact(ep),
-                    )
-                )
-            else:
-                for fc in file_candidates:
-                    if fc.path == ep:
-                        fc.has_explicit_mention = True
-                        fc.combined_score = max(fc.combined_score, pin_floor)
-                        break
-
-    # Also discover unindexed files (yaml, md, etc.) via path matching
-    # (indexed_paths already collected in step 4a above)
-    unindexed_matches = _find_unindexed_files(app_ctx, parsed, indexed_paths)
-    existing_paths = {fc.path for fc in file_candidates}
-    for upath, uscore in unindexed_matches:
-        if upath not in existing_paths:
-            # Scale path-match score into the RRF range
-            file_candidates.append(
-                FileCandidate(
-                    path=upath,
-                    similarity=0.0,
-                    combined_score=uscore * pin_floor * 0.5,
-                    artifact_kind=_classify_artifact(upath),
-                )
-            )
-
-    # 5. Two-elbow tier assignment
-    file_candidates = assign_tiers(file_candidates)
-
-    # 5.1  Anchor-floor pruning — demote FULL_FILE files below the
-    #       data-driven floor derived from explicit/pinned anchors.
-    #       compute_anchor_floor uses max(MAD_anchor, MAD_full_file);
-    #       no arbitrary constants.  When no anchors exist (Q3 open
-    #       prompts, no seeds/pins), floor = 0.0 → no-op.
-    anchor_indices = [i for i, fc in enumerate(file_candidates) if fc.has_explicit_mention]
-    full_file_indices = [
-        i for i, fc in enumerate(file_candidates) if fc.tier == OutputTier.FULL_FILE
+    # 5. Build output — top N ranked DefFacts
+    top_n = scored[:predicted_n]
+    result_candidates = [
+        {
+            "def_uid": c["def_uid"],
+            "path": c["path"],
+            "kind": c["kind"],
+            "name": c["name"],
+            "lexical_path": c.get("lexical_path", ""),
+            "start_line": c["start_line"],
+            "end_line": c["end_line"],
+            "score": round(s, 6),
+        }
+        for c, s in top_n
     ]
-    anchor_floor = compute_anchor_floor(
-        [fc.combined_score for fc in file_candidates],
-        anchor_indices,
-        full_file_indices,
-    )
-    anchor_demoted = 0
-    if anchor_floor > 0:
-        for fc in file_candidates:
-            if (
-                fc.tier == OutputTier.FULL_FILE
-                and fc.combined_score < anchor_floor
-                and not fc.has_explicit_mention
-            ):
-                fc.tier = OutputTier.MIN_SCAFFOLD
-                anchor_demoted += 1
-    if anchor_demoted > 0:
-        log.info(
-            "recon.anchor_floor_demoted",
-            floor=round(anchor_floor, 4),
-            demoted=anchor_demoted,
-            anchors=len(anchor_indices),
-        )
-    diagnostics["anchor_floor"] = round(anchor_floor, 4)
-    diagnostics["anchor_floor_demoted"] = anchor_demoted
 
-    # 5.5. Deterministic test co-retrieval via direct imports
-    #       Single-hop query: find test files whose import_facts have
-    #       resolved_path pointing to a surviving source candidate.
-    #       (NOT transitive — avoids fan-out through barrel re-exports.)
-    #       The test inherits the source's tier:
-    #         - source FULL_FILE  → test FULL_FILE
-    #         - source MIN_SCAFFOLD → test MIN_SCAFFOLD
-    #       Test files NOT linked to any surviving source get demoted.
-    t_test_disco = time.monotonic()
-    full_source_paths = [
-        fc.path
-        for fc in file_candidates
-        if fc.tier == OutputTier.FULL_FILE and not _is_test_file(fc.path)
-    ]
-    scaffold_source_paths = [
-        fc.path
-        for fc in file_candidates
-        if fc.tier == OutputTier.MIN_SCAFFOLD and not _is_test_file(fc.path)
-    ]
-    linked_test_paths: set[str] = set()
-    # Maps test_path → best tier it should inherit
-    test_target_tier: dict[str, OutputTier] = {}
-    test_co_promoted = 0
-    test_co_added = 0
-    test_demoted = 0
-
-    all_source_paths = full_source_paths + scaffold_source_paths
-    if all_source_paths:
-        from sqlmodel import col, select
-
-        from codeplane.core.languages import is_test_file as _is_test_path
-        from codeplane.index.models import File, ImportFact
-
-        # Single-hop direct-import query: test files whose resolved_path
-        # points to one of our source candidates.  No BFS, no transitive
-        # closure — just "who directly imports this file?"
-        full_tests: set[str] = set()
-        scaffold_tests: set[str] = set()
-        with coordinator.db.session() as session:
-            if full_source_paths:
-                stmt = (
-                    select(File.path)
-                    .join(ImportFact, ImportFact.file_id == File.id)  # type: ignore[arg-type]
-                    .where(col(ImportFact.resolved_path).in_(full_source_paths))
-                ).distinct()
-                for path in session.exec(stmt).all():
-                    if path and _is_test_path(path):
-                        full_tests.add(path)
-            if scaffold_source_paths:
-                stmt = (
-                    select(File.path)
-                    .join(ImportFact, ImportFact.file_id == File.id)  # type: ignore[arg-type]
-                    .where(col(ImportFact.resolved_path).in_(scaffold_source_paths))
-                ).distinct()
-                for path in session.exec(stmt).all():
-                    if path and _is_test_path(path):
-                        scaffold_tests.add(path)
-
-        # FULL_FILE wins over MIN_SCAFFOLD
-        for tp in full_tests:
-            test_target_tier[tp] = OutputTier.FULL_FILE
-        for tp in scaffold_tests:
-            if tp not in test_target_tier:
-                test_target_tier[tp] = OutputTier.MIN_SCAFFOLD
-        linked_test_paths = set(test_target_tier.keys())
-
-        existing_by_path = {fc.path: fc for fc in file_candidates}
-
-        for test_path, target_tier in test_target_tier.items():
-            if test_path in existing_by_path:
-                fc = existing_by_path[test_path]
-                # Promote if current tier is worse than target
-                if fc.tier.rank > target_tier.rank:
-                    fc.tier = target_tier
-                    fc.graph_connected = True
-                    test_co_promoted += 1
-            else:
-                # Not in candidates at all — add with the target tier
-                ref_scores = [c.combined_score for c in file_candidates if c.tier == target_tier]
-                score = max(ref_scores, default=pin_floor) * 0.9
-                file_candidates.append(
-                    FileCandidate(
-                        path=test_path,
-                        similarity=0.0,
-                        combined_score=score,
-                        graph_connected=True,
-                        artifact_kind=_classify_artifact(test_path),
-                    ),
-                )
-                # Set tier after construction (assign_tiers already ran)
-                file_candidates[-1].tier = target_tier
-                test_co_added += 1
-
-    # Demote unlinked test files by one tier (not a full drop):
-    #   FULL_FILE → MIN_SCAFFOLD, MIN_SCAFFOLD → SUMMARY_ONLY
-    for fc in file_candidates:
-        if (
-            _is_test_file(fc.path)
-            and fc.path not in linked_test_paths
-            and not fc.has_explicit_mention
-            and fc.tier in (OutputTier.FULL_FILE, OutputTier.MIN_SCAFFOLD)
-        ):
-            if fc.tier == OutputTier.FULL_FILE:
-                fc.tier = OutputTier.MIN_SCAFFOLD
-            else:
-                fc.tier = OutputTier.SUMMARY_ONLY
-            test_demoted += 1
-
-    # 5.6. Reverse direction: test → source co-retrieval
-    #       For test files in the top elbows, find the source files they
-    #       directly import and promote/add those.  Fan-out is naturally
-    #       low (test typically imports 1-3 source modules).
-    source_co_promoted = 0
-    source_co_added = 0
-    linked_source_paths: set[str] = set()
-
-    full_test_paths = [
-        fc.path
-        for fc in file_candidates
-        if fc.tier == OutputTier.FULL_FILE and _is_test_file(fc.path)
-    ]
-    scaffold_test_paths = [
-        fc.path
-        for fc in file_candidates
-        if fc.tier == OutputTier.MIN_SCAFFOLD and _is_test_file(fc.path)
-    ]
-    all_test_query_paths = full_test_paths + scaffold_test_paths
-    if all_test_query_paths:
-        from sqlmodel import col, select
-
-        from codeplane.core.languages import is_test_file as _is_test_path
-        from codeplane.index.models import File, ImportFact
-
-        # Source target tier: test FULL → source FULL, test SCAFFOLD → source SCAFFOLD
-        source_target_tier: dict[str, OutputTier] = {}
-        full_sources: set[str] = set()
-        scaffold_sources: set[str] = set()
-        with coordinator.db.session() as session:
-            if full_test_paths:
-                full_stmt = (
-                    select(File.path, ImportFact.resolved_path)
-                    .join(ImportFact, ImportFact.file_id == File.id)  # type: ignore[arg-type]
-                    .where(col(File.path).in_(full_test_paths))
-                    .where(ImportFact.resolved_path != None)  # noqa: E711
-                ).distinct()
-                for row in session.exec(full_stmt).all():
-                    resolved_path = str(row[1])
-                    if resolved_path and not _is_test_path(resolved_path):
-                        full_sources.add(resolved_path)
-            if scaffold_test_paths:
-                scaffold_stmt = (
-                    select(File.path, ImportFact.resolved_path)
-                    .join(ImportFact, ImportFact.file_id == File.id)  # type: ignore[arg-type]
-                    .where(col(File.path).in_(scaffold_test_paths))
-                    .where(ImportFact.resolved_path != None)  # noqa: E711
-                ).distinct()
-                for row in session.exec(scaffold_stmt).all():
-                    resolved_path = str(row[1])
-                    if resolved_path and not _is_test_path(resolved_path):
-                        scaffold_sources.add(resolved_path)
-
-        # FULL wins over SCAFFOLD
-        for sp in full_sources:
-            source_target_tier[sp] = OutputTier.FULL_FILE
-        for sp in scaffold_sources:
-            if sp not in source_target_tier:
-                source_target_tier[sp] = OutputTier.MIN_SCAFFOLD
-        linked_source_paths = set(source_target_tier.keys())
-
-        existing_by_path = {fc.path: fc for fc in file_candidates}
-        for src_path, target_tier in source_target_tier.items():
-            if src_path in existing_by_path:
-                fc = existing_by_path[src_path]
-                if fc.tier.rank > target_tier.rank:
-                    fc.tier = target_tier
-                    fc.graph_connected = True
-                    source_co_promoted += 1
-            # NOTE: no 'else' branch — we promote existing candidates
-            # but do NOT add new source files that were not already
-            # retrieved by the core pipeline.  Adding was too noisy
-            # (~4.3 files/query, all noise → precision -27%).
-
-    diagnostics["test_co_retrieval_ms"] = round((time.monotonic() - t_test_disco) * 1000)
-    diagnostics["test_co_promoted"] = test_co_promoted
-    diagnostics["test_co_added"] = test_co_added
-    diagnostics["test_demoted"] = test_demoted
-    diagnostics["source_co_promoted"] = source_co_promoted
-    diagnostics["source_co_added"] = source_co_added
-    if test_co_promoted + test_co_added + test_demoted + source_co_promoted + source_co_added > 0:
-        log.info(
-            "recon.test_co_retrieval",
-            promoted=test_co_promoted,
-            added=test_co_added,
-            demoted=test_demoted,
-            source_files=len(all_source_paths),
-            source_co_promoted=source_co_promoted,
-            source_co_added=source_co_added,
-        )
-
-    # ── 5.75  Convention-based test pairing ────────────────────────
-    #   Fallback for when the import graph misses test files (e.g.
-    #   new source files with no test yet, or tests that don't import
-    #   the source directly).  Uses language-specific naming conventions
-    #   to find plausible test counterparts for surviving SCAFFOLD-tier
-    #   source files and includes them if they exist on disk.
-    t_convention = time.monotonic()
-    convention_promoted = 0
-    convention_added = 0
-    convention_test_paths: set[str] = set()
-
-    scaffold_source_for_convention = [
-        fc for fc in file_candidates if fc.tier.is_scaffold and not _is_test_file(fc.path)
-    ]
-    if scaffold_source_for_convention:
-        from codeplane.core.languages import find_test_pairs
-
-        existing_by_path = {fc.path: fc for fc in file_candidates}
-        for src_fc in scaffold_source_for_convention:
-            test_candidates_conv = find_test_pairs(src_fc.path)
-            for test_path in test_candidates_conv:
-                # Skip if already handled by import-graph co-retrieval
-                if test_path in linked_test_paths:
-                    continue
-                if test_path in existing_by_path:
-                    fc = existing_by_path[test_path]
-                    # Promote to at least the source's tier if currently lower
-                    if fc.tier.rank > src_fc.tier.rank:
-                        fc.tier = src_fc.tier
-                        fc.graph_connected = True
-                        convention_promoted += 1
-                        convention_test_paths.add(test_path)
-                elif (coordinator.repo_root / test_path).exists():
-                    # Test file exists on disk but wasn't in candidates — add it
-                    ref_scores = [
-                        c.combined_score for c in file_candidates if c.tier == src_fc.tier
-                    ]
-                    score = max(ref_scores, default=pin_floor) * 0.85
-                    new_fc = FileCandidate(
-                        path=test_path,
-                        similarity=0.0,
-                        combined_score=score,
-                        graph_connected=True,
-                        artifact_kind=_classify_artifact(test_path),
-                    )
-                    new_fc.tier = src_fc.tier
-                    file_candidates.append(new_fc)
-                    existing_by_path[test_path] = new_fc
-                    convention_added += 1
-                    convention_test_paths.add(test_path)
-
-    diagnostics["convention_test_ms"] = round((time.monotonic() - t_convention) * 1000)
-    diagnostics["convention_test_promoted"] = convention_promoted
-    diagnostics["convention_test_added"] = convention_added
-    if convention_promoted + convention_added > 0:
-        log.info(
-            "recon.convention_test_pairing",
-            promoted=convention_promoted,
-            added=convention_added,
-        )
-
-    # Store convention data for agentic hints in the tool function
-    session_info["convention_test_paths"] = convention_test_paths
-
-    # ── 5.7  Directory cohesion expansion ──────────────────────────
-    #   When ≥2 non-test files from the same directory survive at
-    #   FULL_FILE or MIN_SCAFFOLD, pull in remaining indexed files
-    #   from that directory at one tier lower.  This captures package
-    #   co-relevance: if tracking.py and compute.py from a package
-    #   are relevant, config.py and utils.py likely are too.
-    from collections import defaultdict as _defaultdict
-
-    t_dir_cohesion = time.monotonic()
-    _DIR_COHESION_MIN_FILES = 2  # ≥2 siblings needed to trigger expansion
-    _DIR_COHESION_MAX_PER_DIR = 8  # cap siblings added per directory
-
-    dir_best_tier: dict[str, OutputTier] = {}
-    dir_tier_counts: dict[str, int] = _defaultdict(int)
-
-    for fc in file_candidates:
-        if fc.tier in (OutputTier.FULL_FILE, OutputTier.MIN_SCAFFOLD) and not _is_test_file(
-            fc.path
-        ):
-            parent = str(PurePosixPath(fc.path).parent)
-            dir_tier_counts[parent] += 1
-            # Track the best tier present in this directory
-            if parent not in dir_best_tier or fc.tier == OutputTier.FULL_FILE:
-                dir_best_tier[parent] = fc.tier
-
-    # Only expand directories with enough surviving source files
-    dirs_to_expand = {
-        d: tier
-        for d, tier in dir_best_tier.items()
-        if dir_tier_counts[d] >= _DIR_COHESION_MIN_FILES
-    }
-
-    dir_co_added = 0
-    dir_co_dirs: list[str] = []
-    if dirs_to_expand:
-        existing_paths = {fc.path for fc in file_candidates}
-        for ip in indexed_paths:
-            parent = str(PurePosixPath(ip).parent)
-            if parent not in dirs_to_expand:
-                continue
-            if ip in existing_paths:
-                continue
-            if _is_test_file(ip):
-                continue  # test co-retrieval handles tests separately
-
-            # Count how many we've already added for this directory
-            if dir_co_dirs.count(parent) >= _DIR_COHESION_MAX_PER_DIR:
-                continue
-
-            anchor_tier = dirs_to_expand[parent]
-            # Siblings get one tier below the anchor
-            sibling_tier = (
-                OutputTier.MIN_SCAFFOLD
-                if anchor_tier == OutputTier.FULL_FILE
-                else OutputTier.SUMMARY_ONLY
-            )
-            ref_scores = [c.combined_score for c in file_candidates if c.tier == sibling_tier]
-            score = max(ref_scores, default=pin_floor) * 0.8
-            new_fc = FileCandidate(
-                path=ip,
-                similarity=0.0,
-                combined_score=score,
-                graph_connected=True,  # structurally connected via directory
-                artifact_kind=_classify_artifact(ip),
-            )
-            new_fc.tier = sibling_tier
-            file_candidates.append(new_fc)
-            existing_paths.add(ip)
-            dir_co_dirs.append(parent)
-            dir_co_added += 1
-
-    diagnostics["dir_cohesion_ms"] = round((time.monotonic() - t_dir_cohesion) * 1000)
-    diagnostics["dir_cohesion_added"] = dir_co_added
-    diagnostics["dir_cohesion_dirs"] = len(set(dir_co_dirs))
-    if dir_co_added > 0:
-        log.info(
-            "recon.dir_cohesion",
-            added=dir_co_added,
-            dirs=len(set(dir_co_dirs)),
-        )
-
-    # Build expand_reason for each candidate
-    for fc in file_candidates:
-        reasons: list[str] = []
-        if fc.similarity > 0.5:
-            reasons.append("high semantic similarity")
-        elif fc.similarity > 0.3:
-            reasons.append("moderate semantic match")
-        if fc.term_match_count > 0:
-            reasons.append(f"{fc.term_match_count} term matches")
-        if fc.lexical_hit_count > 0:
-            reasons.append(f"{fc.lexical_hit_count} text hits")
-        if fc.has_explicit_mention:
-            reasons.append("explicitly mentioned")
-        if fc.graph_connected:
-            reasons.append("structurally connected")
-        if fc.path in linked_test_paths:
-            reasons.append("test for surviving source")
-        if fc.path in convention_test_paths:
-            reasons.append("convention test pair")
-        if fc.path in linked_source_paths:
-            reasons.append("source imported by surviving test")
-        # Check if this file was added by directory cohesion
-        parent = str(PurePosixPath(fc.path).parent)
-        if (
-            parent in dirs_to_expand
-            and fc.similarity == 0.0
-            and not fc.has_explicit_mention
-            and not any(
-                r.startswith("test for") or r.startswith("source imported") for r in reasons
-            )
-        ):
-            reasons.append("directory sibling")
-        fc.expand_reason = "; ".join(reasons) if reasons else "embedding match"
-
-    # 6. Noise metric
-    scores = [fc.combined_score for fc in file_candidates]
-    noise = compute_noise_metric(scores)
-    session_info["noise_metric"] = round(noise, 4)
-    session_info["include_map_repo"] = noise > 0.6  # high noise → include map_repo
-
-    # Session window check (if available)
-    try:
-        session_mgr = app_ctx.session_manager
-        if hasattr(session_mgr, "pattern_detector"):
-            pd = session_mgr.pattern_detector
-            if hasattr(pd, "call_count"):
-                session_info["session_call_count"] = pd.call_count
-                # Early in session → include map_repo
-                if pd.call_count <= 3:
-                    session_info["include_map_repo"] = True
-    except Exception:  # noqa: BLE001
-        pass
-
-    diagnostics["n_file_candidates"] = len(file_candidates)
-    diagnostics["noise_metric"] = round(noise, 4)
-    n_full = sum(1 for fc in file_candidates if fc.tier == OutputTier.FULL_FILE)
-    n_scaffold = sum(1 for fc in file_candidates if fc.tier == OutputTier.MIN_SCAFFOLD)
-    n_summary = sum(1 for fc in file_candidates if fc.tier == OutputTier.SUMMARY_ONLY)
-    diagnostics["tiers"] = {
-        "full_file": n_full,
-        "min_scaffold": n_scaffold,
-        "summary_only": n_summary,
-    }
+    diagnostics["gate_label"] = gate_label.value
+    diagnostics["predicted_n"] = predicted_n
+    diagnostics["total_candidates"] = len(candidates)
     diagnostics["total_ms"] = round((time.monotonic() - t0) * 1000)
 
-    log.info(
-        "recon.v6.pipeline_done",
-        n_candidates=len(file_candidates),
-        n_full=n_full,
-        n_scaffold=n_scaffold,
-        n_summary=n_summary,
-        noise=round(noise, 4),
-        total_ms=diagnostics["total_ms"],
-    )
-
-    return file_candidates, parsed, diagnostics, session_info
-
-
-# ===================================================================
-# Consecutive Recon Gating
-# ===================================================================
-
-# Minimum expand_reason length for 2nd consecutive call
-_RECON_EXPAND_REASON_MIN = 250
-# Minimum gate_reason length for 3rd+ consecutive call
-_RECON_GATE_REASON_MIN = 500
-
-
-def _check_recon_gate(
-    app_ctx: Any,
-    ctx: Any,
-    *,
-    expand_reason: str | None,
-    pinned_paths: list[str] | None,
-    gate_token: str | None,
-    gate_reason: str | None,
-) -> dict[str, Any] | None:
-    """Enforce escalating requirements for consecutive recon calls.
-
-    Returns a gate/error response dict if the call is blocked,
-    or None if the call should proceed.
-
-    Rules:
-        1st call (counter=0): No restrictions.
-        2nd call (counter=1): Must provide expand_reason (≥250 chars)
-            AND pinned_paths with semantic anchors in query.
-        3rd+ call (counter≥2): Must provide gate_token + gate_reason
-            (≥500 chars) AND pinned_paths.
-
-    Counter resets when write_source is called (tracked in middleware).
-    """
-    try:
-        session = app_ctx.session_manager.get_or_create(ctx.session_id)
-    except Exception:  # noqa: BLE001
-        return None
-
-    consecutive = session.counters.get("recon_consecutive", 0)
-
-    if consecutive == 0:
-        # First call — no restrictions
-        return None
-
-    if consecutive == 1:
-        # 2nd call — HARD BLOCK.  Issue gate_token for 3rd-call escape.
-        from codeplane.mcp.gate import GateSpec
-
-        gate_spec = GateSpec(
-            kind="recon_repeat",
-            reason_min_chars=_RECON_GATE_REASON_MIN,
-            reason_prompt=(
-                "You MUST explain in ≥500 characters: (1) what specific "
-                "information your first recon call returned, (2) exactly "
-                "what is STILL MISSING that you cannot get by reading "
-                "files via terminal (cat/head/sed -n), and (3) why "
-                "different seeds or task framing is required."
-            ),
-            expires_calls=3,
-            message=(
-                "BLOCKED: Recon is hard-gated to 1 call per task. "
-                "Your first recon already returned scaffolds, lites, "
-                "and repo_map. Use terminal (cat/head) to read files "
-                "from those results, then proceed to "
-                "refactor_plan → refactor_edit → checkpoint."
-            ),
-        )
-        gate_block = session.gate_manager.issue(gate_spec)
-        return {
-            "status": "blocked",
-            "error": {
-                "code": "RECON_HARD_GATE",
-                "message": (
-                    "BLOCKED: 2nd recon call denied. You already have "
-                    "scaffolds, lites, and repo_map from your first "
-                    "recon. Read files via terminal (cat/head/sed -n) "
-                    "using paths from those results. Do NOT call recon "
-                    "again unless you have a genuinely different task."
-                ),
-            },
-            "gate": gate_block,
-            "agentic_hint": (
-                "⛔ RECON HARD GATE — READ THIS COMPLETELY ⛔\n\n"
-                "Your first recon call already returned scaffolds, "
-                "lites, and repo_map. You have all the file paths and "
-                "code structure you need.\n\n"
-                "WHAT TO DO INSTEAD:\n"
-                "  1. Read files via terminal: cat, head, sed -n\n"
-                "  2. Use paths from your recon scaffolds\n"
-                "  3. Proceed to refactor_plan → refactor_edit → "
-                "checkpoint\n\n"
-                "IF YOU GENUINELY NEED ANOTHER RECON (different task, "
-                "completely different seeds), here is the unlock flow:\n"
-                "  Step 1: Copy the gate_token from the 'gate' object "
-                "below\n"
-                "  Step 2: Write a gate_reason (≥"
-                f"{_RECON_GATE_REASON_MIN} chars) that explains:\n"
-                "    - What your first recon returned\n"
-                "    - What specific context is STILL MISSING\n"
-                "    - Why terminal reads (cat/head) cannot fill the "
-                "gap\n"
-                "    - What different seeds/task you need\n"
-                "  Step 3: Include pinned_paths listing the specific "
-                "files you need\n"
-                "  Step 4: Call recon again with gate_token + "
-                "gate_reason + pinned_paths\n\n"
-                "WARNING: If your gate_reason is vague, generic, or "
-                "does not address ALL four points above, the gate "
-                "will reject it."
-            ),
-            "consecutive_recon_calls": consecutive + 1,
-        }
-
-    # 3rd+ call — require gate token + gate_reason + pinned_paths
-    from codeplane.mcp.gate import GateSpec
-
-    if not pinned_paths:
-        return {
-            "status": "blocked",
-            "error": {
-                "code": "RECON_EXCESSIVE_REQUIRES_GATE",
-                "message": (
-                    f"BLOCKED: Recon call #{consecutive + 1} requires "
-                    "pinned_paths. You must pin specific files to anchor "
-                    "your search. Use paths from your previous recon "
-                    "scaffolds."
-                ),
-            },
-            "agentic_hint": (
-                f"⛔ RECON BLOCKED — CALL #{consecutive + 1} ⛔\n\n"
-                "You must provide pinned_paths (specific file paths) "
-                "along with gate_token and gate_reason.\n\n"
-                "Get file paths from your previous recon scaffolds, "
-                "then include them in pinned_paths on your next call."
-            ),
-            "consecutive_recon_calls": consecutive + 1,
-        }
-
-    if gate_token:
-        # Validate the gate
-        gate_reason_str = gate_reason if isinstance(gate_reason, str) else ""
-        gate_result = session.gate_manager.validate(gate_token, gate_reason_str)
-        if gate_result.ok:
-            return None  # Gate passed — proceed
-        # Gate validation failed — re-issue
-        gate_spec = GateSpec(
-            kind="recon_repeat",
-            reason_min_chars=_RECON_GATE_REASON_MIN,
-            reason_prompt=(
-                f"This is recon call #{consecutive + 1}. Gate validation "
-                f"FAILED: {gate_result.error}. You MUST explain in ≥500 "
-                "characters: (1) what each previous recon returned, "
-                "(2) what is STILL MISSING, (3) why terminal reads "
-                "cannot fill the gap, (4) what different seeds/task "
-                "you need."
-            ),
-            expires_calls=3,
-            message=(
-                f"BLOCKED: Recon call #{consecutive + 1} — gate "
-                f"validation failed: {gate_result.error}. Your "
-                "gate_reason must address ALL four required points."
-            ),
-        )
-        gate_block = session.gate_manager.issue(gate_spec)
-        return {
-            "status": "blocked",
-            "error": {
-                "code": "GATE_VALIDATION_FAILED",
-                "message": gate_result.error,
-            },
-            "gate": gate_block,
-            "consecutive_recon_calls": consecutive + 1,
-        }
-
-    # No gate token — issue a new gate
-    gate_spec = GateSpec(
-        kind="recon_repeat",
-        reason_min_chars=_RECON_GATE_REASON_MIN,
-        reason_prompt=(
-            f"This is recon call #{consecutive + 1}. You MUST explain "
-            "in ≥500 characters: (1) what each previous recon call "
-            "returned, (2) what is STILL MISSING, (3) why terminal "
-            "reads cannot fill the gap, (4) what different seeds/task "
-            "you need this time."
-        ),
-        expires_calls=3,
-        message=(
-            f"BLOCKED: Recon call #{consecutive + 1} denied. You have "
-            "called recon multiple times without progressing to "
-            "refactor_edit. Stop calling recon — read files via "
-            "terminal (cat/head) and proceed to edit."
-        ),
-    )
-    gate_block = session.gate_manager.issue(gate_spec)
     return {
-        "status": "blocked",
-        "gate": gate_block,
-        "agentic_hint": (
-            f"⛔ RECON BLOCKED — CALL #{consecutive + 1} ⛔\n\n"
-            "You have called recon multiple times without making "
-            "any edits. STOP calling recon.\n\n"
-            "WHAT TO DO INSTEAD:\n"
-            "  1. Read files via terminal (cat/head/sed -n)\n"
-            "  2. Proceed to refactor_plan → refactor_edit → "
-            "checkpoint\n\n"
-            "TO UNLOCK (only if genuinely necessary):\n"
-            "  Step 1: Copy gate_token from the 'gate' object below\n"
-            f"  Step 2: Write gate_reason (≥{_RECON_GATE_REASON_MIN} "
-            "chars) explaining:\n"
-            "    - What each previous recon returned\n"
-            "    - What is STILL MISSING\n"
-            "    - Why terminal reads cannot fill the gap\n"
-            "    - What different seeds/task you need\n"
-            "  Step 3: Include pinned_paths\n"
-            "  Step 4: Call recon with all three params"
-        ),
-        "consecutive_recon_calls": consecutive + 1,
+        "gate_label": gate_label.value,
+        "candidates": result_candidates,
+        "predicted_n": predicted_n,
+        "diagnostics": diagnostics,
     }
-
-
-# ===================================================================
-# Tool Registration
-# ===================================================================
 
 
 def register_tools(mcp: FastMCP, app_ctx: AppContext, *, dev_mode: bool = False) -> None:
@@ -1150,7 +129,7 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext, *, dev_mode: bool = False)
 
     @mcp.tool(
         annotations={
-            "title": "Recon: task-aware code discovery",
+            "title": "Recon: task-aware context retrieval",
             "readOnlyHint": True,
             "openWorldHint": False,
         },
@@ -1161,201 +140,98 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext, *, dev_mode: bool = False)
             description=(
                 "Natural language description of the task. "
                 "Be specific: include symbol names, file paths, "
-                "or domain terms when known.  The server extracts "
-                "structured signals automatically."
+                "or domain terms when known."
             ),
         ),
-        read_only: bool = Field(
+        seeds: list[str] = Field(
+            default_factory=list,
             description=(
-                "Declare task intent. True = research/read-only session "
-                "(mutation tools blocked, sha256/edit_tickets skipped). "
-                "False = read-write session (full edit workflow enabled). "
-                "MANDATORY — you must explicitly declare intent every time."
+                "Symbol names to seed retrieval with "
+                "(e.g., ['IndexCoordinatorEngine', 'FactQueries'])."
             ),
         ),
-        seeds: list[str] | None = Field(
-            None,
+        pins: list[str] = Field(
+            default_factory=list,
             description=(
-                "Optional explicit seed symbol names "
-                "(e.g., ['IndexCoordinatorEngine', 'FactQueries']). "
-                "Treated as high-priority explicit mentions."
-            ),
-        ),
-        pinned_paths: list[str] | None = Field(
-            None,
-            description=(
-                "Optional file paths to pin as high-confidence "
-                "anchors (e.g., ['src/core/base_model.py']). "
-                "Pinned files calibrate the inclusion band and "
-                "always survive selection.  Use when you know "
-                "specific files are relevant."
-            ),
-        ),
-        expand_reason: str | None = Field(
-            None,
-            description=(
-                "REQUIRED on 2nd+ consecutive recon call (before any "
-                "refactor_edit).  Explain what was missing from the "
-                "first call, what needs expansion, and why (~250 chars "
-                "min).  Must accompany pinned_paths and semantic "
-                "anchors in the task query."
-            ),
-        ),
-        gate_token: str | None = Field(
-            None,
-            description=(
-                "Gate confirmation token from a previous recon gate "
-                "block.  Required on 3rd+ consecutive recon call."
-            ),
-        ),
-        gate_reason: str | None = Field(
-            None,
-            description=(
-                "Justification for 3rd+ consecutive recon call (min "
-                "500 chars).  Explain why 2 recon calls were "
-                "insufficient and what specific context is still missing."
+                "File paths to pin as relevant "
+                "(e.g., ['src/core/base_model.py'])."
             ),
         ),
     ) -> dict[str, Any]:
-        """Task-aware code discovery — ONE call, ALL context.
+        """Task-aware context retrieval — returns ranked semantic spans.
 
-        Returns file-level results ranked by embedding similarity,
-        with two fidelity tiers:
-        - SCAFFOLD: imports + signatures for top matches
-        - LITE: path + description for tail
+        Pipeline: retrieve → gate → rank → cutoff → return top N DefFacts.
 
-        Also includes a repo_map for structural orientation.
-        Read files via terminal (cat/head) for full content of files you
-        want to read or edit.
-
-        Pipeline: parse_task → file-level embedding harvest →
-        def-level enrichment → single-elbow tier assignment →
-        content assembly → deliver.
+        Each result includes def_uid, path, name, kind, line range, and
+        ranker score. Read files via terminal for full content.
         """
         recon_id = uuid.uuid4().hex[:12]
-        t_total = time.monotonic()
 
-        # ── Consecutive recon call gating ──
-        gate_block = _check_recon_gate(
-            app_ctx,
-            ctx,
-            expand_reason=expand_reason,
-            pinned_paths=pinned_paths,
-            gate_token=gate_token,
-            gate_reason=gate_reason,
-        )
-        if gate_block is not None:
-            return gate_block
-
-        # Increment consecutive recon counter
-        try:
-            session = app_ctx.session_manager.get_or_create(ctx.session_id)
-            session.counters["recon_consecutive"] = session.counters.get("recon_consecutive", 0) + 1
-        except Exception:  # noqa: BLE001
-            pass
-
-        coordinator = app_ctx.coordinator
-        repo_root = coordinator.repo_root
-
-        # ── File-centric pipeline ──
-        (
-            file_candidates,
-            parsed_task,
-            diagnostics,
-            session_info,
-        ) = await _file_centric_pipeline(
-            app_ctx,
-            task,
-            seeds,
-            pinned_paths=pinned_paths,
+        result = await _recon_pipeline(
+            app_ctx, task,
+            seeds=seeds or None,
+            pins=pins or None,
         )
 
-        if not file_candidates:
-            task_preview = task[:40] + "..." if len(task) > 40 else task
-            failure_actions = _build_failure_actions(
-                parsed_task.primary_terms,
-                parsed_task.explicit_paths,
+        gate_label = result["gate_label"]
+        candidates = result["candidates"]
+        diagnostics = result.get("diagnostics", {})
+
+        response: dict[str, Any] = {
+            "recon_id": recon_id,
+            "gate_label": gate_label,
+            "candidates": candidates,
+            "summary": (
+                f"gate={gate_label}, {len(candidates)} relevant spans"
+                if gate_label == "OK"
+                else f"gate={gate_label} — query not actionable"
+            ),
+            "diagnostics": diagnostics,
+        }
+
+        if gate_label == "OK" and candidates:
+            top_paths = list(dict.fromkeys(c["path"] for c in candidates[:8]))
+            response["agentic_hint"] = (
+                f"Recon found {len(candidates)} relevant spans across "
+                f"{len(set(c['path'] for c in candidates))} files. "
+                f"Top files: {', '.join(top_paths)}. "
+                f"Read files via terminal (cat/head) for full content."
             )
-            return {
-                "recon_id": recon_id,
-                "files": [],
-                "summary": f'No relevant files found for "{task_preview}"',
-                "agentic_hint": ("No relevant files found. See 'next_actions' for recovery steps."),
-                "next_actions": failure_actions,
+        elif gate_label != "OK":
+            hints = {
+                "UNSAT": "Query makes wrong assumptions about this repo. Verify and retry.",
+                "BROAD": "Task is too broad. Decompose into smaller sub-tasks.",
+                "AMBIG": "Query is ambiguous. Specify which subsystem you mean.",
             }
+            response["agentic_hint"] = hints.get(gate_label, "Retry with a clearer query.")
 
-        # ── Filter phantom files (stale embeddings / DB records) ──
-        pre_filter = len(file_candidates)
-        file_candidates = [fc for fc in file_candidates if (repo_root / fc.path).exists()]
-        phantom_count = pre_filter - len(file_candidates)
-        if phantom_count:
-            log.warning(
-                "recon.phantom_files_filtered",
-                removed=phantom_count,
-                remaining=len(file_candidates),
-            )
+        from codeplane.mcp.delivery import wrap_response
 
-        # ── Assemble file-centric response (v2: scaffold + lite only) ──
-        t_assemble = time.monotonic()
-        scaffold_files: list[dict[str, Any]] = []
-        lite_files: list[dict[str, Any]] = []
+        return wrap_response(
+            response,
+            resource_kind="recon_result",
+            session_id=ctx.session_id,
+        )
 
-        # Mint candidate_ids and build ID→path mapping for resolve validation
-        candidate_map: dict[str, str] = {}
+    @mcp.tool(
+        annotations={
+            "title": "Recon: repository structure map",
+            "readOnlyHint": True,
+            "openWorldHint": False,
+        },
+    )
+    async def recon_map(
+        ctx: Context,  # noqa: ARG001
+    ) -> dict[str, Any]:
+        """Repository structure map — file tree, languages, entry points.
 
-        for idx, fc in enumerate(file_candidates):
-            fc.candidate_id = f"{recon_id}:{idx}"
-            candidate_map[fc.candidate_id] = fc.path
-            full_path = repo_root / fc.path
-
-            if fc.tier.is_scaffold:
-                entry: dict[str, Any] = {
-                    "candidate_id": fc.candidate_id,
-                    "path": fc.path,
-                    "similarity": round(fc.similarity, 4),
-                    "combined_score": round(fc.combined_score, 4),
-                    "evidence": fc.evidence_summary,
-                    "artifact_kind": fc.artifact_kind.value,
-                }
-                # Include scaffold: imports + signatures
-                try:
-                    from codeplane.mcp.tools.files import _build_scaffold
-
-                    scaffold = await _build_scaffold(app_ctx, fc.path, full_path)
-                    entry["scaffold"] = scaffold
-                except Exception:  # noqa: BLE001
-                    # Fallback: read first 100 lines
-                    if full_path.exists():
-                        content = _read_unindexed_content(repo_root, fc.path)
-                        if content is not None:
-                            lines = content.splitlines()[:100]
-                            entry["scaffold_preview"] = "\n".join(lines)
-                scaffold_files.append(entry)
-
-            else:
-                # LITE: path + description only
-                lite_entry: dict[str, Any] = {
-                    "candidate_id": fc.candidate_id,
-                    "path": fc.path,
-                    "similarity": round(fc.similarity, 4),
-                    "combined_score": round(fc.combined_score, 4),
-                    "artifact_kind": fc.artifact_kind.value,
-                }
-                if full_path.exists():
-                    try:
-                        from codeplane.mcp.tools.files import _build_lite_scaffold
-
-                        lite = await _build_lite_scaffold(app_ctx, fc.path, full_path)
-                        lite_entry["summary"] = lite
-                    except Exception:  # noqa: BLE001
-                        pass
-                lite_files.append(lite_entry)
-
-        # ── Include repo map in every recon response ──
+        Returns the repo's directory structure, language distribution,
+        and key entry points. Use this to orient before calling recon.
+        """
         repo_map: dict[str, Any] = {}
         try:
             map_result = await app_ctx.coordinator.map_repo(
-                include=["structure", "entry_points"],
+                include=["structure", "languages", "entry_points"],
                 depth=3,
                 limit=100,
             )
@@ -1366,134 +242,13 @@ def register_tools(mcp: FastMCP, app_ctx: AppContext, *, dev_mode: bool = False)
                 **_map_repo_sections_to_text(map_result),
             }
         except Exception:  # noqa: BLE001
-            log.warning("recon.map_repo_failed", exc_info=True)
-
-        # Build set of all tracked paths for exhaustiveness checks
-        tracked_paths: set[str] = set()
-        try:
-            if map_result and map_result.structure and map_result.structure.all_paths:
-                tracked_paths = {p for p, _lc in map_result.structure.all_paths}
-        except Exception:  # noqa: BLE001
-            pass
-
-        assemble_ms = round((time.monotonic() - t_assemble) * 1000)
-        diagnostics["assemble_ms"] = assemble_ms
-
-        # Build response
-        n_files = len(scaffold_files) + len(lite_files)
-
-        response: dict[str, Any] = {
-            "recon_id": recon_id,
-            "repo_map": repo_map,
-            "repo_map_exhaustive": bool(tracked_paths),
-            "scaffold_files": scaffold_files,
-            "lite_files": lite_files,
-            "summary": (
-                f"{len(scaffold_files)} scaffold(s), "
-                f"{len(lite_files)} lite(s) "
-                f"across {n_files} file(s)"
-            ),
-            "scoring_summary": {
-                "pipeline": "file_embed→def_enrich→single_elbow→tier→assemble",
-                "intent": parsed_task.intent.value,
-                "file_candidates": len(file_candidates),
-                "tiers": {
-                    "scaffold": len(scaffold_files),
-                    "lite": len(lite_files),
-                },
-                "parsed_terms": parsed_task.primary_terms[:8],
-                "noise_metric": session_info.get("noise_metric", 0),
-            },
-        }
-
-        if parsed_task.explicit_paths:
-            response["scoring_summary"]["explicit_paths"] = parsed_task.explicit_paths
-        if parsed_task.negative_mentions:
-            response["scoring_summary"]["negative_mentions"] = parsed_task.negative_mentions
-
-        diagnostics["total_ms"] = round((time.monotonic() - t_total) * 1000)
-        response["diagnostics"] = diagnostics
-
-        # Agentic hint
-        intent = parsed_task.intent
-        top_paths = [f["path"] for f in scaffold_files[:5]]
-        top_paths_str = ", ".join(top_paths) if top_paths else "(none)"
-
-        hint_parts = [
-            f"Recon found {n_files} file(s) (intent: {intent.value})."
-            f" Scaffolds ({len(scaffold_files)}): {top_paths_str}."
-            f" Lite ({len(lite_files)}).",
-            "",
-            "HOW TO READ SCAFFOLDS: Each file has a header line:"
-            " '# path/to/file.py | candidate_id=XXXX | N lines'."
-            " Below the header: imports and symbol signatures"
-            " (functions, classes, methods with line numbers)."
-            " Use these to decide which files you need full content for.",
-            "",
-            "NEXT: Read the files you need via terminal (cat/head)"
-            " using paths from the scaffold headers."
-            " Then call refactor_plan with candidate_id values"
-            " to declare your edit set.",
-        ]
-
-        # Test co-evolution hint for write-mode recon calls
-        if not read_only:
-            # Count convention test pairs found in scaffold tier
-            conv_paths = session_info.get("convention_test_paths", set())
-            conv_in_scaffold = [f["path"] for f in scaffold_files if f["path"] in conv_paths]
-            if conv_in_scaffold:
-                hint_parts.append("")
-                hint_parts.append(
-                    "TEST CO-EVOLUTION: Test counterparts included in scaffolds."
-                    " When editing source files, also update or create their"
-                    " test counterparts. Include BOTH source and test files in"
-                    " your checkpoint changed_files."
-                )
-
-        # Missing path warnings — check pinned/explicit paths against tracked files
-        if tracked_paths:
-            requested_paths = set(pinned_paths or []) | set(parsed_task.explicit_paths or [])
-            missing_from_repo = sorted(requested_paths - tracked_paths)
-            if missing_from_repo:
-                hint_parts.append("")
-                hint_parts.append(
-                    "WARNING: These paths do not exist in the repository: "
-                    + ", ".join(missing_from_repo)
-                    + ". Do NOT search for them — they are confirmed absent from repo_map."
-                )
-
-        response["agentic_hint"] = "\n".join(hint_parts)
-
-        # Coverage hint
-        if parsed_task.explicit_paths:
-            found_paths = {f["path"] for f in scaffold_files} | {f["path"] for f in lite_files}
-            missing_paths = [p for p in parsed_task.explicit_paths if p not in found_paths]
-            if missing_paths:
-                response["coverage_hint"] = (
-                    "These paths do not exist in the repository: "
-                    f"{', '.join(missing_paths)}. "
-                    "Do NOT search for them — repo_map is exhaustive."
-                )
+            log.warning("recon_map.failed", exc_info=True)
+            repo_map = {"error": "Failed to build repo map"}
 
         from codeplane.mcp.delivery import wrap_response
 
-        # ── Store session state ──
-        try:
-            session = app_ctx.session_manager.get_or_create(ctx.session_id)
-            # Store candidate mapping for resolve validation
-            session.candidate_maps[recon_id] = candidate_map
-            # Mark recon as called in session state
-            session.counters["recon_called"] = 1
-            # Store read_only intent — gates mutation tools until
-            # a new recon call overrides it.
-            session.read_only = read_only
-            # Track last recon_id for plan validation
-            session.last_recon_id = recon_id
-        except Exception:  # noqa: BLE001
-            pass
-
         return wrap_response(
-            response,
-            resource_kind="recon_result",
+            repo_map,
+            resource_kind="repo_map",
             session_id=ctx.session_id,
         )

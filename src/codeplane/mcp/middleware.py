@@ -502,9 +502,6 @@ class ToolMiddleware(Middleware):
 
         session = self._session_manager.get_or_create(context.fastmcp_context.session_id)
 
-        # 1. Tick gate expiry (decrement pending gate counters)
-        session.gate_manager.tick()
-
         # 2. Record call in pattern detector
         #    Strip MCP prefix (e.g. "codeplane-copy3_search" -> "search")
         short_name = self._strip_tool_prefix(tool_name)
@@ -541,10 +538,6 @@ class ToolMiddleware(Middleware):
             hit_count=hit_count,
             clears_window=lint_mutated,
         )
-
-        # Reset consecutive recon counter when refactor_edit is called
-        if short_name == "refactor_edit":
-            session.counters["recon_consecutive"] = 0
 
         if pattern_match and pattern_match.severity == "warn":
             return pattern_match
