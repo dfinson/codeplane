@@ -18,7 +18,6 @@ from pathlib import Path
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import GroupKFold
 
 from cpl_ranking.train_ranker import (
     RANKER_FEATURES,
@@ -103,95 +102,75 @@ CUTOFF_FEATURES = [
 def train_cutoff(
     merged_dir: Path,
     output_path: Path,
-    n_folds: int = 5,
+    ranker_model_path: Path | None = None,
     params: dict | None = None,
 ) -> dict:
-    """Train the cutoff regressor with no-leakage K-fold.
+    """Train the cutoff regressor using disjoint repo split.
+
+    The ranker (trained on ranker+gate repos) scores cutoff repo
+    candidates. N* is computed from those scores. Zero leakage.
 
     Args:
         merged_dir: Path to ``data/merged/`` with Parquet files.
+            Must contain ``candidates_rank.parquet`` from cutoff repos
+            and ``queries.parquet`` with cutoff queries.
         output_path: Where to save ``cutoff.lgbm``.
-        n_folds: Number of folds for K-fold split.
+        ranker_model_path: Path to trained ``ranker.lgbm``.
+            If None, looks for it next to output_path.
         params: LightGBM parameters override.
 
     Returns:
         Training summary dict.
     """
-    from cpl_ranking.train_ranker import _load_candidates_from_parquet, _prepare_features
-
-    df = _load_candidates_from_parquet(merged_dir)
-    if df.empty:
-        raise ValueError("No candidate data found")
-
-    df = _prepare_features(df)
-
-    # Extract repo_id from run_id for fold splitting
-    df["repo_id"] = df["run_id"].str.rsplit("_", n=1).str[0]
-
-    # Group K-fold by repo
-    repos = df["repo_id"].unique()
-    repo_to_fold: dict[str, int] = {}
-    kf = GroupKFold(n_splits=min(n_folds, len(repos)))
-    for fold_idx, (_, test_idx) in enumerate(kf.split(repos, groups=repos)):
-        for ri in test_idx:
-            repo_to_fold[repos[ri]] = fold_idx
-
-    df["fold"] = df["repo_id"].map(repo_to_fold)
-
-    # Collect cutoff training rows from out-of-fold scoring
-    cutoff_rows: list[dict] = []
-
-    for fold in range(n_folds):
-        train_mask = df["fold"] != fold
-        test_mask = df["fold"] == fold
-
-        if test_mask.sum() == 0:
-            continue
-
-        train_df = df[train_mask]
-        test_df = df[test_mask]
-
-        # Train fold ranker
-        group_col = train_df["run_id"] + "__" + train_df["query_id"]
-        train_sorted = train_df.sort_values(by=["run_id", "query_id"]).reset_index(drop=True)
-        group_sizes = train_sorted.groupby(
-            train_sorted["run_id"] + "__" + train_sorted["query_id"], sort=True
-        ).size().values
-
-        X_train = train_sorted[RANKER_FEATURES].values
-        y_train = train_sorted["label_relevant"].astype(int).values
-
-        train_data = lgb.Dataset(X_train, label=y_train, group=group_sizes)
-        fold_ranker = lgb.train(
-            {"objective": "lambdarank", "metric": "ndcg", "verbose": -1,
-             "learning_rate": 0.05, "num_leaves": 63},
-            train_data,
-            num_boost_round=300,
+    # Load ranker for scoring cutoff candidates
+    if ranker_model_path is None:
+        ranker_model_path = output_path.parent / "ranker.lgbm"
+    if not ranker_model_path.exists():
+        raise FileNotFoundError(
+            f"Ranker model not found at {ranker_model_path}. "
+            f"Train the ranker first."
         )
 
-        # Score held-out queries
-        for (run_id, query_id), qdf in test_df.groupby(["run_id", "query_id"]):
-            X_q = qdf[RANKER_FEATURES].values
-            scores = fold_ranker.predict(X_q)
-            labels = qdf["label_relevant"].astype(int).values
+    from cpl_ranking.train_ranker import _prepare_features
 
-            # Sort by predicted score
-            order = np.argsort(-scores)
-            sorted_scores = scores[order]
-            sorted_labels = labels[order]
-            sorted_hits = qdf["retriever_hits"].values[order]
+    ranker = lgb.Booster(model_file=str(ranker_model_path))
 
-            n_star = _compute_n_star(sorted_scores, sorted_labels)
+    # Load cutoff candidates
+    candidates_df = pd.read_parquet(merged_dir / "candidates_rank.parquet")
+    if candidates_df.empty:
+        raise ValueError("No candidate data found")
 
-            feat = _extract_cutoff_features(
-                sorted_scores, sorted_hits,
-                query_len=int(qdf["query_len"].iloc[0]),
-                has_identifier=bool(qdf["has_identifier"].iloc[0]),
-                has_path=bool(qdf["has_path"].iloc[0]),
-                n_candidates=len(qdf),
-            )
-            feat["n_star"] = n_star
-            cutoff_rows.append(feat)
+    candidates_df = _prepare_features(candidates_df)
+
+    # Score all candidates with the trained ranker
+    feature_names = ranker.feature_name()
+    X_all = candidates_df[feature_names].fillna(0).values
+    candidates_df["ranker_score"] = ranker.predict(X_all)
+
+    # Compute N* per query
+    cutoff_rows: list[dict] = []
+
+    for (run_id, query_id), qdf in candidates_df.groupby(["run_id", "query_id"]):
+        scores = qdf["ranker_score"].values
+        labels = qdf["label_relevant"].astype(int).values
+
+        # Sort by predicted score
+        order = np.argsort(-scores)
+        sorted_scores = scores[order]
+        sorted_labels = labels[order]
+        sorted_hits = qdf["retriever_hits"].values[order]
+
+        n_star = _compute_n_star(sorted_scores, sorted_labels)
+
+        feat = _extract_cutoff_features(
+            sorted_scores, sorted_hits,
+            query_len=int(qdf["query_len"].iloc[0]),
+            has_identifier=bool(qdf["has_identifier"].iloc[0]),
+            has_path=bool(qdf["has_path"].iloc[0]),
+            n_candidates=len(qdf),
+        )
+        feat["n_star"] = n_star
+        cutoff_rows.append(feat)
 
     if not cutoff_rows:
         raise ValueError("No cutoff training rows generated")

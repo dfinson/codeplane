@@ -91,24 +91,26 @@ and load balancers are silently closed after the proxy's idle timeout.
 Implement automatic ping/pong with a configurable interval (default 30s)
 and a dead connection timeout.
 
-### N4: Fix `FileMiddleware` not setting `Content-Type` for `.wasm` files
+### N4: Fix `FileMiddleware` not setting `Cache-Control` for versioned assets
 
-`FileMiddleware` uses an extension-to-MIME lookup to set the
-`Content-Type` header when serving static files. WebAssembly `.wasm`
-files are not included in the mapping, so they are served as
-`application/octet-stream`. Browsers refuse to compile-stream them
-without the correct `application/wasm` type. Add the mapping entry
-for `.wasm` and any other modern file types missing from the table.
+`FileMiddleware` in `Sources/Vapor/Middleware/FileMiddleware.swift`
+serves static files but does not set `Cache-Control` headers. Assets
+with version hashes in their filenames (e.g., `app.a1b2c3.js`) should
+receive long-lived cache headers (`max-age=31536000, immutable`),
+while unversioned assets should receive short-lived headers. Add a
+configurable `CachePolicy` option to `FileMiddleware` that supports
+pattern-based cache control rules (e.g., by file extension or path
+prefix) with sensible defaults.
 
-### N5: Fix `CORSMiddleware` not handling preflight `DELETE` and `PATCH` correctly
+### N5: Fix `ErrorMiddleware` not including request ID in error responses
 
-When a browser sends an `OPTIONS` preflight request with
-`Access-Control-Request-Method: DELETE` or `PATCH`, the middleware
-returns the allowed methods list but omits the
-`Access-Control-Max-Age` header, causing the browser to re-send the
-preflight on every request. Also, the middleware does not set
-`Vary: Origin` when the configuration allows a specific origin list.
-Fix both header omissions.
+`ErrorMiddleware` in `Sources/Vapor/Middleware/ErrorMiddleware.swift`
+returns a JSON error response with `reason` and `error` fields, but
+does not include the request's unique ID. When debugging production
+errors, correlating a client-received error with server logs requires
+matching timestamps. Add the `req.id` value as a `requestID` field
+in the error response JSON and as an `X-Request-ID` response header
+so clients and support teams can reference specific request traces.
 
 ### N6: Fix route parameter percent-decoding for path components with `+`
 
@@ -144,25 +146,28 @@ connection-reset errors. Implement graceful shutdown: stop accepting
 new connections, wait for in-flight requests to complete (with a
 configurable timeout, default 30s), then close the server.
 
-### N10: Fix `Sessions` cookie not setting `SameSite` attribute
+### N10: Fix `PlaintextEncoder` not handling non-UTF-8 string encodings
 
-The session cookie set by `SessionsMiddleware` does not include the
-`SameSite` attribute. Modern browsers default missing `SameSite` to
-`Lax`, which breaks legitimate cross-origin POST flows (e.g., OAuth
-callbacks). Add a `sameSite` configuration option to
-`SessionsConfiguration` with `.lax`, `.strict`, and `.none` values,
-defaulting to `.lax`.
+`PlaintextEncoder` in `Sources/Vapor/Content/PlaintextEncoder.swift`
+assumes all string content is UTF-8 encoded. When a route returns a
+`Content` type whose `String` property contains characters that
+require a different encoding (e.g., Latin-1 from a legacy database),
+the encoder produces mojibake. Add a configurable `String.Encoding`
+parameter to `PlaintextEncoder` (defaulting to `.utf8`) and set
+the `charset` parameter in the `Content-Type` header to match.
 
 ## Medium
 
-### M1: Implement request body validation middleware
+### M1: Implement request ID propagation across service boundaries
 
-Add declarative request body validation via a `Validatable` protocol.
-Types conforming to `Validatable` declare validation rules:
-`.count(1...100)`, `.email`, `.url`, `.custom(closure)`. Add a
-`ValidateMiddleware` that runs validations before the route handler
-and returns structured error responses with per-field error messages.
-Support nested object validation and conditional validation rules.
+Vapor generates a unique request ID but does not propagate it to
+outbound HTTP client calls or include it in structured log metadata
+beyond `req.logger`. Implement a `RequestIDMiddleware` that extracts
+incoming `X-Request-ID` headers (or generates a new UUID), attaches
+it to the request's `Storage`, automatically injects it into
+outbound `Client` requests as a header, and adds it to task-local
+logger metadata so all downstream `async` code inherits the ID.
+Support configurable header names and ID generation strategies.
 
 ### M2: Add database query logging with source location
 
@@ -173,14 +178,16 @@ threshold), and all queries. Include query duration, bound parameters
 (with sensitive value masking), and row count. Add an in-memory query
 log for testing assertions.
 
-### M3: Implement server response compression
+### M3: Implement response body streaming for large file downloads
 
-Add configurable response compression middleware supporting gzip,
-deflate, and brotli. Negotiate encoding via Accept-Encoding header.
-Support minimum response size threshold, content type filtering
-(compress text/JSON but not images), and compression level
-configuration. Add streaming compression for large responses.
-Use SwiftNIO's built-in compression support where available.
+The current `FileIO.streamFile` in `Sources/Vapor/Utilities/FileIO.swift`
+reads files through NIO file handles but does not support HTTP range
+requests or conditional fetching. Implement `Range` header parsing
+and `206 Partial Content` responses with proper `Content-Range`
+headers. Support multi-range requests returning
+`multipart/byteranges` content. Add `Accept-Ranges: bytes` to file
+response headers. Handle `If-Range` conditional requests. Add
+configurable read-ahead buffer size for streaming performance.
 
 ### M4: Add structured concurrency-aware request context
 
@@ -263,15 +270,19 @@ should be registerable per version. Add automatic OpenAPI spec
 generation per version. Support version deprecation warnings in
 response headers. Include a version migration guide generator.
 
-### W2: Implement distributed tracing and observability
+### W2: Implement cross-origin request forgery (CSRF) protection framework
 
-Add OpenTelemetry-compatible distributed tracing. Create spans for
-each request through the middleware pipeline, route handler, Fluent
-database queries, Redis operations, and outbound HTTP client calls.
-Propagate trace context across service boundaries via W3C Trace
-Context headers. Add metrics collection (request count, latency
-histogram, error rate) with Prometheus export. Include a health
-check endpoint with dependency status.
+Add a `CSRFMiddleware` that protects against CSRF attacks across
+Vapor's middleware, session, and content systems. Generate per-session
+CSRF tokens stored in `SessionData` via
+`Sources/Vapor/Sessions/SessionsMiddleware.swift`. Validate tokens
+submitted as hidden form fields or `X-CSRF-Token` headers on
+state-changing requests (POST, PUT, DELETE, PATCH). Support
+double-submit cookie pattern as an alternative for stateless APIs.
+Integrate with `Content` decoding so `req.content.decode()` can
+automatically extract and validate the token. Add token rotation
+on each request to prevent replay attacks. Expose token generation
+helpers for use in HTML template rendering.
 
 ### W3: Implement end-to-end type-safe HTML templating engine
 
@@ -328,27 +339,32 @@ default with a Redis adapter for multi-instance deployments.
 Integrate with the middleware pipeline for authentication and add
 a JavaScript client helper for frontend consumption.
 
-### W8: Add CLI command framework and scaffolding generator
+### W8: Add request throttling and circuit breaker for outbound client calls
 
-Implement a command subsystem registered via `app.commands.use(...)`.
-Commands receive a `CommandContext` with access to the application's
-services (Fluent, logger, configuration). Add built-in commands:
-`routes` (list all registered routes with middleware),
-`migrate` (run/rollback Fluent migrations), `serve` (start server),
-and `generate` (scaffold models, controllers, migrations from
-templates). Support interactive prompts, progress bars, and colored
-output. Allow third-party packages to register commands automatically.
+Vapor's built-in `Client` in `Sources/Vapor/Client/` fires requests
+with no rate control or failure isolation. Implement a
+`ThrottledClient` wrapper that limits concurrent outbound requests
+per host with configurable connection pools. Add a circuit breaker
+that tracks per-host error rates and temporarily fails fast with a
+`503` when a downstream service is unhealthy. Support states:
+closed (normal), open (blocking), half-open (probe). Configure
+error rate thresholds, evaluation windows, and recovery timeouts.
+Integrate with `Application.Clients` lifecycle and add structured
+logging for state transitions and throttled requests.
 
-### W9: Implement request pipeline testing DSL
+### W9: Implement full WebSocket channel abstraction with rooms
 
-Add a testing library that lets integration tests exercise the full
-Vapor pipeline without starting a real HTTP server. Provide a DSL:
-`app.test(.GET, "/users") { res in XCTAssertEqual(res.status, .ok) }`.
-Support authenticated requests, custom headers, JSON body encoding,
-multipart uploads, WebSocket testing, and session persistence across
-requests. Add response assertion helpers for status, headers, JSON
-body paths, and cookie values. Include snapshot testing for response
-bodies with automatic approval workflow.
+Build a high-level WebSocket channel system on top of Vapor's
+existing WebSocket support in `Sources/Vapor/Routing/` and
+`Sources/Vapor/Concurrency/WebSocket+Concurrency.swift`. Define
+typed channels via a `Channel` protocol with join/leave lifecycle
+hooks. Support named rooms within channels with authorization
+callbacks per room. Implement presence tracking (which clients are
+connected to each room). Add typed message serialization using
+`Codable`. Support broadcasting to all room members, specific
+clients, or all-except-sender. Integrate with the authentication
+middleware so channels can access `req.auth`. Add client heartbeat
+monitoring with configurable dead-connection eviction.
 
 ### W10: Add configuration layering and environment-aware secrets
 

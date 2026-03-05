@@ -52,7 +52,7 @@ RANKER_GATE=(
   https://github.com/colinhacks/zod
 )
 
-# ── Cutoff set (20 repos) ───────────────────────────────────────
+# ── Cutoff set (31 repos) ───────────────────────────────────────
 CUTOFF=(
   https://github.com/pallets/click
   https://github.com/Textualize/rich
@@ -74,6 +74,18 @@ CUTOFF=(
   https://github.com/SnapKit/SnapKit
   https://github.com/nlohmann/json
   https://github.com/gabime/spdlog
+  https://github.com/pallets/jinja
+  https://github.com/tiangolo/typer
+  https://github.com/marshmallow-code/marshmallow
+  https://github.com/pallets/flask
+  https://github.com/sindresorhus/execa
+  https://github.com/go-chi/chi
+  https://github.com/crossbeam-rs/crossbeam
+  https://github.com/assertj/assertj
+  https://github.com/jbogard/MediatR
+  https://github.com/lostisland/faraday
+  https://github.com/thephpleague/flysystem
+  https://github.com/Moya/Moya
 )
 
 # ── Eval set (15 repos) ─────────────────────────────────────────

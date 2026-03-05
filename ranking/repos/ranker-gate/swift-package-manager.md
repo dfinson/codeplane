@@ -114,12 +114,16 @@ version constraints or resolution details. Add a `--verbose` flag
 that shows the version constraint from Package.swift alongside each
 resolved version.
 
-### N7: Fix `swift test --enable-code-coverage` not merging coverage from multiple test targets
+### N7: Fix `swift build` not reporting which target caused a linker error
 
-When a package has multiple test targets, coverage data is generated
-per-target but never merged. The final coverage report only includes
-data from the last test target. Fix coverage aggregation to merge
-profdata from all test targets.
+When a linker error occurs during `swift build`, the error output
+shows raw linker diagnostics (undefined symbols, duplicate symbols)
+without indicating which target or product triggered the link step.
+The `SwiftCompilerOutputParser` in
+`Sources/Build/SwiftCompilerOutputParser.swift` parses compiler
+diagnostics but the linker output path in `BuildOperation` does not
+map linker invocations back to their target. Add target attribution
+to linker error messages so developers know which target to fix.
 
 ### N8: Fix `@testable import` failing for mixed Swift/C targets
 
@@ -242,15 +246,18 @@ thresholds (fail if coverage drops below N%), and support coverage
 diff (show only coverage changes in a PR). Integrate with
 `Package.swift` for per-target coverage exclusions.
 
-### W3: Implement binary dependency framework
+### W3: Implement dependency license auditing and compliance
 
-Add support for pre-built binary dependencies as an alternative to
-source dependencies. Support XCFramework bundles, Swift module
-interfaces (`.swiftinterface`), and C module maps. Implement a
-binary artifact server protocol where packages can declare binary
-targets hosted on a remote server. Support binary compatibility
-checks (Swift version, ABI stability). Cache downloaded binaries
-across projects on disk.
+Add `swift package audit-licenses` that scans all resolved
+dependencies, detects their licenses (from `LICENSE`, `COPYING`,
+`Package.swift` metadata), and reports compliance against a
+configurable policy. Support allow-lists and deny-lists of SPDX
+license identifiers. Flag packages with missing or unrecognizable
+licenses. Support `--format json|text|sarif` output for CI
+integration. Generate a combined license attribution file suitable
+for app distribution. Changes span `Sources/Commands/` for the
+new subcommand, `Sources/PackageLoading/` for license detection,
+and `Sources/Workspace/` for dependency metadata access.
 
 ### W4: Implement distributed build with remote caching
 
@@ -260,23 +267,34 @@ compiler version, and build flags. Support cache warm on CI. Handle
 incremental builds correctly with partial cache hits. Changes span
 the build planner, compilation pipeline, cache protocol, and CLI.
 
-### W5: Add cross-compilation support with sysroot management
+### W5: Add parallel test execution with resource isolation
 
-Implement `swift build --target x86_64-unknown-linux-gnu --sysroot /path`
-that cross-compiles packages. Manage sysroot downloads for common
-targets (Linux on macOS, macOS on Linux for testing). Handle C
-library detection in cross-compilation contexts. Changes span the
-build system, toolchain resolution, linker configuration, and
-platform abstraction.
+Implement `swift test --parallel` that runs test targets
+concurrently and distributes individual test cases across
+worker processes. Provide per-worker temporary directories to
+isolate file system side effects. Merge test results from all
+workers into a unified report. Support `--parallel-workers N`
+for configurable parallelism. Handle test target dependencies
+that require serial execution via annotation. Changes span
+`Sources/Commands/SwiftTestCommand.swift` for CLI flags,
+`Sources/Commands/Utilities/TestingSupport.swift` for worker
+orchestration, and `Sources/Build/` for test product discovery.
+Add JUnit XML output merging for CI systems.
 
-### W6: Implement package plugin sandboxing and permissions
+### W6: Implement build trace profiling and bottleneck analysis
 
-Add a security model for package plugins: plugins declare required
-capabilities (file write, network, process execution) in their
-manifest. The build system prompts for approval on first use. Apply
-filesystem sandboxing (plugins can only write to declared paths).
-Log all plugin operations. Changes span the plugin host, build
-system, manifest parser, and security enforcement.
+Add `swift build --trace` that records a detailed build timeline
+tracing every compilation, linking, and resource processing step
+with wall-clock timing and dependency relationships. Output a
+Chrome Trace Event format (JSON) file viewable in
+`chrome://tracing` or Perfetto. Identify the critical path and
+report the longest sequential chain. Detect build bottlenecks:
+targets that block parallelism, unnecessarily broad dependencies,
+and slow individual compilations. Changes span
+`Sources/Build/LLBuildProgressTracker.swift` for event capture,
+`Sources/Build/BuildOperation.swift` for dependency tracking,
+`Sources/Commands/SwiftBuildCommand.swift` for the CLI flag, and
+a new trace serialization module.
 
 ### W7: Add visual dependency graph and build timeline
 
@@ -288,14 +306,20 @@ showing parallel compilation, linking, and resource processing with
 per-target timing. Changes span graph generation, build event
 collection, and add visualization output.
 
-### W8: Implement multi-package workspace support
+### W8: Implement unused dependency detection and cleanup
 
-Add workspace-level package management where a root Package.swift
-declares member packages. Cross-workspace package references use
-local paths automatically. Shared dependency resolution across all
-workspace members. Support `swift build --workspace-filter=pkg/*`.
-Changes span the workspace model, dependency resolver, build planner,
-and CLI.
+Add `swift package clean-deps` that analyzes import statements
+across all targets and cross-references them with declared
+dependencies in Package.swift. Report dependencies that are
+declared but never imported (unused) and imports that reference
+modules not declared as dependencies (missing). Support
+`--auto-fix` to remove unused entries from Package.swift via
+`Sources/PackageModel/ManifestSourceGeneration.swift`. Handle
+conditional imports (`#if canImport`), re-exports, and
+`@_implementationOnly` imports. Changes span
+`Sources/Commands/` for the new subcommand,
+`Sources/Basics/ImportScanning.swift` for import analysis, and
+`Sources/PackageGraph/` for dependency graph querying.
 
 ### W9: Add integrated benchmarking framework
 
@@ -306,11 +330,16 @@ against baselines, and result storage. Support `@Benchmark` macro
 for annotating functions. Changes span the package model (benchmark
 target type), build system, test runner, statistics engine, and CLI.
 
-### W10: Implement package documentation generation and hosting
+### W10: Implement dependency update impact analysis
 
-Add `swift package generate-docs` that produces documentation from
-DocC markup, generates a static site, includes API reference for
-all public types, cross-references between packages in a workspace,
-and symbol search. Support serving locally and publishing to GitHub
-Pages. Changes span the build system (symbol graph generation),
-documentation compiler, static site generator, and CLI commands.
+Add `swift package update --dry-run --impact` that simulates a
+dependency update without modifying `Package.resolved` and reports:
+which packages would change versions, API differences between
+current and new versions (added/removed/changed public symbols),
+potential breaking changes detected via Swift module interface
+comparison, and estimated rebuild scope (which targets would need
+recompilation). Changes span `Sources/Commands/PackageCommands/Update.swift`
+for the CLI, `Sources/Workspace/Workspace+Dependencies.swift` for
+dry-run resolution, `Sources/Commands/Utilities/APIDigester.swift`
+for symbol diffing, and `Sources/Build/BuildPlan/` for rebuild
+scope estimation.

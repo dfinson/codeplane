@@ -75,22 +75,29 @@ but omits the body for multipart upload requests. It shows
 with `--form` flags for each multipart part, including file references
 and content types.
 
-### N3: Fix `DownloadRequest` not calling `EventMonitor.requestDidFinish`
+### N3: Fix `AuthenticationInterceptor` not cancelling queued requests on credential invalidation
 
-When a `DownloadRequest` completes successfully, the `EventMonitor`
-receives `downloadDidFinishDownloadingTo` but not the generic
-`requestDidFinish` event. Code that observes request completion via
-`requestDidFinish` misses download completions. Emit `requestDidFinish`
-after `downloadDidFinishDownloadingTo`.
+When `AuthenticationInterceptor` detects an expired credential and
+begins a refresh cycle, requests that arrive during the refresh are
+queued in `mutableState.additionalRequests`. If the credential refresh
+fails permanently (e.g., refresh token revoked), the queued requests
+are completed with the refresh error but their underlying
+`URLSessionTask`s are never cancelled. This leaves zombie tasks
+consuming connections. Cancel the underlying tasks for all queued
+requests when credential refresh fails in
+`Source/Features/AuthenticationInterceptor.swift`.
 
-### N4: Fix `HTTPHeaders` case-sensitivity mismatch on `value(for:)`
+### N4: Fix `RequestTaskMap` not cleaning up cancelled tasks
 
-`HTTPHeaders.value(for:)` performs a case-insensitive lookup, but
-`HTTPHeaders.remove(name:)` only removes the first matching header by
-case-sensitive comparison. When a server returns duplicate headers with
-different casing (e.g. `Content-Type` and `content-type`), removing by
-name leaves stale entries. Fix `remove(name:)` to use the same
-case-insensitive matching that `value(for:)` uses.
+In `Source/Core/RequestTaskMap.swift`, when a `Request` is cancelled
+and its `URLSessionTask` transitions to `.completed`, the entry is
+removed from the map. However, if the cancellation races with task
+creation (the task is cancelled before the delegate receives
+`didCreateTask`), the `RequestTaskMap` retains a dangling entry
+for the request with no associated task. Over time this leaks
+memory in long-lived `Session` instances. Add cleanup logic in the
+task-to-request mapping path to remove entries whose tasks are in
+a terminal state.
 
 ### N5: Fix `URLEncodedFormEncoder` dropping nested array parameters
 
@@ -101,23 +108,28 @@ the second value. The array index tracking resets when recursing into
 nested containers. Fix the encoder to correctly track array indices
 across nested levels so all values are emitted.
 
-### N6: Fix `Session.deinit` not cancelling in-flight requests
+### N6: Fix `ParameterEncoder` not encoding `Date` values consistently
 
-When a `Session` instance is deallocated while requests are still in
-flight, the underlying `URLSession` is invalidated but individual
-`Request` objects are never cancelled. Their completion handlers fire
-with a confusing `URLError.cancelled` instead of an Alamofire-level
-error. Cancel all tracked requests in `Session.deinit` before
-invalidating the `URLSession` so callers receive `AFError.sessionDeinitialized`.
+When using `JSONParameterEncoder` vs `URLEncodedFormParameterEncoder`
+to encode a struct containing `Date` fields, the two encoders produce
+inconsistent date representations. `JSONParameterEncoder` uses the
+underlying `JSONEncoder.dateEncodingStrategy` (defaulting to
+`deferredToDate`), while `URLEncodedFormEncoder` in
+`Source/Features/URLEncodedFormEncoder.swift` always uses
+`timeIntervalSinceReferenceDate`. Add a `DateEncoding` configuration
+to `URLEncodedFormEncoder` that supports `.iso8601`,
+`.secondsSince1970`, and `.formatted(DateFormatter)` to match
+`JSONEncoder`'s strategies.
 
-### N7: Fix `Validation` content-type check failing on parameters
+### N7: Fix `ServerTrustManager` not supporting wildcard subdomains
 
-`validate(contentType:)` matches the response MIME type against the
-acceptable set using exact string comparison, but some servers return
-content types with parameters (e.g. `application/json; charset=utf-8`).
-A request validated with `[.json]` fails because the parameter suffix
-does not match. Parse the MIME type properly and compare only the
-type/subtype portion, ignoring parameters.
+`ServerTrustManager` in `Source/Features/ServerTrustEvaluation.swift`
+looks up evaluators by exact host match. A configuration like
+`["*.example.com": PinnedCertificatesTrustEvaluator(...)]` does not
+match `api.example.com` because the lookup uses dictionary subscript
+without wildcard expansion. Fix `serverTrustEvaluator(forHost:)` to
+support leading-wildcard patterns by matching against the host's
+parent domain when no exact match is found.
 
 ### N8: Fix `ResponseSerializer` treating empty 201 response as failure
 
@@ -128,23 +140,29 @@ and `205`. Add `201` to the default `emptyResponseCodes` when the
 generic type is `Empty` or `Void`, so empty creation responses succeed
 without requiring callers to override the defaults.
 
-### N9: Fix `Notifications` posted on background queue instead of main
+### N9: Fix `MultipartFormData` not setting `filename` for `Data` appends
 
-`Notification.Name.Task` notifications for request lifecycle events
-are posted on the `URLSession` delegate queue (a background serial
-queue) instead of the main queue. UI code that observes these
-notifications to update progress indicators crashes with a main-thread
-assertion. Post the notifications on the main queue, or document the
-threading contract and dispatch in the `NotificationCenter` posting.
+When appending raw `Data` to `MultipartFormData` via
+`append(_ data:, withName:, mimeType:)` in
+`Source/Features/MultipartFormData.swift`, the `Content-Disposition`
+header omits the `filename` parameter. Some server frameworks
+(e.g., Rails, Django) reject file uploads that lack a `filename`
+in the multipart part headers, returning 422 errors. Add an optional
+`fileName` parameter to the `Data` append overload (defaulting to
+`nil` for backward compatibility) and include it in the
+`Content-Disposition` when provided.
 
-### N10: Fix `URLConvertible` double-encoding percent-encoded paths
+### N10: Fix `DownloadRequest` resume data not included in `AFError`
 
-When a `String` conforming to `URLConvertible` already contains
-percent-encoded characters (e.g. `/path/hello%20world`), calling
-`asURL()` re-encodes the percent sign, producing `/path/hello%2520world`.
-This causes 404s for URLs with pre-encoded segments. Use
-`URL(string:)` without additional encoding when the string is already
-a valid URL, only falling back to percent-encoding for raw strings.
+When a `DownloadRequest` fails after partial transfer, the resume
+data from `URLSessionDownloadTask` is stored in
+`DownloadRequest.mutableState.resumeData` in
+`Source/Core/DownloadRequest.swift`, but the `AFError` delivered to
+response handlers does not include it. Callers must separately
+access `request.resumeData` which may be nil by the time the error
+handler runs if the request is deallocated. Attach the resume data
+to the `AFError.downloadedFileMoveFailed` error case so that error
+handlers have the data needed to retry the download.
 
 ## Medium
 
@@ -185,15 +203,17 @@ Map `URLSessionTaskMetrics` and `URLSessionTaskTransactionMetrics`
 into Alamofire's type system. Support aggregation across redirect
 chains and retry attempts.
 
-### M5: Implement configurable automatic retry with exponential backoff
+### M5: Add request deduplication for identical in-flight requests
 
-Add a built-in `ExponentialBackoffRetryPolicy` conforming to
-`RequestInterceptor` that retries failed requests with configurable
-base delay, multiplier, maximum delay, maximum retry count, and
-jitter. Support retry only for idempotent HTTP methods by default.
-Detect retryable errors (network timeouts, 429, 503) and respect
-`Retry-After` headers when present. Integrate with `EventMonitor`
-to report retry attempts and total retry duration.
+Implement a `RequestDeduplicator` that detects when multiple callers
+make identical requests (same URL, method, headers, and body) while
+a matching request is already in flight. Instead of sending duplicate
+requests, attach additional response handlers to the existing
+`Request`. Key deduplication by a configurable hash of request
+properties. Support opting out per-request for non-idempotent
+methods. Track deduplication statistics (hits, total saved requests)
+through `EventMonitor`. Integrate with `Session` as a configurable
+option in `Source/Core/Session.swift`.
 
 ### M6: Add request/response logging interceptor
 
@@ -214,14 +234,17 @@ pattern (e.g. `*.api.example.com`). Prioritize queued requests
 using `RequestPriority` from M3 if set. Expose queue depth and
 active connection count through `EventMonitor` for monitoring.
 
-### M8: Add custom redirect handling policy
+### M8: Add request body compression with content negotiation
 
-Implement a `RedirectHandler` protocol that intercepts HTTP redirects
-before they are followed. Support policies: follow all, follow
-same-host only, follow with header stripping (remove `Authorization`
-on cross-origin redirect), and block. Allow per-request override of
-the session-level policy. Expose the redirect chain (all intermediate
-URLs and status codes) on the completed `Request` for debugging.
+Implement automatic request body compression that integrates with
+`RequestCompression` in `Source/Features/RequestCompression.swift`.
+Currently `RequestCompression` only supports deflate. Add gzip and
+zstd support with algorithm selection based on server capability
+advertised via `Accept-Encoding` response headers from prior
+requests. Cache server compression support per-host. Add a
+`CompressionNegotiator` adapter that can be attached to `Session`
+to automatically compress request bodies above a configurable
+size threshold and set the appropriate `Content-Encoding` header.
 
 ### M9: Implement offline request queue with persistence
 
@@ -233,15 +256,18 @@ requests, maximum queue depth, and conflict resolution when the same
 endpoint is queued multiple times. Report queue state changes through
 `EventMonitor`.
 
-### M10: Add response streaming with incremental progress
+### M10: Add typed error recovery chain for response serialization
 
-Implement a streaming response API on `DataRequest` that delivers
-response data in chunks as they arrive instead of buffering the
-entire response. Expose a `DataStream<Data>` that yields chunks with
-cumulative progress. Support back-pressure so slow consumers pause
-the transfer. Integrate with `Validation` to validate response
-headers (status code, content type) before streaming begins, failing
-fast without buffering the body.
+Implement an error recovery mechanism for `ResponseSerializer` types
+in `Source/Features/ResponseSerialization.swift`. When a
+`DecodableResponseSerializer` fails to decode the response body,
+allow registering fallback serializers that attempt alternative
+deserialization strategies (e.g., try a v2 API model, then a v1
+model, then an error envelope model). Chain fallbacks via
+`responseDecodable(of:fallbacks:)` on `DataRequest`. Each fallback
+receives the original response data and the previous error. Report
+which serializer succeeded through `EventMonitor` so callers can
+track API version drift.
 
 ## Wide
 
@@ -254,15 +280,18 @@ simulation (latency, packet loss, bandwidth throttling), request
 assertion (verify expected requests were made in order), and
 automatic mock generation from live traffic. Integrate with XCTest.
 
-### W2: Implement reactive/Combine extensions as first-class API
+### W2: Add SwiftUI-native request state management
 
-Add Combine publishers for all Alamofire request types. Return
-`AnyPublisher<DataResponse<T>, Never>` from request methods.
-Support progress tracking via `Progress` publisher, streaming
-responses via `Data` publisher chunks, and cancellation via
-Combine subscription lifecycle. Add SwiftUI integration with
-`@Published` request state. Support back-pressure for streaming.
-Deprecate the completion-handler API in favor of Combine/async-await.
+Build a SwiftUI integration layer on top of Alamofire's existing
+async/await and Combine support. Add a `@RequestState` property
+wrapper that manages request lifecycle (idle, loading, success,
+failure) with automatic view updates. Add an `AlamofireView`
+modifier that triggers requests on appear and handles retry UI.
+Support pull-to-refresh binding, pagination state tracking, and
+automatic request cancellation when views disappear. Integrate
+with `Session`, `DataRequest`, and `DownloadRequest` in
+`Source/Core/`. Add `Identifiable` conformance to `Request` for
+list-based UIs. Include a preview-compatible mock `Session`.
 
 ### W3: Add full GraphQL client layer
 
@@ -298,16 +327,19 @@ caching, body compression (gzip/brotli), and content negotiation.
 Middleware should compose with existing `RequestInterceptor` and
 `EventMonitor` without replacing them.
 
-### W6: Implement WebSocket support with automatic reconnection
+### W6: Add network traffic recording and replay for testing
 
-Add a `WebSocketRequest` type that manages a WebSocket connection
-through Alamofire's session. Support text and binary messages,
-ping/pong, and connection close handshake. Implement automatic
-reconnection with configurable backoff when the connection drops.
-Route WebSocket lifecycle events through `EventMonitor`. Support
-per-message compression (permessage-deflate). Integrate with
-`ServerTrustEvaluation` for secure WebSocket (wss://) connections.
-Add message framing helpers for JSON-based WebSocket protocols.
+Build a traffic recording system that captures all HTTP
+request/response pairs flowing through a `Session` and exports
+them in a structured format. Implement a `RecordingEventMonitor`
+that serializes requests (URL, method, headers, body) and
+responses (status, headers, body, timing) to a JSON-based
+cassette file. Add a `ReplayProtocolProvider` using
+`URLProtocol` subclass that intercepts requests and returns
+recorded responses by matching URL, method, and optionally
+headers/body. Support strict mode (fail on unmatched requests)
+and loose mode (pass through to network). Support updating
+stale cassettes by re-recording only changed endpoints.
 
 ### W7: Add distributed tracing with OpenTelemetry-compatible spans
 

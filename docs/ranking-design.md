@@ -211,11 +211,15 @@ grouping. No test co-retrieval. Presentation is the consumer's concern.
 
 ### 4.1 Repo Selection
 
-One unified repo set: **50 repos**, 10 languages × 5 repos per language
-(small/medium/large scale diversity). All 50 repos train all 3 models.
-Cutoff uses K-fold out-of-fold ranker predictions for no-leakage training.
+Three repo sets:
 
-**Total:** 50 repos, 1,500 tasks, 12,000–21,000 queries.
+- **Ranker + Gate** (30 repos): train ranker and gate. 10 languages × 3 repos.
+- **Cutoff** (31 repos): train cutoff with disjoint data. 10 languages × 3 repos + 1.
+  No K-fold needed — cutoff repos are scored by the ranker trained on the
+  ranker+gate set, so no leakage.
+- **Eval** (15 repos): held-out evaluation. 10 languages + 5 extra.
+
+**Total:** 76 repos, 2,280 tasks, ~18,000+ queries.
 
 ### 4.2 Task Generation
 
@@ -531,8 +535,9 @@ One group per `(run_id, query_id)`. Per-candidate features from
 
 ### 5.5 `queries_cutoff`
 
-One row per OK query. Score distribution features from out-of-fold
-ranker output + $N^*$ target.
+One row per OK query from CUTOFF repos only. Score distribution
+features from ranker output (ranker trained on ranker+gate repos)
++ $N^*$ target.
 
 ### 5.6 `queries_gate`
 
@@ -549,12 +554,12 @@ gate label.
 2. Train LightGBM LambdaMART grouped by `(run_id, query_id)`.
 3. Binary relevance gain.
 
-### 6.2 Cutoff (no-leakage K-fold across all 50 repos)
+### 6.2 Cutoff (disjoint repo split)
 
-1. 5-fold split across repos (10 repos per fold).
-2. Per fold: train ranker on 40 repos, score held-out 10.
-3. Compute $N^*$ per held-out query.
-4. Aggregate → 7,500 rows.
+1. Train ranker on 30 ranker+gate repos.
+2. Score all 31 cutoff repos with the trained ranker.
+3. Compute $N^*$ per cutoff query.
+4. ~7,400 rows, zero leakage (ranker never saw cutoff data).
 5. Train cutoff regressor.
 
 ### 6.3 Gate
@@ -565,11 +570,11 @@ gate label.
 
 ### 6.4 Shipment Sequence
 
-1. Data collection (all 50 repos)
-2. Gate training → gate ships (wired into heuristic pipeline)
-3. Ranker training → validate NDCG on held-out data
-4. Cutoff training (depends on validated ranker)
-5. Full pipeline ships (gate + ranker + cutoff replaces heuristic recon)
+1. Data collection (30 ranker+gate repos, 31 cutoff repos, 15 eval repos)
+2. Gate training (30 ranker+gate repos) → gate ships
+3. Ranker training (30 ranker+gate repos) → validate NDCG on eval set
+4. Cutoff training (31 cutoff repos scored by trained ranker)
+5. Full pipeline ships (gate + ranker + cutoff)
 
 ---
 
