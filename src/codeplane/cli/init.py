@@ -540,15 +540,6 @@ def initialize_repo(
         for f in modified_agent_files:
             status(f"Updated {f} with CodePlane instructions", style="info")
 
-    # === cplcache Script Injection ===
-    from codeplane.templates import get_cplcache_script
-
-    scripts_dir = codeplane_dir / "scripts"
-    scripts_dir.mkdir(parents=True, exist_ok=True)
-    cplcache_path = scripts_dir / "cplcache.py"
-    cplcache_path.write_text(get_cplcache_script(), encoding="utf-8")
-    status("Installed cplcache.py → .codeplane/scripts/", style="info")
-
     # === Discovery Phase ===
     from codeplane.index._internal.grammars import (
         get_needed_grammars,
