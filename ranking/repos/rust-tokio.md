@@ -68,7 +68,7 @@ tokio/src/
 
 ## Tasks
 
-10 tasks (3 narrow, 4 medium, 3 wide) for the Rust async runtime.
+30 tasks (10 narrow, 10 medium, 10 wide).
 
 ## Narrow
 
@@ -95,71 +95,6 @@ When `tokio::runtime::Runtime::shutdown_timeout` is called, pending
 expires instead of returning immediately with an error. Fix the accept
 implementation to poll the runtime shutdown signal and return an error
 when the runtime is shutting down.
-
-## Medium
-
-### M1: Implement priority-based task scheduling
-
-Add task priority support to the multi-threaded scheduler. Tasks spawned
-with `tokio::spawn_with_priority(priority, future)` should be scheduled
-according to their priority level (High, Normal, Low). High-priority
-tasks should be dequeued before normal and low. Implement this without
-degrading the performance of the normal-priority fast path. Add
-metrics for per-priority queue depths.
-
-### M2: Add structured concurrency with `TaskGroup`
-
-Implement a `tokio::task::TaskGroup` that manages a set of spawned
-tasks as a unit. When the group is dropped or cancelled, all tasks in
-the group are cancelled. The group should propagate panics from child
-tasks to the parent. Provide `group.spawn()` and `group.join_all()`
-methods. Support nested groups.
-
-### M3: Implement async `Read`/`Write` for Unix domain sockets with fd passing
-
-The current `UnixStream` supports async read/write but not file
-descriptor passing (`sendmsg`/`recvmsg` with `SCM_RIGHTS`). Implement
-`send_fd()` and `recv_fd()` methods on `UnixStream` that allow passing
-file descriptors between processes. This requires interfacing with
-the I/O driver for readiness notification on ancillary data.
-
-### M4: Add runtime metrics export via `tracing`
-
-Implement automatic export of runtime metrics (task count, task poll
-duration histogram, I/O driver event count, timer wheel size, thread
-pool utilization) through the `tracing` subscriber system. Emit
-metrics as `tracing` events with structured fields so any tracing
-subscriber (e.g., tracing-opentelemetry) can collect them. Add
-configurable emission intervals.
-
-## Wide
-
-### W1: Implement io_uring backend for Linux
-
-Add an io_uring-based I/O driver as an alternative to the epoll driver
-on Linux. This affects the I/O driver, file operations, networking
-(TCP accept, read, write), and timer implementation. The io_uring
-backend should be selectable at runtime via a builder option. Implement
-buffer ring support for zero-copy reads. Maintain the existing epoll
-backend as the default.
-
-### W2: Add WASM/WASI runtime support
-
-Port the Tokio runtime to work in WebAssembly/WASI environments.
-Replace the multi-threaded scheduler with a single-threaded variant
-(no threads in WASM), adapt the I/O driver to use WASI's async I/O
-primitives, remove signal handling, and use WASI clocks for timers.
-Provide a feature flag (`wasm`) that configures the appropriate
-backend. Keep the API surface identical where possible.
-
-### W3: Implement cross-runtime task migration
-
-Add support for migrating a running task from one Tokio runtime to
-another. This enables load balancing across multiple runtime instances
-in a process. Implement a migration protocol that checkpoints the
-task's state (waker, resources), transfers it to the target runtime,
-and resumes execution. Handle I/O resource ownership transfer and
-timer re-registration. Add a `Runtime::migrate_task()` API.
 
 ### N4: Fix broadcast channel `recv` missing messages under high contention
 
@@ -222,6 +157,42 @@ instead of reflecting the actual source. The readiness state transitions
 before the OS-level `recvfrom` populates the address buffer. Fix the
 readiness flow to ensure the address is fully populated before returning.
 
+## Medium
+
+### M1: Implement priority-based task scheduling
+
+Add task priority support to the multi-threaded scheduler. Tasks spawned
+with `tokio::spawn_with_priority(priority, future)` should be scheduled
+according to their priority level (High, Normal, Low). High-priority
+tasks should be dequeued before normal and low. Implement this without
+degrading the performance of the normal-priority fast path. Add
+metrics for per-priority queue depths.
+
+### M2: Add structured concurrency with `TaskGroup`
+
+Implement a `tokio::task::TaskGroup` that manages a set of spawned
+tasks as a unit. When the group is dropped or cancelled, all tasks in
+the group are cancelled. The group should propagate panics from child
+tasks to the parent. Provide `group.spawn()` and `group.join_all()`
+methods. Support nested groups.
+
+### M3: Implement async `Read`/`Write` for Unix domain sockets with fd passing
+
+The current `UnixStream` supports async read/write but not file
+descriptor passing (`sendmsg`/`recvmsg` with `SCM_RIGHTS`). Implement
+`send_fd()` and `recv_fd()` methods on `UnixStream` that allow passing
+file descriptors between processes. This requires interfacing with
+the I/O driver for readiness notification on ancillary data.
+
+### M4: Add runtime metrics export via `tracing`
+
+Implement automatic export of runtime metrics (task count, task poll
+duration histogram, I/O driver event count, timer wheel size, thread
+pool utilization) through the `tracing` subscriber system. Emit
+metrics as `tracing` events with structured fields so any tracing
+subscriber (e.g., tracing-opentelemetry) can collect them. Add
+configurable emission intervals.
+
 ### M5: Add cooperative budget tracking for user-spawned blocking tasks
 
 The blocking thread pool spawns tasks via `spawn_blocking` but does not
@@ -282,6 +253,35 @@ their full capacity before slowing the upstream. Implement a cooperative
 protocol where an `mpsc::Sender` can optionally subscribe to downstream
 pressure signals, so the entire pipeline stalls together. Add a
 `PressureAware` wrapper type and builder method to opt in per-channel.
+
+## Wide
+
+### W1: Implement io_uring backend for Linux
+
+Add an io_uring-based I/O driver as an alternative to the epoll driver
+on Linux. This affects the I/O driver, file operations, networking
+(TCP accept, read, write), and timer implementation. The io_uring
+backend should be selectable at runtime via a builder option. Implement
+buffer ring support for zero-copy reads. Maintain the existing epoll
+backend as the default.
+
+### W2: Add WASM/WASI runtime support
+
+Port the Tokio runtime to work in WebAssembly/WASI environments.
+Replace the multi-threaded scheduler with a single-threaded variant
+(no threads in WASM), adapt the I/O driver to use WASI's async I/O
+primitives, remove signal handling, and use WASI clocks for timers.
+Provide a feature flag (`wasm`) that configures the appropriate
+backend. Keep the API surface identical where possible.
+
+### W3: Implement cross-runtime task migration
+
+Add support for migrating a running task from one Tokio runtime to
+another. This enables load balancing across multiple runtime instances
+in a process. Implement a migration protocol that checkpoints the
+task's state (waker, resources), transfers it to the target runtime,
+and resumes execution. Handle I/O resource ownership transfer and
+timer re-registration. Add a `Runtime::migrate_task()` API.
 
 ### W4: Implement distributed tracing context propagation across runtime boundaries
 

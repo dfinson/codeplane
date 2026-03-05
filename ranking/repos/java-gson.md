@@ -56,7 +56,7 @@ gson/src/main/java/com/google/gson/
 
 ## Tasks
 
-8 tasks (3 narrow, 3 medium, 2 wide) for the Java JSON library.
+30 tasks (10 narrow, 10 medium, 10 wide).
 
 ## Narrow
 
@@ -83,54 +83,6 @@ After calling `skipValue()` to skip a large nested JSON object,
 error messages. The line counter does not track newlines within the
 skipped content. Fix `skipValue()` to correctly count newlines even
 when skipping.
-
-## Medium
-
-### M1: Implement JSON streaming with back-pressure
-
-Add a `JsonStreamer` class that reads from an `InputStream` and emits
-parsed JSON tokens incrementally without buffering the entire document.
-Support configurable buffer sizes. When the consumer pauses, the reader
-should stop consuming from the stream (back-pressure). Support streaming
-serialization as well — writing large collections element by element
-without holding the full list in memory.
-
-### M2: Add null-safety annotations throughout the API
-
-Annotate all public API methods with `@Nullable` and `@NonNull`
-(from `org.jspecify.annotations`). Add annotations to `Gson`,
-`JsonElement`, `JsonObject`, `JsonArray`, `TypeAdapter`, `TypeToken`,
-and all public interfaces. This requires auditing each method's actual
-null behavior and fixing any methods whose behavior contradicts the
-annotation.
-
-### M3: Implement custom `TypeAdapter` composition
-
-Add a `TypeAdapters.compose()` method that chains multiple TypeAdapters
-together: the first adapter serializes/deserializes, then the result
-is passed to the next adapter. This enables reusable transformations
-(e.g., trim strings, clamp numbers) that compose with any base type
-adapter without subclassing.
-
-## Wide
-
-### W1: Add JSON Schema validation during deserialization
-
-Implement JSON Schema (draft-2020-12) validation that can be applied
-during deserialization. Add a `@JsonSchema` annotation that references
-a schema resource, and a `GsonBuilder.setSchemaValidation()` option.
-Schema violations should be collected as a list (not fail-fast) and
-reported through a new `SchemaViolationException`. Support `$ref`,
-`oneOf`, `allOf`, `anyOf`, and format validation.
-
-### W2: Implement Gson 3.0 API with sealed interfaces and pattern matching
-
-Design and implement a modernized Gson API that takes advantage of
-Java 17+ features: sealed interfaces for `JsonElement` (enabling
-pattern matching with `switch`), records for configuration, a builder
-API using method chaining with generics, and `Stream<JsonElement>`
-support for lazy iteration over JSON arrays. Maintain backward
-compatibility through a compatibility layer.
 
 ### N4: Fix `TypeToken` failing for intersection types in generic bounds
 
@@ -160,6 +112,34 @@ When a class enables `excludeFieldsWithoutExposeAnnotation()` and extends a supe
 
 `new JsonPrimitive(new BigDecimal("1.0")).equals(new JsonPrimitive(new BigDecimal("1.00")))` returns `false` because `BigDecimal.equals()` considers scale. This contradicts JSON semantics where `1.0` and `1.00` are the same number. Fix `JsonPrimitive.equals()` to use `compareTo()` instead of `equals()` for `BigDecimal` comparisons.
 
+## Medium
+
+### M1: Implement JSON streaming with back-pressure
+
+Add a `JsonStreamer` class that reads from an `InputStream` and emits
+parsed JSON tokens incrementally without buffering the entire document.
+Support configurable buffer sizes. When the consumer pauses, the reader
+should stop consuming from the stream (back-pressure). Support streaming
+serialization as well — writing large collections element by element
+without holding the full list in memory.
+
+### M2: Add null-safety annotations throughout the API
+
+Annotate all public API methods with `@Nullable` and `@NonNull`
+(from `org.jspecify.annotations`). Add annotations to `Gson`,
+`JsonElement`, `JsonObject`, `JsonArray`, `TypeAdapter`, `TypeToken`,
+and all public interfaces. This requires auditing each method's actual
+null behavior and fixing any methods whose behavior contradicts the
+annotation.
+
+### M3: Implement custom `TypeAdapter` composition
+
+Add a `TypeAdapters.compose()` method that chains multiple TypeAdapters
+together: the first adapter serializes/deserializes, then the result
+is passed to the next adapter. This enables reusable transformations
+(e.g., trim strings, clamp numbers) that compose with any base type
+adapter without subclassing.
+
 ### M4: Add hierarchical `TypeAdapterFactory` registration with priority
 
 Currently all factories registered via `GsonBuilder.registerTypeAdapterFactory()` are stored in a flat list and resolved in insertion order. Add a priority mechanism so factories can declare precedence levels. Factories at higher priority override lower ones for the same type, and the resolution logic in `Gson.getAdapter()` respects the ordering. Update `GsonBuilder` and the internal factory chain accordingly.
@@ -187,6 +167,26 @@ Add a `JsonPath` class that evaluates JSONPath expressions (dot notation, bracke
 ### M10: Add `GsonBuilder` validation for conflicting configuration
 
 `GsonBuilder` silently accepts contradictory settings — for example, enabling `serializeNulls()` and then registering a custom serializer that skips nulls, or setting two different date formats without the second overriding the first clearly. Add a `GsonBuilder.validate()` method that detects common conflicts and ambiguities, returning a list of warnings. Call this automatically during `create()` when a new `strictMode()` builder option is enabled.
+
+## Wide
+
+### W1: Add JSON Schema validation during deserialization
+
+Implement JSON Schema (draft-2020-12) validation that can be applied
+during deserialization. Add a `@JsonSchema` annotation that references
+a schema resource, and a `GsonBuilder.setSchemaValidation()` option.
+Schema violations should be collected as a list (not fail-fast) and
+reported through a new `SchemaViolationException`. Support `$ref`,
+`oneOf`, `allOf`, `anyOf`, and format validation.
+
+### W2: Implement Gson 3.0 API with sealed interfaces and pattern matching
+
+Design and implement a modernized Gson API that takes advantage of
+Java 17+ features: sealed interfaces for `JsonElement` (enabling
+pattern matching with `switch`), records for configuration, a builder
+API using method chaining with generics, and `Stream<JsonElement>`
+support for lazy iteration over JSON arrays. Maintain backward
+compatibility through a compatibility layer.
 
 ### W3: Add asynchronous serialization and deserialization API
 

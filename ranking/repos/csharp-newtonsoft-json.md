@@ -60,7 +60,7 @@ Src/Newtonsoft.Json/
 
 ## Tasks
 
-8 tasks (3 narrow, 3 medium, 2 wide) for the C# JSON framework.
+30 tasks (10 narrow, 10 medium, 10 wide).
 
 ## Narrow
 
@@ -86,55 +86,6 @@ Parsing a JSON document with ~1000 levels of nesting causes a
 `StackOverflowException` because the recursive descent parser uses
 the call stack for nesting depth tracking. Add a configurable maximum
 depth (default 64) and throw a `JsonReaderException` when exceeded.
-
-## Medium
-
-### M1: Implement async serialization and deserialization
-
-Add `JsonConvert.SerializeObjectAsync` and `DeserializeObjectAsync`
-that work with `Stream` and use async I/O. The async path should
-not buffer the entire JSON in memory. Support `CancellationToken`
-for cancellation. The async reader/writer should yield periodically
-to avoid blocking the thread pool on large documents.
-
-### M2: Add support for `System.Text.Json` JsonDocument interop
-
-Implement converters that bridge between Newtonsoft.Json's `JToken`
-tree and System.Text.Json's `JsonDocument`/`JsonElement`. Add
-`JToken.FromJsonElement(JsonElement)` and `JToken.ToJsonElement()`.
-Support round-tripping without data loss. Handle the semantic
-differences between the two JSON models (Newtonsoft allows duplicate
-keys, System.Text.Json does not).
-
-### M3: Implement JSON Patch (RFC 6902) support
-
-Add a `JsonPatch` class that represents a sequence of JSON Patch
-operations (add, remove, replace, move, copy, test). Implement
-`JToken.ApplyPatch(JsonPatch)` and `JsonPatch.Create(JToken original, JToken modified)` that generates the minimal patch between two
-documents. Support atomic patch application (all-or-nothing).
-
-## Wide
-
-### W1: Add JSON Schema generation from .NET types
-
-Implement `JsonSchema.Generate<T>()` that produces a JSON Schema
-(draft-2020-12) from a .NET type using its Newtonsoft.Json serialization
-configuration. Respect `[JsonProperty]` attributes, `[JsonConverter]`
-annotations, `Required` settings, `NullValueHandling`, and custom
-contract resolvers. Support recursive types, generic types, inheritance
-(`$ref`, `allOf`), and enum schemas. Add schema validation for
-`JToken` instances.
-
-### W2: Implement source generator for compile-time serialization
-
-Add a C# source generator that emits serialization/deserialization
-code at compile time, eliminating runtime reflection cost. The
-generator should analyze `[JsonObject]` and `[JsonProperty]`
-annotations, handle contract customization, support converters, and
-produce code equivalent to the reflection-based serializer. Add a
-`[JsonSourceGeneration]` attribute to opt-in per type. Maintain
-behavioral parity with the runtime serializer for all supported
-features.
 
 ### N4: Fix `JsonTextReader` ignoring trailing commas in strict mode
 
@@ -193,6 +144,32 @@ the item from the internal list but does not reset the removed
 token's `Parent` property to `null`. This causes the removed token
 to still report the old array as its parent, leading to incorrect
 behavior when the token is added to a different container.
+
+## Medium
+
+### M1: Implement async serialization and deserialization
+
+Add `JsonConvert.SerializeObjectAsync` and `DeserializeObjectAsync`
+that work with `Stream` and use async I/O. The async path should
+not buffer the entire JSON in memory. Support `CancellationToken`
+for cancellation. The async reader/writer should yield periodically
+to avoid blocking the thread pool on large documents.
+
+### M2: Add support for `System.Text.Json` JsonDocument interop
+
+Implement converters that bridge between Newtonsoft.Json's `JToken`
+tree and System.Text.Json's `JsonDocument`/`JsonElement`. Add
+`JToken.FromJsonElement(JsonElement)` and `JToken.ToJsonElement()`.
+Support round-tripping without data loss. Handle the semantic
+differences between the two JSON models (Newtonsoft allows duplicate
+keys, System.Text.Json does not).
+
+### M3: Implement JSON Patch (RFC 6902) support
+
+Add a `JsonPatch` class that represents a sequence of JSON Patch
+operations (add, remove, replace, move, copy, test). Implement
+`JToken.ApplyPatch(JsonPatch)` and `JsonPatch.Create(JToken original, JToken modified)` that generates the minimal patch between two
+documents. Support atomic patch application (all-or-nothing).
 
 ### M4: Add polymorphic deserialization using a configurable discriminator property
 
@@ -263,6 +240,29 @@ applied. Add logic in `DefaultContractResolver.CreateConstructorParameters`
 to match constructor parameters to JSON properties using the resolved
 property name rather than the CLR parameter name. Support `init`-only
 setters and `with`-expression cloning for record population.
+
+## Wide
+
+### W1: Add JSON Schema generation from .NET types
+
+Implement `JsonSchema.Generate<T>()` that produces a JSON Schema
+(draft-2020-12) from a .NET type using its Newtonsoft.Json serialization
+configuration. Respect `[JsonProperty]` attributes, `[JsonConverter]`
+annotations, `Required` settings, `NullValueHandling`, and custom
+contract resolvers. Support recursive types, generic types, inheritance
+(`$ref`, `allOf`), and enum schemas. Add schema validation for
+`JToken` instances.
+
+### W2: Implement source generator for compile-time serialization
+
+Add a C# source generator that emits serialization/deserialization
+code at compile time, eliminating runtime reflection cost. The
+generator should analyze `[JsonObject]` and `[JsonProperty]`
+annotations, handle contract customization, support converters, and
+produce code equivalent to the reflection-based serializer. Add a
+`[JsonSourceGeneration]` attribute to opt-in per type. Maintain
+behavioral parity with the runtime serializer for all supported
+features.
 
 ### W3: Implement a JSON diff engine producing RFC 6902 patches
 

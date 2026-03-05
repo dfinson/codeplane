@@ -66,7 +66,7 @@ okhttp/src/main/kotlin/okhttp3/
 
 ## Tasks
 
-8 tasks (3 narrow, 3 medium, 2 wide) for the Java/Kotlin HTTP client.
+30 tasks (10 narrow, 10 medium, 10 wide).
 
 ## Narrow
 
@@ -92,56 +92,6 @@ When a `Call` is cancelled via `call.cancel()`, the `EventListener`
 receives `callFailed` but not `callEnd`. The contract says `callEnd`
 is always the last event. Fix the cancellation path to emit `callEnd`
 after `callFailed` when the call is cancelled.
-
-## Medium
-
-### M1: Implement automatic retry with exponential backoff
-
-Add configurable automatic retry for failed requests. Support
-retry on connection failures, 5xx responses, and configurable
-status codes. Use exponential backoff with jitter. Add a
-`RetryPolicy` interface with a default implementation, configurable
-via `OkHttpClient.Builder.retryPolicy()`. Respect `Retry-After`
-headers. Track retry count in the response for observability.
-
-### M2: Add HTTP/3 (QUIC) transport support
-
-Implement an HTTP/3 transport using QUIC. Add connection migration
-support (handling network changes without reconnection), 0-RTT
-connection resumption, and Alt-Svc header parsing for HTTP/3
-discovery. The transport should be selectable via the client builder
-and fall back to HTTP/2 when QUIC is unavailable.
-
-### M3: Implement response body decompression pipeline
-
-Currently OkHttp handles gzip decompression as a special case in
-the `BridgeInterceptor`. Refactor to support a pluggable decompression
-pipeline: gzip, deflate, brotli, and zstd. Each decompressor should
-implement a common interface. Content-Encoding negotiation should
-advertise all available decompressors in the Accept-Encoding header.
-Add content verification (checksum) after decompression.
-
-## Wide
-
-### W1: Add comprehensive request/response logging interceptor
-
-Implement a new `HttpLoggingInterceptor` with structured logging
-output. Support logging levels: basic (method, URL, status, duration),
-headers (basic + request/response headers with sensitive header
-masking), body (headers + request/response body with size limits and
-content type filtering). Add format options: text, JSON, and custom
-formatters. Log multipart request bodies with per-part metadata.
-Support async logging to avoid blocking the request thread.
-
-### W2: Implement connection health monitoring dashboard
-
-Add an internal monitoring system that tracks: connection pool
-utilization (active/idle/total per host), connection lifetimes, TLS
-handshake durations, DNS resolution times, request durations
-(percentiles), retry rates, and cache hit rates. Expose metrics
-through a `MetricsListener` interface and provide a JMX MBean
-implementation. Add a diagnostic `dump()` method that produces a
-human-readable report of all connection pool state.
 
 ### N4: Fix certificate pinning bypass on redirects to different hosts
 
@@ -199,6 +149,34 @@ ping frames are queued behind data frames. If the pong deadline
 expires before the queued ping is sent, the connection is incorrectly
 closed as unresponsive. Fix the frame writer to prioritize ping/pong
 control frames over queued data frames.
+
+## Medium
+
+### M1: Implement automatic retry with exponential backoff
+
+Add configurable automatic retry for failed requests. Support
+retry on connection failures, 5xx responses, and configurable
+status codes. Use exponential backoff with jitter. Add a
+`RetryPolicy` interface with a default implementation, configurable
+via `OkHttpClient.Builder.retryPolicy()`. Respect `Retry-After`
+headers. Track retry count in the response for observability.
+
+### M2: Add HTTP/3 (QUIC) transport support
+
+Implement an HTTP/3 transport using QUIC. Add connection migration
+support (handling network changes without reconnection), 0-RTT
+connection resumption, and Alt-Svc header parsing for HTTP/3
+discovery. The transport should be selectable via the client builder
+and fall back to HTTP/2 when QUIC is unavailable.
+
+### M3: Implement response body decompression pipeline
+
+Currently OkHttp handles gzip decompression as a special case in
+the `BridgeInterceptor`. Refactor to support a pluggable decompression
+pipeline: gzip, deflate, brotli, and zstd. Each decompressor should
+implement a common interface. Content-Encoding negotiation should
+advertise all available decompressors in the Accept-Encoding header.
+Add content verification (checksum) after decompression.
 
 ### M4: Add mutual TLS (client certificate) rotation without restart
 
@@ -269,6 +247,28 @@ option to opt in to this behavior. Ensure cached authenticated
 responses are properly revalidated and that the cache key includes
 enough request metadata to prevent serving one user's cached response
 to another.
+
+## Wide
+
+### W1: Add comprehensive request/response logging interceptor
+
+Implement a new `HttpLoggingInterceptor` with structured logging
+output. Support logging levels: basic (method, URL, status, duration),
+headers (basic + request/response headers with sensitive header
+masking), body (headers + request/response body with size limits and
+content type filtering). Add format options: text, JSON, and custom
+formatters. Log multipart request bodies with per-part metadata.
+Support async logging to avoid blocking the request thread.
+
+### W2: Implement connection health monitoring dashboard
+
+Add an internal monitoring system that tracks: connection pool
+utilization (active/idle/total per host), connection lifetimes, TLS
+handshake durations, DNS resolution times, request durations
+(percentiles), retry rates, and cache hit rates. Expose metrics
+through a `MetricsListener` interface and provide a JMX MBean
+implementation. Add a diagnostic `dump()` method that produces a
+human-readable report of all connection pool state.
 
 ### W3: Refactor interceptor chain to support async non-blocking execution
 

@@ -60,7 +60,7 @@ src/Composer/
 
 ## Tasks
 
-8 tasks (3 narrow, 3 medium, 2 wide) for the PHP dependency manager.
+30 tasks (10 narrow, 10 medium, 10 wide).
 
 ## Narrow
 
@@ -87,56 +87,6 @@ When a package provides a platform extension replacement via
 still warns that `ext-json` is missing. The platform checker does not
 consult the `replace` field. Fix the checker to treat replaced
 extensions as available.
-
-## Medium
-
-### M1: Implement parallel package downloads
-
-Add parallel downloading of package archives. When `composer install`
-determines the set of packages to download, spawn multiple concurrent
-download workers (default 4, configurable via `--concurrency=N`).
-Show a combined progress bar with per-package status. Handle partial
-failures (retry individual downloads) without aborting the entire
-operation. Support parallel git clones for source installs.
-
-### M2: Add security vulnerability scanning
-
-Implement `composer audit` that checks installed packages against a
-vulnerability database (Packagist security advisories). Report CVE
-IDs, severity, affected version ranges, and fixed versions. Support
-`--format=json` for CI integration. Add `--ignore=CVE-2024-XXXX` for
-acknowledged vulnerabilities. Run automatically after `composer install`
-with a configurable severity threshold.
-
-### M3: Implement workspace/monorepo support
-
-Add `composer.json` workspace support for monorepos containing multiple
-packages. A root workspace config lists member packages by directory.
-Cross-references between workspace packages use local paths
-automatically. `composer install` in the root resolves dependencies
-for all workspace members together, deduplicating shared dependencies.
-Add `--workspace-filter=pkg/*` to operate on a subset.
-
-## Wide
-
-### W1: Add plugin sandboxing for security
-
-Implement a security sandbox for Composer plugins. Plugins currently
-have full access to the filesystem and network. Add a permission system
-where plugins declare required capabilities (filesystem read/write paths,
-network hosts, command execution) and the user approves them on first
-use. Store approved permissions in a lock file. Block undeclared
-operations at runtime. Add `composer plugin:audit` to review plugin
-permissions.
-
-### W2: Implement dependency resolution visualization and debugging
-
-Add rich dependency resolution diagnostics: visual dependency tree
-(`composer why-tree pkg/name`), conflict explanation with the full
-resolution trace (`composer why-not pkg/name:2.0` with step-by-step
-solver reasoning), resolution time profiling (which constraints took
-the longest to satisfy), and a browser-based interactive dependency
-graph that shows version constraints, conflicts, and resolution paths.
 
 ### N4: Fix `VcsRepository` failing to detect tags with slashes in names
 
@@ -201,6 +151,35 @@ in the lock file. A subsequent `composer install` on a clean checkout
 emits a "lock file out of date" warning even though the lock is correct.
 Fix the require command to recalculate and write the content hash after
 modifying the lock file.
+
+## Medium
+
+### M1: Implement parallel package downloads
+
+Add parallel downloading of package archives. When `composer install`
+determines the set of packages to download, spawn multiple concurrent
+download workers (default 4, configurable via `--concurrency=N`).
+Show a combined progress bar with per-package status. Handle partial
+failures (retry individual downloads) without aborting the entire
+operation. Support parallel git clones for source installs.
+
+### M2: Add security vulnerability scanning
+
+Implement `composer audit` that checks installed packages against a
+vulnerability database (Packagist security advisories). Report CVE
+IDs, severity, affected version ranges, and fixed versions. Support
+`--format=json` for CI integration. Add `--ignore=CVE-2024-XXXX` for
+acknowledged vulnerabilities. Run automatically after `composer install`
+with a configurable severity threshold.
+
+### M3: Implement workspace/monorepo support
+
+Add `composer.json` workspace support for monorepos containing multiple
+packages. A root workspace config lists member packages by directory.
+Cross-references between workspace packages use local paths
+automatically. `composer install` in the root resolves dependencies
+for all workspace members together, deduplicating shared dependencies.
+Add `--workspace-filter=pkg/*` to operate on a subset.
 
 ### M4: Implement a `composer outdated --direct` summary report
 
@@ -273,6 +252,27 @@ a tree of conflicting requirements with the exact version ranges each
 constraint allows. Suggest the minimum set of packages that need to be
 updated to unblock the requested version. Support `--format=json` for
 programmatic consumption.
+
+## Wide
+
+### W1: Add plugin sandboxing for security
+
+Implement a security sandbox for Composer plugins. Plugins currently
+have full access to the filesystem and network. Add a permission system
+where plugins declare required capabilities (filesystem read/write paths,
+network hosts, command execution) and the user approves them on first
+use. Store approved permissions in a lock file. Block undeclared
+operations at runtime. Add `composer plugin:audit` to review plugin
+permissions.
+
+### W2: Implement dependency resolution visualization and debugging
+
+Add rich dependency resolution diagnostics: visual dependency tree
+(`composer why-tree pkg/name`), conflict explanation with the full
+resolution trace (`composer why-not pkg/name:2.0` with step-by-step
+solver reasoning), resolution time profiling (which constraints took
+the longest to satisfy), and a browser-based interactive dependency
+graph that shows version constraints, conflicts, and resolution paths.
 
 ### W3: Implement lock file conflict auto-resolution for merge workflows
 

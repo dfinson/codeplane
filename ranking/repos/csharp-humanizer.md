@@ -50,7 +50,7 @@ src/Humanizer/
 
 ## Tasks
 
-8 tasks (3 narrow, 3 medium, 2 wide) for the C# string manipulation library.
+30 tasks (10 narrow, 10 medium, 10 wide).
 
 ## Narrow
 
@@ -75,57 +75,6 @@ When truncating from the left with `"long string".Truncate(5, Truncator.FixedLen
 at the end instead of the beginning. The output is `"tring…"` but
 should be `"…tring"`. Fix the left-truncation to place the truncation
 indicator at the left.
-
-## Medium
-
-### M1: Add relative time formatting with granularity control
-
-The current `Humanize()` on `DateTime` shows "2 hours ago" but with no
-control over granularity. Implement a `Humanize(precision)` overload
-that shows multiple units: "2 hours and 15 minutes ago" (precision=2),
-"2 hours, 15 minutes, and 30 seconds ago" (precision=3). Support both
-past and future directions. Add `maxUnit` and `minUnit` parameters
-to cap the range.
-
-### M2: Implement file size formatting with IEC/SI units
-
-Add `ByteSize` formatting that supports both IEC binary units (KiB, MiB,
-GiB — powers of 1024) and SI decimal units (KB, MB, GB — powers of 1000).
-Include parsing from formatted strings back to byte counts. Support
-custom decimal precision, automatic unit selection, and explicit unit
-specification. Add localization for unit names in supported languages.
-
-### M3: Add collection humanization
-
-Implement `IEnumerable<T>.Humanize()` that formats collections as
-English lists: `["a", "b", "c"].Humanize()` → `"a, b, and c"`.
-Support conjunctions (`and`, `or`), Oxford comma configuration,
-custom separators, custom element formatters, and truncation for
-long lists (`"a, b, and 8 more"`). Add localization for conjunctions
-and list formatting conventions.
-
-## Wide
-
-### W1: Add comprehensive date/time humanization
-
-Implement a unified date/time humanization system covering: relative
-time ("2 days ago"), calendar time ("last Tuesday"), approximate
-duration ("about a month"), date ranges ("March 3–7"), recurring
-patterns ("every other Tuesday"), and time-of-day descriptions
-("this morning", "tonight"). Support timezone-aware formatting and
-cultural conventions (24h vs 12h, date order). Add localization for
-all time expressions.
-
-### W2: Implement a fluent builder API for complex formatting
-
-Add a `Formatter` builder that chains humanization operations:
-`Formatter.For(value).Truncate(50).Titleize().ToQuantity(3)`.
-The builder should be composable, reusable (save a formatter
-configuration and apply to many values), and type-safe (only show
-methods applicable to the current value type). Include predefined
-formatters for common patterns (slug generation, display name
-formatting, search-friendly text). Add serialization of formatter
-configurations for use in configuration files.
 
 ### N4: Fix `Singularize` incorrectly singularizing uncountable nouns
 
@@ -155,6 +104,34 @@ The Czech localization has `ToWords()` for cardinal numbers but lacks `ToOrdinal
 
 When a `[Flags]` enum has a value that is a combination of defined members, `Humanize()` shows the underlying integer instead of a comma-separated list of flag names. Fix the enum humanizer to decompose combined flag values into their named constituents before formatting.
 
+## Medium
+
+### M1: Add relative time formatting with granularity control
+
+The current `Humanize()` on `DateTime` shows "2 hours ago" but with no
+control over granularity. Implement a `Humanize(precision)` overload
+that shows multiple units: "2 hours and 15 minutes ago" (precision=2),
+"2 hours, 15 minutes, and 30 seconds ago" (precision=3). Support both
+past and future directions. Add `maxUnit` and `minUnit` parameters
+to cap the range.
+
+### M2: Implement file size formatting with IEC/SI units
+
+Add `ByteSize` formatting that supports both IEC binary units (KiB, MiB,
+GiB — powers of 1024) and SI decimal units (KB, MB, GB — powers of 1000).
+Include parsing from formatted strings back to byte counts. Support
+custom decimal precision, automatic unit selection, and explicit unit
+specification. Add localization for unit names in supported languages.
+
+### M3: Add collection humanization
+
+Implement `IEnumerable<T>.Humanize()` that formats collections as
+English lists: `["a", "b", "c"].Humanize()` → `"a, b, and c"`.
+Support conjunctions (`and`, `or`), Oxford comma configuration,
+custom separators, custom element formatters, and truncation for
+long lists (`"a, b, and 8 more"`). Add localization for conjunctions
+and list formatting conventions.
+
 ### M4: Add metric prefix formatting for numbers
 
 Implement `ToMetric()` that formats large and small numbers with SI metric prefixes: `1_500.ToMetric()` → `"1.5k"`, `0.003.ToMetric()` → `"3m"`. Support the full SI prefix range from yocto to yotta, custom decimal precision, and both symbol and full-word output modes ("kilo" vs "k"). Include a corresponding `FromMetric()` parser.
@@ -182,6 +159,29 @@ Implement `FromWords()` that parses written-out numbers back to integers: `"fort
 ### M10: Implement sentence-level truncation
 
 Add a `TruncateAtSentence()` strategy that truncates text at the nearest sentence boundary rather than mid-word: `"First sentence. Second sentence. Third.".Truncate(30, Truncator.AtSentence)` → `"First sentence. Second sentence."`. Detect sentence boundaries using common punctuation patterns (period, exclamation, question mark followed by whitespace or end-of-string). Support configurable ellipsis placement and minimum-length thresholds.
+
+## Wide
+
+### W1: Add comprehensive date/time humanization
+
+Implement a unified date/time humanization system covering: relative
+time ("2 days ago"), calendar time ("last Tuesday"), approximate
+duration ("about a month"), date ranges ("March 3–7"), recurring
+patterns ("every other Tuesday"), and time-of-day descriptions
+("this morning", "tonight"). Support timezone-aware formatting and
+cultural conventions (24h vs 12h, date order). Add localization for
+all time expressions.
+
+### W2: Implement a fluent builder API for complex formatting
+
+Add a `Formatter` builder that chains humanization operations:
+`Formatter.For(value).Truncate(50).Titleize().ToQuantity(3)`.
+The builder should be composable, reusable (save a formatter
+configuration and apply to many values), and type-safe (only show
+methods applicable to the current value type). Include predefined
+formatters for common patterns (slug generation, display name
+formatting, search-friendly text). Add serialization of formatter
+configurations for use in configuration files.
 
 ### W3: Add comprehensive number formatting across cultures
 

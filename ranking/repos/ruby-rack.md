@@ -55,7 +55,7 @@ lib/rack/
 
 ## Tasks
 
-30 tasks (10 narrow, 10 medium, 10 wide) for the Ruby HTTP server interface.
+30 tasks (10 narrow, 10 medium, 10 wide).
 
 ## Narrow
 
@@ -80,56 +80,6 @@ The `Rack::Static` middleware sets appropriate `Cache-Control` headers
 for common static file types but misses `.woff2` font files. Requests
 for web fonts get no-cache behavior. Add `.woff2`, `.woff`, and `.ttf`
 to the default static file content types with immutable cache headers.
-
-## Medium
-
-### M1: Implement request body streaming with Rack 3 compatible API
-
-Add a streaming request body interface that supports reading the request
-body in chunks without buffering the entire body in memory. Implement
-`rack.input` as an `Enumerable`-like interface with `#each_chunk` that
-yields fixed-size chunks. Support back-pressure by pausing reading when
-the consumer is slow. Add a `content_length_limit` configuration to
-reject oversized requests early.
-
-### M2: Add structured logging middleware
-
-Implement `Rack::StructuredLogger` middleware that produces JSON-formatted
-request logs with fields: timestamp, method, path, status, duration_ms,
-request_id, user_agent, client_ip, and response_size. Support log
-enrichment via a callback that adds custom fields (user_id, tenant, etc.).
-Add correlation with upstream request IDs from `X-Request-Id` headers.
-
-### M3: Implement ETag generation with content-aware hashing
-
-Replace the current `Rack::ETag` middleware (which hashes the entire
-response body) with content-aware ETag generation. For HTML responses,
-hash only the meaningful content (strip whitespace changes). For JSON
-responses, hash the semantically-sorted content (key order independent).
-For binary responses, use the current body hash. Add weak ETag support
-for semantically-equivalent responses.
-
-## Wide
-
-### W1: Implement HTTP/2 support in Rack's interface
-
-Extend the Rack specification to support HTTP/2 features: server push
-(via a `rack.push_promise` lambda), stream prioritization, and
-multiplexed responses. The `rack.response` should support a streaming
-body that can send headers and data frames independently. Add a
-compatibility layer so existing Rack 2/3 apps work unchanged on
-HTTP/2 servers. Update the mock request/response for testing HTTP/2.
-
-### W2: Add comprehensive security middleware suite
-
-Implement a suite of security middleware as a cohesive package:
-`Rack::ContentSecurityPolicy` (CSP headers with nonce generation),
-`Rack::PermissionsPolicy` (Permissions-Policy headers),
-`Rack::CORSPolicy` (with preflight caching),
-`Rack::RateLimiter` (configurable rate limiting),
-and `Rack::RequestSanitizer` (input sanitization with configurable
-rules). Each middleware should be usable independently or as a bundle
-via `Rack::SecureHeaders` that applies sensible defaults.
 
 ### N4: Fix `Rack::Multipart` boundary detection failing on mixed-case Content-Type
 
@@ -187,6 +137,34 @@ session store, `max_age` is silently ignored because the options hash
 merge in `session/cookie.rb` lets `expires` overwrite it. Per RFC 6265,
 `Max-Age` takes precedence. Fix the cookie serialization to emit both
 attributes and ensure `Max-Age` is preferred by compliant clients.
+
+## Medium
+
+### M1: Implement request body streaming with Rack 3 compatible API
+
+Add a streaming request body interface that supports reading the request
+body in chunks without buffering the entire body in memory. Implement
+`rack.input` as an `Enumerable`-like interface with `#each_chunk` that
+yields fixed-size chunks. Support back-pressure by pausing reading when
+the consumer is slow. Add a `content_length_limit` configuration to
+reject oversized requests early.
+
+### M2: Add structured logging middleware
+
+Implement `Rack::StructuredLogger` middleware that produces JSON-formatted
+request logs with fields: timestamp, method, path, status, duration_ms,
+request_id, user_agent, client_ip, and response_size. Support log
+enrichment via a callback that adds custom fields (user_id, tenant, etc.).
+Add correlation with upstream request IDs from `X-Request-Id` headers.
+
+### M3: Implement ETag generation with content-aware hashing
+
+Replace the current `Rack::ETag` middleware (which hashes the entire
+response body) with content-aware ETag generation. For HTML responses,
+hash only the meaningful content (strip whitespace changes). For JSON
+responses, hash the semantically-sorted content (key order independent).
+For binary responses, use the current body hash. Add weak ETag support
+for semantically-equivalent responses.
 
 ### M4: Implement conditional GET support across the middleware stack
 
@@ -253,6 +231,28 @@ or Server-Sent Events. Add `#stream` mode that returns an
 individually. Support timeout configuration for slow streams. Add
 assertion helpers for verifying chunk order, timing, and content type
 in streaming responses.
+
+## Wide
+
+### W1: Implement HTTP/2 support in Rack's interface
+
+Extend the Rack specification to support HTTP/2 features: server push
+(via a `rack.push_promise` lambda), stream prioritization, and
+multiplexed responses. The `rack.response` should support a streaming
+body that can send headers and data frames independently. Add a
+compatibility layer so existing Rack 2/3 apps work unchanged on
+HTTP/2 servers. Update the mock request/response for testing HTTP/2.
+
+### W2: Add comprehensive security middleware suite
+
+Implement a suite of security middleware as a cohesive package:
+`Rack::ContentSecurityPolicy` (CSP headers with nonce generation),
+`Rack::PermissionsPolicy` (Permissions-Policy headers),
+`Rack::CORSPolicy` (with preflight caching),
+`Rack::RateLimiter` (configurable rate limiting),
+and `Rack::RequestSanitizer` (input sanitization with configurable
+rules). Each middleware should be usable independently or as a bundle
+via `Rack::SecureHeaders` that applies sensible defaults.
 
 ### W3: Add middleware profiling and instrumentation framework
 
