@@ -57,22 +57,23 @@ click/
 
 ## Narrow
 
-### N1: Fix Choice type not respecting case_sensitive=False in error messages
+### N1: Add closest-match suggestion to Choice invalid value error message
 
-When a `Choice` type is configured with `case_sensitive=False`, passing
-an invalid value produces an error message that lists the original-case
-choices, making it unclear that the match is case-insensitive. The error
-message should indicate that matching is case-insensitive, and the listed
-choices should reflect the normalized comparison. The fix is localized
-to the `Choice.fail()` method in the type system module.
+When a user enters an invalid `Choice` value (e.g., `--env prodction`),
+the error message lists all valid choices but does not suggest the
+closest match. Add string-similarity matching (e.g., Levenshtein
+distance) to `Choice.get_invalid_choice_message()` in `types.py` so the
+error includes a "Did you mean 'production'?" suggestion when a close
+match exists among the normalized choices.
 
-### N2: Fix Context.color being ignored when invoking subcommands
+### N2: Add ANSI escape sequence awareness to custom text wrapper
 
-When a parent `Context` sets `color=False` to suppress ANSI output, child
-contexts created by `Group.invoke()` do not inherit this setting. The
-`Context.__init__` method defaults `color` to `None` instead of
-inheriting from the parent. Fix the context initialization to propagate
-the `color` flag through the context chain.
+Click's custom text wrapper in `_textwrap.py` uses `_wlen()` to compute
+visible string width, but it does not strip ANSI escape sequences (e.g.,
+`\x1b[31m`) before measuring. When styled text is passed through the
+help formatter, ANSI codes inflate the measured width and cause premature
+line breaks. Fix `_wlen()` in `_textwrap.py` to exclude ANSI escape
+sequence byte lengths from the width calculation.
 
 ### N3: Fix echo() silently swallowing UnicodeEncodeError on redirected stdout
 
@@ -82,20 +83,23 @@ raising a clear error or using a replacement strategy. Fix `echo()` in
 the utils module to apply `errors='replace'` or `errors='backslashreplace'`
 when writing to a non-UTF-8 stream rather than silently dropping output.
 
-### N4: Fix @option with multiple=True and default=None raising TypeError
+### N4: Add glob expansion support to Path type
 
-Declaring `@option('--tag', multiple=True, default=None)` raises a
-`TypeError` during parameter processing because the `multiple` code path
-assumes the default is always a tuple. Fix the `Option.type_cast_value()`
-method to normalize `None` defaults to an empty tuple when `multiple=True`.
+The `Path` type in `types.py` validates individual paths but does not
+support shell-style glob patterns (e.g., `--input "*.csv"`). When a
+user passes a glob pattern to a `Path` option, the literal string
+`*.csv` is validated for existence and fails. Add a `resolve_glob`
+parameter to `Path` that expands glob patterns via `glob.glob()` before
+validation, returning the list of matched paths.
 
-### N5: Fix Path type not expanding ~ in file arguments
+### N5: Add timeout parameter to prompt() in termui
 
-The `Path` type validates existence and permissions but does not expand
-`~` or `~user` prefixes before validation. A user passing `--config
-~/myfile.conf` gets a "does not exist" error because the literal `~`
-path is checked. Fix the `Path.convert()` method to call
-`os.path.expanduser()` before validation.
+The `prompt()` function in `termui.py` blocks indefinitely waiting for
+user input, which is problematic for automated or CI environments where
+no human is available. Add a `timeout` parameter (in seconds) to
+`prompt()` that raises a `click.Abort` if the user does not respond
+within the specified duration, using `select()` or `threading.Timer` for
+the timeout mechanism.
 
 ### N6: Fix HelpFormatter indentation breaking with very long option names
 
@@ -105,12 +109,14 @@ produces misaligned help text. Fix the definition-list writer to wrap
 the help text onto the next line when the term exceeds the column width,
 matching the behavior of `argparse`.
 
-### N7: Fix IntRange not showing allowed range in error messages
+### N7: Add value normalization hook to _NumberRangeBase
 
-When a value falls outside an `IntRange(min=1, max=100)`, the error
-message says the value is "not in the range" but does not display the
-actual allowed bounds. Fix the `IntRange.fail()` method to include the
-`min` and `max` values in the error message so users know the valid range.
+The `_NumberRangeBase` class in `types.py` validates that a value falls
+within `[min, max]` but does not offer a way to snap values to a step
+grid (e.g., multiples of 5). Add a `step` parameter to `IntRange` and
+`FloatRange` that rounds the converted value to the nearest valid step
+before range validation, and update `_describe_range()` to include the
+step in help text.
 
 ### N8: Fix shell completion not escaping special characters in values
 
@@ -120,21 +126,23 @@ causing the shell to misinterpret the completions. Fix the completion
 formatting in the shell-completion module to properly quote or escape
 values for each supported shell (bash, zsh, fish).
 
-### N9: Fix testing.CliRunner not capturing stderr separately when mix_stderr=False
+### N9: Add CliRunner.charset parameter for encoding-specific testing
 
-When `CliRunner` is created with `mix_stderr=False`, the `result.stderr`
-attribute is supposed to contain only stderr output, but it also
-captures some stdout content due to incorrect stream wiring in the
-isolation context manager. Fix the stream separation logic in the
-testing module.
+The `CliRunner` in `testing.py` defaults to UTF-8 encoding for its
+isolated streams, but there is no way to simulate a console with a
+different encoding (e.g., `latin-1` or `ascii`) to test how commands
+handle encoding limitations. Add a `charset` parameter to `CliRunner`
+that configures the encoding of the isolated stdin/stdout/stderr streams
+so developers can write tests for non-UTF-8 environments.
 
-### N10: Fix @argument with nargs=-1 not allowing empty input when required=False
+### N10: Add structured error context to MissingParameter exception
 
-An argument with `nargs=-1` and `required=False` still raises a
-`MissingParameter` error when no values are provided because the
-argument processing does not check the `required` flag for variadic
-arguments. Fix the argument resolution in the parser to allow an empty
-tuple when the argument is optional.
+The `MissingParameter` exception in `exceptions.py` carries the
+parameter name and type but does not include the full command path or
+the set of parameters that _were_ provided, making it difficult for
+programmatic consumers to generate actionable error reports. Add
+`command_path` and `provided_params` attributes to `MissingParameter`
+and populate them in `Parameter.process_value()` in `core.py`.
 
 ## Medium
 

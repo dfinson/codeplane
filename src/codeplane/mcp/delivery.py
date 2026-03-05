@@ -1,1122 +1,130 @@
-"""Unified delivery envelope for MCP tool responses.
+"""Inline-only delivery for MCP tool responses.
 
-Provides:
-- ClientProfile: static client capability profiles
-- wrap_response: decide inline vs sidecar-cache delivery
-- resolve_profile: select client profile from connection info
-- ScopeBudget / ScopeManager: per-scope usage tracking
-
-Oversized payloads are stored in the in-memory sidecar cache
-(see sidecar_cache.py) and the agent is given cplcache commands
-to retrieve slices from the running daemon.
+All responses are returned inline. If a response exceeds the inline
+budget (30KB), it is trimmed per resource_kind and a hint is added.
+No sidecar cache, no disk I/O, no jq commands.
 """
 
 from __future__ import annotations
 
-import contextvars
 import json
-import threading
-import time
-from collections import OrderedDict
-from dataclasses import dataclass, field
 from typing import Any
 
-import structlog
-
 from codeplane.config.constants import INLINE_CAP_BYTES
-from codeplane.config.user_config import DEFAULT_PORT
-
-log = structlog.get_logger(__name__)
-
-# Server port for cplcache hints (set during startup, fallback to default)
-_server_port: int = DEFAULT_PORT
 
 
 def set_server_port(port: int) -> None:
-    """Set the server port for cplcache fetch hints."""
-    global _server_port  # noqa: PLW0603
-    _server_port = port
-
-
-# =============================================================================
-# Slice Strategies — resource-kind-specific consumption guidance
-# =============================================================================
-
-
-@dataclass
-class SliceStrategy:
-    """Resource-kind-specific guidance for consuming cached sections.
-
-    Combines with pre-computed CacheSection metadata to produce
-    context-aware hints showing byte sizes, priority order,
-    and section descriptions.
-    """
-
-    flow: str  # one-line consumption guidance
-    priority: tuple[str, ...] = ()  # sections to surface first, in order
-    descriptions: dict[str, str] = field(default_factory=dict)  # key → contextual label
-
-
-_SLICE_STRATEGIES: dict[str, SliceStrategy] = {
-    "recon_result": SliceStrategy(
-        flow=(
-            "Read agentic_hint first for next steps. "
-            "scaffold_files has source for context files; "
-            "lite_files for peripheral orientation; "
-            "repo_map for repository structure."
-        ),
-        priority=(
-            "agentic_hint",
-            "scaffold_files",
-            "lite_files",
-            "repo_map",
-            "summary",
-            "scoring_summary",
-        ),
-        descriptions={
-            "agentic_hint": "next-step instructions — read first",
-            "scaffold_files": "imports + signatures for context files",
-            "lite_files": "path + description for peripheral files",
-            "repo_map": "repository structure overview (embedded in recon)",
-            "summary": "file count summary",
-            "scoring_summary": "pipeline scoring metadata and diagnostics",
-            "coverage_hint": "guidance when explicitly-mentioned paths are missing",
-            "recon_id": "unique identifier for this recon call",
-            "diagnostics": "timing information",
-        },
-    ),
-    "resolve_result": SliceStrategy(
-        flow=(
-            "Read resolved for file contents with SHA hashes; "
-            "follow agentic_hint for edit/review workflow."
-        ),
-        priority=("resolved", "agentic_hint", "errors"),
-        descriptions={
-            "resolved": "file contents with path, content, file_sha256, line_count",
-            "agentic_hint": "next-step routing (edit / rename / move / delete / review)",
-            "errors": "resolution errors, if any",
-        },
-    ),
-    "refactor_preview": SliceStrategy(
-        flow=(
-            "Check summary + display_to_user for overview; "
-            "follow agentic_hint for next steps (apply/inspect/cancel); "
-            "inspect preview.edits for per-file hunks; "
-            "use refactor_id to apply or cancel."
-        ),
-        priority=("summary", "display_to_user", "agentic_hint", "preview", "refactor_id"),
-        descriptions={
-            "summary": "human-readable refactor summary",
-            "display_to_user": "user-facing refactor description",
-            "agentic_hint": "next-step instructions — apply, inspect, or cancel",
-            "preview": "per-file edit hunks with certainty levels",
-            "refactor_id": "ID for refactor_commit or refactor_cancel",
-            "status": "previewed / applied / cancelled",
-            "divergence": "conflicting hunks and resolution options",
-            "warning": "format or usage warnings",
-        },
-    ),
-    "semantic_diff": SliceStrategy(
-        flow=(
-            "Read summary + breaking_summary for overview; "
-            "structural_changes for per-symbol diffs; "
-            "follow agentic_hint for next steps."
-        ),
-        priority=(
-            "summary",
-            "breaking_summary",
-            "structural_changes",
-            "non_structural_changes",
-            "agentic_hint",
-        ),
-        descriptions={
-            "summary": "high-level change overview",
-            "breaking_summary": "breaking change summary",
-            "structural_changes": "per-symbol structural diffs (compressed)",
-            "non_structural_changes": "non-structural file changes (renames, deletes)",
-            "agentic_hint": "next-step guidance",
-            "files_analyzed": "number of files analyzed",
-            "base": "base ref description",
-            "target": "target ref description",
-            "scope": "analysis scope boundaries",
-        },
-    ),
-    "checkpoint": SliceStrategy(
-        flow=(
-            "Check passed + summary first; read agentic_hint for next steps; "
-            "on failure: failure_index → failure:<N> → snippet:<path> → fix_plan."
-        ),
-        priority=(
-            "passed",
-            "summary",
-            "agentic_hint",
-            "failure_index",
-            "lint",
-            "tests",
-            "fix_plan",
-            "commit",
-            "coverage",
-        ),
-        descriptions={
-            "passed": "overall pass/fail boolean — read first",
-            "summary": "one-line result summary",
-            "agentic_hint": "next-step instructions — always follow these",
-            "failure_index": "compact array of all failures (name, location, error)",
-            "lint": "linter diagnostics with status, issue count, and fixes",
-            "tests": "test summary (pass/fail counts — failures split into failure:<N>)",
-            "fix_plan": "plan_id + pre-minted edit tickets for immediate correction",
-            "commit": "commit SHA, push status, and lean semantic diff",
-            "coverage": "inline tiered test coverage summary",
-            "action": "always 'checkpoint'",
-            "changed_files": "input file list",
-        },
-    ),
-}
-
-
-def _order_sections(
-    sections: dict[str, Any],
-    strategy: SliceStrategy | None,
-) -> list[tuple[str, Any]]:
-    """Order sections by strategy priority, then remaining keys alphabetically."""
-    if not strategy or not strategy.priority:
-        return list(sections.items())
-
-    ordered: list[tuple[str, Any]] = []
-    seen: set[str] = set()
-    for key in strategy.priority:
-        if key in sections:
-            ordered.append((key, sections[key]))
-            seen.add(key)
-    for key in sorted(sections.keys()):
-        if key not in seen:
-            ordered.append((key, sections[key]))
-    return ordered
-
-
-# =============================================================================
-# cplcache Hint Builder
-# =============================================================================
-
-
-def _cpl_cmd(cache_id: str, slice_key: str) -> str:
-    """Format a single cplcache retrieval command.
-
-    Uses jq for direct JSON access when available, falls back to
-    cplcache.py Python script otherwise.
-    """
-    from codeplane.mcp.sidecar_cache import jq_available
-
-    if jq_available():
-        return f"jq -r --arg k \"{slice_key}\" '.[$k]' .codeplane/cache/{cache_id}.json"
-    return f'python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "{slice_key}"'
-
-
-def _cpl_json_cmd(cache_id: str, slice_key: str) -> str:
-    """Format a cplcache command that outputs structured JSON (not raw text).
-
-    Used for metadata arrays (candidates, manifest) where the agent wants
-    parseable JSON, not raw string output.
-    """
-    from codeplane.mcp.sidecar_cache import jq_available
-
-    if jq_available():
-        return f"jq --arg k \"{slice_key}\" '.[$k]' .codeplane/cache/{cache_id}.json"
-    return f'python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "{slice_key}"'
-
-
-def _cpl_cmd_template(cache_id: str) -> str:
-    """Format a reusable command template with <SLICE> placeholder.
-
-    Used by the generic fallback hint for unknown endpoint types.
-    """
-    from codeplane.mcp.sidecar_cache import jq_available
-
-    if jq_available():
-        return f"jq -r --arg k \"<SLICE>\" '.[$k]' .codeplane/cache/{cache_id}.json"
-    return f'python3 .codeplane/scripts/cplcache.py --cache-id "{cache_id}" --slice "<SLICE>"'
-
-
-def _build_cplcache_hint(
-    cache_id: str,
-    byte_size: int,
-    resource_kind: str,
-    sections: dict[str, Any] | None = None,
-    payload: dict[str, Any] | None = None,
-) -> str:
-    """Build menu-style cache retrieval hints with numbered steps.
-
-    Each endpoint type gets a tailored sequence of jq commands with
-    contextual explanations.  The agent reads the steps in order —
-    no template substitution or guessing required.
-    """
-    if resource_kind == "recon_result" and payload:
-        return _build_recon_hint(cache_id, byte_size, payload)
-    if resource_kind in ("resolve_result", "resolve_refresh") and payload:
-        return _build_resolve_hint(cache_id, byte_size, payload)
-    if resource_kind == "checkpoint" and payload:
-        return _build_checkpoint_hint(cache_id, byte_size, payload)
-    if resource_kind == "semantic_diff" and payload:
-        return _build_semantic_diff_hint(cache_id, byte_size, payload)
-
-    # Generic fallback for unknown/other resource kinds
-    return _build_generic_hint(cache_id, byte_size, resource_kind, sections)
-
-
-def _build_recon_hint(cache_id: str, byte_size: int, payload: dict[str, Any]) -> str:
-    scaffold_files = payload.get("scaffold_files", [])
-    lite_files = payload.get("lite_files", [])
-    n_scaffold = len(scaffold_files)
-    n_lite = len(lite_files)
-
-    parts: list[str] = [
-        ">>> RESPONSE CACHED <<<",
-        f"Cache: {cache_id} | {byte_size:,} bytes | recon_result",
-        f"Files: {n_scaffold} scaffold(s), {n_lite} lite(s)",
-        "",
-        "STEP 1 — CANDIDATES: Read the full candidate list (each entry has .id and .path)",
-        f"  {_cpl_json_cmd(cache_id, 'candidates')}",
-        "  Parse the .id field from each candidate — you need these for refactor_plan.",
-        "",
-    ]
-
-    if scaffold_files:
-        paths = [f.get("path", "") for f in scaffold_files[:3]]
-        parts.append(
-            "STEP 2 — SCAFFOLD: Read scaffold for files you need (imports + symbols + line numbers)"
-        )
-        parts.append(f"  {_cpl_cmd(cache_id, f'scaffold:{paths[0]}')}")
-        if len(paths) > 1:
-            parts.append(f"  Replace path for others: {', '.join(paths[1:])}")
-    else:
-        parts.append("STEP 2 — No scaffolds available")
-    parts.append("")
-
-    parts.append("STEP 3 — REPO MAP: Verify coverage — ensure recon found all relevant areas")
-    parts.append(f"  {_cpl_cmd(cache_id, 'repo_map')}")
-    parts.append("")
-
-    parts.append(
-        "NEXT: Read the files you need via terminal (cat/head) "
-        "using paths from the scaffold headers. "
-        "Then call refactor_plan with candidate_id values to declare your edit set."
-    )
-
-    return "\n".join(parts)
-
-
-def _build_resolve_hint(
-    cache_id: str,
-    byte_size: int,
-    payload: dict[str, Any],
-) -> str:
-    resolved = payload.get("resolved", [])
-    n_files = len(resolved)
-    paths = [r.get("path", "") for r in resolved[:5]]
-
-    parts: list[str] = [
-        ">>> RESPONSE CACHED <<<",
-        f"Cache: {cache_id} | {byte_size:,} bytes | resolve_result",
-        f"Resolved: {n_files} file(s)",
-        "",
-        "STEP 1 — MANIFEST: See all resolved files with paths, sha256, and line counts",
-        f"  {_cpl_json_cmd(cache_id, 'manifest')}",
-        "",
-    ]
-
-    if paths:
-        # Check if scaffolds are present
-        has_scaffolds = any(isinstance(r.get("scaffold"), dict) for r in resolved)
-        if has_scaffolds:
-            parts.append(
-                "STEP 2 — SCAFFOLD: Read scaffold for a file "
-                "(symbol index with line numbers — use as table of contents)"
-            )
-            parts.append(f"  {_cpl_cmd(cache_id, f'scaffold:{paths[0]}')}")
-            parts.append("")
-            step_num = 3
-        else:
-            step_num = 2
-
-        parts.append(f"STEP {step_num} — CONTENT: Read full file content")
-        parts.append(f"  {_cpl_cmd(cache_id, f'file:{paths[0]}')}")
-        if len(paths) > 1:
-            parts.append(f"  Replace path for others: {', '.join(paths[1:])}")
-        parts.append("  For specific lines: ... | sed -n '<start>,<end>p'")
-    parts.append("")
-
-    parts.append("NEXT: Plan & edit. Call refactor_plan → refactor_edit → checkpoint.")
-
-    return "\n".join(parts)
-
-
-def _build_checkpoint_hint(
-    cache_id: str,
-    byte_size: int,
-    payload: dict[str, Any],
-) -> str:
-    """Build targeted diagnostic menu for checkpoint results.
-
-    On failure, guides the agent through a focused flow:
-    failure index → individual failures → source snippets → fix_plan.
-    The agent reads exactly what it needs to fix — no re-reading entire files.
-    """
-    passed = payload.get("passed")
-    summary = payload.get("summary", "")
-
-    parts: list[str] = [
-        ">>> RESPONSE CACHED <<<" if passed else ">>> CHECKPOINT FAILED <<<",
-        f"Cache: {cache_id} | {byte_size:,} bytes | checkpoint",
-        f"Result: {summary}",
-        "",
-    ]
-
-    if passed:
-        parts.append("STEP 1 — SUMMARY: Read the result summary")
-        parts.append(f"  {_cpl_cmd(cache_id, 'summary')}")
-        parts.append("")
-        commit = payload.get("commit", {})
-        if isinstance(commit, dict) and commit.get("oid"):
-            parts.append("STEP 2 — COMMIT: View commit details and semantic diff")
-            parts.append(f"  {_cpl_json_cmd(cache_id, 'commit')}")
-            parts.append("")
-        parts.append("All checks passed.")
-    else:
-        step = 1
-
-        # ── Lint issues ──
-        lint = payload.get("lint", {})
-        if isinstance(lint, dict) and lint.get("diagnostics", 0) > 0:
-            n_issues = lint.get("diagnostics", 0)
-            parts.append(f"STEP {step} — LINT: {n_issues} issue(s) — read file:line + fix")
-            parts.append(f"  {_cpl_json_cmd(cache_id, 'lint')}")
-            parts.append("")
-            step += 1
-
-        # ── Failure index (what broke) ──
-        tests = payload.get("tests", {})
-        n_failed = tests.get("failed", 0) if isinstance(tests, dict) else 0
-        # Check for failure_list (structured) to show failure index
-        failure_list = tests.get("failure_list", []) if isinstance(tests, dict) else []
-        if failure_list or n_failed > 0:
-            parts.append(
-                f"STEP {step} — FAILURE INDEX: See all {n_failed} failure(s) "
-                f"at a glance (name + error + location)"
-            )
-            parts.append(f"  {_cpl_json_cmd(cache_id, 'failure_index')}")
-            parts.append("")
-            step += 1
-
-            # ── Individual failure detail ──
-            parts.append(f"STEP {step} — FAILURE DETAIL: Read one failure's full traceback")
-            parts.append(f"  {_cpl_cmd(cache_id, 'failure:1')}")
-            if n_failed > 1:
-                parts.append(f"  Replace 1 with failure number (1-{n_failed})")
-            parts.append("")
-            step += 1
-
-        # ── Source snippets (code around failure points) ──
-        # Collect snippet paths from enrichment data
-        snippet_paths = _extract_snippet_paths(payload)
-        if snippet_paths:
-            parts.append(
-                f"STEP {step} — SOURCE CONTEXT: Code around failure "
-                f"locations (line numbers + markers)"
-            )
-            parts.append(f"  {_cpl_cmd(cache_id, f'snippet:{snippet_paths[0]}')}")
-            if len(snippet_paths) > 1:
-                other_paths = ", ".join(snippet_paths[1:4])
-                parts.append(f"  Other files: {other_paths}")
-                if len(snippet_paths) > 4:
-                    parts.append(f"  ... and {len(snippet_paths) - 4} more")
-            parts.append("")
-            step += 1
-
-        # ── Scaffolds (symbol navigation) ──
-        scaffold_paths = _extract_scaffold_paths(payload)
-        if scaffold_paths and not snippet_paths:
-            # Only show scaffold step if no snippets (otherwise redundant)
-            parts.append(f"STEP {step} — SCAFFOLD: Symbol index with line ranges")
-            parts.append(f"  {_cpl_cmd(cache_id, f'scaffold:{scaffold_paths[0]}')}")
-            parts.append("")
-            step += 1
-
-        # ── Fix plan ──
-        fix_plan = payload.get("fix_plan")
-        if isinstance(fix_plan, dict):
-            plan_id = fix_plan.get("plan_id", "?")
-            n_tickets = len(fix_plan.get("edit_tickets", []))
-            parts.append(
-                f"STEP {step} — FIX: fix_plan is INLINED in this response "
-                f"(plan_id={plan_id}, {n_tickets} ticket(s))"
-            )
-            parts.append(
-                "  Edit tickets are pre-minted — call refactor_edit directly "
-                "with plan_id and edit_tickets from the fix_plan field below."
-            )
-            parts.append("  Budget is RESET. Batch ALL fixes into ONE refactor_edit call.")
-            parts.append("")
-            step += 1
-
-        parts.append(
-            "NEXT: Read failure index + details, fix the code, then call checkpoint again."
-        )
-        parts.append(
-            "DO NOT re-read entire files — use snippets above. "
-            "Read files via terminal (cat/head) if you need more context."
-        )
-
-    return "\n".join(parts)
-
-
-def _extract_snippet_paths(payload: dict[str, Any]) -> list[str]:
-    """Extract paths that have failure snippets from checkpoint payload."""
-    snippets = payload.get("failure_snippets")
-    if isinstance(snippets, dict):
-        return sorted(snippets.keys())
-    return []
-
-
-def _extract_scaffold_paths(payload: dict[str, Any]) -> list[str]:
-    """Extract paths that have scaffolds from checkpoint payload."""
-    scaffolds = payload.get("failure_scaffolds")
-    if isinstance(scaffolds, dict):
-        return sorted(scaffolds.keys())
-    return []
-
-
-def _build_semantic_diff_hint(
-    cache_id: str,
-    byte_size: int,
-    payload: dict[str, Any],
-) -> str:
-    summary = payload.get("summary", "")
-
-    parts: list[str] = [
-        ">>> RESPONSE CACHED <<<",
-        f"Cache: {cache_id} | {byte_size:,} bytes | semantic_diff",
-        f"Summary: {summary}",
-        "",
-        "STEP 1 — SUMMARY: High-level change overview",
-        f"  {_cpl_cmd(cache_id, 'summary')}",
-        "",
-        "STEP 2 — BREAKING: Check for breaking changes",
-        f"  {_cpl_cmd(cache_id, 'breaking_summary')}",
-        "",
-        "STEP 3 — STRUCTURAL: Per-symbol diffs",
-        f"  {_cpl_json_cmd(cache_id, 'structural_changes')}",
-        "",
-        "NEXT: Review changes and proceed with your task.",
-    ]
-
-    return "\n".join(parts)
-
-
-def _build_generic_hint(
-    cache_id: str,
-    byte_size: int,
-    resource_kind: str,
-    sections: dict[str, Any] | None,
-) -> str:
-    """Fallback hint for unknown resource kinds — lists sections with commands."""
-    from codeplane.mcp.sidecar_cache import CacheSection
-
-    strategy = _SLICE_STRATEGIES.get(resource_kind)
-
-    parts: list[str] = [
-        ">>> RESPONSE CACHED <<<",
-        f"Cache: {cache_id} | {byte_size:,} bytes | {resource_kind}",
-    ]
-    if strategy:
-        parts.append(f"Plan: {strategy.flow}")
-    parts.append(f"Cmd: {_cpl_cmd_template(cache_id)}")
-    parts.append("")
-
-    if sections:
-        ordered = _order_sections(sections, strategy)
-        top_level = [
-            (k, s) for k, s in ordered if isinstance(s, CacheSection) and s.parent_key is None
-        ]
-        if top_level:
-            parts.append("Sections (replace <SLICE> above):")
-            for key, sec in top_level:
-                desc = strategy.descriptions.get(key, "") if strategy else ""
-                desc_suffix = f" \u2014 {desc}" if desc else ""
-                if sec.ready:
-                    parts.append(f"  {key} ({sec.byte_size:,}b){desc_suffix}")
-                elif sec.chunk_total:
-                    parts.append(
-                        f"  {key} ({sec.byte_size:,}b, {sec.chunk_total} chunks){desc_suffix}"
-                    )
-                else:
-                    parts.append(f"  {key} ({sec.byte_size:,}b){desc_suffix}")
-
-    return "\n".join(parts)
-
-
-def _build_inline_summary(
-    resource_kind: str,
-    payload: dict[str, Any],
-) -> str | None:
-    """Build a compact inline summary string for oversized payloads.
-
-    Used in the envelope when the full payload goes to the sidecar cache.
-    Returns None if no meaningful summary can be constructed.
-    """
-    if resource_kind == "recon_result":
-        n_scaffold = len(payload.get("scaffold_files", []))
-        n_lite = len(payload.get("lite_files", []))
-        has_map = "repo_map" in payload
-        parts: list[str] = [f"{n_scaffold} scaffold(s), {n_lite} lite(s)"]
-        if has_map:
-            parts.append("repo_map included")
-        return ", ".join(parts)
-
-    if resource_kind == "resolve_result":
-        resolved = payload.get("resolved", [])
-        errors = payload.get("errors", [])
-        parts_: list[str] = [f"{len(resolved)} file(s) resolved"]
-        if errors:
-            parts_.append(f"{len(errors)} error(s)")
-        parts_.append("resolved_meta inlined")
-        return ", ".join(parts_)
-
-    if resource_kind == "checkpoint":
-        passed = payload.get("passed")
-        parts_c: list[str] = []
-        if passed is True:
-            parts_c.append("PASSED")
-        elif passed is False:
-            parts_c.append("FAILED")
-        summary_text = payload.get("summary", "")
-        if summary_text:
-            parts_c.append(str(summary_text))
-        commit = payload.get("commit", {})
-        if isinstance(commit, dict) and commit.get("oid"):
-            parts_c.append(f"committed {commit['oid'][:7]}")
-        fix_plan = payload.get("fix_plan")
-        if isinstance(fix_plan, dict):
-            parts_c.append("fix_plan inlined")
-        return " | ".join(parts_c) if parts_c else None
-
-    if resource_kind == "semantic_diff":
-        summary = payload.get("summary")
-        if summary:
-            return str(summary)
-        changes = payload.get("structural_changes", [])
-        return f"{len(changes)} structural change(s)"
-
-    if resource_kind == "refactor_preview":
-        preview = payload.get("preview", {})
-        if isinstance(preview, dict):
-            af = preview.get("files_affected", 0)
-            edits = preview.get("edits", [])
-            return f"{len(edits)} edit(s) across {af} file(s)"
-        summary = payload.get("summary")
-        return str(summary) if summary else None
-
-    return None
+    """No-op — retained for backward compatibility with startup code."""
 
 
 def wrap_response(
-    result: dict[str, Any],
+    data: dict[str, Any],
     *,
-    resource_kind: str,
-    session_id: str = "default",
-    scope_id: str | None = None,
-    scope_usage: dict[str, Any] | None = None,
-    client_profile: ClientProfile | None = None,
+    resource_kind: str = "",
+    session_id: str | None = None,
+    max_bytes: int = INLINE_CAP_BYTES,
 ) -> dict[str, Any]:
-    """Add delivery envelope fields to an existing handler response.
+    """Serialize and return inline. Trim if over budget.
 
-    If the payload fits within inline_cap, it is returned inline.
-    Otherwise it is stored in the sidecar cache and the response
-    contains a summary + cplcache fetch hints.
+    Args:
+        data: The response dict.
+        resource_kind: Used to decide trimming strategy.
+        session_id: Ignored (no session-scoped caching).
+        max_bytes: Inline byte budget.
+
+    Returns:
+        The response dict, possibly trimmed.
     """
-    from codeplane.mcp.sidecar_cache import cache_put, get_sidecar_cache
+    serialized = json.dumps(data, default=str)
+    if len(serialized) <= max_bytes:
+        return data
 
-    profile = client_profile or get_current_profile()
-    inline_cap = profile.inline_cap_bytes
+    # Trim based on resource kind
+    trimmed = _trim(data, resource_kind, max_bytes)
+    return trimmed
 
-    payload_bytes = len(json.dumps(result, separators=(",", ":"), default=str).encode("utf-8"))
 
-    if payload_bytes <= inline_cap:
-        # Inline delivery — full payload in the response
-        result["resource_kind"] = resource_kind
-        result["delivery"] = "inline"
-        result["inline_budget_bytes_used"] = payload_bytes
-        result["inline_budget_bytes_limit"] = inline_cap
-    else:
-        # Oversized — store in sidecar cache, return synopsis + cplcache hints
-        cache_id = cache_put(session_id, resource_kind, result)
-        entry = get_sidecar_cache().get_entry(cache_id)
-        summary = _build_inline_summary(resource_kind, result)
+def _trim(data: dict[str, Any], kind: str, budget: int) -> dict[str, Any]:
+    """Trim response to fit within budget."""
+    if kind == "recon_result":
+        return _trim_recon(data, budget)
+    if kind == "repo_map":
+        return _trim_repo_map(data, budget)
+    if kind == "raw_signals":
+        return _trim_raw_signals(data, budget)
+    # Generic: drop largest key until it fits
+    return _trim_generic(data, budget)
 
-        envelope: dict[str, Any] = {
-            "resource_kind": resource_kind,
-            "delivery": "sidecar_cache",
-            "cache_id": cache_id,
-        }
-        if summary:
-            envelope["summary"] = summary
 
-        envelope["agentic_hint"] = _build_cplcache_hint(
-            cache_id,
-            payload_bytes,
-            resource_kind,
-            sections=entry.sections if entry else None,
-            payload=result,
-        )
+def _trim_recon(data: dict[str, Any], budget: int) -> dict[str, Any]:
+    """Trim recon results by removing snippets from bottom results first."""
+    results = data.get("results", [])
+    if not results:
+        return data
 
-        # ── Inline resolve metadata ──
-        # When resolve goes sidecar, the agent still needs per-file metadata
-        # (path, candidate_id, sha256, line_count) to call refactor_plan /
-        # refactor_edit.  Extract it inline — only bulk content is sidecar-only.
-        if resource_kind == "resolve_result":
-            resolved_meta = []
-            for r in result.get("resolved", []):
-                meta: dict[str, Any] = {
-                    "path": r.get("path"),
-                    "candidate_id": r.get("candidate_id"),
-                    "line_count": r.get("line_count"),
-                }
-                if "file_sha256" in r:
-                    meta["file_sha256"] = r["file_sha256"]
-                if "span" in r:
-                    meta["span"] = r["span"]
-                resolved_meta.append(meta)
-            if resolved_meta:
-                envelope["resolved_meta"] = resolved_meta
-            errors = result.get("errors")
-            if errors:
-                envelope["errors"] = errors
+    # Progressive trimming: remove sig/snippet from bottom up
+    trimmed = {**data, "results": list(results)}
+    for i in range(len(trimmed["results"]) - 1, -1, -1):
+        if len(json.dumps(trimmed, default=str)) <= budget:
+            break
+        r = {**trimmed["results"][i]}
+        r.pop("snippet", None)
+        r.pop("sig", None)
+        trimmed["results"][i] = r
 
-        # ── Inline fix_plan for checkpoint failures ──
-        # When checkpoint fails with a fix_plan, the agent needs plan_id
-        # and edit_tickets IMMEDIATELY to call refactor_edit.  Without
-        # these inline, the agent is deadlocked — it can't proceed with
-        # edits and has no way to reference the plan.  The fix_plan data
-        # is tiny (~200-500 bytes) so inlining is safe.
-        if resource_kind == "checkpoint":
-            fix_plan = result.get("fix_plan")
-            if isinstance(fix_plan, dict):
-                envelope["fix_plan"] = fix_plan
+    # Still too big? Remove results from bottom
+    while len(json.dumps(trimmed, default=str)) > budget and trimmed["results"]:
+        trimmed["results"].pop()
 
-        envelope["inline_budget_bytes_limit"] = inline_cap
-        # Measure AFTER all fields are set so the count reflects reality.
-        envelope["inline_budget_bytes_used"] = len(
-            json.dumps(envelope, separators=(",", ":"), default=str).encode("utf-8")
-        )
+    if len(trimmed["results"]) < len(results):
+        trimmed["hint"] = (
+            trimmed.get("hint", "") +
+            f" Trimmed to {len(trimmed['results'])}/{len(results)} results to fit inline."
+        ).strip()
 
-        log.debug(
-            "envelope_wrapped",
-            delivery="sidecar_cache",
-            resource_kind=resource_kind,
-            payload_bytes=payload_bytes,
-            inline_cap=inline_cap,
-            cache_id=cache_id,
-        )
+    return trimmed
 
-        result = envelope
 
-    if scope_id:
-        result["scope_id"] = scope_id
-    if scope_usage:
-        result["scope_usage"] = scope_usage
+def _trim_repo_map(data: dict[str, Any], budget: int) -> dict[str, Any]:
+    """Trim repo map by truncating structure."""
+    trimmed = dict(data)
+    # Drop structure first (largest section)
+    if "structure" in trimmed and len(json.dumps(trimmed, default=str)) > budget:
+        struct = trimmed["structure"]
+        if isinstance(struct, str) and len(struct) > 2000:
+            trimmed["structure"] = struct[:2000] + "\n... (truncated)"
+    # Drop entry_points if still too big
+    if len(json.dumps(trimmed, default=str)) > budget:
+        trimmed.pop("entry_points", None)
+    return trimmed
 
-    log.debug(
-        "envelope_wrapped",
-        delivery=result.get("delivery", "unknown"),
-        resource_kind=resource_kind,
-        payload_bytes=payload_bytes,
-        inline_cap=inline_cap,
-        scope_id=scope_id,
+
+def _trim_raw_signals(data: dict[str, Any], budget: int) -> dict[str, Any]:
+    """Raw signals is dev-mode only. Return summary, not full candidates."""
+    return {
+        "query_features": data.get("query_features"),
+        "repo_features": data.get("repo_features"),
+        "diagnostics": data.get("diagnostics"),
+        "candidate_count": len(data.get("candidates", [])),
+        "hint": (
+            "Raw signals response too large for inline delivery. "
+            "Use collect_signals.py to write candidates to disk instead."
+        ),
+    }
+
+
+def _trim_generic(data: dict[str, Any], budget: int) -> dict[str, Any]:
+    """Generic trimming: drop largest values until it fits."""
+    trimmed = dict(data)
+    keys_by_size = sorted(
+        trimmed.keys(),
+        key=lambda k: len(json.dumps(trimmed[k], default=str)),
+        reverse=True,
     )
-
-    return result
-
-
-# =============================================================================
-# Client Profiles
-# =============================================================================
-
-
-@dataclass(frozen=True)
-class ClientProfile:
-    """Static client capability profile."""
-
-    name: str
-    inline_cap_bytes: int = INLINE_CAP_BYTES
-
-
-PROFILES: dict[str, ClientProfile] = {
-    "default": ClientProfile(name="default"),
-    "copilot_coding_agent": ClientProfile(name="copilot_coding_agent"),
-    "vscode_chat": ClientProfile(name="vscode_chat"),
-    "Visual Studio Code": ClientProfile(name="Visual Studio Code"),
-}
-
-
-def resolve_profile(
-    client_info: dict[str, Any] | None = None,
-    capabilities: dict[str, Any] | None = None,  # noqa: ARG001
-    config_override: str | None = None,
-) -> ClientProfile:
-    """Resolve client profile from connection info.
-
-    Priority: explicit config override > clientInfo.name > default.
-    """
-    # 1. Explicit override
-    if config_override and config_override in PROFILES:
-        profile = PROFILES[config_override]
-        log.debug("profile_resolved", source="config_override", profile=profile.name)
-        return profile
-
-    # 2. clientInfo.name match
-    if client_info:
-        name = client_info.get("name", "")
-        if name in PROFILES:
-            profile = PROFILES[name]
-            log.debug("profile_resolved", source="client_name", profile=profile.name)
-            return profile
-
-    # 3. Default
-    profile = PROFILES["default"]
-    log.debug("profile_resolved", source="default", profile=profile.name)
-    return profile
-
-
-# Per-request client profile (set by middleware, read by envelope builders)
-_current_profile: contextvars.ContextVar[ClientProfile | None] = contextvars.ContextVar(
-    "_current_profile", default=None
-)
-
-
-def set_current_profile(profile: ClientProfile) -> None:
-    """Set the resolved client profile for the current request context."""
-    _current_profile.set(profile)
-
-
-def get_current_profile() -> ClientProfile:
-    """Get the resolved client profile for the current request, or default."""
-    return _current_profile.get() or PROFILES["default"]
-
-
-# =============================================================================
-# Scope Budgets
-# =============================================================================
-
-
-@dataclass
-class ScopeBudget:
-    """Per-scope usage tracking with budget enforcement."""
-
-    scope_id: str
-    created_at: float = field(default_factory=time.monotonic)
-    last_active: float = field(default_factory=time.monotonic)
-
-    # Counters
-    read_bytes_total: int = 0
-    full_file_reads: int = 0
-    read_calls: int = 0
-    search_calls: int = 0
-    search_hits_returned_total: int = 0
-    paged_continuations: int = 0
-
-    # Limits (defaults, can be overridden)
-    max_read_bytes_total: int = 10_000_000  # 10MB
-    max_full_file_reads: int = 50
-    max_read_calls: int = 200
-    max_search_calls: int = 100
-    max_search_hits_returned_total: int = 5000
-    max_paged_continuations: int = 500
-    # Duplicate read tracking
-    _full_read_history: dict[str, int] = field(default_factory=dict)
-    _mutation_epoch: int = field(default=0)
-
-    # Budget reset tracking
-    _read_reset_eligible_at_epoch: int = field(default=-1)
-    _search_reset_eligible_at_epoch: int = field(default=-1)
-    _total_resets: int = field(default=0)
-    _reset_log: list[dict[str, Any]] = field(default_factory=list)
-    mutations_for_search_reset: int = field(default=3)
-
-    def touch(self) -> None:
-        self.last_active = time.monotonic()
-
-    def increment_read(self, byte_count: int) -> None:
-        self.read_bytes_total += byte_count
-        self.read_calls += 1
-        self.touch()
-
-    def increment_full_read(self, path: str, byte_count: int) -> None:
-        self.full_file_reads += 1
-        self.read_bytes_total += byte_count
-        self.read_calls += 1
-        # Track for duplicate detection
-        self._full_read_history[path] = self._full_read_history.get(path, 0) + 1
-        self.touch()
-
-    def increment_search(self, hits: int) -> None:
-        self.search_calls += 1
-        self.search_hits_returned_total += hits
-        self.touch()
-
-    def increment_paged(self) -> None:
-        self.paged_continuations += 1
-        self.touch()
-
-    def record_mutation(self) -> None:
-        """Record a mutation and update budget reset eligibility.
-
-        - Read budget becomes eligible for reset immediately (next epoch)
-        - Search budget becomes eligible every N mutations
-        """
-        self._mutation_epoch += 1
-        self._full_read_history.clear()
-        # Read reset: eligible after any mutation
-        self._read_reset_eligible_at_epoch = self._mutation_epoch
-        # Search reset: eligible every N mutations
-        if self._mutation_epoch % self.mutations_for_search_reset == 0:
-            self._search_reset_eligible_at_epoch = self._mutation_epoch
-
-    def request_reset(self, category: str, justification: str) -> dict[str, Any]:
-        """Request a budget reset. Requires eligibility and justification.
-
-        Args:
-            category: 'read' or 'search'
-            justification: Why the reset is needed.
-                Post-mutation: max 50 chars.
-                No-mutation (ceiling reset): max 250 chars.
-
-        Returns:
-            Dict with reset result, counters before/after, and justification.
-
-        Raises:
-            ValueError: If category invalid, justification too short/long,
-                or reset not eligible.
-        """
-        if category not in ("read", "search"):
-            msg = f"Invalid reset category: {category!r}. Must be 'read' or 'search'."
-            raise ValueError(msg)
-
-        justification = justification.strip()
-        if len(justification) < 50:
-            msg = "Justification must be at least 50 characters."
-            raise ValueError(msg)
-
-        # Determine eligibility
-        has_mutations = self._mutation_epoch > 0
-        if category == "read":
-            eligible = self._read_reset_eligible_at_epoch == self._mutation_epoch
-            counters = ["read_bytes_total", "full_file_reads", "read_calls"]
-            check_keys = ["read_bytes", "full_reads", "read_calls"]
-            # No-mutation path: agent can request read reset at ceiling
-            if not eligible and not has_mutations:
-                at_ceiling = any(self.check_budget(c) is not None for c in check_keys)
-                if at_ceiling and len(justification) >= 250:
-                    eligible = True
-                elif at_ceiling:
-                    msg = (
-                        "No-mutation read reset requires justification "
-                        f"of at least 250 characters (got {len(justification)})."
-                    )
-                    raise ValueError(msg)
-        else:  # search
-            eligible = self._search_reset_eligible_at_epoch == self._mutation_epoch
-            counters = ["search_calls", "search_hits_returned_total", "paged_continuations"]
-            check_keys = ["search_calls", "search_hits", "paged_continuations"]
-            # No-mutation path for search
-            if not eligible and not has_mutations:
-                at_ceiling = any(self.check_budget(c) is not None for c in check_keys)
-                if at_ceiling and len(justification) >= 250:
-                    eligible = True
-                elif at_ceiling:
-                    msg = (
-                        "No-mutation search reset requires justification "
-                        f"of at least 250 characters (got {len(justification)})."
-                    )
-                    raise ValueError(msg)
-
-        if not eligible:
-            if category == "read":
-                msg = "Read budget reset requires at least one mutation since last reset."
-            else:
-                msg = (
-                    f"Search budget reset requires {self.mutations_for_search_reset} "
-                    f"mutations (current epoch: {self._mutation_epoch})."
-                )
-            raise ValueError(msg)
-
-        # Capture before state
-        before = {c: getattr(self, c) for c in counters}
-
-        # Reset counters
-        for c in counters:
-            setattr(self, c, 0)
-        if category == "read":
-            self._full_read_history.clear()
-            self._read_reset_eligible_at_epoch = -1
-        else:
-            self._search_reset_eligible_at_epoch = -1
-
-        self._total_resets += 1
-        self._reset_log.append(
-            {
-                "category": category,
-                "justification": justification,
-                "epoch": self._mutation_epoch,
-                "before": before,
-                "has_mutations": has_mutations,
-            }
-        )
-
-        return {
-            "reset": True,
-            "category": category,
-            "before": before,
-            "after": dict.fromkeys(counters, 0),
-            "total_resets": self._total_resets,
-            "epoch": self._mutation_epoch,
-        }
-
-    def check_duplicate_read(self, path: str) -> dict[str, Any] | None:
-        """Check for duplicate full read, return warning if detected."""
-        count = self._full_read_history.get(path, 0)
-        if count >= 2:
-            return {
-                "code": "DUPLICATE_FULL_READ",
-                "path": path,
-                "count": count,
-                "scope_id": self.scope_id,
-            }
-        return None
-
-    def check_budget(self, counter: str) -> str | None:
-        """Check if a budget counter is exceeded. Returns hint or None."""
-        checks = {
-            "read_bytes": (
-                self.read_bytes_total,
-                self.max_read_bytes_total,
-                "Reduce read scope or use search to find specific content.",
-            ),
-            "full_reads": (
-                self.full_file_reads,
-                self.max_full_file_reads,
-                "Use targeted reads instead of full file reads.",
-            ),
-            "read_calls": (
-                self.read_calls,
-                self.max_read_calls,
-                "Batch reads into fewer calls with multiple targets.",
-            ),
-            "search_calls": (
-                self.search_calls,
-                self.max_search_calls,
-                "Refine search queries to reduce call count.",
-            ),
-            "search_hits": (
-                self.search_hits_returned_total,
-                self.max_search_hits_returned_total,
-                "Use filter_paths or filter_kinds to narrow results.",
-            ),
-            "paged_continuations": (
-                self.paged_continuations,
-                self.max_paged_continuations,
-                "Reduce result sets or use more specific queries.",
-            ),
-        }
-        if counter in checks:
-            current, limit, hint = checks[counter]
-            if current > limit:
-                return hint
-        return None
-
-    def to_usage_dict(self) -> dict[str, Any]:
-        result: dict[str, Any] = {
-            "read_bytes": self.read_bytes_total,
-            "full_reads": self.full_file_reads,
-            "read_calls": self.read_calls,
-            "search_calls": self.search_calls,
-            "search_hits": self.search_hits_returned_total,
-            "paged_continuations": self.paged_continuations,
-            "mutation_epoch": self._mutation_epoch,
-            "total_resets": self._total_resets,
-        }
-        # Mutation-path availability
-        read_available = self._read_reset_eligible_at_epoch == self._mutation_epoch
-        search_available = self._search_reset_eligible_at_epoch == self._mutation_epoch
-        # Pure-read path: available at ceiling when no mutations
-        if self._mutation_epoch == 0:
-            read_keys = ["read_bytes", "full_reads", "read_calls"]
-            search_keys = ["search_calls", "search_hits", "paged_continuations"]
-            if any(self.check_budget(c) is not None for c in read_keys):
-                read_available = True
-            if any(self.check_budget(c) is not None for c in search_keys):
-                search_available = True
-        if read_available:
-            result["read_reset_available"] = True
-        if search_available:
-            result["search_reset_available"] = True
-        return result
-
-    def is_expired(self, ttl_seconds: float = 3600.0) -> bool:
-        return (time.monotonic() - self.last_active) > ttl_seconds
-
-
-class ScopeManager:
-    """Manages per-scope budgets. Thread-safe, TTL-evicted."""
-
-    def __init__(self, ttl_seconds: float = 3600.0, max_scopes: int = 100) -> None:
-        self._scopes: OrderedDict[str, ScopeBudget] = OrderedDict()
-        self._lock = threading.Lock()
-        self._ttl = ttl_seconds
-        self._max = max_scopes
-
-    def get_or_create(self, scope_id: str) -> ScopeBudget:
-        with self._lock:
-            if scope_id in self._scopes:
-                budget = self._scopes[scope_id]
-                if budget.is_expired(self._ttl):
-                    del self._scopes[scope_id]
-                else:
-                    budget.touch()
-                    self._scopes.move_to_end(scope_id)
-                    return budget
-
-            budget = ScopeBudget(scope_id=scope_id)
-            self._scopes[scope_id] = budget
-            # Evict oldest
-            while len(self._scopes) > self._max:
-                self._scopes.popitem(last=False)
-            return budget
-
-    def get(self, scope_id: str) -> ScopeBudget | None:
-        with self._lock:
-            budget = self._scopes.get(scope_id)
-            if budget and not budget.is_expired(self._ttl):
-                return budget
-            return None
-
-    def record_mutation(self, scope_id: str) -> None:
-        """Record a mutation event and update reset eligibility."""
-        with self._lock:
-            budget = self._scopes.get(scope_id)
-            if budget:
-                budget.record_mutation()
-
-    def request_reset(self, scope_id: str, category: str, justification: str) -> dict[str, Any]:
-        """Request a budget reset for a scope. Thread-safe."""
-        with self._lock:
-            budget = self._scopes.get(scope_id)
-            if not budget:
-                msg = f"No budget found for scope '{scope_id}'."
-                raise ValueError(msg)
-            return budget.request_reset(category, justification)
-
-    def cleanup_expired(self) -> int:
-        with self._lock:
-            to_remove = [sid for sid, b in self._scopes.items() if b.is_expired(self._ttl)]
-            for sid in to_remove:
-                del self._scopes[sid]
-            return len(to_remove)
+    for key in keys_by_size:
+        if len(json.dumps(trimmed, default=str)) <= budget:
+            break
+        if key in ("hint", "gate", "recon_id", "metrics"):
+            continue  # don't drop critical keys
+        trimmed[key] = f"(trimmed — {key} too large for inline)"
+    return trimmed

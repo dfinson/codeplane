@@ -1425,7 +1425,20 @@ def register_tools(mcp: "FastMCP", app_ctx: "AppContext") -> None:
                     failure_snippets = _build_failure_snippets(fl, file_contents) if fl else {}
 
                     # Build scaffolds (compact symbol index)
-                    from codeplane.mcp.sidecar_cache import _render_scaffold
+                    def _render_scaffold(scaffold: dict) -> str:
+                        parts: list[str] = []
+                        summary = scaffold.get("summary", "")
+                        if summary:
+                            parts.append(summary)
+                        imports = scaffold.get("imports", [])
+                        if imports:
+                            parts.append(f"imports: {', '.join(str(i) for i in imports)}")
+                        for s in scaffold.get("symbols", []):
+                            name = s.get("name", "?")
+                            kind = s.get("kind", "")
+                            line = s.get("line", "")
+                            parts.append(f"  {kind} {name} (L{line})" if line else f"  {kind} {name}")
+                        return "\n".join(parts)
 
                     failure_scaffolds: dict[str, str] = {}
                     for r in refreshed:

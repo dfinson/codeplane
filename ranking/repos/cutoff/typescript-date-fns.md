@@ -110,13 +110,13 @@ without compensating for the timezone offset change. Fix the month
 difference calculation in `differenceInMonths/` to normalize both dates
 to UTC-equivalent values before comparison.
 
-### N3: Fix startOfWeek not respecting weekStartsOn from locale
+### N3: Fix startOfWeek not validating weekStartsOn option range
 
-When `startOfWeek()` is called with a locale that sets `weekStartsOn: 1`
-(Monday) but no explicit `weekStartsOn` option, the function defaults to
-Sunday (0) instead of reading the locale's setting. Fix the options
-resolution in `startOfWeek/` to fall back to the locale's
-`options.weekStartsOn` when the parameter is not explicitly provided.
+When `startOfWeek()` receives an out-of-range `weekStartsOn` value
+(e.g., `7` or `-1`), it silently produces an incorrect result because
+the day-of-week arithmetic in `startOfWeek/index.ts` wraps without
+bounds checking. Fix the options validation to throw a `RangeError`
+when `weekStartsOn` is not an integer between 0 and 6.
 
 ### N4: Fix parseISO silently returning Invalid Date for time-only strings
 
@@ -126,13 +126,14 @@ time-only ISO 8601 strings (starting with `T`) and parse them relative
 to the epoch date, or throw a `RangeError` with a clear message
 explaining that a date component is required.
 
-### N5: Fix isWithinInterval not handling intervals where start equals end
+### N5: Fix isWithinInterval not throwing when interval is inverted
 
-`isWithinInterval(date, { start, end })` returns `false` when `start`
-and `end` are the same timestamp and `date` equals that timestamp. A
-zero-length interval at a point should include that exact point. Fix
-the boundary comparison in `isWithinInterval/` to use `<=` for both
-bounds.
+When `isWithinInterval()` receives an interval where `start > end`, it
+silently sorts the boundaries internally. This hides a likely caller
+bug where the interval was constructed backwards. Add a `strict` option
+(defaulting to `false` for backward compatibility) to
+`isWithinInterval/index.ts` that throws a `RangeError` when
+`start > end` and `strict` is `true`.
 
 ### N6: Fix formatDistance rounding error for durations near threshold boundaries
 
@@ -142,13 +143,15 @@ the hour threshold. Fix the rounding in `formatDistance/` to use
 floor-based thresholds so that 44 minutes remains "44 minutes" and the
 hour label only triggers at 45 minutes.
 
-### N7: Fix addMonths producing invalid dates when adding to the 31st
+### N7: Fix addMonths not preserving time-of-day across DST transitions
 
-`addMonths(new Date(2024, 0, 31), 1)` returns March 2 instead of
-February 29 (2024 is a leap year) because the overflow logic does not
-clamp to the last day of the target month. Fix the month addition in
-`addMonths/` to detect month overflow and clamp to the last valid day
-of the resulting month.
+When `addMonths()` crosses a DST transition, the resulting date can
+have its hours shifted because `setFullYear()` and `setMonth()` in
+`addMonths/index.ts` operate in local time. Adding 1 month to
+`2024-03-10T02:30` (spring-forward) can yield `2024-04-10T03:30`
+instead of preserving the original `02:30` time. Fix the month addition
+to detect and compensate for DST-induced hour shifts after setting the
+new month.
 
 ### N8: Fix toDate helper not rejecting non-finite numeric inputs
 
@@ -158,76 +161,89 @@ without throwing. Other functions that rely on `toDate()` then silently
 propagate the Invalid Date. Fix `toDate()` to throw a `RangeError` for
 non-finite numeric inputs.
 
-### N9: Fix eachDayOfInterval including an extra day when interval spans DST fall-back
+### N9: Fix eachDayOfInterval not respecting step values greater than the interval span
 
-`eachDayOfInterval()` generates one extra day when the interval crosses
-a fall-back DST transition because the 25-hour day causes the iteration
-to produce two entries for the same calendar date. Fix the day iteration
-in `eachDayOfInterval/` to use `startOfDay()` normalization within the
-loop to avoid duplicate calendar dates.
+When `eachDayOfInterval()` is called with a `step` larger than the
+number of days in the interval, it still returns the start date even
+though no full step fits within the range. The loop condition in
+`eachDayOfInterval/index.ts` (`+date <= endTime`) always includes the
+first date regardless of step. Fix the function to return an empty
+array when the step exceeds the interval span, or document that the
+start date is always included.
 
-### N10: Fix locale formatRelative not receiving the correct base date
+### N10: Fix formatRelative not accounting for timezone offset in day boundary comparison
 
-In locale definitions, the `formatRelative` function is called with the
-wrong argument order — it receives `(token, date)` instead of
-`(token, date, baseDate, options)`, preventing locales from using the
-base date for context-dependent phrasing. Fix the call site in
-`formatRelative/` to pass all four arguments to the locale function.
+The `formatRelative()` function in `formatRelative/index.ts` uses
+`differenceInCalendarDays()` to classify the date relative to the base
+date, but the calendar-day difference can be off by one when the two
+dates are in different timezone offsets (e.g., one during DST and one
+not). Fix the comparison to normalize both dates to the same offset
+before computing the calendar-day difference.
 
 ## Medium
 
-### M1: Implement duration arithmetic functions (addDuration, subDuration)
+### M1: Implement transpose() for bulk date shifting with overflow policy
 
-Add `addDuration(date, duration)` and `subDuration(date, duration)` that
-accept a `Duration` object `{ years, months, weeks, days, hours, minutes,
-seconds }` and apply all fields in order. Requires creating new function
-modules under `src/`, integrating with existing `add*` functions for each
-field, handling the `Duration` type from `types.ts`, and generating
-corresponding `fp/` curried variants.
+Add `transpose(dates, duration, options)` that applies a `Duration`
+shift to an array of dates and returns the shifted array. Unlike calling
+`add()` in a loop, `transpose` should accept an `overflow` policy
+(`"clamp"` or `"reject"`) for month-end overflow cases. Requires a new
+`transpose/` module under `src/`, integration with `add/` for the
+underlying arithmetic, a new `OverflowPolicy` type in `types.ts`, and
+a corresponding `fp/` curried variant.
 
-### M2: Add ISO 8601 duration parsing and formatting
+### M2: Add ISO 8601 duration parsing function
 
 Implement `parseISODuration("P1Y2M3DT4H5M6S")` that returns a
-`Duration` object, and `formatISODuration(duration)` that serializes
-back to an ISO 8601 duration string. Requires new function modules,
-a parser for the ISO 8601 duration grammar, validation for negative
-or fractional values, and proper type exports in `types.ts`.
+`Duration` object. The existing `formatISODuration()` serializes
+durations but there is no parser for the reverse direction. Requires a
+new `parseISODuration/` module under `src/`, a parser for the ISO 8601
+duration grammar handling both period and time components, validation
+for negative or fractional values, proper type integration with
+`Duration` from `types.ts`, and an `fp/` curried variant.
 
-### M3: Implement configurable default options via a context provider
+### M3: Implement scoped default options via createContext
 
-Add `setDefaultOptions({ locale, weekStartsOn, firstWeekContainsDate })`
-that sets global defaults used by all functions when options are not
-explicitly provided. Requires modifying the options resolution logic
-shared across all function modules via `_lib/defaultOptions/`, updating
-the `defaultLocale` helper, and ensuring the global state is isolated
-in module scope to avoid cross-contamination in bundled applications.
+Add `createContext(defaults)` that returns a scoped set of date-fns
+functions pre-bound with the given default options (locale,
+weekStartsOn, firstWeekContainsDate). Unlike the global
+`setDefaultOptions()`, `createContext` produces an isolated instance
+that does not affect other consumers. Requires a new `createContext/`
+module that wraps each exported function with options merging, updates
+to `_lib/defaultOptions/` to support context-level resolution, and
+updates to `types.ts` for the context type.
 
-### M4: Add recurring interval generation functions
+### M4: Add recurring interval generation with configurable anchor
 
-Implement `eachWeekOfInterval()`, `eachMonthOfInterval()`, and
-`eachYearOfInterval()` that generate arrays of dates at the specified
-cadence within a given interval. Requires new function modules that
-follow the same pattern as `eachDayOfInterval/`, DST-safe iteration
-using `startOfWeek/startOfMonth/startOfYear`, and corresponding `fp/`
-curried wrappers.
+Implement `eachIntervalOfType(interval, type, options)` where `type` is
+`"hour"` | `"day"` | `"week"` | `"month"` | `"year"` that generates
+dates at the specified cadence. Unlike the existing `eachDayOfInterval`
+and siblings, this function should accept an `anchor` date that
+determines alignment (e.g., anchor to the 15th of each month).
+Requires a new module under `src/`, integration with existing
+`startOf*` functions for normalization, and a corresponding `fp/`
+curried variant.
 
-### M5: Implement intlFormat function using Intl.DateTimeFormat
+### M5: Implement formatDistanceStrict with custom unit thresholds
 
-Add `intlFormat(date, formatOptions, localeOptions)` that wraps the
-browser's `Intl.DateTimeFormat` API to produce locale-aware formatted
-strings without relying on date-fns locale objects. Requires a new
-function module, type definitions for the `Intl.DateTimeFormat` options
-subset, graceful fallback for environments without `Intl` support, and
-an `fp/` curried variant.
+The existing `formatDistanceStrict()` uses fixed unit thresholds for
+choosing between seconds, minutes, hours, etc. Add a
+`unitThresholds` option to `formatDistanceStrict/index.ts` that lets
+callers customize when the display unit changes (e.g., show minutes
+up to 120 instead of switching to hours at 60). Requires changes to
+the unit selection logic in `formatDistanceStrict/`, a new
+`UnitThresholds` type in `types.ts`, and updates to the locale
+`formatDistance` callbacks to receive the custom thresholds.
 
-### M6: Add quarter-based date functions
+### M6: Add fiscal year date functions with configurable start month
 
-Implement `startOfQuarter()`, `endOfQuarter()`, `getQuarter()`,
-`setQuarter()`, `addQuarters()`, `differenceInQuarters()`, and
-`isSameQuarter()`. Requires seven new function modules following the
-existing patterns, `fp/` curried wrappers for each, and updates to
-`index.ts` barrel exports. Quarter boundaries must respect the calendar
-year (Q1 = Jan-Mar).
+Implement `startOfFiscalYear(date, { fiscalYearStartMonth })`,
+`endOfFiscalYear()`, `getFiscalYear()`, `getFiscalQuarter()`, and
+`isSameFiscalYear()` for organizations whose fiscal year does not align
+with the calendar year (e.g., starts in April or October). Requires
+five new function modules under `src/`, a `FiscalYearOptions` type in
+`types.ts`, `fp/` curried wrappers for each, and updates to `index.ts`
+barrel exports.
 
 ### M7: Implement a date range type with iteration and containment checks
 
@@ -247,14 +263,16 @@ changes to the token parser in `format/`, a token registry with conflict
 detection for built-in tokens, and documentation of the formatter
 callback signature.
 
-### M9: Implement locale-aware ordinal formatting across all locales
+### M9: Implement locale validation and completeness checker
 
-Add ordinal support to `format()` via the `'do'`, `'Mo'`, `'Qo'` tokens
-so that dates render as "1st", "2nd", "3rd" etc., with correct ordinal
-rules per locale. Requires extending each locale definition under
-`src/locale/` with an `ordinalNumber` function, updating the `format/`
-token processor to dispatch ordinal tokens to the locale, and adding
-the ordinal type to `types.ts`.
+Add a `validateLocale(locale)` function under `src/_lib/` that checks
+a locale definition for completeness: all required formatters
+(`formatDistance`, `formatRelative`, `localize`, `formatLong`, `match`)
+are present, `ordinalNumber` returns strings for all tested inputs,
+and `era`/`quarter`/`month`/`day` localizers cover all required values.
+Requires a validation module under `src/_lib/validateLocale/`, type
+integration with the `Locale` type from `types.ts`, and test coverage
+for at least the `en-US` locale.
 
 ### M10: Add tree-shakeable sub-path exports to package.json
 
@@ -326,15 +344,18 @@ is reached, `countdown$(target)` emitting remaining durations, and
 interval types, support for both RxJS-compatible and native async
 iterator interfaces, and cleanup/disposal handling.
 
-### W7: Implement business day calculation functions with holiday calendars
+### W7: Implement holiday calendar system with regional holiday packs
 
-Add `addBusinessDays()`, `differenceInBusinessDays()`,
-`isBusinessDay()`, `nextBusinessDay()`, and `previousBusinessDay()` that
-skip weekends and user-provided holiday calendars. Support configurable
-work weeks (e.g., Sun-Thu for Middle Eastern locales). Requires new
-function modules, a `HolidayCalendar` type in `types.ts`, integration
-with locale `options.weekStartsOn` for work-week determination, a
-holiday lookup structure, and `fp/` curried variants.
+Add a `HolidayCalendar` type and a holiday-aware layer that integrates
+with the existing `addBusinessDays()` and `differenceInBusinessDays()`
+functions. Implement `createHolidayCalendar({ holidays, workWeek })`,
+`isHoliday(date, calendar)`, `nextWorkday(date, calendar)`, and
+`previousWorkday(date, calendar)`. Include regional holiday packs
+(US-federal, EU-common) as importable presets. Requires new modules
+under `src/holidays/`, a `HolidayCalendar` type in `types.ts`,
+modifications to `addBusinessDays/` and `differenceInBusinessDays/` to
+accept a calendar option, `fp/` curried variants, and `index.ts` export
+updates.
 
 ### W8: Add a migration CLI for upgrading from date-fns v2 to v3
 
@@ -346,22 +367,28 @@ inline comments. Requires an AST parser (using TypeScript compiler API),
 a transformation rule engine, a CLI entry point, and a dry-run mode that
 reports changes without writing.
 
-### W9: Implement a date arithmetic constraint solver
+### W9: Implement a date constraint query builder
 
-Add `closestTo(date, dates)`, `clamp(date, interval)`, `roundToNearest(date, unit, method)`, and `snap(date, unit, direction)` functions plus a
-constraint solver `findDate({ after, before, dayOfWeek, monthDay, not })`
-that returns the nearest date satisfying all constraints. Requires new
-function modules for each utility, a constraint evaluation engine, an
-iteration strategy for constraint satisfaction, and comprehensive edge-
-case handling for month/year boundaries.
+Add a `findDate({ after, before, dayOfWeek, monthDay, not })` constraint
+solver that returns the nearest date satisfying all constraints, plus
+a `snap(date, unit, direction)` function for rounding dates to unit
+boundaries (`'ceil'` | `'floor'` | `'round'`). The existing
+`closestTo()`, `clamp()`, and `roundToNearestMinutes` /
+`roundToNearestHours` cover individual operations but there is no
+composed constraint system. Requires a new `findDate/` module, a
+`snap/` module, a `DateConstraint` type in `types.ts`, integration with
+existing comparison and rounding functions for each constraint, `fp/`
+curried variants, and comprehensive edge-case handling for month/year
+boundaries.
 
-### W10: Implement full ICU-compatible week numbering system
+### W10: Implement a date schema validation library for runtime type checking
 
-Add complete ISO 8601 and US week-numbering support: `getISOWeek()`,
-`getWeek()` (locale-aware), `setISOWeek()`, `setWeek()`,
-`getISOWeekYear()`, `getWeekYear()`, `startOfISOWeekYear()`,
-`startOfWeekYear()`, and `getWeeksInYear()`. Each variant must respect
-`firstWeekContainsDate` and `weekStartsOn` from locale options. Requires
-nine new function modules, updates to `_lib/` week-numbering helpers,
-integration with the `format/` and `parse/` token systems for `I`, `R`,
-`w`, and `Y` tokens, and `fp/` curried wrappers.
+Add a `src/schema/` module providing runtime validators that complement
+the compile-time types: `dateSchema()`, `intervalSchema()`,
+`durationSchema()`, and `localeSchema()`. Each schema validates input
+shape, value ranges (e.g., month 0–11, day 1–31), and cross-field
+consistency (e.g., interval start ≤ end). Support composability with
+Zod-style `.refine()` for custom rules. Requires a schema builder
+module, integration with `types.ts` types for inference, validators for
+each major type, error message formatting using locale-aware date
+rendering via `format/`, and `fp/` curried variants.

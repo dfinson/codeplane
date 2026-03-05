@@ -110,73 +110,7 @@ def create_routes(controller: ServerController) -> list[Route]:
 
         return JSONResponse(response)
 
-    # -----------------------------------------------------------------
-    # Sidecar cache routes
-    # -----------------------------------------------------------------
-
-    async def sidecar_cache_list(request: Request) -> JSONResponse:
-        """List cached entries for a (session_id, endpoint_key) pair."""
-        from codeplane.mcp.sidecar_cache import cache_list
-
-        session_id = request.query_params.get("session", "")
-        endpoint_key = request.query_params.get("endpoint", "")
-        if not session_id or not endpoint_key:
-            return JSONResponse(
-                {"error": "Both 'session' and 'endpoint' query params are required."},
-                status_code=400,
-            )
-        entries = cache_list(session_id, endpoint_key)
-        return JSONResponse({"entries": entries})
-
-    async def sidecar_cache_slice(request: Request) -> Response:
-        """Render a cache slice as terminal-ready plain text.
-
-        Query params:
-            cache (required): cache entry ID
-            path: dot-separated slice path (e.g. 'resolved.0')
-        """
-        from codeplane.mcp.sidecar_cache import cache_render
-
-        cache_id = request.query_params.get("cache", "")
-        if not cache_id:
-            return Response(
-                "'cache' query param is required.",
-                status_code=400,
-                media_type="text/plain",
-            )
-
-        path = request.query_params.get("path")
-        rendered = cache_render(cache_id, path=path)
-        if rendered is None:
-            return Response(
-                f"Cache entry '{cache_id}' not found.",
-                status_code=404,
-                media_type="text/plain",
-            )
-        return Response(rendered, media_type="text/plain")
-
-    async def sidecar_cache_meta(request: Request) -> JSONResponse:
-        """Get metadata and schema for a cached entry."""
-        from codeplane.mcp.sidecar_cache import cache_meta
-
-        cache_id = request.query_params.get("cache", "")
-        if not cache_id:
-            return JSONResponse(
-                {"error": "'cache' query param is required."},
-                status_code=400,
-            )
-        result = cache_meta(cache_id)
-        if result is None:
-            return JSONResponse(
-                {"error": f"Cache entry '{cache_id}' not found."},
-                status_code=404,
-            )
-        return JSONResponse(result)
-
     return [
         Route("/health", health, methods=["GET"]),
         Route("/status", status, methods=["GET"]),
-        Route("/sidecar/cache/list", sidecar_cache_list, methods=["GET"]),
-        Route("/sidecar/cache/slice", sidecar_cache_slice, methods=["GET"]),
-        Route("/sidecar/cache/meta", sidecar_cache_meta, methods=["GET"]),
     ]

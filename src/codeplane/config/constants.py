@@ -40,7 +40,7 @@ DIFF_CHANGES_MAX = 100
 # Delivery Envelope
 # ======================================================================
 
-INLINE_CAP_BYTES = 8_000
+INLINE_CAP_BYTES = 30_000
 """Default inline cap for delivery envelope. Fits within VS Code's inline display."""
 
 # ======================================================================# Delivery Envelope Constants

@@ -216,8 +216,13 @@ Three repo sets:
 - **Ranker + Gate** (30 repos): train ranker and gate. 10 languages × 3 repos.
 - **Cutoff** (31 repos): train cutoff with disjoint data. 10 languages × 3 repos + 1.
   No K-fold needed — cutoff repos are scored by the ranker trained on the
-  ranker+gate set, so no leakage.
+  ranker+gate set, so no leakage. Gate also trains on these repos
+  (gate uses raw signals, not ranker output, so no leakage).
 - **Eval** (15 repos): held-out evaluation. 10 languages + 5 extra.
+
+All repos generate the same full query set: 8 OK queries + up to 6
+non-OK queries per task. Gate uses all queries from all 61 training
+repos. Cutoff uses only OK queries from cutoff repos.
 
 **Total:** 76 repos, 2,280 tasks, ~18,000+ queries.
 
@@ -564,14 +569,15 @@ gate label.
 
 ### 6.3 Gate
 
-1. All query types (OK + UNSAT + BROAD + AMBIG).
+1. All query types (OK + UNSAT + BROAD + AMBIG) from ALL 61 training
+   repos (30 ranker+gate + 31 cutoff).
 2. Retrieval distribution features from candidate pools.
 3. LightGBM multiclass, cross-entropy.
 
 ### 6.4 Shipment Sequence
 
 1. Data collection (30 ranker+gate repos, 31 cutoff repos, 15 eval repos)
-2. Gate training (30 ranker+gate repos) → gate ships
+2. Gate training (all 61 training repos) → gate ships
 3. Ranker training (30 ranker+gate repos) → validate NDCG on eval set
 4. Cutoff training (31 cutoff repos scored by trained ranker)
 5. Full pipeline ships (gate + ranker + cutoff)

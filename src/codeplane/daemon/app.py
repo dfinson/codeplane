@@ -33,11 +33,6 @@ def create_app(
 
     codeplane_dir = repo_root / ".codeplane"
 
-    # Set up disk cache directory for pre-rendered JSON
-    from codeplane.mcp.sidecar_cache import set_cache_dir
-
-    set_cache_dir(codeplane_dir / "cache")
-
     context = AppContext.create(
         repo_root=repo_root,
         db_path=codeplane_dir / "index.db",

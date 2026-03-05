@@ -75,29 +75,32 @@ rich/
 
 ## Narrow
 
-### N1: Fix Console.print not respecting markup=False when using Text objects
+### N1: Add overflow strategy parameter to Panel for long content
 
-When `Console.print()` is called with `markup=False`, markup tags inside
-plain strings are correctly escaped, but `Text` objects that contain
-literal bracket characters in their content are still parsed for markup
-during rendering. The issue is in the render pipeline where `Text`
-objects bypass the `markup` flag. Fix the `Console._render_buffer()`
-method to propagate the `markup=False` setting to `Text` rendering.
+When content inside a `Panel` exceeds the panel width, it is wrapped
+by default, but there is no option to truncate with an ellipsis or crop
+instead. Add an `overflow` parameter to `Panel.__init__()` in `panel.py`
+that accepts `"wrap"`, `"ellipsis"`, or `"crop"` and passes it through
+to the renderable's `ConsoleOptions` so content wider than the panel is
+handled according to the chosen strategy.
 
-### N2: Fix Style.__add__ not preserving link attribute when combining styles
+### N2: Add Style.subtract() method for removing specific attributes
 
-When two `Style` objects are combined with `+`, if the first style has a
-`link` attribute and the second does not, the link is dropped from the
-resulting style. The `Style.__add__()` method should carry forward the
-link from the left operand when the right operand has no link set. Fix
-the style combination logic in `style.py`.
+The `Style` class in `style.py` supports combining styles via `__add__`
+but has no way to selectively remove attributes (e.g., remove `bold`
+from a combined style while keeping color and italic). Add a
+`Style.subtract(other)` method that returns a new `Style` with attributes
+from `other` cleared, useful for style overrides in nested renderables
+where a child needs to undo a parent's styling.
 
-### N3: Fix Color.parse not handling uppercase hex codes
+### N3: Add named color alias registry to Color class
 
-`Color.parse("#FF5733")` raises a `ColorParseError` because the hex
-regex only matches lowercase hex digits. The color parser in `color.py`
-should be case-insensitive for hex color codes. Fix the regex pattern
-in `Color.parse()` to accept both upper and lowercase hex characters.
+The `Color` class in `color.py` supports standard named colors and hex
+codes but does not allow users to register custom named aliases (e.g.,
+`"brand-primary"` → `"#336699"`). Add a `Color.register_alias(name, color_str)`
+class method that stores aliases in a module-level dictionary consulted
+by `Color.parse()` before falling back to the standard color lookup,
+so themes can define semantic color names.
 
 ### N4: Fix Table not rendering empty cells when show_lines=True
 
@@ -107,12 +110,14 @@ is measured as zero height instead of one line. Fix the cell height
 calculation in `table.py` to ensure empty cells occupy at least one
 line when `show_lines` is enabled.
 
-### N5: Fix markup.render not closing tags at string boundary
+### N5: Add escape_markup() utility to markup module
 
-When markup text ends with an unclosed tag like `"[bold]hello"`, the
-`render()` function in `markup.py` silently drops the unclosed style
-instead of applying it to the remaining text. Fix the markup parser to
-implicitly close any open tags at the end of the input string.
+The `markup.py` module provides `render()` for parsing markup tags, but
+there is no public utility to escape literal bracket characters in
+user-provided strings before interpolation into markup templates. Add
+`escape_markup(text)` to `markup.py` that replaces `[` with `\[` so
+user content can be safely embedded in markup strings without triggering
+style parsing.
 
 ### N6: Fix Segment.split_cells not handling zero-width characters
 
@@ -121,13 +126,12 @@ characters (ZWJ, combining marks) as occupying one cell, causing
 misaligned output when splitting segments at a cell boundary. Fix the
 cell measurement to use `cell_len()` for zero-width character detection.
 
-### N7: Fix Tree guide characters breaking with non-UTF-8 console encoding
+### N7: Add Tree.sort_children() for alphabetical node ordering
 
-When the console encoding is ASCII, `Tree` renders guide characters
-(box-drawing glyphs) as `?` without falling back to ASCII-safe
-alternatives. Fix the `Tree.__rich_console__()` method to detect the
-console encoding and use ASCII guide characters (`|`, `+`, `-`) when
-the encoding cannot represent the default Unicode guides.
+The `Tree` class in `tree.py` stores children in insertion order via
+`self.children: List[Tree]`, but there is no built-in way to sort child
+nodes alphabetically or by a custom key. Add a `sort_children(key=None, reverse=False)` method that sorts the children list in place,
+recursively sorting subtrees when `recursive=True` is passed.
 
 ### N8: Fix Panel title truncation not adding ellipsis
 
@@ -136,20 +140,24 @@ hard-truncated without any visual indicator. Fix `Panel._render_title()`
 to add an ellipsis (`…`) when the title must be truncated, preserving
 one character of width for the ellipsis character.
 
-### N9: Fix prompt.Confirm accepting "y " (trailing space) as invalid
+### N9: Add IntPrompt with range validation to prompt module
 
-`Confirm.ask()` strips leading whitespace but not trailing whitespace
-from user input, causing `"y "` to be rejected as an invalid response.
-Fix the input processing in `prompt.py` to strip both leading and
-trailing whitespace before validation.
+The `prompt.py` module provides `IntPrompt` for integer input but does
+not offer built-in numeric range validation — users must re-prompt
+manually if the value is out of bounds. Add optional `min_value` and
+`max_value` parameters to `IntPrompt` that validate the parsed integer
+against the range and re-prompt with a message like
+`"Please enter a value between 1 and 100"` when the constraint is
+violated.
 
-### N10: Fix Pretty not handling recursive dataclass references
+### N10: Add max_string_length parameter to Pretty for large string truncation
 
-When `pretty.py` encounters a dataclass that references itself (e.g., a
-tree node with a `children: list[Node]` field), the pretty printer
-enters infinite recursion instead of detecting the cycle and printing
-an ellipsis placeholder. Fix the `_traverse()` function to track visited
-object IDs and emit `...` for cycles.
+The `pretty.py` module's `Pretty` renderable and the `_traverse()`
+function render all data structures in full, which can produce
+megabytes of output for objects containing large strings (e.g., base64
+blobs). Add a `max_string_length` parameter to the `Pretty` class and
+the `pretty_repr()` / `_traverse()` functions that truncates string
+values beyond the limit with an `"..."` suffix.
 
 ## Medium
 

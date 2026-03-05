@@ -115,14 +115,14 @@ packages/
 
 ## Narrow
 
-### N1: Fix httpBatchLink not respecting maxURLLength for GET requests
+### N1: Fix httpBatchLink not setting Content-Type header for GET batch requests
 
-When `httpBatchLink` batches multiple queries into a single GET request,
-the combined URL can exceed browser URL length limits. The link does not
-check the resulting URL length against the configurable `maxURLLength`
-option and fall back to POST. Fix the URL construction logic in
-`httpBatchLink` to measure the encoded URL length and switch to POST
-when it exceeds the threshold.
+When `httpBatchLink` constructs a GET request with batched query
+parameters, it does not set a `Content-Type` header on the request.
+Some CDN or proxy configurations reject requests without an explicit
+`Content-Type`. Fix the request construction in `httpBatchLink.ts` to
+set `Content-Type: application/json` on GET batch requests so they are
+not stripped or rejected by intermediate infrastructure.
 
 ### N2: Fix middleware context type not narrowing after validation
 
@@ -142,21 +142,26 @@ serialization in `resolveResponse.ts` to include a serialized
 representation of the `cause` (message, stack) in the error envelope,
 and update client-side error parsing to reconstruct it.
 
-### N4: Fix splitLink not forwarding headers from conditional branches
+### N4: Add operation metadata passthrough to splitLink branches
 
-When `splitLink` routes an operation to a branch link (e.g., `wsLink`
-for subscriptions, `httpLink` for queries), HTTP headers set by
-upstream links are not forwarded to the branch link's request context.
-Fix the link composition in `splitLink.ts` to propagate the operation
-context including headers to whichever branch is selected.
+When `splitLink` routes an operation to a branch, any metadata added
+by prior links (e.g., timing marks or correlation IDs stored in
+`op.context`) is passed through. However, there is no mechanism for
+branch links to signal back metadata (e.g., cache-hit status) to
+downstream links after `splitLink`. Add a `postProcess` callback option
+to `splitLink.ts` that receives the operation result and the selected
+branch identifier, allowing callers to annotate results with routing
+metadata.
 
-### N5: Fix loggerLink printing [object Object] for input with circular references
+### N5: Add structured logging format option to loggerLink
 
-The `loggerLink` uses `JSON.stringify` to log operation inputs, which
-throws on circular references and falls back to printing
-`[object Object]`. Fix the logger formatting in `loggerLink.ts` to use
-a safe serializer that handles circular references by replacing cycles
-with a `[Circular]` placeholder.
+The `loggerLink` in `loggerLink.ts` formats log output for human
+consumption using CSS or ANSI coloring, but does not support a
+structured JSON format suitable for log aggregation services like
+Datadog or CloudWatch. Add a `format: 'structured'` option to
+`LoggerLinkOptions` that outputs each operation as a single JSON line
+with fields for `type`, `path`, `direction`, `elapsedMs`, and
+`status`.
 
 ### N6: Fix subscription cleanup not awaiting async teardown functions
 
@@ -176,13 +181,16 @@ simultaneously produce two entries in the batch instead of sharing one.
 Fix the batching logic in `dataLoader.ts` to deduplicate by operation
 key and fan out the result to all callers.
 
-### N8: Fix contentType negotiation ignoring Accept header from client
+### N8: Add content type validation for procedure input in resolveResponse
 
-The server's `contentType.ts` module always responds with
-`application/json` regardless of the client's `Accept` header. When a
-client requests `application/x-ndjson` for streaming responses, the
-server should respect this. Fix the content type resolution to inspect
-the incoming `Accept` header and select the appropriate response format.
+The server's `contentType.ts` module parses request bodies based on
+detected content types but does not validate that the parsed input
+conforms to the procedure's expected input schema before dispatching.
+When a request arrives with a valid `Content-Type` but malformed body
+(e.g., truncated JSON), the error surfaces as a generic parse failure
+rather than a typed `TRPCError`. Add early schema pre-validation in
+`resolveResponse.ts` that catches malformed inputs and returns a
+`BAD_REQUEST` error with the specific parsing failure details.
 
 ### N9: Fix createTRPCReact proxy not supporting Symbol.iterator access
 
@@ -193,13 +201,15 @@ not handled by the decoration proxy. Fix `decorationProxy.ts` to return
 `undefined` for well-known Symbol accesses instead of constructing
 a procedure path.
 
-### N10: Fix withTRPC HOC not forwarding getInitialProps from wrapped component
+### N10: Add static props merging to withTRPC for custom App properties
 
-When `withTRPC()` wraps a Next.js page component that defines its own
-`getInitialProps`, the HOC's `getInitialProps` implementation replaces
-rather than composes with the wrapped component's static method. Fix
-`withTRPC.ts` to detect and invoke the wrapped component's
-`getInitialProps` and merge the resulting props with tRPC's data.
+The `withTRPC()` HOC in `withTRPC.tsx` wraps a Next.js App or Page
+component and sets up tRPC providers, but it does not forward custom
+static properties (e.g., `getLayout`, `authenticate`) from the wrapped
+component to the wrapper. Add a static property copying step to
+`withTRPC` using `hoist-non-react-statics` semantics, ensuring that
+custom static methods on the wrapped component are accessible on the
+returned component.
 
 ## Medium
 
@@ -212,15 +222,17 @@ cache size, and stale-while-revalidate semantics. Requires changes to
 abstraction in `client/src/internals/`, and integration with the link
 chain so downstream links can signal cache invalidation on mutations.
 
-### M2: Add FormData support for file uploads in procedures
+### M2: Add request deduplication to httpLink for concurrent identical queries
 
-Implement file upload handling for mutation procedures. The server
-should accept `multipart/form-data` requests, parse file fields, and
-make them available in the procedure input alongside JSON fields.
-Requires changes to `contentType.ts` for multipart parsing,
-`resolveResponse.ts` for request body handling, `parser.ts` for
-mixed schema validation, and client-side `httpLink.ts` for FormData
-request construction.
+When multiple components simultaneously call the same query procedure
+with identical input, `httpLink.ts` sends separate HTTP requests for
+each. Implement request deduplication that detects concurrent identical
+operations (same path and serialized input) and shares a single
+in-flight request across all callers. Requires a deduplication cache
+in `httpLink.ts` keyed by operation path and input hash, a reference
+counting mechanism in `client/src/internals/`, proper error fan-out
+when the shared request fails, and cache cleanup after the response
+is delivered.
 
 ### M3: Implement procedure-level rate limiting middleware
 
@@ -232,14 +244,16 @@ middleware module under `server/src/`, a pluggable store interface
 `TOO_MANY_REQUESTS` code, and `Retry-After` header propagation through
 the HTTP adapter layer.
 
-### M4: Add server-sent events transport as an alternative to WebSocket
+### M4: Add client-side response caching with cache tags
 
-Implement an SSE-based transport for subscriptions that works through
-HTTP/2 without requiring a WebSocket connection. Requires a new
-`sseLink.ts` in the client links, a server-side SSE adapter that
-converts observable emissions to SSE events, reconnection logic with
-event ID tracking on the client, and integration with the existing
-`splitLink` for transport selection.
+Implement a `cacheLink` that sits in the client link chain and caches
+query results by operation path and serialized input. Support
+configurable TTL, maximum cache size, and tag-based invalidation
+(mutations can declare which cache tags they invalidate). Requires a
+new `cacheLink.ts` in `client/src/links/`, a `CacheStore` abstraction
+in `client/src/internals/`, tag registration on the procedure proxy,
+and integration with httpBatchLink to skip cached operations in
+outgoing batches.
 
 ### M5: Implement typed error handling with discriminated union error types
 
@@ -259,15 +273,17 @@ frame. Requires changes to `wsLink.ts` for message buffering, the
 server-side `ws.ts` adapter for batch message parsing, and the
 `batchStreamFormatter.ts` for WebSocket batch envelope formatting.
 
-### M7: Implement automatic retry with backoff for failed queries
+### M7: Add request timeout support to httpLink and httpBatchLink
 
-Add a `retry` option to `httpLink` and `httpBatchLink` that automatically
-retries failed queries (not mutations) with configurable max attempts,
-exponential backoff, and retry condition predicate. Requires changes to
-both link implementations, a shared retry utility in
-`client/src/internals/`, proper handling of partial batch failures (retry
-only failed operations), and integration with React Query's own retry
-logic to avoid double-retrying.
+Neither `httpLink` nor `httpBatchLink` provide a built-in timeout
+mechanism for requests that hang indefinitely. Add a `timeoutMs` option
+to both links that aborts the fetch request via `AbortController` after
+the specified duration and returns a `TRPCClientError` with a
+`TIMEOUT` code. Requires changes to `httpLink.ts` and
+`httpBatchLink.ts` for signal management, a shared timeout utility in
+`client/src/internals/`, proper handling of partial batch timeouts
+(abort only timed-out operations), and type updates for the new error
+code.
 
 ### M8: Add OpenAPI schema generation from tRPC router definitions
 
@@ -279,15 +295,17 @@ module under `server/src/`, router introspection utilities, Zod-to-
 JSON-Schema conversion, and proper handling of nested routers as
 path prefixes.
 
-### M9: Implement React Suspense integration for tRPC queries
+### M9: Add prefetch utilities for React Server Components
 
-Add `useSuspenseQuery` and `useSuspenseInfiniteQuery` hooks to the
-`react-query` package that integrate with React Suspense boundaries.
-Queries should throw promises for pending states and errors for error
-boundaries. Requires new hook implementations in `createHooksInternal.ts`,
-proper TypeScript types that exclude `undefined` from data (since
-Suspense guarantees data availability), and integration with the
-tRPC context provider for SSR prefetching.
+The `react-query` package provides hooks for client-side data fetching
+but lacks dedicated utilities for prefetching tRPC queries in React
+Server Components. Add `prefetchQuery(router, path, input)` and
+`prefetchInfiniteQuery(router, path, input)` functions to
+`react-query/src/server/` that populate the QueryClient cache during
+SSR. Requires new server-side prefetch functions, integration with
+`createTRPCQueryUtils.tsx` for cache hydration, proper TypeScript
+types that infer procedure input/output from the router, and
+coordination with the existing `rsc.tsx` caller.
 
 ### M10: Add end-to-end type testing infrastructure
 
