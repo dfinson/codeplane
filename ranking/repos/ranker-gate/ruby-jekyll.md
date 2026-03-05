@@ -111,13 +111,16 @@ from the system timezone. The filter converts to the site timezone
 after formatting instead of before. Fix the filter in `lib/jekyll/filters.rb`
 to apply the timezone conversion before producing the ISO 8601 string.
 
-### N7: Fix `--watch` missing new files in deeply nested directories
+### N7: Fix `Jekyll::Reader` not filtering `_data` subdirectory entries with `exclude` config
 
-The file watcher detects changes to existing files in nested subdirectories
-but does not pick up newly created files more than two levels deep
-(e.g., `_posts/2026/03/new-post.md`). The directory watch registration
-in `lib/jekyll/watcher.rb` does not recursively add watchers for new
-subdirectories. Fix it to register watches on newly created directories.
+The `DataReader` in `lib/jekyll/readers/data_reader.rb` reads all YAML,
+JSON, and CSV files under `_data/` recursively but does not apply the
+site's `exclude` configuration patterns to files within `_data/`
+subdirectories. A file like `_data/test/fixtures.yml` cannot be
+excluded via `exclude: ["_data/test"]` in `_config.yml` because the
+`EntryFilter` is not consulted during data directory traversal. Fix
+the data reader to apply `EntryFilter` checks defined in
+`lib/jekyll/entry_filter.rb` to files and subdirectories within `_data/`.
 
 ### N8: Fix Markdown converter not preserving `{:target}` attribute syntax
 
@@ -127,13 +130,16 @@ The GFM parser's link handling bypasses the IAL attachment step. Fix the
 converter configuration in `lib/jekyll/converters/markdown/kramdown_parser.rb`
 to preserve IAL processing in GFM mode.
 
-### N9: Fix `site.static_files` not updated on delete during `--watch`
+### N9: Fix `Jekyll::StaticFile#destination_rel_dir` ignoring collection permalink overrides
 
-When a static file is deleted while `jekyll serve --watch` is running,
-it remains in the `site.static_files` array and the old file persists
-in `_site/`. The watcher's remove handler does not clean up the
-`StaticFile` entry from the site's tracked list. Fix the watcher
-callback to remove deleted static files from the site object.
+When a static file belongs to a collection with a custom `permalink`
+pattern, `StaticFile#destination_rel_dir` in `lib/jekyll/static_file.rb`
+computes the output path using only the file's relative directory from
+the source, ignoring the collection's permalink template. This causes
+static files (images, PDFs) within a collection to be written to
+unexpected paths when the collection uses a custom permalink like
+`/docs/:title/`. Fix `destination_rel_dir` to respect the owning
+collection's configured output directory structure.
 
 ### N10: Fix `jsonify` filter producing invalid JSON for `nil` values in hashes
 
@@ -200,15 +206,18 @@ build performance report showing the slowest pages, converters, and
 generators. Store profiling data in `.jekyll-cache/profile.json` for
 trend analysis across builds.
 
-### M7: Implement collection-level pagination
+### M7: Implement cross-collection Liquid query filters
 
-Extend the pagination generator beyond posts to support paginating any
-collection with `output: true`. Add a `paginate_collection` config key
-per collection and a `{% paginate collection_name %}` Liquid tag. Support
-custom sort orders (`date`, `title`, alphabetical by any front matter
-field), configurable page size per collection, and generate pagination
-metadata (`paginator.total_pages`, `paginator.previous_page_path`, etc.)
-scoped to each collection.
+Add Liquid filters that enable querying across multiple collections
+in templates. Implement a `collection_items` filter in
+`lib/jekyll/filters.rb` that retrieves documents from a named
+collection with support for filtering and sorting:
+`{{ site | collection_items: "projects", "date" }}`. Add a
+`merge_collections` filter that combines documents from multiple
+collections into a single sorted array. Add backing collection
+access logic in `lib/jekyll/collection.rb` and expose the new
+capabilities through `lib/jekyll/drops/collection_drop.rb`. Support
+the same `where` and `sort` semantics as the existing array filters.
 
 ### M8: Add front matter cascade system
 

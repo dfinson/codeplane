@@ -78,12 +78,15 @@ via `includes` (eager loading). The eager loader's join query does not
 preserve the scope's order. Fix the eager loading to incorporate the
 scoped association's order clause.
 
-### N2: Add `assert_enqueued_email_with` test helper
+### N2: Fix `ActionController::Live` not setting `X-Accel-Buffering` for nginx streaming
 
-Active Job has `assert_enqueued_with` for jobs, but there's no dedicated
-email assertion helper. Add `assert_enqueued_email_with(mailer, method, args:, params:)` that validates the mailer class, method, arguments,
-and Action Mailer params in one assertion. Include a clear failure
-message showing expected vs actual.
+When using `ActionController::Live` for SSE or streaming responses in
+`actionpack/lib/action_controller/metal/live.rb`, nginx buffers the
+response by default, preventing real-time delivery to clients. The
+`Live` module does not set `X-Accel-Buffering: no`, which is required
+to disable nginx proxy buffering for streaming connections. Fix
+`Live::Response` to automatically set this header when the streaming
+thread is started, before any data is written.
 
 ### N3: Fix `ActiveStorage::Blob#download` not respecting `Range` header
 
@@ -178,23 +181,31 @@ X-Headers). Support route priorities when multiple routes match.
 Add a test helper that simulates inbound email with full header
 construction.
 
-### M4: Add encrypted credentials per-environment
+### M4: Add Active Storage content-hash integration with Action View cache keys
 
-Extend `credentials.yml.enc` to support per-environment credential
-files: `credentials/production.yml.enc`, `credentials/staging.yml.enc`.
-Environment-specific credentials should merge on top of the shared
-credentials file. Add `rails credentials:edit --environment staging`.
-Support key rotation that re-encrypts a credential file with a new
-master key without changing the decrypted content.
+Integrate Active Storage blob checksums with Action View's template
+digest caching. When a view renders Active Storage attachments, the
+cache key should incorporate the blob's `checksum` so caches
+automatically invalidate when the attached file changes. Add
+`cache_key_with_attachments` to `ActiveStorage::Blob` in
+`activestorage/app/models/active_storage/blob.rb` and integrate with
+`ActionView::Digestor` in `actionview/lib/action_view/digestor.rb`
+so partial digests that reference attachments include blob checksums.
+Support both single attachments and collections.
 
-### M5: Add multi-database automatic role switching
+### M5: Add Active Job serializer for Active Record relations
 
-Extend `ActiveRecord::DatabaseConfigurations` to automatically switch
-between a primary (writer) and replica (reader) database based on
-request method. GET/HEAD requests should use the replica after a
-configurable delay following the last write. Add connection pooling
-per role, health checks that fall back to the primary when the
-replica is unavailable, and instrumentation events for role switches.
+`ActiveJob` currently serializes individual `ActiveRecord` instances
+via `GlobalID` but does not support serializing `ActiveRecord::Relation`
+objects as job arguments. Developers must pass raw SQL or primary key
+arrays when a job needs to process a scoped query. Add
+`ActiveJob::Serializers::RelationSerializer` in
+`activejob/lib/active_job/serializers/` that serializes the relation's
+SQL, bind values, and model class, then deserializes it back into a
+live `Relation`. Add guards against serializing relations with
+in-memory-only state (loaded records, extended modules). Integrate
+with the existing serializer registry in
+`activejob/lib/active_job/serializers.rb`.
 
 ### M6: Implement Action View component slots
 
