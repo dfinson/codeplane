@@ -10,7 +10,7 @@ directly in the output files.
 You will be given:
 1. A path to a **tasks markdown file** describing the repo and 30 tasks
 2. Access to the **cloned repository** you are currently working inside
-3. Ground truth JSON files at `../../data/{repo_id}/ground_truth/{task_id}.json`
+3. Ground truth JSON files at `../../data/{repo_id}/ground_truth/{heading_id}.json`
    produced by the task executor (Role 2)
 
 Read the tasks file first to understand the repo and all tasks. Then
@@ -22,7 +22,7 @@ For EACH task (N1–N10, M1–M10, W1–W10):
 
 ### 1. Read the executor's output
 
-Open `../../data/{repo_id}/ground_truth/{task_id}.json` and read it
+Open `../../data/{repo_id}/ground_truth/{heading_id}.json` and read it
 alongside the task description from the tasks markdown.
 
 ### 2. Verify the diff
@@ -122,8 +122,9 @@ Or simply:
 - **Read-only on the repository.** Do not modify source code.
 - **Edit only the ground truth JSONs** — do not create new files.
 - **Do not skip tasks.** Review every single one.
-- **Do not change task_id or task_text** — those come from the tasks
-  markdown and are fixed.
+- **Do not change task_id or task_text** — `task_id` is
+  `{repo_id}/{heading_id}` (e.g., `python-fastapi/N1`) and both
+  fields come from the tasks markdown and are fixed.
 - **Preserve the diff** unless it is clearly wrong (solves the wrong
   problem). If the diff is wrong, note it in `reviewer_corrections`
   and set `confidence` to `"low"`.

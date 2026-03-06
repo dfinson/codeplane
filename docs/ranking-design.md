@@ -273,11 +273,12 @@ Each role runs as a separate agent session inside the cloned repo:
 
 #### Ground truth JSON schema
 
-Each task produces one file: `data/{repo_id}/ground_truth/{task_id}.json`.
+Each task produces one file: `data/{repo_id}/ground_truth/{heading_id}.json`.
 
 ```json
 {
-  "task_id": "N1",
+  "task_id": "python-fastapi/N1",
+  "task_complexity": "narrow",
   "task_text": "<verbatim from md>",
   "diff": "<raw git diff>",
   "solve_notes": "<1-3 sentences>",

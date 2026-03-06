@@ -25,15 +25,6 @@ For EACH task:
 
 Read the code, make edits, and verify they work. Capture a `git diff`.
 
-**While solving, track your exploration process mentally.** Pay
-attention to:
-- What you searched for first and why
-- What you read to understand the problem space
-- Dead ends — code you explored that turned out irrelevant
-- Key decisions — when you had multiple approaches, which you chose
-- The moment the solution clicked and what context triggered it
-- What you'd search for differently with hindsight
-
 After capturing the diff: `git stash` to restore clean state before
 the next task.
 
@@ -41,16 +32,22 @@ the next task.
 
 ### STEP 2 — REFLECT
 
-Write a JSON file to `../../data/{repo_id}/ground_truth/{task_id}.json`.
+After solving, look back at what you just did and write a ground truth
+record. The exploration log is retrospective — recall how you actually
+navigated the codebase, what worked, what didn't, and what you learned.
+
+Write a JSON file to `../../data/{repo_id}/ground_truth/{heading_id}.json`.
 
 > **{repo_id}** is the markdown filename without `.md` (e.g.,
 > `python-fastapi` from `python-fastapi.md`).
+> **{heading_id}** is the task heading (N1, M3, W2, etc.).
 
 #### Ground truth JSON format
 
 ```json
 {
-  "task_id": "N1",
+  "task_id": "python-fastapi/N1",
+  "task_complexity": "narrow",
   "task_text": "<full task description from the md file>",
   "diff": "<raw git diff output>",
   "solve_notes": "<1-3 sentence narrative of what you did and why>",
@@ -131,7 +128,14 @@ Write a JSON file to `../../data/{repo_id}/ground_truth/{task_id}.json`.
 
 #### Field definitions
 
-**task_id:** The heading ID from the md file (N1, M1, W2, etc.)
+**task_id:** `{repo_id}/{heading_id}` — the repo name (md filename
+without `.md`) followed by the heading ID from the md file.
+Examples: `python-fastapi/N1`, `rust-serde/M3`, `go-caddy/W2`.
+
+**task_complexity:** Derived from the heading prefix:
+- `N` → `"narrow"` (1–3 files, 1–5 defs)
+- `M` → `"medium"` (3–8 files, 5–15 defs)
+- `W` → `"wide"` (8+ files, 15+ defs)
 
 **task_text:** The full task description text, verbatim.
 
@@ -139,9 +143,10 @@ Write a JSON file to `../../data/{repo_id}/ground_truth/{task_id}.json`.
 
 **solve_notes:** 1–3 sentences explaining what you did and why.
 
-**exploration_log:** A structured record of how you explored the
-codebase while solving this task. This data trains us to understand
-agent navigation patterns. Be honest — include wrong turns.
+**exploration_log:** After solving, reconstruct how you actually
+navigated the codebase. This is retrospective — recall your real
+process, don't fabricate a clean narrative. Be honest about wrong
+turns. This data helps us understand agent navigation patterns.
 
 - `search_sequence`: ordered list of searches/reads you performed
 - `dead_ends`: code you investigated that didn't contribute
