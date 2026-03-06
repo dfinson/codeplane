@@ -139,13 +139,19 @@ early or late. Fix `next_rotation_tp_()` to compute the target
 wall-clock time directly using `std::mktime` rather than adding a
 fixed duration.
 
-### N4: Fix log_msg_buffer not copying source location string data
+### N4: Fix log_msg_buffer not capturing MDC context for cross-thread consumption
 
-`log_msg_buffer` in `details/log_msg_buffer.h` copies the `payload`
-string but stores `source_location` fields as `string_view` pointing
-into the original `log_msg`'s memory. When the original `log_msg`
-is destroyed, the source location fields become dangling. Fix the
-buffer to own copies of the filename and function name strings.
+`log_msg_buffer` in `details/log_msg_buffer-inl.h` copies the
+`logger_name` and `payload` string_views into an owned buffer, and
+copies value-type fields (`level`, `time`, `thread_id`) via the base
+`log_msg` copy. However, it does not capture mapped diagnostic context
+(MDC) data from `mdc.h`, which is stored in thread-local storage.
+When `log_msg_buffer` is consumed on the async logging thread pool
+(via `details/thread_pool.h`), the MDC entries from the originating
+thread are inaccessible because the worker thread has its own
+thread-local storage. Fix `log_msg_buffer` to snapshot the current
+thread's MDC data at construction time and make it available when
+the buffer is processed on a different thread.
 
 ### N5: Fix periodic_worker not catching exceptions from callback function
 

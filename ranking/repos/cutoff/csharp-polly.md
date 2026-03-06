@@ -131,13 +131,17 @@ them to resume on the captured `SynchronizationContext`. Fix
 `HedgingResilienceStrategy.cs` to propagate the context setting to
 each hedging action's inner context.
 
-### N5: Fix RateLimiterRejectedException missing retry-after metadata
+### N5: Fix RetryDelayGeneratorArguments not including previous attempt execution duration
 
-`RateLimiterRejectedException` is thrown when the rate limit is
-exceeded but does not include the `RetryAfter` value from the
-underlying `RateLimitLease`. Fix `RateLimiterResilienceStrategy.cs`
-to read `RetryAfter` from the lease metadata and set it on the
-exception.
+`RetryDelayGeneratorArguments` provides the attempt number and outcome
+to custom delay generators but does not include the execution duration
+of the previous attempt. Delay generators that want to implement
+latency-adaptive backoff (e.g., increasing delay when the upstream
+is slow) must track timing externally. Fix
+`RetryDelayGeneratorArguments.cs` to add a `Duration` property and
+populate it from the execution time measured in
+`RetryResilienceStrategy.cs`, matching the `Duration` already
+available on `OnRetryArguments`.
 
 ### N6: Fix FallbackResilienceStrategy swallowing original exception stack trace
 
@@ -162,14 +166,16 @@ documentation and `MaxRetryAttempts` counting. Fix
 builder to validate options with `ArgumentNullException` at the
 `AddStrategy` call site.
 
-### N9: Fix CircuitStateController not resetting half-open attempt counter on close
+### N9: Fix OnCircuitOpenedArguments not including the failure rate that triggered the transition
 
-When the circuit transitions from `HalfOpen` back to `Closed` after a
-successful probe, `CircuitStateController` does not reset
-`_halfOpenAttempts` to zero. On subsequent open→half-open transitions,
-the stale counter inflates telemetry reporting of half-open probes.
-Fix `CircuitStateController.cs` to reset `_halfOpenAttempts` in the
-`OnActionSuccess` path when transitioning from `HalfOpen` to `Closed`.
+`OnCircuitOpenedArguments` carries the break duration, outcome, and
+manual flag but does not include the failure rate or failure count from
+the health metrics sampling window that caused the circuit to open.
+Subscribers to the `OnOpened` callback cannot assess the severity of
+the failure pattern or verify which threshold was crossed. Fix
+`OnCircuitOpenedArguments.cs` to add `FailureRate` and `FailureCount`
+properties, and populate them from the health metrics in
+`CircuitStateController.cs` when the circuit transitions to `Open`.
 
 ### N10: Fix TelemetryUtil not including pipeline name in enriched tags
 

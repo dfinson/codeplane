@@ -100,13 +100,19 @@ notifying pending callbacks. Fix the timeout handling in
 `SessionDelegate.swift` to invoke all registered completion handlers
 for the URL before removing the entry.
 
-### N2: Fix MemoryStorage not respecting totalCostLimit after config change
+### N2: Fix MemoryStorage not synchronizing config property access during cleanup
 
-Changing `MemoryStorage.Config.totalCostLimit` at runtime does not
-propagate to the underlying `NSCache` instance because the cache's
-`totalCostLimit` is only set during initialization. Fix
-`MemoryStorage.swift` so that updates to the config's cost limit
-are applied to the `NSCache` immediately.
+`MemoryStorage.Backend` in `Cache/MemoryStorage.swift` protects
+storage operations (`store`, `remove`, `removeExpired`) with an
+`NSLock`. However, the `config` property’s `didSet` handler updates
+the underlying `NSCache` limits and reschedules the cleanup timer
+without acquiring the lock. If `removeExpired()` is executing on
+the timer thread while `config` is changed from another thread,
+the expiration settings read during cleanup may be inconsistent —
+partially from the old config and partially from the new. Fix
+`MemoryStorage.swift` to acquire the lock in the `config` `didSet`
+handler to ensure config changes are atomic with respect to
+in-progress cleanup operations.
 
 ### N3: Fix DiskStorage calculating wrong file size for expiration check
 
@@ -132,13 +138,18 @@ view controller is deallocated mid-prefetch, the closure keeps it
 alive, causing a memory leak. Fix `ImagePrefetcher.swift` to use
 weak capture and cancel outstanding prefetch tasks on `deinit`.
 
-### N6: Fix GIFAnimatedImage frame duration defaulting to zero for malformed GIFs
+### N6: Fix GIFAnimatedImage not validating nil frames from corrupt image sources
 
-When a GIF frame's delay time is missing or set to zero in the frame
-metadata, `GIFAnimatedImage` uses `0.0` as the duration, causing the
-animation loop to spin at maximum speed. Fix `GIFAnimatedImage.swift`
-to clamp the minimum frame duration to 0.1 seconds per the GIF spec
-recommendation.
+When `GIFAnimatedImage` in `Image/GIFAnimatedImage.swift` decodes
+frames from a `CGImageSource`, it uses `CGImageSourceGetCount()` to
+determine the frame count and then iterates up to that count calling
+`CGImageSourceCreateImageAtIndex()`. When the image source is created
+from corrupt or truncated GIF data, the reported frame count may
+exceed the actual number of decodable frames. Frames that fail to
+decode return `nil`, which is passed through without validation,
+causing `nil` entries in the frame array and a crash during animation
+playback. Fix `GIFAnimatedImage.swift` to validate each frame result
+and skip or terminate early if a `nil` frame is encountered.
 
 ### N7: Fix SessionDataTask not cancelling underlying URLSession task when last callback is removed
 
@@ -158,12 +169,18 @@ cache has not yet been cleaned. Fix the retrieval path in
 `ImageCache.swift` to check the file's expiration metadata before
 returning a disk-cached result.
 
-### N9: Fix CallbackQueue.asyncAfter not dispatching on correct queue
+### N9: Fix AnimatedImageView not stopping display link when removed from view hierarchy
 
-`CallbackQueue.asyncAfter(deadline:execute:)` ignores the queue
-case and always dispatches on `DispatchQueue.main`. Fix
-`CallbackQueue.swift` to dispatch on the queue specified by the
-enum case (`.mainAsync`, `.untouch`, `.dispatch(queue)`).
+`AnimatedImageView` in `Views/AnimatedImageView.swift` uses a
+`CADisplayLink` (or platform equivalent via `DisplayLinkCompatible`)
+to drive frame-by-frame animation. The display link is invalidated
+in `deinit`, but the view does not override `didMoveToSuperview()`
+or `didMoveToWindow()` to pause or invalidate the link when removed
+from the view hierarchy. When an `AnimatedImageView` is removed from
+its superview but retained by other references, the display link
+continues firing on every screen refresh, consuming CPU for invisible
+animation. Fix `AnimatedImageView.swift` to pause the display link
+when `window` becomes `nil` and resume when re-added.
 
 ### N10: Fix Indicator view not removed from superview after image load cancellation
 

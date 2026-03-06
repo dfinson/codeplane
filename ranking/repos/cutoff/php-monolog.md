@@ -163,21 +163,29 @@ memory limit. Fix `BufferHandler.php` to interpret `bufferLimit = 0`
 as truly unlimited but add a safety flush when the buffer count exceeds
 a configurable high-water mark, preventing out-of-memory crashes.
 
-### N6: Fix NormalizerFormatter truncating exception traces at 200 characters
+### N6: Fix NormalizerFormatter::setMaxNormalizeDepth accepting zero and negative values
 
-`NormalizerFormatter::normalizeException()` truncates the stack trace
-string to a fixed length, losing critical debugging information for
-deeply nested call stacks. Fix `NormalizerFormatter.php` to make the
-trace length limit configurable via a constructor parameter, defaulting
-to no truncation.
+`NormalizerFormatter` in `Formatter/NormalizerFormatter.php` allows
+setting `$maxNormalizeDepth` to any integer via `setMaxNormalizeDepth()`.
+Setting it to `0` causes `normalize()`'s bail-out check
+(`$depth > $this->maxNormalizeDepth`) to trigger immediately at
+`$depth = 0`, replacing all data — including simple strings and
+integers — with `"Over 0 levels deep, aborting normalization"`.
+Negative values bypass depth protection entirely, allowing unbounded
+recursion. Fix `setMaxNormalizeDepth()` to reject values less than 1
+with an `\InvalidArgumentException`.
 
-### N7: Fix UidProcessor generating non-unique IDs under concurrent requests
+### N7: Fix GitProcessor caching stale branch and commit data in long-running processes
 
-`UidProcessor` generates its UID in the constructor using
-`substr(hash('md5', uniqid()), 0, $length)`, which can produce
-duplicates when multiple PHP-FPM workers start within the same
-microsecond. Fix `UidProcessor.php` to use `random_bytes()` for
-cryptographically secure unique ID generation.
+`GitProcessor` in `Processor/GitProcessor.php` caches the git branch
+and commit hash in a static class property (`$cache`) that is
+populated once via `git log` and `git branch` shell commands and
+never refreshed. In long-running processes (queue workers, daemons,
+Swoole servers), the cached data becomes stale when new commits are
+pushed to the repository, causing all log records to report an
+outdated commit hash. Fix `GitProcessor.php` to accept an optional
+TTL parameter that expires the cache after a configurable interval,
+triggering a re-read of git data.
 
 ### N8: Fix SyslogUdpHandler not splitting messages exceeding UDP max size
 
@@ -194,16 +202,19 @@ buffered but are never flushed because the handler remains in the
 activated state. Fix the handler to transition back to buffering mode
 after a configurable reset interval or when `reset()` is called.
 
-### N10: Fix PsrLogMessageProcessor not handling object placeholders with __toString
+### N10: Fix PsrLogMessageProcessor removing context entries for lossy object replacements
 
-`PsrLogMessageProcessor` replaces `{key}` placeholders in the message
-with values from the context array. When the context value is an object
-that implements `__toString()`, the processor should invoke `__toString()`
-for the replacement. Currently, objects without `__toString()` produce
-a generic representation, but objects with `__toString()` are also not
-called consistently — they are serialized via `json_encode` instead of
-using their string representation. Fix the processor to prefer
-`__toString()` when available on object context values.
+`PsrLogMessageProcessor` in `Processor/PsrLogMessageProcessor.php`
+replaces `{key}` placeholders with context values and, when
+`$removeUsedContextFields` is enabled, removes the context entry
+after substitution. For non-stringable objects, the replacement is
+the lossy string `[object ClassName]`, discarding all object data.
+Despite the replacement losing information, the original context
+entry is still removed, preventing downstream handlers and formatters
+from accessing the full object. Fix the processor to preserve context
+entries when the replacement is a lossy representation (plain objects,
+arrays, resource types) so the original data remains available to
+other handlers.
 
 ## Medium
 

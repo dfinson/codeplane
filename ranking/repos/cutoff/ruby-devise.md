@@ -128,14 +128,16 @@ The global mailer_sender configuration is ignored when sending unlock instructio
 
 The trackable hook updates sign_in_count and timestamps before the Warden after_set_user callback chain finishes. If a later callback aborts authentication by throwing :warden, the tracking data is persisted for a session that was never established.
 
-### N5 – Token generator does not enforce single-use consumption
+### N5 – Token generator generate loop not bounding retry attempts
 
-The token generator creates reset and confirmation tokens but does not
-track whether a token has already been consumed. If a token is used
-successfully (e.g., password reset), the same token remains valid until
-it expires, allowing replay. The `digest` method in token_generator.rb
-should be paired with a consumption check that clears the stored digest
-after first use.
+The `generate` method in `token_generator.rb` uses an unbounded
+`loop do` block that retries until `find_first` confirms the generated
+token is unique in the database. If the database connection drops, the
+query times out, or the token column lacks an index causing slow
+lookups, this loop runs indefinitely without any iteration limit or
+timeout. Fix the `generate` method to cap retry iterations at a
+reasonable bound and raise a descriptive error when uniqueness cannot
+be achieved within the limit.
 
 ### N6 – flash message key mismatch for already-confirmed accounts
 
@@ -149,9 +151,16 @@ When a session times out due to the timeoutable module, the remember-me cookie i
 
 When a model has custom devise parameter sanitizer rules that include nested attributes (e.g., address attributes inside registration), the sanitizer raises a NoMethodError because it calls permit on a symbol array without handling hash entries.
 
-### N9 – Database authenticatable strategy does not timing-safe compare
+### N9 – Confirmable module does not clear stale confirmation_token after successful confirmation
 
-The database authenticatable Warden strategy uses a plain equality check on the hashed password rather than a constant-time comparison. This creates a theoretical timing side-channel that should be closed by using secure_compare.
+When `confirm()` succeeds in `models/confirmable.rb`, it sets
+`confirmed_at` and saves the record but does not nil out
+`confirmation_token`. Although replay is prevented by the `confirmed?`
+guard in `pending_any_confirmation`, the stale HMAC token digest
+remains in the database indefinitely. If the database is compromised,
+these stale digests reveal information about the token derivation.
+Fix `models/confirmable.rb` to set `self.confirmation_token = nil`
+in the `confirm` method after successfully setting `confirmed_at`.
 
 ### N10 – Route helpers undefined inside engine-mounted devise
 

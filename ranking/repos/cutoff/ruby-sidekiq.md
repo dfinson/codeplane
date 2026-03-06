@@ -102,15 +102,16 @@ When a job exceeds 20 retries, the exponential backoff formula in job_retry.rb p
 
 The scheduled set poller in scheduled.rb compares job scores against Time.now.to_f. When the system clock drifts backward (e.g., NTP correction), jobs whose scores fall in the gap between the old and new time are never dequeued until the clock catches up. The comparison should account for backward drift.
 
-### N3 – CSRF tag helper does not rotate token per form render
+### N3 – Web dashboard to_display helper does not cap exception message length
 
-The web dashboard's `csrf_tag` helper in web/helpers.rb generates a
-CSRF token that is stored in the session but never rotated between
-form renders. When a user has two dashboard tabs open, both tabs share
-the same token. If one tab submits (consuming the token in session
-frameworks that rotate on use), the other tab's form becomes invalid.
-The helper should embed a per-render nonce tied to the session token
-rather than echoing the raw session value.
+The `to_display` method in `web/helpers.rb` calls `arg.inspect` with
+a rescue fallback to `arg.to_s`. If both raise, the final rescue
+interpolates `ex.message` into the fallback string without length
+limiting. A broken object whose `inspect` and `to_s` raise exceptions
+with very large messages (e.g., containing a full serialized payload)
+can cause the dashboard page to balloon in size and slow rendering.
+Fix `web/helpers.rb` to truncate `ex.message` in the fallback display
+string to a reasonable maximum (e.g., 200 characters).
 
 ### N4 – Fetch strategy does not respect queue weights under low load
 
@@ -120,14 +121,17 @@ The BasicFetch strategy is documented to perform weighted random queue selection
 
 When a server middleware raises and the exception propagates through the chain, the structured logging context (job ID, queue name) set by the processor is cleared before the error handler runs. The error log entry lacks the job context needed for debugging.
 
-### N6 – Client middleware not invoked for scheduled job promotion
+### N6 – Scheduled poller Enq does not handle Lua script eviction gracefully on replica failover
 
-When the scheduled poller in scheduled.rb promotes a job from the
-scheduled sorted set into a ready queue, it moves the job directly
-via Redis commands without passing through the client middleware chain.
-Client middleware registered for logging or argument enrichment never
-fires for jobs at their actual execution-time enqueue, only at their
-original scheduling time.
+The `Enq` class in `scheduled.rb` caches the SHA of the
+`LUA_ZPOPBYSCORE` script in `@lua_zpopbyscore_sha` and retries once
+on `NOSCRIPT` error. However, during a Redis replica failover the new
+primary has no cached scripts, and if multiple pollers race to reload
+the script simultaneously, the retry path can encounter a second
+`NOSCRIPT` error from a stale SHA computed against the old primary.
+Fix `scheduled.rb` to nil out `@lua_zpopbyscore_sha` before retrying
+so the reload always uses a fresh `SCRIPT LOAD` against the current
+primary.
 
 ### N7 – Dead job display truncates large payloads in web UI
 

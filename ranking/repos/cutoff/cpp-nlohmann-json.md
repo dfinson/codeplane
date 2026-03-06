@@ -91,12 +91,18 @@ include/nlohmann/
 
 ## Narrow
 
-### N1: Fix lexer not rejecting leading zeros in JSON numbers
+### N1: Fix lexer not validating UTF-8 continuation bytes in non-escaped strings
 
-The lexer in `detail/input/lexer.hpp` accepts numbers like `007` or
-`01.5` as valid, but RFC 8259 forbids leading zeros in numbers
-(except `0` itself or `0.x`). Fix the number-scanning state machine
-to reject leading zeros and emit `parse_error.101` for such inputs.
+The lexer in `detail/input/lexer.hpp` validates `\uNNNN` escape
+sequences and rejects unpaired surrogates, but when processing raw
+(non-escaped) multi-byte UTF-8 characters in strings, it accepts
+each byte individually without verifying that continuation bytes
+(`0x80`–`0xBF`) follow the correct leading-byte pattern. Invalid
+UTF-8 sequences such as orphaned continuation bytes or overlong
+encodings are silently accepted as part of the string content. Fix
+the string-scanning path in `lexer.hpp` to validate complete UTF-8
+byte sequences and reject strings containing malformed UTF-8 with
+`parse_error.101`.
 
 ### N2: Fix binary_reader not validating BSON document size against consumed bytes
 
@@ -129,12 +135,18 @@ equal with `operator==`. Fix `hash.hpp` to normalize equivalent
 integer and unsigned values to the same hash by using a unified
 hashing path when the values are numerically equal.
 
-### N5: Fix ordered_map::erase invalidating iteration order
+### N5: Fix ordered_map::erase not using allocator for placement construction during shift
 
-`ordered_map::erase()` in `ordered_map.hpp` uses swap-and-pop removal
-to maintain O(1) erasure, but this changes the iteration order of
-remaining elements. Fix the erase method to preserve insertion order
-by using a shift-down approach or maintaining a stable index.
+`ordered_map::erase(const key_type&)` in `ordered_map.hpp` shifts
+elements down after erasure using placement `new (&*it)
+value_type{std::move(*next)}` to reconstruct each shifted element.
+This bypass the container’s allocator entirely, using global
+`operator new` for placement construction instead of
+`std::allocator_traits<Allocator>::construct()`. When `ordered_map`
+is used with a custom allocator (e.g., a pool allocator that tracks
+constructions), the shift path produces elements that were not
+constructed through the allocator. Fix `erase` to use allocator-aware
+construction for the shifted elements.
 
 ### N6: Fix binary_reader not validating CBOR tag values for typed arrays
 
@@ -152,29 +164,43 @@ primitive types it constructs a temporary and returns a reference to
 it. Fix the primitive path to either disallow indexing or return by
 value.
 
-### N8: Fix value_t comparison not treating integer and unsigned as compatible
+### N8: Fix value_t ordering array not guarded by static_assert against enum changes
 
-The `operator<` for `value_t` in `detail/value_t.hpp` treats
-`number_integer` and `number_unsigned` as distinct types for ordering
-purposes. This causes `json(1) < json(2u)` to compare by type
-discriminator rather than numeric value. Fix the comparison operators
-in `basic_json` to unify integer and unsigned ordering.
+The `operator<` and `operator<=>` comparisons for `value_t` in
+`detail/value_t.hpp` use a fixed-size `std::array<std::uint8_t, 9>`
+to map each enum value to an ordering rank. The array size (9) must
+match the number of non-discarded enumerators, but there is no
+compile-time check enforcing this. If a new value type is added to
+the `value_t` enum without extending the `order` array, the bounds
+check (`l_index < order.size()`) silently treats the new type as
+unordered rather than producing a compilation error. Fix
+`value_t.hpp` to add a `static_assert` verifying the array size
+matches the enum range.
 
-### N9: Fix parser ignoring max_depth limit for empty nested containers
+### N9: Fix parser not reporting expected token type in structural error messages
 
-The recursive-descent parser in `detail/input/parser.hpp` enforces a
-`max_depth` limit on nesting, but empty containers like `[[]]` or
-`{"a":{}}` do not increment the depth counter because the open-bracket
-is consumed before the depth check. Fix the depth tracking to
-increment before recursing into any container.
+The recursive-descent parser in `detail/input/parser.hpp` emits
+`parse_error` exceptions when unexpected tokens are encountered
+during structural parsing (e.g., missing `:` after an object key,
+missing `,` between array elements). The error messages report
+only what was found (“unexpected token”) without indicating what
+was expected, making it difficult to diagnose malformed JSON. Fix
+`parser.hpp` to include the expected token type in structural parse
+error messages — e.g., `"expected ':' after object key, got ']'"`
+instead of the generic unexpected-token message.
 
-### N10: Fix to_json not handling std::variant with monostate
+### N10: Fix to_json not providing an overload for std::filesystem::path
 
-The `to_json` overloads in `detail/conversions/to_json.hpp` support
-`std::variant` via `std::visit`, but `std::monostate` has no
-serialization, causing a compile error when the variant's active type
-is `monostate`. Add a `to_json` overload for `std::monostate` that
-serializes it as JSON null.
+The `to_json` overloads in `detail/conversions/to_json.hpp` cover
+standard library types including strings, containers, and optional,
+but do not include `std::filesystem::path` despite the library
+already providing filesystem-related utilities in
+`detail/meta/std_fs.hpp`. Users must manually convert paths to
+strings before serialization, which is error-prone on Windows where
+`path::string()` and `path::u8string()` differ. Add a `to_json`
+overload for `std::filesystem::path` that serializes via
+`path::string()` (or `u8string()` for UTF-8 correctness), guarded
+by the same feature-detection macro used in `std_fs.hpp`.
 
 ## Medium
 

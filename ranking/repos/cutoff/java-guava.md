@@ -178,16 +178,17 @@ and validation, `LocalCache.java` for invoking the writer hooks in
 segment put and remove paths, and `RemovalCause.java` for cause
 context.
 
-### M3: Add topological sort and cycle detection to the graph package
+### M3: Add topological sort to the graph package
 
 Implement `Graphs.topologicalOrder(Graph<N>)` returning an
 `ImmutableList<N>` of nodes in topological order for directed acyclic
-graphs, throwing `IllegalArgumentException` on cyclic input. Add
-`Graphs.hasCycle(Graph<N>)` for O(V+E) cycle detection using Kahn's
-algorithm. Both must work with `Graph`, `ValueGraph`, and `Network`
-via the `SuccessorsFunction` abstraction. Changes span `Graphs.java`
-for the public API methods, internal helper classes for in-degree
-tracking, and `Traverser.java` for shared iteration infrastructure.
+graphs, throwing `IllegalArgumentException` on cyclic input (detected
+via the existing `Graphs.hasCycle()` method). The implementation must
+work with `Graph`, `ValueGraph`, and `Network` via the
+`SuccessorsFunction` abstraction, using Kahn's algorithm for O(V+E)
+performance. Changes span `Graphs.java` for the new public API
+method, internal helper classes for in-degree tracking, and
+`Traverser.java` for shared iteration infrastructure.
 
 ### M4: Add EventBus subscriber introspection and priority ordering
 
@@ -201,17 +202,19 @@ maintenance, `Subscriber.java` for priority extraction from the
 annotation, and a new `SubscriberPriority.java` annotation class in
 the `eventbus/` package.
 
-### M5: Add ClosingFuture for resource-safe future chaining
+### M5: Add RateLimiter warmup introspection and reset support
 
-Implement `ClosingFuture<V>` in `util/concurrent/` that wraps a
-`ListenableFuture<V>` where V is `Closeable`. When the future chain
-completes (success or failure), all accumulated closeables are closed
-in reverse acquisition order. Support `transform()`,
-`transformAsync()`, and `whenAllSucceed()` combinators that
-propagate closeable tracking. Changes span a new
-`ClosingFuture.java` class, integration with `Futures.java` for
-chain composition, `MoreExecutors.java` for cleanup executor support,
-and `FluentFuture.java` for bridge methods.
+Implement `RateLimiter.getAvailablePermits()` returning the estimated
+number of permits currently available without blocking,
+`RateLimiter.reset()` to clear accumulated permits and restart the
+warmup period from cold state, and `RateLimiter.isWarmingUp()` to
+query whether the limiter is still in its warmup phase. These methods
+enable monitoring dashboards and operational tooling to inspect rate
+limiter state at runtime. Changes span `RateLimiter.java` for the new
+public API methods, `SmoothRateLimiter.java` for warmup state
+introspection and reset logic, `SmoothRateLimiter.SmoothWarmingUp` for
+warmup phase detection, and `SmoothRateLimiter.SmoothBursty` for
+bursty reset behavior.
 
 ### M6: Add bounded-size strong interner with LRU eviction
 
@@ -253,20 +256,20 @@ items receive more hash bits for lower false-positive rates. Add
 `BloomFilter`, `BloomFilterStrategies`, the `Funnel` interface, and
 the hash-function internals in `hash/`.
 
-### M10: Add multi-hash BloomFilter with pluggable hash strategies
+### M10: Add counting BloomFilter variant with element removal support
 
-Extend `BloomFilter` to support user-supplied hash strategy
-selection at construction time via
-`BloomFilter.create(Funnel, long, double, Strategy)` where
-`Strategy` is a public version of the internal `BloomFilterStrategies`
-enum. Add a `MURMUR3_128_MITZ_64` strategy alongside the existing
-default. Expose `BloomFilter.approximateElementCount()` to estimate
-how many elements have been inserted and `BloomFilter.expectedFpp()`
-to compute the current false-positive probability. Changes span
-`BloomFilter.java` for the new factory and estimation methods,
-`BloomFilterStrategies.java` for the new strategy enum entry, and
-`LockFreeBitArray` (inner class) for bitcount-based cardinality
-estimation.
+Implement `CountingBloomFilter<T>` backed by a counter array instead
+of a bit array, supporting `remove(T)` in addition to `put(T)` and
+`mightContain(T)`. Each hash position maintains a 4-bit counter that
+increments on `put` and decrements on `remove`, with overflow
+detection that saturates at the maximum counter value to prevent
+wrap-around corruption. Include `CountingBloomFilter.create(Funnel,
+long, double)` factory mirroring the standard `BloomFilter` API.
+Changes span a new `CountingBloomFilter.java` class in `hash/`, a new
+`CountingBloomFilterStrategies.java` for counter-based hash layouts,
+`BloomFilterStrategies.java` for shared bit-manipulation
+infrastructure, and the `Funnel` interface for shared funnel
+compatibility.
 
 ## Wide
 
