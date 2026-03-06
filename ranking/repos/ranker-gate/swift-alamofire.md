@@ -7,6 +7,7 @@
 | **Language** | Swift |
 | **Scale** | Small (focused library) |
 | **Category** | HTTP networking library |
+| **Set** | ranker-gate |
 | **Commit** | `14dc760dee02fcd28c42f3d8fd760ebfbae6ce0d` |
 
 ## Why this repo

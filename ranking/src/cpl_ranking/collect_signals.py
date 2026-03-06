@@ -150,22 +150,7 @@ def collect_signals(
                 print(f"  ERROR {query_id}: {e}")
                 continue
 
-            # Handle sidecar cache delivery
             candidates = result.get("candidates", [])
-            if not candidates and "cache_id" in result:
-                # Read from sidecar cache
-                cache_path = Path(f".codeplane/cache/{result['cache_id']}.json")
-                if cache_path.exists():
-                    cache_data = json.loads(cache_path.read_text())
-                    for k in sorted(cache_data.keys()):
-                        if k.startswith("candidates."):
-                            for ln in cache_data[k].split("\n"):
-                                if ln.strip():
-                                    try:
-                                        candidates.append(json.loads(ln))
-                                    except json.JSONDecodeError:
-                                        pass
-
             query_features = result.get("query_features", {})
 
             for cand in candidates:

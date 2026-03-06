@@ -297,10 +297,10 @@ Each task produces one file: `data/{repo_id}/ground_truth/{heading_id}.json`.
   },
   "confidence": "high|medium|low",
   "minimum_sufficient_defs": [
-    {"path": "...", "name": "...", "kind": "...", "reason": "edited:|read: ..."}
+    {"path": "...", "name": "...", "kind": "...", "start_line": 42, "reason": "edited:|read: ..."}
   ],
   "thrash_preventing_defs": [
-    {"path": "...", "name": "...", "kind": "...", "reason": "read: ..."}
+    {"path": "...", "name": "...", "kind": "...", "start_line": 87, "reason": "read: ..."}
   ],
   "tier_difference_reasoning": "<why the two tiers differ or are identical>",
   "excluded_defs": [
@@ -386,6 +386,10 @@ Two tiers: `minimum` (human-necessary) and `thrash_preventing`
 | `seeds` | list[str] | Symbol names passed as seeds |
 | `pins` | list[str] | File paths passed as pins |
 | `label_gate` | str | OK / UNSAT / BROAD / AMBIG |
+
+Non-OK queries live in a separate per-repo file:
+`data/{repo_id}/non_ok_queries.json`. They are merged into `queries`
+during post-processing with `label_gate` set to the query type.
 
 ### 5.4 `candidates_rank`
 

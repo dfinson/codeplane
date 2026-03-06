@@ -7,6 +7,7 @@
 | **Language** | Java |
 | **Scale** | Large (multi-team project) |
 | **Category** | Application framework |
+| **Set** | ranker-gate |
 | **Commit** | `fd18d6ba968dbce31a793edaf62a39ae0b5ba718` |
 
 ## Why this repo

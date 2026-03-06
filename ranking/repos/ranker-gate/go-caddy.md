@@ -7,6 +7,7 @@
 | **Language** | Go |
 | **Scale** | Medium (multi-module project) |
 | **Category** | Web server with plugin architecture |
+| **Set** | ranker-gate |
 | **Commit** | `a118b959e27f6c09ab077e90bd60accea529eb28` |
 
 ## Why this repo

@@ -7,6 +7,7 @@
 | **Language** | Rust |
 | **Scale** | Large (multi-team project) |
 | **Category** | Async runtime |
+| **Set** | ranker-gate |
 | **Commit** | `6a44775e078ad518923dd10f922a7f210364dd64` |
 
 ## Why this repo

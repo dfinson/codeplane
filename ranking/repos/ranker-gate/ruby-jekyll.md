@@ -7,6 +7,7 @@
 | **Language** | Ruby |
 | **Scale** | Medium (multi-module project) |
 | **Category** | Static site generator |
+| **Set** | ranker-gate |
 | **Commit** | `491d4737611298a54d82c91118a40563a00d485f` |
 
 ## Why this repo

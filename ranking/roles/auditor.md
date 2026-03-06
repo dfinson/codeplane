@@ -12,6 +12,18 @@ You will be given:
 
 Read the tasks file thoroughly before starting.
 
+## Pre-flight: verify commit
+
+Before checking any tasks, verify the repo is at the correct commit:
+
+```
+git rev-parse HEAD
+```
+
+Compare the output with the **Commit** field in the tasks file's
+metadata table. If they don't match, stop and report the mismatch.
+Do not proceed with an audit against the wrong code.
+
 ## Your job
 
 For EACH task (N1–N10, M1–M10, W1–W10):

@@ -22,24 +22,48 @@ def _resolve_def(
     path: str,
     name: str,
     kind: str,
+    start_line: int,
 ) -> dict[str, Any] | None:
-    """Look up a DefFact in the index by (path, name, kind).
+    """Look up a DefFact in the index by (path, name, kind, start_line).
+
+    Uses start_line for exact match first. If the exact line doesn't
+    match (index may have shifted slightly), falls back to nearest
+    match within 5 lines.
 
     Returns dict with def_uid, start_line, end_line or None if not found.
     """
+    # Exact match
     row = cursor.execute(
         """
         SELECT d.def_uid, d.start_line, d.end_line
         FROM def_facts d
         JOIN files f ON d.file_id = f.id
         WHERE f.path = ? AND d.name = ? AND d.kind = ?
+          AND d.start_line = ?
         LIMIT 1
         """,
-        (path, name, kind),
+        (path, name, kind, start_line),
     ).fetchone()
-    if row is None:
-        return None
-    return {"def_uid": row[0], "start_line": row[1], "end_line": row[2]}
+    if row is not None:
+        return {"def_uid": row[0], "start_line": row[1], "end_line": row[2]}
+
+    # Nearest match within 5 lines (handles minor index drift)
+    row = cursor.execute(
+        """
+        SELECT d.def_uid, d.start_line, d.end_line
+        FROM def_facts d
+        JOIN files f ON d.file_id = f.id
+        WHERE f.path = ? AND d.name = ? AND d.kind = ?
+          AND ABS(d.start_line - ?) <= 5
+        ORDER BY ABS(d.start_line - ?)
+        LIMIT 1
+        """,
+        (path, name, kind, start_line, start_line),
+    ).fetchone()
+    if row is not None:
+        return {"def_uid": row[0], "start_line": row[1], "end_line": row[2]}
+
+    return None
 
 
 def collect_ground_truth(
@@ -90,7 +114,10 @@ def collect_ground_truth(
             ("thrash_preventing_defs", "thrash_preventing"),
         ]:
             for rd in task.get(tier_key, []):
-                resolved = _resolve_def(cur, rd["path"], rd["name"], rd["kind"])
+                resolved = _resolve_def(
+                    cur, rd["path"], rd["name"], rd["kind"],
+                    start_line=rd["start_line"],
+                )
                 if resolved is None:
                     unmatched.append({
                         "task_id": task_id,

@@ -31,6 +31,15 @@ git remote remove <name>
 
 ## Your job
 
+Before starting any tasks, create the output directory:
+
+```
+mkdir -p ../../data/{repo_id}/ground_truth
+```
+
+> **{repo_id}** is the markdown filename without `.md` (e.g.,
+> `python-fastapi` from `python-fastapi.md`).
+
 Work through every task sequentially (N1–N10, M1–M10, W1–W10).
 
 For EACH task:
@@ -41,25 +50,15 @@ For EACH task:
 
 Read the code, make edits, and verify they work.
 
-**Before starting:** verify the working tree is clean:
-
-```
-git status --porcelain
-```
-
-If any output appears, stop and investigate before proceeding.
-
 When the solution is complete:
 
-1. Capture the diff: `git diff`
-2. Revert only the files you changed:
-   `git checkout <file1> <file2> ...`
-   List every file you modified — do NOT use `git checkout .` or
-   `git reset --hard` as other work may be in progress.
-3. Verify clean state: `git status --porcelain` should show no
-   changes to tracked files.
+1. Stage and capture the diff: `git add -A && git diff --cached`
+   (this captures new files too)
+2. Commit: `git commit -m "task {heading_id}: <brief description>"`
+3. Revert the commit: `git revert HEAD --no-edit`
 
-The working tree must be clean before starting the next task.
+Both the task commit and its revert stay in history — the repo is
+clean and every solution is recoverable via `git log`.
 
 ---
 
@@ -117,6 +116,7 @@ Write a JSON file to `../../data/{repo_id}/ground_truth/{heading_id}.json`.
       "path": "<repo-relative path>",
       "name": "<def name>",
       "kind": "<kind>",
+      "start_line": 42,
       "reason": "edited: <what changed>" or "read: <why needed>"
     }
   ],
@@ -126,6 +126,7 @@ Write a JSON file to `../../data/{repo_id}/ground_truth/{heading_id}.json`.
       "path": "<repo-relative path>",
       "name": "<def name>",
       "kind": "<kind>",
+      "start_line": 87,
       "reason": "read: <why seeing this upfront prevents re-searching>"
     }
   ],
@@ -137,6 +138,7 @@ Write a JSON file to `../../data/{repo_id}/ground_truth/{heading_id}.json`.
       "path": "<repo-relative path>",
       "name": "<def name>",
       "kind": "<kind>",
+      "start_line": 120,
       "reason": "<why this was opened but not needed>"
     }
   ],
@@ -236,6 +238,9 @@ Each entry has:
 - `kind`: one of: `function`, `method`, `class`, `struct`, `interface`,
   `trait`, `enum`, `variable`, `constant`, `module`, `property`, `pair`,
   `key`, `table`, `target`, `heading`
+- `start_line`: the 1-based line number where the def starts. This is
+  required — it disambiguates when multiple defs share the same name
+  in one file (e.g., `__init__` in two classes).
 - `reason`: why this def is in this category
 
 If you edited a method inside a class, list the METHOD. Only list the

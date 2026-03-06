@@ -7,6 +7,7 @@
 | **Language** | Rust |
 | **Scale** | Small (focused library) |
 | **Category** | Serialization/deserialization framework |
+| **Set** | ranker-gate |
 | **Commit** | `3fd6b4840a8c7dcc34284f8d478c744c4f78ebfb` |
 
 ## Why this repo

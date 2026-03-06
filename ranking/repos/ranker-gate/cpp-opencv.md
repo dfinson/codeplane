@@ -7,6 +7,7 @@
 | **Language** | C++ |
 | **Scale** | Large (multi-team project) |
 | **Category** | Computer vision library |
+| **Set** | ranker-gate |
 | **Commit** | `fe160f3eed3ec0344baff4bfb6a0771d01b5882d` |
 
 ## Why this repo

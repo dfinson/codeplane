@@ -7,6 +7,7 @@
 | **Language** | PHP |
 | **Scale** | Medium (multi-module project) |
 | **Category** | Dependency manager |
+| **Set** | ranker-gate |
 | **Commit** | `213661a06ab4b080c03334c354b08430af0bb108` |
 
 ## Why this repo

@@ -7,6 +7,7 @@
 | **Language** | Rust |
 | **Scale** | Medium (multi-module project) |
 | **Category** | Recursive search tool |
+| **Set** | ranker-gate |
 | **Commit** | `0884e89f38b7b756b58aed8318c2aa05de0a750c` |
 
 ## Why this repo

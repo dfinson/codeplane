@@ -7,6 +7,7 @@
 | **Language** | Java |
 | **Scale** | Small (focused library) |
 | **Category** | JSON serialization library |
+| **Set** | ranker-gate |
 | **Commit** | `990f1377e2e21d15e280e83190132e2f6baffae2` |
 
 ## Why this repo

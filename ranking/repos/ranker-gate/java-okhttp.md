@@ -7,6 +7,7 @@
 | **Language** | Java (Kotlin) |
 | **Scale** | Medium (multi-module project) |
 | **Category** | HTTP client |
+| **Set** | ranker-gate |
 | **Commit** | `4f843e44998e52caf60b36a7abd72da421c326d1` |
 
 ## Why this repo

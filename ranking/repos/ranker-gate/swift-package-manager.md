@@ -7,6 +7,7 @@
 | **Language** | Swift |
 | **Scale** | Large (multi-team project) |
 | **Category** | Build system and package manager |
+| **Set** | ranker-gate |
 | **Commit** | `b908844f8e335dbc36735eea71eb0fc30baffb66` |
 
 ## Why this repo

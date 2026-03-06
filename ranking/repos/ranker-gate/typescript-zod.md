@@ -7,6 +7,7 @@
 | **Language** | TypeScript |
 | **Scale** | Small (focused library) |
 | **Category** | Schema validation library |
+| **Set** | ranker-gate |
 | **Commit** | `58498da33b1cd110e15fed3a83733f24d41a6bb9` |
 
 ## Why this repo

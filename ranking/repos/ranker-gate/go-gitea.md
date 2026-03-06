@@ -7,6 +7,7 @@
 | **Language** | Go |
 | **Scale** | Large (multi-team project) |
 | **Category** | Self-hosted Git service |
+| **Set** | ranker-gate |
 | **Commit** | `5d87bb3d4566e71b791a8114bfc9e25c037ab5fe` |
 
 ## Why this repo

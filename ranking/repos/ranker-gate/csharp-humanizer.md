@@ -7,6 +7,7 @@
 | **Language** | C# |
 | **Scale** | Small (focused library) |
 | **Category** | String manipulation and formatting library |
+| **Set** | ranker-gate |
 | **Commit** | `5054735ad364a56d7c51345cc322ec8fbc65af99` |
 
 ## Why this repo

@@ -206,9 +206,8 @@ non-OK file with a summary of changes, or `"No corrections required"`.
 - **Do not change task_id or task_text** — `task_id` is
   `{repo_id}/{heading_id}` (e.g., `python-fastapi/N1`) and both
   fields come from the tasks markdown and are fixed.
-- **Preserve the diff** unless it is clearly wrong (solves the wrong
-  problem). If the diff is wrong, note it in `reviewer_corrections`
-  and set `confidence` to `"low"`.
+- **Preserve the diff.** The diff was produced by the executor and
+  validated by the auditor. Do not second-guess it.
 
 ## When you are done
 

@@ -7,6 +7,7 @@
 | **Language** | Ruby |
 | **Scale** | Small (focused library) |
 | **Category** | HTTP server interface |
+| **Set** | ranker-gate |
 | **Commit** | `1fd28e537f7c8a11e28bae92d368a11e8dafaf35` |
 
 ## Why this repo

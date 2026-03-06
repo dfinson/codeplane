@@ -7,6 +7,7 @@
 | **Language** | C# |
 | **Scale** | Large (multi-team project) |
 | **Category** | Object-relational mapper (ORM) |
+| **Set** | ranker-gate |
 | **Commit** | `8e7f5641775281a0607a6d76077e743965c86761` |
 
 ## Why this repo

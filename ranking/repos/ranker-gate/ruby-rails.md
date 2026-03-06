@@ -7,6 +7,7 @@
 | **Language** | Ruby |
 | **Scale** | Large (multi-team project) |
 | **Category** | Full-stack web framework |
+| **Set** | ranker-gate |
 | **Commit** | `d9fa3a2883ed87f8afdaafc28fe919e280911835` |
 
 ## Why this repo

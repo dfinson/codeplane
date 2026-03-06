@@ -7,6 +7,7 @@
 | **Language** | Python |
 | **Scale** | Large (multi-team project) |
 | **Category** | Full-stack web framework |
+| **Set** | ranker-gate |
 | **Commit** | `09b7e84b79073e915ee74a2941ba82dad1e8918a` |
 
 ## Why this repo
