@@ -1,22 +1,19 @@
 #!/usr/bin/env bash
-# Clone all ranking repos pinned to exact commits, remove origin.
+# Clone all ranking repos pinned to exact commits.
 #
 # Usage:
 #   cd ranking && bash clone_repos.sh
-#   cd ranking && bash clone_repos.sh --with-cpl-init   # also run cpl init
 #
-# Each repo is cloned and checked out to the pinned commit from the
-# corresponding md file. The remote is removed so no accidental pushes
-# occur. Pass --with-cpl-init to also index each repo with codeplane.
+# Idempotent: safe to re-run. Each stage is independently skipped if
+# already done (clone exists, commit matches, origin already removed,
+# cpl init already committed).
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLONES_DIR="$SCRIPT_DIR/clones"
-DO_CPL_INIT=false
-[[ "${1:-}" == "--with-cpl-init" ]] && DO_CPL_INIT=true
 
-mkdir -p "$CLONES_DIR"
+mkdir -p "$CLONES_DIR/ranker-gate" "$CLONES_DIR/cutoff" "$CLONES_DIR/eval"
 
 # ── Ranker + Gate set (30 repos) — "url commit" ─────────────────
 RANKER_GATE=(
@@ -52,7 +49,7 @@ RANKER_GATE=(
   "https://github.com/colinhacks/zod 58498da33b1cd110e15fed3a83733f24d41a6bb9"
 )
 
-# ── Cutoff set (32 repos) — "url commit" ────────────────────────
+# ── Cutoff set (42 repos) — "url commit" ────────────────────────
 CUTOFF=(
   "https://github.com/nlohmann/json 0d92c01619b04aab4d1f52bdc5ec6a25e62195fd"
   "https://github.com/gabime/spdlog 355676231ecc8054df12bee275b2193eeeef5ccb"
@@ -86,6 +83,16 @@ CUTOFF=(
   "https://github.com/date-fns/date-fns ec4d9f88d32059967196605435e929de880c4e3c"
   "https://github.com/sindresorhus/execa b016bf41352cea7e5bc470ce873ed7d96c1cd02f"
   "https://github.com/trpc/trpc 1e7e6986101ca60f9d48dff4480fd32e6bf5b065"
+  "https://github.com/psf/requests 0e4ae38f0c93d4f92a96c774bd52c069d12a4798"
+  "https://github.com/fastify/fastify b61c362cc9fba35e7e060a71284154e4f86d54f4"
+  "https://github.com/labstack/echo 1753170a74959596a69735c553f3fe5a4bd07715"
+  "https://github.com/hyperium/hyper 8ba900853b0f619b165e8530fc8c310bc13e056b"
+  "https://github.com/square/retrofit 4a60aef50e8cc2a323ea6b095b35abaa696d2c67"
+  "https://github.com/FluentValidation/FluentValidation cc9917c3688d790f7a414b17d1e03ce337a4151c"
+  "https://github.com/puma/puma a1b5b5e7e1b8d34b7d24964f668733299be930a2"
+  "https://github.com/briannesbitt/Carbon 72ee09e5ada27bd82d668ba30e877722251d8322"
+  "https://github.com/airbnb/lottie-ios ea35e6a4ec7f443a2b0b69ae97cccf0e946ef4a2"
+  "https://github.com/abseil/abseil-cpp 60152322663f4e5a16cb71ca8c5f18c38a081265"
 )
 
 # ── Eval set (15 repos) — "url commit" ──────────────────────────
@@ -107,59 +114,70 @@ EVAL=(
   "https://github.com/vitest-dev/vitest e06f175cba08346bf0382c0b3e137a822bced280"
 )
 
-ALL_REPOS=("${RANKER_GATE[@]}" "${CUTOFF[@]}" "${EVAL[@]}")
-total=${#ALL_REPOS[@]}
-i=0
+process_set() {
+  local set_name="$1"
+  shift
+  local entries=("$@")
 
-for entry in "${ALL_REPOS[@]}"; do
-  url="${entry% *}"
-  commit="${entry##* }"
-  i=$((i + 1))
-  name=$(basename "$url")
-  dest="$CLONES_DIR/$name"
+  for entry in "${entries[@]}"; do
+    url="${entry% *}"
+    commit="${entry##* }"
+    i=$((i + 1))
+    name=$(basename "$url")
+    dest="$CLONES_DIR/$set_name/$name"
 
-  echo ""
-  echo "=== [$i/$total] $name @ ${commit:0:12} ==="
+    echo ""
+    echo "=== [$i/$total] $set_name/$name ==="
 
-  # Skip if already cloned at correct commit
-  if [[ -d "$dest/.git" ]]; then
+    # ── Stage 1: Clone ──────────────────────────────────────────
+    if [[ -d "$dest/.git" ]]; then
+      echo "  clone exists"
+    else
+      echo "  cloning $url ..."
+      git clone --depth=1 "$url" "$dest"
+    fi
+
+    # ── Stage 2: Pin to exact commit ────────────────────────────
     current=$(git -C "$dest" rev-parse HEAD 2>/dev/null)
     if [[ "$current" == "$commit" ]]; then
-      echo "  already at pinned commit, skipping"
+      echo "  pinned at ${commit:0:10}"
     else
-      echo "  WARNING: at $current, expected $commit"
-      echo "  checking out pinned commit..."
-      git -C "$dest" fetch origin "$commit" --depth=1 2>/dev/null || true
-      git -C "$dest" checkout "$commit" 2>/dev/null || echo "  ERROR: cannot checkout $commit"
-    fi
-  else
-    echo "  cloning $url @ $commit ..."
-    git clone "$url" "$dest"
-    git -C "$dest" checkout "$commit"
-  fi
-
-  # Remove remote to prevent accidental pushes
-  if git -C "$dest" remote get-url origin &>/dev/null; then
-    echo "  removing origin remote"
-    git -C "$dest" remote remove origin
-  fi
-
-  if [[ "$DO_CPL_INIT" == true ]]; then
-    echo "  running cpl init ..."
-    if (cd "$dest" && cpl init); then
-      echo "  cpl init complete"
-    else
-      echo "  WARNING: cpl init failed for $name (exit $?)"
+      echo "  checking out ${commit:0:10} (was ${current:0:10}) ..."
+      git -C "$dest" fetch origin "$commit" --depth=1 2>/dev/null || \
+        git -C "$dest" fetch --unshallow 2>/dev/null || true
+      git -C "$dest" checkout "$commit" 2>/dev/null || \
+        echo "  ERROR: cannot checkout $commit"
     fi
 
-    # Commit any files cpl init created
+    # ── Stage 3: Remove origin ──────────────────────────────────
+    if git -C "$dest" remote get-url origin &>/dev/null; then
+      echo "  removing origin"
+      git -C "$dest" remote remove origin
+    fi
+
+    # ── Stage 4: cpl init + commit ─────────────────────────────────
+    if [[ -d "$dest/.codeplane" ]]; then
+      echo "  cpl already initialized"
+    else
+      echo "  running cpl init ..."
+      (cd "$dest" && cpl init) || echo "  WARNING: cpl init failed"
+    fi
+
+    # Commit any uncommitted cpl artifacts
     if [[ -n "$(git -C "$dest" status --porcelain 2>/dev/null)" ]]; then
       echo "  committing cpl init artifacts"
       git -C "$dest" add -A
       git -C "$dest" commit -m "cpl init: add codeplane config files" --no-verify -q
     fi
-  fi
-done
+  done
+}
+
+total=$(( ${#RANKER_GATE[@]} + ${#CUTOFF[@]} + ${#EVAL[@]} ))
+i=0
+
+process_set "ranker-gate" "${RANKER_GATE[@]}"
+process_set "cutoff" "${CUTOFF[@]}"
+process_set "eval" "${EVAL[@]}"
 
 echo ""
-echo "=== Done: $total repos cloned ==="
+echo "=== Done: $total repos ($i processed) ==="
