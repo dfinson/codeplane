@@ -49,7 +49,7 @@ RANKER_GATE=(
   "https://github.com/colinhacks/zod 58498da33b1cd110e15fed3a83733f24d41a6bb9"
 )
 
-# ── Cutoff set (42 repos) — "url commit" ────────────────────────
+# ── Cutoff set (48 repos) — "url commit" ────────────────────────
 CUTOFF=(
   "https://github.com/nlohmann/json 0d92c01619b04aab4d1f52bdc5ec6a25e62195fd"
   "https://github.com/gabime/spdlog 355676231ecc8054df12bee275b2193eeeef5ccb"
@@ -93,9 +93,15 @@ CUTOFF=(
   "https://github.com/briannesbitt/Carbon 72ee09e5ada27bd82d668ba30e877722251d8322"
   "https://github.com/airbnb/lottie-ios ea35e6a4ec7f443a2b0b69ae97cccf0e946ef4a2"
   "https://github.com/abseil/abseil-cpp 60152322663f4e5a16cb71ca8c5f18c38a081265"
+  "https://github.com/simdjson/simdjson 262ddad0370cdfa656b61c388c52bad02697f8a1"
+  "https://github.com/CLIUtils/CLI11 b5fc53c89afc1f2c4fce49c5061d44dddcd41fc4"
+  "https://github.com/pallets/markupsafe b2e4d9c7687be25695fffbe93a37622302b24fb1"
+  "https://github.com/tj/commander.js 8247364da749736570161e95682b07fc2d72497b"
+  "https://github.com/apache/kafka 55d1e3823b76590649cbe584cb906e330ca59fcc"
+  "https://github.com/dotnet/aspnetcore 0b12e6f18f1f22a103d09d254c8579f9d5d47422"
 )
 
-# ── Eval set (15 repos) — "url commit" ──────────────────────────
+# ── Eval set (20 repos) — "url commit" ──────────────────────────
 EVAL=(
   "https://github.com/catchorg/Catch2 0ad9824bc644fbc4c0c1226340a04f0ded7919de"
   "https://github.com/grpc/grpc 4a1e0fb594588a81e11187d0c34507a22a141e42"
@@ -112,6 +118,11 @@ EVAL=(
   "https://github.com/ReactiveX/RxSwift c5a74e0378ab8fe8a8f16844fd438347d87e5641"
   "https://github.com/evanw/esbuild f566f21d943aa2a741e7e57b3f76425634b4a576"
   "https://github.com/vitest-dev/vitest e06f175cba08346bf0382c0b3e137a822bced280"
+  "https://github.com/diesel-rs/diesel f5e93c0125694914dca6888ae09f8d84528353f6"
+  "https://github.com/xunit/xunit 63aad206c62c2db373a9420486aa8ebc1a3daad9"
+  "https://github.com/ruby-grape/grape f2fc392dcae0c1e1fbf4196fa3f51a024e7f22db"
+  "https://github.com/filp/whoops 67342bc807854844244f219fb74687fdf2f62e00"
+  "https://github.com/pointfreeco/swift-composable-architecture 68a0237ea65261f8694d131d33a36288cfd93863"
 )
 
 process_set() {

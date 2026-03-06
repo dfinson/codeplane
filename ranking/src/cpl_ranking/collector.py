@@ -171,6 +171,24 @@ def collect_ground_truth(
 
     con.close()
 
+    # Process non-OK queries (separate per-repo file)
+    non_ok_path = data_dir / "non_ok_queries.json"
+    if non_ok_path.exists():
+        non_ok = json.loads(non_ok_path.read_text())
+        # Non-OK queries aren't tied to a specific task — use repo-level run_id
+        non_ok_run_id = f"{repo_id}__non_ok"
+        for qi, q in enumerate(non_ok.get("non_ok_queries", [])):
+            query_type = q["query_type"]
+            queries.append({
+                "run_id": non_ok_run_id,
+                "query_id": f"{non_ok_run_id}_q{qi}",
+                "query_text": q["query_text"],
+                "query_type": query_type,
+                "seeds": q.get("seeds", []),
+                "pins": q.get("pins", []),
+                "label_gate": query_type,  # UNSAT, BROAD, or AMBIG
+            })
+
     # Write JSONL files
     out_dir = data_dir / "ground_truth"
     _write_jsonl(out_dir / "runs.jsonl", runs)

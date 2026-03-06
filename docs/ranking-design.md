@@ -222,18 +222,19 @@ grouping. No test co-retrieval. Presentation is the consumer's concern.
 Three repo sets:
 
 - **Ranker + Gate** (30 repos): train ranker and gate. 10 languages × 3 repos.
-- **Cutoff** (42 repos): train cutoff with disjoint data. Medium-scale repos
-  with varied codebase sizes for diverse N* distributions.
+- **Cutoff** (48 repos): train cutoff with disjoint data. Medium-scale repos
+  with varied codebase sizes for diverse N* distributions, plus small and
+  large scale anchors for N* range coverage.
   No K-fold needed — cutoff repos are scored by the ranker trained on the
   ranker+gate set, so no leakage. Gate also trains on these repos
   (gate uses raw signals, not ranker output, so no leakage).
-- **Eval** (15 repos): held-out evaluation. 10 languages + 5 extra.
+- **Eval** (20 repos): held-out evaluation. 10 languages × 2 repos each.
 
 All repos generate the same full query set: 8 OK queries + up to 12
-non-OK queries per task. Gate uses all queries from all 72 training
+non-OK queries per task. Gate uses all queries from all 78 training
 repos. Cutoff uses only OK queries from cutoff repos.
 
-**Total:** 87 repos, 2,610 tasks, ~23,000+ queries.
+**Total:** 98 repos, 2,940 tasks, ~26,000+ queries.
 
 ### 4.2 Task Generation
 
@@ -431,7 +432,7 @@ gate label.
 1. Train ranker on 30 ranker+gate repos.
 2. Score all 31 cutoff repos with the trained ranker.
 3. Compute $N^*$ per cutoff query.
-4. ~7,400 rows, zero leakage (ranker never saw cutoff data).
+4. ~11,520 rows, zero leakage (ranker never saw cutoff data).
 5. Train cutoff regressor.
 
 ### 6.3 Gate
@@ -444,7 +445,7 @@ gate label.
 ### 6.4 Shipment Sequence
 
 1. Data collection (30 ranker+gate repos, 31 cutoff repos, 15 eval repos)
-2. Gate training (all 72 training repos) → gate ships
+2. Gate training (all 78 training repos) → gate ships
 3. Ranker training (30 ranker+gate repos) → validate NDCG on eval set
 4. Cutoff training (31 cutoff repos scored by trained ranker)
 5. Full pipeline ships (gate + ranker + cutoff)
