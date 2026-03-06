@@ -36,7 +36,8 @@ class TouchedObject:
     """§5.2 — a relevant DefFact for a task.
 
     Two tiers: minimum (human-necessary) and thrash_preventing
-    (agent-necessary). Ranker trains on the union.
+    (agent-necessary). Ranker uses graded relevance:
+    2 = minimum_sufficient, 1 = thrash_preventing, 0 = irrelevant.
     """
 
     run_id: str
@@ -111,8 +112,8 @@ class CandidateRank:
     query_len: int
     has_identifier: bool
     has_path: bool
-    # Label
-    label_relevant: bool
+    # Label (graded: 0=irrelevant, 1=thrash_preventing, 2=minimum_sufficient)
+    label_relevant: int
 
 
 # ── Constants ────────────────────────────────────────────────────

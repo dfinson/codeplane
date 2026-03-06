@@ -71,7 +71,7 @@ Seeds and pins are separate arguments alongside the query text.
 | **Q_IDENT_NAV** | Identifier + Navigational | Term match + explicit | 2–4 | 2–4 |
 | **Q_FULL** | Full signal | All signals | 2–4 | 2–4 |
 
-**Non-OK tiers** (up to 2 each, optional — skip if forced):
+**Non-OK tiers** (up to 4 each, optional — skip if forced):
 
 | Tier | Definition |
 |------|------------|
@@ -79,7 +79,7 @@ Seeds and pins are separate arguments alongside the query text.
 | **BROAD** | Work spanning 15+ files in 3+ unrelated directories |
 | **AMBIG** | 2+ subsystems could be the target; query doesn't specify which |
 
-Total per task: 8 required OK + 0–6 optional non-OK = 8–14 queries.
+Total per task: 8 required OK + 0–12 optional non-OK = 8–20 queries.
 
 ### 1.4 Gate Taxonomy
 
@@ -94,9 +94,17 @@ Four labels, defined as properties of the **(query, repo) pair**:
 
 ### 1.5 Relevance Model
 
-Binary. A def is either relevant to the task or it isn't. No edit/read
-distinction — recon answers "what context is needed," not "what will be
-edited." The agent decides what to edit.
+Graded (3-level). The ranker learns to prioritize minimum_sufficient
+defs over thrash_preventing defs, so that under budget pressure the
+must-see context survives the cutoff.
+
+| Gain | Tier | Meaning |
+|------|------|---------|
+| 2 | `minimum_sufficient` | Human-necessary — removing this def causes task failure |
+| 1 | `thrash_preventing` | Agent-necessary — removing this causes extra searches but task is still solvable |
+| 0 | irrelevant | Not relevant to the task |
+
+LambdaMART natively optimizes NDCG with graded gains.
 
 ---
 
@@ -106,8 +114,8 @@ edited." The agent decides what to edit.
 
 **Goal:** Score $P(\text{relevant} \mid q, o)$ for each candidate DefFact.
 
-**Base model:** LightGBM LambdaMART. Binary relevance gain. Grouped by
-`(run_id, query_id)`. Only OK-labeled queries.
+**Base model:** LightGBM LambdaMART. Graded relevance gains (2/1/0).
+Grouped by `(run_id, query_id)`. Only OK-labeled queries.
 
 **Per-candidate features:**
 
@@ -214,17 +222,18 @@ grouping. No test co-retrieval. Presentation is the consumer's concern.
 Three repo sets:
 
 - **Ranker + Gate** (30 repos): train ranker and gate. 10 languages × 3 repos.
-- **Cutoff** (31 repos): train cutoff with disjoint data. 10 languages × 3 repos + 1.
+- **Cutoff** (42 repos): train cutoff with disjoint data. Medium-scale repos
+  with varied codebase sizes for diverse N* distributions.
   No K-fold needed — cutoff repos are scored by the ranker trained on the
   ranker+gate set, so no leakage. Gate also trains on these repos
   (gate uses raw signals, not ranker output, so no leakage).
 - **Eval** (15 repos): held-out evaluation. 10 languages + 5 extra.
 
-All repos generate the same full query set: 8 OK queries + up to 6
-non-OK queries per task. Gate uses all queries from all 61 training
+All repos generate the same full query set: 8 OK queries + up to 12
+non-OK queries per task. Gate uses all queries from all 72 training
 repos. Cutoff uses only OK queries from cutoff repos.
 
-**Total:** 76 repos, 2,280 tasks, ~18,000+ queries.
+**Total:** 87 repos, 2,610 tasks, ~23,000+ queries.
 
 ### 4.2 Task Generation
 
@@ -415,7 +424,7 @@ gate label.
 
 1. Filter to OK-labeled queries.
 2. Train LightGBM LambdaMART grouped by `(run_id, query_id)`.
-3. Binary relevance gain.
+3. Graded relevance: 2 (minimum_sufficient), 1 (thrash_preventing), 0.
 
 ### 6.2 Cutoff (disjoint repo split)
 
@@ -427,7 +436,7 @@ gate label.
 
 ### 6.3 Gate
 
-1. All query types (OK + UNSAT + BROAD + AMBIG) from ALL 61 training
+1. All query types (OK + UNSAT + BROAD + AMBIG) from ALL 72 training
    repos (30 ranker+gate + 31 cutoff).
 2. Retrieval distribution features from candidate pools.
 3. LightGBM multiclass, cross-entropy.
@@ -435,7 +444,7 @@ gate label.
 ### 6.4 Shipment Sequence
 
 1. Data collection (30 ranker+gate repos, 31 cutoff repos, 15 eval repos)
-2. Gate training (all 61 training repos) → gate ships
+2. Gate training (all 72 training repos) → gate ships
 3. Ranker training (30 ranker+gate repos) → validate NDCG on eval set
 4. Cutoff training (31 cutoff repos scored by trained ranker)
 5. Full pipeline ships (gate + ranker + cutoff)

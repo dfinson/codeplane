@@ -8,6 +8,7 @@
 | **Scale** | Small |
 | **Category** | Mediator pattern for .NET |
 | **Set** | Cutoff |
+| **Commit** | `6a1bf54413124866b5c8647ce42eb5901c93b7b9` |
 
 ## Why this repo
 

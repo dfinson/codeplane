@@ -113,14 +113,14 @@ def collect_signals(
     # Load queries
     queries = [json.loads(ln) for ln in queries_file.read_text().splitlines() if ln.strip()]
 
-    # Load touched def_uids per run_id for labeling
-    touched_uids: dict[str, set[str]] = {}
+    # Load touched def_uids per run_id for labeling (with tier)
+    touched_tiers: dict[str, dict[str, str]] = {}  # run_id -> {def_uid: tier}
     if touched_file.exists():
         for ln in touched_file.read_text().splitlines():
             if not ln.strip():
                 continue
             obj = json.loads(ln)
-            touched_uids.setdefault(obj["run_id"], set()).add(obj["def_uid"])
+            touched_tiers.setdefault(obj["run_id"], {})[obj["def_uid"]] = obj.get("tier", "minimum")
 
     # Init MCP session
     client, session_id = _init_mcp_session(mcp_url)
@@ -138,7 +138,7 @@ def collect_signals(
             query_id = q["query_id"]
             seeds = q.get("seeds", [])
             pins = q.get("pins", [])
-            relevant_uids = touched_uids.get(run_id, set())
+            relevant_tiers = touched_tiers.get(run_id, {})
 
             # Call raw_signals
             try:
@@ -154,6 +154,10 @@ def collect_signals(
             query_features = result.get("query_features", {})
 
             for cand in candidates:
+                def_uid = cand.get("def_uid", "")
+                tier = relevant_tiers.get(def_uid)
+                # Graded relevance: 2 = minimum_sufficient, 1 = thrash_preventing, 0 = irrelevant
+                relevance = 2 if tier == "minimum" else (1 if tier == "thrash_preventing" else 0)
                 row = {
                     "run_id": run_id,
                     "query_id": query_id,
@@ -161,7 +165,7 @@ def collect_signals(
                     "query_len": query_features.get("query_len", 0),
                     "has_identifier": query_features.get("has_identifier", False),
                     "has_path": query_features.get("has_path", False),
-                    "label_relevant": cand.get("def_uid", "") in relevant_uids,
+                    "label_relevant": relevance,
                 }
                 out.write(json.dumps(row) + "\n")
                 total_candidates += 1

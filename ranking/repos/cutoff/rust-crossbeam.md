@@ -8,6 +8,7 @@
 | **Scale** | Large |
 | **Category** | Concurrent data structures |
 | **Set** | Cutoff |
+| **Commit** | `bc5f78cb544fa03a40474e878a84b3cdd640f2fa` |
 
 ## Why this repo
 
