@@ -85,7 +85,9 @@ value contains a `\n`, the SSE wire framing breaks — the premature
 newline terminates the current field and corrupts the event stream.
 The SSE specification forbids newlines in `id` and `event` fields.
 Fix by validating that these fields do not contain newline characters
-and raising `ValueError` if they do.
+and raising `ValueError` if they do. Update the SSE documentation in
+`docs/en/docs/advanced/server-sent-events.md` to document the validation
+behavior and the error raised for invalid field values.
 
 ### N4: Fix `_endpoint_context_cache` unbounded memory growth
 
@@ -162,7 +164,10 @@ Implement a built-in rate limiting middleware that supports per-client
 middleware should support configurable backends (in-memory for single-process,
 with a protocol for external stores like Redis). Include proper `429 Too Many
 Requests` responses with `Retry-After` headers. Add the rate limit
-configuration to the OpenAPI schema as a vendor extension.
+configuration to the OpenAPI schema as a vendor extension. Add a tutorial
+page at `docs/en/docs/tutorial/rate-limiting.md` covering configuration
+examples and update `docs/en/mkdocs.yml` to include the new page in the
+Tutorial nav section.
 
 ### M2: Implement dependency overrides scoped to test context
 
@@ -344,3 +349,43 @@ Support plugin lifecycle hooks (startup, shutdown), plugin
 dependencies/ordering, and plugin configuration via the app's settings.
 Changes span the application class, router, middleware stack, and a
 new plugin registry module.
+
+## Non-code focused
+
+### N11: Fix `.pre-commit-config.yaml` missing hook for example snippet validation
+
+The `.pre-commit-config.yaml` defines hooks for code formatting and linting
+but does not validate the Python code snippets embedded in documentation
+markdown files under `docs/en/docs/`. Broken examples (syntax errors,
+references to removed APIs) are only caught when users report them. Add a
+`pre-commit` hook entry that runs `ruff check` on fenced Python code blocks
+extracted from `docs/en/docs/**/*.md`. Also add a `[tool.ruff.per-file-overrides]`
+section in `pyproject.toml` to configure relaxed lint rules (e.g., allow
+`import fastapi` without installing it) for the extracted doc snippets.
+
+### M11: Add CI workflow for public API backward-compatibility checking
+
+FastAPI's `.github/workflows/test.yml` runs tests but does not detect
+accidental breaking changes to the public API surface. Add a new
+`.github/workflows/api-compat.yml` workflow that: (1) extracts the public
+API signature from the `fastapi` package on the base branch and the PR
+branch, (2) diffs the signatures to detect removed or changed public
+symbols, and (3) fails the PR check if breaking changes are found without
+a corresponding entry in a new `BREAKING_CHANGES.md` file. Update
+`CONTRIBUTING.md` to document the breaking-change annotation process, and
+add the new workflow to the required status checks list in the repo's
+branch protection documentation.
+
+### W11: Restructure multi-locale documentation build pipeline and CI integration
+
+The documentation build spans twelve `mkdocs.yml` files (one per locale
+under `docs/{lang}/mkdocs.yml`), the `build-docs.yml` and `deploy-docs.yml`
+CI workflows, and the `scripts/` directory. Several issues exist across
+these files: (1) the `docs/en/mkdocs.yml` `nav` section is missing entries
+for recently added tutorial pages; (2) three locale `mkdocs.yml` files
+(`docs/de/mkdocs.yml`, `docs/tr/mkdocs.yml`, `docs/uk/mkdocs.yml`)
+reference theme extensions that no longer exist in the latest MkDocs
+Material version; (3) `build-docs.yml` does not cache the `mkdocs-material`
+package, causing slow CI runs; and (4) `.github/labeler.yml` is missing
+glob patterns for the newer locale directories. Fix all four issues across
+the affected YAML and markdown files.

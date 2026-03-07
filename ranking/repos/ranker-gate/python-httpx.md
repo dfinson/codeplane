@@ -109,7 +109,9 @@ Bearer token authentication. Add a `BearerAuth(Auth)` class that sets the
 optional `token_getter` callable parameter: when provided, if the initial
 request gets a 401 response, `BearerAuth` should call `token_getter()` to
 obtain a fresh token and retry the request. Export `BearerAuth` in
-`__init__.py`.
+`__init__.py`. Also add a documentation page at
+`docs/advanced/authentication.md` covering Bearer token usage with examples,
+and update the `nav` section in `mkdocs.yml` to include the new page.
 
 ### N7: Add `default_encoding` parameter to top-level convenience functions
 
@@ -216,7 +218,10 @@ method, URL, headers (with sensitive headers obfuscated using the existing
 response headers, and elapsed time. Support configurable log level and
 logger name. Add a `log_transport: bool = False` option to `Client` and
 `AsyncClient` that automatically wraps the configured transport with
-`LoggingTransport`. Place the new transport in `_transports/logging.py`.
+`LoggingTransport`. Place the new transport in `_transports/logging.py`. Update
+`mkdocs.yml` to add a "Logging" entry under the Advanced nav section, and
+add a `docs/advanced/logging.md` page documenting the logging transport
+configuration and output format.
 
 ### M8: Implement request signing for AWS Signature V4
 
@@ -341,3 +346,43 @@ utilization. Expose via a `client.pool_status()` method returning
 structured data. Add an async event stream for pool state changes.
 Support export to Prometheus format. This touches the connection pool,
 transport layer, client API, and adds a monitoring module.
+
+## Non-code focused
+
+### N11: Fix `mkdocs.yml` nav ordering and add missing documentation pages
+
+The `mkdocs.yml` navigation does not include pages for `environment_variables.md`
+or `compatibility.md` in the nav tree, even though these files exist in the
+`docs/` directory. Users browsing the docs site can only reach them via
+search. Additionally, the `theme` section references a custom `css/custom.css`
+but does not set `locale` for MkDocs' built-in search plugin, causing
+search tokenization issues for non-ASCII characters. Fix the nav to
+include all existing doc pages, and add `locale: en` to the search plugin
+configuration in `mkdocs.yml`.
+
+### M11: Add CI workflow for automated changelog validation and release-note linting
+
+The `publish.yml` workflow handles PyPI publishing but does not verify that
+`CHANGELOG.md` has been updated when a PR modifies source files under
+`httpx/`. Add a new `.github/workflows/changelog-check.yml` workflow that
+runs on pull requests, checks whether `CHANGELOG.md` has a new entry when
+any `httpx/**/*.py` file is modified, and validates the entry format
+(expects `## [version]` headers and `- description (#PR)` bullet items).
+Also update `CONTRIBUTING.md` to document the required changelog format,
+and add a `[tool.changelog]` section in `pyproject.toml` with the
+validation regex pattern for CI to reference.
+
+### W11: Overhaul project metadata, CI matrix, and documentation build configuration
+
+The project's non-code infrastructure has several issues spanning multiple
+config and documentation files. In `pyproject.toml`: the
+`[project.classifiers]` list is missing the `Framework :: AnyIO` classifier,
+`[project.urls]` still points to the old documentation domain, and the
+`[tool.hatch.build]` section does not exclude benchmark files from the
+sdist. In `.github/workflows/test-suite.yml`: the test matrix does not
+include Python 3.13, and the httpcore dependency pin uses an older version.
+In `mkdocs.yml`: the `markdown_extensions` list is missing
+`pymdownx.tabbed` which is needed for the tabbed code examples in
+`docs/async.md`. In `.github/dependabot.yml`: the update schedule for
+GitHub Actions is set to `weekly` but should be `monthly` to reduce noise.
+Fix all four files to address these issues.

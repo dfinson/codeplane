@@ -104,7 +104,9 @@ loaded back via `loaddata`, the generated column value is lost and the
 database must recompute it — but some backends don't recompute on
 INSERT. Add a `serialize` option to `GeneratedField.__init__()` that
 defaults to `True` for `STORED` generated columns, and update
-`Serializer.serialize()` in the base serializer to include them.
+`Serializer.serialize()` in the base serializer to include them. Update
+the `GeneratedField` reference documentation in `docs/ref/models/fields.txt`
+to document the new `serialize` parameter and its default behavior.
 
 ### N6: Fix `prefetch_related` generating duplicate queries with `to_attr`
 
@@ -201,7 +203,10 @@ connections, health check pass/fail counts). Wire it into the
 that each backend overrides. For PostgreSQL, read from
 `ConnectionPool.get_stats()`. For SQLite, report single-connection state.
 Also add a `django/core/checks/database.py` system check that warns
-when `CONN_HEALTH_CHECKS` is disabled but `CONN_MAX_AGE` is set.
+when `CONN_HEALTH_CHECKS` is disabled but `CONN_MAX_AGE` is set. Update
+`docs/Makefile` to include the new management command in the doc build
+targets, and add a documentation entry in `docs/ref/django-admin.txt` for
+the `dbconnstats` command.
 
 ### M6: Add full-text search for SQLite backend
 
@@ -341,3 +346,48 @@ Prometheus), and structured logging with trace correlation. Add an
 observability middleware stack, per-view tracing decorators, and a
 diagnostics management command. Changes span middleware, database
 backends, template engine, cache framework, and settings.
+
+## Non-code focused
+
+### N11: Fix `pyproject.toml` metadata and update `.pre-commit-config.yaml` hook versions
+
+The `pyproject.toml` `[project.classifiers]` list is missing the
+`Framework :: Django :: 5.2` classifier for the latest release series, and
+the `[project.urls]` section uses a legacy URL for the release notes page.
+Additionally, `.pre-commit-config.yaml` pins several hooks to outdated
+revisions — `blacken-docs` is two major versions behind and no longer
+compatible with the current `black` version, causing pre-commit failures
+for new contributors. Update the classifiers and URLs in `pyproject.toml`,
+bump the hook revisions in `.pre-commit-config.yaml`, and update the
+`zizmor.yml` configuration to include the newly added CI workflow files
+(`benchmark.yml`, `check-migrations.yml`) in its scan targets.
+
+### M11: Add CI workflow for automated benchmark regression detection on pull requests
+
+Django has a `.github/workflows/benchmark.yml` but it only runs on the
+`main` branch on a schedule. Add a new `.github/workflows/pr-benchmark.yml`
+workflow that runs a subset of performance benchmarks on pull requests
+targeting `django/db/` and `django/template/`, compares results against
+a baseline stored in the repository, and posts a comment with the
+regression report. Update `docs/Makefile` to add a `benchmark-baseline`
+target that generates the baseline data file. Also add a
+`docs/internals/benchmarking.txt` documentation page explaining how
+contributors should interpret benchmark results, and update
+`.readthedocs.yml` to exclude the benchmark data directory from the
+documentation build.
+
+### W11: Overhaul documentation build pipeline across `docs/Makefile`, ReadTheDocs, and CI
+
+The documentation infrastructure spans `docs/Makefile`,
+`.readthedocs.yml`, and several `.github/workflows/` files (`docs.yml`,
+`linters.yml`), and has accumulated configuration drift. Specifically:
+(1) `docs/Makefile` still references a `SPHINXBUILD` variable pointing to
+`python -m sphinx` without activating the virtualenv, breaking local doc
+builds when Sphinx is not installed globally; (2) `.readthedocs.yml`
+specifies a Python version that is no longer supported by ReadTheDocs'
+build images; (3) `.github/workflows/docs.yml` does not cache pip
+dependencies, causing slow CI runs; and (4) `.github/workflows/linters.yml`
+runs `blacken-docs` but does not install the same version pinned in
+`.pre-commit-config.yaml`, leading to inconsistent formatting. Fix all
+four files to resolve these issues and ensure a consistent doc build
+across local, CI, and ReadTheDocs environments.
