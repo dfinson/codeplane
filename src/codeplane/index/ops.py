@@ -23,11 +23,13 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from sqlalchemy import case, delete, func, text
 from sqlmodel import col, select
+
+log = structlog.get_logger(__name__)
 
 from codeplane.core.languages import detect_language_family, is_test_file
 from codeplane.index._internal.db import (
@@ -600,9 +602,87 @@ class IndexCoordinatorEngine:
         if self._lexical is not None:
             self._lexical.reload()
 
+        # Validate embedding completeness — rebuild if interrupted init
+        # left structural index complete but embeddings empty/partial
+        await self._validate_embeddings()
+
         self._initialized = True
         self._fresh_event.set()
         return True
+
+    async def _validate_embeddings(self) -> None:
+        """Check embedding indices match structural index and rebuild if needed.
+
+        Handles the case where `cpl init -r` was killed after structural
+        indexing completed but before embedding commit finished. The DB
+        has all files/defs but the embedding npz is empty or partial.
+        """
+        if self._def_embedding is None or self._structural is None:
+            return
+
+        # Count code defs in DB vs embedded defs
+        with self.db.session() as session:
+            row = session.exec(
+                text(
+                    "SELECT COUNT(*) FROM def_facts "
+                    "WHERE kind IN ('function','method','class','struct',"
+                    "'interface','trait','enum','property')"
+                )
+            ).one()
+            code_def_count: int = int(row[0])
+
+        embedded_count = self._def_embedding.count
+        # Allow 5% tolerance for minor drift (e.g. defs added by incremental
+        # reindex that haven't been embedded yet)
+        if code_def_count > 0 and embedded_count < code_def_count * 0.95:
+            log.warning(
+                "index.embedding_incomplete",
+                code_defs=code_def_count,
+                embedded=embedded_count,
+                action="rebuilding",
+            )
+            await self._rebuild_embeddings()
+        else:
+            log.info(
+                "index.embedding_valid",
+                code_defs=code_def_count,
+                embedded=embedded_count,
+            )
+
+    async def _rebuild_embeddings(self) -> None:
+        """Rebuild def embeddings from scratch using indexed defs."""
+        if self._def_embedding is None:
+            return
+
+        with self.db.session() as session:
+            rows = session.exec(
+                text(
+                    "SELECT d.def_uid, d.kind, d.name, d.lexical_path, "
+                    "d.signature_text, d.docstring, f.path "
+                    "FROM def_facts d JOIN files f ON d.file_id = f.id "
+                    "WHERE d.kind IN ('function','method','class','struct',"
+                    "'interface','trait','enum','property')"
+                )
+            ).all()
+
+        # Group by file path
+        by_file: dict[str, list[dict[str, Any]]] = {}
+        for r in rows:
+            by_file.setdefault(r[6], []).append({
+                "def_uid": r[0], "kind": r[1], "name": r[2],
+                "lexical_path": r[3], "signature_text": r[4], "docstring": r[5],
+            })
+
+        # Clear and re-stage
+        self._def_embedding.clear()
+        for path, defs in by_file.items():
+            self._def_embedding.stage_defs(path, defs)
+
+        staged = sum(len(v) for v in self._def_embedding._staged_defs.values())
+        log.info("index.embedding_rebuild_staged", defs=staged)
+
+        count = self._def_embedding.commit_staged()
+        log.info("index.embedding_rebuild_done", embedded=count)
 
     async def reindex_incremental(self, changed_paths: list[Path]) -> IndexStats:
         """
