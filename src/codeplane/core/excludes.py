@@ -153,7 +153,6 @@ DEFAULT_PRUNABLE_DIRS: frozenset[str] = frozenset(
         "dist",
         "build",
         "out",
-        "coverage",
         ".coverage",
         ".nyc_output",
         # -------------------------------------------------------------------------
@@ -335,7 +334,7 @@ Cargo.lock
 .ruff_cache/
 .coverage
 htmlcov/
-coverage/
+/coverage/
 .nyc_output/
 .hypothesis/
 
