@@ -75,7 +75,7 @@ sinatra/
 
 ## Tasks
 
-30 tasks (10 narrow, 10 medium, 10 wide).
+33 tasks (11 narrow, 11 medium, 11 wide).
 
 ## Narrow
 
@@ -93,7 +93,7 @@ In `base.rb`, `Response#finish` calculates `content-length` by calling `body.map
 
 ### N4: Fix `Rack::Protection::AuthenticityToken` not rotating tokens on session regeneration
 
-In `rack-protection/lib/rack/protection/authenticity_token.rb`, the CSRF token is derived from `session[:csrf]`. When the session ID is regenerated (e.g., after login), the old session hash persists and the CSRF token remains valid for the old session, allowing session fixation attacks to reuse the token.
+In `rack-protection/lib/rack/protection/authenticity_token.rb`, the CSRF token is derived from `session[:csrf]`. When the session ID is regenerated (e.g., after login), the old session hash persists and the CSRF token remains valid for the old session, allowing session fixation attacks to reuse the token. Document the token rotation behavior and mitigation in `SECURITY.md`.
 
 ### N5: Fix `Rack::Protection::HostAuthorization` not normalising port numbers in permitted hosts
 
@@ -119,6 +119,10 @@ In `sinatra-contrib/lib/sinatra/cookies.rb`, cookies set via the `cookies` helpe
 
 In `base.rb`, when a `before` filter calls `halt`, the `after` filters in `dispatch!` still execute because the `catch(:halt)` in `invoke` unwinds to `call!` which then runs `after_filter!`. After-filters should be skipped when the response was halted from a before-filter.
 
+### N11: Fix `CHANGELOG.md` not attributing security fixes to CVE identifiers
+
+The `CHANGELOG.md` lists security fixes as regular bug fixes without linking to CVE identifiers or the `SECURITY.md` advisory process. Add CVE cross-references to existing security-related changelog entries, establish a changelog format convention in `CONTRIBUTING.md`, and update `RELEASING.md` with a security release checklist that includes CVE attribution and `VERSION` file bump procedures.
+
 ## Medium
 
 ### M1: Add conditional route matching with request-header predicates
@@ -143,7 +147,7 @@ Implement `post '/items', schema: ItemSchema do ... end` that validates the pars
 
 ### M6: Implement session encryption for rack-protection
 
-Add `Rack::Protection::EncryptedSession` middleware that encrypts session data at rest using AES-256-GCM. Changes span a new `encrypted_session.rb` in `rack-protection/lib/rack/protection/`, key derivation from the app secret in `base.rb`, and integration with session middleware.
+Add `Rack::Protection::EncryptedSession` middleware that encrypts session data at rest using AES-256-GCM. Changes span a new `encrypted_session.rb` in `rack-protection/lib/rack/protection/`, key derivation from the app secret in `base.rb`, and integration with session middleware. Update `README.md` with session encryption configuration instructions and add a security hardening section to `.github/copilot-instructions.md`.
 
 ### M7: Add template caching with dependency invalidation for the reloader
 
@@ -160,6 +164,10 @@ Extend `sinatra-contrib/lib/sinatra/namespace.rb` to allow `namespace '/admin' d
 ### M10: Implement content security policy nonce injection
 
 Extend `rack-protection/lib/rack/protection/content_security_policy.rb` to auto-generate a per-request nonce, inject it into the CSP `script-src` directive, and expose it via `env['rack.csp_nonce']` for use in templates. Changes span `content_security_policy.rb` (nonce generation and header rewriting), `Helpers` in `base.rb` (nonce accessor), and `show_exceptions.rb` (use nonce for inline scripts).
+
+### M11: Modernize CI test matrix and release workflow
+
+Extend `.github/workflows/test.yml` with a Ruby version matrix (3.1, 3.2, 3.3) and platform matrix (ubuntu, macos). Add an automated release workflow in `.github/workflows/release.yml` that reads the `VERSION` file, builds all three gems (`sinatra`, `sinatra-contrib`, `rack-protection`), and publishes to RubyGems. Update `Gemfile` with development dependency groups, configure `.rubocop.yml` with monorepo-specific settings per gem directory, and add a `.github/CODEOWNERS` file mapping gem directories to maintainers. Changes span `.github/workflows/test.yml`, `.github/workflows/release.yml`, `.github/CODEOWNERS`, `Gemfile`, `.rubocop.yml`, `VERSION`, and `sinatra.gemspec`.
 
 ## Wide
 
@@ -203,30 +211,6 @@ Add `desc 'List users'; param :page, Integer, default: 1` annotations that gener
 
 Implement `tenant { |req| req.host.split('.').first }` with isolated settings, middleware stacks, sessions, and CSRF tokens per tenant. Changes span `base.rb` (tenant resolution in `call!`, settings isolation, middleware scoping), `main.rb` (top-level tenant DSL), rack-protection (per-tenant CSRF tokens in `authenticity_token.rb`, per-tenant sessions in `session_hijacking.rb`), `cookies.rb` (tenant-scoped cookie jar), and `namespace.rb` (tenant-aware namespaces).
 
-## Non-code focused
+### W11: Create unified contributor documentation and maintenance guides
 
-### N11: Fix outdated or inconsistent metadata in .rubocop.yml
-
-The project configuration file `.rubocop.yml` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in .rubocop.yml, and update rack-protection/README.md to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `.github/workflows/test.yml`, `.github/workflows/release.yml`, `.rubocop.yml`, `.vscode/mcp.json`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Consolidate and overhaul the project's extensive non-code documentation: unify `CONTRIBUTING.md`, `MAINTENANCE.md`, and `RELEASING.md` into a coherent contributor handbook with cross-references; update `AUTHORS.md` with a contribution attribution process; modernize `CODE_OF_CONDUCT.md` to the latest Contributor Covenant; add development setup instructions to `CONTRIBUTING.md` covering all three gems; update `CHANGELOG.md` format to follow Keep a Changelog with per-gem sections for `sinatra`, `sinatra-contrib`, and `rack-protection`; document the security advisory process in `SECURITY.md` with responsible disclosure timeline; and update `README.md` with badges, monorepo structure overview, and links to all documentation files. Changes span `CONTRIBUTING.md`, `MAINTENANCE.md`, `RELEASING.md`, `AUTHORS.md`, `CODE_OF_CONDUCT.md`, `CHANGELOG.md`, `SECURITY.md`, `README.md`, and `VERSION`.

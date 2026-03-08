@@ -49,13 +49,13 @@ Platform/                # AtomicInt, RecursiveLock, data structures (Bag, Queue
 
 ## Tasks
 
-30 tasks (10 narrow, 10 medium, 10 wide).
+33 tasks (11 narrow, 11 medium, 11 wide).
 
 ## Narrow
 
 ### N1: Fix `throttle` operator dropping the last element when using `.latest` mode
 
-The `ThrottleSink` in `Observables/Throttle.swift` schedules a timer on `next` events but when the source completes while a throttle window is active, the pending latest value is never forwarded. The `on(.completed)` path disposes the scheduled item without flushing it.
+The `ThrottleSink` in `Observables/Throttle.swift` schedules a timer on `next` events but when the source completes while a throttle window is active, the pending latest value is never forwarded. The `on(.completed)` path disposes the scheduled item without flushing it. Document the corrected throttle behavior in `Documentation/Tips.md`.
 
 ### N2: Fix `ReplaySubject` not trimming buffer after `bufferSize` exceeded under concurrent access
 
@@ -93,6 +93,10 @@ In `Schedulers/CurrentThreadScheduler.swift`, recursive `schedule` calls within 
 
 The `Completable` extensions in `Traits/PrimitiveSequence/Completable.swift` lack a `materialize()` operator that would convert `.completed` and `.error` events into `Observable<CompletableEvent>`, unlike `Single` and `Maybe` which have their own materialized event types.
 
+### N11: Fix `Documentation/GettingStarted.md` code samples using deprecated `bind(to:)` syntax
+
+The `Documentation/GettingStarted.md` file contains code examples that use the deprecated `bind(to:)` API patterns and reference outdated import statements. Update all code samples in `Documentation/GettingStarted.md` to use current syntax, fix broken markdown links in `Documentation/Examples.md` and `Documentation/Traits.md`, and add version-specific callouts for API differences between RxSwift 5 and 6 in `Documentation/SwiftConcurrency.md`.
+
 ## Medium
 
 ### M1: Implement `share(replay:scope:)` for `Infallible`
@@ -101,7 +105,7 @@ The `Infallible` trait needs a `share(replay:scope:)` operator equivalent to `Ob
 
 ### M2: Add retry with exponential backoff operator
 
-Implement a `retry(maxAttempts:delay:multiplier:scheduler:)` operator that retries a failed observable sequence with configurable exponential backoff. The operator should integrate with `RetryWhen` logic in `Observables/RetryWhen.swift` and schedulers for delay timing without blocking threads.
+Implement a `retry(maxAttempts:delay:multiplier:scheduler:)` operator that retries a failed observable sequence with configurable exponential backoff. The operator should integrate with `RetryWhen` logic in `Observables/RetryWhen.swift` and schedulers for delay timing without blocking threads. Update `README.md` with retry operator documentation and add error handling guidance.
 
 ### M3: Implement `TestScheduler` cold observable auto-disposal tracking
 
@@ -134,6 +138,10 @@ The `Completable` trait lacks a `delay` operator. Implement `delay(_:scheduler:)
 ### M10: Add `groupBy` operator support for `Driver` trait
 
 The `Driver` trait in `RxCocoa/Traits/` supports most operators but lacks `groupBy`. Implement `Driver.groupBy(keySelector:)` that returns `Driver<GroupedObservable<Key, Element>>`, ensuring all emissions happen on the main scheduler and errors are replaced with the `onErrorJustReturn` recovery mechanism.
+
+### M11: Improve SwiftLint and formatting configuration
+
+Update `.swiftlint.yml` with module-specific rules for RxSwift/, RxCocoa/, RxBlocking/, RxRelay/, and RxTest/ directories. Configure `.swiftformat` with per-directory formatting rules matching the existing code style. Update `.jazzy.yml` with complete module documentation generation settings and custom theme. Add a `Makefile` target for documentation generation and linting. Configure `mise.toml` with development tool versions. Create a `CONTRIBUTING.md` with code style guidelines referencing the linting configuration. Changes span `.swiftlint.yml`, `.swiftformat`, `.jazzy.yml`, `Makefile`, `mise.toml`, `CONTRIBUTING.md`, and `README.md`.
 
 ## Wide
 
@@ -177,30 +185,6 @@ Implement a backpressure mechanism for `Observable` sequences: `Flowable<Element
 
 Extend `RxCocoa/Foundation/URLSession+Rx.swift` into a full reactive networking module: request retry with backoff, response caching with observable invalidation, request deduplication for identical in-flight requests, progress tracking as `Observable<Progress>`, multipart upload support, and automatic JSON decoding with `Codable`. Changes span RxCocoa/Foundation/, new networking files, integration with schedulers for retry timing, and RxSwift operators for deduplication logic.
 
-## Non-code focused
+### W11: Overhaul documentation site and playground examples
 
-### N11: Fix outdated or inconsistent metadata in mise.toml
-
-The project configuration file `mise.toml` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in mise.toml, and update docs/undocumented.json to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `.github/workflows/tests.yml`, `.github/copilot-instructions.md`, `mise.toml`, `.swiftlint.yml`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Comprehensively restructure the project's documentation: update all files in `Documentation/` (GettingStarted.md, Traits.md, Schedulers.md, Subjects.md, UnitTests.md, SwiftConcurrency.md, etc.) with current API examples and Swift 5.9+ syntax; refresh `Rx.playground/` examples to work with the latest Xcode; rebuild `docs/` Jazzy-generated API documentation from `.jazzy.yml`; update `README.md` with a feature comparison table, architecture overview, and migration guide from Combine; add structured changelog to `CONTRIBUTING.md`; update `CODE_OF_CONDUCT.md` to latest Contributor Covenant; and configure `Version.xcconfig` with documentation version tracking. Changes span `Documentation/`, `Rx.playground/`, `docs/`, `.jazzy.yml`, `README.md`, `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `LICENSE.md`, and `Version.xcconfig`.

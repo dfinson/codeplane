@@ -56,7 +56,7 @@ axum/
 
 ## Tasks
 
-30 tasks (10 narrow, 10 medium, 10 wide).
+33 tasks (11 narrow, 11 medium, 11 wide).
 
 ## Narrow
 
@@ -82,7 +82,7 @@ When merging two `MethodRouter` instances that both have a handler for GET, `mer
 
 ### N6: Add `Redirect::see_other` convenience constructor
 
-`Redirect` provides `to`, `permanent`, and `temporary` constructors but not `see_other` (303). POST-redirect-GET flows commonly need 303 status. Add `Redirect::see_other(uri)` that returns a 303 redirect response.
+`Redirect` provides `to`, `permanent`, and `temporary` constructors but not `see_other` (303). POST-redirect-GET flows commonly need 303 status. Add `Redirect::see_other(uri)` that returns a 303 redirect response. Update `CHANGELOG.md` with the new API addition and add a usage example to `README.md`.
 
 ### N7: Fix SSE `Event::json_data` not setting event content type
 
@@ -100,11 +100,15 @@ When `State<T>` extraction fails because the state was not provided via `Router:
 
 The `serve` function in `serve/mod.rs` accepts a `TcpListener` but does not configure TCP keepalive on accepted connections. Long-lived idle connections (e.g., SSE, WebSocket) can be silently dropped by intermediate proxies without keepalive probes.
 
+### N11: Fix `CHANGELOG.md` not documenting breaking changes from axum-core extractor trait signature updates
+
+The `CHANGELOG.md` at the repository root does not include entries for breaking changes introduced in axum-core's `FromRequest` and `FromRequestParts` trait modifications. Contributors updating extractors have no changelog guidance. Add a changelog policy section to `CONTRIBUTING.md` and backfill missing breaking-change entries in `CHANGELOG.md` referencing the relevant axum-core commits.
+
 ## Medium
 
 ### M1: Implement request body size limiting middleware
 
-Add middleware that enforces a maximum request body size, returning 413 Payload Too Large when exceeded. Integrate with `DefaultBodyLimit` from axum-core but allow per-route override via `Router::route_layer`. Handle streaming bodies by counting bytes as they are read.
+Add middleware that enforces a maximum request body size, returning 413 Payload Too Large when exceeded. Integrate with `DefaultBodyLimit` from axum-core but allow per-route override via `Router::route_layer`. Handle streaming bodies by counting bytes as they are read. Add a body-limit example to the `examples/` directory and document configuration in `ECOSYSTEM.md`.
 
 ### M2: Add typed multipart form extractor with struct derivation
 
@@ -141,6 +145,10 @@ Add a `StreamingMultipart` extractor that streams uploaded files directly to dis
 ### M10: Add metrics middleware collecting request duration and status histograms
 
 Implement middleware that measures request processing time, records HTTP method, route pattern, and status code, and exposes metrics via a Prometheus-compatible endpoint. Changes touch middleware module, routing (for matched-path extraction), and add a metrics response endpoint.
+
+### M11: Add CI workflow for automated API compatibility checking
+
+Extend `.github/workflows/CI.yml` to include an API compatibility check step using `cargo-semver-checks` that validates all four crates (axum, axum-core, axum-extra, axum-macros) against their previous published versions. Update `CONTRIBUTING.md` with semver policy, add a `deny.toml` rule for detecting accidental public API removals, and document the CI pipeline in `.github/PULL_REQUEST_TEMPLATE.md`.
 
 ## Wide
 
@@ -184,30 +192,6 @@ Add an in-process task queue that handlers can submit work to via a `TaskQueue` 
 
 Implement a testing framework with recorded request replay, response assertion helpers, mock extractors, and integration test utilities. Support capturing handler chains as test fixtures. Changes span a new testing module, handler (test mode), extractors (mock implementations), routing (test router builder), and response (assertion helpers).
 
-## Non-code focused
+### W11: Implement comprehensive contributor onboarding and ecosystem documentation
 
-### N11: Fix outdated or inconsistent metadata in axum-core/Cargo.toml
-
-The project configuration file `axum-core/Cargo.toml` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in axum-core/Cargo.toml, and update axum-core/README.md to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `.github/ISSUE_TEMPLATE/bug_report.md`, `.github/ISSUE_TEMPLATE/feature_request.md`, `axum-core/Cargo.toml`, `Cargo.toml`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Overhaul the project's non-code documentation: restructure `CONTRIBUTING.md` with step-by-step build instructions, PR checklist, and coding conventions; update `ECOSYSTEM.md` with a curated list of middleware and extractor crates; add an architecture overview to `README.md` explaining the crate dependency graph; create `.github/DISCUSSION_TEMPLATE/` forms for feature requests vs. questions; and add a `deny.toml` audit policy section. Changes span `CONTRIBUTING.md`, `ECOSYSTEM.md`, `README.md`, `.github/PULL_REQUEST_TEMPLATE.md`, `.github/DISCUSSION_TEMPLATE/`, `deny.toml`, and `Cargo.toml` workspace metadata.

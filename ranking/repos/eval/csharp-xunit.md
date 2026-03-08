@@ -59,7 +59,7 @@ src/
 
 ## Tasks
 
-30 tasks (10 narrow, 10 medium, 10 wide).
+33 tasks (11 narrow, 11 medium, 11 wide).
 
 ## Narrow
 
@@ -89,7 +89,7 @@ Add a `RetryFactAttribute` that retries a failing test up to a configurable numb
 
 ### N7: Fix `ConfigReader_Json` silently ignoring unknown configuration keys
 
-In `src/xunit.v3.runner.common/Configuration/ConfigReader_Json.cs`, unknown keys in the JSON configuration file are silently ignored. A typo like `"maxParallelThread"` (missing 's') produces no warning, leading to confusing behavior where the setting appears ineffective.
+In `src/xunit.v3.runner.common/Configuration/ConfigReader_Json.cs`, unknown keys in the JSON configuration file are silently ignored. A typo like `"maxParallelThread"` (missing 's') produces no warning, leading to confusing behavior where the setting appears ineffective. Update `README.md` with a comprehensive list of valid configuration keys and their expected types.
 
 ### N8: Add support for `[MemberData]` sourcing from static properties on base classes
 
@@ -103,11 +103,15 @@ In `xunit.v3.common/Utility/DisposalTracker.cs`, objects implementing `IAsyncDis
 
 The `ExecutionSinkOptions` in `src/xunit.v3.runner.common/Sinks/` allows configuring various execution behaviors but has no limit on test attachment sizes. Add a `MaxAttachmentSizeBytes` option that truncates or rejects attachments exceeding the configured limit, preventing memory exhaustion from large test output attachments.
 
+### N11: Fix `BUILDING.md` missing instructions for building on ARM64 Linux and macOS
+
+The `BUILDING.md` file documents build prerequisites for x64 Windows and Linux but omits ARM64-specific instructions. .NET SDK selection via `global.json` may resolve to an incompatible architecture. Add ARM64 build sections to `BUILDING.md`, document `global.json` rollForward policy for multi-architecture builds, and update `.github/ISSUE_TEMPLATE.md` with a build environment diagnosis template.
+
 ## Medium
 
 ### M1: Implement structured test output capture with named sections
 
-Currently, `TestOutputHelper` in `xunit.v3.core/Framework/` captures all test output as a single string. Implement named output sections (e.g., `output.Section("Setup")`, `output.Section("Assertion")`) that partition captured output into labeled segments. Update the message pipeline, `TestOutput` message, and console/MSBuild reporters to display sectioned output.
+Currently, `TestOutputHelper` in `xunit.v3.core/Framework/` captures all test output as a single string. Implement named output sections (e.g., `output.Section("Setup")`, `output.Section("Assertion")`) that partition captured output into labeled segments. Update the message pipeline, `TestOutput` message, and console/MSBuild reporters to display sectioned output. Add documentation for the new API in `docfx/` configuration.
 
 ### M2: Add test dependency declaration and execution ordering
 
@@ -144,6 +148,10 @@ Add automatic flaky test detection that tracks test result history across runs u
 ### M10: Add test matrix support for combinatorial `[Theory]` data
 
 Implement `[MatrixData]` attribute that generates test cases from the Cartesian product of multiple data sources. `[MatrixData(nameof(Browsers), nameof(Resolutions))]` generates all combinations. Add `MatrixDataDiscoverer`, integrate with `TheoryDiscoverer`, and support filtering specific matrix combinations.
+
+### M11: Improve CI pipeline with signed build validation and version management
+
+Extend `.github/workflows/ci-signed.yaml` with additional validation steps: verify NuGet package signature consistency, validate `version.json` against Git tags, and run deterministic build checks. Update `global.json` with SDK version pinning policy documentation, add a release checklist to `.github/PULL_REQUEST_TEMPLATE.md`, and configure `docfx/filterConfig.yml` to exclude internal APIs from public documentation. Changes span `.github/workflows/ci-signed.yaml`, `.github/workflows/ci-unsigned.yaml`, `version.json`, `global.json`, `.github/PULL_REQUEST_TEMPLATE.md`, and `docfx/`.
 
 ## Wide
 
@@ -187,30 +195,6 @@ Add a web-based test execution dashboard that displays real-time test progress, 
 
 Implement mutation testing that systematically modifies source code (mutants) and verifies tests catch the mutations. Add a mutation engine with operator library (arithmetic, conditional, null, void), mutant generation, selective test execution per mutant, and survival analysis reporting. Changes span the runner pipeline, add a mutation engine project, test mapping infrastructure, and report generation.
 
-## Non-code focused
+### W11: Create comprehensive docfx-based API documentation site
 
-### N11: Fix outdated or inconsistent metadata in version.json
-
-The project configuration file `version.json` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in version.json, and update BUILDING.md to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `.github/workflows/pull-request.yaml`, `.github/workflows/ci-signed.yaml`, `version.json`, `global.json`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Build a complete API documentation website using the existing `docfx/` infrastructure: configure `docfx/docfx.json` to generate API reference from all `xunit.v3.*` projects' XML doc comments; add conceptual documentation pages covering test lifecycle, parallel execution, custom extensibility, and migration from v2; update `docfx/filterConfig.yml` to properly categorize public vs. internal APIs; add tutorial content to `BUILDING.md` for documentation contributions; update `README.md` with documentation site links and badges; and configure `.github/workflows/` to deploy documentation on release. Changes span `docfx/`, `BUILDING.md`, `README.md`, `.github/PULL_REQUEST_TEMPLATE.md`, and `.github/workflows/`.

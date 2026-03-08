@@ -57,13 +57,13 @@ lib/grape/
 
 ## Tasks
 
-30 tasks (10 narrow, 10 medium, 10 wide).
+33 tasks (11 narrow, 11 medium, 11 wide).
 
 ## Narrow
 
 ### N1: Fix `Router#rotation` not preserving `Allow` header across mounted APIs
 
-In `lib/grape/router.rb`, the `rotation` method iterates candidate routes for a given path. When multiple mounted APIs define routes for the same path with different HTTP methods, the `Allow` header in the 405 response only includes methods from the last mounted API, dropping methods from earlier mounts.
+In `lib/grape/router.rb`, the `rotation` method iterates candidate routes for a given path. When multiple mounted APIs define routes for the same path with different HTTP methods, the `Allow` header in the 405 response only includes methods from the last mounted API, dropping methods from earlier mounts. Document the correct multi-mount pattern in `CHANGELOG.md`.
 
 ### N2: Fix `params_scope` not validating `mutually_exclusive` across nested groups
 
@@ -101,6 +101,10 @@ When a custom `content_type` is declared via the DSL (e.g., `content_type :json,
 
 The `before_validation` callback in `lib/grape/dsl/callbacks.rb` fires before parameter validation. Inside this callback, there's no API to inspect the declared parameter types and requirements for the current endpoint. Add a `declared_params_info` method to the endpoint context that returns parameter names, types, and validation rules.
 
+### N11: Fix `UPGRADING.md` not covering breaking parameter validation changes
+
+The `UPGRADING.md` file documents API-level breaking changes for major version upgrades but omits breaking changes in the parameter validation subsystem (e.g., `params_scope` coercion behavior changes, `mutually_exclusive` semantics). Add a "Validation Changes" section to `UPGRADING.md` for each major version, cross-reference the corresponding `CHANGELOG.md` entries, and update `CONTRIBUTING.md` with a requirement to update `UPGRADING.md` for any validation-related breaking changes.
+
 ## Medium
 
 ### M1: Implement request rate limiting middleware
@@ -109,7 +113,7 @@ Add a `Grape::Middleware::RateLimiter` that limits requests per client based on 
 
 ### M2: Add OpenAPI 3.1 specification generation
 
-Implement automatic OpenAPI 3.1 specification generation from Grape API definitions. Extract route definitions, parameter validations, response types, and descriptions. Support `$ref` components for reusable schemas, security schemes from authentication blocks, and server definitions from mount points. Add a `GET /openapi.json` endpoint. Changes span DSL metadata extraction, a schema builder, and spec rendering.
+Implement automatic OpenAPI 3.1 specification generation from Grape API definitions. Extract route definitions, parameter validations, response types, and descriptions. Support `$ref` components for reusable schemas, security schemes from authentication blocks, and server definitions from mount points. Add a `GET /openapi.json` endpoint. Changes span DSL metadata extraction, a schema builder, and spec rendering. Update `README.md` with OpenAPI generation usage and add documentation to `CONTRIBUTING.md` for maintaining schema accuracy.
 
 ### M3: Implement typed response declaration and validation
 
@@ -142,6 +146,10 @@ Extend the validation system to support full `dry-validation` contracts as an al
 ### M10: Add endpoint-level caching with conditional GET support
 
 Implement response caching with `cache` DSL method supporting TTL, ETag, and Last-Modified strategies. Handle conditional GET (`If-None-Match`, `If-Modified-Since`) returning 304 responses. Support cache key customization and cache store backends (memory, Redis). Changes span `dsl/inside_route.rb`, middleware, and add a `caching/` module.
+
+### M11: Improve CI matrix and Docker-based testing
+
+Extend `.github/workflows/test.yml` with a Ruby version matrix (3.1, 3.2, 3.3) and add Docker-based integration testing using `docker-compose.yml`. Update `Gemfile` with platform-specific dependencies for CI environments, add a `.github/workflows/danger.yml` configuration for automated PR review, configure `.rubocop.yml` with project-specific cop settings for the `lib/grape/` directory, and add CI status badges to `README.md`. Changes span `.github/workflows/test.yml`, `.github/workflows/danger.yml`, `docker-compose.yml`, `Gemfile`, `.rubocop.yml`, and `README.md`.
 
 ## Wide
 
@@ -185,30 +193,6 @@ Add a comprehensive auth framework supporting OAuth2, JWT, API keys, HMAC signin
 
 Implement gRPC service definitions generated from Grape endpoint declarations. Translate REST routes to gRPC methods, parameter schemas to protobuf messages, and response types to gRPC response messages. Support dual serving (REST + gRPC) from the same API definition. Changes span routing, endpoint, serialization, and add a `grpc/` module with protobuf generation and gRPC server integration.
 
-## Non-code focused
+### W11: Overhaul project documentation and release process
 
-### N11: Fix outdated or inconsistent metadata in .rubocop_todo.yml
-
-The project configuration file `.rubocop_todo.yml` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in .rubocop_todo.yml, and update UPGRADING.md to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `.github/workflows/danger.yml`, `.github/workflows/edge.yml`, `.rubocop_todo.yml`, `.coveralls.yml`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Restructure all project documentation: consolidate `UPGRADING.md` with version-specific migration checklists; update `RELEASING.md` with automated release workflow referencing `.github/workflows/edge.yml`; rewrite `CONTRIBUTING.md` with development setup using `docker-compose.yml`, RuboCop compliance guidelines from `.rubocop.yml`, and Danger PR review expectations from `Dangerfile`; update `CHANGELOG.md` format to follow Keep a Changelog specification; add security vulnerability reporting process to `SECURITY.md`; and update `README.md` with badges, quickstart guide, and links to all documentation files. Changes span `README.md`, `CHANGELOG.md`, `CONTRIBUTING.md`, `RELEASING.md`, `UPGRADING.md`, `SECURITY.md`, `grape.gemspec` (metadata links), and `.github/workflows/`.

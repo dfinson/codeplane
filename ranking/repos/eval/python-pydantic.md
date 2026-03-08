@@ -102,6 +102,10 @@ When `Field(examples=[...])` is set, the examples are stored in field metadata b
 
 When `@validate_call` decorates a function, the resulting wrapper in `validate_call_decorator.py` doesn't preserve `__module__`, `__qualname__`, and `__annotations__` from the original function, breaking introspection tools.
 
+### N11: Update `docs/concepts/fields.md` to document the `deprecated` parameter for `Field()`
+
+The `deprecated` parameter added to `Field()` is not reflected in the documentation. Add a section to `docs/concepts/fields.md` covering usage examples, deprecation warning behavior, and JSON Schema output. Update `mkdocs.yml` navigation if needed and cross-reference from `docs/migration.md` for users migrating from manual deprecation patterns.
+
 ## Medium
 
 ### M1: Implement computed fields with dependency tracking
@@ -122,7 +126,7 @@ The JSON Schema output for discriminated unions uses `anyOf` without the OpenAPI
 
 ### M5: Implement custom error message templates for validation errors
 
-Add configurable error message templates per field or per model via `Field(error_messages={...})` and `model_config`. The template system should support variable interpolation (`{input}`, `{field_name}`, `{constraint}`). Changes span `fields.py`, `config.py`, `_generate_schema.py`.
+Add configurable error message templates per field or per model via `Field(error_messages={...})` and `model_config`. The template system should support variable interpolation (`{input}`, `{field_name}`, `{constraint}`). Changes span `fields.py`, `config.py`, `_generate_schema.py`. Update `docs/concepts/validators.md` with error message template documentation and add usage examples to `docs/concepts/fields.md`.
 
 ### M6: Add `TypeAdapter` caching and reuse for repeated type patterns
 
@@ -144,6 +148,10 @@ Add a `validate_many(items: list)` method to `TypeAdapter` that validates all it
 
 Implement schema version tracking via `model_config['schema_version']` with migration functions between versions. When validating data with an older version tag, apply the migration chain before validation. Changes span `config.py`, `main.py`, and `_model_construction.py`.
 
+### M11: Add migration guide and changelog for partial model validation
+
+Create a new section in `docs/migration.md` covering `model_validate_partial()` usage patterns and migration from workaround approaches. Update `docs/concepts/models.md` with partial validation examples and caveats. Add a changelog entry to `HISTORY.md` describing the feature. Update `mkdocs.yml` navigation to surface the partial validation docs.
+
 ## Wide
 
 ### W1: Implement async validation support for I/O-bound validators
@@ -160,7 +168,7 @@ Add `model.model_changes()` that tracks which fields changed since construction,
 
 ### W4: Add multi-format serialization framework
 
-Implement `model.model_dump_yaml()`, `model.model_dump_toml()`, `model.model_dump_msgpack()` with custom serializer registration via `model_config`. Changes span `main.py`, `config.py`, `functional_serializers.py`, `type_adapter.py`, `_internal/_generate_schema.py`, and add format-specific serialization modules.
+Implement `model.model_dump_yaml()`, `model.model_dump_toml()`, `model.model_dump_msgpack()` with custom serializer registration via `model_config`. Changes span `main.py`, `config.py`, `functional_serializers.py`, `type_adapter.py`, `_internal/_generate_schema.py`, and add format-specific serialization modules. Update `docs/concepts/serialization.md` with YAML, TOML, and MsgPack serialization examples and add changelog entries to `HISTORY.md`.
 
 ### W5: Implement pydantic settings with hierarchical configuration sources
 
@@ -186,30 +194,6 @@ Add the ability to define cross-model validation rules where one model's field r
 
 Implement an event system that emits structured validation events (field validated, coercion applied, default used, error raised) to configurable sinks for monitoring and debugging. Changes span `main.py`, `plugin/`, `_generate_schema.py`, `_model_construction.py`, `type_adapter.py`, `config.py`, and add an events module.
 
-## Non-code focused
+### W11: Overhaul CI and documentation for async validation support
 
-### N11: Fix outdated or inconsistent metadata in .hyperlint/.vale.ini
-
-The project configuration file `.hyperlint/.vale.ini` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in .hyperlint/.vale.ini, and update .hyperlint/style_guide_test.md to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `.github/ISSUE_TEMPLATE/bug-v2.yml`, `.github/ISSUE_TEMPLATE/feature_request.yml`, `.hyperlint/.vale.ini`, `.markdownlint.yaml`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Update `.github/workflows/ci.yml` to add an async test matrix covering `asyncio` and `trio` backends. Update `docs/concepts/validators.md` with async validator documentation and usage examples. Add performance comparison notes to `docs/concepts/performance.md`. Update `HISTORY.md` with async validation changelog entries. Update `docs/contributing.md` with async testing guidelines and update `pyproject.toml` with new async test dependencies.

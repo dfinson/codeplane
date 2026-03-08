@@ -60,7 +60,7 @@ src/Whoops/
 
 ## Tasks
 
-30 tasks (10 narrow, 10 medium, 10 wide).
+33 tasks (11 narrow, 11 medium, 11 wide).
 
 ## Narrow
 
@@ -78,7 +78,7 @@ The `Frame` class in `src/Whoops/Exception/Frame.php` tracks file and line numbe
 
 ### N4: Fix `PrettyPageHandler::getEditorHref` not URL-encoding file paths with spaces
 
-In `src/Whoops/Handler/PrettyPageHandler.php`, the `getEditorHref` method generates editor URLs (e.g., `phpstorm://open?file=/path/to/file&line=42`). File paths containing spaces or special characters are not URL-encoded, causing the editor link to break when clicked.
+In `src/Whoops/Handler/PrettyPageHandler.php`, the `getEditorHref` method generates editor URLs (e.g., `phpstorm://open?file=/path/to/file&line=42`). File paths containing spaces or special characters are not URL-encoded, causing the editor link to break when clicked. Update `docs/Open Files In An Editor.md` with the supported editor URL formats and encoding behavior.
 
 ### N5: Fix `Inspector::getFrames` not deduplicating frames from previous exception chain
 
@@ -104,11 +104,15 @@ In `src/Whoops/Run.php`, `silenceErrorsInPaths` uses regex patterns to match fil
 
 The `PrettyPageHandler` always displays the exception's original message. Add `setExceptionMessage(callable $formatter)` that allows transforming or replacing the displayed exception message (e.g., to redact sensitive data from database connection error messages) without modifying the exception itself.
 
+### N11: Fix `docs/` not covering `PrettyPageHandler` custom data table registration
+
+The `docs/API Documentation.md` documents basic handler setup but does not explain how to register custom data tables via `PrettyPageHandler::addDataTable()` or `addDataTableCallback()`. Add a "Custom Data Tables" section to `docs/API Documentation.md`, include examples for common use cases (request context, user info, application config), and cross-reference from `README.md`.
+
 ## Medium
 
 ### M1: Implement dark mode support for `PrettyPageHandler`
 
-Add a dark mode theme to the pretty error page. Detect system preference via `prefers-color-scheme` CSS media query and add a toggle button. Create dark mode CSS variables, update all templates in `Resources/views/` to use CSS custom properties. Add `setTheme('dark'|'light'|'auto')` API method.
+Add a dark mode theme to the pretty error page. Detect system preference via `prefers-color-scheme` CSS media query and add a toggle button. Create dark mode CSS variables, update all templates in `Resources/views/` to use CSS custom properties. Add `setTheme('dark'|'light'|'auto')` API method. Update `README.md` with theme configuration examples and add dark mode screenshots to `docs/API Documentation.md`.
 
 ### M2: Add source code syntax highlighting to the pretty error page
 
@@ -145,6 +149,10 @@ Add multi-language support for the pretty error page's UI labels, section headin
 ### M10: Add custom error page layouts via template overrides
 
 Implement a template override system where users can provide their own HTML templates to replace the default layout. Add `PrettyPageHandler::setTemplate($name, $path)` for individual view replacement and `setLayoutPath($dir)` for complete layout override. Support template inheritance and variable injection. Changes span `PrettyPageHandler`, `TemplateHelper`, and resource path resolution.
+
+### M11: Improve CI and code quality configuration
+
+Extend `.github/workflows/tests.yml` with a PHP version matrix (8.1, 8.2, 8.3, 8.4) and add static analysis steps. Update `.scrutinizer.yml` with code coverage thresholds and quality metrics. Configure `phpunit.xml.dist` with coverage report generation and strict mode. Add `composer.json` scripts section for development commands (test, lint, analyze). Create a `.github/FUNDING.yml` for sponsorship configuration and update `CONTRIBUTING.md` with development setup instructions. Changes span `.github/workflows/tests.yml`, `.scrutinizer.yml`, `phpunit.xml.dist`, `composer.json`, `CONTRIBUTING.md`, and `.github/FUNDING.yml`.
 
 ## Wide
 
@@ -188,30 +196,6 @@ Add distributed tracing support that correlates errors across microservice bound
 
 Implement a progressive error page that loads instantly with critical information and lazily loads additional panels (environment, data tables, full trace) via AJAX. Add performance profiling that measures time spent in each panel's data collection. Support panel prioritization and custom lazy panels. Changes span `PrettyPageHandler`, all templates, `TemplateHelper`, add JavaScript lazy-loading infrastructure, and a profiling module.
 
-## Non-code focused
+### W11: Overhaul documentation with framework integration guides
 
-### N11: Fix outdated or inconsistent metadata in .scrutinizer.yml
-
-The project configuration file `.scrutinizer.yml` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in .scrutinizer.yml, and update docs/Open Files In An Editor.md to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `.github/workflows/tests.yml`, `.github/FUNDING.yml`, `.scrutinizer.yml`, `composer.json`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Restructure all documentation files: expand `docs/Framework Integration.md` with step-by-step guides for Laravel, Symfony, Slim, and Laminas integration including middleware configuration; update `docs/API Documentation.md` with complete handler API reference and configuration examples; rewrite `docs/Replay Errors.md` with production error capture workflows; update `README.md` with quickstart guide, feature matrix, and links to all documentation; add framework-specific data table registration examples to `docs/Open Files In An Editor.md`; update `CONTRIBUTING.md` with documentation contribution guidelines; and add `SECURITY.md` responsible disclosure process for XSS vulnerabilities in error page rendering. Changes span `docs/Framework Integration.md`, `docs/API Documentation.md`, `docs/Replay Errors.md`, `docs/Open Files In An Editor.md`, `README.md`, `CONTRIBUTING.md`, `SECURITY.md`, and `LICENSE.md`.

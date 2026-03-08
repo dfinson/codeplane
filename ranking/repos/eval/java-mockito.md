@@ -63,7 +63,7 @@ mockito-core/src/main/java/org/mockito/
 
 ## Tasks
 
-30 tasks (10 narrow, 10 medium, 10 wide).
+33 tasks (11 narrow, 11 medium, 11 wide).
 
 ## Narrow
 
@@ -77,7 +77,7 @@ When using `inOrder.verify(mock).methodA()` followed by `inOrder.verify(mock).me
 
 ### N3: Add `verify(mock, description("..."))` to include custom message in failure output
 
-Verification failures print the expected/actual invocation counts but do not support custom descriptive messages. Add a `description(String)` method that can be combined with `times()`, `atLeast()`, etc., to prepend user-provided context to the failure message.
+Verification failures print the expected/actual invocation counts but do not support custom descriptive messages. Add a `description(String)` method that can be combined with `times()`, `atLeast()`, etc., to prepend user-provided context to the failure message. Document the new API in `doc/release-notes/official.md`.
 
 ### N4: Fix `MockedStatic` not restoring original behavior on `close()` when nested
 
@@ -107,6 +107,10 @@ The existing `RETURNS_EMPTY_COLLECTIONS` answer returns empty lists/maps/sets bu
 
 `verifyNoInteractions(mock)` correctly fails when the mock was invoked in the test, but when the mock was only used during `when(mock.method()).thenReturn(...)` setup and never invoked in the actual test code, it still passes. The `when()` call itself records an invocation that should be excluded from the "no interactions" check.
 
+### N11: Fix `doc/release-notes/official.md` not documenting deprecated API removals across major versions
+
+The `doc/release-notes/official.md` file lists new features per release but omits entries for APIs removed after deprecation (e.g., removed `Matchers` class, legacy `MockitoJUnitRunner`). Add a "Removed" section per major version in `doc/release-notes/official.md`, cross-reference the original deprecation notices, and update `.github/ISSUE_TEMPLATE.md` with a migration assistance request template for users affected by removals.
+
 ## Medium
 
 ### M1: Implement argument capture for consecutive stubbing calls
@@ -127,7 +131,7 @@ Implement `BDDMockito.then(mock).should().method(captor.capture())` that combine
 
 ### M5: Implement mock serialization with Kryo support
 
-Mocks configured with `withSettings().serializable()` use Java's built-in serialization, which is slow and fails for classes without no-arg constructors. Add Kryo serialization support via `withSettings().serializable(SerializableMode.KRYO)`. Changes span `MockSettings`, mock creation in ByteBuddy, and serialization handling in `InvocationContainerImpl`.
+Mocks configured with `withSettings().serializable()` use Java's built-in serialization, which is slow and fails for classes without no-arg constructors. Add Kryo serialization support via `withSettings().serializable(SerializableMode.KRYO)`. Changes span `MockSettings`, mock creation in ByteBuddy, and serialization handling in `InvocationContainerImpl`. Add the Kryo dependency to `build.gradle.kts` and update `README.md` with serialization mode documentation.
 
 ### M6: Add invocation listener with filtering support
 
@@ -148,6 +152,10 @@ When a spy of a subclass is created, stubs declared on a parent class spy are no
 ### M10: Add `MockedConstruction` support for capturing constructor arguments
 
 `MockedConstruction` intercepts constructor calls but does not provide access to the constructor arguments. Add `MockedConstruction.Context.arguments()` that returns the argument list for each construction. Changes span `MockedConstructionImpl`, ByteBuddy instrumentation in `creation/bytebuddy/`, and the `MockedConstruction.Context` interface.
+
+### M11: Improve build and CI configuration for cross-JDK testing
+
+Extend `.github/workflows/ci.yml` to test against JDK 11, 17, and 21 using a matrix strategy. Update `build.gradle.kts` to configure cross-compilation targets and source/target compatibility. Add JDK compatibility documentation to `.github/CONTRIBUTING.md`, configure Dependabot schedule in `.github/dependabot.yml` for Gradle dependency updates, and update `gradle.properties` with reproducible build settings.
 
 ## Wide
 
@@ -191,30 +199,6 @@ Add `@AutoMock` annotation that generates mock configurations from interface con
 
 Implement a source-code transformation tool that migrates EasyMock `expect()`/`replay()` and PowerMock `@PrepareForTest` patterns to Mockito equivalents. Changes span a new `migration/` module, AST parsing utilities, pattern matching for EasyMock/PowerMock APIs, code generation for Mockito equivalents, and CLI tooling.
 
-## Non-code focused
+### W11: Create comprehensive contributor documentation and design doc system
 
-### N11: Fix outdated or inconsistent metadata in gradle/libs.versions.toml
-
-The project configuration file `gradle/libs.versions.toml` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in gradle/libs.versions.toml, and update SECURITY.md to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `.github/dependabot.yml`, `.github/workflows/ci.yml`, `gradle/libs.versions.toml`, `config/checkstyle/checkstyle.xml`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Establish a structured project documentation system: expand `doc/design-docs/` with design doc templates and existing architectural decisions (mock creation pipeline, stubbing resolution, ByteBuddy integration strategy); rewrite `.github/CONTRIBUTING.md` with build setup, test execution, and PR review guidelines; update `.github/ISSUE_TEMPLATE.md` with separate templates for bug reports, feature requests, and design proposals; add a `SECURITY.md` responsible disclosure process; update `README.md` with architecture overview and links to design docs; and create `.github/PULL_REQUEST_TEMPLATE.md` with a changelog and documentation checklist. Changes span `doc/design-docs/`, `.github/CONTRIBUTING.md`, `.github/ISSUE_TEMPLATE.md`, `.github/PULL_REQUEST_TEMPLATE.md`, `SECURITY.md`, and `README.md`.

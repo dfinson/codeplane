@@ -50,7 +50,7 @@ src/catch2/
 
 ## Tasks
 
-30 tasks (10 narrow, 10 medium, 10 wide).
+33 tasks (11 narrow, 11 medium, 11 wide).
 
 ## Narrow
 
@@ -68,7 +68,7 @@ The benchmark subsystem in `benchmark/catch_benchmark.hpp` is always compiled ev
 
 ### N4: Fix JSON reporter not escaping Unicode control characters
 
-In `internal/catch_jsonwriter.cpp`, the JSON string escaping handles quotes and backslashes but does not escape Unicode control characters (U+0000–U+001F) as required by the JSON specification. Characters like `\t` and `\n` embedded in test names produce invalid JSON output.
+In `internal/catch_jsonwriter.cpp`, the JSON string escaping handles quotes and backslashes but does not escape Unicode control characters (U+0000–U+001F) as required by the JSON specification. Characters like `\t` and `\n` embedded in test names produce invalid JSON output. Update `docs/reporters.md` with JSON reporter output format specification.
 
 ### N5: Fix `StringRef` comparison not being `constexpr` when possible
 
@@ -94,6 +94,10 @@ The TAP reporter in `reporters/catch_reporter_tap.cpp` outputs `ok`/`not ok` lin
 
 In `internal/catch_sharding.hpp`, the `createShard` function uses modulo-based distribution that can produce shards with significantly different test counts when the total is not evenly divisible. The last shard may get up to `shard_count - 1` fewer tests than others.
 
+### N11: Fix `docs/release-notes.md` not documenting matcher API breaking changes
+
+The `docs/release-notes.md` file does not flag breaking changes in the matcher API (e.g., `WithinAbsMatcher` constructor signature changes, removed matcher aliases) across major versions. Add a "Breaking Changes" section per release in `docs/release-notes.md`, update `docs/matchers.md` with migration notes for deprecated matcher APIs, and cross-reference from `docs/migrate-v2-to-v3.md`.
+
 ## Medium
 
 ### M1: Implement parametrized test case registration
@@ -118,7 +122,7 @@ Add `PARALLEL_SECTION("name")` that allows independent sections within a test ca
 
 ### M6: Add JUnit reporter support for test suite properties and system-out
 
-Extend `reporters/catch_reporter_junit.cpp` to emit `<properties>` elements from user-defined metadata and capture `<system-out>` / `<system-err>` per test case using the output redirect in `internal/catch_output_redirect.cpp`. Requires adding a metadata API accessible from test cases and integrating it with the JUnit XML writer.
+Extend `reporters/catch_reporter_junit.cpp` to emit `<properties>` elements from user-defined metadata and capture `<system-out>` / `<system-err>` per test case using the output redirect in `internal/catch_output_redirect.cpp`. Requires adding a metadata API accessible from test cases and integrating it with the JUnit XML writer. Update `docs/reporters.md` with JUnit reporter properties documentation and CI integration examples.
 
 ### M7: Implement generator shrinking for property-based testing
 
@@ -135,6 +139,10 @@ Add `--load-reporter <path>` CLI option to dynamically load reporter shared libr
 ### M10: Add source location tracking for matchers in failure messages
 
 When a matcher assertion fails, the error message shows the expression but not where the matcher was defined. Extend `matchers/catch_matchers.hpp` to capture `std::source_location` at matcher construction, and modify the assertion handler in `internal/catch_assertion_handler.cpp` to include the matcher definition site in the failure output.
+
+### M11: Improve CMake and build system configuration
+
+Overhaul the build system configuration: update `CMakeLists.txt` with modern CMake 3.20+ `FetchContent` patterns and target-based dependency management; add `CMakePresets.json` presets for common build configurations (debug, release, sanitizers, coverage); configure `meson.build` to match CMake feature parity; update `Doxyfile` with project-specific settings for API documentation generation; add `codecov.yml` coverage thresholds and path exclusions; and update `appveyor.yml` Windows CI with MSVC and MinGW matrix. Changes span `CMakeLists.txt`, `CMakePresets.json`, `meson.build`, `meson_options.txt`, `Doxyfile`, `codecov.yml`, `appveyor.yml`, and `CMake/` directory.
 
 ## Wide
 
@@ -178,30 +186,6 @@ Add `APPROVE(value)` macro that on first run saves the output as approved baseli
 
 Implement `--crosscompile-run <command>` that executes tests on a remote target or emulator, collects results via structured output, and presents them locally. Requires splitting the runner into compile-side and execute-side components in `internal/`, a structured result protocol (extending JSON reporter), result deserialization and re-emission through local reporters, timeout handling for remote execution, and CLI integration for target configuration.
 
-## Non-code focused
+### W11: Overhaul Doxygen and Markdown documentation
 
-### N11: Fix outdated or inconsistent metadata in appveyor.yml
-
-The project configuration file `appveyor.yml` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in appveyor.yml, and update MAINTAINERS.md to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `docs/commercial-users.md`, `docs/ci-and-misc.md`, `appveyor.yml`, `CMakePresets.json`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Comprehensively restructure the project's documentation: regenerate Doxygen API documentation from updated `Doxyfile` with complete `src/catch2/` coverage; update `docs/tutorial.md` and `docs/test-cases-and-sections.md` with modern C++17/20 patterns; consolidate `docs/cmake-integration.md` with `CMakeLists.txt` examples for `FetchContent`, `find_package`, and submodule workflows; update `docs/command-line.md` with all current CLI options; add a `docs/ci-and-misc.md` section for `codecov.yml` and `appveyor.yml` CI integration; update `README.md` with feature matrix and quick-reference installation instructions; refresh `CODE_OF_CONDUCT.md` and `MAINTAINERS.md`; and add `SECURITY.md` vulnerability reporting process. Changes span `docs/` (tutorial.md, matchers.md, reporters.md, cmake-integration.md, command-line.md, ci-and-misc.md, release-notes.md, contributing.md), `Doxyfile`, `README.md`, `CODE_OF_CONDUCT.md`, `MAINTAINERS.md`, and `SECURITY.md`.

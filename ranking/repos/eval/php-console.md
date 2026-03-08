@@ -87,7 +87,7 @@ console/
 
 ## Tasks
 
-30 tasks (10 narrow, 10 medium, 10 wide).
+33 tasks (11 narrow, 11 medium, 11 wide).
 
 ## Narrow
 
@@ -97,7 +97,7 @@ In `Formatter/OutputFormatterStyleStack.php`, when processing `<info>outer<error
 
 ### N2: Fix `ProgressBar` not recalculating terminal width on window resize
 
-In `Helper/ProgressBar.php`, the terminal width is captured once during `start()` via `Terminal::getWidth()`. If the terminal is resized mid-progress, the bar format overflows or underflows. The width should be re-queried on each `advance()` call or on a configurable interval.
+In `Helper/ProgressBar.php`, the terminal width is captured once during `start()` via `Terminal::getWidth()`. If the terminal is resized mid-progress, the bar format overflows or underflows. The width should be re-queried on each `advance()` call or on a configurable interval. Document the resize behavior in `README.md`.
 
 ### N3: Fix `ArgvInput` not handling `--option=` (empty value) for required-value options
 
@@ -131,6 +131,10 @@ In `Helper/OutputWrapper.php`, the `wrap()` method uses `wordwrap()` which opera
 
 In `Cursor.php`, methods like `moveUp()`, `moveToColumn()`, and `clearLine()` write ANSI escape sequences to the output but do not call `flush()`. When the output stream is buffered, cursor movements are delayed until the next explicit write, causing visual glitches in interactive commands.
 
+### N11: Fix `CHANGELOG.md` unreleased section not following Keep a Changelog format
+
+The `CHANGELOG.md` uses a freeform format for unreleased changes instead of the Keep a Changelog specification (Added/Changed/Deprecated/Removed/Fixed/Security categories). Restructure existing `CHANGELOG.md` entries into the standardized format, update `.github/PULL_REQUEST_TEMPLATE.md` to require a changelog category selection, and add a changelog validation step referencing `composer.json` version metadata.
+
 ## Medium
 
 ### M1: Add table column alignment and numeric formatting
@@ -139,7 +143,7 @@ Extend `Helper/Table.php` to support per-column alignment (`left`, `right`, `cen
 
 ### M2: Implement command grouping with collapsible sections in list output
 
-Add `#[AsCommand(group: 'database')]` support so `list` command displays commands in collapsible groups. Changes span `Attribute/AsCommand.php` (group property), `Command/Command.php` (group accessor), `Application.php` (group collection during `all()`), `Descriptor/TextDescriptor.php` (grouped rendering), and `Command/ListCommand.php` (group filter option).
+Add `#[AsCommand(group: 'database')]` support so `list` command displays commands in collapsible groups. Changes span `Attribute/AsCommand.php` (group property), `Command/Command.php` (group accessor), `Application.php` (group collection during `all()`), `Descriptor/TextDescriptor.php` (grouped rendering), and `Command/ListCommand.php` (group filter option). Update `composer.json` autoload configuration for any new namespace additions.
 
 ### M3: Add progress bar multi-bar support for parallel operations
 
@@ -172,6 +176,10 @@ Extend the completion system to support async value providers that fetch suggest
 ### M10: Implement colored diff output helper for text comparison
 
 Add `Helper/DiffHelper.php` that renders side-by-side or unified diffs with ANSI coloring. Changes span a new `Helper/DiffHelper.php` (diff algorithm, formatting), `Style/SymfonyStyle.php` (diff rendering method), `Formatter/OutputFormatterStyle.php` (diff-specific styles: added, removed, changed), and `Helper/HelperSet.php` (diff helper registration).
+
+### M11: Improve CI configuration and PR review process
+
+Extend `.github/workflows/close-pull-request.yml` with a comprehensive CI pipeline: add PHP version matrix testing (8.1, 8.2, 8.3), integrate `phpunit.xml.dist` test execution, and add static analysis steps. Create `.github/PULL_REQUEST_TEMPLATE.md` with checklist items for tests, changelog, and documentation. Update `composer.json` with `scripts` section for development commands (test, lint, format). Add `.github/copilot-instructions.md` with project conventions for the `Descriptor/`, `Helper/`, and `Command/` directories. Changes span `.github/workflows/`, `.github/PULL_REQUEST_TEMPLATE.md`, `.github/copilot-instructions.md`, `composer.json`, and `phpunit.xml.dist`.
 
 ## Wide
 
@@ -215,30 +223,6 @@ Add `#[AsCommand(since: '5.0', deprecatedAt: '6.0', replacedBy: 'new:command')]`
 
 Implement `Application::dispatch('long:command', $args)` that serializes command invocations to a message queue (via Symfony Messenger) and processes them asynchronously with result collection. Changes span `Application.php` (dispatch mode, result collector), `Messenger/RunCommandMessage.php` (enhanced serialization), `Messenger/RunCommandMessageHandler.php` (async execution), `Command/Command.php` (async result reporting), `Output/BufferedOutput.php` (serializable output capture), `Tester/CommandTester.php` (async testing), and a new `Async/` directory (AsyncResult, ResultCollector, CommandSerializer).
 
-## Non-code focused
+### W11: Generate comprehensive descriptor-based documentation
 
-### N11: Fix outdated or inconsistent metadata in Tests/Fixtures/input_argument_4.json
-
-The project configuration file `Tests/Fixtures/input_argument_4.json` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in Tests/Fixtures/input_argument_4.json, and update README.md to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `.github/workflows/close-pull-request.yml`, `.github/copilot-instructions.md`, `Tests/Fixtures/input_argument_4.json`, `Tests/Fixtures/input_option_with_default_inf_value.xml`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Leverage the existing `Descriptor/` system (JSON, XML, Markdown, ReStructuredText, Text descriptors) to auto-generate project documentation: add a `GenerateDocsCommand` that uses `MarkdownDescriptor` and `ReStructuredTextDescriptor` to produce complete command reference documentation from registered commands; create `Resources/doc/` with generated and hand-written guides; update `README.md` with usage examples for all major features (ProgressBar, Table, TreeHelper, SymfonyStyle, shell completion); add `CHANGELOG.md` generation validation to CI; and document the full descriptor format in a developer guide. Changes span `Descriptor/`, `Resources/`, `README.md`, `CHANGELOG.md`, `composer.json` (scripts), and `.github/workflows/`.

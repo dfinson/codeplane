@@ -50,13 +50,13 @@ src/AutoMapper/
 
 ## Tasks
 
-30 tasks (10 narrow, 10 medium, 10 wide).
+33 tasks (11 narrow, 11 medium, 11 wide).
 
 ## Narrow
 
 ### N1: Fix `ReverseMap` not honoring `ForPath` mappings
 
-When a `TypeMapConfiguration` declares `ForPath(dest => dest.Address.City, opt => opt.MapFrom(src => src.City))` and then calls `ReverseMap()`, the reverse map does not generate the correct source expression for the nested path. The `PathMap` entries are skipped when `MappingExpression.ReverseMapExpression` iterates `PathMaps` in `TypeMapConfiguration`.
+When a `TypeMapConfiguration` declares `ForPath(dest => dest.Address.City, opt => opt.MapFrom(src => src.City))` and then calls `ReverseMap()`, the reverse map does not generate the correct source expression for the nested path. The `PathMap` entries are skipped when `MappingExpression.ReverseMapExpression` iterates `PathMaps` in `TypeMapConfiguration`. Update `docs/source/` with corrected `ForPath` + `ReverseMap` usage examples.
 
 ### N2: Fix `NullsafeQueryRewriter` dropping method-call arguments for parameterised projections
 
@@ -94,6 +94,10 @@ In `Internal/LockingConcurrentDictionary.cs`, `GetOrAdd` acquires a lock per buc
 
 In `Execution/TypeMapPlanBuilder.cs`, when building the map expression for `Nullable<T> → T`, the builder does not insert a `HasValue` guard. If the source is `null`, the compiled delegate throws `InvalidOperationException` instead of returning `default(T)` or applying the configured null substitution.
 
+### N11: Fix `ISSUE_TEMPLATE.md` missing fields for performance regression reports
+
+The `ISSUE_TEMPLATE.md` at the repository root only has sections for bug description, reproduction steps, and expected behavior. Add a performance regression template with fields for mapping configuration, benchmark results (before/after), profiling output, and AutoMapper version. Also update `CONTRIBUTING.md` with guidance on submitting performance-focused PRs and add a benchmarking section referencing the existing benchmark project.
+
 ## Medium
 
 ### M1: Add inheritance-chain mapping with automatic base-type map inclusion
@@ -106,7 +110,7 @@ When `ReverseMap` is used with collection members (e.g., `List<ChildDto> → Lis
 
 ### M3: Add mapping diagnostic trace for debugging complex type maps
 
-Implement a `MapperConfiguration.BuildExecutionPlan(typeof(Src), typeof(Dest))` diagnostic that returns a human-readable tree of the compiled mapping plan: source member → destination member, value resolvers applied, type converters, conditions, and null substitutions. Changes span `TypeMapPlanBuilder`, `ExpressionBuilder`, `ProfileMap`, and a new `DiagnosticPlan` model.
+Implement a `MapperConfiguration.BuildExecutionPlan(typeof(Src), typeof(Dest))` diagnostic that returns a human-readable tree of the compiled mapping plan: source member → destination member, value resolvers applied, type converters, conditions, and null substitutions. Changes span `TypeMapPlanBuilder`, `ExpressionBuilder`, `ProfileMap`, and a new `DiagnosticPlan` model. Update `README.md` with diagnostic trace usage examples and add a troubleshooting guide to `docs/source/`.
 
 ### M4: Implement conditional profile activation based on runtime context
 
@@ -135,6 +139,10 @@ The current `Mapper.Map<TDest>(object source)` does a runtime type lookup every 
 ### M10: Implement source-member auditing to detect unused source properties
 
 Add `MapperConfiguration.FindUnmappedSourceMembers(typeof(Src), typeof(Dest))` that returns source properties not consumed by any `PropertyMap`, `PathMap`, or `ConstructorMap`. Changes span `TypeMap` (to track consumed source members), `ConfigurationValidator`, and expose via `MapperConfiguration`.
+
+### M11: Add ReadTheDocs documentation build pipeline
+
+Configure a documentation build pipeline using the existing `docs/` Sphinx project and `.readthedocs.yml`. Update `docs/requirements.txt` with pinned Sphinx dependencies, add API reference auto-generation from XML doc comments in `docs/source/`, configure versioned documentation builds tied to release tags in `.github/workflows/ci.yml`, and update `README.md` with a documentation badge and links to the hosted documentation site. Changes span `docs/`, `.readthedocs.yml`, `README.md`, `Directory.Build.props` (XML doc generation), and `.github/workflows/`.
 
 ## Wide
 
@@ -178,30 +186,6 @@ Extend `Conventions.cs` to support fully pluggable naming strategies beyond the 
 
 Implement `MapperConfiguration.LoadProfile(Uri endpoint)` that fetches serialized profile definitions from a remote service, deserializes type maps, and merges them into the active configuration. Changes span `MapperConfiguration`, `Profile` (serialization/deserialization), `TypeMapConfiguration`, `ProfileMap`, `ServiceCollectionExtensions` (hot-reload registration), and a new `Remote/` module.
 
-## Non-code focused
+### W11: Implement comprehensive API documentation with versioned doc site
 
-### N11: Fix outdated or inconsistent metadata in .vscode/mcp.json
-
-The project configuration file `.vscode/mcp.json` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in .vscode/mcp.json, and update docs/source/Open-Generics.md to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `.github/workflows/lock.yml`, `.github/workflows/ci.yml`, `.vscode/mcp.json`, `docs/source/Open-Generics.md`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Overhaul the project's documentation: build a versioned doc site from `docs/source/` covering all mapping features (profiles, conventions, annotations, projections, value resolvers, type converters); add a migration guide from earlier AutoMapper versions; update `CONTRIBUTING.md` with documentation contribution guidelines; configure `docs/Makefile` for local doc builds; add `Directory.Build.props` settings for XML documentation generation across all projects; update `.readthedocs.yml` with build matrix for multiple framework targets; and link the doc site from `README.md` and `nuget.config` package metadata. Changes span `docs/`, `CONTRIBUTING.md`, `README.md`, `ISSUE_TEMPLATE.md`, `Directory.Build.props`, `.readthedocs.yml`, and `.github/workflows/`.

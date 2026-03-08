@@ -97,11 +97,15 @@ Tests need a way to register cleanup callbacks that run after the test completes
 
 When `vi.mock('./module')` is used alongside `const mod = await import('./module')`, the mock factory isn't applied because the hoisting transform in `packages/vitest/src/node/plugins/` doesn't intercept dynamic `import()` calls following `vi.mock()`.
 
+### N11: Update CLI documentation for the `--fail-on-flaky` flag
+
+The `--fail-on-flaky` CLI flag is undocumented. Add usage examples and behavior description to `docs/guide/cli.md`. Update `docs/guide/filtering.md` with flaky test handling guidance. Add a configuration reference entry in `docs/config/retry.md` covering the interaction between retry settings and flaky detection.
+
 ## Medium
 
 ### M1: Implement test tagging and tag-based filtering
 
-Add `test.tag('slow', 'integration')` and `--tags slow --exclude-tags integration` CLI filtering. Changes span `packages/runner/src/collect.ts` for tag collection, `packages/vitest/src/node/tags.ts` for filtering, `packages/vitest/src/node/cli/` for CLI options, and reporter output.
+Add `test.tag('slow', 'integration')` and `--tags slow --exclude-tags integration` CLI filtering. Changes span `packages/runner/src/collect.ts` for tag collection, `packages/vitest/src/node/tags.ts` for filtering, `packages/vitest/src/node/cli/` for CLI options, and reporter output. Update `docs/guide/test-tags.md` and `docs/config/tags.md` with tag filtering documentation, configuration reference, and usage examples.
 
 ### M2: Add parallel suite execution within a single test file
 
@@ -139,6 +143,10 @@ Add `globalSetup` files that can export resources accessible to all test files v
 
 Implement `--changed` mode that uses the Vite module graph to determine which test files are affected by source changes, running only impacted tests. Changes span `packages/vitest/src/node/git.ts` for change detection, `packages/vitest/src/node/vite.ts` for module graph traversal, and `packages/vitest/src/node/specifications.ts` for test selection.
 
+### M11: Add contributor documentation and CI validation for test tagging
+
+Update `CONTRIBUTING.md` with tag system development guidelines and architecture overview. Add advanced tag filtering examples to `docs/guide/test-tags.md` covering tag composition and exclusion patterns. Update tag-related configuration documentation in `docs/config/tags.md` with all available options. Add a CI validation job in `.github/workflows/ci.yml` that runs the tag-filtered test suite.
+
 ## Wide
 
 ### W1: Implement distributed test execution across multiple machines
@@ -151,7 +159,7 @@ Implement screenshot comparison for browser tests: capture, diff against baselin
 
 ### W3: Implement test analytics and trend tracking
 
-Add persistent test result storage with historical trend analysis: flaky test detection, duration trends, failure rate tracking, and test health dashboards. Changes span `packages/vitest/src/node/reporters/` for data collection, `packages/vitest/src/node/cache/` for storage, `packages/ui/` for dashboard views, `packages/vitest/src/node/core.ts` for aggregation, `packages/ws-client/src/` for live updates, and add analytics infrastructure.
+Add persistent test result storage with historical trend analysis: flaky test detection, duration trends, failure rate tracking, and test health dashboards. Changes span `packages/vitest/src/node/reporters/` for data collection, `packages/vitest/src/node/cache/` for storage, `packages/ui/` for dashboard views, `packages/vitest/src/node/core.ts` for aggregation, `packages/ws-client/src/` for live updates, and add analytics infrastructure. Add an analytics dashboard setup guide to `docs/guide/` and a CI workflow for metrics collection in `.github/workflows/ci.yml`.
 
 ### W4: Add contract testing framework for API boundary validation
 
@@ -181,30 +189,6 @@ Add tools to migrate snapshot files between serializer versions, handle format c
 
 Implement cross-project test execution for monorepos: shared configuration, project dependency ordering, cross-project coverage, and unified reporting. Changes span `packages/vitest/src/node/core.ts` for workspace coordination, `packages/vitest/src/node/projects/` for project resolution, `packages/vitest/src/node/config/` for workspace config, `packages/vitest/src/node/reporters/` for merged output, `packages/coverage-v8/src/` for cross-project coverage, and `packages/vitest/src/node/pools/` for project isolation.
 
-## Non-code focused
+### W11: Overhaul documentation and CI for distributed test execution
 
-### N11: Fix outdated or inconsistent metadata in netlify.toml
-
-The project configuration file `netlify.toml` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in netlify.toml, and update .claude/agents/vitest-test-writer.md to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `docs/guide/recipes.md`, `.github/ISSUE_TEMPLATE/bug_report.yml`, `netlify.toml`, `pnpm-lock.yaml`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Add a distributed execution guide to `docs/guide/` covering coordinator/worker setup and deployment topologies. Add distributed configuration reference to `docs/config/`. Update `.github/workflows/ci.yml` with a multi-machine distributed test job. Update `CONTRIBUTING.md` with distributed development setup instructions. Update `pnpm-workspace.yaml` to include the distributed execution package and update `netlify.toml` for the new documentation pages.

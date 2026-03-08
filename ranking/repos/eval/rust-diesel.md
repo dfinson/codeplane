@@ -49,7 +49,7 @@ diesel/
 
 ## Tasks
 
-30 tasks (10 narrow, 10 medium, 10 wide).
+33 tasks (11 narrow, 11 medium, 11 wide).
 
 ## Narrow
 
@@ -75,7 +75,7 @@ The `CacheSize` enum in `connection/mod.rs` supports `Disabled` and `Fixed(usize
 
 ### N6: Fix `FrameCollection::filter` in `diesel_cli` schema inference skipping composite foreign keys
 
-In `diesel_cli/src/infer_schema_internals/foreign_keys.rs`, when inferring foreign key relationships that span multiple columns (composite keys), only the first column is captured. The `remove_unsafe_foreign_keys_for_codegen` function groups by constraint name but doesn't preserve multi-column mappings.
+In `diesel_cli/src/infer_schema_internals/foreign_keys.rs`, when inferring foreign key relationships that span multiple columns (composite keys), only the first column is captured. The `remove_unsafe_foreign_keys_for_codegen` function groups by constraint name but doesn't preserve multi-column mappings. Update `guide_drafts/migration_guide.md` to document composite foreign key handling.
 
 ### N7: Add `is not distinct from` expression support for PostgreSQL
 
@@ -93,6 +93,10 @@ The query builder supports `INSERT`, `UPDATE`, `DELETE`, and `SELECT` but not `T
 
 In `diesel_cli/src/database.rs`, `InferConnection::from_url` parses the database URL but strips query parameters like `sslmode=require` and `sslcert=...`. The CLI's schema inference connects without SSL even when the database requires it.
 
+### N11: Fix `CHANGELOG.md` missing migration guidance section for breaking SQLite changes
+
+The `CHANGELOG.md` documents breaking changes as bullet points but lacks structured migration guidance for SQLite-specific breaking changes (e.g., RETURNING clause behavior changes, WAL mode defaults). Add a "Migration Guide" subsection per release in `CHANGELOG.md`, cross-reference the corresponding `guide_drafts/migration_guide.md` content, and update `CONTRIBUTING.md` to require migration notes for any breaking change PR.
+
 ## Medium
 
 ### M1: Implement batch insert with automatic chunking for SQLite
@@ -109,7 +113,7 @@ PostgreSQL supports `LATERAL JOIN` which allows subqueries in `FROM` to referenc
 
 ### M4: Add schema migration diffing to `diesel_cli`
 
-Implement a `diesel migration diff` command in `diesel_cli` that compares the current database schema against the expected schema from migration files. Add a `diff_schema.rs` module that queries information_schema, compares against `print_schema` output, and reports missing tables, columns, indices, and type mismatches.
+Implement a `diesel migration diff` command in `diesel_cli` that compares the current database schema against the expected schema from migration files. Add a `diff_schema.rs` module that queries information_schema, compares against `print_schema` output, and reports missing tables, columns, indices, and type mismatches. Add CI workflow steps in `.github/workflows/ci.yml` to run migration diff checks, and update `CONTRIBUTING.md` with instructions for validating schema changes.
 
 ### M5: Implement connection health checking for the r2d2 pool integration
 
@@ -134,6 +138,10 @@ The existing `CopyToBuffer` in `pg/connection/copy.rs` reads raw bytes. Implemen
 ### M10: Add stored procedure and function call support
 
 Diesel supports `sql_function!` for SQL functions in expressions but not `CALL` for stored procedures or standalone `SELECT function()`. Implement a `call_procedure` DSL function that generates `CALL proc_name(args)` for MySQL/PostgreSQL and handles output parameters. Add return type mapping for functions that return tables.
+
+### M11: Add CI workflow for cross-database integration testing with Docker Compose
+
+Create a unified CI pipeline using `docker-compose.yml` to spin up PostgreSQL, MySQL, and SQLite test environments. Extend `.github/workflows/ci.yml` with a matrix strategy that runs the full test suite against each backend. Update `.env.sample` with documented environment variables for each database, add a Docker-based development setup guide to `CONTRIBUTING.md`, and configure `docker/` with backend-specific initialization scripts.
 
 ## Wide
 
@@ -177,30 +185,6 @@ Add tenant-aware query building that automatically injects tenant ID filters on 
 
 Implement a schema registry that tracks schema versions, validates application compatibility with the current database schema, and supports blue-green deployment scenarios. Add schema fingerprinting, compatibility matrices, and automatic migration path computation. Changes span `diesel_cli` (registry commands), `diesel_migrations` (version tracking), `connection/` (compatibility check on connect), and add a `schema_registry/` module.
 
-## Non-code focused
+### W11: Overhaul contributor documentation and developer guides
 
-### N11: Fix outdated or inconsistent metadata in diesel/Cargo.toml
-
-The project configuration file `diesel/Cargo.toml` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in diesel/Cargo.toml, and update diesel/README.md to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `.github/ISSUE_TEMPLATE/bug_report.yaml`, `.github/ISSUE_TEMPLATE/config.yml`, `diesel/Cargo.toml`, `Cargo.toml`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Restructure the project's non-code documentation: consolidate `guide_drafts/` drafts (README.md, backend_installation.md, custom_types.md, migration_guide.md, trait_derives.md) into published documentation linked from `README.md`; update `CONTRIBUTING.md` with build instructions for all three backends using `docker-compose.yml`; add architecture decision records in a new `docs/adr/` directory; update `code_of_conduct.md` to the latest Contributor Covenant version; and add a `RELEASING.md` with the release workflow referencing `.github/workflows/release.yml`. Changes span `guide_drafts/`, `CONTRIBUTING.md`, `README.md`, `code_of_conduct.md`, `docker-compose.yml`, and `.github/workflows/`.

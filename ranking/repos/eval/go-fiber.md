@@ -122,6 +122,10 @@ The response interface in `res.go` supports `JSON()`, `XML()`, and `CBOR()` but 
 
 When session configuration changes cookie attributes (e.g., `MaxAge`) between requests, calling `session.Save()` in `middleware/session/` writes the session data but uses the original cookie attributes from session creation rather than current configuration.
 
+### N11: Update `docs/guide/error-handling.md` to document the `OnError` lifecycle hook
+
+The `OnError` hook added to the hooks system is not documented. Add a section to `docs/guide/error-handling.md` covering hook registration, callback signature, and usage examples. Cross-reference from `docs/whats_new.md` and `docs/intro.md`. Update `.github/CONTRIBUTING.md` with error hook development guidelines.
+
 ## Medium
 
 ### M1: Implement request body streaming for large file uploads
@@ -154,7 +158,7 @@ Add WebSocket handling with connection grouping, room join/leave, and broadcast 
 
 ### M8: Add structured error responses with problem details (RFC 9457)
 
-Implement RFC 9457 Problem Details error responses: type URI, status, title, detail, and extension fields. Changes span `error.go` for `ProblemDetail` type, `app.go` for problem-details-aware error handler, `ctx.go` for problem response helpers, and `middleware/recover/` for panic-to-problem conversion.
+Implement RFC 9457 Problem Details error responses: type URI, status, title, detail, and extension fields. Changes span `error.go` for `ProblemDetail` type, `app.go` for problem-details-aware error handler, `ctx.go` for problem response helpers, and `middleware/recover/` for panic-to-problem conversion. Update `docs/guide/error-handling.md` with Problem Details documentation, response format examples, and migration guidance from plain error strings.
 
 ### M9: Implement server-sent events (SSE) support
 
@@ -163,6 +167,10 @@ Add `c.SSEvent()` for sending server-sent events with proper `text/event-stream`
 ### M10: Add request tracing with OpenTelemetry integration
 
 Implement distributed tracing middleware that creates spans for request handling, propagates trace context, and records attributes. Changes span `middleware/` for a new `otel/` package, `ctx.go` for trace context propagation, `client/hooks.go` for outgoing request span creation, and `router.go` for span naming from route patterns.
+
+### M11: Add middleware documentation and CI validation for request validation
+
+Update `docs/guide/validation.md` with struct tag validation rules, supported constraint types, and error response format examples. Add a new `docs/middleware/validator.md` page with middleware configuration and custom rule registration. Update `.github/workflows/test.yml` with a validation middleware test job. Update `.github/CONTRIBUTING.md` with middleware development and testing guidelines.
 
 ## Wide
 
@@ -180,7 +188,7 @@ Add tenant-aware request processing: per-tenant middleware stacks, isolated stat
 
 ### W4: Add real-time metrics and monitoring dashboard
 
-Implement request metrics collection (latency histograms, error rates, route-level stats) with a built-in dashboard. Changes span `app.go` for metrics collection, `ctx.go` for request timing, `router.go` for route-level metrics, `middleware/logger/` for metric-aware logging, `hooks.go` for metric lifecycle, `middleware/` for a metrics package, and add dashboard UI serving.
+Implement request metrics collection (latency histograms, error rates, route-level stats) with a built-in dashboard. Changes span `app.go` for metrics collection, `ctx.go` for request timing, `router.go` for route-level metrics, `middleware/logger/` for metric-aware logging, `hooks.go` for metric lifecycle, `middleware/` for a metrics package, and add dashboard UI serving. Add metrics setup guide to `docs/` and update `.github/workflows/test.yml` with metrics integration test steps.
 
 ### W5: Implement automatic HTTPS with Let's Encrypt certificate management
 
@@ -206,30 +214,6 @@ Add a debugging mode that records request/response pairs, supports replay for de
 
 Implement a built-in load testing tool: scenario definition, concurrent request generation, latency percentile reporting, and comparison with baseline results. Changes span `app.go` for test mode, `client/` for concurrent request generation, `middleware/` for a benchmarking middleware, `hooks.go` for metric collection, `router.go` for route profiling, and add scenario definition, runner, and reporting modules.
 
-## Non-code focused
+### W11: Overhaul CI, documentation, and linting for OpenTelemetry integration
 
-### N11: Fix outdated or inconsistent metadata in .markdownlint.yml
-
-The project configuration file `.markdownlint.yml` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in .markdownlint.yml, and update binder/README.md to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `.github/ISSUE_TEMPLATE/question.yaml`, `.github/ISSUE_TEMPLATE/bug-report.yaml`, `.markdownlint.yml`, `.golangci.yml`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Update `.github/workflows/test.yml` with tracing integration tests using a Jaeger collector. Add `docs/middleware/otel.md` with OpenTelemetry configuration, span attributes, and propagation guide. Update `.golangci.yml` with tracing-specific lint rules for context propagation. Update `docs/whats_new.md` with tracing feature announcement. Update `.github/CONTRIBUTING.md` with observability development guidelines and add spell-checking entries to `.cspell.json` for tracing terminology.

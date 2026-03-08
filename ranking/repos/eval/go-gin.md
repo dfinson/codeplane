@@ -73,7 +73,7 @@ The `BasicAuth` middleware in `auth.go` uses `searchCredential` with `subtle.Con
 
 ### N5: Fix `LoggerWithConfig` not sanitizing newlines in request path
 
-The default `LoggerWithConfig` writes `c.Request.URL.Path` directly into log output. A request path containing `\n` can inject fake log lines. Sanitize control characters in the path before formatting.
+The default `LoggerWithConfig` writes `c.Request.URL.Path` directly into log output. A request path containing `\n` can inject fake log lines. Sanitize control characters in the path before formatting. Update `CONTRIBUTING.md` with security-related logging guidelines for future middleware contributions.
 
 ### N6: Fix `tree.getValue` not returning trailing-slash redirect for parameterized routes
 
@@ -95,6 +95,10 @@ When `HandleContext` is used for internal re-routing, it calls `engine.handleHTT
 
 `ShouldBindBodyWith` caches the raw body in `c.Set(BodyBytesKey, ...)` after the first read. But each `BindingBody` type uses the same cache key, so calling `ShouldBindBodyWithJSON` then `ShouldBindBodyWithTOML` reuses the JSON-bound bytes without re-reading. The second binding succeeds or fails based on the first format's cached bytes rather than re-parsing.
 
+### N11: Update `docs/doc.md` and `README.md` to document the `Context.RemoveHeader` method
+
+The new `Context.RemoveHeader` method is undocumented. Add an API reference entry with signature and usage example to `docs/doc.md`. Update `README.md` with a code snippet in the response helpers section. Add a feature entry to `CHANGELOG.md`.
+
 ## Medium
 
 ### M1: Implement request-scoped timeout middleware
@@ -107,7 +111,7 @@ Implement a mechanism to attach arbitrary metadata (tags, descriptions, deprecat
 
 ### M3: Implement ETag response middleware
 
-Add middleware that computes a weak ETag from response body hash, sets the `ETag` header, and returns 304 Not Modified when the request includes a matching `If-None-Match`. Integrate with `ResponseWriter` to buffer the body for hashing before flushing.
+Add middleware that computes a weak ETag from response body hash, sets the `ETag` header, and returns 304 Not Modified when the request includes a matching `If-None-Match`. Integrate with `ResponseWriter` to buffer the body for hashing before flushing. Update `README.md` with ETag middleware usage examples and configuration options, and add a `CHANGELOG.md` entry.
 
 ### M4: Add request ID middleware with propagation
 
@@ -137,6 +141,10 @@ Add `Context.SaveUploadedFileWithProgress` that accepts a callback `func(bytesWr
 
 Extend `Context.Negotiate` to support route-level configuration of offered formats. Currently `NegotiateFormat` uses the `Accepted` field set globally. Add per-`RouterGroup` default offered types and allow individual handlers to override via `NegotiateConfig` options.
 
+### M11: Add release automation and documentation for structured error handling
+
+Update `.goreleaser.yaml` with changelog generation rules for error handling features. Add an error handling guide to `docs/doc.md` covering error types, `ErrorHandler` customization, and `ProblemDetail` patterns. Update `CONTRIBUTING.md` with error type development guidelines and testing expectations. Update `.github/workflows/goreleaser.yml` release note templates and add `CHANGELOG.md` entries.
+
 ## Wide
 
 ### W1: Implement graceful shutdown with connection draining
@@ -145,7 +153,7 @@ Add `Engine.Shutdown(ctx context.Context)` that stops accepting new connections,
 
 ### W2: Add OpenAPI 3.0 schema generation from routes
 
-Implement automatic OpenAPI spec generation by inspecting registered routes, binding struct tags, and render types. Changes span `routergroup.go` (route metadata capture), `binding/` (struct-to-schema conversion), `render/` (response type inference), and a new `openapi/` package.
+Implement automatic OpenAPI spec generation by inspecting registered routes, binding struct tags, and render types. Changes span `routergroup.go` (route metadata capture), `binding/` (struct-to-schema conversion), `render/` (response type inference), and a new `openapi/` package. Update `docs/doc.md` with OpenAPI schema generation documentation and add CI validation in `.github/workflows/gin.yml` for spec correctness.
 
 ### W3: Implement rate limiting with pluggable backends
 
@@ -179,30 +187,6 @@ Add a plugin registration API where plugins can hook into the engine lifecycle (
 
 Implement server push integration where handlers can trigger push promises for preloading resources. Add `Context.Push(path string, opts *PushOptions)` that uses the `http.Pusher` interface. Changes span `context.go` (push API), `response_writer.go` (Pusher interface assertion), `gin.go` (HTTP/2 configuration), and `render/html.go` (auto-push linked assets).
 
-## Non-code focused
+### W11: Overhaul CI, benchmarks, and contributor docs for HTTP/2 server push
 
-### N11: Fix outdated or inconsistent metadata in .golangci.yml
-
-The project configuration file `.golangci.yml` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in .golangci.yml, and update ginS/README.md to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `.github/ISSUE_TEMPLATE/bug-report.yaml`, `.github/ISSUE_TEMPLATE/config.yml`, `.golangci.yml`, `.goreleaser.yaml`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Update `.github/workflows/gin.yml` with an HTTP/2 test matrix including TLS configurations. Add TLS test certificates to `testdata/certificate/` for HTTP/2 testing. Update `BENCHMARKS.md` with HTTP/2 push performance benchmarks and comparison tables. Update `CONTRIBUTING.md` with HTTP/2 development and testing guidelines. Update `README.md` with HTTP/2 push usage examples, update `docs/doc.md` with push API reference, and add feature entries to `CHANGELOG.md`.

@@ -77,7 +77,7 @@ lombok/src/
 
 ## Tasks
 
-30 tasks (10 narrow, 10 medium, 10 wide).
+33 tasks (11 narrow, 11 medium, 11 wide).
 
 ## Narrow
 
@@ -103,7 +103,7 @@ When `@NonNull` is used on a record component, `HandleNonNull` does not generate
 
 ### N6: Add configuration key to set default `@Builder` method name
 
-`@Builder` defaults to `builder()` as the static method name. Projects that use a different convention (e.g., `newBuilder()`) must set `builderMethodName` on every annotation. Add a configuration key `lombok.builder.defaultBuilderMethodName` that `HandleBuilder` reads as the default.
+`@Builder` defaults to `builder()` as the static method name. Projects that use a different convention (e.g., `newBuilder()`) must set `builderMethodName` on every annotation. Add a configuration key `lombok.builder.defaultBuilderMethodName` that `HandleBuilder` reads as the default. Document the new key in `doc/changelog.markdown` and add it to the configuration keys listing in `README.md`.
 
 ### N7: Fix `@Cleanup` not handling exceptions from the `close()` call
 
@@ -120,6 +120,10 @@ When `@NonNull` is used on a record component, `HandleNonNull` does not generate
 ### N10: Fix `@Setter` on a `boolean` field with `is` prefix generating wrong method name
 
 For a field `boolean isActive`, `@Setter` generates `setIsActive(boolean)` instead of `setActive(boolean)`. `HandleSetter` does not strip the `is` prefix from boolean fields the way `HandleGetter` adds it. Align with JavaBeans convention by stripping `is` for the setter name.
+
+### N11: Fix `doc/changelog.markdown` entries missing cross-references to issue tracker
+
+The `doc/changelog.markdown` file lists changes per release but individual entries lack links to the corresponding GitHub issue or PR. Add hyperlinked issue references to existing changelog entries, establish a changelog entry format in `CONTRIBUTING` guidelines (referenced from `.github/copilot-instructions.md`), and update `doc/PlannedExtensions.txt` to indicate which planned features have corresponding tracking issues.
 
 ## Medium
 
@@ -149,7 +153,7 @@ Add a `@Builder.Validate` annotation for a method that is called in `build()` be
 
 ### M7: Implement delombok output formatting configuration
 
-The delombok tool generates plain Java but uses its own code formatting. Add configuration for indentation style (tabs/spaces, width), brace placement, and blank line insertion. Changes span `delombok/` (formatting output), configuration key registration, and `LombokConfiguration` parsing.
+The delombok tool generates plain Java but uses its own code formatting. Add configuration for indentation style (tabs/spaces, width), brace placement, and blank line insertion. Changes span `delombok/` (formatting output), configuration key registration, and `LombokConfiguration` parsing. Update `build.xml` with a delombok formatting integration test target and document formatting options in `doc/publishing.txt`.
 
 ### M8: Add `@Log` support for custom logger factories
 
@@ -162,6 +166,10 @@ The delombok tool generates plain Java but uses its own code formatting. Add con
 ### M10: Add `@EqualsAndHashCode` caching for immutable classes
 
 For `@Value` (immutable) classes, the hash code never changes after construction. Add a `cacheHashCode` option to `@EqualsAndHashCode` that computes the hash code once and stores it. Generate a private `int $hashCodeCache` field and lazy-compute on first `hashCode()` call. Changes span `HandleEqualsAndHashCode` and `HandleValue`.
+
+### M11: Modernize build system from Ant to Gradle
+
+Migrate the primary build from `build.xml` and `buildScripts/*.ant.xml` to Gradle with Kotlin DSL. Convert the Ant targets (compile, test, javadoc, eclipse-p2, maven publish) to Gradle tasks. Update `.github/workflows/ant.yml` to use the new Gradle build, rename the workflow file to `build.yml`, configure the Gradle wrapper, and update `README.md` with the new build instructions. Preserve backward compatibility by keeping `build.xml` as a thin wrapper that delegates to Gradle during the transition period. Changes span `build.xml`, `buildScripts/`, `.github/workflows/`, `README.md`, and new `build.gradle.kts` and `settings.gradle.kts` files.
 
 ## Wide
 
@@ -205,30 +213,6 @@ Add compile-time validation that detects conflicting annotation combinations: `@
 
 Allow users to customize generated code via template files: toString format strings, equals comparison strategies, builder method naming patterns, constructor parameter ordering. Changes span `ConfigurationKeys` (template paths), `LombokConfiguration` (template loading), a new `templates/` package for template parsing, `HandleToString` / `HandleEqualsAndHashCode` / `HandleBuilder` / `HandleConstructor` (template-driven generation), and delombok.
 
-## Non-code focused
+### W11: Create comprehensive developer guide and extension authoring documentation
 
-### N11: Fix outdated or inconsistent metadata in buildScripts/p2/feature.xml
-
-The project configuration file `buildScripts/p2/feature.xml` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in buildScripts/p2/feature.xml, and update SECURITY.md to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `.github/ISSUE_TEMPLATE/bug_report.md`, `.github/ISSUE_TEMPLATE/intellij_plugin.md`, `buildScripts/p2/feature.xml`, `buildScripts/p2/artifacts.xml`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Build a structured developer documentation system from existing scattered files: consolidate `doc/changelog.markdown`, `doc/PlannedExtensions.txt`, `doc/experiences.txt`, and `doc/git-workflow.txt` into a cohesive developer guide; create an extension authoring tutorial explaining how to add new annotation handlers for both javac and Eclipse pipelines; document the build system in `buildScripts/` with architecture diagrams; update `README.md` with links to all documentation; add an `AUTHORS` file maintenance guide; and create a `CONTRIBUTING.md` at the repository root. Changes span `doc/`, `buildScripts/`, `README.md`, `AUTHORS`, `SECURITY.md`, and `.github/workflows/`.

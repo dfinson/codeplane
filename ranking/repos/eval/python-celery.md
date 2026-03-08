@@ -88,11 +88,15 @@ Task log messages from `self.logger` don't include the task ID in structured log
 
 When revoking a task submitted with an `eta`, the revocation is ignored because the task hasn't been delivered to a worker yet. The revocation signal only reaches active workers.
 
+### N11: Update configuration documentation for the `task_received_timeout` setting
+
+The `docs/userguide/configuration.rst` reference table is missing the `task_received_timeout` option. Add the setting with type, default value, and description to the configuration reference. Update `docs/userguide/tasks.rst` to cross-reference the timeout behavior and add a usage example in the task execution section.
+
 ## Medium
 
 ### M1: Implement dead letter queue for permanently failed tasks
 
-When a task exhausts all retries and fails permanently, it's silently dropped. Add a dead letter queue that captures permanently failed tasks with their exception details, arguments, and retry history.
+When a task exhausts all retries and fails permanently, it's silently dropped. Add a dead letter queue that captures permanently failed tasks with their exception details, arguments, and retry history. Update `docs/userguide/tasks.rst` with dead letter queue usage documentation and add the new configuration options to `docs/userguide/configuration.rst`.
 
 ### M2: Add task priority support across all broker backends
 
@@ -130,6 +134,10 @@ Add task version tracking so when a new version of a task handler is deployed, t
 
 Implement rate limiting coordinated across all workers using Redis. Support per-task-type rate limits, sliding window algorithm, and configurable burst allowance. Return tasks to the queue when rate limit is exceeded.
 
+### M11: Add Helm chart support for Celery flower monitoring deployment
+
+Add a `flower` deployment template in `helm-chart/templates/` for the Celery monitoring dashboard. Update `helm-chart/values.yaml` with flower configuration options (replica count, resource limits, broker URL). Bump the chart version in `helm-chart/Chart.yaml` and update `helm-chart/README.rst` with deployment instructions. Update `docker/docker-compose.yml` to include a flower service for local development.
+
 ## Wide
 
 ### W1: Implement multi-broker support
@@ -154,7 +162,7 @@ Add automatic profiling for task execution: CPU time, wall time, memory allocati
 
 ### W6: Add comprehensive testing framework for Celery tasks
 
-Implement `celery.testing` with synchronous task execution mode, in-memory broker and result backend, task call assertion helpers, workflow testing, and time travel for testing scheduled tasks. Changes span app, worker, backends, beat, and add a testing module.
+Implement `celery.testing` with synchronous task execution mode, in-memory broker and result backend, task call assertion helpers, workflow testing, and time travel for testing scheduled tasks. Changes span app, worker, backends, beat, and add a testing module. Add testing framework usage guide to `CONTRIBUTING.rst`, update `requirements/test.txt` with new test dependencies, and add a CI job to `.github/workflows/python-package.yml` for framework validation.
 
 ### W7: Implement automatic task retry with circuit breaker
 
@@ -172,30 +180,6 @@ Replace the file-based beat schedule store with a database-backed scheduler supp
 
 Implement a queue migration framework for moving tasks between brokers without message loss. Support draining, replaying, format transformation, and verification. Changes span transport layer, CLI, worker consumer, and add a migration module.
 
-## Non-code focused
+### W11: Overhaul CI pipeline and contributor docs for multi-broker testing
 
-### N11: Fix outdated or inconsistent metadata in helm-chart/templates/deployment.yaml
-
-The project configuration file `helm-chart/templates/deployment.yaml` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in helm-chart/templates/deployment.yaml, and update docs/Makefile to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `.github/ISSUE_TEMPLATE/Minor-Version-Release-Checklist.md`, `.github/ISSUE_TEMPLATE/Major-Version-Release-Checklist.md`, `helm-chart/templates/deployment.yaml`, `helm-chart/templates/secret.yaml`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Update `.github/workflows/integration-tests.yml` to add a broker matrix testing Redis, RabbitMQ, and SQS backends. Update `CONTRIBUTING.rst` with local multi-broker setup instructions using Docker. Add `requirements/test-multi-broker.txt` with broker client dependencies. Update `docker/docker-compose.yml` with additional broker services. Add feature entries to `Changelog.rst` and update `docs/userguide/` guides for multi-broker configuration, routing, and troubleshooting.

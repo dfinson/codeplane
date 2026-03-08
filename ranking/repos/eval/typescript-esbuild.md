@@ -113,6 +113,10 @@ The `--drop` flag supports `console` and `debugger`. Extend it to support named 
 
 When code splitting creates chunks, modules marked with `sideEffects: false` in their `package.json` are still included in chunks even when their exports aren't used by that chunk. The chunk assignment in `internal/graph/graph.go` doesn't consult side-effects metadata during splitting.
 
+### N11: Update `CHANGELOG.md` and `docs/architecture.md` to document the `--drop-labels` feature
+
+Add a changelog entry to `CHANGELOG.md` describing the `--drop-labels` flag with usage examples. Update `docs/architecture.md` with the label-stripping pipeline stage in the parser-to-printer flow. Update `README.md` CLI reference section with the new flag syntax and semantics.
+
 ## Medium
 
 ### M1: Implement import map support for module resolution
@@ -125,7 +129,7 @@ Track `var(--custom-prop)` usage across CSS files and remove unused `:root { --u
 
 ### M3: Implement bundle size budget enforcement
 
-Add `--size-budget=500kb` that fails the build when the total output exceeds the budgetand per-entry budgets via API. Changes span `internal/config/config.go` for budget configuration, `internal/linker/linker.go` for size calculation after linking, `pkg/api/api.go` for the API option, and `internal/logger/` for budget violation reporting.
+Add `--size-budget=500kb` that fails the build when the total output exceeds the budget and per-entry budgets via API. Changes span `internal/config/config.go` for budget configuration, `internal/linker/linker.go` for size calculation after linking, `pkg/api/api.go` for the API option, and `internal/logger/` for budget violation reporting. Update `docs/development.md` with budget testing procedures and add a `CHANGELOG.md` entry.
 
 ### M4: Add TypeScript project references support
 
@@ -155,11 +159,15 @@ Add granular CSS minification options: `minifyColors`, `minifyGradients`, `minif
 
 Generate a JSON manifest mapping input entry points to output files with content hashes, chunk dependencies, and subresource integrity (SRI) hashes. Changes span `internal/linker/linker.go` for manifest data collection, `internal/config/config.go` for manifest options, `pkg/api/api.go` for API exposure, and add manifest serialization logic.
 
+### M11: Add build pipeline documentation and CI validation for import maps
+
+Update `docs/architecture.md` with the import map resolution flow and precedence rules. Add import map integration tests to `.github/workflows/ci.yml` covering resolution overrides and scoped mappings. Update `RUNBOOK.md` with import map debugging procedures and common pitfalls. Add a `CHANGELOG.md` entry for the import map feature.
+
 ## Wide
 
 ### W1: Implement HTML entry point support with asset pipeline
 
-Add HTML files as entry points that automatically discover and bundle `<script>`, `<link>`, and inline assets. Changes span `pkg/api/api.go` for HTML loader, `internal/config/config.go` for loader type, `internal/bundler/bundler.go` for HTML parsing and asset extraction, `internal/linker/linker.go` for HTML output with hashed references, `internal/resolver/resolver.go` for asset resolution, and add HTML parser/printer modules.
+Add HTML files as entry points that automatically discover and bundle `<script>`, `<link>`, and inline assets. Changes span `pkg/api/api.go` for HTML loader, `internal/config/config.go` for loader type, `internal/bundler/bundler.go` for HTML parsing and asset extraction, `internal/linker/linker.go` for HTML output with hashed references, `internal/resolver/resolver.go` for asset resolution, and add HTML parser/printer modules. Update `README.md` with HTML entry point examples and usage guide, and add entries to `CHANGELOG.md`.
 
 ### W2: Add watch mode with incremental rebuild and HMR server
 
@@ -197,30 +205,6 @@ Add support for extracting CSS from tagged template literals (`css\`...\``) and 
 
 Implement workspace-aware bundling that understands monorepo package boundaries, deduplicates shared dependencies, and generates per-package bundles with cross-package imports. Changes span `internal/resolver/resolver.go` for workspace resolution, `internal/bundler/bundler.go` for multi-package orchestration, `internal/linker/linker.go` for cross-package linking, `internal/graph/graph.go` for package boundary tracking, `internal/config/config.go` for workspace config, and `pkg/api/api.go` for the API.
 
-## Non-code focused
+### W11: Overhaul release process and documentation for multi-target builds
 
-### N11: Fix outdated or inconsistent metadata in internal/resolver/testExpectations.json
-
-The project configuration file `internal/resolver/testExpectations.json` contains metadata that has
-drifted from the actual project state. Audit the file for incorrect
-version constraints, outdated URLs, deprecated configuration keys,
-or missing entries that should be present based on the current
-codebase structure. Fix the inconsistencies.
-
-### M11: Add or improve CI workflow and update related documentation
-
-The CI configuration needs improvement: add a workflow step for
-linting or type-checking that currently only runs locally, ensure
-the CI matrix covers all supported platform/version combinations
-listed in internal/resolver/testExpectations.json, and update internal/xxhash/README.md to document the CI
-process and badge status for contributors.
-
-### W11: Overhaul project configuration, CI, and documentation consistency
-
-Multiple non-code files have drifted from each other and from the
-actual project state. Specifically: `.github/ISSUE_TEMPLATE/new-issue.md`, `.github/workflows/publish.yml`, `internal/resolver/testExpectations.json`, `compat-table/package-lock.json`
-need to be audited and synchronized. Version requirements in config
-files should match CI matrix entries, documentation should reflect
-current APIs and configuration options, and build/CI files should
-use consistent tooling versions. Fix all inconsistencies across
-these files to ensure a coherent project configuration.
+Update `.github/workflows/publish.yml` for multi-target artifact publishing across platform/architecture combinations. Update `Makefile` with multi-target build rules and validation targets. Update `docs/development.md` with a multi-target development and testing guide. Add architecture diagrams to `images/` illustrating the shared-parse divergent-lowering pipeline. Update `CHANGELOG.md` with multi-target feature entries, update `version.txt` versioning strategy, and update `README.md` with new CLI flags and examples.
