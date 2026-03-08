@@ -4,7 +4,7 @@
 > for evaluation.**
 >
 > Read and follow ALL instructions in
-> `/home/$USER/wsl-repos/codeplane/ranking/roles/executor.md` first.
+> `../../../roles/executor.md` first.
 > Everything below is IN ADDITION to those instructions — not a
 > replacement.
 

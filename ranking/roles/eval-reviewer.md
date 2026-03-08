@@ -4,7 +4,7 @@
 > and parsing for evaluation.**
 >
 > Read and follow ALL instructions in
-> `/home/$USER/wsl-repos/codeplane/ranking/roles/reviewer.md` first.
+> `../../../roles/reviewer.md` first.
 > Everything below is IN ADDITION to those instructions — not a
 > replacement.
 
@@ -41,9 +41,9 @@ After the export is saved, run the trace parser script to extract
 per-task tool-use traces from the exported chat:
 
 ```bash
-python3 /home/$USER/wsl-repos/codeplane/ranking/infra/parse_traces.py \
+python3 ../../../infra/parse_traces.py \
   <path_to_exported_chat.json> \
-  --output /home/$USER/wsl-repos/codeplane/ranking/data/{repo_id}/traces.jsonl
+  --output ../../../data/{repo_id}/traces.jsonl
 ```
 
 Replace `{repo_id}` with the repo name (e.g., `python-pydantic`).
