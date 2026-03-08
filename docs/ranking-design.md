@@ -327,7 +327,7 @@ Each task produces one file: `data/{repo_id}/ground_truth/{heading_id}.json`.
 Field details, query type rules, seed/pin rules, and validation
 checklist are in `roles/executor.md` (the canonical reference).
 
-**Post-processing** (automated):
+**Data assembly** (automated format conversion):
 
 1. For each def in `minimum_sufficient_defs` and `thrash_preventing_defs`:
    look up `(path, name, kind)` in codeplane index → resolve `def_uid`.
@@ -352,6 +352,49 @@ affect the pool: seeded symbols enter via the explicit harvester
 those files (`symbol_source="pin"`).
 
 Join with ground truth → `label_relevant` per candidate (binary).
+
+#### Phase 4: Test Relevance Data (collected with ground truth)
+
+During Phase 2, the executor also runs the test suite with coverage
+enabled. The executor itself analyzes the coverage results and
+identifies which pre-existing test functions cover the changed lines.
+The reviewer verifies this analysis.
+
+**What the executor does:**
+
+1. Runs the test suite with coverage against the reverted state
+   (pre-change baseline).
+2. Reads the coverage report to find which test functions cover the
+   lines that were changed in the task commit diff.
+3. Excludes any test functions the executor wrote as part of the task
+   (new tests are in the diff — they're not pre-existing ground truth).
+4. Constructs `diff_seeds` (changed symbol names from the diff) and
+   `diff_pins` (changed file paths from the diff).
+5. Records all of this in the `test_selection` field of the ground
+   truth JSON.
+
+**What the reviewer verifies:**
+
+1. `relevant_preexisting_tests` only contains tests that actually
+   exist in the pre-change codebase (not new tests).
+2. The `covers_changed_lines` reference real line numbers from the diff.
+3. `diff_seeds` and `diff_pins` match the actual diff content.
+4. `new_tests_excluded` lists all new test functions from the diff.
+
+**Ground truth labels:**
+
+| Field | What it contains | Source |
+|-------|-----------------|--------|
+| `relevant_preexisting_tests` | Pre-existing test DefFacts that cover changed lines | Executor analyzes coverage + diff |
+| `import_graph_test_files` | Test files that import changed modules | Executor identifies from imports |
+| `diff_seeds` | Changed symbol names | Executor extracts from diff |
+| `diff_pins` | Changed file paths | Executor extracts from diff |
+| `new_tests_excluded` | New test functions written by executor | Executor identifies from diff |
+
+The `relevant_preexisting_tests` set is the ground truth for test
+selection. The `import_graph_test_files` set is the baseline (current
+checkpoint behavior). The ratio |import_graph| / |relevant| measures
+over-selection.
 
 ---
 
@@ -400,7 +443,7 @@ Two tiers: `minimum` (human-necessary) and `thrash_preventing`
 
 Non-OK queries live in a separate per-repo file:
 `data/{repo_id}/non_ok_queries.json`. They are merged into `queries`
-during post-processing with `label_gate` set to the query type.
+during data assembly with `label_gate` set to the query type.
 
 ### 5.4 `candidates_rank`
 

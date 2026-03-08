@@ -62,6 +62,54 @@ clean and every solution is recoverable via `git log`.
 
 ---
 
+### STEP 1b — TEST COVERAGE
+
+Before reflecting, run the project's test suite with coverage enabled
+to capture which pre-existing test functions exercise the code you
+changed. This data trains a future test-selection model.
+
+**Run the test suite with coverage.** The exact command depends on the
+language:
+
+| Language | Command |
+|----------|---------|
+| Python | `pytest --cov --cov-report=json` |
+| TypeScript | `npx vitest --coverage` or `npx jest --coverage` |
+| Go | `go test -coverprofile=coverage.out ./...` |
+| Rust | `cargo tarpaulin --out json` |
+| Java | `./gradlew test jacocoTestReport` |
+| C# | `dotnet test --collect:"XPlat Code Coverage"` |
+| Ruby | `COVERAGE=1 bundle exec rake test` |
+| PHP | `phpunit --coverage-clover=coverage.xml` |
+| Swift | `swift test --enable-code-coverage` |
+| C++ | Build with coverage flags + `ctest` |
+
+**Important:** Run this against the **reverted** state (HEAD is the
+revert commit — the code is back to baseline but the task commit is
+in history). The coverage report shows which tests cover which lines
+in the **pre-change** codebase.
+
+After running coverage, **you must analyze the results yourself**:
+
+1. Identify the lines you changed (from your diff in the task commit).
+2. Read the coverage report to find which test functions cover those
+   changed lines.
+3. Exclude any test functions that YOU WROTE as part of the task —
+   only pre-existing tests count as ground truth.
+4. Record the relevant pre-existing test functions in your JSON output
+   (see `test_selection` field below).
+
+If coverage tooling is not configured for this project and cannot be
+set up within a few minutes, set `"coverage_available": false` in your
+JSON output and skip this step.
+
+Save the coverage report:
+```
+cp <coverage_output_file> ../../data/{repo_id}/ground_truth/{heading_id}_coverage.<ext>
+```
+
+---
+
 ### STEP 2 — REFLECT
 
 After solving, look back at what you just did and write a ground truth
@@ -154,11 +202,57 @@ Write a JSON file to `../../data/{repo_id}/ground_truth/{heading_id}.json`.
     }
   ],
 
+  "test_selection": {
+    "coverage_available": true,
+    "coverage_file": "{heading_id}_coverage.json",
+    "diff_seeds": ["process_request", "TokenExpiredError"],
+    "diff_pins": ["src/auth/middleware.py"],
+    "relevant_preexisting_tests": [
+      {
+        "test_path": "tests/test_auth.py",
+        "test_name": "test_expired_token_returns_401",
+        "test_kind": "function",
+        "start_line": 45,
+        "covers_changed_lines": [12, 15, 18],
+        "reason": "exercises the token validation path that was changed"
+      }
+    ],
+    "import_graph_test_files": ["tests/test_auth.py", "tests/test_middleware.py"],
+    "new_tests_excluded": ["tests/test_auth.py::test_new_error_format"]
+  },
+
   "reviewer_corrections": ""
 }
 ```
 
 > Leave `reviewer_corrections` empty. The reviewer (Role 3) fills it.
+
+#### Test selection field details
+
+**`diff_seeds`**: The names of symbols you changed (from your diff).
+Extract function/class/method names from the diff hunks. These are
+the symbols a test selector would use to find relevant tests.
+
+**`diff_pins`**: The files you changed (from your diff). Same file
+paths as in your diff.
+
+**`relevant_preexisting_tests`**: Test functions that EXISTED BEFORE
+your changes AND that cover lines you changed. You determine this by:
+1. Looking at your diff to identify changed line numbers per file.
+2. Reading the coverage report to find which test functions cover
+   those specific lines.
+3. Excluding any test functions you wrote as part of this task.
+
+Each entry must have the test's file path, function name, kind,
+start line, which changed lines it covers, and why it's relevant.
+
+**`import_graph_test_files`**: All test files that import the modules
+you changed. This is the coarse baseline — what the current system
+would select. List them even if they contain irrelevant tests.
+
+**`new_tests_excluded`**: Test functions you wrote as part of this
+task that appear in coverage but are NOT ground truth (they didn't
+exist before your changes).
 
 ---
 
