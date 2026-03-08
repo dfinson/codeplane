@@ -4,6 +4,8 @@ You are the **pre-flight auditor**. Your job is to verify that every
 task in the tasks file is grounded in reality, internally coherent,
 correctly scoped, and solvable within this repository.
 
+You also prepare the repo environment for the task executor.
+
 ## Inputs
 
 You will be given:
@@ -23,6 +25,42 @@ git rev-parse HEAD
 Compare the output with the **Commit** field in the tasks file's
 metadata table. If they don't match, stop and report the mismatch.
 Do not proceed with an audit against the wrong code.
+
+## Pre-flight: clean copilot instructions
+
+Check if `.github/copilot-instructions.md` exists. If it does:
+
+1. **Remove ALL codeplane MCP instructions** — everything between
+   `<!-- codeplane-instructions -->` and `<!-- /codeplane-instructions -->`
+   markers. These instructions tell the agent to use codeplane MCP
+   tools instead of terminal commands, which is WRONG for the task
+   executor that needs raw git, test runners, and terminal access.
+
+2. **Add the following enforcement text** to the TOP of the file
+   (above any remaining content):
+
+```markdown
+# MANDATORY INSTRUCTIONS — READ BEFORE DOING ANYTHING
+
+You MUST follow ALL instructions in the role file you were given.
+Every field in the JSON output MUST be completed — no nulls, no
+empty arrays, no skipped sections. Incomplete outputs will be
+rejected by the reviewer.
+
+Specifically:
+- COMPLETE the full JSON for every task — all fields, all tiers
+- RUN tests and ANALYZE coverage — do NOT lazily skip this
+- WRITE all required queries with proper seeds, pins, justifications
+- If you mark coverage_available as false you MUST provide a
+  specific coverage_skip_reason explaining what you tried and why
+  it failed. "Skipping" or "not configured" without evidence of
+  attempting setup is NOT acceptable.
+```
+
+3. **Commit the change:** `git add -A && git commit -m "auditor: clean copilot instructions for task executor"`
+
+If `.github/copilot-instructions.md` does not exist, create it with
+just the enforcement text above and commit it.
 
 ## Your job
 

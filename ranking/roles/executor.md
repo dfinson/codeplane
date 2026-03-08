@@ -64,9 +64,12 @@ clean and every solution is recoverable via `git log`.
 
 ### STEP 1b — TEST COVERAGE
 
-Before reflecting, run the project's test suite with coverage enabled
-to capture which pre-existing test functions exercise the code you
-changed. This data trains a future test-selection model.
+**THIS STEP IS MANDATORY. DO NOT SKIP IT. DO NOT LAZILY MARK
+`coverage_available: false` WITHOUT A REAL, SPECIFIC REASON.**
+
+Run the project's test suite with coverage enabled to capture which
+pre-existing test functions exercise the code you changed. This data
+trains a future test-selection model.
 
 **Run the test suite with coverage.** The exact command depends on the
 language:
@@ -99,14 +102,14 @@ After running coverage, **you must analyze the results yourself**:
 4. Record the relevant pre-existing test functions in your JSON output
    (see `test_selection` field below).
 
-If coverage tooling is not configured for this project and cannot be
-set up within a few minutes, set `"coverage_available": false` in your
-JSON output and skip this step.
-
-Save the coverage report:
-```
-cp <coverage_output_file> ../../data/{repo_id}/ground_truth/{heading_id}_coverage.<ext>
-```
+**If and ONLY IF** coverage tooling genuinely cannot be configured for
+this project (e.g., no test suite exists, coverage tool requires
+external service not available), set `"coverage_available": false` AND
+you MUST provide a `"coverage_skip_reason"` explaining exactly what
+you tried and why it failed. "Couldn't figure it out" or "skipping
+for time" are NOT acceptable reasons. The reviewer will reject any
+task with `coverage_available: false` that lacks a specific, verifiable
+explanation.
 
 ---
 
@@ -204,7 +207,7 @@ Write a JSON file to `../../data/{repo_id}/ground_truth/{heading_id}.json`.
 
   "test_selection": {
     "coverage_available": true,
-    "coverage_file": "{heading_id}_coverage.json",
+    "coverage_skip_reason": null,
     "test_query": "Find tests that verify the behavior of process_request and TokenExpiredError in src/auth/middleware.py",
     "diff_seeds": ["process_request", "TokenExpiredError"],
     "diff_pins": ["src/auth/middleware.py"],
@@ -230,19 +233,28 @@ Write a JSON file to `../../data/{repo_id}/ground_truth/{heading_id}.json`.
 
 #### Test selection field details
 
-**`test_query`**: A single natural language query describing what
-changed, constructed from your diff. Format:
+**`coverage_available`**: Must be `true` unless you genuinely cannot
+set up coverage tooling (see STEP 1b rules).
+
+**`coverage_skip_reason`**: REQUIRED when `coverage_available` is
+`false`. Must explain exactly what you tried and why it failed.
+Example: `"Attempted pytest --cov but got ImportError: No module
+named 'pytest_cov'. Ran pip install pytest-cov but it conflicts with
+pinned coverage==5.5. No alternative coverage tool available."`
+
+**`test_query`**, **`diff_seeds`**, **`diff_pins`**: Only populate
+these when `relevant_preexisting_tests` is non-empty. If coverage
+ran but no pre-existing tests cover the changed lines (i.e., the
+changed code is untested), set these to `null` — there's nothing
+for a test selector to find. Format when populated:
 `"Find tests that verify the behavior of {symbol1}, {symbol2} in {file1}, {file2}"`
 where symbols and files come from your diff hunks. One query per task
-— all changed symbols and files go into one sentence. This query
-enables the embedding harvester to find semantically relevant tests.
+— all changed symbols and files go into one sentence.
 
 **`diff_seeds`**: The names of symbols you changed (from your diff).
-Extract function/class/method names from the diff hunks. These are
-the symbols a test selector would use to find relevant tests.
+Extract function/class/method names from the diff hunks.
 
-**`diff_pins`**: The files you changed (from your diff). Same file
-paths as in your diff.
+**`diff_pins`**: The files you changed (from your diff).
 
 **`relevant_preexisting_tests`**: Test functions that EXISTED BEFORE
 your changes AND that cover lines you changed. You determine this by:
