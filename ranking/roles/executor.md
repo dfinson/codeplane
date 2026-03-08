@@ -475,9 +475,12 @@ Fix any issues before moving to the next task.
 
 ---
 
-### STEP 4 — NON-OK QUERIES (after all 30 tasks)
+### STEP 4 — NON-OK QUERIES (Session C only)
 
-After completing all tasks, write a single file:
+This step applies **only when you are executing W tasks (Session C)**.
+If you are executing N or M tasks, skip this step entirely.
+
+After completing all W tasks, write a single file:
 `../../data/{repo_id}/non_ok_queries.json`
 
 Using full knowledge of the repo you gained during solving, write

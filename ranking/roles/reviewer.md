@@ -211,10 +211,19 @@ non-OK file with a summary of changes, or `"No corrections required"`.
 
 ## When you are done
 
-After reviewing all 30 tasks AND the non-OK queries, say:
+After reviewing all 33 tasks AND the non-OK queries:
 
+1. Say:
 ```
 REVIEW COMPLETE.
 Tasks corrected: <list of task IDs, or "none">
 Non-OK queries corrected: <yes/no>
 ```
+
+2. Run the merge script to produce the final JSONL:
+```bash
+python ../../../infra/merge_ground_truth.py ../../data/{REPO_NAME}
+```
+This merges all per-task JSONs + non_ok_queries.json into a single
+`ground_truth.jsonl` file. Verify the line count matches expectations
+(33 tasks + 1 non_ok = 34 lines).
