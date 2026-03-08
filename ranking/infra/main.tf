@@ -15,8 +15,8 @@ provider "azurerm" {
 }
 
 variable "subscription_id" {
-  type    = string
-  default = "d1a12354-5c67-4461-9fc9-2e5c111ea163"
+  type        = string
+  description = "Azure subscription ID. Set via TF_VAR_subscription_id or -var."
 }
 
 variable "location" {
@@ -42,12 +42,14 @@ resource "azurerm_resource_group" "this" {
 
 # ── Storage Account + Container ─────────────────────────────────
 resource "azurerm_storage_account" "this" {
-  name                     = "st${replace(var.prefix, "-", "")}${substr(sha256(azurerm_resource_group.this.id), 0, 6)}"
-  resource_group_name      = azurerm_resource_group.this.name
-  location                 = azurerm_resource_group.this.location
-  account_tier             = "Standard"
-  account_replication_type = "LRS"
-  min_tls_version          = "TLS1_2"
+  name                          = "st${replace(var.prefix, "-", "")}${substr(sha256(azurerm_resource_group.this.id), 0, 6)}"
+  resource_group_name           = azurerm_resource_group.this.name
+  location                      = azurerm_resource_group.this.location
+  account_tier                  = "Standard"
+  account_replication_type      = "LRS"
+  min_tls_version               = "TLS1_2"
+  shared_access_key_enabled     = false
+  default_to_oauth_authentication = true
 
   tags = azurerm_resource_group.this.tags
 }

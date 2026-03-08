@@ -210,3 +210,6 @@ __marimo__/
 
 # Benchmark raw chatreplay exports (large)
 benchmarking/**/results/*_raw.json
+ranking/infra/terraform.tfvars
+ranking/infra/.terraform/
+ranking/infra/terraform.tfstate*
