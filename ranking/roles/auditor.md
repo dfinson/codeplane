@@ -48,7 +48,8 @@ empty arrays, no skipped sections. Incomplete outputs will be
 rejected by the reviewer.
 
 Specifically:
-- COMPLETE the full JSON for every task — all fields, all tiers
+- COMPLETE each task's full cycle (solve → write JSON → validate)
+  BEFORE starting the next task. Do NOT batch or defer JSON writing.
 - USE the baseline coverage report (already committed at repo root)
   to populate test_selection — do NOT re-run the test suite
 - WRITE all required queries with proper seeds, pins, justifications

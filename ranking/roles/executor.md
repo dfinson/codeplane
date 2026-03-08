@@ -42,7 +42,13 @@ mkdir -p ../../data/{repo_id}/ground_truth
 
 Work through every task sequentially (N1–N10, M1–M10, W1–W10).
 
-For EACH task:
+**CRITICAL: Complete ALL steps (1 → 1b → 2 → 3) for ONE task before
+starting the next task. Write the JSON IMMEDIATELY after solving each
+task while the context is fresh. Do NOT batch — do NOT solve multiple
+tasks and then go back to write JSONs. Each task is a self-contained
+cycle: solve → coverage analysis → write JSON → validate → next task.**
+
+For EACH task, repeat this full cycle:
 
 ---
 
@@ -460,6 +466,8 @@ After writing each JSON, re-read it and verify:
     of minimum_sufficient ∪ thrash_preventing?
 
 Fix any issues before moving to the next task.
+
+**── End of per-task cycle. Go back to STEP 1 for the next task. ──**
 
 ---
 
