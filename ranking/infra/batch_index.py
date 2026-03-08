@@ -78,37 +78,66 @@ def load_terraform_outputs(infra_dir: Path) -> dict:
 
 
 def get_repos(repo_root: Path, set_filter: str | None = None, repo_filter: str | None = None) -> list[Repo]:
-    """Read repo URL + commit from md files."""
+    """Discover repos from clones directory (not md files).
+
+    Reads URL + commit from the clone's git config and HEAD.
+    Falls back to md file metadata if clone has no remote.
+    """
     repos = []
+    clones_root = repo_root / "ranking" / "clones"
+
     for set_name in ["ranker-gate", "cutoff", "eval"]:
         if set_filter and set_name != set_filter:
             continue
-        repos_dir = repo_root / "ranking" / "repos" / set_name
-        if not repos_dir.exists():
+        set_dir = clones_root / set_name
+        if not set_dir.exists():
             continue
-        for md in sorted(repos_dir.glob("*.md")):
-            if md.name == "README.md":
+        for clone_dir in sorted(set_dir.iterdir()):
+            if not (clone_dir / ".git").exists():
                 continue
-            if repo_filter and md.stem != repo_filter:
+            clone_name = clone_dir.name
+            if repo_filter and repo_filter not in clone_name:
                 continue
-            text = md.read_text()
-            url_m = re.search(r'\*\*URL\*\*\s*\|\s*(https://\S+)', text)
-            commit_m = re.search(r'\*\*Commit\*\*\s*\|\s*`([0-9a-f]+)`', text)
-            if not url_m or not commit_m:
-                url_m = url_m or re.search(r'\|\s*URL\s*\|\s*(https://\S+)', text)
-                commit_m = commit_m or re.search(r'\|\s*Commit\s*\|\s*`([0-9a-f]+)`', text)
-            if url_m and commit_m:
-                # Determine clone dir name from URL
-                clone_name = url_m.group(1).rstrip(" |").rstrip("/").rsplit("/", 1)[-1]
-                clone_dir = f"ranking/clones/{set_name}/{clone_name}"
-                repos.append(Repo(
-                    repo_id=md.stem,
-                    url=url_m.group(1).rstrip(" |"),
-                    commit=commit_m.group(1),
-                    set_name=set_name,
-                    clone_dir=clone_dir,
-                ))
+
+            # Get commit from HEAD
+            try:
+                commit = subprocess.check_output(
+                    ["git", "rev-parse", "HEAD"],
+                    cwd=str(clone_dir), text=True, stderr=subprocess.DEVNULL
+                ).strip()
+            except subprocess.CalledProcessError:
+                continue
+
+            # Try to get URL from md file (clones have origin removed)
+            url = _find_url_from_md(repo_root, set_name, clone_name)
+            if not url:
+                continue
+
+            repos.append(Repo(
+                repo_id=clone_name,
+                url=url,
+                commit=commit,
+                set_name=set_name,
+                clone_dir=f"ranking/clones/{set_name}/{clone_name}",
+            ))
     return repos
+
+
+def _find_url_from_md(repo_root: Path, set_name: str, clone_name: str) -> str | None:
+    """Find the GitHub URL for a clone by searching md files."""
+    repos_dir = repo_root / "ranking" / "repos" / set_name
+    for md in repos_dir.glob("*.md"):
+        if md.name == "README.md":
+            continue
+        text = md.read_text()
+        url_m = re.search(r'\*\*URL\*\*\s*\|\s*(https://\S+)', text)
+        if not url_m:
+            url_m = re.search(r'\|\s*URL\s*\|\s*(https://\S+)', text)
+        if url_m:
+            url = url_m.group(1).rstrip(" |").rstrip("/")
+            if url.rsplit("/", 1)[-1] == clone_name:
+                return url
+    return None
 
 
 def az(*args: str, check: bool = True) -> str:
@@ -371,13 +400,99 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {r.set_name}/{r.repo_id} @ {r.commit[:12]} → {r.clone_dir}")
         return 0
 
-    # Process in batches
+    # Fire all jobs
+    print(f"\n=== Launching {len(repos)} ACI jobs ===")
+    jobs: dict[str, tuple[str, Repo]] = {}  # repo_id → (aci_name, repo)
+    for repo in repos:
+        try:
+            name = launch_job(repo, config)
+            jobs[repo.repo_id] = (name, repo)
+        except RuntimeError as e:
+            print(f"    LAUNCH FAILED {repo.repo_id}: {e}")
+
+    print(f"\n=== Launched {len(jobs)}/{len(repos)} — polling for completion ===")
+
+    # Collect as they finish (poll all, process completed ones)
     all_results: list[JobResult] = []
-    for i in range(0, len(repos), args.parallelism):
-        batch = repos[i:i + args.parallelism]
-        print(f"\n=== Batch {i // args.parallelism + 1} ({len(batch)} repos) ===")
-        results = process_batch(batch, config, repo_root)
-        all_results.extend(results)
+    pending = dict(jobs)  # copy
+    start_times = {rid: time.time() for rid in pending}
+    deadline = time.time() + args.timeout * 60
+
+    while pending and time.time() < deadline:
+        newly_done = []
+
+        for repo_id, (name, repo) in list(pending.items()):
+            try:
+                out = az(
+                    "container", "show",
+                    "-g", config["resource_group"],
+                    "-n", name,
+                    "--query", "[containers[0].instanceView.currentState.state, containers[0].instanceView.currentState.exitCode]",
+                    "-o", "json",
+                    check=False,
+                )
+                if out:
+                    info = json.loads(out)
+                    state = info[0] if info[0] else "unknown"
+                    if state == "Terminated":
+                        exit_code = info[1]
+                        duration = int(time.time() - start_times[repo_id])
+                        logs = fetch_logs(name, config)
+
+                        result = JobResult(
+                            repo=repo, aci_name=name,
+                            state=state, exit_code=exit_code,
+                            duration_sec=duration, logs=logs,
+                        )
+
+                        if exit_code == 0:
+                            print(f"  ✓ {repo_id} ({duration}s)")
+                            if download_index(repo, config, repo_root):
+                                result.profile = download_profile(repo, config)
+                            else:
+                                result.error = "download failed"
+                        else:
+                            print(f"  ✗ {repo_id} exit={exit_code} ({duration}s)")
+                            result.error = f"exit_code={exit_code}"
+                            if logs:
+                                print(f"    {logs.splitlines()[-1][:100]}" if logs.strip() else "")
+
+                        # Save logs
+                        log_dir = repo_root / "ranking" / "data" / "index_logs"
+                        log_dir.mkdir(parents=True, exist_ok=True)
+                        (log_dir / f"{repo_id}.log").write_text(logs)
+
+                        cleanup_aci(name, config)
+                        all_results.append(result)
+                        newly_done.append(repo_id)
+            except (json.JSONDecodeError, RuntimeError):
+                pass
+
+        for rid in newly_done:
+            del pending[rid]
+
+        if pending:
+            remaining = len(pending)
+            elapsed_total = int(time.time() - min(start_times.values()))
+            print(f"  ... {remaining} pending ({elapsed_total}s elapsed)", end="\r")
+            time.sleep(15)
+
+    # Handle timeouts
+    for repo_id, (name, repo) in pending.items():
+        duration = int(time.time() - start_times[repo_id])
+        logs = fetch_logs(name, config)
+        log_dir = repo_root / "ranking" / "data" / "index_logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        (log_dir / f"{repo_id}.log").write_text(logs)
+        print(f"  ⏱ {repo_id} TIMEOUT after {duration}s")
+        if logs:
+            print(f"    Last: {logs.splitlines()[-1][:100]}" if logs.strip() else "")
+        cleanup_aci(name, config)
+        all_results.append(JobResult(
+            repo=repo, aci_name=name, state="timeout",
+            duration_sec=duration, logs=logs,
+            error=f"timeout after {args.timeout}min",
+        ))
 
     # Summary
     print(f"\n{'='*60}")
