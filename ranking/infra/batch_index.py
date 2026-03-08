@@ -149,6 +149,21 @@ def az(*args: str, check: bool = True) -> str:
     return result.stdout.strip()
 
 
+def _list_existing_containers(config: dict) -> set[str]:
+    """List existing ACI container names in the resource group."""
+    try:
+        out = az(
+            "container", "list",
+            "-g", config["resource_group"],
+            "--query", "[].name",
+            "-o", "tsv",
+            check=False,
+        )
+        return set(out.strip().splitlines()) if out.strip() else set()
+    except RuntimeError:
+        return set()
+
+
 def launch_job(repo: Repo, config: dict) -> str:
     """Create ACI container for one repo. Returns ACI name."""
     # ACI names: lowercase alnum + hyphens, max 63 chars
@@ -166,6 +181,7 @@ def launch_job(repo: Repo, config: dict) -> str:
         "--resource-group", config["resource_group"],
         "--name", name,
         "--image", config["image"],
+        "--os-type", "Linux",
         "--restart-policy", "Never",
         "--cpu", str(config["cpu"]),
         "--memory", str(config["memory_gb"]),
@@ -400,17 +416,35 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {r.set_name}/{r.repo_id} @ {r.commit[:12]} → {r.clone_dir}")
         return 0
 
-    # Fire all jobs
-    print(f"\n=== Launching {len(repos)} ACI jobs ===")
+    # Check what's already running/completed in ACI
+    existing_containers = _list_existing_containers(config)
+    already_running = set()
+    for name in existing_containers:
+        # Extract repo_id from container name (cpl-{repo_id})
+        already_running.add(name)
+
+    # Fire jobs, skipping already-running and retrying on quota errors
+    print(f"\n=== Launching ACI jobs (existing: {len(already_running)}) ===")
     jobs: dict[str, tuple[str, Repo]] = {}  # repo_id → (aci_name, repo)
+    retry_queue: list[Repo] = []
+
     for repo in repos:
+        aci_name = re.sub(r'[^a-z0-9-]', '-', f"cpl-{repo.repo_id}".lower())[:63].rstrip("-")
+        if aci_name in already_running:
+            print(f"  {aci_name} already exists, tracking")
+            jobs[repo.repo_id] = (aci_name, repo)
+            continue
         try:
             name = launch_job(repo, config)
             jobs[repo.repo_id] = (name, repo)
         except RuntimeError as e:
-            print(f"    LAUNCH FAILED {repo.repo_id}: {e}")
+            if "QuotaReached" in str(e) or "quota" in str(e).lower():
+                print(f"    QUOTA — queued for retry: {repo.repo_id}")
+                retry_queue.append(repo)
+            else:
+                print(f"    LAUNCH FAILED {repo.repo_id}: {e}")
 
-    print(f"\n=== Launched {len(jobs)}/{len(repos)} — polling for completion ===")
+    print(f"\n=== Launched {len(jobs)}/{len(repos)}, {len(retry_queue)} queued for retry ===")
 
     # Collect as they finish (poll all, process completed ones)
     all_results: list[JobResult] = []
@@ -471,10 +505,31 @@ def main(argv: list[str] | None = None) -> int:
         for rid in newly_done:
             del pending[rid]
 
+        # Retry queued jobs as slots free up
+        if newly_done and retry_queue:
+            to_retry = list(retry_queue)
+            retry_queue.clear()
+            for repo in to_retry:
+                try:
+                    name = launch_job(repo, config)
+                    jobs[repo.repo_id] = (name, repo)
+                    pending[repo.repo_id] = (name, repo)
+                    start_times[repo.repo_id] = time.time()
+                except RuntimeError as e:
+                    if "QuotaReached" in str(e) or "quota" in str(e).lower():
+                        retry_queue.append(repo)
+                    else:
+                        print(f"    RETRY FAILED {repo.repo_id}: {e}")
+
         if pending:
             remaining = len(pending)
+            queued = len(retry_queue)
             elapsed_total = int(time.time() - min(start_times.values()))
-            print(f"  ... {remaining} pending ({elapsed_total}s elapsed)", end="\r")
+            status = f"  ... {remaining} pending"
+            if queued:
+                status += f", {queued} queued"
+            status += f" ({elapsed_total}s elapsed)"
+            print(status, end="\r")
             time.sleep(15)
 
     # Handle timeouts
