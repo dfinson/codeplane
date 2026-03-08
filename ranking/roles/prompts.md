@@ -1,6 +1,23 @@
 # Agent Prompt Templates
 
 Copy-paste these into VS Code agent chat to start each session.
+Open the chat with the agent's cwd already set to the clone directory.
+
+---
+
+## Training — Auditor
+
+```
+Read /home/$USER/wsl-repos/codeplane/ranking/roles/auditor.md — those are your
+instructions. Your tasks file is:
+
+/home/$USER/wsl-repos/codeplane/ranking/repos/{SET}/{REPO_NAME}.md
+
+Begin.
+```
+
+Replace `{SET}` with `ranker-gate` or `cutoff`.
+Replace `{REPO_NAME}` with e.g. `python-fastapi`.
 
 ---
 
@@ -12,16 +29,8 @@ instructions. Your tasks file is:
 
 /home/$USER/wsl-repos/codeplane/ranking/repos/{SET}/{REPO_NAME}.md
 
-You are working inside the cloned repo at:
-
-/home/$USER/wsl-repos/codeplane/ranking/clones/{SET}/{CLONE_NAME}/
-
 Begin.
 ```
-
-Replace `{SET}` with `ranker-gate` or `cutoff`.
-Replace `{REPO_NAME}` with e.g. `python-fastapi`.
-Replace `{CLONE_NAME}` with the clone directory name (e.g. `fastapi`).
 
 ---
 
@@ -36,10 +45,6 @@ instructions. The tasks file is:
 The ground truth outputs are at:
 
 /home/$USER/wsl-repos/codeplane/ranking/data/{REPO_NAME}/ground_truth/
-
-You are working inside the cloned repo at:
-
-/home/$USER/wsl-repos/codeplane/ranking/clones/{SET}/{CLONE_NAME}/
 
 Begin.
 ```
@@ -56,15 +61,8 @@ Your tasks file is:
 
 /home/$USER/wsl-repos/codeplane/ranking/repos/eval/{REPO_NAME}.md
 
-You are working inside the cloned repo at:
-
-/home/$USER/wsl-repos/codeplane/ranking/clones/eval/{CLONE_NAME}/
-
 Begin.
 ```
-
-Replace `{REPO_NAME}` with e.g. `python-pydantic`.
-Replace `{CLONE_NAME}` with the clone directory name (e.g. `pydantic`).
 
 ---
 
@@ -81,10 +79,6 @@ The tasks file is:
 The ground truth outputs are at:
 
 /home/$USER/wsl-repos/codeplane/ranking/data/{REPO_NAME}/ground_truth/
-
-You are working inside the cloned repo at:
-
-/home/$USER/wsl-repos/codeplane/ranking/clones/eval/{CLONE_NAME}/
 
 Begin.
 ```
