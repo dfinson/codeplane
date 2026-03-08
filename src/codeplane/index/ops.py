@@ -2782,15 +2782,14 @@ class IndexCoordinatorEngine:
         return count, indexed_paths, files_by_ext
 
     def _stage_embeddings(self, extraction: ExtractionResult) -> None:
-        """Route an extraction to the correct embedding index.
+        """Route an extraction to the embedding index.
 
-        Code files (those with any code-kind defs) → per-def embedding.
-        Non-code files (config, docs, build) → per-file embedding.
+        All files with defs (code or non-code) → per-def embedding.
+        Files with zero defs (binary, empty) → per-file embedding.
         """
-        has_code = any(_is_code_kind(d.get("kind", "")) for d in extraction.defs)
-        if has_code and self._def_embedding is not None:
+        if extraction.defs and self._def_embedding is not None:
             self._def_embedding.stage_defs(extraction.file_path, extraction.defs)
-        elif not has_code and self._file_embedding is not None:
+        elif not extraction.defs and self._file_embedding is not None:
             self._file_embedding.stage_file(
                 extraction.file_path,
                 extraction.content_text,

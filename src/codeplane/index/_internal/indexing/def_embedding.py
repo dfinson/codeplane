@@ -247,10 +247,11 @@ class DefEmbeddingIndex:
         file_path: str,
         defs: list[dict[str, Any]],
     ) -> None:
-        """Stage code defs from a file for embedding.
+        """Stage defs from a file for embedding.
 
-        Filters to code kinds only. Builds per-def scaffold for each.
-        Non-code kinds are silently skipped.
+        All def kinds (code and non-code) get per-def embeddings.
+        Non-code kinds (pair, key, table, target, heading) use
+        a simplified scaffold with name + kind + file context.
 
         Args:
             file_path: Relative file path.
@@ -258,12 +259,8 @@ class DefEmbeddingIndex:
         """
         entries: list[tuple[str, str]] = []
         for d in defs:
-            kind = d.get("kind", "")
-            if not _is_code_kind(kind):
-                continue
             uid = d.get("def_uid", "")
             if not uid:
-                # Build uid from lexical_path if available
                 uid = d.get("lexical_path", "")
             if not uid:
                 continue
