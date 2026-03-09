@@ -1,0 +1,163 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/absl/status/statusor.h b/absl/status/statusor.h\nindex 2427d24..5ccc700 100644\n--- a/absl/status/statusor.h\n+++ b/absl/status/statusor.h\n@@ -567,6 +567,28 @@ class StatusOr : private internal_statusor::OperatorBase<T>,\n     return std::move(*this).ValueOrImpl(std::forward<U>(default_value));\n   }\n \n+  // StatusOr<T>::or_else()\n+  //\n+  // Invokes the given callable with the held `absl::Status` when this\n+  // `StatusOr` holds an error, returning a new `StatusOr<T>` produced by\n+  // the callable. If this `StatusOr` holds a value, it is returned unchanged.\n+  template <typename Fn>\n+  StatusOr<T> or_else(Fn&& fn) const& {\n+    if (ok()) return *this;\n+    return std::forward<Fn>(fn)(status());\n+  }\n+\n+  template <typename Fn>\n+  StatusOr<T> or_else(Fn&& fn) && {\n+    if (ok()) return std::move(*this);\n+    return std::forward<Fn>(fn)(std::move(*this).status());\n+  }\n+",
+  "excluded_defs": [
+    {
+      "kind": "function",
+      "name": "ValueOrImpl",
+      "path": "absl/status/statusor.h",
+      "reason": "Briefly examined to understand the existing monadic pattern; not needed since or_else uses ok() and status() directly",
+      "start_line": 690
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "StatusOr already has ok() (to check state), value() (to access value), and status() (to access error). or_else needs two overloads: const& (returns copy of *this if ok) and && (moves *this if ok, moves status for the fallback call).",
+    "dead_ends": [],
+    "hindsight": "Could have checked if there's an and_then() already (there isn't) to understand whether or_else should be the first monadic operation or part of a series.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Single overload taking const&",
+          "Two overloads: const& and &&"
+        ],
+        "decision": "Two overloads (const& and &&) for efficient move semantics",
+        "reasoning": "Following the same pattern as value_or() which has both const& and && overloads; the && overload allows moving the value out instead of copying it"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Search for value_or in statusor.h to understand the existing monadic API",
+        "reasoning": "Need to understand the API pattern for monadic operations on StatusOr",
+        "result": "value_or has const& and && overloads; both use ok() and ValueOrImpl"
+      },
+      {
+        "action": "Check ok() and status() methods availability",
+        "reasoning": "Need to confirm these are accessible from within the template method",
+        "result": "ok() at line 455, status() accessible - both present in the class"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "function",
+      "name": "or_else",
+      "path": "absl/status/statusor.h",
+      "reason": "edited: added two overloads of or_else",
+      "start_line": 580
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts ('error fallback', 'callable', 'monadic chaining'). Pre-implementation: a developer adding error-handling chains would describe it this way.",
+      "pins": [],
+      "query_text": "invoke a fallback function when an error-wrapping value type holds an error, enabling monadic error handling chains",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'or_else' and 'StatusOr' appear literally in the changed source. Pre-implementation: a developer would search for these patterns.",
+      "pins": [],
+      "query_text": "\"or_else\" OR \"StatusOr\" OR \"monadic\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 4 exact symbol names from the changed code. Pre-implementation: a developer would search for these by name.",
+      "pins": [],
+      "query_text": "or_else, StatusOr, value_or, ok",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names value_or with relationship word 'siblings'. Pre-implementation: a developer would look at the siblings of value_or in StatusOr to understand the API pattern.",
+      "pins": [],
+      "query_text": "siblings of value_or in the StatusOr class",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "value_or"
+      ]
+    },
+    {
+      "justification": "Rule compliance: names the changed file path. Pre-implementation: a developer would navigate directly to statusor.h.",
+      "pins": [
+        "absl/status/statusor.h"
+      ],
+      "query_text": "absl/status/statusor.h",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('fallback callable') with symbol names or_else and StatusOr. Pre-implementation: a developer would use these terms when searching.",
+      "pins": [],
+      "query_text": "add or_else monadic fallback callable to StatusOr for error handling chains",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "or_else",
+        "StatusOr"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 1 file path. Pre-implementation: a developer would search by method name and file.",
+      "pins": [
+        "absl/status/statusor.h"
+      ],
+      "query_text": "or_else value_or in absl/status/statusor.h",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "or_else",
+        "value_or"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names and file path. Pre-implementation: this is the natural query for starting this task.",
+      "pins": [
+        "absl/status/statusor.h"
+      ],
+      "query_text": "Add StatusOr::or_else(callable) that invokes callable with Status when StatusOr holds an error, alongside value_or in absl/status/statusor.h",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "or_else",
+        "StatusOr",
+        "value_or"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added two overloads of `or_else` to `StatusOr<T>` in `statusor.h`: a `const&` overload that returns `*this` if OK or invokes the callable with `status()`, and an `&&` overload that moves `*this` if OK or moves the status into the callable. The pattern mirrors `value_or` which also has both value-category overloads.",
+  "task_complexity": "narrow",
+  "task_id": "cpp-abseil/N6",
+  "task_text": "The `StatusOr<T>` class in `status/statusor.h` supports `value()`,\n`value_or()`, `ok()`, and `status()`, but lacks monadic operations for\nchaining fallible computations. Add `StatusOr<T>::or_else(callable)`\nthat invokes the callable with the held `absl::Status` when the\n`StatusOr` holds an error, returning a new `StatusOr<T>` produced by\nthe callable. The callable signature should be `StatusOr<T>(absl::Status)`.\nThis enables error-handling chains such as\n`auto r = Compute().or_else([](Status s) { return Fallback(); });`\nwithout nested if-statements.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "absl/status/statusor.h"
+    ],
+    "diff_seeds": [
+      "or_else"
+    ],
+    "import_graph_test_files": [
+      "absl/status/statusor_test.cc"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "function",
+      "name": "value_or",
+      "path": "absl/status/statusor.h",
+      "reason": "read: the const&/&& overload pattern in value_or is exactly what or_else must mirror; an agent must see this to know to provide both overloads",
+      "start_line": 545
+    },
+    {
+      "kind": "function",
+      "name": "ok",
+      "path": "absl/status/statusor.h",
+      "reason": "read: or_else uses ok() to check state; an agent must verify it returns bool and is const",
+      "start_line": 455
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers only the new or_else method. An AI agent would additionally look at value_or to understand the const&/&& dual-overload pattern (to know it should implement both), and at ok() to confirm its signature. Without seeing these, the agent might implement only one overload or use wrong state-checking API."
+}

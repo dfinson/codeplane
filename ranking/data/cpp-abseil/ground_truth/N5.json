@@ -1,0 +1,182 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/FAQ.md b/FAQ.md\n+## How do I convert a string to title case?\n+\n+Use `absl::AsciiStrToTitle()` from `absl/strings/ascii.h`:\n+...\ndiff --git a/absl/strings/ascii.cc b/absl/strings/ascii.cc\n+void AsciiStrToTitle(std::string* s) {\n+  bool new_word = true;\n+  for (char& c : *s) {\n+    if (absl::ascii_isspace(...)) { new_word = true; }\n+    else if (new_word) { c = absl::ascii_toupper(...); new_word = false; }\n+    else { c = absl::ascii_tolower(...); }\n+  }\n+}\n+\n+std::string AsciiStrToTitle(absl::string_view s) {\n+  std::string result(s);\n+  absl::AsciiStrToTitle(&result);\n+  return result;\n+}\ndiff --git a/absl/strings/ascii.h b/absl/strings/ascii.h\n+void AsciiStrToTitle(std::string* s);\n+[[nodiscard]] std::string AsciiStrToTitle(absl::string_view s);",
+  "excluded_defs": [
+    {
+      "kind": "function",
+      "name": "AsciiStrCaseFold",
+      "path": "absl/strings/ascii.cc",
+      "reason": "Investigated as potential building block; not used since it only handles pure upper/lower, not title-case logic",
+      "start_line": 220
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "AsciiStrToLower/Upper in-place functions use a templated AsciiStrCaseFold helper. For title-case the logic is different (state machine based on word boundaries), so implementing it directly in the in-place function is cleaner.",
+    "dead_ends": [],
+    "hindsight": "Could have added an overload for std::string&& (rvalue) like AsciiStrToLower/Upper have, but the task doesn't request it and it's not needed for correctness.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Use AsciiStrCaseFold template",
+          "Implement from scratch with a state machine"
+        ],
+        "decision": "Implement directly with a bool state variable tracking word boundaries",
+        "reasoning": "AsciiStrCaseFold only handles single-case folding; title case requires a word-boundary state machine which is simpler to write directly"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read ascii.h for existing AsciiStrToLower/Upper patterns",
+        "reasoning": "Need to understand the API pattern (in-place + copy-returning overloads)",
+        "result": "In-place takes std::string*, copy-returning takes string_view and returns std::string"
+      },
+      {
+        "action": "Read ascii.cc for implementations",
+        "reasoning": "Need to understand the implementation pattern and available helpers",
+        "result": "In-place uses AsciiStrCaseFold<bool> template; can use ascii_isspace, ascii_toupper, ascii_tolower directly"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "function",
+      "name": "AsciiStrToTitle",
+      "path": "absl/strings/ascii.h",
+      "reason": "edited: added declaration for in-place and copy-returning overloads",
+      "start_line": 241
+    },
+    {
+      "kind": "function",
+      "name": "AsciiStrToTitle",
+      "path": "absl/strings/ascii.cc",
+      "reason": "edited: added in-place and copy-returning implementations",
+      "start_line": 265
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts ('title case', 'capitalize first letter of each word'). Pre-implementation: a developer tasked with this feature would search for it in these terms.",
+      "pins": [],
+      "query_text": "capitalize the first letter of each word in a string while lowercasing the rest",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'AsciiStrToTitle' and 'ascii_toupper' appear literally in the changed source. Pre-implementation: a developer would search for these function names to check if they exist.",
+      "pins": [],
+      "query_text": "\"AsciiStrToTitle\" OR \"title case\" OR \"ascii_toupper\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 4 exact symbol names from the changed code. Pre-implementation: a developer would search for these by name.",
+      "pins": [],
+      "query_text": "AsciiStrToTitle, AsciiStrToLower, AsciiStrToUpper, ascii_isspace",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names AsciiStrToLower with relationship word 'siblings'. Pre-implementation: a developer would look at the siblings in the ASCII module to understand the API pattern.",
+      "pins": [],
+      "query_text": "siblings of AsciiStrToLower in the absl strings ascii module",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "AsciiStrToLower"
+      ]
+    },
+    {
+      "justification": "Rule compliance: names 3 file paths from the changed files. Pre-implementation: a developer would navigate directly to ascii.h and ascii.cc.",
+      "pins": [
+        "absl/strings/ascii.h",
+        "absl/strings/ascii.cc",
+        "FAQ.md"
+      ],
+      "query_text": "absl/strings/ascii.h absl/strings/ascii.cc FAQ.md",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('title case conversion') with symbol names AsciiStrToTitle and AsciiStrToLower. Pre-implementation: a developer would use these terms when searching.",
+      "pins": [],
+      "query_text": "add AsciiStrToTitle for title case conversion alongside AsciiStrToLower in absl strings",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "AsciiStrToTitle",
+        "AsciiStrToLower"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 2 file paths. Pre-implementation: a developer would search by function name and file location.",
+      "pins": [
+        "absl/strings/ascii.h",
+        "absl/strings/ascii.cc"
+      ],
+      "query_text": "AsciiStrToTitle AsciiStrToLower in absl/strings/ascii.h absl/strings/ascii.cc",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "AsciiStrToTitle",
+        "AsciiStrToLower"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names and file paths. Pre-implementation: this is the natural query for starting this task.",
+      "pins": [
+        "absl/strings/ascii.h",
+        "absl/strings/ascii.cc"
+      ],
+      "query_text": "Add AsciiStrToTitle title case function to absl/strings/ascii.h and ascii.cc alongside AsciiStrToLower and AsciiStrToUpper",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "AsciiStrToTitle",
+        "AsciiStrToLower"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `AsciiStrToTitle(std::string*)` (in-place) and `AsciiStrToTitle(absl::string_view)` (copy-returning) to `ascii.h` (declarations) and `ascii.cc` (implementations). The in-place version uses a word-boundary state machine with `ascii_isspace`, `ascii_toupper`, and `ascii_tolower`. Also added a FAQ.md entry with usage examples.",
+  "task_complexity": "narrow",
+  "task_id": "cpp-abseil/N5",
+  "task_text": "The `absl/strings/ascii.h` header provides `AsciiStrToLower()` and\n`AsciiStrToUpper()` in both in-place (`std::string*`) and copy-returning\n(`string_view`) overloads, but has no title-case function. Add\n`AsciiStrToTitle(std::string* s)` (in-place) and\n`[[nodiscard]] std::string AsciiStrToTitle(absl::string_view s)`\n(copy-returning) that capitalize the first character of each\nwhitespace-delimited word using `ascii_toupper` and lowercase the rest\nusing `ascii_tolower`. Also update `FAQ.md` to include a usage example\nfor the new title-case function alongside the existing case-conversion\nexamples.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "absl/strings/ascii.h",
+      "absl/strings/ascii.cc",
+      "FAQ.md"
+    ],
+    "diff_seeds": [
+      "AsciiStrToTitle"
+    ],
+    "import_graph_test_files": [
+      "absl/strings/ascii_test.cc"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "function",
+      "name": "AsciiStrToLower",
+      "path": "absl/strings/ascii.h",
+      "reason": "read: the declaration pattern (in-place + copy-returning overloads) is what the new function must mirror; an agent must verify the signature pattern",
+      "start_line": 188
+    },
+    {
+      "kind": "function",
+      "name": "AsciiStrToLower",
+      "path": "absl/strings/ascii.cc",
+      "reason": "read: the in-place implementation shows how to iterate and modify in-place; needed to understand how the existing case functions work",
+      "start_line": 256
+    },
+    {
+      "kind": "function",
+      "name": "ascii_isspace",
+      "path": "absl/strings/ascii.h",
+      "reason": "read: the word-boundary detection uses ascii_isspace; an agent must verify this function exists in scope",
+      "start_line": 163
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers only the new functions. An AI agent would additionally look at the existing AsciiStrToLower declaration/implementation to understand the exact API pattern to mirror (in-place vs copy-returning overloads), and check that ascii_isspace is available for word-boundary detection. Without these, the agent might use a different API shape or forget to check for whitespace correctly."
+}

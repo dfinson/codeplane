@@ -231,13 +231,13 @@ class SessionRunner:
             runner.status_line = f"wrote {params.task_id}.json"
             return f"Written successfully: {path} ({runner.jsons_written} JSONs total)"
 
-        @define_tool(description="Write the non-OK queries JSON file. Call after all W tasks are done (executor session C only).")
+        @define_tool(description="Write the non-OK queries JSON file to ground_truth/non_ok_queries.json. Call AFTER all W tasks are done (executor session C only). This file goes in the SAME directory as the task JSONs.")
         async def write_non_ok_queries(params: WriteNonOKParams) -> str:
             errors = validate_non_ok_schema(params.data)
             if errors:
                 runner.log(f"NON-OK VALIDATION FAILED: {errors}")
                 return f"VALIDATION FAILED:\n" + "\n".join(f"  - {e}" for e in errors)
-            path = DATA_DIR / params.repo_id / "non_ok_queries.json"
+            path = DATA_DIR / params.repo_id / "ground_truth" / "non_ok_queries.json"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(json.dumps(params.data, indent=2) + "\n")
             runner.log(f"WROTE {path}")
@@ -303,8 +303,10 @@ class SessionRunner:
             base_prompt += (
                 "Execute tasks W1 through W11 only. Skip all N and M tasks.\n"
                 "For each task, solve it, then call write_ground_truth with the complete JSON.\n"
-                "After all W tasks, write non-OK queries using write_non_ok_queries.\n"
-                "When done, call report_complete.\n"
+                "After ALL W tasks are done, write the non-OK queries by calling write_non_ok_queries.\n"
+                "The non_ok_queries file will be written to ground_truth/non_ok_queries.json — "
+                "the SAME directory as the task JSONs. Do NOT write it anywhere else.\n"
+                "When everything is complete (all W JSONs + non_ok_queries), call report_complete.\n"
             )
         elif self.stage == "review":
             gt_dir = DATA_DIR / self.repo_id / "ground_truth"
