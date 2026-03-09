@@ -328,15 +328,17 @@ class SessionRunner:
 
         client = CopilotClient({
             "cwd": str(clone_dir),
-            "log_level": "warn",
+            "log_level": "warning",
         })
         await client.start()
 
         try:
+            from copilot import PermissionHandler
             session = await client.create_session({
                 "model": MODELS[self.stage],
                 "tools": self.build_tools(),
                 "infinite_sessions": {"enabled": True},
+                "on_permission_request": PermissionHandler.approve_all,
             })
 
             def on_event(event):
@@ -489,68 +491,49 @@ async def cmd_run(state: dict, stage_filter: str | None, repo_filter: str | None
         from rich.console import Group
         return Panel(Group(table, Text(""), active_table, Text(""), footer), title="Ground Truth Pipeline")
 
-    # Main loop
-    while True:
-        stage = stage_filter or current_global_stage(state)
-        if stage == "done":
-            console.print("[green]All stages complete![/green]")
-            break
+    # Determine stage and targets
+    stage = stage_filter or current_global_stage(state)
+    if stage == "done":
+        console.print("[green]All stages complete![/green]")
+        return
 
-        if repo_filter:
-            pending = [repo_filter] if state["repos"].get(repo_filter, {}).get(stage, {}).get("status") == "pending" else []
-        else:
-            pending = repos_for_stage(state, stage, "pending")
+    if repo_filter:
+        targets = [repo_filter] if state["repos"].get(repo_filter, {}).get(stage, {}).get("status") == "pending" else []
+    else:
+        targets = repos_for_stage(state, stage, "pending")
 
-        if not pending and not runners:
-            # Check if stage is complete
-            all_done = all(
-                rd.get(stage, {}).get("status") in ("merged", "done")
-                for rd in state["repos"].values()
-            )
-            if all_done:
-                # Advance: mark all "done" as "merged" for this stage
-                for rd in state["repos"].values():
-                    if rd.get(stage, {}).get("status") == "done":
-                        rd[stage]["status"] = "merged"
-                save_state(state)
-                console.print(f"[green]Stage {stage} complete! Advancing...[/green]")
-                if stage_filter:
-                    break
-                continue
-            else:
-                # Some failed, nothing pending
-                console.print(f"[yellow]Stage {stage}: {len(repos_for_stage(state, stage, 'failed'))} failed, no pending. Run 'retry' to reset.[/yellow]")
-                break
+    if not targets:
+        console.print(f"[yellow]No pending repos for stage {stage}[/yellow]")
+        return
 
-        # Launch tasks
-        tasks = []
-        for repo_id in pending:
-            if len(runners) >= concurrency:
-                break
-            tasks.append(asyncio.create_task(run_one(repo_id, stage)))
+    console.print(f"Launching {len(targets)} session(s) for stage [bold]{stage}[/bold]")
 
-        if not tasks and not runners:
-            await asyncio.sleep(5)
-            continue
-
-        # Run with live display
+    # Create all tasks upfront, semaphore controls concurrency
+    async def run_with_display():
+        flight = [asyncio.create_task(run_one(rid, stage)) for rid in targets]
         with Live(render_display(), console=console, refresh_per_second=0.5) as live:
-            while runners or tasks:
+            while not all(t.done() for t in flight):
                 live.update(render_display())
-                done_tasks, _ = await asyncio.wait(
-                    [asyncio.create_task(asyncio.sleep(2))],
-                    timeout=2,
-                )
-                # Check for newly pending repos
-                new_pending = repos_for_stage(state, stage, "pending")
-                for repo_id in new_pending:
-                    if repo_id not in runners and len(runners) < concurrency:
-                        tasks.append(asyncio.create_task(run_one(repo_id, stage)))
-                # Remove finished tasks
-                tasks = [t for t in tasks if not t.done()]
+                await asyncio.sleep(2)
+            live.update(render_display())
+        # Collect exceptions
+        for t, rid in zip(flight, targets):
+            if t.exception():
+                console.print(f"[red]{rid}: {t.exception()}[/red]")
 
-        if repo_filter:
-            break
+    await run_with_display()
+
+    # Post-run: advance stage if all done
+    all_done = all(
+        rd.get(stage, {}).get("status") in ("merged", "done")
+        for rd in state["repos"].values()
+    )
+    if all_done:
+        for rd in state["repos"].values():
+            if rd.get(stage, {}).get("status") == "done":
+                rd[stage]["status"] = "merged"
+        save_state(state)
+        console.print(f"[green]Stage {stage} complete![/green]")
 
 
 def _archive_log(repo_id: str, stage: str, attempt: int) -> None:
