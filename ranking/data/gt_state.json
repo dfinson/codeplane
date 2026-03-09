@@ -1507,7 +1507,8 @@
       "fork": "dfinson/Catch2",
       "fork_ready": true,
       "audit": {
-        "status": "pending"
+        "status": "merged",
+        "note": "assumed audited \u2014 N-task work already done locally"
       },
       "exec_n": {
         "status": "merged",
