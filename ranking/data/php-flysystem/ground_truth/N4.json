@@ -1,0 +1,175 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/DirectoryListing.php b/src/DirectoryListing.php\nindex 7b1a1f5..4070438 100644\n--- a/src/DirectoryListing.php\n+++ b/src/DirectoryListing.php\n@@ -28,13 +28,14 @@ class DirectoryListing implements IteratorAggregate\n      */\n     public function filter(callable $filter): DirectoryListing\n     {\n+        $listing = $this->listing instanceof Generator ? $this->toArray() : $this->listing;\n         $generator = (static function (iterable $listing) use ($filter): Generator {\n             foreach ($listing as $item) {\n                 if ($filter($item)) {\n                     yield $item;\n                 }\n             }\n-        })($this->listing);\n+        })($listing);\n \n         return new DirectoryListing($generator);\n     }\n@@ -48,11 +49,12 @@ class DirectoryListing implements IteratorAggregate\n      */\n     public function map(callable $mapper): DirectoryListing\n     {\n+        $listing = $this->listing instanceof Generator ? $this->toArray() : $this->listing;\n         $generator = (static function (iterable $listing) use ($mapper): Generator {\n             foreach ($listing as $item) {\n                 yield $mapper($item);\n             }\n-        })($this->listing);\n+        })($listing);\n \n         return new DirectoryListing($generator);\n     }",
+  "excluded_defs": [
+    {
+      "kind": "method",
+      "name": "sortByPath",
+      "path": "src/DirectoryListing.php",
+      "reason": "read for context: already uses toArray() correctly, confirming the pattern to follow",
+      "start_line": 62
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "sortByPath already calls toArray() before working with the listing, confirming toArray() is the correct materialization pattern. The fix for map/filter mirrors this exactly.",
+    "dead_ends": [],
+    "hindsight": "Could have looked at sortByPath first since it already solved the same problem.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Clone the generator",
+          "Check instanceof Generator and call toArray()"
+        ],
+        "decision": "Check instanceof Generator and call toArray() before passing to the inner closure",
+        "reasoning": "toArray() is already used in sortByPath for the same reason; cloning generators is not supported in PHP"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read src/DirectoryListing.php",
+        "reasoning": "Task directly targets map() and filter() in this file",
+        "result": "Both methods pass $this->listing directly to the inner generator closure; if $this->listing is a Generator it gets shared"
+      },
+      {
+        "action": "Read toArray() method in the same file",
+        "reasoning": "Task mentions materializing via toArray(); need to confirm its implementation",
+        "result": "Returns array from Traversable via iterator_to_array or casts to array"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "filter",
+      "path": "src/DirectoryListing.php",
+      "reason": "edited: added Generator instanceof check and materialization before passing to inner generator",
+      "start_line": 28
+    },
+    {
+      "kind": "method",
+      "name": "map",
+      "path": "src/DirectoryListing.php",
+      "reason": "edited: same fix as filter",
+      "start_line": 49
+    },
+    {
+      "kind": "method",
+      "name": "toArray",
+      "path": "src/DirectoryListing.php",
+      "reason": "read: needed to confirm it returns a plain array suitable for re-iteration",
+      "start_line": 80
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts 'directory listing', 'generator exhaustion', 'multiple iterations', 'shared state' with no symbol names. Pre-implementation: a developer experiencing the bug would describe it this way.",
+      "pins": [],
+      "query_text": "Directory listing transformation methods exhaust the underlying generator on first use, causing subsequent iterations to return no results",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'iterator_to_array' appears literally in toArray(). Pre-implementation: a developer researching how iterators are materialized in this codebase.",
+      "pins": [],
+      "query_text": "\"iterator_to_array\" generator materialize listing",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names from changed code. Pre-implementation: a developer tasked with this fix would search these.",
+      "pins": [],
+      "query_text": "filter, map, toArray, DirectoryListing",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names DirectoryListing with relationship word 'methods'. Pre-implementation: agent wants to understand all transformation methods.",
+      "pins": [],
+      "query_text": "Methods of DirectoryListing that transform or iterate the underlying iterable",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "DirectoryListing"
+      ]
+    },
+    {
+      "justification": "Rule compliance: names 1 file path. Pre-implementation: task description directly names this file.",
+      "pins": [
+        "src/DirectoryListing.php"
+      ],
+      "query_text": "src/DirectoryListing.php map filter generator state sharing",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept 'generator sharing' with symbols map, filter, DirectoryListing. Pre-implementation: a developer writing the fix description.",
+      "pins": [],
+      "query_text": "DirectoryListing map and filter should not share generator state when the source listing is a Generator instance",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "map",
+        "filter",
+        "DirectoryListing"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 symbol names and 1 file path. Pre-implementation: developer knows the file and key methods.",
+      "pins": [
+        "src/DirectoryListing.php"
+      ],
+      "query_text": "map filter toArray in src/DirectoryListing.php",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "map",
+        "filter",
+        "toArray"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names and file path. Pre-implementation: natural task description query.",
+      "pins": [
+        "src/DirectoryListing.php"
+      ],
+      "query_text": "Fix DirectoryListing map and filter to materialize Generator via toArray before creating derived listing",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "map",
+        "filter",
+        "toArray"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added a `$listing instanceof Generator ? $this->toArray() : $this->listing` check at the start of both `map()` and `filter()`. When the underlying listing is a `Generator`, it is materialized into an array first so each derived `DirectoryListing` gets its own independent copy of the data.",
+  "task_complexity": "narrow",
+  "task_id": "php-flysystem/N4",
+  "task_text": "Fix DirectoryListing.map and filter sharing generator state across multiple calls\n\nIn `src/DirectoryListing.php`, `map()` and `filter()` each create a\nnew generator by passing `$this->listing` to an immediately-invoked\nfunction. When `$this->listing` is a `Generator` (as returned by\n`Filesystem::listContents`), both the original and the newly created\ngenerators share the same underlying generator object. Iterating the\nfirst derived listing exhausts the shared generator, causing any\nsecond derived listing produced from the same source to yield no\nresults. Fix `map` and `filter` to detect when `$this->listing` is\nan instance of `\\Generator` and materialise it via `toArray()` before\nwrapping it in a new lazy generator, ensuring that multiple\nindependent transformations of the same `DirectoryListing` each see\nthe full contents.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 no coverage report file found in repository root",
+    "diff_pins": null,
+    "diff_seeds": null,
+    "import_graph_test_files": [
+      "src/DirectoryListingTest.php"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "sortByPath",
+      "path": "src/DirectoryListing.php",
+      "reason": "read: already calls toArray() for the same reason; seeing this pattern prevents the agent from inventing an alternative approach",
+      "start_line": 62
+    },
+    {
+      "kind": "method",
+      "name": "getIterator",
+      "path": "src/DirectoryListing.php",
+      "reason": "read: understanding how Traversable/Generator is handled elsewhere in the class prevents duplicating the logic incorrectly",
+      "start_line": 72
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers only the two edited methods plus the toArray() helper used in the fix. An AI agent would additionally read sortByPath to see the existing materialization pattern, and getIterator to understand how Traversable vs Generator is handled elsewhere, preventing it from proposing an incompatible approach."
+}

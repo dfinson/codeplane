@@ -1,0 +1,140 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/include/simdjson/constevalutil.h b/include/simdjson/constevalutil.h\n@@ added constexpr bool is_valid_json_pointer(std::string_view ptr) after the #endif SIMDJSON_CONSTEVAL block, in the constevalutil namespace",
+  "excluded_defs": [
+    {
+      "kind": "function",
+      "name": "consteval_to_quoted_escaped",
+      "path": "include/simdjson/constevalutil.h",
+      "reason": "Read to understand the SIMDJSON_CONSTEVAL guard pattern; not edited",
+      "start_line": 30
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "The existing `consteval_to_quoted_escaped` inside the `SIMDJSON_CONSTEVAL` guard demonstrates the pattern. However, `is_valid_json_pointer` only needs `constexpr` (not `consteval`) since it doesn't allocate memory and is simpler \u2014 making it usable in both C++17 and C++20 contexts.",
+    "dead_ends": [],
+    "hindsight": "I placed the function OUTSIDE the SIMDJSON_CONSTEVAL guard since it only uses std::string_view and basic iteration, making it broadly available. Could have put it inside the guard like `consteval_to_quoted_escaped` but that would restrict it unnecessarily.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Place inside #if SIMDJSON_CONSTEVAL guard as consteval function",
+          "Put in a separate header"
+        ],
+        "decision": "Define as constexpr (not consteval) outside the SIMDJSON_CONSTEVAL guard",
+        "reasoning": "constexpr allows both compile-time and runtime use; it doesn't need the C++20 consteval keyword since it doesn't allocate; placing it outside the guard makes it available in C++17 too"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Find and read include/simdjson/constevalutil.h",
+        "reasoning": "Task names this file directly",
+        "result": "Found the SIMDJSON_CONSTEVAL guard, consteval_to_quoted_escaped function, and fixed_string / string_constant structs under SIMDJSON_SUPPORTS_CONCEPTS guard"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "function",
+      "name": "is_valid_json_pointer",
+      "path": "include/simdjson/constevalutil.h",
+      "reason": "edited: added new constexpr function",
+      "start_line": 53
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: domain concepts only ('compile-time validation', 'JSON Pointer', 'static assert'). Pre-implementation: assigned developer would describe it this way.",
+      "pins": [],
+      "query_text": "Add a compile-time validator for JSON Pointer strings so that embedded hard-coded paths can be checked in static_assert",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'SIMDJSON_CONSTEVAL' appears literally in the header guard. Pre-implementation: searching for this macro locates the right file.",
+      "pins": [],
+      "query_text": "\"SIMDJSON_CONSTEVAL\" \"constevalutil\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names. Pre-implementation: developer would search for these.",
+      "pins": [],
+      "query_text": "is_valid_json_pointer, consteval, constevalutil, consteval_to_quoted_escaped",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names constevalutil and relationship word siblings. Pre-implementation: finding sibling functions shows the namespace structure.",
+      "pins": [],
+      "query_text": "Sibling functions of consteval_to_quoted_escaped in the constevalutil namespace",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "consteval_to_quoted_escaped"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 1 file path from the solution. Pre-implementation: task names this file.",
+      "pins": [
+        "include/simdjson/constevalutil.h"
+      ],
+      "query_text": "include/simdjson/constevalutil.h",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('compile-time JSON Pointer syntax') with exact symbol names is_valid_json_pointer and constevalutil. Pre-implementation: natural combined search.",
+      "pins": [],
+      "query_text": "Add is_valid_json_pointer constexpr function to constevalutil for static_assert validation of JSON Pointer strings",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "is_valid_json_pointer",
+        "constevalutil"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 1 file path.",
+      "pins": [
+        "include/simdjson/constevalutil.h"
+      ],
+      "query_text": "is_valid_json_pointer constexpr in constevalutil.h",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "is_valid_json_pointer",
+        "consteval_to_quoted_escaped"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names and file path. Pre-implementation: natural query.",
+      "pins": [
+        "include/simdjson/constevalutil.h"
+      ],
+      "query_text": "Add consteval/constexpr is_valid_json_pointer to constevalutil.h for compile-time RFC 6901 JSON Pointer validation",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "is_valid_json_pointer",
+        "constevalutil"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `constexpr bool is_valid_json_pointer(std::string_view ptr)` to `constevalutil.h` in the `simdjson::constevalutil` namespace. The function returns false for non-empty pointers that don't start with `/` or that contain a `~` not followed by `0` or `1`. It's defined outside the `SIMDJSON_CONSTEVAL` guard (as `constexpr` rather than `consteval`) so it's usable in both C++17 and C++20 contexts and in both compile-time and runtime scenarios.",
+  "task_complexity": "narrow",
+  "task_id": "cpp-simdjson/N8",
+  "task_text": "The `constevalutil.h` header provides compile-time string utilities (e.g., `consteval_to_quoted_escaped`) under the `SIMDJSON_CONSTEVAL` guard, but there is no compile-time validator for JSON Pointer strings. Add a `consteval bool is_valid_json_pointer(std::string_view ptr)` function to `constevalutil.h` that returns `false` for any pointer that does not begin with `/` (unless empty) or contains a `~` not followed by `0` or `1`, enabling developers to embed hard-coded pointer strings as `static_assert(is_valid_json_pointer(\"/foo/bar\"))` and catch typos at compile time.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "include/simdjson/constevalutil.h"
+    ],
+    "diff_seeds": [
+      "is_valid_json_pointer"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [],
+  "tier_difference_reasoning": "The minimum set covers the single new function. No additional defs are needed \u2014 the function is self-contained and the task description fully specifies the algorithm. No agent thrash is expected."
+}

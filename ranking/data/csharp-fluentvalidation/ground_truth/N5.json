@@ -1,0 +1,133 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/FluentValidation/Internal/MessageFormatter.cs b/src/FluentValidation/Internal/MessageFormatter.cs\nindex 58a604d..0ac9068 100644\n--- a/src/FluentValidation/Internal/MessageFormatter.cs\n+++ b/src/FluentValidation/Internal/MessageFormatter.cs\n@@ -80,13 +80,18 @@ public partial class MessageFormatter {\n \t\t\tif (!_placeholderValues.TryGetValue(key, out var value))\n \t\t\t\treturn m.Value; // No placeholder / value\n \n+\t\t\t// Escape braces in the value's string representation so that they\n+\t\t\t// cannot be misinterpreted as placeholders if the result is processed\n+\t\t\t// again (e.g., by string.Format).\n+\t\t\tvar stringValue = value?.ToString()?.Replace(\"{\", \"{{\").Replace(\"}\", \"}}\") ?? string.Empty;\n+\n \t\t\tvar format = m.Groups[2].Success // Format specified?\n \t\t\t\t? $\"{{0:{m.Groups[2].Value}}}\"\n \t\t\t\t: null;\n \n \t\t\treturn format == null\n \t\t\t\t? value?.ToString()\n-\t\t\t\t: string.Format(format, value);\n+\t\t\t\t: string.Format(format, stringValue);\n \t\t});\n \t}",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "In BuildMessage, the format branch calls string.Format(format, value) where format is like '{0:N2}' - if value.ToString() contains '{' or '}', those could be misinterpreted. Escaping braces via Replace before passing to string.Format is the standard .NET fix.",
+    "dead_ends": [],
+    "hindsight": "The non-format path still returns value?.ToString() unescaped; this is correct because Regex.Replace doesn't re-process the substituted text, but we only escape in the string.Format path where re-interpretation is a real risk.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "escape in both branches",
+          "use custom format providers"
+        ],
+        "decision": "Escape braces only in the string.Format branch (format != null case) to prevent FormatException; the no-format branch returns raw ToString() since Regex.Replace doesn't re-process output",
+        "reasoning": "The risk of braces causing a throw is in string.Format; escaping in Regex output is unnecessary as the regex runs once on the template"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read MessageFormatter.cs in full",
+        "reasoning": "Task explicitly names this file as the only target",
+        "result": "Found BuildMessage() using Regex.Replace with a MatchEvaluator; value?.ToString() is returned for no-format case; string.Format(format, value) is called when a format specifier is present"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "BuildMessage",
+      "path": "src/FluentValidation/Internal/MessageFormatter.cs",
+      "reason": "edited: added brace-escaping of the substituted value in the string.Format branch",
+      "start_line": 76
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts (validation message, placeholder, curly braces, property values, escaping) with no symbol names. Pre-implementation: a developer fixing a brace-escaping bug in error messages would search this.",
+      "pins": [],
+      "query_text": "Escape curly braces in property values substituted into validation error message templates to prevent misinterpretation as message placeholders",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'malformed output' and the escaping pattern '{{' and '}}' appear in the context of this bug. Pre-implementation: a developer might grep for the existing format string handling.",
+      "pins": [],
+      "query_text": "\"string.Format\" \"{{\" \"}}\" placeholder braces escape validation message",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 4 exact symbol names from the changed code. Pre-implementation: a developer knows BuildMessage and MessageFormatter from the task description.",
+      "pins": [],
+      "query_text": "BuildMessage, MessageFormatter, AppendArgument, KeyRegex",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names BuildMessage with a callers relationship. Pre-implementation: an agent would trace callers to understand the impact of the fix.",
+      "pins": [],
+      "query_text": "Callers of MessageFormatter.BuildMessage and methods that call AppendArgument with user-supplied property values",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "BuildMessage",
+        "MessageFormatter"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides the explicit file path from the task description. Pre-implementation: task names this file directly.",
+      "pins": [
+        "src/FluentValidation/Internal/MessageFormatter.cs"
+      ],
+      "query_text": "src/FluentValidation/Internal/MessageFormatter.cs placeholder replacement brace escaping",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept (brace escaping, placeholder safety) with 2 exact symbol names. Pre-implementation: natural starting query from the task.",
+      "pins": [],
+      "query_text": "Fix MessageFormatter.BuildMessage to escape braces in substituted placeholder values before string.Format",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "MessageFormatter",
+        "BuildMessage"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names plus 1 file path. Pre-implementation: combines known file with symbols.",
+      "pins": [
+        "src/FluentValidation/Internal/MessageFormatter.cs"
+      ],
+      "query_text": "MessageFormatter BuildMessage string.Format brace escaping in src/FluentValidation/Internal/MessageFormatter.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "MessageFormatter",
+        "BuildMessage"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names and file path. Pre-implementation: natural query combining the fix with the known file.",
+      "pins": [
+        "src/FluentValidation/Internal/MessageFormatter.cs"
+      ],
+      "query_text": "Escape { and } in property value substitutions in MessageFormatter.BuildMessage to prevent FormatException when values contain braces",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "MessageFormatter",
+        "BuildMessage"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "In `MessageFormatter.BuildMessage`, added brace-escaping (`Replace(\"{\", \"{{\").Replace(\"}\", \"}}\")`) of the value's string representation before passing it to `string.Format` in the format-specifier branch, preventing `FormatException` when property values contain literal braces.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-fluentvalidation/N5",
+  "task_text": "The `MessageFormatter` in `Internal/MessageFormatter.cs` performs\nplaceholder replacement (e.g., `{PropertyName}`) using simple string\nsubstitution. If a property value itself contains braces (e.g.,\n`\"{json}\"`), the replacement can produce malformed output or throw. Fix\nthe formatter to escape literal braces in substituted values so they are\nnot interpreted as placeholders.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/FluentValidation/Internal/MessageFormatter.cs"
+    ],
+    "diff_seeds": [
+      "BuildMessage"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [],
+  "tier_difference_reasoning": "The fix is entirely self-contained within BuildMessage. No additional context is needed beyond reading the method itself."
+}

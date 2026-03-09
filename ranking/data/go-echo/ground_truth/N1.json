@@ -1,0 +1,171 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/context.go b/context.go\nindex f91ea7a..17e8619 100644\n--- a/context.go\n+++ b/context.go\n@@ -311,6 +311,22 @@ func (c *Context) QueryParams() url.Values {\n \treturn c.query\n }\n \n+// QueryParamDefaults returns the query parameters as `url.Values`, with default values applied\n+// for any keys that are missing or have an empty value in the request.\n+func (c *Context) QueryParamDefaults(defaults map[string]string) url.Values {\n+\tparams := c.QueryParams()\n+\tresult := make(url.Values, len(params)+len(defaults))\n+\tfor k, v := range params {\n+\t\tresult[k] = v\n+\t}\n+\tfor k, v := range defaults {\n+\t\tif _, exists := result[k]; !exists {\n+\t\t\tresult[k] = []string{v}\n+\t\t}\n+\t}\n+\treturn result\n+}\n+\n // QueryString returns the URL query string.\n func (c *Context) QueryString() string {\n \treturn c.request.URL.RawQuery",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The method just needs to call QueryParams() to get the cached parsed values, then overlay defaults for absent keys \u2014 no parsing logic needed.",
+    "dead_ends": [],
+    "hindsight": "Nothing to change \u2014 the solution is straightforward once you see the existing pattern.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Apply default when value is empty string too",
+          "Apply default only when absent"
+        ],
+        "decision": "Only apply default when key is absent (not when empty string)",
+        "reasoning": "QueryParams() preserves empty string values intentionally (task says 'missing keys'), and this is consistent with map semantics vs the QueryParamOr behavior which treats empty as missing"
+      },
+      {
+        "alternatives": [
+          "Mutate the cached query map",
+          "Return a new map with only defaults applied"
+        ],
+        "decision": "Copy all existing query params into a new map rather than mutating c.query",
+        "reasoning": "Mutating the cached query map would affect subsequent calls; returning a new map is safer and non-destructive"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Searched for QueryParam methods in context.go",
+        "reasoning": "Task mentions modifying these methods and adding new one nearby",
+        "result": "Found QueryParam (line 288), QueryParamOr (line 295), QueryParams (line 306) methods"
+      },
+      {
+        "action": "Read context.go lines 280-320",
+        "reasoning": "Needed to understand how to implement consistent behavior in the new method",
+        "result": "Saw the pattern: QueryParams() caches parsed query into c.query and returns it; QueryParamOr checks empty string as missing"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "QueryParams",
+      "path": "context.go",
+      "reason": "read: called by the new method to get parsed query values; understanding its caching pattern was needed",
+      "start_line": 306
+    },
+    {
+      "kind": "method",
+      "name": "QueryParamDefaults",
+      "path": "context.go",
+      "reason": "edited: the new method added by this task",
+      "start_line": 314
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain/business concepts ('URL query parameters', 'fallback default values', 'absent from the request'). Pre-implementation: a developer would write this before knowing the symbol names.",
+      "pins": [],
+      "query_text": "Provide fallback default values for multiple URL query parameters that are absent from the request",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'url.Values' and 'QueryParams' appear literally in context.go. Pre-implementation: a developer would search for these string literals to find the relevant code.",
+      "pins": [],
+      "query_text": "\"QueryParams\" \"defaults\" \"url.Values\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists exact symbol names from context.go touched by this task. Pre-implementation: a developer would search for these identifiers knowing the task involves query param defaults.",
+      "pins": [],
+      "query_text": "QueryParamDefaults, QueryParams, QueryParamOr, url.Values",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol 'QueryParams' with relationship word 'callers' and 'siblings'. Pre-implementation: a developer would want to see what uses QueryParams and the sibling methods before adding a new one.",
+      "pins": [],
+      "query_text": "callers of QueryParams in context.go and siblings of QueryParamOr",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "QueryParams"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes file path 'context.go'. Pre-implementation: a developer would navigate to context.go knowing that's where Context methods live.",
+      "pins": [
+        "context.go"
+      ],
+      "query_text": "context.go query parameter methods",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('returning query parameters with defaults for missing keys') with symbol names 'QueryParamOr' and 'QueryParams'. Pre-implementation: a developer familiar with the existing API would phrase it this way.",
+      "pins": [],
+      "query_text": "Add method to Context returning query parameters with defaults for missing keys, similar to QueryParamOr but for multiple values via url.Values",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "QueryParamOr",
+        "QueryParams"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes 2+ symbol names ('QueryParams', 'QueryParamOr') and file path 'context.go'. Pre-implementation: a developer knows the file and the related symbols.",
+      "pins": [
+        "context.go"
+      ],
+      "query_text": "QueryParams QueryParamOr url.Values in context.go",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "QueryParams",
+        "QueryParamOr"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names 'QueryParamDefaults', 'QueryParams' and file path 'context.go'. Pre-implementation: a developer implementing this task would phrase it this way.",
+      "pins": [
+        "context.go"
+      ],
+      "query_text": "Add QueryParamDefaults method to Context in context.go that returns url.Values with defaults applied for missing query parameters",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "QueryParamDefaults",
+        "QueryParams"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `QueryParamDefaults` method to `Context` in context.go. The method calls `QueryParams()` to get the parsed query values, then copies them into a new `url.Values` map and applies defaults only for keys that are not present in the request.",
+  "task_complexity": "narrow",
+  "task_id": "go-echo/N1",
+  "task_text": "The `Context.QueryParam()` method in `context.go` returns an empty\nstring when a query parameter is missing, and `QueryParamOr()` provides\na default. However, `QueryParams()` returns raw `url.Values` with no\nway to specify defaults for multiple parameters at once. Add a\n`QueryParamDefaults(defaults map[string]string)` method to `Context`\nthat returns a `url.Values` map filled with defaults for missing keys.",
+  "test_selection": {
+    "coverage_available": true,
+    "coverage_skip_reason": null,
+    "diff_pins": [
+      "context.go"
+    ],
+    "diff_seeds": [
+      "QueryParamDefaults"
+    ],
+    "import_graph_test_files": [
+      "context_test.go"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [
+      {
+        "covers_changed_lines": [],
+        "reason": "Directly tests QueryParams which is called by the new QueryParamDefaults method; covers the adjacent code area",
+        "start_line": 818,
+        "test_kind": "function",
+        "test_name": "TestContext_QueryParams",
+        "test_path": "context_test.go"
+      }
+    ],
+    "test_query": "Find tests that verify the behavior of QueryParamDefaults, QueryParams, QueryParamOr in context.go"
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "QueryParamOr",
+      "path": "context.go",
+      "reason": "read: understanding the semantics of empty string vs missing key was important for the new method's behavior",
+      "start_line": 295
+    }
+  ],
+  "tier_difference_reasoning": "QueryParamOr is in thrash_preventing because an AI agent would likely read it to understand the existing convention for handling missing-vs-empty before implementing QueryParamDefaults, avoiding a wrong assumption about treating empty strings as missing."
+}

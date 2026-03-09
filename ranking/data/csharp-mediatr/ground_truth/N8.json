@@ -1,0 +1,158 @@
+{
+  "confidence": "medium",
+  "diff": "diff --git a/src/MediatR/IStreamPipelineBehavior.cs b/src/MediatR/IStreamPipelineBehavior.cs\nindex ddd15cf..f69f233 100644\n--- a/src/MediatR/IStreamPipelineBehavior.cs\n+++ b/src/MediatR/IStreamPipelineBehavior.cs\n@@ -9,7 +9,7 @@ namespace MediatR;\n /// </summary>\n /// <typeparam name=\"TResponse\">Response type</typeparam>\n /// <returns>Async Enumerable returning a <typeparamref name=\"TResponse\"/></returns>\n-public delegate IAsyncEnumerable<TResponse> StreamHandlerDelegate<out TResponse>();\n+public delegate IAsyncEnumerable<TResponse> StreamHandlerDelegate<out TResponse>(CancellationToken cancellationToken = default);\n \n /// <summary>\n /// Stream Pipeline behavior to surround the inner handler.\ndiff --git a/src/MediatR/Wrappers/StreamRequestHandlerWrapper.cs b/src/MediatR/Wrappers/StreamRequestHandlerWrapper.cs\nindex 5f3a7b2..2784d39 100644\n--- a/src/MediatR/Wrappers/StreamRequestHandlerWrapper.cs\n+++ b/src/MediatR/Wrappers/StreamRequestHandlerWrapper.cs\n@@ -38,21 +38,21 @@ await foreach (var item in Handle((IStreamRequest<TResponse>) request, servicePr\n         IServiceProvider serviceProvider, \n         [EnumeratorCancellation] CancellationToken cancellationToken)\n     {\n-        IAsyncEnumerable<TResponse> Handler() => serviceProvider\n+        IAsyncEnumerable<TResponse> Handler(CancellationToken ct = default) => serviceProvider\n             .GetRequiredService<IStreamRequestHandler<TRequest, TResponse>>()\n-            .Handle((TRequest) request, cancellationToken);\n+            .Handle((TRequest) request, ct == default ? cancellationToken : ct);\n \n         var items = serviceProvider\n             .GetServices<IStreamPipelineBehavior<TRequest, TResponse>>()\n             .Reverse()\n             .Aggregate(\n                 (StreamHandlerDelegate<TResponse>) Handler, \n-                (next, pipeline) => () => pipeline.Handle(\n+                (next, pipeline) => (ct) => pipeline.Handle(\n                     (TRequest) request, \n-                    () => NextWrapper(next(), cancellationToken),\n-                    cancellationToken\n+                    (innerCt) => NextWrapper(next(innerCt == default ? ct : innerCt), ct == default ? cancellationToken : ct),\n+                    ct == default ? cancellationToken : ct\n                 )\n-            )();\n+            )(cancellationToken);\n \n         await foreach ( var item in items.WithCancellation(cancellationToken) )\n         {",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "StreamHandlerDelegate took no parameters, meaning behaviors couldn't thread the cancellation token through the delegate chain. Adding a CancellationToken parameter mirrors the RequestHandlerDelegate pattern established in N1.",
+    "dead_ends": [],
+    "hindsight": "Reading IStreamPipelineBehavior.cs confirmed the delegate signature needed to change. The aggregate pattern needed updating consistently once the delegate signature changed.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Use captured closure token only (no delegate parameter change)",
+          "Use nullable CancellationToken? like N1"
+        ],
+        "decision": "Add CancellationToken parameter to StreamHandlerDelegate with default value",
+        "reasoning": "Consistent with the pattern of IPipelineBehavior's RequestHandlerDelegate. Using default instead of null avoids the nullable difference from N1's approach since this is a different scenario where the token value is meaningful (not the 'not provided' distinction)."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read src/MediatR/Wrappers/StreamRequestHandlerWrapper.cs",
+        "reasoning": "Task description points to this file as the site of the fix",
+        "result": "Found StreamHandlerDelegate used without token parameter; aggregate chain uses captured cancellationToken"
+      },
+      {
+        "action": "Read src/MediatR/IStreamPipelineBehavior.cs",
+        "reasoning": "Need to understand StreamHandlerDelegate signature to know how to change it",
+        "result": "Found StreamHandlerDelegate takes no parameters; IStreamPipelineBehavior.Handle receives CancellationToken separately"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "variable",
+      "name": "StreamHandlerDelegate",
+      "path": "src/MediatR/IStreamPipelineBehavior.cs",
+      "reason": "edited: added CancellationToken parameter to the delegate",
+      "start_line": 12
+    },
+    {
+      "kind": "method",
+      "name": "StreamRequestHandlerWrapperImpl.Handle",
+      "path": "src/MediatR/Wrappers/StreamRequestHandlerWrapper.cs",
+      "reason": "edited: updated Handler local function and aggregate lambda to thread the token through the delegate chain",
+      "start_line": 36
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: describes the problem in domain terms (streaming pipeline cancellation inconsistency) with no code symbols. Pre-implementation: a developer noticing cancellation token inconsistency in streaming would describe it this way.",
+      "pins": [],
+      "query_text": "streaming request pipeline behaviors receive different cancellation signals than those used to cancel the enumeration of results",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'NextWrapper' appears literally in the source at the exact location of the bug. Pre-implementation: developer investigating stream pipeline token routing would grep for this method.",
+      "pins": [],
+      "query_text": "NextWrapper(next(), cancellationToken)",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names from touched code. Pre-implementation: developer knows these types from the streaming pipeline subsystem.",
+      "pins": [],
+      "query_text": "StreamHandlerDelegate, StreamRequestHandlerWrapperImpl, IStreamPipelineBehavior, NextWrapper",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbols with relationship words. Pre-implementation: understanding the streaming aggregate chain requires tracing from the wrapper to the delegate.",
+      "pins": [],
+      "query_text": "callees of StreamRequestHandlerWrapperImpl.Handle and implementors of IStreamPipelineBehavior that use StreamHandlerDelegate",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "StreamRequestHandlerWrapperImpl",
+        "StreamHandlerDelegate"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes 2 explicit file paths. Pre-implementation: task description names these exact files.",
+      "pins": [
+        "src/MediatR/Wrappers/StreamRequestHandlerWrapper.cs",
+        "src/MediatR/IStreamPipelineBehavior.cs"
+      ],
+      "query_text": "src/MediatR/Wrappers/StreamRequestHandlerWrapper.cs and src/MediatR/IStreamPipelineBehavior.cs stream pipeline cancellation token",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain description (consistent token propagation) with 2 exact symbol names. Pre-implementation: developer knows the class names from the task description.",
+      "pins": [],
+      "query_text": "ensure consistent CancellationToken propagation through StreamHandlerDelegate in StreamRequestHandlerWrapperImpl aggregate chain",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "StreamHandlerDelegate",
+        "StreamRequestHandlerWrapperImpl"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 2 file paths. Pre-implementation: task explicitly names these.",
+      "pins": [
+        "src/MediatR/Wrappers/StreamRequestHandlerWrapper.cs",
+        "src/MediatR/IStreamPipelineBehavior.cs"
+      ],
+      "query_text": "StreamHandlerDelegate StreamRequestHandlerWrapperImpl in src/MediatR/Wrappers/StreamRequestHandlerWrapper.cs and src/MediatR/IStreamPipelineBehavior.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "StreamHandlerDelegate",
+        "StreamRequestHandlerWrapperImpl"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names, file paths, and description. Pre-implementation: developer who read the full task description would write this.",
+      "pins": [
+        "src/MediatR/Wrappers/StreamRequestHandlerWrapper.cs",
+        "src/MediatR/IStreamPipelineBehavior.cs"
+      ],
+      "query_text": "add CancellationToken to StreamHandlerDelegate and thread it through the aggregate chain in StreamRequestHandlerWrapperImpl",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "StreamHandlerDelegate",
+        "StreamRequestHandlerWrapperImpl"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Changed `StreamHandlerDelegate` to accept a `CancellationToken` parameter (defaulting to `default`). Updated the `Handler` local function and the aggregate chain in `StreamRequestHandlerWrapperImpl.Handle` to thread the token through each layer via the delegate parameter, ensuring all pipeline behaviors and the final handler use the same consistent token.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-mediatr/N8",
+  "task_text": "Fix IStreamPipelineBehavior not receiving CancellationToken propagated from CreateStream\n\nIn `src/MediatR/Wrappers/StreamRequestHandlerWrapper.cs`, the\n`StreamRequestHandlerWrapperImpl` aggregates stream pipeline behaviors\nusing `Aggregate`. The `NextWrapper` method accepts\n`CancellationToken` via `[EnumeratorCancellation]`, but the token\nfrom `CreateStream` is only passed to the outermost iteration\n`items.WithCancellation(cancellationToken)`. Inner pipeline behaviors\nreceive the token from their own `Handle` parameter which may differ\nfrom the enumeration token. Fix the aggregate chain to consistently\npass the same cancellation token through all pipeline layers.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/MediatR/IStreamPipelineBehavior.cs",
+      "src/MediatR/Wrappers/StreamRequestHandlerWrapper.cs"
+    ],
+    "diff_seeds": [
+      "StreamHandlerDelegate",
+      "StreamRequestHandlerWrapperImpl"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "interface",
+      "name": "IStreamPipelineBehavior",
+      "path": "src/MediatR/IStreamPipelineBehavior.cs",
+      "reason": "read: verifying IStreamPipelineBehavior.Handle signature confirms the existing CancellationToken parameter that behaviors already receive, which is the companion to the delegate parameter change",
+      "start_line": 20
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers both edited definitions. An AI agent would also check IStreamPipelineBehavior to understand how pipeline behaviors currently receive and use the CancellationToken, ensuring the delegate parameter change is additive and backward-compatible with existing behavior implementations."
+}

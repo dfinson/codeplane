@@ -1,0 +1,157 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/Polly.Core/Retry/RetryDelayGeneratorArguments.cs b/src/Polly.Core/Retry/RetryDelayGeneratorArguments.cs\nindex a327ae6..d84d97e 100644\n--- a/src/Polly.Core/Retry/RetryDelayGeneratorArguments.cs\n+++ b/src/Polly.Core/Retry/RetryDelayGeneratorArguments.cs\n@@ -17,11 +17,13 @@ public readonly struct RetryDelayGeneratorArguments<TResult>\n     /// <param name=\"outcome\">The context in which the resilience operation or event occurred.</param>\n     /// <param name=\"context\">The outcome of the resilience operation or event.</param>\n     /// <param name=\"attemptNumber\">The zero-based attempt number.</param>\n-    public RetryDelayGeneratorArguments(ResilienceContext context, Outcome<TResult> outcome, int attemptNumber)\n+    /// <param name=\"duration\">The duration of this attempt.</param>\n+    public RetryDelayGeneratorArguments(ResilienceContext context, Outcome<TResult> outcome, int attemptNumber, TimeSpan duration)\n     {\n         Context = context;\n         Outcome = outcome;\n         AttemptNumber = attemptNumber;\n+        Duration = duration;\n     }\n \n     /// <summary>\n@@ -38,4 +40,9 @@ public readonly struct RetryDelayGeneratorArguments<TResult>\n     /// Gets The zero-based attempt number.\n     /// </summary>\n     public int AttemptNumber { get; }\n+\n+    /// <summary>\n+    /// Gets the duration of this attempt.\n+    /// </summary>\n+    public TimeSpan Duration { get; }\n }\ndiff --git a/src/Polly.Core/Retry/RetryResilienceStrategy.cs b/src/Polly.Core/Retry/RetryResilienceStrategy.cs\nindex c4b78fc..71b321e 100644\n--- a/src/Polly.Core/Retry/RetryResilienceStrategy.cs\n+++ b/src/Polly.Core/Retry/RetryResilienceStrategy.cs\n@@ -86,7 +86,7 @@ internal sealed class RetryResilienceStrategy<T> : ResilienceStrategy<T>\n             var delay = RetryHelper.GetRetryDelay(BackoffType, UseJitter, attempt, BaseDelay, MaxDelay, ref retryState, _randomizer);\n             if (DelayGenerator is not null)\n             {\n-                var delayArgs = new RetryDelayGeneratorArguments<T>(context, outcome, attempt);\n+                var delayArgs = new RetryDelayGeneratorArguments<T>(context, outcome, attempt, executionTime);\n \n                 if (await DelayGenerator(delayArgs).ConfigureAwait(false) is TimeSpan newDelay && RetryHelper.IsValidDelay(newDelay))\n                 {\n",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "OnRetryArguments already has a `Duration` property and is constructed with `executionTime` from `_timeProvider.GetElapsedTime(startTimestamp)`. The same value just needs to be passed to RetryDelayGeneratorArguments.",
+    "dead_ends": [],
+    "hindsight": "No dead ends; the fix was straightforward once I saw `executionTime` is already computed before the `DelayGenerator` call.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Measure duration differently in the DelayGenerator path",
+          "Add a separate timer for the delay generator"
+        ],
+        "decision": "Pass the already-computed `executionTime` to `RetryDelayGeneratorArguments` constructor",
+        "reasoning": "executionTime is already computed at line 69 from `_timeProvider.GetElapsedTime(startTimestamp)` and is the same value used by OnRetryArguments.Duration - no new measurement needed."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read RetryDelayGeneratorArguments.cs and OnRetryArguments.cs",
+        "reasoning": "Task names both files; need to see what Duration looks like on OnRetryArguments",
+        "result": "OnRetryArguments has Duration: TimeSpan in constructor; RetryDelayGeneratorArguments does not"
+      },
+      {
+        "action": "Read RetryResilienceStrategy.cs lines 60-100",
+        "reasoning": "Need to find where executionTime is computed and where DelayGenerator is invoked",
+        "result": "executionTime is computed at line 69 via _timeProvider.GetElapsedTime; DelayGenerator call at line 89 constructs RetryDelayGeneratorArguments without duration"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "struct",
+      "name": "RetryDelayGeneratorArguments",
+      "path": "src/Polly.Core/Retry/RetryDelayGeneratorArguments.cs",
+      "reason": "edited: added Duration property and constructor parameter",
+      "start_line": 13
+    },
+    {
+      "kind": "method",
+      "name": "ExecuteCore",
+      "path": "src/Polly.Core/Retry/RetryResilienceStrategy.cs",
+      "reason": "edited: passed executionTime to RetryDelayGeneratorArguments constructor",
+      "start_line": 46
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: describes the problem in domain terms without symbol names: 'latency-adaptive backoff', 'execution time', 'custom delay generator'. Pre-implementation: developer seeking to add timing info to delay generator would search for this.",
+      "pins": [],
+      "query_text": "retry delay generator does not receive the execution duration of the previous attempt preventing latency-adaptive backoff implementation",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: quotes the literal XML doc from RetryDelayGeneratorArguments.cs. Pre-implementation: developer searching for the delay generator arguments struct.",
+      "pins": [],
+      "query_text": "\"Represents the arguments used by\" \"DelayGenerator\" \"generating the next retry delay\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 3 exact symbol names from changed code. Pre-implementation: developer knows these names from task description.",
+      "pins": [],
+      "query_text": "RetryDelayGeneratorArguments, DelayGenerator, executionTime",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names a symbol and uses relationship word 'implementors'. Pre-implementation: understanding what implements delay generation.",
+      "pins": [],
+      "query_text": "callers of RetryDelayGeneratorArguments constructor in RetryResilienceStrategy",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "RetryDelayGeneratorArguments"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 explicit file paths. Pre-implementation: task names both files directly.",
+      "pins": [
+        "src/Polly.Core/Retry/RetryDelayGeneratorArguments.cs",
+        "src/Polly.Core/Retry/RetryResilienceStrategy.cs"
+      ],
+      "query_text": "src/Polly.Core/Retry/RetryDelayGeneratorArguments.cs duration property",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept 'execution duration' with symbol names. Pre-implementation: developer would search for both.",
+      "pins": [],
+      "query_text": "RetryDelayGeneratorArguments missing Duration property for execution time compared to OnRetryArguments",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "RetryDelayGeneratorArguments",
+        "OnRetryArguments"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 2 file paths. Pre-implementation: developer starts from class names in task.",
+      "pins": [
+        "src/Polly.Core/Retry/RetryDelayGeneratorArguments.cs",
+        "src/Polly.Core/Retry/RetryResilienceStrategy.cs"
+      ],
+      "query_text": "RetryDelayGeneratorArguments Duration in src/Polly.Core/Retry/RetryDelayGeneratorArguments.cs and RetryResilienceStrategy.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "RetryDelayGeneratorArguments",
+        "Duration"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names and file path. Pre-implementation: task description names both files and the property.",
+      "pins": [
+        "src/Polly.Core/Retry/RetryDelayGeneratorArguments.cs",
+        "src/Polly.Core/Retry/RetryResilienceStrategy.cs"
+      ],
+      "query_text": "add Duration property to RetryDelayGeneratorArguments and populate from executionTime in RetryResilienceStrategy.ExecuteCore",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "RetryDelayGeneratorArguments",
+        "ExecuteCore"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `Duration` property and constructor parameter to `RetryDelayGeneratorArguments<TResult>`, matching the pattern from `OnRetryArguments`. Updated `RetryResilienceStrategy.ExecuteCore` to pass the already-computed `executionTime` value when constructing `RetryDelayGeneratorArguments`.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-polly/N5",
+  "task_text": "Fix RetryDelayGeneratorArguments not including previous attempt execution duration\n\n`RetryDelayGeneratorArguments` provides the attempt number and outcome\nto custom delay generators but does not include the execution duration\nof the previous attempt. Delay generators that want to implement\nlatency-adaptive backoff (e.g., increasing delay when the upstream\nis slow) must track timing externally. Fix\n`RetryDelayGeneratorArguments.cs` to add a `Duration` property and\npopulate it from the execution time measured in\n`RetryResilienceStrategy.cs`, matching the `Duration` already\navailable on `OnRetryArguments`.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "No baseline coverage report found in the repository root or any standard location.",
+    "diff_pins": [
+      "src/Polly.Core/Retry/RetryDelayGeneratorArguments.cs",
+      "src/Polly.Core/Retry/RetryResilienceStrategy.cs"
+    ],
+    "diff_seeds": [
+      "RetryDelayGeneratorArguments",
+      "ExecuteCore"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "struct",
+      "name": "OnRetryArguments",
+      "path": "src/Polly.Core/Retry/OnRetryArguments.cs",
+      "reason": "read: shows the Duration pattern to replicate in RetryDelayGeneratorArguments",
+      "start_line": 12
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers the edited files. OnRetryArguments is in thrash_preventing because the task says 'matching the Duration already available on OnRetryArguments' \u2014 an AI agent would search for this reference type to replicate its exact pattern, avoiding guessing the property name or constructor signature."
+}

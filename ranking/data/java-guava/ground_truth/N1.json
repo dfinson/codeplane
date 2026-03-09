@@ -1,0 +1,145 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/guava/src/com/google/common/collect/ImmutableList.java b/guava/src/com/google/common/collect/ImmutableList.java\nindex 6d77b58..e7c8d53 100644\n--- a/guava/src/com/google/common/collect/ImmutableList.java\n+++ b/guava/src/com/google/common/collect/ImmutableList.java\n@@ -270,6 +270,7 @@ public abstract class ImmutableList<E> extends ImmutableCollection<E>\n    * @throws NullPointerException if {@code elements} contains a null element\n    */\n   public static <E> ImmutableList<E> copyOf(Iterator<? extends E> elements) {\n+    checkNotNull(elements);\n     // We special-case for 0 or 1 elements, but going further is madness.\n     if (!elements.hasNext()) {\n       return of();\n",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The copyOf(Iterable) overload at line 235 already shows the exact pattern to follow.",
+    "dead_ends": [],
+    "hindsight": "Nothing to do differently \u2014 the fix is a single-line addition matching an obvious sibling.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Add after the comment",
+          "Add checkNotNull inside condition"
+        ],
+        "decision": "Add checkNotNull(elements) before the comment and existing logic",
+        "reasoning": "Consistent with the Iterable overload pattern and makes the null check the very first thing"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Searched for copyOf(Iterator in ImmutableList.java",
+        "reasoning": "Task specifies the exact method to fix",
+        "result": "Found at line 272"
+      },
+      {
+        "action": "Read copyOf(Iterable) at line 234 to see the existing pattern",
+        "reasoning": "Task mentions sibling overload as reference",
+        "result": "Confirmed it calls checkNotNull(elements) as its first statement"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "copyOf",
+      "path": "guava/src/com/google/common/collect/ImmutableList.java",
+      "reason": "edited: added checkNotNull(elements) as first statement",
+      "start_line": 272
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: describes the domain concept ('immutable list factory method', 'null guard', 'call site') without any symbol names or file paths. Pre-implementation: a developer would phrase it this way when first understanding what change is needed.",
+      "pins": [],
+      "query_text": "add a null guard to an immutable list factory method that copies from a lazy sequence source so that passing null fails immediately at the call site rather than deep inside iteration",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'checkNotNull(elements)' is a literal string that would appear in the source after the fix, and already appears in the Iterable overload. Pre-implementation: a developer looking for where null checks are done in ImmutableList would grep for this exact string.",
+      "pins": [],
+      "query_text": "\"checkNotNull(elements)\" ImmutableList copyOf Iterator",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 4 exact symbol names from the code touched. Pre-implementation: a developer would enumerate these identifiers when searching for the relevant method.",
+      "pins": [],
+      "query_text": "copyOf, checkNotNull, ImmutableList, Iterator",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names 'copyOf' and uses relationship word 'sibling methods' and 'callers'. Pre-implementation: a developer would trace where null checks are applied among the copyOf overloads to understand the pattern.",
+      "pins": [],
+      "query_text": "callers of checkNotNull within ImmutableList sibling methods of copyOf",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "copyOf"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides the explicit file path. Pre-implementation: the task description identifies the file directly.",
+      "pins": [
+        "guava/src/com/google/common/collect/ImmutableList.java"
+      ],
+      "query_text": "guava/src/com/google/common/collect/ImmutableList.java copyOf Iterator method",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('validate argument is non-null before calling hasNext') with 2 exact symbol names 'copyOf' and 'checkNotNull'. Pre-implementation: a developer who has read the task would naturally phrase it this way.",
+      "pins": [],
+      "query_text": "ImmutableList.copyOf should validate its Iterator argument is non-null before calling hasNext, consistent with the Iterable overload that already calls checkNotNull",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "copyOf",
+        "checkNotNull"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 1 file path. Pre-implementation: a developer who knows the method name and file would use this to navigate directly.",
+      "pins": [
+        "guava/src/com/google/common/collect/ImmutableList.java"
+      ],
+      "query_text": "copyOf checkNotNull in guava/src/com/google/common/collect/ImmutableList.java",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "copyOf",
+        "checkNotNull"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names 'copyOf', 'checkNotNull' and the file path. Pre-implementation: this is how a developer would phrase a search after reading the task description.",
+      "pins": [
+        "guava/src/com/google/common/collect/ImmutableList.java"
+      ],
+      "query_text": "add checkNotNull to ImmutableList.copyOf(Iterator) in ImmutableList.java to match the Iterable overload null-check pattern",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "copyOf",
+        "checkNotNull"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `checkNotNull(elements)` as the first statement of `copyOf(Iterator<? extends E> elements)` in ImmutableList.java, matching the pattern already used by the `copyOf(Iterable)` overload which calls `checkNotNull(elements)` on line 235.",
+  "task_complexity": "narrow",
+  "task_id": "java-guava/N1",
+  "task_text": "Fix ImmutableList.copyOf(Iterator) missing null-check on the iterator itself\n\n`ImmutableList.copyOf(Iterator<? extends E> elements)` does not call\n`checkNotNull(elements)` before using the iterator. Passing a `null`\niterator throws `NullPointerException` inside the method at\n`elements.hasNext()` rather than at the call site. The sibling overload\n`copyOf(Iterable)` already calls `checkNotNull(elements)` as its first\nstatement. Fix `copyOf(Iterator)` in `ImmutableList.java` to add\n`checkNotNull(elements)` at the start of the method for a clear,\ncaller-pointing error.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "guava/src/com/google/common/collect/ImmutableList.java"
+    ],
+    "diff_seeds": [
+      "copyOf"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "copyOf",
+      "path": "guava/src/com/google/common/collect/ImmutableList.java",
+      "reason": "read: the Iterable overload shows the existing null-check pattern an agent needs to follow precisely",
+      "start_line": 234
+    }
+  ],
+  "tier_difference_reasoning": "The minimum is the method being edited. The Iterable overload (line 234) is added to thrash_preventing because an AI agent would search for how sibling overloads perform null checks to ensure consistency \u2014 without seeing it, the agent might choose a different call form (e.g., Preconditions.checkNotNull with a message vs. plain checkNotNull) and then backtrack."
+}

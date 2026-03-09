@@ -1,0 +1,207 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/Http/Http.Results/src/NotModifiedHttpResult.cs b/src/Http/Http.Results/src/NotModifiedHttpResult.cs\nnew file mode 100644\n--- /dev/null\n+++ b/src/Http/Http.Results/src/NotModifiedHttpResult.cs\n@@ -0,0 +1,60 @@\n+public sealed class NotModifiedHttpResult : IResult, IEndpointMetadataProvider, IStatusCodeHttpResult\n+{\n+    internal NotModifiedHttpResult() { }\n+    public int StatusCode => StatusCodes.Status304NotModified;\n+    int? IStatusCodeHttpResult.StatusCode => StatusCode;\n+    public Task ExecuteAsync(HttpContext httpContext) { ... httpContext.Response.StatusCode = StatusCode; ... }\n+    static void IEndpointMetadataProvider.PopulateMetadata(MethodInfo method, EndpointBuilder builder) { ... }\n+}\ndiff --git a/src/Http/Http.Results/src/ResultsCache.cs b/src/Http/Http.Results/src/ResultsCache.cs\n+    public static NotModifiedHttpResult NotModified { get; } = new();\ndiff --git a/src/Http/Http.Results/src/Results.cs b/src/Http/Http.Results/src/Results.cs\n+    public static IResult NotModified() => TypedResults.NotModified();\ndiff --git a/src/Http/Http.Results/src/TypedResults.cs b/src/Http/Http.Results/src/TypedResults.cs\n+    public static NotModifiedHttpResult NotModified() => ResultsCache.NotModified;\ndiff --git a/src/Http/Http.Results/src/PublicAPI.Unshipped.txt b/src/Http/Http.Results/src/PublicAPI.Unshipped.txt\n+Microsoft.AspNetCore.Http.HttpResults.NotModifiedHttpResult\n+Microsoft.AspNetCore.Http.HttpResults.NotModifiedHttpResult.ExecuteAsync(...)\n+Microsoft.AspNetCore.Http.HttpResults.NotModifiedHttpResult.StatusCode.get -> int\n+static Microsoft.AspNetCore.Http.Results.NotModified() -> Microsoft.AspNetCore.Http.IResult!\n+static Microsoft.AspNetCore.Http.TypedResults.NotModified() -> Microsoft.AspNetCore.Http.HttpResults.NotModifiedHttpResult!",
+  "excluded_defs": [
+    {
+      "kind": "class",
+      "name": "NoContent",
+      "path": "src/Http/Http.Results/src/NoContent.cs",
+      "reason": "read as the structural template to follow but not edited",
+      "start_line": 16
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "ResultsCache follows a simple static singleton pattern \u2014 just add a new property there and all three other files (TypedResults, Results, PublicAPI) follow mechanically.",
+    "dead_ends": [],
+    "hindsight": "Nothing; the pattern was extremely clear from looking at the NoContent implementation.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Add DisableCookieRedirectMetadata to the 304 result like NoContent does"
+        ],
+        "decision": "Not including DisableCookieRedirectMetadata in 304 result",
+        "reasoning": "HTTP 304 is a conditional response, not a form-redirect scenario; the metadata is not semantically appropriate"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "List src/Http/Http.Results/src/ directory",
+        "reasoning": "Understand the file structure and find the pattern",
+        "result": "Found NoContent.cs as the template and ResultsCache.cs as the registry"
+      },
+      {
+        "action": "Read NoContent.cs",
+        "reasoning": "Understand exact class structure to replicate for NotModifiedHttpResult",
+        "result": "Implements IResult, IEndpointMetadataProvider, IStatusCodeHttpResult; uses internal constructor; logs and sets StatusCode"
+      },
+      {
+        "action": "Read ResultsCache.cs",
+        "reasoning": "Understand the singleton cache pattern",
+        "result": "Simple static class with static readonly properties for each no-arg result type"
+      },
+      {
+        "action": "Find NoContent in TypedResults.cs and Results.cs",
+        "reasoning": "Find the exact locations to add the new NotModified() methods",
+        "result": "TypedResults line 704: returns ResultsCache.NoContent; Results line 655: delegates to TypedResults.NoContent()"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "class",
+      "name": "NotModifiedHttpResult",
+      "path": "src/Http/Http.Results/src/NotModifiedHttpResult.cs",
+      "reason": "edited: new result class created",
+      "start_line": 1
+    },
+    {
+      "kind": "class",
+      "name": "ResultsCache",
+      "path": "src/Http/Http.Results/src/ResultsCache.cs",
+      "reason": "edited: added NotModified singleton property",
+      "start_line": 9
+    },
+    {
+      "kind": "method",
+      "name": "NotModified",
+      "path": "src/Http/Http.Results/src/Results.cs",
+      "reason": "edited: new NotModified() factory method on Results",
+      "start_line": 664
+    },
+    {
+      "kind": "method",
+      "name": "NotModified",
+      "path": "src/Http/Http.Results/src/TypedResults.cs",
+      "reason": "edited: new NotModified() factory method on TypedResults",
+      "start_line": 704
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: pure domain concepts \u2014 'conditional GET responses', '304 status code', 'cached version still valid', 'type-safe result'. Pre-implementation: a developer describes the feature gap without knowing class names.",
+      "pins": [],
+      "query_text": "Add a type-safe result for conditional GET responses that returns a 304 Not Modified status with no response body to indicate the client's cached version is still valid",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'NotModified', 'Status304NotModified', '304' are literal strings in source code. Pre-implementation: searching for existing 304 handling in the results framework.",
+      "pins": [],
+      "query_text": "\"NotModified\" OR \"Status304NotModified\" OR \"304\" OR \"NoContent\" OR \"ResultsCache\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names from the changed code. Pre-implementation: developer looking for the Results factory and typed results classes.",
+      "pins": [],
+      "query_text": "NotModifiedHttpResult, ResultsCache, TypedResults, IEndpointMetadataProvider, IStatusCodeHttpResult",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names symbols (TypedResults, Results) with relationship word 'implementors'. Pre-implementation: trace which classes implement IStatusCodeHttpResult to understand the pattern.",
+      "pins": [],
+      "query_text": "Implementors of IStatusCodeHttpResult and IEndpointMetadataProvider in the Http.Results namespace",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "TypedResults",
+        "Results"
+      ]
+    },
+    {
+      "justification": "Rule compliance: two file paths from the solution. Pre-implementation: developer opens these files to understand the NoContent pattern and where to register new results.",
+      "pins": [
+        "src/Http/Http.Results/src/NoContent.cs",
+        "src/Http/Http.Results/src/ResultsCache.cs"
+      ],
+      "query_text": "src/Http/Http.Results/src/ NotModified 304 Not Modified result class",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain terms ('HTTP 304 Not Modified', 'conditional GET') with 3 exact symbols. Pre-implementation: developer writing the task description as a search query.",
+      "pins": [],
+      "query_text": "Add Results.NotModified and TypedResults.NotModified for HTTP 304 Not Modified conditional GET, backed by a NotModifiedHttpResult class like NoContent",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "NotModified",
+        "NotModifiedHttpResult",
+        "TypedResults"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 symbol names and 3 file paths. Pre-implementation: pinning the key files.",
+      "pins": [
+        "src/Http/Http.Results/src/NotModifiedHttpResult.cs",
+        "src/Http/Http.Results/src/ResultsCache.cs",
+        "src/Http/Http.Results/src/TypedResults.cs"
+      ],
+      "query_text": "NotModifiedHttpResult ResultsCache NotModified in src/Http/Http.Results/src/",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "NotModifiedHttpResult",
+        "ResultsCache",
+        "NotModified"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names and file paths. Pre-implementation: full task description as a query.",
+      "pins": [
+        "src/Http/Http.Results/src/Results.cs",
+        "src/Http/Http.Results/src/TypedResults.cs"
+      ],
+      "query_text": "Add Results.NotModified() and TypedResults.NotModified() backed by NotModifiedHttpResult with status 304 following NoContent pattern, register in ResultsCache",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "NotModifiedHttpResult",
+        "ResultsCache",
+        "TypedResults",
+        "Results"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Created `NotModifiedHttpResult` class following the exact same pattern as `NoContent` \u2014 implements `IResult`, `IEndpointMetadataProvider`, `IStatusCodeHttpResult` with status 304. Registered a singleton in `ResultsCache`, added factory methods to both `TypedResults.NotModified()` and `Results.NotModified()`, and declared the new public API in `PublicAPI.Unshipped.txt`.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-aspnetcore/N3",
+  "task_text": "The `Results` and `TypedResults` classes in `src/Http/Http.Results/src/` provide typed results for common HTTP status codes (`Results.NoContent()`, `Results.Ok()`, `Results.Conflict()`) but have no `Results.NotModified()` method for HTTP 304. Applications that implement custom conditional GET logic (checking `If-None-Match` or `If-Modified-Since` themselves) must fall back to `Results.StatusCode(304)`, which conveys no semantic intent and has no type-safe equivalent in `TypedResults`. Add `Results.NotModified()` and `TypedResults.NotModified()` backed by a new `NotModifiedHttpResult` class (following the same pattern as `NoContentHttpResult`) that sets status 304 with no response body. Register the result in `ResultsCache` and update `IResultExtensions`. Touches `src/Http/Http.Results/src/` (3\u20134 files).",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/Http/Http.Results/src/NotModifiedHttpResult.cs",
+      "src/Http/Http.Results/src/ResultsCache.cs",
+      "src/Http/Http.Results/src/Results.cs",
+      "src/Http/Http.Results/src/TypedResults.cs"
+    ],
+    "diff_seeds": [
+      "NotModifiedHttpResult",
+      "NotModified",
+      "ResultsCache"
+    ],
+    "import_graph_test_files": [
+      "src/Http/Http.Results/test/ResultsTests.cs",
+      "src/Http/Http.Results/test/TypedResultsTests.cs"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "class",
+      "name": "NoContent",
+      "path": "src/Http/Http.Results/src/NoContent.cs",
+      "reason": "read: the structural template to follow for NotModifiedHttpResult; an AI agent would look at this to understand the pattern",
+      "start_line": 16
+    },
+    {
+      "kind": "class",
+      "name": "ResultsCache",
+      "path": "src/Http/Http.Results/src/ResultsCache.cs",
+      "reason": "read: must understand the singleton cache structure to add the new entry correctly",
+      "start_line": 9
+    }
+  ],
+  "tier_difference_reasoning": "Minimum sufficient includes all edited defs. Thrash-preventing adds NoContent (the template) and ResultsCache \u2014 the latter is also in minimum_sufficient, but an AI agent would look at NoContent for the implementation pattern and would need ResultsCache to understand the singleton registration approach."
+}

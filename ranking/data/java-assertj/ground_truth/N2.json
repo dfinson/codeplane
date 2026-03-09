@@ -1,0 +1,196 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/assertj-core/src/main/java/org/assertj/core/api/AbstractIterableAssert.java b/assertj-core/src/main/java/org/assertj/core/api/AbstractIterableAssert.java\nindex b21e4fe..52b0aa4 100644\n--- a/assertj-core/src/main/java/org/assertj/core/api/AbstractIterableAssert.java\n+++ b/assertj-core/src/main/java/org/assertj/core/api/AbstractIterableAssert.java\n@@ -2059,13 +2059,15 @@ public abstract class AbstractIterableAssert\n   @CheckReturnValue\n   public SELF usingComparatorForType(Comparator comparator, Class type) {\n+    getComparatorsForElementPropertyOrFieldTypes().registerComparator(type, comparator);\n+    getComparatorsByType().registerComparator(type, comparator);\n+\n     if (iterables.getComparator() == null) {\n       usingElementComparator(new ExtendedByTypesComparator(getComparatorsByType()));\n+    } else if (iterables.getComparator() instanceof ExtendedByTypesComparator extendedComparator) {\n+      usingElementComparator(new ExtendedByTypesComparator(extendedComparator.getComparator(), getComparatorsByType()));\n     }\n \n-    getComparatorsForElementPropertyOrFieldTypes().registerComparator(type, comparator);\n-    getComparatorsByType().registerComparator(type, comparator);\n-\n     return myself;\n   }",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The fix needed two things: (1) register the type comparator BEFORE rebuilding the ExtendedByTypesComparator so the updated map is passed in, and (2) check if the existing comparator is an ExtendedByTypesComparator to preserve the underlying base comparator.",
+    "dead_ends": [],
+    "hindsight": "I would read ExtendedByTypesComparator first to understand its two constructors before modifying usingComparatorForType.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Only handle null case and ignore non-null case",
+          "Wrap non-ExtendedByTypesComparator cases too"
+        ],
+        "decision": "Only rebuild when the existing comparator is an ExtendedByTypesComparator, skip otherwise",
+        "reasoning": "The task says to fix specifically when ExtendedByTypesComparator is already in use; non-ExtendedByTypesComparator cases represent a user-set custom comparator that should not be silently replaced"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read AbstractIterableAssert.usingComparatorForType",
+        "reasoning": "Task points directly to this method",
+        "result": "Found the bug: only installs ExtendedByTypesComparator when iterables.getComparator() is null; ignores non-null case"
+      },
+      {
+        "action": "Read ExtendedByTypesComparator",
+        "reasoning": "Need to understand how to rebuild it with updated type comparators",
+        "result": "Has two constructors: one with just TypeComparators (default base), one with explicit base Comparator + TypeComparators. Need to preserve the base comparator when rebuilding"
+      },
+      {
+        "action": "Read usingElementComparator in AbstractIterableAssert",
+        "reasoning": "Need to understand what usingElementComparator does to iterables field",
+        "result": "Creates a new Iterables with ComparatorBasedComparisonStrategy containing the element comparator"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "usingComparatorForType",
+      "path": "assertj-core/src/main/java/org/assertj/core/api/AbstractIterableAssert.java",
+      "reason": "edited: added else-if branch to rebuild ExtendedByTypesComparator when already set, and reordered registration before comparator setup",
+      "start_line": 2061
+    },
+    {
+      "kind": "class",
+      "name": "ExtendedByTypesComparator",
+      "path": "assertj-core/src/main/java/org/assertj/core/internal/ExtendedByTypesComparator.java",
+      "reason": "read: needed to understand the two constructors and getComparator() method to correctly rebuild the comparator",
+      "start_line": 27
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts. Pre-implementation: a developer would describe the bug without knowing symbol names.",
+      "pins": [],
+      "query_text": "element comparator registered for specific type being silently ignored when another element comparator was set first",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'iterables.getComparator() == null' is a literal code string grep would find. Pre-implementation: developer investigating the null check behavior would search for this literal.",
+      "pins": [],
+      "query_text": "\"iterables.getComparator() == null\" usingComparatorForType",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 4 exact symbol names. Pre-implementation: a developer would search for these key symbols when investigating the comparator chaining issue.",
+      "pins": [],
+      "query_text": "usingComparatorForType, ExtendedByTypesComparator, comparatorsByType, usingElementComparator",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbols with relationship words 'callers' and 'uses'. Pre-implementation: developer would look at call graph to understand dependency.",
+      "pins": [],
+      "query_text": "callers of usingComparatorForType in AbstractIterableAssert, uses of ExtendedByTypesComparator constructors",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "usingComparatorForType",
+        "ExtendedByTypesComparator"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes 2 file paths from the changed files. Pre-implementation: developer would navigate to these files from the task description.",
+      "pins": [
+        "assertj-core/src/main/java/org/assertj/core/api/AbstractIterableAssert.java",
+        "assertj-core/src/main/java/org/assertj/core/internal/ExtendedByTypesComparator.java"
+      ],
+      "query_text": "assertj-core/src/main/java/org/assertj/core/api/AbstractIterableAssert.java usingComparatorForType, assertj-core/src/main/java/org/assertj/core/internal/ExtendedByTypesComparator.java constructor",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain description with 2 symbol names. Pre-implementation: developer writing the fix would combine the bug description with the key classes.",
+      "pins": [],
+      "query_text": "fix per-type comparator being ignored when usingElementComparator already called, rebuild ExtendedByTypesComparator with updated comparatorsByType",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "ExtendedByTypesComparator",
+        "usingComparatorForType"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 symbol names + 2 file paths. Pre-implementation: a developer would search for these specific method names in the identified files.",
+      "pins": [
+        "assertj-core/src/main/java/org/assertj/core/api/AbstractIterableAssert.java",
+        "assertj-core/src/main/java/org/assertj/core/internal/ExtendedByTypesComparator.java"
+      ],
+      "query_text": "usingComparatorForType usingElementComparator getComparator in AbstractIterableAssert.java ExtendedByTypesComparator.java",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "usingComparatorForType",
+        "usingElementComparator",
+        "getComparator"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol and file path. Pre-implementation: this is what a developer would type after reading the task description.",
+      "pins": [
+        "assertj-core/src/main/java/org/assertj/core/api/AbstractIterableAssert.java"
+      ],
+      "query_text": "AbstractIterableAssert usingComparatorForType not applying when element comparator already set, fix with ExtendedByTypesComparator rebuild in assertj-core/src/main/java/org/assertj/core/api/AbstractIterableAssert.java",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "usingComparatorForType",
+        "ExtendedByTypesComparator"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "The bug was in `usingComparatorForType`: it only installed an `ExtendedByTypesComparator` when `iterables.getComparator() == null`, so if the user had previously called `usingElementComparator`, the new type comparator was registered in `comparatorsByType` but not applied to the iteration strategy. The fix adds an `else if` branch that detects when an `ExtendedByTypesComparator` is already in use and rebuilds it with the updated type comparators map, preserving the original base comparator.",
+  "task_complexity": "narrow",
+  "task_id": "java-assertj/N2",
+  "task_text": "Fix AbstractIterableAssert.usingComparatorForType not applying when element comparator is already set\n\nIn `assertj-core/src/main/java/org/assertj/core/api/AbstractIterableAssert.java`,\nthe `usingComparatorForType(Comparator, Class)` method only installs a\nwrapping `ExtendedByTypesComparator` when `iterables.getComparator() == null`.\nIf the user previously called `usingElementComparator(existingCmp)` (making\n`iterables.getComparator()` non-null), a subsequent\n`usingComparatorForType(newCmp, MyType.class)` call updates `comparatorsByType`\nbut does NOT update the `iterables` strategy, so `newCmp` is silently\nignored during element comparison. Fix `usingComparatorForType` to also\nupdate the element comparison strategy when an `ExtendedByTypesComparator`\nis already in use, by rebuilding it with the updated `comparatorsByType` map.",
+  "test_selection": {
+    "coverage_available": true,
+    "coverage_skip_reason": null,
+    "diff_pins": [
+      "assertj-core/src/main/java/org/assertj/core/api/AbstractIterableAssert.java"
+    ],
+    "diff_seeds": [
+      "usingComparatorForType"
+    ],
+    "import_graph_test_files": [
+      "assertj-core/src/test/java/org/assertj/core/api/iterable/IterableAssert_usingComparatorForType_Test.java"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [
+      {
+        "covers_changed_lines": [
+          2062,
+          2063,
+          2066,
+          2067
+        ],
+        "reason": "directly exercises the usingComparatorForType method, first call installs ExtendedByTypesComparator (null branch)",
+        "start_line": 67,
+        "test_kind": "function",
+        "test_name": "should_be_able_to_use_a_comparator_for_specified_types",
+        "test_path": "assertj-core/src/test/java/org/assertj/core/api/iterable/IterableAssert_usingComparatorForType_Test.java"
+      },
+      {
+        "covers_changed_lines": [
+          2062,
+          2066,
+          2067
+        ],
+        "reason": "calls usingComparatorForType twice which triggers the non-null branch on the second call",
+        "start_line": 79,
+        "test_kind": "function",
+        "test_name": "should_be_able_to_replace_a_registered_comparator_by_type",
+        "test_path": "assertj-core/src/test/java/org/assertj/core/api/iterable/IterableAssert_usingComparatorForType_Test.java"
+      }
+    ],
+    "test_query": "Find tests that verify the behavior of usingComparatorForType in assertj-core/src/main/java/org/assertj/core/api/AbstractIterableAssert.java"
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "getComparator",
+      "path": "assertj-core/src/main/java/org/assertj/core/internal/ExtendedByTypesComparator.java",
+      "reason": "read: needed to access the base comparator when rebuilding, prevents searching for how to get the inner comparator",
+      "start_line": 64
+    },
+    {
+      "kind": "method",
+      "name": "usingElementComparator",
+      "path": "assertj-core/src/main/java/org/assertj/core/api/AbstractIterableAssert.java",
+      "reason": "read: needed to understand how the iterables comparator gets set and how to rebuild it correctly",
+      "start_line": 872
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers the edited method and the class needed for correctness. An AI agent would additionally need to check ExtendedByTypesComparator.getComparator() to know how to access the inner comparator, and usingElementComparator to understand the mechanics of installing a comparator. Without these, the agent would have to search for them during implementation."
+}

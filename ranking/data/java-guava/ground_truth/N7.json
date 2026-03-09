@@ -1,0 +1,145 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/guava/src/com/google/common/net/InternetDomainName.java b/guava/src/com/google/common/net/InternetDomainName.java\nindex 5646343..188ce61 100644\n--- a/guava/src/com/google/common/net/InternetDomainName.java\n+++ b/guava/src/com/google/common/net/InternetDomainName.java\n@@ -603,6 +603,9 @@ public final class InternetDomainName {\n    * @since 8.0 (previously named {@code isValidLenient})\n    */\n   public static boolean isValid(String name) {\n+    if (name == null) {\n+      return false;\n+    }\n     try {\n       InternetDomainName unused = from(name);\n       return true;\n",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The catch clause only catches IllegalArgumentException, but from() calls checkNotNull which throws NPE. Adding a null check at the top of isValid is the minimal change that makes isValid safe.",
+    "dead_ends": [],
+    "hindsight": "Could also widen the catch to include NullPointerException, but that would be a worse design. The early-return approach is cleaner.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Catch NullPointerException in addition to IllegalArgumentException",
+          "Add null check before calling from()"
+        ],
+        "decision": "Add explicit null check at the start of isValid that returns false",
+        "reasoning": "An early null check is the clearest and most idiomatic pattern; widening the catch clause would mask programming errors inside from()"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "grep for isValid and from in InternetDomainName.java",
+        "reasoning": "Task specifies the exact method and its relationship to from()",
+        "result": "isValid at line 605, from at line 221"
+      },
+      {
+        "action": "Read isValid method body",
+        "reasoning": "Need to see the current try/catch structure",
+        "result": "Only catches IllegalArgumentException; from() calls checkNotNull internally which throws NPE"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "isValid",
+      "path": "guava/src/com/google/common/net/InternetDomainName.java",
+      "reason": "edited: added null check returning false before the try block",
+      "start_line": 605
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses domain concepts ('domain name validator', 'null input', 'safe guard method') without symbols or paths. Pre-implementation: natural description of the bug.",
+      "pins": [],
+      "query_text": "fix a domain name validator method so that passing null returns false instead of throwing NullPointerException so it can be used safely as a guard without a prior null check",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'previously named isValidLenient' is a literal Javadoc string in the source. Pre-implementation: developer searching for the isValid Javadoc to understand how it is documented.",
+      "pins": [],
+      "query_text": "\"isValidLenient\" InternetDomainName isValid",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 3 exact symbol names from the touched code. Pre-implementation: developer enumerating identifiers for the task.",
+      "pins": [],
+      "query_text": "isValid, from, InternetDomainName",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names 'isValid' and uses relationship word 'calls' referencing from(). Pre-implementation: developer tracing what isValid calls to understand where NPE originates.",
+      "pins": [],
+      "query_text": "isValid calls from in InternetDomainName where from calls checkNotNull causing NPE when null is passed",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "isValid"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides explicit file path. Pre-implementation: task description identifies the file.",
+      "pins": [
+        "guava/src/com/google/common/net/InternetDomainName.java"
+      ],
+      "query_text": "guava/src/com/google/common/net/InternetDomainName.java isValid null input handling",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('return false for null input') with 2 exact symbols 'isValid' and 'from'. Pre-implementation: natural task description phrasing.",
+      "pins": [],
+      "query_text": "InternetDomainName.isValid should return false for null input instead of propagating NPE from the from() call",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "isValid",
+        "from"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 1 file path. Pre-implementation: developer navigating with method name and file.",
+      "pins": [
+        "guava/src/com/google/common/net/InternetDomainName.java"
+      ],
+      "query_text": "isValid from in guava/src/com/google/common/net/InternetDomainName.java null guard",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "isValid",
+        "from"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names 'isValid', 'from' and the file path. Pre-implementation: how a developer phrases the search after reading the task.",
+      "pins": [
+        "guava/src/com/google/common/net/InternetDomainName.java"
+      ],
+      "query_text": "fix InternetDomainName.isValid in InternetDomainName.java to return false for null instead of throwing NullPointerException from from()",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "isValid",
+        "from"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added an explicit `if (name == null) { return false; }` check at the start of `isValid()` in InternetDomainName.java. The existing catch only catches `IllegalArgumentException`; `from()` calls `checkNotNull` which throws `NullPointerException`, escaping the catch. The early-return pattern is cleaner than widening the catch clause.",
+  "task_complexity": "narrow",
+  "task_id": "java-guava/N7",
+  "task_text": "Fix InternetDomainName.isValid not handling null input gracefully\n\n`InternetDomainName.isValid(String name)` is documented as a safe\nguard method, but passing `null` causes it to throw\n`NullPointerException` instead of returning `false`. The method calls\n`from(name)` which calls `checkNotNull(domain)`, throwing NPE. The\ntry/catch in `isValid()` only catches `IllegalArgumentException`, so\nthe NPE escapes to the caller. Fix `isValid()` in\n`InternetDomainName.java` to return `false` for a `null` argument,\nmaking it safe to use as a guard without a prior null check.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "guava/src/com/google/common/net/InternetDomainName.java"
+    ],
+    "diff_seeds": [
+      "isValid"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "from",
+      "path": "guava/src/com/google/common/net/InternetDomainName.java",
+      "reason": "read: from() calls checkNotNull(domain) which is what causes the NPE; seeing this confirms the fix should be in isValid not in from()",
+      "start_line": 221
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set is only the edited method. The from() method is added to thrash_preventing because an AI agent would read it to confirm that the NPE source is checkNotNull inside from(), which validates the decision to add a null check in isValid rather than modifying from() or widening the catch clause."
+}

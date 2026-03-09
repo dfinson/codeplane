@@ -1,0 +1,222 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/include/nlohmann/detail/conversions/from_json.hpp b/include/nlohmann/detail/conversions/from_json.hpp\nindex 2a814d1..3a46047 100644\n--- a/include/nlohmann/detail/conversions/from_json.hpp\n+++ b/include/nlohmann/detail/conversions/from_json.hpp\n@@ -33,6 +33,7 @@\n // include after macro_scope.hpp\n #ifdef JSON_HAS_CPP_17\n     #include <optional> // optional\n+    #include <variant> // variant, variant_alternative_t\n #endif\n \n #if JSON_HAS_FILESYSTEM || JSON_HAS_EXPERIMENTAL_FILESYSTEM\n@@ -581,6 +582,35 @@ inline void from_json(const BasicJsonType& j, std_fs::path& p)\n }\n #endif\n \n+#ifdef JSON_HAS_CPP_17\n+namespace variant_detail\n+{\n+template<std::size_t I, typename BasicJsonType, typename... Types>\n+void from_json_variant_alt(const BasicJsonType& j, std::variant<Types...>& v, std::size_t idx)\n+{\n+    if (I == idx)\n+    {\n+        v = j.template get<std::variant_alternative_t<I, std::variant<Types...>>>();\n+    }\n+}\n+\n+template<typename BasicJsonType, typename... Types, std::size_t... Is>\n+void from_json_variant_impl(const BasicJsonType& j, std::variant<Types...>& v,\n+                            std::size_t idx, index_sequence<Is...> /*unused*/)\n+{\n+    (from_json_variant_alt<Is>(j, v, idx), ...);\n+}\n+} // namespace variant_detail\n+\n+template<typename BasicJsonType, typename... Types,\n+         enable_if_t<is_variant<std::variant<Types...>>::value, int> = 0>\n+void from_json(const BasicJsonType& j, std::variant<Types...>& v)\n+{\n+    const auto idx = j.at(0).template get<std::size_t>();\n+    variant_detail::from_json_variant_impl(j.at(1), v, idx, index_sequence_for<Types...> {});\n+}\n+#endif\n+\n struct from_json_fn\n {\n     template<typename BasicJsonType, typename T>\ndiff --git a/include/nlohmann/detail/conversions/to_json.hpp b/include/nlohmann/detail/conversions/to_json.hpp\nindex 3626593..86679d5 100644\n--- a/include/nlohmann/detail/conversions/to_json.hpp\n+++ b/include/nlohmann/detail/conversions/to_json.hpp\n@@ -11,6 +11,7 @@\n #include <nlohmann/detail/macro_scope.hpp> // JSON_HAS_CPP_17\n #ifdef JSON_HAS_CPP_17\n     #include <optional> // optional\n+    #include <variant> // variant, visit, variant_size\n #endif\n \n #include <algorithm> // copy\n@@ -459,6 +460,19 @@ inline void to_json(BasicJsonType& j, const std_fs::path& p)\n }\n #endif\n \n+#ifdef JSON_HAS_CPP_17\n+template<typename BasicJsonType, typename... Types,\n+         enable_if_t<is_variant<std::variant<Types...>>::value, int> = 0>\n+void to_json(BasicJsonType& j, const std::variant<Types...>& v)\n+{\n+    j = {v.index(),\n+         std::visit([](const auto& alt) -> BasicJsonType\n+    {\n+        return alt;\n+    }, v)};\n+}\n+#endif\n+\n struct to_json_fn\n {\n     template<typename BasicJsonType, typename T>\ndiff --git a/include/nlohmann/detail/meta/type_traits.hpp b/include/nlohmann/detail/meta/type_traits.hpp\nindex e4551d1..1c10e75 100644\n--- a/include/nlohmann/detail/meta/type_traits.hpp\n+++ b/include/nlohmann/detail/meta/type_traits.hpp\n@@ -16,6 +16,9 @@\n #if defined(__cpp_lib_byte) && __cpp_lib_byte >= 201603L\n     #include <cstddef> // byte\n #endif\n+#ifdef JSON_HAS_CPP_17\n+    #include <variant> // variant\n+#endif\n #include <nlohmann/detail/iterators/iterator_traits.hpp>\n #include <nlohmann/detail/macro_scope.hpp>\n #include <nlohmann/detail/meta/call_std/begin.hpp>\n@@ -857,5 +860,20 @@ struct is_transparent : bool_constant<impl::is_transparent<T)()> {};\n \n ///////////////////////////////////////////////////////////////////////////////\n \n+///////////////////////////////////////////////////////////////////////////////\n+// is_variant\n+///////////////////////////////////////////////////////////////////////////////\n+\n+// checks whether T is a std::variant\n+template<typename T>\n+struct is_variant : std::false_type {};\n+\n+#ifdef JSON_HAS_CPP_17\n+template<typename... Types>\n+struct is_variant<std::variant<Types...>> : std::true_type {};\n+#endif\n+\n+///////////////////////////////////////////////////////////////////////////////\n+\n }  // namespace detail\n NLOHMANN_JSON_NAMESPACE_END",
+  "excluded_defs": [
+    {
+      "kind": "function",
+      "name": "to_json (optional)",
+      "path": "include/nlohmann/detail/conversions/to_json.hpp",
+      "reason": "read as model for variant pattern \u2014 identical guard and style, but not needed for correctness of variant implementation",
+      "start_line": 271
+    },
+    {
+      "kind": "function",
+      "name": "from_json (optional)",
+      "path": "include/nlohmann/detail/conversions/from_json.hpp",
+      "reason": "read as model for variant pattern",
+      "start_line": 59
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "The optional overloads provide the exact pattern: JSON_HAS_CPP_17 guard, enable_if_t SFINAE constraint via is_variant, simple serialization. For from_json, the tuple's from_json_tuple_impl_base with index_sequence showed how to dispatch over compile-time alternatives at runtime index.",
+    "dead_ends": [],
+    "hindsight": "Looking at the tuple from_json pattern upfront for the index_sequence dispatch approach would have saved time vs designing from scratch.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Serialize as JSON object {\"index\": N, \"value\": ...}",
+          "Serialize as JSON array [index, value] (task requirement)",
+          "Use monostate marker for empty variants"
+        ],
+        "decision": "JSON array [index, value] as specified by the task",
+        "reasoning": "Task explicitly specifies this format"
+      },
+      {
+        "alternatives": [
+          "Recursive template instantiation for runtime index dispatch",
+          "fold expression with if (I == idx) check over index_sequence_for"
+        ],
+        "decision": "fold expression approach: from_json_variant_impl with index_sequence<Is...> and fold (from_json_variant_alt<Is>(...), ...)",
+        "reasoning": "C++17 fold expressions are simpler and cleaner than recursive template instantiation; consistent with the codebase's use of fold expressions elsewhere"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Grepped for 'optional' in to_json.hpp and from_json.hpp",
+        "reasoning": "Optional is the closest existing std type with similar JSON_HAS_CPP_17 guard pattern",
+        "result": "Found pattern at lines 271 and 59 respectively"
+      },
+      {
+        "action": "Checked type_traits.hpp for is_optional and similar traits to understand pattern",
+        "reasoning": "Need to know how to add is_variant trait",
+        "result": "No existing is_optional but found is_c_string pattern to follow"
+      },
+      {
+        "action": "Checked tuple from_json for index_sequence dispatch pattern",
+        "reasoning": "Variant from_json needs runtime index dispatch over compile-time alternatives",
+        "result": "Found from_json_tuple_impl_base using index_sequence<Idx...> - adapted this for variant"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "function",
+      "name": "to_json (variant)",
+      "path": "include/nlohmann/detail/conversions/to_json.hpp",
+      "reason": "edited: new function added",
+      "start_line": 460
+    },
+    {
+      "kind": "function",
+      "name": "from_json (variant)",
+      "path": "include/nlohmann/detail/conversions/from_json.hpp",
+      "reason": "edited: new function added",
+      "start_line": 606
+    },
+    {
+      "kind": "function",
+      "name": "from_json_variant_alt",
+      "path": "include/nlohmann/detail/conversions/from_json.hpp",
+      "reason": "edited: helper for runtime index dispatch",
+      "start_line": 584
+    },
+    {
+      "kind": "function",
+      "name": "from_json_variant_impl",
+      "path": "include/nlohmann/detail/conversions/from_json.hpp",
+      "reason": "edited: helper applying fold expression over alternatives",
+      "start_line": 594
+    },
+    {
+      "kind": "struct",
+      "name": "is_variant",
+      "path": "include/nlohmann/detail/meta/type_traits.hpp",
+      "reason": "edited: new type trait added to gate SFINAE constraints"
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: domain concept only - 'serialize and deserialize a tagged union type'. No symbols. Pre-implementation: a developer would describe the goal this way.",
+      "pins": [],
+      "query_text": "add serialization and deserialization support for tagged union types that store one of several possible value alternatives",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: literal string from code: 'variant, variant_alternative_t'. Pre-implementation: searching for existing variant includes reveals no current support.",
+      "pins": [],
+      "query_text": "\"variant, variant_alternative_t\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names. Pre-implementation: developer knows these from the task.",
+      "pins": [],
+      "query_text": "to_json, from_json, is_variant, variant_detail",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: concrete symbol 'is_variant' with relationship 'callees'. Pre-implementation: developer wants to find where variant conversion is dispatched.",
+      "pins": [],
+      "query_text": "callers of is_variant and functions that call from_json_variant_impl",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "is_variant",
+        "from_json_variant_impl"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 explicit file paths. Pre-implementation: task names all 3 files.",
+      "pins": [
+        "include/nlohmann/detail/conversions/to_json.hpp",
+        "include/nlohmann/detail/conversions/from_json.hpp",
+        "include/nlohmann/detail/meta/type_traits.hpp"
+      ],
+      "query_text": "include/nlohmann/detail/conversions/to_json.hpp include/nlohmann/detail/conversions/from_json.hpp include/nlohmann/detail/meta/type_traits.hpp variant support",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: domain concept mixed with symbol names 'to_json', 'from_json'. Pre-implementation: developer states goal + entry point.",
+      "pins": [],
+      "query_text": "add to_json and from_json overloads for std::variant serialization as index-value pair",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "to_json",
+        "from_json",
+        "is_variant"
+      ]
+    },
+    {
+      "justification": "Rule compliance: symbol names + file paths.",
+      "pins": [
+        "include/nlohmann/detail/conversions/to_json.hpp",
+        "include/nlohmann/detail/conversions/from_json.hpp"
+      ],
+      "query_text": "to_json from_json is_variant in include/nlohmann/detail/conversions/to_json.hpp and from_json.hpp",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "to_json",
+        "from_json",
+        "is_variant"
+      ]
+    },
+    {
+      "justification": "Rule compliance: symbols and file paths. Natural full query.",
+      "pins": [
+        "include/nlohmann/detail/conversions/to_json.hpp",
+        "include/nlohmann/detail/conversions/from_json.hpp",
+        "include/nlohmann/detail/meta/type_traits.hpp"
+      ],
+      "query_text": "add std::variant to_json from_json overloads [index, value] format with is_variant type trait in type_traits.hpp",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "to_json",
+        "from_json",
+        "is_variant"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `is_variant` type trait in `type_traits.hpp` (guarded by `JSON_HAS_CPP_17` + `<variant>` include). Added `to_json` using `std::visit` to serialize as `{index, value}` array and `from_json` using a fold expression over `index_sequence_for<Types...>` to dispatch to the correct `variant_alternative_t` at runtime. Both overloads are guarded with `JSON_HAS_CPP_17`.",
+  "task_complexity": "narrow",
+  "task_id": "cpp-nlohmann-json/N10",
+  "task_text": "Add to_json and from_json overloads for std::variant\n\nThe conversion functions in `detail/conversions/to_json.hpp` and\n`detail/conversions/from_json.hpp` cover standard library types\nincluding `std::optional`, `std::pair`, `std::tuple`, and\n`std::filesystem::path`, but do not include `std::variant`. Users\nwho hold typed alternatives via `std::variant` must manually match\nthe active alternative before serialization. Add `to_json` and\n`from_json` overloads for `std::variant<Types...>` that serialize the\nactive alternative as a JSON array `[index, value]` (where `index`\nis the zero-based `std::variant::index()`) and deserialize by reading\nthe index and constructing the corresponding alternative via\n`std::get<N>`. Guard the overloads with `__cpp_lib_variant` or an\nequivalent feature-detection check. Add a supporting `is_variant`\ntype trait in `detail/meta/type_traits.hpp` to gate the SFINAE\nconstraints.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "include/nlohmann/detail/conversions/to_json.hpp",
+      "include/nlohmann/detail/conversions/from_json.hpp",
+      "include/nlohmann/detail/meta/type_traits.hpp"
+    ],
+    "diff_seeds": [
+      "to_json",
+      "from_json",
+      "is_variant",
+      "from_json_variant_impl"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "function",
+      "name": "to_json (optional)",
+      "path": "include/nlohmann/detail/conversions/to_json.hpp",
+      "reason": "read: establishes the JSON_HAS_CPP_17 guard pattern, SFINAE style, and placement in the file \u2014 prevents an agent from inventing a different guard or placement",
+      "start_line": 271
+    },
+    {
+      "kind": "function",
+      "name": "from_json (optional)",
+      "path": "include/nlohmann/detail/conversions/from_json.hpp",
+      "reason": "read: establishes the from_json pattern for optional types \u2014 prevents agent from guessing the dispatch mechanism",
+      "start_line": 59
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers all edited defs. The thrash-preventing set adds the existing optional overloads: an AI agent would proactively search for these to understand the exact guard style, SFINAE pattern, and placement convention before writing the variant versions. Without seeing them upfront, the agent would need to make a search call mid-implementation to verify the coding pattern."
+}

@@ -1,0 +1,270 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/main/java/tools/jackson/databind/type/ClassStack.java b/src/main/java/tools/jackson/databind/type/ClassStack.java\nindex b5330ba..5b4603f 100644\n--- a/src/main/java/tools/jackson/databind/type/ClassStack.java\n+++ b/src/main/java/tools/jackson/databind/type/ClassStack.java\n@@ -59,6 +59,17 @@ public final class ClassStack\n         }\n     }\n \n+    /**\n+     * Returns true if this stack frame had self-references registered via\n+     * {@link #addSelfReference}, meaning the type being built is self-referential\n+     * and those references have been (or are about to be) resolved.\n+     *\n+     * @since 3.x\n+     */\n+    public boolean hasSelfReferences() {\n+        return _selfRefs != null && !_selfRefs.isEmpty();\n+    }\n+\n     public ClassStack find(Class<?> cls)\n diff --git a/src/main/java/tools/jackson/databind/type/TypeFactory.java b/src/main/java/tools/jackson/databind/type/TypeFactory.java\nindex a6b4b63..8e06582 100644\n--- a/src/main/java/tools/jackson/databind/type/TypeFactory.java\n+++ b/src/main/java/tools/jackson/databind/type/TypeFactory.java\n@@ -1400,10 +1400,28 @@ ClassUtil.nameOf(rawClass), pc, (pc == 1) ? \"\" : \"s\", bindings));\n             }\n         }\n         context.resolveSelfReferences(result);\n-        // 16-Jul-2016, tatu: [databind#1302] is solved different way, but ideally we shouldn't\n-        //     cache anything with partially resolved `ResolvedRecursiveType`... so maybe improve\n+        // After resolveSelfReferences() all ResolvedRecursiveType placeholders registered\n+        // on this context frame have been patched to reference the fully-built type.\n+        // We can now safely cache; the previous concern about partially-resolved types\n+        // no longer applies once resolveSelfReferences() returns.\n+        // Verify by checking that the context carried self-references: if it did, they\n+        // are now resolved, so the result is fully determined and cacheable.\n         if (key != null && !result.hasHandlers()) {\n             _typeCache.putIfAbsent(key, result); // cache object syncs\n+        } else if (key == null && context.hasSelfReferences() && !result.hasHandlers()) {\n+            // The cache key was null because type bindings held a ResolvedRecursiveType\n+            // placeholder during construction. Now that self-references are resolved we\n+            // can build a valid key and cache the fully-resolved type to avoid repeated\n+            // expensive resolution on subsequent accesses.\n+            Object resolvedKey;\n+            if (bindings == null || bindings.isEmpty()) {\n+                resolvedKey = rawType;\n+            } else {\n+                resolvedKey = bindings.asKey(rawType);\n+            }\n+            if (resolvedKey != null) {\n+                _typeCache.putIfAbsent(resolvedKey, result);\n+            }\n         }\n         return result;\n     }",
+  "excluded_defs": [
+    {
+      "kind": "method",
+      "name": "invalidCacheKey",
+      "path": "src/main/java/tools/jackson/databind/type/TypeBindings.java",
+      "reason": "read: explains why bindings.asKey() returns null when bindings contain ResolvedRecursiveType (IdentityEqualityType check). Investigated to confirm that asKey() will still return null for partially-resolved bindings, so the else-if branch correctly falls through when resolution is incomplete.",
+      "start_line": 275
+    },
+    {
+      "kind": "method",
+      "name": "asKey",
+      "path": "src/main/java/tools/jackson/databind/type/TypeBindings.java",
+      "reason": "read: confirms asKey() returns null for bindings containing IdentityEqualityType (ResolvedRecursiveType), establishing the root cause of the missing cache entry",
+      "start_line": 377
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "TypeBindings.invalidCacheKey() returns true when the bindings contain any IdentityEqualityType (including ResolvedRecursiveType), making asKey() return null, so key is null from the start and the normal caching path `if (key != null...)` is bypassed entirely. The fix adds an else-if branch that detects this case via context.hasSelfReferences() and retries asKey() after resolution.",
+    "dead_ends": [
+      {
+        "explored": "Whether modifying TypeBindings.invalidCacheKey() to skip resolved ResolvedRecursiveType would be cleaner",
+        "why_irrelevant": "Would change TypeBindings semantics for all callers; the TypeFactory-local else-if branch is more surgical and targeted"
+      }
+    ],
+    "hindsight": "Should have checked TypeBindings.invalidCacheKey() and asKey() first to understand the null-key root cause rather than tracing through the caching condition in detail.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Modify TypeBindings.invalidCacheKey() to treat resolved ResolvedRecursiveType as valid",
+          "Store result indexed by rawType without bindings"
+        ],
+        "decision": "Add else-if branch in _fromClass() that retries asKey() after resolution and caches if a valid key can be produced",
+        "reasoning": "Keeps the fix contained to _fromClass() and uses the existing asKey() contract; doesn't change TypeBindings semantics for other callers"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Grep for ResolvedRecursiveType, resolveSelfReferences, and caching in TypeFactory.java",
+        "reasoning": "Task mentions _fromClass() and resolveSelfReferences() as the primary sites",
+        "result": "Found the TODO comment at line 1403-1404 and caching condition at 1405 with key != null guard"
+      },
+      {
+        "action": "Read ClassStack.java fully",
+        "reasoning": "resolveSelfReferences() is in ClassStack; needed to understand when and how it patches placeholders",
+        "result": "Found addSelfReference(), resolveSelfReferences(), and that _selfRefs list tracks outstanding placeholders"
+      },
+      {
+        "action": "Read ResolvedRecursiveType.java",
+        "reasoning": "Needed to understand what getSelfReferencedType() returns and when the type is 'fully resolved'",
+        "result": "Found _referencedType field set by setReference(); null means unresolved, non-null means resolved"
+      },
+      {
+        "action": "Read TypeBindings.asKey() and invalidCacheKey()",
+        "reasoning": "key is set to bindings.asKey(rawType) and checked for null; needed to understand when it returns null",
+        "result": "invalidCacheKey() returns true if any binding type instanceof IdentityEqualityType (which ResolvedRecursiveType extends), making asKey() return null"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "_fromClass",
+      "path": "src/main/java/tools/jackson/databind/type/TypeFactory.java",
+      "reason": "edited: updated caching logic with else-if branch for self-referential type caching after resolveSelfReferences()",
+      "start_line": 1327
+    },
+    {
+      "kind": "method",
+      "name": "hasSelfReferences",
+      "path": "src/main/java/tools/jackson/databind/type/ClassStack.java",
+      "reason": "edited: new method added to expose whether this context frame had any self-references",
+      "start_line": 59
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts ('generic types referencing themselves', 'cached on every access', 'slow performance'). Pre-implementation: a developer seeing slow performance on repeated generic type resolution would describe it this way.",
+      "pins": [],
+      "query_text": "Generic types that reference themselves are not cached after resolution, causing slow repeated construction on every access",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: contains the literal code comment 'cache anything with partially resolved ResolvedRecursiveType' which appears verbatim in the removed comment. Pre-implementation: a developer who has read the code might search for this exact comment to find the caching site.",
+      "pins": [],
+      "query_text": "\"cache anything with partially resolved ResolvedRecursiveType\" OR \"resolveSelfReferences\" OR \"hasSelfReferences\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 4 exact symbol names from the changed code. Pre-implementation: these are the central identifiers a developer would search for when investigating the type resolution caching path.",
+      "pins": [],
+      "query_text": "_fromClass, resolveSelfReferences, ResolvedRecursiveType, TypeFactory, ClassStack, hasSelfReferences",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names a concrete symbol (_fromClass) and uses relationship words (callers, calls). Pre-implementation: a developer tracing the type resolution path would start with _fromClass and its relationship to ClassStack.resolveSelfReferences.",
+      "pins": [],
+      "query_text": "callers of ClassStack.resolveSelfReferences and TypeFactory._fromClass caching block",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "_fromClass",
+        "resolveSelfReferences"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains 2 file paths from the changed files. Pre-implementation: the task description explicitly names TypeFactory._fromClass() as the primary fix site and ClassStack as the secondary.",
+      "pins": [
+        "src/main/java/tools/jackson/databind/type/TypeFactory.java",
+        "src/main/java/tools/jackson/databind/type/ClassStack.java"
+      ],
+      "query_text": "src/main/java/tools/jackson/databind/type/TypeFactory.java _fromClass caching step and src/main/java/tools/jackson/databind/type/ClassStack.java self-reference tracking",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept (type cache misses for self-referential generics) with symbol names (_fromClass, TypeFactory, ResolvedRecursiveType). Pre-implementation: a developer investigating type factory performance would combine domain description with the known class names.",
+      "pins": [],
+      "query_text": "TypeFactory type cache misses for self-referential generic types because ResolvedRecursiveType placeholder causes _fromClass to skip caching",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "_fromClass",
+        "TypeFactory",
+        "ResolvedRecursiveType"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains 3 symbol names and 2 file paths. Pre-implementation: a developer would combine the known symbol names with file paths from the task description.",
+      "pins": [
+        "src/main/java/tools/jackson/databind/type/TypeFactory.java",
+        "src/main/java/tools/jackson/databind/type/ClassStack.java"
+      ],
+      "query_text": "_fromClass resolveSelfReferences hasSelfReferences in TypeFactory.java ClassStack.java",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "_fromClass",
+        "resolveSelfReferences",
+        "hasSelfReferences"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names and file paths. Pre-implementation: this is what a developer would type when starting to implement the fix from the task description.",
+      "pins": [
+        "src/main/java/tools/jackson/databind/type/TypeFactory.java",
+        "src/main/java/tools/jackson/databind/type/ClassStack.java"
+      ],
+      "query_text": "Fix TypeFactory._fromClass() to cache fully-resolved self-referential types after resolveSelfReferences() using ClassStack.hasSelfReferences() to verify no unresolved ResolvedRecursiveType remain",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "_fromClass",
+        "resolveSelfReferences",
+        "ResolvedRecursiveType"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "The root cause: when type bindings contain a ResolvedRecursiveType placeholder, TypeBindings.asKey() returns null (because invalidCacheKey() fires for IdentityEqualityType instances), so the normal cache path is bypassed. After resolveSelfReferences() patches the placeholder, a post-resolution key can be attempted. Added hasSelfReferences() to ClassStack to distinguish self-referential frames from plain recursive-call frames, and added an else-if branch in _fromClass() to retry caching with the post-resolution key.",
+  "task_complexity": "narrow",
+  "task_id": "java-jackson/N2",
+  "task_text": "`TypeFactory` uses `ResolvedRecursiveType` as a placeholder when it\ndetects a type that references itself (e.g., `Comparable<Foo>` where\n`Foo implements Comparable<Foo>`). After resolution, `resolveSelfReferences()`\npatches the placeholder, but the code comment at the caching step\nacknowledges that types containing a partially-resolved\n`ResolvedRecursiveType` are skipped from the cache. This causes repeated\nexpensive resolution on every access. Fix the caching logic in\n`TypeFactory._fromClass()` to correctly cache fully-resolved\nself-referential types once `resolveSelfReferences()` has completed,\nverifying that no unresolved `ResolvedRecursiveType` references remain.",
+  "test_selection": {
+    "coverage_available": true,
+    "coverage_skip_reason": null,
+    "diff_pins": [
+      "src/main/java/tools/jackson/databind/type/TypeFactory.java",
+      "src/main/java/tools/jackson/databind/type/ClassStack.java"
+    ],
+    "diff_seeds": [
+      "_fromClass",
+      "resolveSelfReferences",
+      "hasSelfReferences"
+    ],
+    "import_graph_test_files": [
+      "src/test/java/tools/jackson/databind/type/RecursiveTypeTest.java",
+      "src/test/java/tools/jackson/databind/type/JavaTypeTest.java",
+      "src/test/java/tools/jackson/databind/type/TypeBindingsTest.java"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [
+      {
+        "covers_changed_lines": [
+          1402,
+          1405,
+          1406,
+          1408
+        ],
+        "reason": "constructs HashTree which is a self-referential type, exercising the _fromClass caching path including resolveSelfReferences()",
+        "start_line": 66,
+        "test_kind": "function",
+        "test_name": "testRecursiveType",
+        "test_path": "src/test/java/tools/jackson/databind/type/RecursiveTypeTest.java"
+      },
+      {
+        "covers_changed_lines": [
+          1402,
+          1405,
+          1406,
+          1408
+        ],
+        "reason": "constructs ImmutablePair which implements a self-referential Ability<ImmutablePair<L,R>>, exercising the same path",
+        "start_line": 87,
+        "test_kind": "function",
+        "test_name": "testRecursivePair",
+        "test_path": "src/test/java/tools/jackson/databind/type/RecursiveTypeTest.java"
+      },
+      {
+        "covers_changed_lines": [
+          1402,
+          1405,
+          1406,
+          1408
+        ],
+        "reason": "constructs Base/Sub class hierarchy involving IFace<T> cross-reference, verifying resolveSelfReferences handling",
+        "start_line": 121,
+        "test_kind": "function",
+        "test_name": "testSuperClassWithReferencedJavaType",
+        "test_path": "src/test/java/tools/jackson/databind/type/RecursiveTypeTest.java"
+      },
+      {
+        "covers_changed_lines": [
+          1402,
+          1405,
+          1406,
+          1408
+        ],
+        "reason": "constructs Tree1658<T> (recursive map subclass) and verifies serialization round-trip",
+        "start_line": 155,
+        "test_kind": "function",
+        "test_name": "testRecursive1658",
+        "test_path": "src/test/java/tools/jackson/databind/type/RecursiveTypeTest.java"
+      }
+    ],
+    "test_query": "Find tests that verify the behavior of _fromClass, resolveSelfReferences in TypeFactory.java and ClassStack.java"
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "resolveSelfReferences",
+      "path": "src/main/java/tools/jackson/databind/type/ClassStack.java",
+      "reason": "read: shows exactly how self-references are patched; confirms that after this call all ResolvedRecursiveType instances in _selfRefs have _referencedType set, making the type cacheable",
+      "start_line": 45
+    },
+    {
+      "kind": "method",
+      "name": "addSelfReference",
+      "path": "src/main/java/tools/jackson/databind/type/ClassStack.java",
+      "reason": "read: shows when and how ResolvedRecursiveType instances are registered; confirms that hasSelfReferences() correctly identifies self-referential context frames",
+      "start_line": 35
+    },
+    {
+      "kind": "method",
+      "name": "invalidCacheKey",
+      "path": "src/main/java/tools/jackson/databind/type/TypeBindings.java",
+      "reason": "read: explains WHY key is null during self-referential type construction (IdentityEqualityType check); needed to understand why the normal caching path fires key==null for these types",
+      "start_line": 275
+    },
+    {
+      "kind": "method",
+      "name": "getSelfReferencedType",
+      "path": "src/main/java/tools/jackson/databind/type/ResolvedRecursiveType.java",
+      "reason": "read: confirms that _referencedType is null before resolution and non-null after; validates the post-resolution caching approach",
+      "start_line": 30
+    }
+  ],
+  "tier_difference_reasoning": "minimum_sufficient covers the two edited sites (_fromClass and the new hasSelfReferences method). thrash_preventing adds ClassStack.resolveSelfReferences and addSelfReference (an agent needs to read both to understand when placeholders are registered vs. resolved), TypeBindings.invalidCacheKey (explains the root cause of null key without which an agent would not know why asKey() returns null), and ResolvedRecursiveType.getSelfReferencedType (confirms the post-resolution state). Without these, an agent would likely make wrong assumptions about when the placeholder is considered resolved or why the null-key branch exists."
+}

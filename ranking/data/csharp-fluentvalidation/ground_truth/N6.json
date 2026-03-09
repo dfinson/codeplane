@@ -1,0 +1,204 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/FluentValidation/DefaultValidatorExtensions.cs b/src/FluentValidation/DefaultValidatorExtensions.cs\n+\t/// <summary>\n+\t/// Defines a minimum items validator on the current rule builder for collection properties.\n+\t/// Validation will fail if the number of items in the collection is less than the minimum.\n+\t/// </summary>\n+\tpublic static IRuleBuilderOptions<T, ICollection<TElement>> MinimumItems<T, TElement>(this IRuleBuilder<T, ICollection<TElement>> ruleBuilder, int min)\n+\t\t=> ruleBuilder.SetValidator(new MinimumCollectionLengthValidator<T, TElement>(min));\n+\n+\tpublic static IRuleBuilderOptions<T, ICollection<TElement>> MaximumItems<T, TElement>(this IRuleBuilder<T, ICollection<TElement>> ruleBuilder, int max)\n+\t\t=> ruleBuilder.SetValidator(new MaximumCollectionLengthValidator<T, TElement>(max));\n\ndiff --git a/src/FluentValidation/Resources/Languages/EnglishLanguage.cs b/src/FluentValidation/Resources/Languages/EnglishLanguage.cs\n+\t\t\"MinimumCollectionLengthValidator\" => \"'{PropertyName}' must contain at least {MinItems} items. The collection has {TotalItems} item(s).\",\n+\t\t\"MaximumCollectionLengthValidator\" => \"'{PropertyName}' must contain no more than {MaxItems} items. The collection has {TotalItems} item(s).\",\n\ndiff --git a/src/FluentValidation/Validators/CollectionLengthValidator.cs b/src/FluentValidation/Validators/CollectionLengthValidator.cs\n+ (new file with MinimumCollectionLengthValidator<T,TElement> and MaximumCollectionLengthValidator<T,TElement>)",
+  "excluded_defs": [
+    {
+      "kind": "class",
+      "name": "LengthValidator",
+      "path": "src/FluentValidation/Validators/LengthValidator.cs",
+      "reason": "read as a reference pattern for implementing validator structure, but the collection validators are new separate classes",
+      "start_line": 23
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "LengthValidator.cs shows the exact pattern: store Min/Max, call AppendArgument in IsValid, override GetDefaultMessageTemplate calling Localized(). Mirroring that pattern for ICollection<T>.Count was straightforward.",
+    "dead_ends": [],
+    "hindsight": "Could have also added IMinimumCollectionLengthValidator / IMaximumCollectionLengthValidator interfaces for discoverability (like LengthValidator has ILengthValidator), but the task didn't require it.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "extend LengthValidator for collections",
+          "use a generic count-based validator"
+        ],
+        "decision": "Create two separate new classes MinimumCollectionLengthValidator<T,TElement> and MaximumCollectionLengthValidator<T,TElement>",
+        "reasoning": "LengthValidator targets string; separate classes keep string and collection validation distinct, matching the existing MaximumLengthValidator/MinimumLengthValidator split"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read LengthValidator.cs",
+        "reasoning": "Need to understand the validator pattern to replicate for collections",
+        "result": "PropertyValidator<T,TValue> base; IsValid appends arguments to context.MessageFormatter; GetDefaultMessageTemplate calls Localized()"
+      },
+      {
+        "action": "Find MinimumLength/MaximumLength extension methods in DefaultValidatorExtensions.cs",
+        "reasoning": "Need to add analogous MinimumItems/MaximumItems methods in the same file",
+        "result": "Found at lines 269/258 - simple one-liner SetValidator calls"
+      },
+      {
+        "action": "Find English error message template location",
+        "reasoning": "Need to add default messages for both new validators",
+        "result": "EnglishLanguage.cs GetTranslation switch at line 53"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "class",
+      "name": "MinimumCollectionLengthValidator",
+      "path": "src/FluentValidation/Validators/CollectionLengthValidator.cs",
+      "reason": "edited: new validator class checking ICollection.Count >= Min",
+      "start_line": 27
+    },
+    {
+      "kind": "class",
+      "name": "MaximumCollectionLengthValidator",
+      "path": "src/FluentValidation/Validators/CollectionLengthValidator.cs",
+      "reason": "edited: new validator class checking ICollection.Count <= Max",
+      "start_line": 57
+    },
+    {
+      "kind": "method",
+      "name": "MinimumItems",
+      "path": "src/FluentValidation/DefaultValidatorExtensions.cs",
+      "reason": "edited: new extension method wiring MinimumCollectionLengthValidator",
+      "start_line": 272
+    },
+    {
+      "kind": "method",
+      "name": "MaximumItems",
+      "path": "src/FluentValidation/DefaultValidatorExtensions.cs",
+      "reason": "edited: new extension method wiring MaximumCollectionLengthValidator",
+      "start_line": 283
+    },
+    {
+      "kind": "method",
+      "name": "GetTranslation",
+      "path": "src/FluentValidation/Resources/Languages/EnglishLanguage.cs",
+      "reason": "edited: added error message templates for both new validators",
+      "start_line": 30
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts (collection, item count, minimum, maximum, validation) without any code terms. Pre-implementation: a developer adding count validators for collections would search this.",
+      "pins": [],
+      "query_text": "Add validators to check that a collection has a minimum or maximum number of items",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: the quoted strings appear literally in the new English messages. Pre-implementation: a developer might look for existing count validation messages.",
+      "pins": [],
+      "query_text": "\"must contain at least\" OR \"must contain no more than\" collection items validator",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 5 exact symbol names from the new code. Pre-implementation: a developer knows these from the task description.",
+      "pins": [],
+      "query_text": "MinimumItems, MaximumItems, MinimumCollectionLengthValidator, MaximumCollectionLengthValidator, ICollection",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbols with relationship words (implementors, callers). Pre-implementation: an agent would trace what PropertyValidator implementors look like.",
+      "pins": [],
+      "query_text": "Implementors of PropertyValidator that operate on ICollection, and callers of SetValidator for collection rules",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "MinimumItems",
+        "MaximumItems"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides 2 explicit file paths from the changed files. Pre-implementation: task names these files directly.",
+      "pins": [
+        "src/FluentValidation/DefaultValidatorExtensions.cs",
+        "src/FluentValidation/Validators/CollectionLengthValidator.cs"
+      ],
+      "query_text": "src/FluentValidation/DefaultValidatorExtensions.cs and src/FluentValidation/Validators/CollectionLengthValidator.cs",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept (collection count validation) with 3 exact symbol names. Pre-implementation: natural starting query from the task description.",
+      "pins": [],
+      "query_text": "Add MinimumItems and MaximumItems extension methods backed by CollectionLengthValidator to validate ICollection.Count",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "MinimumItems",
+        "MaximumItems",
+        "MinimumCollectionLengthValidator"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 symbol names plus 2 file paths. Pre-implementation: combines known files with expected symbols.",
+      "pins": [
+        "src/FluentValidation/DefaultValidatorExtensions.cs",
+        "src/FluentValidation/Validators/CollectionLengthValidator.cs"
+      ],
+      "query_text": "MinimumItems MaximumItems CollectionLengthValidator in src/FluentValidation/DefaultValidatorExtensions.cs and src/FluentValidation/Validators/CollectionLengthValidator.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "MinimumItems",
+        "MaximumItems",
+        "MaximumCollectionLengthValidator"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names and file paths. Pre-implementation: natural query for the full task.",
+      "pins": [
+        "src/FluentValidation/DefaultValidatorExtensions.cs",
+        "src/FluentValidation/Resources/Languages/EnglishLanguage.cs"
+      ],
+      "query_text": "Add MinimumItems and MaximumItems extension methods for ICollection count validation in DefaultValidatorExtensions.cs and register default error messages in EnglishLanguage.cs",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "MinimumItems",
+        "MaximumItems",
+        "MinimumCollectionLengthValidator"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Created `CollectionLengthValidator.cs` with `MinimumCollectionLengthValidator<T,TElement>` and `MaximumCollectionLengthValidator<T,TElement>` classes operating on `ICollection<TElement>.Count`. Added `MinimumItems` and `MaximumItems` extension methods in `DefaultValidatorExtensions.cs` and registered default English error messages in `EnglishLanguage.cs`.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-fluentvalidation/N6",
+  "task_text": "The `CollectionPropertyRule` in `Internal/CollectionPropertyRule.cs` runs\nper-element validation via `RuleForEach`, but there is no built-in\nvalidator that checks the collection's count. Add `MinimumItems(int min)`\nand `MaximumItems(int max)` extension methods in\n`DefaultValidatorExtensions.cs` that attach a new `CollectionLengthValidator`\nin `Validators/`, operating on `ICollection<T>` and checking `Count`.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/FluentValidation/Validators/CollectionLengthValidator.cs",
+      "src/FluentValidation/DefaultValidatorExtensions.cs"
+    ],
+    "diff_seeds": [
+      "MinimumItems",
+      "MaximumItems",
+      "MinimumCollectionLengthValidator",
+      "MaximumCollectionLengthValidator"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "class",
+      "name": "LengthValidator",
+      "path": "src/FluentValidation/Validators/LengthValidator.cs",
+      "reason": "read: reference pattern for the PropertyValidator structure (constructor, IsValid with AppendArgument, GetDefaultMessageTemplate)",
+      "start_line": 23
+    },
+    {
+      "kind": "method",
+      "name": "MinimumLength",
+      "path": "src/FluentValidation/DefaultValidatorExtensions.cs",
+      "reason": "read: reference showing how MinimumLengthValidator is wired via a one-liner SetValidator call; confirms the extension method pattern",
+      "start_line": 269
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers the new files and changed method. An AI agent would also look at LengthValidator as the reference pattern to understand validator structure, and at MinimumLength extension method to confirm the wiring pattern, preventing unnecessary exploration of unrelated validator implementations."
+}

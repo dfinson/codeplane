@@ -1,0 +1,133 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/MediatR/NotificationPublishers/TaskWhenAllPublisher.cs b/src/MediatR/NotificationPublishers/TaskWhenAllPublisher.cs\nindex 4b948eb..8c1389a 100644\n--- a/src/MediatR/NotificationPublishers/TaskWhenAllPublisher.cs\n+++ b/src/MediatR/NotificationPublishers/TaskWhenAllPublisher.cs\n@@ -17,12 +17,29 @@ namespace MediatR.NotificationPublishers;\n /// </summary>\n public class TaskWhenAllPublisher : INotificationPublisher\n {\n-    public Task Publish(IEnumerable<NotificationHandlerExecutor> handlerExecutors, INotification notification, CancellationToken cancellationToken)\n+    public async Task Publish(IEnumerable<NotificationHandlerExecutor> handlerExecutors, INotification notification, CancellationToken cancellationToken)\n     {\n         var tasks = handlerExecutors\n             .Select(handler => handler.HandlerCallback(notification, cancellationToken))\n             .ToArray();\n \n-        return Task.WhenAll(tasks);\n+        try\n+        {\n+            await Task.WhenAll(tasks).ConfigureAwait(false);\n+        }\n+        catch\n+        {\n+            var innerExceptions = tasks\n+                .Where(static t => t.IsFaulted && t.Exception != null)\n+                .SelectMany(static t => t.Exception!.Flatten().InnerExceptions)\n+                .ToList();\n+\n+            if (innerExceptions.Count > 0)\n+            {\n+                throw new AggregateException(innerExceptions);\n+            }\n+\n+            throw;\n+        }\n     }\n }",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "Task.WhenAll throws only the first exception when awaited. To collect all exceptions, we must inspect each task's .Exception after WhenAll completes, then use Flatten() to get individual inner exceptions.",
+    "dead_ends": [],
+    "hindsight": "Direct implementation \u2014 no investigation needed beyond reading the file.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Use Task.WhenAll().ContinueWith() to collect faults",
+          "Catch AggregateException directly from awaited WhenAll"
+        ],
+        "decision": "await WhenAll in try/catch, then collect faults from all task .Exception properties using Flatten()",
+        "reasoning": "Awaiting WhenAll only rethrows the first exception as an unwrapped exception, not an AggregateException. Inspecting each task's .Exception after the await is the reliable way to get all failures, and Flatten() handles nested AggregateExceptions."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read src/MediatR/NotificationPublishers/TaskWhenAllPublisher.cs",
+        "reasoning": "Task description points directly to this file",
+        "result": "Found simple return Task.WhenAll(tasks) that only propagates first exception"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "TaskWhenAllPublisher.Publish",
+      "path": "src/MediatR/NotificationPublishers/TaskWhenAllPublisher.cs",
+      "reason": "edited: changed to async, added try/catch that collects all faulted task exceptions via Flatten() and throws a new AggregateException",
+      "start_line": 19
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: domain description of exception loss in parallel processing with no code terms. Pre-implementation: developer debugging 'handler exceptions are disappearing' would describe it this way.",
+      "pins": [],
+      "query_text": "parallel notification dispatch silently loses exceptions from all but the first failing handler",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'return Task.WhenAll(tasks)' is the exact literal expression in the source code that is the root of the bug. Pre-implementation: developer would grep for this to find the publisher implementation.",
+      "pins": [],
+      "query_text": "return Task.WhenAll(tasks)",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names from touched code. Pre-implementation: developer knows these types from the MediatR notification publishing subsystem.",
+      "pins": [],
+      "query_text": "TaskWhenAllPublisher, INotificationPublisher, AggregateException, NotificationHandlerExecutor",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol (INotificationPublisher) with relationship words (implementors). Pre-implementation: finding all publisher implementations is the first step to understanding the notification dispatch design.",
+      "pins": [],
+      "query_text": "implementors of INotificationPublisher and how they handle exceptions from parallel handler execution",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "INotificationPublisher",
+        "TaskWhenAllPublisher"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes 1 explicit file path from the diff. Pre-implementation: task description names this exact file.",
+      "pins": [
+        "src/MediatR/NotificationPublishers/TaskWhenAllPublisher.cs"
+      ],
+      "query_text": "src/MediatR/NotificationPublishers/TaskWhenAllPublisher.cs exception handling in parallel notification publishing",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept (exceptions lost) with 2 exact symbol names. Pre-implementation: developer knows TaskWhenAllPublisher is responsible for parallel publish from the task description.",
+      "pins": [],
+      "query_text": "fix TaskWhenAllPublisher swallowing multiple handler exceptions when using Task.WhenAll for parallel notification dispatch",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "TaskWhenAllPublisher",
+        "INotificationPublisher"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 1 file path. Pre-implementation: task explicitly names the file and the publisher class.",
+      "pins": [
+        "src/MediatR/NotificationPublishers/TaskWhenAllPublisher.cs"
+      ],
+      "query_text": "TaskWhenAllPublisher Publish in src/MediatR/NotificationPublishers/TaskWhenAllPublisher.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "TaskWhenAllPublisher",
+        "Publish"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol name, file path, and full description. Pre-implementation: developer with full context would write this query.",
+      "pins": [
+        "src/MediatR/NotificationPublishers/TaskWhenAllPublisher.cs"
+      ],
+      "query_text": "fix TaskWhenAllPublisher.Publish to catch AggregateException and use Flatten() to preserve all handler exceptions",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "TaskWhenAllPublisher",
+        "AggregateException"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Changed `TaskWhenAllPublisher.Publish` from returning `Task.WhenAll(tasks)` directly to `await`-ing it inside a try/catch. The catch block inspects all faulted tasks, collects their inner exceptions via `.Exception!.Flatten().InnerExceptions`, and throws a new `AggregateException` with all exceptions preserved. Falls back to re-throw if no faulted tasks are found.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-mediatr/N5",
+  "task_text": "Fix TaskWhenAllPublisher swallowing individual handler exceptions\n\nIn `src/MediatR/NotificationPublishers/TaskWhenAllPublisher.cs`, the\n`Publish` method calls `Task.WhenAll(tasks)` which throws an\n`AggregateException` containing only the first exception when multiple\nhandlers fail. The other exceptions are lost. Fix `Publish` to catch\nthe `AggregateException`, unwrap all inner exceptions via `Flatten()`,\nand throw an `AggregateException` with all original exceptions preserved.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/MediatR/NotificationPublishers/TaskWhenAllPublisher.cs"
+    ],
+    "diff_seeds": [
+      "TaskWhenAllPublisher"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [],
+  "tier_difference_reasoning": "The minimum set (the one edited method) is fully sufficient. An AI agent needs only the TaskWhenAllPublisher.Publish method to implement the fix \u2014 no callers, interfaces, or related types need to be examined to complete the change correctly."
+}

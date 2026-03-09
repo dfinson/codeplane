@@ -1,0 +1,164 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/Doxyfile b/Doxyfile\nindex b9f0eb3..8f48f20 100644\n--- a/Doxyfile\n+++ b/Doxyfile\n@@ -261,7 +261,7 @@ TAB_SIZE               = 4\n # commands \\{ and \\} for these it is advised to use the version @{ and @} or use\n # a double escape (\\\\{ and \\\\})\n \n-ALIASES                =\n+ALIASES                = \"simd_note=\\note This feature relies on SIMD intrinsics and may behave differently across CPU architectures.\"\n \n # This tag can be used to specify a number of word-keyword mappings (TCL only).\n # A mapping has the form \"name=value\". For example adding \"class=itcl::class\"\n@@ -829,7 +829,7 @@ WARN_LOGFILE           =\n # spaces. See also FILE_PATTERNS and EXTENSION_MAPPING\n # Note: If this tag is empty the current directory is searched.\n \n-INPUT                  = doc include/simdjson include/simdjson/dom include/simdjson/generic\n+INPUT                  = doc include/simdjson include/simdjson/dom include/simdjson/generic include/simdjson/generic/ondemand\n \n # This tag can be used to specify the character encoding of the source files\n # that doxygen parses. Internally doxygen uses the UTF-8 encoding. Doxygen uses\n@@ -933,7 +933,7 @@ EXCLUDE_SYMLINKS       = NO\n # Note that the wildcards are matched against the file with absolute path, so to\n # exclude all test directories for example use the pattern */test/*\n \n-EXCLUDE_PATTERNS       =\n+EXCLUDE_PATTERNS       = */internal/* *-inl.h\n \n # The EXCLUDE_SYMBOLS tag can be used to specify one or more symbol names\n # (namespaces, classes, functions, etc.) that should be excluded from the\ndiff --git a/SECURITY.md b/SECURITY.md\nindex 87c4c9b..6a7e0e4 100644\n--- a/SECURITY.md\n+++ b/SECURITY.md\n@@ -5,3 +5,18 @@\n Please use the following contact information for reporting a vulnerability:\n \n - [Daniel Lemire](https://github.com/lemire) - daniel@lemire.me\n+\n+For encrypted reports, you may use the following PGP key:\n+\n+```\n+Fingerprint: 1234 5678 9ABC DEF0 1234  5678 9ABC DEF0 1234 5678\n+```\n+\n+## Disclosure Timeline\n+\n+- **Day 0**: Vulnerability report received and acknowledged within 72 hours.\n+- **Day 7**: Initial assessment and severity classification completed.\n+- **Day 30**: Target date for patch release (may extend to 90 days for complex issues).\n+- **Day 30+**: Public disclosure after patch is available and distributed.\n+\n+We follow coordinated disclosure. Please allow up to 90 days before public disclosure.\n",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The Doxyfile INPUT already listed doc/include/simdjson/dom/include/simdjson/generic but was missing include/simdjson/generic/ondemand \u2014 a simple addition. EXCLUDE_PATTERNS and ALIASES were already blank, needing only population.",
+    "dead_ends": [],
+    "hindsight": "Nothing \u2014 all four target fields were immediately visible with a single grep.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Add ondemand path only to INPUT"
+        ],
+        "decision": "Update all three Doxyfile fields: INPUT, EXCLUDE_PATTERNS, and ALIASES as the task requires",
+        "reasoning": "Task explicitly lists all three Doxyfile changes; doing all is necessary for correctness"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Grep for INPUT, EXCLUDE_PATTERNS, ALIASES in Doxyfile",
+        "reasoning": "Task names these fields",
+        "result": "Found all three; INPUT was missing generic/ondemand, EXCLUDE_PATTERNS and ALIASES were blank"
+      },
+      {
+        "action": "cat SECURITY.md",
+        "reasoning": "Need to see existing content before adding PGP fingerprint and disclosure timeline",
+        "result": "Minimal file with one contact entry \u2014 trivial to append"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "key",
+      "name": "INPUT",
+      "path": "Doxyfile",
+      "reason": "edited: added include/simdjson/generic/ondemand to the INPUT path list",
+      "start_line": 832
+    },
+    {
+      "kind": "key",
+      "name": "EXCLUDE_PATTERNS",
+      "path": "Doxyfile",
+      "reason": "edited: added */internal/* and *-inl.h exclusions",
+      "start_line": 936
+    },
+    {
+      "kind": "key",
+      "name": "ALIASES",
+      "path": "Doxyfile",
+      "reason": "edited: added simd_note alias definition",
+      "start_line": 264
+    },
+    {
+      "kind": "heading",
+      "name": "Reporting a Vulnerability",
+      "path": "SECURITY.md",
+      "reason": "edited: added PGP fingerprint and Disclosure Timeline section",
+      "start_line": 3
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: domain concepts only ('documentation configuration', 'security vulnerability reporting', 'API coverage'). Pre-implementation: describes what needs to change without code terms.",
+      "pins": [],
+      "query_text": "Improve documentation coverage for newer API additions and add a structured security disclosure process with encrypted reporting support",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: literal string 'EXCLUDE_PATTERNS' appears verbatim in Doxyfile; 'Reporting a Vulnerability' appears in SECURITY.md. Pre-implementation: grep finds both config locations.",
+      "pins": [],
+      "query_text": "\"EXCLUDE_PATTERNS\" \"ALIASES\" \"Reporting a Vulnerability\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact identifiers from the files. Pre-implementation: developer would search for these Doxyfile keys.",
+      "pins": [],
+      "query_text": "INPUT, EXCLUDE_PATTERNS, ALIASES, simd_note",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names INPUT and ALIASES and the structural location (Doxyfile). Pre-implementation: developer would look up what INPUT currently lists.",
+      "pins": [],
+      "query_text": "Siblings of INPUT in Doxyfile configuration (EXCLUDE_PATTERNS, ALIASES fields)",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "INPUT"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 file paths from the solution. Pre-implementation: task names both files.",
+      "pins": [
+        "Doxyfile",
+        "SECURITY.md"
+      ],
+      "query_text": "Doxyfile and SECURITY.md configuration updates",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain description ('Doxygen input configuration') with exact key names INPUT and EXCLUDE_PATTERNS. Pre-implementation: natural query.",
+      "pins": [],
+      "query_text": "Update Doxygen INPUT paths to include ondemand headers, set EXCLUDE_PATTERNS for internal files, and define ALIASES for SIMD notes",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "INPUT",
+        "EXCLUDE_PATTERNS"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 key names and 2 file paths.",
+      "pins": [
+        "Doxyfile",
+        "SECURITY.md"
+      ],
+      "query_text": "INPUT EXCLUDE_PATTERNS ALIASES simd_note in Doxyfile; PGP fingerprint disclosure timeline in SECURITY.md",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "INPUT",
+        "EXCLUDE_PATTERNS",
+        "ALIASES"
+      ]
+    },
+    {
+      "justification": "Rule compliance: key names and file paths. Pre-implementation: natural query for this task.",
+      "pins": [
+        "Doxyfile",
+        "SECURITY.md"
+      ],
+      "query_text": "Add ondemand INPUT path, EXCLUDE_PATTERNS for internals, simd_note ALIAS to Doxyfile; add PGP fingerprint and disclosure timeline to SECURITY.md",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "INPUT",
+        "ALIASES"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `include/simdjson/generic/ondemand` to Doxyfile's `INPUT` so on-demand API headers are documented, set `EXCLUDE_PATTERNS` to skip internal implementation files (`*/internal/*` and `*-inl.h`), added a `simd_note` alias, and updated `SECURITY.md` with a PGP fingerprint placeholder and disclosure timeline policy.",
+  "task_complexity": "narrow",
+  "task_id": "cpp-simdjson/N11",
+  "task_text": "The `Doxyfile` configures Doxygen documentation generation but its `INPUT` paths may not cover all public headers, particularly newer additions in `include/simdjson/generic/ondemand/`. Update `Doxyfile` to add missing `INPUT` paths, configure `EXCLUDE_PATTERNS` to skip internal implementation details, and add `ALIASES` for common terminology (e.g., `\\simd_note` for SIMD-specific caveats). Also update `SECURITY.md` to add a PGP key fingerprint for encrypted vulnerability reports and add a disclosure timeline policy.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "Doxyfile",
+      "SECURITY.md"
+    ],
+    "diff_seeds": [
+      "INPUT",
+      "EXCLUDE_PATTERNS",
+      "ALIASES"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [],
+  "tier_difference_reasoning": "All four changed definitions are in the minimum set. There are no additional definitions needed \u2014 the Doxyfile fields are self-contained configuration entries and SECURITY.md is prose, so no code context is required to make the changes."
+}

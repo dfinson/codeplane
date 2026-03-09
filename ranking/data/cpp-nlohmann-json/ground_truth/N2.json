@@ -1,0 +1,168 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/include/nlohmann/detail/input/binary_reader.hpp b/include/nlohmann/detail/input/binary_reader.hpp\nindex 033cfeb..7ec418f 100644\n--- a/include/nlohmann/detail/input/binary_reader.hpp\n+++ b/include/nlohmann/detail/input/binary_reader.hpp\n@@ -172,6 +172,8 @@ class binary_reader\n         std::int32_t document_size{};\n         get_number<std::int32_t, true>(input_format_t::bson, document_size);\n \n+        const std::size_t start_position = chars_read - 4;  // position of the first byte of the size field\n+\n         if (JSON_HEDLEY_UNLIKELY(!sax->start_object(detail::unknown_size())))\n         {\n             return false;\n@@ -182,6 +184,15 @@ class binary_reader\n             return false;\n         }\n \n+        if (JSON_HEDLEY_UNLIKELY(chars_read != start_position + static_cast<std::size_t>(document_size)))\n+        {\n+            return sax->parse_error(chars_read, get_token_string(),\n+                                    parse_error::create(110, chars_read,\n+                                                        exception_message(input_format_t::bson,\n+                                                                          concat(\"BSON document size mismatch: declared \", std::to_string(document_size), \" bytes, consumed \", std::to_string(chars_read - start_position)),\n+                                                                          \"document\"), nullptr));\n+        }\n+\n         return sax->end_object();\n     }\n \n@@ -400,6 +411,8 @@ class binary_reader\n         std::int32_t document_size{};\n         get_number<std::int32_t, true>(input_format_t::bson, document_size);\n \n+        const std::size_t start_position = chars_read - 4;  // position of the first byte of the size field\n+\n         if (JSON_HEDLEY_UNLIKELY(!sax->start_array(detail::unknown_size())))\n         {\n             return false;\n@@ -410,6 +423,15 @@ class binary_reader\n             return false;\n         }\n \n+        if (JSON_HEDLEY_UNLIKELY(chars_read != start_position + static_cast<std::size_t>(document_size)))\n+        {\n+            return sax->parse_error(chars_read, get_token_string(),\n+                                    parse_error::create(110, chars_read,\n+                                                        exception_message(input_format_t::bson,\n+                                                                          concat(\"BSON document size mismatch: declared \", std::to_string(document_size), \" bytes, consumed \", std::to_string(chars_read - start_position)),\n+                                                                          \"document\"), nullptr));\n+        }\n+\n         return sax->end_array();\n     }",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The `chars_read` member is incremented on every byte read, so recording `chars_read - 4` right after reading the size gives a clean start baseline to compare against `start + document_size` after parsing.",
+    "dead_ends": [],
+    "hindsight": "Nothing to change \u2014 the fix was straightforward once the byte-tracking mechanism was understood.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Only fix parse_bson_internal (objects)",
+          "Fix both parse_bson_internal and parse_bson_array"
+        ],
+        "decision": "Fix both parse_bson_internal and parse_bson_array",
+        "reasoning": "Both functions read a document-size prefix but neither validates it; BSON arrays have the same size-prefixed format and the same silent-ignore bug"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "grep for parse_bson_internal and document_size in binary_reader.hpp",
+        "reasoning": "Task description explicitly names these",
+        "result": "Found parse_bson_internal at line 170 and parse_bson_array at line 398, both reading document_size but not validating"
+      },
+      {
+        "action": "grep for chars_read to understand byte tracking",
+        "reasoning": "Need to know how consumed bytes are tracked to compute the mismatch",
+        "result": "chars_read is a std::size_t member (line 3036) incremented by every get() call"
+      },
+      {
+        "action": "Reviewed exception_message and parse_error::create pattern used elsewhere",
+        "reasoning": "To match existing error-reporting style for parse_error.110",
+        "result": "Pattern is: sax->parse_error(chars_read, get_token_string(), parse_error::create(110, chars_read, exception_message(...), nullptr))"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "parse_bson_internal",
+      "path": "include/nlohmann/detail/input/binary_reader.hpp",
+      "reason": "edited: added start_position tracking and consumed-bytes validation against document_size",
+      "start_line": 170
+    },
+    {
+      "kind": "method",
+      "name": "parse_bson_array",
+      "path": "include/nlohmann/detail/input/binary_reader.hpp",
+      "reason": "edited: added start_position tracking and consumed-bytes validation against document_size",
+      "start_line": 398
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: pure domain description \u2014 'verify a declared total document byte count matches the actual number of bytes read from a binary document format'. No symbol names or paths. Pre-implementation: a developer tasked with adding size validation to a binary format parser would describe the goal this way.",
+      "pins": [],
+      "query_text": "verify that the declared total byte count in a binary document matches the actual number of bytes consumed during parsing and report corruption when they differ",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: exact string literal from the changed code: 'BSON document size mismatch'. Pre-implementation: a developer looking for the validation error or test would grep for this string.",
+      "pins": [],
+      "query_text": "\"BSON document size mismatch\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names from the changed code. Pre-implementation: a developer would know the main parsing entry point names from the task description.",
+      "pins": [],
+      "query_text": "parse_bson_internal, parse_bson_array, document_size, chars_read",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: concrete symbol 'parse_bson_internal' with relationship word 'callees'. Pre-implementation: to find what parsing helpers are invoked and how bytes are tracked.",
+      "pins": [],
+      "query_text": "callees of parse_bson_internal that consume bytes, and how chars_read tracks consumed position",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "parse_bson_internal",
+        "parse_bson_array"
+      ]
+    },
+    {
+      "justification": "Rule compliance: explicit file path from the changed file. Pre-implementation: task description names binary_reader.hpp.",
+      "pins": [
+        "include/nlohmann/detail/input/binary_reader.hpp"
+      ],
+      "query_text": "include/nlohmann/detail/input/binary_reader.hpp BSON document size validation",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('validate declared document size against consumed bytes') with 2 exact symbols ('parse_bson_internal', 'document_size'). Pre-implementation: directly maps to the task.",
+      "pins": [],
+      "query_text": "validate declared document size against consumed bytes in parse_bson_internal and document_size field in BSON binary reader",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "parse_bson_internal",
+        "document_size"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 symbol names + 1 file path. Pre-implementation: developer knows function name and file from task description.",
+      "pins": [
+        "include/nlohmann/detail/input/binary_reader.hpp"
+      ],
+      "query_text": "parse_bson_internal parse_bson_array document_size in include/nlohmann/detail/input/binary_reader.hpp",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "parse_bson_internal",
+        "parse_bson_array",
+        "document_size"
+      ]
+    },
+    {
+      "justification": "Rule compliance: symbols and file path present. Pre-implementation: this is the natural query a developer would type.",
+      "pins": [
+        "include/nlohmann/detail/input/binary_reader.hpp"
+      ],
+      "query_text": "add BSON document size validation in parse_bson_internal parse_bson_array binary_reader.hpp throw parse_error 110 on mismatch",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "parse_bson_internal",
+        "parse_bson_array"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Both `parse_bson_internal()` and `parse_bson_array()` in `binary_reader.hpp` read a 4-byte document size prefix but never validate it. I captured `chars_read - 4` immediately after reading the size to get the start position, then after `parse_bson_element_list()` returns I compare `chars_read` against `start_position + document_size` and invoke `sax->parse_error` with `parse_error.110` when they differ.",
+  "task_complexity": "narrow",
+  "task_id": "cpp-nlohmann-json/N2",
+  "task_text": "Fix binary_reader not validating BSON document size against consumed bytes\n\nThe BSON reader in `detail/input/binary_reader.hpp` reads the 4-byte\ndocument size prefix but does not validate that the total bytes\nconsumed during parsing match the declared size. If the BSON data\ncontains extra trailing bytes within the declared document boundary,\nthey are silently ignored rather than flagged as corruption. Fix the\nBSON parsing path in `binary_reader.hpp` to verify that the consumed\nbyte count matches the declared document size and throw\n`parse_error.110` on mismatch.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "include/nlohmann/detail/input/binary_reader.hpp"
+    ],
+    "diff_seeds": [
+      "parse_bson_internal",
+      "parse_bson_array",
+      "document_size"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "variable",
+      "name": "chars_read",
+      "path": "include/nlohmann/detail/input/binary_reader.hpp",
+      "reason": "read: type and semantics confirm it counts bytes consumed since start of input, enabling start_position calculation",
+      "start_line": 3036
+    },
+    {
+      "kind": "method",
+      "name": "exception_message",
+      "path": "include/nlohmann/detail/input/binary_reader.hpp",
+      "reason": "read: needed to match the existing error-message formatting convention used throughout binary_reader",
+      "start_line": 2958
+    }
+  ],
+  "tier_difference_reasoning": "Minimum set covers the two edited functions. Thrash_preventing adds `chars_read` (to confirm the byte-tracking variable's type and semantics, preventing wrong assumptions about what it counts) and `exception_message` (to match the existing error-reporting convention so the agent doesn't invent a different pattern)."
+}

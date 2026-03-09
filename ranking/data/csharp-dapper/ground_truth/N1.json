@@ -1,0 +1,150 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/Dapper/SqlMapper.cs b/Dapper/SqlMapper.cs\nindex d23e949..57a308a 100644\n--- a/Dapper/SqlMapper.cs\n+++ b/Dapper/SqlMapper.cs\n@@ -1229,8 +1229,19 @@ private static IEnumerable<T> QueryImpl<T>(this IDbConnection cnn, CommandDefini\n                 var convertToType = Nullable.GetUnderlyingType(effectiveType) ?? effectiveType;\n                 while (reader.Read())\n                 {\n-                    object? val = func(reader);\n-                    yield return GetValue<T>(reader, effectiveType, val);\n+                    T result;\n+                    try\n+                    {\n+                        object? val = func(reader);\n+                        result = GetValue<T>(reader, effectiveType, val);\n+                    }\n+                    catch\n+                    {\n+                        reader.Dispose();\n+                        reader = null;\n+                        throw;\n+                    }\n+                    yield return result;\n                 }",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "C# yield iterators: the finally only runs when Dispose() is called on the enumerator, not immediately when an exception propagates out of MoveNext(). Explicit disposal inside a catch (with yield return moved outside) ensures immediate cleanup.",
+    "dead_ends": [],
+    "hindsight": "Next time, look at the exact line numbers first to confirm the yield return is directly in the try block, then apply the standard try-catch-rethrow pattern.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Only wrap func(reader)",
+          "Add a bool flag and dispose in finally when flag is set"
+        ],
+        "decision": "Wrap both `func(reader)` and `GetValue<T>` in try-catch, set reader=null, and yield the result outside the catch",
+        "reasoning": "C# disallows `yield return` inside try-catch, so the yield must be outside. Wrapping both deserialization calls and setting reader=null prevents the outer finally from double-disposing."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Searched for `QueryImpl` and `yield return` in SqlMapper.cs",
+        "reasoning": "Task mentioned the iterator in SqlMapper.cs",
+        "result": "Found `QueryImpl<T>` at line 1198 with the iteration loop at lines 1230-1234"
+      },
+      {
+        "action": "Read QueryImpl<T> full method (lines 1198-1259)",
+        "reasoning": "Need to understand the existing cleanup structure before fixing",
+        "result": "The try-finally correctly disposes the reader, but the `yield return` at line 1233 is inside the try block; if `func(reader)` throws, the exception exits MoveNext() and the finally only runs on Dispose()"
+      },
+      {
+        "action": "Read GetValue<T> method (lines 1372-1400)",
+        "reasoning": "Need to know what can throw inside the iteration body",
+        "result": "Simple value coercion; can also throw for incompatible types"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "QueryImpl",
+      "path": "Dapper/SqlMapper.cs",
+      "reason": "edited: wrapped deserialization loop in try-catch to dispose reader on mapping exception",
+      "start_line": 1198
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain/business concepts ('database reader', 'converting a row into a strongly-typed object') with no symbol names or file paths. Pre-implementation: a developer encountering leaked connections after type-mapping failures would naturally search for how the reader cleanup works.",
+      "pins": [],
+      "query_text": "ensure database reader is closed when an exception occurs while converting a row into a strongly-typed object",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: contains literal code phrases 'yield return' and 'reader.Dispose' that appear in SqlMapper.cs. Pre-implementation: a developer investigating the reader leak would grep for the disposal site near the yield.",
+      "pins": [],
+      "query_text": "\"yield return\" \"reader.Dispose\" mapping exception iterator",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 5 exact symbol names from the changed code. Pre-implementation: a developer looking for the query iterator internals would search for these identifiers.",
+      "pins": [],
+      "query_text": "QueryImpl, GetValue, func, reader, yield",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol 'QueryImpl' and uses relationship word 'callers'. Pre-implementation: tracing callers of QueryImpl reveals how the iterator is consumed and whether Dispose is guaranteed.",
+      "pins": [],
+      "query_text": "callers of QueryImpl that iterate the IEnumerable result and how the reader is disposed when MoveNext throws",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "QueryImpl"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes file path 'Dapper/SqlMapper.cs'. Pre-implementation: the task description explicitly mentions SqlMapper.cs, so a developer goes straight there.",
+      "pins": [
+        "Dapper/SqlMapper.cs"
+      ],
+      "query_text": "Dapper/SqlMapper.cs iterator reader disposal",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('IDataReader leak', 'mapping deserialization throws') with exact symbol names 'QueryImpl' and 'GetValue'. Pre-implementation: developer knows the method name from reading the codebase and wants to find where disposal could be skipped.",
+      "pins": [],
+      "query_text": "fix IDataReader leak when QueryImpl mapping deserialization throws and reader is not disposed",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "QueryImpl",
+        "GetValue"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names (QueryImpl, GetValue) and 1 file path (Dapper/SqlMapper.cs). Pre-implementation: combining the known symbol and file focuses the search immediately.",
+      "pins": [
+        "Dapper/SqlMapper.cs"
+      ],
+      "query_text": "QueryImpl GetValue reader disposal in Dapper/SqlMapper.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "QueryImpl",
+        "GetValue"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names (QueryImpl, reader.Dispose) and file path (Dapper/SqlMapper.cs). Pre-implementation: this is the most natural query a developer would type when investigating why the reader is not disposed on exception.",
+      "pins": [
+        "Dapper/SqlMapper.cs"
+      ],
+      "query_text": "QueryImpl iterator reader.Dispose on exception catch yield return in Dapper/SqlMapper.cs",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "QueryImpl",
+        "GetValue"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "In C# iterator methods, `yield return` inside a `try-finally` means the `finally` only runs when the enumerator is `Dispose()`d, which may not happen if the caller doesn't properly dispose on exception. The fix wraps the deserialization (`func(reader)` and `GetValue<T>`) in a `try-catch`, explicitly disposing and nullifying the reader on exception so cleanup happens immediately and the outer `finally` does not double-dispose.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-dapper/N1",
+  "task_text": "Fix Query<T> not disposing IDataReader on mapping exception\n\nWhen `Query<T>` maps a row and the user-supplied type's constructor\nthrows, the `IDataReader` is not disposed because the exception\nbypasses the `finally` block in the yield-based iterator. Fix the\niterator implementation in `SqlMapper.cs` to ensure the reader is\ndisposed even when a mapping exception occurs mid-enumeration.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "Dapper/SqlMapper.cs"
+    ],
+    "diff_seeds": [
+      "QueryImpl"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "GetValue",
+      "path": "Dapper/SqlMapper.cs",
+      "reason": "read: understanding what GetValue<T> does clarifies whether it can throw and whether it should also be inside the try-catch",
+      "start_line": 1372
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set is just `QueryImpl<T>` because that is the only method edited. `GetValue<T>` is needed by an AI agent to confirm that this helper can also throw (type coercion errors), justifying that both `func(reader)` and `GetValue<T>` belong inside the try block rather than only `func(reader)`. A skilled human can infer this from the method name, but an AI agent would search for and read `GetValue<T>` before deciding the catch boundary."
+}

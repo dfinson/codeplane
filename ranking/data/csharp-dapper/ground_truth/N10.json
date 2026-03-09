@@ -1,0 +1,141 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/Dapper/WrappedReader.cs b/Dapper/WrappedReader.cs\nindex 04321f9..4854e3e 100644\n--- a/Dapper/WrappedReader.cs\n+++ b/Dapper/WrappedReader.cs\n@@ -107,7 +107,12 @@ public DbWrappedReader(IDbCommand cmd, DbDataReader reader)\n \n         public override bool HasRows => _reader.HasRows;\n \n-        public override void Close() => _reader.Close();\n+        public override void Close()\n+        {\n+            _reader.Close();\n+            _cmd?.Dispose();\n+            _cmd = null!;\n+        }\n         public override DataTable? GetSchemaTable() => _reader.GetSchemaTable();",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The class doc comment at line 82-85 says 'the purpose of wrapping here is to allow closing a reader to *also* close the command'. The Dispose(bool) already does this at lines 134-135, but Close() only closes the reader. The fix is to match Dispose(bool) behavior in Close().",
+    "dead_ends": [],
+    "hindsight": "Should also check if CloseAsync() needs similar treatment - it delegates to _reader.CloseAsync() without disposing _cmd.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Make Close() call Dispose() which calls Dispose(bool disposing: true)",
+          "Duplicate the _cmd disposal logic directly in Close()"
+        ],
+        "decision": "Duplicate the disposal logic in Close() matching exactly what Dispose(bool) does",
+        "reasoning": "The simplest, most direct fix that matches the documented purpose. Calling Dispose() from Close() could cause double-dispose issues if the caller also disposes later."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read DbWrappedReader class in WrappedReader.cs (lines 81-140)",
+        "reasoning": "Task description named this class and file",
+        "result": "Found Close() at line 110 only closing _reader without _cmd; Dispose(bool) at lines 128-136 does dispose both"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "Close",
+      "path": "Dapper/WrappedReader.cs",
+      "reason": "edited: added _cmd?.Dispose() and null assignment to match Dispose(bool) behavior",
+      "start_line": 110
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: only domain concepts ('database reader wrapper', 'close', 'command not released'). Pre-implementation: developer seeing command leaks when using wrapped readers.",
+      "pins": [],
+      "query_text": "database reader wrapper does not release the associated command when the reader is closed",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: contains literal comment text 'closing a reader to *also* close the command' from WrappedReader.cs. Pre-implementation: developer searching for the documented purpose of the wrapper.",
+      "pins": [],
+      "query_text": "\"closing a reader to *also* close the command\" DbWrappedReader Close dispose",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names. Pre-implementation: developer looking for Close and Dispose in the reader wrapper.",
+      "pins": [],
+      "query_text": "DbWrappedReader, Close, Dispose, _cmd",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names 'DbWrappedReader' and uses relationship word 'callers'. Pre-implementation: finding who calls Close() on the wrapped reader.",
+      "pins": [],
+      "query_text": "callers of DbWrappedReader.Close that expect the underlying command to be disposed",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "DbWrappedReader"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes file path. Pre-implementation: task description names WrappedReader.cs.",
+      "pins": [
+        "Dapper/WrappedReader.cs"
+      ],
+      "query_text": "Dapper/WrappedReader.cs DbWrappedReader Close command dispose",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('reader close should dispose command') with exact symbols 'DbWrappedReader' and 'Close'. Pre-implementation: developer knows the class from task description.",
+      "pins": [],
+      "query_text": "DbWrappedReader.Close should dispose the underlying IDbCommand like Dispose does",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "DbWrappedReader",
+        "Close"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 1 file path. Pre-implementation: obvious starting point.",
+      "pins": [
+        "Dapper/WrappedReader.cs"
+      ],
+      "query_text": "DbWrappedReader Close in Dapper/WrappedReader.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "DbWrappedReader",
+        "Close"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbols and file path. Most natural fix query.",
+      "pins": [
+        "Dapper/WrappedReader.cs"
+      ],
+      "query_text": "fix DbWrappedReader.Close to dispose _cmd matching Dispose behavior in Dapper/WrappedReader.cs",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "DbWrappedReader",
+        "Close"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "The `DbWrappedReader.Close()` method only called `_reader.Close()`, leaving `_cmd` undisposed. The fix adds `_cmd?.Dispose()` and nulls `_cmd` in `Close()`, matching what `Dispose(bool)` already did and fulfilling the documented purpose ('allowing closing a reader to also close the command').",
+  "task_complexity": "narrow",
+  "task_id": "csharp-dapper/N10",
+  "task_text": "Fix DbWrappedReader.Close not disposing the underlying command\n\n`DbWrappedReader` in `WrappedReader.cs` is documented as allowing\n\"closing a reader to also close the command\", but its `Close()` method\nonly calls `_reader.Close()` without disposing `_cmd`. The `Dispose(bool)`\noverload correctly disposes both, but `Close()` is the path taken when\nquery code finishes reading rows. Fix `WrappedReader.cs` so `Close()`\nalso disposes `_cmd`, matching the documented purpose and the behavior\nof `Dispose(bool)`.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "Dapper/WrappedReader.cs"
+    ],
+    "diff_seeds": [
+      "Close",
+      "DbWrappedReader"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "Dispose",
+      "path": "Dapper/WrappedReader.cs",
+      "reason": "read: an AI agent must read Dispose(bool) to see the existing _cmd?.Dispose() pattern and replicate it exactly in Close()",
+      "start_line": 128
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set is just `Close` (the edited method). `Dispose(bool)` is added to thrash_preventing because an AI agent needs to see the existing disposal pattern before implementing Close(), to ensure it replicates exactly the same logic (_cmd?.Dispose() then _cmd = null!) rather than inventing something different."
+}

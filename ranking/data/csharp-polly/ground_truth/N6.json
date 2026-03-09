@@ -1,0 +1,133 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/Polly.Core/Fallback/FallbackResilienceStrategy.cs b/src/Polly.Core/Fallback/FallbackResilienceStrategy.cs\nindex 4fed52e..4a38091 100644\n--- a/src/Polly.Core/Fallback/FallbackResilienceStrategy.cs\n+++ b/src/Polly.Core/Fallback/FallbackResilienceStrategy.cs\n@@ -50,7 +50,8 @@ internal sealed class FallbackResilienceStrategy<T> : ResilienceStrategy<T>\n         }\n         catch (Exception e)\n         {\n-            return Outcome.FromException<T>(e);\n+            return Outcome.FromException<T>(\n+                outcome.Exception is { } original ? new AggregateException(e, original) : e);\n         }\n     }\n }\n",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The fallback action catch block `catch (Exception e)` at line 51 discards `outcome.Exception` entirely. Using `AggregateException(e, original)` preserves both: the fallback exception as the primary and the original as an accessible inner exception.",
+    "dead_ends": [],
+    "hindsight": "The fix is entirely localized to the catch block; no other code needs to change.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "new Exception(e.Message, outcome.Exception) - loses fallback type",
+          "Rethrow with modified InnerException - not possible in .NET",
+          "AggregateException(e, original) - wraps both exceptions"
+        ],
+        "decision": "Use AggregateException(e, original) to wrap both the fallback and original exception",
+        "reasoning": "In .NET, InnerException is read-only after construction. AggregateException is the standard way to chain multiple exceptions; e.InnerException returns the first (fallback) exception, and InnerExceptions contains both."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read FallbackResilienceStrategy.cs in full",
+        "reasoning": "Task names the file directly",
+        "result": "Found the catch block at line 51 returning Outcome.FromException(e) with no reference to outcome.Exception"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "ExecuteCore",
+      "path": "src/Polly.Core/Fallback/FallbackResilienceStrategy.cs",
+      "reason": "edited: wrapped fallback exception with AggregateException preserving original",
+      "start_line": 22
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses domain concepts 'fallback action fails', 'root cause exception silently discarded', no symbol names. Pre-implementation: developer debugging why they can't find the original exception would search for this.",
+      "pins": [],
+      "query_text": "when fallback action throws an exception the original triggering exception is silently discarded making root cause analysis impossible",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: quotes the literal method reference in the source. Pre-implementation: developer searching for the fallback action generator invocation.",
+      "pins": [],
+      "query_text": "\"ActionGenerator\" \"FallbackActionArguments\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 3 exact symbol names from changed code. Pre-implementation: developer knows these from task description.",
+      "pins": [],
+      "query_text": "FallbackResilienceStrategy, ExecuteCore, Outcome.FromException",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol with relationship word. Pre-implementation: tracing what happens when fallback action throws.",
+      "pins": [],
+      "query_text": "catch block in FallbackResilienceStrategy.ExecuteCore that handles fallback action exceptions",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "FallbackResilienceStrategy"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 1 explicit file path as required. Pre-implementation: task names the file directly.",
+      "pins": [
+        "src/Polly.Core/Fallback/FallbackResilienceStrategy.cs"
+      ],
+      "query_text": "src/Polly.Core/Fallback/FallbackResilienceStrategy.cs exception chain",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain 'original exception lost' with symbol names. Pre-implementation: developer would describe both the symptom and the class.",
+      "pins": [],
+      "query_text": "FallbackResilienceStrategy.ExecuteCore losing original exception when fallback action itself throws",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "FallbackResilienceStrategy",
+        "ExecuteCore"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 1 file path. Pre-implementation: developer starts from task-provided names.",
+      "pins": [
+        "src/Polly.Core/Fallback/FallbackResilienceStrategy.cs"
+      ],
+      "query_text": "FallbackResilienceStrategy ExecuteCore exception preservation src/Polly.Core/Fallback/FallbackResilienceStrategy.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "FallbackResilienceStrategy",
+        "ExecuteCore"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol and file path. Pre-implementation: task description names the file and pattern.",
+      "pins": [
+        "src/Polly.Core/Fallback/FallbackResilienceStrategy.cs"
+      ],
+      "query_text": "fix FallbackResilienceStrategy.ExecuteCore to preserve original outcome.Exception as InnerException when fallback action fails",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "FallbackResilienceStrategy",
+        "ExecuteCore"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Found the fallback action catch block in `FallbackResilienceStrategy.ExecuteCore` at line 51 returning `Outcome.FromException(e)` without referencing `outcome.Exception`. Changed to wrap both exceptions in `AggregateException(e, original)` when an original exception exists, preserving the full exception chain. If no original exception exists (result-based fallback), returns `e` unchanged.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-polly/N6",
+  "task_text": "Fix FallbackResilienceStrategy losing original exception when fallback itself fails\n\nWhen `FallbackResilienceStrategy` invokes the fallback action and the\naction itself throws an exception, the catch block returns\n`Outcome.FromException<T>(e)` where `e` is only the fallback's\nexception. The original exception that triggered the fallback (stored\nin `outcome.Exception`) is silently discarded, making root-cause\nanalysis impossible. Fix `FallbackResilienceStrategy.cs` to set the\noriginal exception as the `InnerException` of the fallback exception\nwhen the fallback action fails, preserving the full exception chain\nfor callers and logging infrastructure.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "No baseline coverage report found in the repository root or any standard location.",
+    "diff_pins": [
+      "src/Polly.Core/Fallback/FallbackResilienceStrategy.cs"
+    ],
+    "diff_seeds": [
+      "ExecuteCore"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [],
+  "tier_difference_reasoning": "The minimum set is sufficient. The fix is entirely localized to the single catch block in ExecuteCore and no additional context is needed to implement it correctly."
+}

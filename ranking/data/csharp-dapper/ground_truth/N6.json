@@ -1,0 +1,152 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/Dapper/SqlMapper.cs b/Dapper/SqlMapper.cs\nindex d23e949..6130207 100644\n--- a/Dapper/SqlMapper.cs\n+++ b/Dapper/SqlMapper.cs\n@@ -413,6 +413,10 @@ private static void AddTypeHandlerCore(Type type, ITypeHandler? handler, bool cl\n                 }\n                 typeHandlers = newCopy;\n             }\n+            // Purge the deserializer cache for this type so that previously compiled\n+            // deserializers are not reused with the old handler.\n+            PurgeQueryCacheByType(type);\n+            if (secondary is not null) PurgeQueryCacheByType(secondary);\n         }",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The `AddTypeHandlerCore` method already has all the logic to update `typeHandlers` and `TypeHandlerCache<T>`, but it never calls `PurgeQueryCacheByType` to invalidate the `TypeDeserializerCache`. The existing `PurgeQueryCacheByType` helper already purges both the query cache and the deserializer cache for a type.",
+    "dead_ends": [],
+    "hindsight": "Should check that the early-return at line 393 (`if same handler return`) is correct before the purge - it's fine since if the handler is the same, no invalidation is needed.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Call TypeDeserializerCache.Purge(type) directly",
+          "Call PurgeQueryCache() to purge everything"
+        ],
+        "decision": "Call PurgeQueryCacheByType(type) (and secondary if present) after updating typeHandlers",
+        "reasoning": "PurgeQueryCacheByType purges both the query cache entries for the type and the TypeDeserializerCache entries, which is exactly what's needed. Calling full PurgeQueryCache would be too broad."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Searched SqlMapper.cs for AddTypeHandler and TypeDeserializerCache",
+        "reasoning": "Task description named these exact methods",
+        "result": "Found AddTypeHandlerCore at line 368; it does not call TypeDeserializerCache.Purge"
+      },
+      {
+        "action": "Found PurgeQueryCacheByType at line 114",
+        "reasoning": "Looking for existing cache purge helpers to reuse",
+        "result": "PurgeQueryCacheByType removes entries from _queryCache by type AND calls TypeDeserializerCache.Purge(type) - perfect fit"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "AddTypeHandlerCore",
+      "path": "Dapper/SqlMapper.cs",
+      "reason": "edited: added PurgeQueryCacheByType calls after updating typeHandlers",
+      "start_line": 368
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: only domain concepts ('register a custom type handler', 'cached deserializer', 'stale'). Pre-implementation: developer seeing old type handler behavior after registration would search for this.",
+      "pins": [],
+      "query_text": "register a custom type handler does not invalidate cached deserializers leaving stale converters in use",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: contains literal string 'typeHandlers = newCopy' that appears in the source. Pre-implementation: developer grepping for where the type handler dictionary is updated.",
+      "pins": [],
+      "query_text": "\"typeHandlers = newCopy\" cache invalidation TypeDeserializerCache purge",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names. Pre-implementation: developer searching for type handler registration internals.",
+      "pins": [],
+      "query_text": "AddTypeHandlerCore, AddTypeHandler, PurgeQueryCacheByType, TypeDeserializerCache",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names 'AddTypeHandlerCore' and uses relationship word 'callers'. Pre-implementation: finding callers of AddTypeHandlerCore shows all registration entry points.",
+      "pins": [],
+      "query_text": "callers of AddTypeHandlerCore that register new type handlers",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "AddTypeHandlerCore"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes file path 'Dapper/SqlMapper.cs'. Pre-implementation: task description names SqlMapper.cs.",
+      "pins": [
+        "Dapper/SqlMapper.cs"
+      ],
+      "query_text": "Dapper/SqlMapper.cs AddTypeHandler cache invalidation TypeDeserializerCache",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('type handler registration cache') with exact symbols 'AddTypeHandler' and 'TypeDeserializerCache'. Pre-implementation: developer knows these names from the task.",
+      "pins": [],
+      "query_text": "AddTypeHandler registration does not purge TypeDeserializerCache causing stale deserializer hits",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "AddTypeHandler",
+        "TypeDeserializerCache"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 1 file path. Pre-implementation: obvious starting point.",
+      "pins": [
+        "Dapper/SqlMapper.cs"
+      ],
+      "query_text": "AddTypeHandlerCore PurgeQueryCacheByType in Dapper/SqlMapper.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "AddTypeHandlerCore",
+        "PurgeQueryCacheByType"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbols and file path. Most natural query for this bug.",
+      "pins": [
+        "Dapper/SqlMapper.cs"
+      ],
+      "query_text": "fix AddTypeHandler to purge TypeDeserializerCache when handler is registered in Dapper/SqlMapper.cs",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "AddTypeHandlerCore",
+        "TypeDeserializerCache"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "After updating `typeHandlers` in `AddTypeHandlerCore`, the method did not invalidate the `TypeDeserializerCache`, so previously compiled deserializers kept using the old handler. The fix calls `PurgeQueryCacheByType(type)` (and `secondary` if present) after the lock block, which removes both query cache entries and `TypeDeserializerCache` entries for the affected type.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-dapper/N6",
+  "task_text": "Fix SqlMapper.TypeHandler not clearing cache on handler registration\n\nRegistering a new `TypeHandler<T>` via `SqlMapper.AddTypeHandler<T>()`\ndoes not invalidate the `TypeDeserializerCache`, so previously compiled\ndeserializers continue using the old handler. Fix the handler\nregistration in `SqlMapper.cs` to purge the relevant\ncache entries in `SqlMapper.TypeDeserializerCache.cs`.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "Dapper/SqlMapper.cs"
+    ],
+    "diff_seeds": [
+      "AddTypeHandlerCore"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "PurgeQueryCacheByType",
+      "path": "Dapper/SqlMapper.cs",
+      "reason": "read: an AI agent would search for existing cache purge helpers to determine whether to call TypeDeserializerCache.Purge directly or reuse PurgeQueryCacheByType",
+      "start_line": 114
+    },
+    {
+      "kind": "method",
+      "name": "Purge",
+      "path": "Dapper/SqlMapper.TypeDeserializerCache.cs",
+      "reason": "read: agent needs to understand what TypeDeserializerCache.Purge(type) does and confirm it's the right invalidation method",
+      "start_line": 20
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set is just `AddTypeHandlerCore` (the only edited method). `PurgeQueryCacheByType` and `TypeDeserializerCache.Purge` are added to thrash_preventing because an AI agent would search for these to decide how to implement the invalidation rather than writing a new purge mechanism from scratch. Without seeing them, the agent would search anyway and then potentially call TypeDeserializerCache.Purge directly (missing _queryCache entries). Seeing PurgeQueryCacheByType upfront shows the combined purge is already available."
+}

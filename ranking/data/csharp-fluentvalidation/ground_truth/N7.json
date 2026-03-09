@@ -1,0 +1,167 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/FluentValidation/Internal/AccessorCache.cs b/src/FluentValidation/Internal/AccessorCache.cs\n--- replace ConcurrentDictionary with lock+Dictionary+LinkedList LRU implementation\n+++ evict LRU when _cacheMap.Count > ValidatorOptions.Global.AccessorCacheMaxSize\n\ndiff --git a/src/FluentValidation/ValidatorOptions.cs b/src/FluentValidation/ValidatorOptions.cs\n+\t/// <summary>\n+\t/// Maximum number of compiled expression accessors to keep in the LRU cache per type.\n+\t/// Default is 10,000.\n+\t/// </summary>\n+\tpublic int AccessorCacheMaxSize { get; set; } = 10_000;",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The ConcurrentDictionary has no eviction; replacing it with a lock-guarded Dictionary + LinkedList gives O(1) LRU operations (move-to-front, remove-last).",
+    "dead_ends": [],
+    "hindsight": "Could have used a WeakReference-based approach for memory-pressure eviction, but the task asks for LRU with a configurable max size, which is simpler and more predictable.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "WeakReference-based cache",
+          "ConditionalWeakTable"
+        ],
+        "decision": "Replace ConcurrentDictionary with a lock+Dictionary+LinkedList LRU implementation",
+        "reasoning": "Classic O(1) LRU using a doubly-linked list for recency order and a dictionary for O(1) lookup; the configurable max size maps directly to the eviction threshold"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read AccessorCache.cs in full",
+        "reasoning": "Task names this file as the only target",
+        "result": "ConcurrentDictionary<Key,Delegate> with no eviction; Clear() method exists; DisableAccessorCache is checked from ValidatorOptions.Global"
+      },
+      {
+        "action": "Read ValidatorOptions.cs around DisableAccessorCache",
+        "reasoning": "Need to add AccessorCacheMaxSize as a sibling option",
+        "result": "DisableAccessorCache is a simple bool property at line 106; easy to add adjacent property"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "GetCachedAccessor",
+      "path": "src/FluentValidation/Internal/AccessorCache.cs",
+      "reason": "edited: replaced ConcurrentDictionary.GetOrAdd with lock+LinkedList LRU with eviction",
+      "start_line": 24
+    },
+    {
+      "kind": "method",
+      "name": "Clear",
+      "path": "src/FluentValidation/Internal/AccessorCache.cs",
+      "reason": "edited: updated to clear both _cacheMap and _lruList under lock",
+      "start_line": 70
+    },
+    {
+      "kind": "property",
+      "name": "AccessorCacheMaxSize",
+      "path": "src/FluentValidation/ValidatorOptions.cs",
+      "reason": "edited: new configurable max cache size property with default of 10,000",
+      "start_line": 106
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain/business concepts (compiled expression cache, memory leak, eviction, long-lived application) without any symbol names. Pre-implementation: a developer fixing a cache growth issue would search this.",
+      "pins": [],
+      "query_text": "Prevent unbounded memory growth in the compiled expression accessor cache by adding a size limit and evicting least-recently-used entries",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'LRU' and 'eviction' are literal strings in the added code comments. Pre-implementation: a developer might search for LRU cache implementation patterns.",
+      "pins": [],
+      "query_text": "\"LRU\" \"evict\" \"AccessorCache\" expression cache bounded",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 5 exact symbol names from the changed code. Pre-implementation: a developer knows these from the task description.",
+      "pins": [],
+      "query_text": "AccessorCache, GetCachedAccessor, AccessorCacheMaxSize, DisableAccessorCache, LinkedList",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names GetCachedAccessor with callers relationship. Pre-implementation: an agent would trace callers to understand the full impact of the change.",
+      "pins": [],
+      "query_text": "Callers of AccessorCache.GetCachedAccessor and usages of ValidatorOptions.DisableAccessorCache",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "AccessorCache",
+        "GetCachedAccessor"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides 2 explicit file paths. Pre-implementation: task names these files.",
+      "pins": [
+        "src/FluentValidation/Internal/AccessorCache.cs",
+        "src/FluentValidation/ValidatorOptions.cs"
+      ],
+      "query_text": "src/FluentValidation/Internal/AccessorCache.cs and src/FluentValidation/ValidatorOptions.cs cache eviction",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept (LRU eviction, memory pressure) with 3 exact symbol names. Pre-implementation: natural query from the task description.",
+      "pins": [],
+      "query_text": "Add LRU eviction to AccessorCache.GetCachedAccessor controlled by ValidatorOptions.AccessorCacheMaxSize",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "AccessorCache",
+        "GetCachedAccessor",
+        "AccessorCacheMaxSize"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 symbol names plus 2 file paths. Pre-implementation: combines known file paths with expected symbols.",
+      "pins": [
+        "src/FluentValidation/Internal/AccessorCache.cs",
+        "src/FluentValidation/ValidatorOptions.cs"
+      ],
+      "query_text": "AccessorCache GetCachedAccessor AccessorCacheMaxSize in src/FluentValidation/Internal/AccessorCache.cs and src/FluentValidation/ValidatorOptions.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "AccessorCache",
+        "AccessorCacheMaxSize"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names and file paths. Pre-implementation: natural query combining the task fix with known files.",
+      "pins": [
+        "src/FluentValidation/Internal/AccessorCache.cs",
+        "src/FluentValidation/ValidatorOptions.cs"
+      ],
+      "query_text": "Add bounded LRU eviction to AccessorCache in AccessorCache.cs with configurable AccessorCacheMaxSize in ValidatorOptions.cs",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "AccessorCache",
+        "GetCachedAccessor",
+        "AccessorCacheMaxSize"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Replaced the `ConcurrentDictionary` in `AccessorCache<T>` with a lock-guarded `Dictionary` + `LinkedList` pair implementing O(1) LRU eviction. Added `AccessorCacheMaxSize` (default 10,000) to `ValidatorOptions` to configure the limit. When the cache exceeds the limit, the least-recently-used entry is evicted.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-fluentvalidation/N7",
+  "task_text": "The `AccessorCache` in `Internal/AccessorCache.cs` caches compiled\n`Expression<Func<T, TProperty>>` accessors using a\n`ConcurrentDictionary` but never evicts entries. For long-lived\napplications that dynamically create validators for many types, this\ncan leak memory. Add a bounded eviction policy (e.g., LRU with a\nconfigurable max size) to the cache.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/FluentValidation/Internal/AccessorCache.cs",
+      "src/FluentValidation/ValidatorOptions.cs"
+    ],
+    "diff_seeds": [
+      "GetCachedAccessor",
+      "AccessorCacheMaxSize"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "property",
+      "name": "DisableAccessorCache",
+      "path": "src/FluentValidation/ValidatorOptions.cs",
+      "reason": "read: confirms that the cache bypass check reads from ValidatorOptions.Global, establishing the pattern for where to add AccessorCacheMaxSize",
+      "start_line": 106
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers the edited methods and new property. An AI agent would also look at DisableAccessorCache to confirm the ValidatorOptions pattern, preventing it from adding the new property somewhere else (e.g., as a static field on AccessorCache itself)."
+}

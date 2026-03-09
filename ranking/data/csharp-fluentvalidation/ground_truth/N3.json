@@ -1,0 +1,198 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/FluentValidation/DefaultValidatorOptions.cs b/src/FluentValidation/DefaultValidatorOptions.cs\nindex fd30941..cab5814 100644\n--- a/src/FluentValidation/DefaultValidatorOptions.cs\n+++ b/src/FluentValidation/DefaultValidatorOptions.cs\n@@ -163,7 +163,32 @@ public static class DefaultValidatorOptions {\n \t}\n \n \t/// <summary>\n-\t/// Specifies a condition limiting when the validator should run.\n+\t/// Specifies a delegate that derives a custom error code at validation time.\n+\t/// </summary>\n+\t/// <param name=\"rule\">The current rule</param>\n+\t/// <param name=\"codeProvider\">Delegate that receives the object being validated and returns the error code.</param>\n+\t/// <returns></returns>\n+\tpublic static IRuleBuilderOptions<T, TProperty> WithErrorCode<T, TProperty>(this IRuleBuilderOptions<T, TProperty> rule, Func<T, string> codeProvider) {\n+\t\tArgumentNullException.ThrowIfNull(codeProvider);\n+\t\tConfigurable(rule).Current.ErrorCodeProvider = (ctx, _) =>\n+\t\t\tcodeProvider(ctx == null ? default : ctx.InstanceToValidate);\n+\t\treturn rule;\n+\t}\n+\n+\t/// <summary>\n+\t/// Specifies a delegate that derives a custom error code at validation time using both the instance and the property value.\n+\t/// </summary>\n+\t/// <param name=\"rule\">The current rule</param>\n+\t/// <param name=\"codeProvider\">Delegate that receives the object being validated and the property value and returns the error code.</param>\n+\t/// <returns></returns>\n+\tpublic static IRuleBuilderOptions<T, TProperty> WithErrorCode<T, TProperty>(this IRuleBuilderOptions<T, TProperty> rule, Func<T, TProperty, string> codeProvider) {\n+\t\tArgumentNullException.ThrowIfNull(codeProvider);\n+\t\tConfigurable(rule).Current.ErrorCodeProvider = (ctx, value) =>\n+\t\t\tcodeProvider(ctx == null ? default : ctx.InstanceToValidate, value);\n+\t\treturn rule;\n+\t}\n+\ndiff --git a/src/FluentValidation/Internal/RuleBase.cs b/src/FluentValidation/Internal/RuleBase.cs\nindex 2176d46..4cc6f6e 100644\n--- a/src/FluentValidation/Internal/RuleBase.cs\n+++ b/src/FluentValidation/Internal/RuleBase.cs\n@@ -325,7 +325,9 @@ public string GetDisplayName(ValidationContext<T> context)\n \t\tvar failure = new ValidationFailure(context.PropertyPath, error, value);\n \n \t\tfailure.FormattedMessagePlaceholderValues = new Dictionary<string, object>(context.MessageFormatter.PlaceholderValues);\n-\t\tfailure.ErrorCode = component.ErrorCode ?? ValidatorOptions.Global.ErrorCodeResolver(component.Validator);\n+\t\tfailure.ErrorCode = component.ErrorCodeProvider != null\n+\t\t\t? component.ErrorCodeProvider(context, value)\n+\t\t\t: component.ErrorCode ?? ValidatorOptions.Global.ErrorCodeResolver(component.Validator);\n \ndiff --git a/src/FluentValidation/Internal/RuleComponent.cs b/src/FluentValidation/Internal/RuleComponent.cs\nindex 2ad01e7..3359ad8 100644\n--- a/src/FluentValidation/Internal/RuleComponent.cs\n+++ b/src/FluentValidation/Internal/RuleComponent.cs\n@@ -153,6 +153,12 @@ private protected virtual Task<bool> InvokePropertyValidatorAsync(ValidationCont\n \t/// </summary>\n \tpublic string ErrorCode { get; set; }\n \n+\t/// <summary>\n+\t/// Function used to retrieve a dynamic error code at validation time.\n+\t/// When set, takes precedence over <see cref=\"ErrorCode\"/>.\n+\t/// </summary>\n+\tpublic Func<ValidationContext<T>, TProperty, string> ErrorCodeProvider { get; set; }\n+",
+  "excluded_defs": [
+    {
+      "kind": "method",
+      "name": "SetErrorMessage",
+      "path": "src/FluentValidation/Internal/RuleComponent.cs",
+      "reason": "read as reference pattern for how message delegate is stored but not changed",
+      "start_line": 199
+    },
+    {
+      "kind": "method",
+      "name": "WithMessage",
+      "path": "src/FluentValidation/DefaultValidatorOptions.cs",
+      "reason": "read as the template pattern to mirror for WithErrorCode delegate overloads",
+      "start_line": 131
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "RuleBase.CreateValidationError reads component.ErrorCode with a null-coalescing fallback to the global resolver, so inserting a conditional on a new ErrorCodeProvider property before that gives clean delegate-based dynamic codes with no other changes needed.",
+    "dead_ends": [],
+    "hindsight": "Could also have added a SetErrorCode(Func<>) method on RuleComponent mirroring SetErrorMessage(), but a plain auto-property is simpler and consistent with SeverityProvider.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "add SetErrorCode(Func<>) method mirroring SetErrorMessage",
+          "reuse ErrorCode with a sentinel value"
+        ],
+        "decision": "Add ErrorCodeProvider as a plain Func<> property on RuleComponent, checked before ErrorCode in CreateValidationError",
+        "reasoning": "Mirrors the SeverityProvider pattern exactly; minimal API surface change, easy to discover"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Grep for WithErrorCode and WithMessage in DefaultValidatorOptions.cs",
+        "reasoning": "Task says to mirror how WithMessage delegate overloads work",
+        "result": "Found WithMessage(Func<T,string>) and WithMessage(Func<T,TProperty,string>) calling SetErrorMessage; found WithErrorCode(string) setting ErrorCode"
+      },
+      {
+        "action": "Read RuleComponent.cs fields around ErrorCode",
+        "reasoning": "Need to add a new field to store the delegate",
+        "result": "ErrorCode is a simple string property at line 154; SeverityProvider at line 149 shows the pattern for a Func property"
+      },
+      {
+        "action": "Grep RuleBase.cs for ErrorCode usage",
+        "reasoning": "Need to find where ErrorCode is consumed to emit ValidationFailure.ErrorCode",
+        "result": "CreateValidationError at line 328 reads component.ErrorCode with null-coalesce to global resolver; needs to check ErrorCodeProvider first"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "WithErrorCode",
+      "path": "src/FluentValidation/DefaultValidatorOptions.cs",
+      "reason": "edited: added two new delegate overloads (Func<T,string> and Func<T,TProperty,string>)",
+      "start_line": 159
+    },
+    {
+      "kind": "property",
+      "name": "ErrorCodeProvider",
+      "path": "src/FluentValidation/Internal/RuleComponent.cs",
+      "reason": "edited: new Func property to store the dynamic error code delegate",
+      "start_line": 158
+    },
+    {
+      "kind": "method",
+      "name": "CreateValidationError",
+      "path": "src/FluentValidation/Internal/RuleBase.cs",
+      "reason": "edited: checks ErrorCodeProvider before ErrorCode when building ValidationFailure",
+      "start_line": 320
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: describes only domain/business concepts (error code, delegate, validation failure, dynamic, instance-based) without any symbol names. Pre-implementation: a developer implementing dynamic error codes would search this before knowing which files to change.",
+      "pins": [],
+      "query_text": "Allow error codes on validation rules to be computed dynamically from the validated object at runtime instead of being set as static strings",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'codeProvider' and 'ErrorCodeProvider' appear literally in the added source code. Pre-implementation: a developer grepping for the pattern would look for these strings.",
+      "pins": [],
+      "query_text": "\"codeProvider\" \"ErrorCodeProvider\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 5 exact symbol names from the changed code. Pre-implementation: a developer knows WithErrorCode from the task description and would search these identifiers.",
+      "pins": [],
+      "query_text": "WithErrorCode, ErrorCodeProvider, codeProvider, CreateValidationError, IRuleBuilderOptions",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol WithErrorCode with callers/implementors relationship. Pre-implementation: an agent would trace callers of WithErrorCode to understand the extension pattern.",
+      "pins": [],
+      "query_text": "Callers of WithErrorCode and implementors of IRuleBuilderOptions that store error code in RuleComponent",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "WithErrorCode",
+        "IRuleBuilderOptions"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides 3 explicit file paths from the solution. Pre-implementation: the task names DefaultValidatorOptions.cs and the agent would also look at RuleComponent.cs and RuleBase.cs as obvious related files.",
+      "pins": [
+        "src/FluentValidation/DefaultValidatorOptions.cs",
+        "src/FluentValidation/Internal/RuleComponent.cs",
+        "src/FluentValidation/Internal/RuleBase.cs"
+      ],
+      "query_text": "src/FluentValidation/DefaultValidatorOptions.cs, src/FluentValidation/Internal/RuleComponent.cs, src/FluentValidation/Internal/RuleBase.cs",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept (dynamic error code delegate) with 3 exact symbol names. Pre-implementation: natural query for the task goal using known symbols.",
+      "pins": [],
+      "query_text": "Add WithErrorCode delegate overloads storing an ErrorCodeProvider in RuleComponent, invoked during CreateValidationError",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "WithErrorCode",
+        "ErrorCodeProvider",
+        "CreateValidationError"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 symbol names plus 2 file paths. Pre-implementation: a developer would combine known file locations with the symbols they expect to change.",
+      "pins": [
+        "src/FluentValidation/DefaultValidatorOptions.cs",
+        "src/FluentValidation/Internal/RuleComponent.cs"
+      ],
+      "query_text": "WithErrorCode ErrorCodeProvider RuleComponent in src/FluentValidation/DefaultValidatorOptions.cs and src/FluentValidation/Internal/RuleComponent.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "WithErrorCode",
+        "ErrorCodeProvider"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names and file paths. Pre-implementation: natural query combining the task goal with known file targets.",
+      "pins": [
+        "src/FluentValidation/DefaultValidatorOptions.cs",
+        "src/FluentValidation/Internal/RuleComponent.cs",
+        "src/FluentValidation/Internal/RuleBase.cs"
+      ],
+      "query_text": "Add WithErrorCode(Func<T,string>) and WithErrorCode(Func<T,TProperty,string>) overloads in DefaultValidatorOptions.cs storing delegate in RuleComponent.ErrorCodeProvider, invoked in RuleBase.CreateValidationError",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "WithErrorCode",
+        "ErrorCodeProvider",
+        "CreateValidationError"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `ErrorCodeProvider` property (a `Func<ValidationContext<T>, TProperty, string>`) to `RuleComponent` mirroring `SeverityProvider`. Added two `WithErrorCode` overloads in `DefaultValidatorOptions` for `Func<T, string>` and `Func<T, TProperty, string>`. Updated `RuleBase.CreateValidationError` to invoke `ErrorCodeProvider` first, falling back to the existing static `ErrorCode` and global resolver.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-fluentvalidation/N3",
+  "task_text": "The `DefaultValidatorOptions.cs` provides `WithErrorCode(string code)` to\nset a static error code on a rule, but unlike `WithMessage()` there are no\noverloads that accept a delegate to derive the code at validation time.\nAdd `WithErrorCode<T, TProperty>(Func<T, string> codeProvider)` and\n`WithErrorCode<T, TProperty>(Func<T, TProperty, string> codeProvider)`\nextension methods in `DefaultValidatorOptions.cs` that store the delegate\nin `RuleComponent` and invoke it when building the `ValidationFailure`,\nmirroring how `WithMessage(Func<T, string>)` works for error messages.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/FluentValidation/DefaultValidatorOptions.cs",
+      "src/FluentValidation/Internal/RuleComponent.cs",
+      "src/FluentValidation/Internal/RuleBase.cs"
+    ],
+    "diff_seeds": [
+      "WithErrorCode",
+      "ErrorCodeProvider",
+      "CreateValidationError"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "WithMessage",
+      "path": "src/FluentValidation/DefaultValidatorOptions.cs",
+      "reason": "read: reference implementation showing how delegate overloads of WithMessage store the factory in SetErrorMessage; upfront context prevents agent trying a different storage pattern",
+      "start_line": 131
+    },
+    {
+      "kind": "property",
+      "name": "SeverityProvider",
+      "path": "src/FluentValidation/Internal/RuleComponent.cs",
+      "reason": "read: exemplar showing how an existing Func<> provider property is stored and later consumed in CreateValidationError",
+      "start_line": 149
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers the three edited locations. An AI agent would also inspect the existing WithMessage overloads (to replicate the delegate storage pattern) and the SeverityProvider property (to see how an analogous Func<> property is already used in the same CreateValidationError method) \u2014 without seeing these, it might invent an incompatible storage mechanism and need to backtrack."
+}

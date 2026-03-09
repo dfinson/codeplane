@@ -1,0 +1,146 @@
+{
+  "confidence": "medium",
+  "diff": "diff --git a/src/MediatR/Wrappers/NotificationHandlerWrapper.cs b/src/MediatR/Wrappers/NotificationHandlerWrapper.cs\nindex 404fe3f..e69a3d3 100644\n--- a/src/MediatR/Wrappers/NotificationHandlerWrapper.cs\n+++ b/src/MediatR/Wrappers/NotificationHandlerWrapper.cs\n@@ -21,11 +21,27 @@ public class NotificationHandlerWrapperImpl<TNotification> : NotificationHandler\n         Func<IEnumerable<NotificationHandlerExecutor>, INotification, CancellationToken, Task> publish,\n         CancellationToken cancellationToken)\n     {\n-        var handlers = serviceFactory\n+        var concreteHandlers = serviceFactory\n             .GetServices<INotificationHandler<TNotification>>()\n-            .GroupBy(static x => x.GetType())\n-            .Select(static g => g.First())\n-            .Select(static x => new NotificationHandlerExecutor(x, (theNotification, theToken) => x.Handle((TNotification)theNotification, theToken)));\n+            .Distinct(ReferenceEqualityComparer.Instance);\n+\n+        var interfaceHandlers = typeof(TNotification)\n+            .GetInterfaces()\n+            .Where(static i => i != typeof(INotification) && typeof(INotification).IsAssignableFrom(i))\n+            .SelectMany(interfaceType =>\n+            {\n+                var handlerType = typeof(INotificationHandler<>).MakeGenericType(interfaceType);\n+                var handleMethod = handlerType.GetMethod(nameof(INotificationHandler<TNotification>.Handle))!;\n+                return serviceFactory\n+                    .GetServices(handlerType)\n+                    .Where(static h => h != null)\n+                    .Select(h => new NotificationHandlerExecutor(h!,\n+                        (theNotification, theToken) => (System.Threading.Tasks.Task)handleMethod.Invoke(h, new object[] { theNotification, theToken })!));\n+            });\n+\n+        var handlers = concreteHandlers\n+            .Select(static x => new NotificationHandlerExecutor(x, (theNotification, theToken) => x.Handle((TNotification)theNotification, theToken)))\n+            .Concat(interfaceHandlers);\n \n         return publish(handlers, notification, cancellationToken);\n     }",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The fix requires two passes: (1) resolve concrete type handlers as before, (2) also enumerate notification-implementing interfaces and query the service container for handlers of each. The reflection approach via GetMethod/Invoke is necessary since we don't know the interface type at compile time.",
+    "dead_ends": [],
+    "hindsight": "The interface handler executor needs reflection since the interface type is not known at compile time. Could have considered a generic helper method to avoid inline reflection but the approach is equivalent.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Use a separate generic method per interface type (cleaner but complex)",
+          "Use reflection inline in the executor callback"
+        ],
+        "decision": "Use reflection to invoke the Handle method of each interface-typed handler",
+        "reasoning": "The interface type is only known at runtime, so reflection is required. Caching handleMethod per interfaceType in the closure avoids redundant reflection per invocation."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read src/MediatR/Wrappers/NotificationHandlerWrapper.cs",
+        "reasoning": "Task says this is the file to fix",
+        "result": "Found the concrete type handler resolution and identified where interface handler resolution should be added"
+      },
+      {
+        "action": "Read src/MediatR/NotificationHandlerExecutor.cs",
+        "reasoning": "Need to understand how NotificationHandlerExecutor is constructed to properly wrap interface handlers",
+        "result": "Found it wraps a handler object and a HandlerCallback delegate"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "NotificationHandlerWrapperImpl.Handle",
+      "path": "src/MediatR/Wrappers/NotificationHandlerWrapper.cs",
+      "reason": "edited: extended handler resolution to include handlers registered for INotification-implementing interfaces of TNotification",
+      "start_line": 20
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: describes the bug in domain terms (interface subscriber not receiving events). Pre-implementation: a developer debugging 'my notification handler for the interface is never called' would say this.",
+      "pins": [],
+      "query_text": "notification handler registered against a base interface type is never invoked when the concrete notification is published",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'GetServices<INotificationHandler<TNotification>>()' is the exact literal pattern in the source that is being extended. Pre-implementation: developer investigating handler resolution would search for this.",
+      "pins": [],
+      "query_text": "GetServices<INotificationHandler<TNotification>>()",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names from the touched code. Pre-implementation: developer knows these types from the notification publishing subsystem.",
+      "pins": [],
+      "query_text": "NotificationHandlerWrapperImpl, INotificationHandler, NotificationHandlerExecutor, INotification",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol with relationship word. Pre-implementation: understanding handler resolution flow is needed before modifying it.",
+      "pins": [],
+      "query_text": "callees of NotificationHandlerWrapperImpl.Handle and how INotificationHandler registrations are resolved from the service container",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "NotificationHandlerWrapperImpl"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes 1 explicit file path from the diff. Pre-implementation: task description names this exact file.",
+      "pins": [
+        "src/MediatR/Wrappers/NotificationHandlerWrapper.cs"
+      ],
+      "query_text": "src/MediatR/Wrappers/NotificationHandlerWrapper.cs interface notification handler resolution",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain description (interface handler dispatch) with 2 exact symbol names. Pre-implementation: developer knows class names from task description.",
+      "pins": [],
+      "query_text": "fix NotificationHandlerWrapperImpl to also resolve handlers registered for INotification interface types implemented by TNotification",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "NotificationHandlerWrapperImpl",
+        "INotificationHandler"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 1 file path. Pre-implementation: task explicitly names the file.",
+      "pins": [
+        "src/MediatR/Wrappers/NotificationHandlerWrapper.cs"
+      ],
+      "query_text": "NotificationHandlerWrapperImpl Handle in src/MediatR/Wrappers/NotificationHandlerWrapper.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "NotificationHandlerWrapperImpl",
+        "Handle"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names, file path, and description. Pre-implementation: developer who read the task would write this.",
+      "pins": [
+        "src/MediatR/Wrappers/NotificationHandlerWrapper.cs"
+      ],
+      "query_text": "extend NotificationHandlerWrapperImpl.Handle to query INotificationHandler for each INotification interface type implemented by TNotification using GetServices and reflection",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "NotificationHandlerWrapperImpl",
+        "INotificationHandler"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Extended `NotificationHandlerWrapperImpl.Handle` to additionally resolve handlers for each interface implemented by `TNotification` that extends `INotification`. For each such interface, it queries the service container for `INotificationHandler<TInterface>` registrations and uses reflection to invoke their `Handle` method. Also replaced the old `GroupBy`-based dedup with `Distinct(ReferenceEqualityComparer.Instance)` for the concrete handlers.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-mediatr/N9",
+  "task_text": "Fix Mediator.Publish not awaiting handlers when the notification type is an interface\n\nIn `src/MediatR/Mediator.cs`, `Publish(object notification, ...)` casts\nto `INotification` and calls `PublishNotification`. The wrapper resolves\nhandlers for the concrete notification type via\n`GetServices<INotificationHandler<TNotification>>()`. Handlers registered\nagainst a base interface (e.g., `INotificationHandler<IMyNotification>`)\nare not resolved when the concrete type is dispatched. Fix the handler\nresolution to also resolve handlers registered for interface types\nimplemented by the notification.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/MediatR/Wrappers/NotificationHandlerWrapper.cs"
+    ],
+    "diff_seeds": [
+      "NotificationHandlerWrapperImpl",
+      "INotificationHandler"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "class",
+      "name": "NotificationHandlerExecutor",
+      "path": "src/MediatR/NotificationHandlerExecutor.cs",
+      "reason": "read: understanding the NotificationHandlerExecutor constructor signature is needed to correctly wrap the interface handlers with the right callback delegate",
+      "start_line": 1
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set is just the one edited method. An AI agent would also read NotificationHandlerExecutor to understand how to construct executors for the interface handlers \u2014 without seeing this, the agent might guess the constructor signature wrong and write incorrect callback wrapper code."
+}

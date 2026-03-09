@@ -1,0 +1,150 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/Polly.Core/Retry/RetryResilienceStrategy.cs b/src/Polly.Core/Retry/RetryResilienceStrategy.cs\nindex c4b78fc..beb3490 100644\n--- a/src/Polly.Core/Retry/RetryResilienceStrategy.cs\n+++ b/src/Polly.Core/Retry/RetryResilienceStrategy.cs\n@@ -90,7 +90,7 @@ internal sealed class RetryResilienceStrategy<T> : ResilienceStrategy<T>\n \n                 if (await DelayGenerator(delayArgs).ConfigureAwait(false) is TimeSpan newDelay && RetryHelper.IsValidDelay(newDelay))\n                 {\n-                    delay = newDelay;\n+                    delay = MaxDelay is TimeSpan maxDelay && newDelay > maxDelay ? maxDelay : newDelay;\n                 }\n             }\n",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The existing MaxDelay cap pattern in RetryHelper.GetRetryDelay uses `if (maxDelay is TimeSpan maxDelayValue && delay > maxDelayValue) return maxDelay.Value`. The same conditional pattern applies directly at the point where `newDelay` is assigned.",
+    "dead_ends": [],
+    "hindsight": "The fix is a one-line change; reading RetryHelper.GetRetryDelay just confirmed the capping pattern to reuse.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Call RetryHelper.GetRetryDelay with newDelay as baseDelay",
+          "Apply Math.Min(delay.Ticks, maxDelay.Ticks)",
+          "Use same pattern as RetryHelper: if (maxDelay is TimeSpan maxDelayValue && delay > maxDelayValue)"
+        ],
+        "decision": "Apply inline: MaxDelay is TimeSpan maxDelay && newDelay > maxDelay ? maxDelay : newDelay",
+        "reasoning": "Minimal one-line change that mirrors the existing MaxDelay pattern in RetryHelper, consistent with how the cap is applied elsewhere in the retry codebase."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read RetryResilienceStrategy.cs around the DelayGenerator invocation (lines 82-100)",
+        "reasoning": "Task names the file and the specific code path",
+        "result": "Found `delay = newDelay` without any MaxDelay cap at line 91"
+      },
+      {
+        "action": "Read RetryHelper.GetRetryDelay signature and MaxDelay cap logic (lines 20-40)",
+        "reasoning": "Need to understand how MaxDelay cap is applied to algorithm-computed delay to replicate the same logic",
+        "result": "Found `if (maxDelay is TimeSpan maxDelayValue && delay > maxDelayValue) return maxDelay.Value` pattern"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "ExecuteCore",
+      "path": "src/Polly.Core/Retry/RetryResilienceStrategy.cs",
+      "reason": "edited: added MaxDelay cap to the DelayGenerator result assignment",
+      "start_line": 46
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: describes the bug in domain terms without symbol names: 'maximum delay cap bypassed', 'custom delay generator'. Pre-implementation: developer observing uncapped delays would search for this.",
+      "pins": [],
+      "query_text": "retry strategy maximum delay cap is bypassed when a custom delay generator is provided returning values exceeding the configured maximum",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: quotes a literal comment from RetryHelper.cs. Pre-implementation: searching for delay capping logic.",
+      "pins": [],
+      "query_text": "\"The retry backoff type is not supported\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 3 exact symbol names. Pre-implementation: developer knows these from task description.",
+      "pins": [],
+      "query_text": "RetryResilienceStrategy, DelayGenerator, MaxDelay",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol with relationship word. Pre-implementation: understanding where MaxDelay is applied.",
+      "pins": [],
+      "query_text": "callers of RetryHelper.GetRetryDelay in RetryResilienceStrategy and MaxDelay capping",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "RetryHelper"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 file paths from the solution. Pre-implementation: task names the file directly.",
+      "pins": [
+        "src/Polly.Core/Retry/RetryResilienceStrategy.cs",
+        "src/Polly.Core/Retry/RetryHelper.cs"
+      ],
+      "query_text": "src/Polly.Core/Retry/RetryResilienceStrategy.cs DelayGenerator MaxDelay cap",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept 'uncapped delay' with symbol names. Pre-implementation: developer describes both symptom and class.",
+      "pins": [],
+      "query_text": "RetryResilienceStrategy DelayGenerator result not capped by MaxDelay unlike algorithm-computed delay from RetryHelper.GetRetryDelay",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "RetryResilienceStrategy",
+        "MaxDelay"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 2 file paths. Pre-implementation: starts from task-named classes.",
+      "pins": [
+        "src/Polly.Core/Retry/RetryResilienceStrategy.cs",
+        "src/Polly.Core/Retry/RetryHelper.cs"
+      ],
+      "query_text": "RetryResilienceStrategy MaxDelay cap for DelayGenerator src/Polly.Core/Retry/",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "RetryResilienceStrategy",
+        "MaxDelay"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names and file path. Pre-implementation: task description names file and the bug precisely.",
+      "pins": [
+        "src/Polly.Core/Retry/RetryResilienceStrategy.cs"
+      ],
+      "query_text": "fix RetryResilienceStrategy.ExecuteCore to apply MaxDelay cap to DelayGenerator result same as algorithm-computed delay",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "RetryResilienceStrategy",
+        "MaxDelay",
+        "DelayGenerator"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Located the `DelayGenerator` invocation in `RetryResilienceStrategy.ExecuteCore`. The `delay = newDelay` line assigns the generator's result without any `MaxDelay` cap. Applied the same pattern used in `RetryHelper.GetRetryDelay`: `MaxDelay is TimeSpan maxDelay && newDelay > maxDelay ? maxDelay : newDelay`.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-polly/N7",
+  "task_text": "Fix RetryResilienceStrategy not capping DelayGenerator results to MaxDelay\n\n`RetryResilienceStrategy.ExecuteCore` applies `MaxDelay` only to the\nalgorithm-computed delay produced by `RetryHelper.GetRetryDelay`. When\n`RetryStrategyOptions.DelayGenerator` is also set and returns a valid\n`TimeSpan`, the returned value replaces the computed delay without\nbeing subject to the `MaxDelay` cap. A custom `DelayGenerator`\nreturning 60 seconds when `MaxDelay` is 5 seconds will proceed\nuncapped. Fix `RetryResilienceStrategy.cs` to apply the `MaxDelay`\ncap to the delay returned by `DelayGenerator` (using the same\n`Math.Min` / `TimeSpan` comparison logic already present in\n`RetryHelper.GetRetryDelay`).",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "No baseline coverage report found in the repository root or any standard location.",
+    "diff_pins": [
+      "src/Polly.Core/Retry/RetryResilienceStrategy.cs"
+    ],
+    "diff_seeds": [
+      "ExecuteCore",
+      "DelayGenerator"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "GetRetryDelay",
+      "path": "src/Polly.Core/Retry/RetryHelper.cs",
+      "reason": "read: shows the MaxDelay cap pattern to replicate in the DelayGenerator path",
+      "start_line": 17
+    }
+  ],
+  "tier_difference_reasoning": "The minimum is just ExecuteCore where the fix is made. An AI agent would also read GetRetryDelay to understand the existing MaxDelay comparison pattern before writing the fix, preventing guessing the correct comparison syntax."
+}

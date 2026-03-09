@@ -1,0 +1,137 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/guava/src/com/google/common/eventbus/EventBus.java b/guava/src/com/google/common/eventbus/EventBus.java\nindex 603f550..137296c 100644\n--- a/guava/src/com/google/common/eventbus/EventBus.java\n+++ b/guava/src/com/google/common/eventbus/EventBus.java\n@@ -257,6 +257,7 @@ public class EventBus {\n    * @param event event to post.\n    */\n   public void post(Object event) {\n+    checkNotNull(event);\n     Iterator<Subscriber> eventSubscribers = subscribers.getSubscribers(event);\n     if (eventSubscribers.hasNext()) {\n       dispatcher.dispatch(event, eventSubscribers);\n",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The constructor already calls checkNotNull for all its arguments (lines 195-198), confirming checkNotNull is the standard validation tool in this class. Adding it as the first line of post() is the natural fix.",
+    "dead_ends": [],
+    "hindsight": "Nothing to do differently.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "checkNotNull(event, \"event\")",
+          "checkNotNull(event)"
+        ],
+        "decision": "Use plain checkNotNull(event) without a message",
+        "reasoning": "Task description says 'checkNotNull(event)'; consistent with the constructor calls which also use plain form"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "grep for post method in EventBus.java",
+        "reasoning": "Task specifies the exact method",
+        "result": "Found at line 259"
+      },
+      {
+        "action": "Read post() body",
+        "reasoning": "Need to see the current code before editing",
+        "result": "No null check; first statement delegates to subscribers.getSubscribers(event) which calls event.getClass()"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "post",
+      "path": "guava/src/com/google/common/eventbus/EventBus.java",
+      "reason": "edited: added checkNotNull(event) as first statement",
+      "start_line": 259
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses domain concepts ('event bus dispatch method', 'null event', 'fail at the call site') without symbols or paths. Pre-implementation: natural description of the bug.",
+      "pins": [],
+      "query_text": "add a null guard to an event bus dispatch method so that posting null fails immediately at the caller rather than deep inside the subscriber registry",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'the event had no subscribers and was not itself a DeadEvent' is a literal comment in the source. Pre-implementation: developer searching for the post method comment.",
+      "pins": [],
+      "query_text": "\"the event had no subscribers\" EventBus post",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 4 exact symbol names from the touched code. Pre-implementation: developer enumerating identifiers for the task.",
+      "pins": [],
+      "query_text": "post, checkNotNull, EventBus, DeadEvent",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names 'post' and uses relationship word 'calls' referencing getSubscribers. Pre-implementation: developer tracing what post() calls to understand where NPE originates.",
+      "pins": [],
+      "query_text": "post calls subscribers.getSubscribers in EventBus where null event would cause NPE at getClass()",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "post"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides explicit file path. Pre-implementation: task description identifies the file.",
+      "pins": [
+        "guava/src/com/google/common/eventbus/EventBus.java"
+      ],
+      "query_text": "guava/src/com/google/common/eventbus/EventBus.java post method null event check",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('validate event is non-null before dispatch') with 2 exact symbols 'post' and 'checkNotNull'. Pre-implementation: natural task description phrasing.",
+      "pins": [],
+      "query_text": "EventBus.post should call checkNotNull on the event argument before dispatching to subscribers",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "post",
+        "checkNotNull"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 1 file path. Pre-implementation: developer navigating with method name and file.",
+      "pins": [
+        "guava/src/com/google/common/eventbus/EventBus.java"
+      ],
+      "query_text": "post checkNotNull in guava/src/com/google/common/eventbus/EventBus.java",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "post",
+        "checkNotNull"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names 'post', 'checkNotNull' and the file path. Pre-implementation: how a developer phrases the search after reading the task.",
+      "pins": [
+        "guava/src/com/google/common/eventbus/EventBus.java"
+      ],
+      "query_text": "add checkNotNull(event) to EventBus.post at start of method in EventBus.java to catch null at call site",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "post",
+        "checkNotNull"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `checkNotNull(event)` as the first statement of `EventBus.post(Object event)`. The `checkNotNull` import was already present in EventBus.java (used in the constructor). Without this check, a null event causes NPE inside `SubscriberRegistry.getSubscribers()` at `event.getClass()`.",
+  "task_complexity": "narrow",
+  "task_id": "java-guava/N10",
+  "task_text": "Fix EventBus.post not validating that the event is non-null\n\n`EventBus.post(Object event)` does not call `checkNotNull(event)`\nbefore dispatching. Posting a `null` event causes a\n`NullPointerException` inside `SubscriberRegistry.getSubscribers()` at\n`event.getClass()`, making the stack trace point to internal code\nrather than the caller's `post()` call. Fix `EventBus.post()` in\n`EventBus.java` to add `checkNotNull(event)` at the start of the\nmethod so the error is reported at the call site.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "guava/src/com/google/common/eventbus/EventBus.java"
+    ],
+    "diff_seeds": [
+      "post"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [],
+  "tier_difference_reasoning": "The minimum set (just the edited method) is fully sufficient for an AI agent. The method is self-contained and checkNotNull is already imported and used in the same class. There are no sibling patterns or external references that would cause an agent to search elsewhere."
+}

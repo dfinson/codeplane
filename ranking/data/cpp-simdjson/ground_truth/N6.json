@@ -1,0 +1,184 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/include/simdjson/generic/ondemand/parser-inl.h b/include/simdjson/generic/ondemand/parser-inl.h\n@@ added load() implementation after iterate(const simdjson_result<padded_string>&)\ndiff --git a/include/simdjson/generic/ondemand/parser.h b/include/simdjson/generic/ondemand/parser.h\n@@ added load() declaration after iterate(padded_string&&) = delete\n@@ added _loaded_json unique_ptr<padded_string> field to private section",
+  "excluded_defs": [
+    {
+      "kind": "method",
+      "name": "load",
+      "path": "include/simdjson/dom/parser.h",
+      "reason": "Read as the reference API pattern to mirror; not edited",
+      "start_line": 65
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "dom::parser::load() uses a stored padded_string buffer (loaded_bytes) to keep the data alive during iteration. For ondemand, I can add a `_loaded_json` unique_ptr that holds the padded_string, and call `iterate(*_loaded_json)` on it.",
+    "dead_ends": [],
+    "hindsight": "Using `unique_ptr<padded_string>` avoids needing to include padded_string.h in the header (forward declaration suffices for pointer member). A simpler approach would have been to store a bare `padded_string` but that requires including the full definition.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Add iterate(std::string_view path) overload",
+          "Store padded_string by value (requires full definition in header)"
+        ],
+        "decision": "Add load(std::string_view path) method storing the padded_string in a unique_ptr<padded_string> member",
+        "reasoning": "load() matches the dom::parser naming; unique_ptr<padded_string> keeps the header forward-declaration-compatible"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read include/simdjson/generic/ondemand/parser.h",
+        "reasoning": "Task names this file; need to find insertion point for new method",
+        "result": "Found existing iterate() overloads ending at line 138; private section at 408+"
+      },
+      {
+        "action": "Read include/simdjson/generic/ondemand/parser-inl.h",
+        "reasoning": "Need to find where to add implementation",
+        "result": "Found iterate(padded_string&) and iterate(simdjson_result<padded_string>&) as the right pattern to follow"
+      },
+      {
+        "action": "Read dom/parser.h load() method",
+        "reasoning": "Need to match the dom::parser::load() API signature and behavior",
+        "result": "Confirmed dom::load() takes std::string_view path, stores in loaded_bytes; analogous approach needed for ondemand"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "load",
+      "path": "include/simdjson/generic/ondemand/parser.h",
+      "reason": "edited: added declaration",
+      "start_line": 140
+    },
+    {
+      "kind": "variable",
+      "name": "_loaded_json",
+      "path": "include/simdjson/generic/ondemand/parser.h",
+      "reason": "edited: added private field to keep the buffer alive",
+      "start_line": 421
+    },
+    {
+      "kind": "method",
+      "name": "load",
+      "path": "include/simdjson/generic/ondemand/parser-inl.h",
+      "reason": "edited: added implementation",
+      "start_line": 120
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: domain concepts only ('convenience file loading', 'streaming parser', 'single call'). Pre-implementation: assigned developer would describe it this way.",
+      "pins": [],
+      "query_text": "Add a convenience method to the on-demand streaming parser that loads a JSON file from disk in a single call",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'padded_string::load' appears literally in the implementation. Pre-implementation: searching for how to load a file into padded_string locates this.",
+      "pins": [],
+      "query_text": "\"padded_string::load\" \"iterate\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names. Pre-implementation: developer would search for these.",
+      "pins": [],
+      "query_text": "load, iterate, padded_string, ondemand",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names load and relationship word callers. Pre-implementation: finding callers of padded_string::load shows the pattern.",
+      "pins": [],
+      "query_text": "Callers of padded_string::load and iterate in ondemand::parser",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "load"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 file paths from the solution. Pre-implementation: task names both files.",
+      "pins": [
+        "include/simdjson/generic/ondemand/parser.h",
+        "include/simdjson/generic/ondemand/parser-inl.h"
+      ],
+      "query_text": "include/simdjson/generic/ondemand/parser.h include/simdjson/generic/ondemand/parser-inl.h",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('file loading shortcut') with exact symbol names load and ondemand. Pre-implementation: natural combined search.",
+      "pins": [],
+      "query_text": "Add load(std::string_view path) to ondemand::parser that reads a file and returns a document via iterate()",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "load",
+        "iterate"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 2 file paths.",
+      "pins": [
+        "include/simdjson/generic/ondemand/parser.h",
+        "include/simdjson/generic/ondemand/parser-inl.h"
+      ],
+      "query_text": "load _loaded_json in ondemand/parser.h and parser-inl.h",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "load",
+        "_loaded_json"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names and file paths. Pre-implementation: natural query.",
+      "pins": [
+        "include/simdjson/generic/ondemand/parser.h",
+        "include/simdjson/generic/ondemand/parser-inl.h"
+      ],
+      "query_text": "Add load() to ondemand parser.h and parser-inl.h using padded_string::load() + iterate()",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "load",
+        "iterate"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `load(std::string_view path)` to `ondemand::parser`. The implementation loads the file into a `padded_string` via `padded_string::load()`, stores it in a `unique_ptr<padded_string>` member `_loaded_json` (to keep the buffer alive during iteration), then delegates to `iterate(*_loaded_json)`. The declaration and private field were added to `parser.h`; the implementation was added to `parser-inl.h`.",
+  "task_complexity": "narrow",
+  "task_id": "cpp-simdjson/N6",
+  "task_text": "The `dom::parser` exposes a `load(std::string_view path)` method that reads a file and returns a parsed element in a single call. The `ondemand::parser` provides no equivalent; users must manually call `padded_string::load(path)` and then pass the result to `iterate()`. Add an `iterate(std::string_view path)` overload (or a `load()` method) to `ondemand::parser` in `include/simdjson/generic/ondemand/parser.h` and `parser-inl.h` that loads the file into a `padded_string` and returns a `simdjson_result<document>`, matching the convenience of the DOM API.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "include/simdjson/generic/ondemand/parser.h",
+      "include/simdjson/generic/ondemand/parser-inl.h"
+    ],
+    "diff_seeds": [
+      "load",
+      "iterate"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "load",
+      "path": "include/simdjson/dom/parser.h",
+      "reason": "read: the dom::parser::load() signature is the API contract to mirror in ondemand",
+      "start_line": 65
+    },
+    {
+      "kind": "method",
+      "name": "load",
+      "path": "include/simdjson/padded_string-inl.h",
+      "reason": "read: padded_string::load() is what the implementation calls to load the file; needed to understand error codes returned and how to extract the value",
+      "start_line": 156
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers the 3 new defs. The thrash_preventing set adds dom::parser::load() (to understand the expected API signature) and padded_string::load() (to understand how to load a file and what errors it returns) \u2014 without these, an agent would need to search for them before implementing."
+}

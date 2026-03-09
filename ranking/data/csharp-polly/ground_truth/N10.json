@@ -1,0 +1,205 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/Polly.Core/CircuitBreaker/CircuitBreakerStrategyOptions.TResult.cs b/src/Polly.Core/CircuitBreaker/CircuitBreakerStrategyOptions.TResult.cs\n- public CircuitBreakerStrategyOptions() => Name = CircuitBreakerConstants.DefaultName;\n+ public CircuitBreakerStrategyOptions() { Name = CircuitBreakerConstants.DefaultName; StrategyType = CircuitBreakerConstants.DefaultName; }\ndiff --git a/src/Polly.Core/Fallback/FallbackStrategyOptions.TResult.cs\n- public FallbackStrategyOptions() => Name = FallbackConstants.DefaultName;\n+ public FallbackStrategyOptions() { Name = FallbackConstants.DefaultName; StrategyType = FallbackConstants.DefaultName; }\ndiff --git a/src/Polly.Core/Hedging/HedgingStrategyOptions.TResult.cs\n- public HedgingStrategyOptions() => Name = HedgingConstants.DefaultName;\n+ public HedgingStrategyOptions() { Name = HedgingConstants.DefaultName; StrategyType = HedgingConstants.DefaultName; }\ndiff --git a/src/Polly.Core/ResiliencePipelineBuilderBase.cs\n- var source = new ResilienceTelemetrySource(Name, InstanceName, entry.Options.Name);\n+ var source = new ResilienceTelemetrySource(Name, InstanceName, entry.Options.Name, entry.Options.StrategyType);\ndiff --git a/src/Polly.Core/ResilienceStrategyOptions.cs\n+ public string? StrategyType { get; set; }\ndiff --git a/src/Polly.Core/Retry/RetryStrategyOptions.TResult.cs\n- public RetryStrategyOptions() => Name = RetryConstants.DefaultName;\n+ public RetryStrategyOptions() { Name = RetryConstants.DefaultName; StrategyType = RetryConstants.DefaultName; }\ndiff --git a/src/Polly.Core/Telemetry/ResilienceTelemetrySource.cs\n+ public string? strategyType = null parameter added to constructor\n+ public string? StrategyType { get; } property added\ndiff --git a/src/Polly.Core/Timeout/TimeoutStrategyOptions.cs\n- public TimeoutStrategyOptions() => Name = TimeoutConstants.DefaultName;\n+ public TimeoutStrategyOptions() { Name = TimeoutConstants.DefaultName; StrategyType = TimeoutConstants.DefaultName; }",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "Each built-in strategy already sets `Name = XxxConstants.DefaultName` in its constructor. Adding `StrategyType = XxxConstants.DefaultName` alongside `Name` is the natural pattern. The telemetry source constructor just needs an optional 4th parameter.",
+    "dead_ends": [],
+    "hindsight": "Confirming that all built-in strategy options follow the same `Name = XConstants.DefaultName` pattern meant I could make the change uniformly.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Add StrategyType as non-optional constructor param to ResilienceTelemetrySource (breaking)",
+          "Add as optional param with default null (backward compatible)"
+        ],
+        "decision": "Add StrategyType as optional parameter (default null) to ResilienceTelemetrySource constructor",
+        "reasoning": "There are existing callers (the composite pipeline source) that construct ResilienceTelemetrySource without StrategyType; making it optional avoids breaking those call sites."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read ResilienceTelemetrySource.cs",
+        "reasoning": "Task names the file directly",
+        "result": "Has PipelineName, PipelineInstanceName, StrategyName - no StrategyType"
+      },
+      {
+        "action": "Read ResilienceStrategyOptions.cs",
+        "reasoning": "Need to add StrategyType property there",
+        "result": "Has only Name property"
+      },
+      {
+        "action": "Grep for Name = *Constants.DefaultName pattern across all strategy options",
+        "reasoning": "Need to find all built-in strategies to update StrategyType in their constructors",
+        "result": "Found 5 main strategies plus 4 Simmy chaos strategies"
+      },
+      {
+        "action": "Read ResiliencePipelineBuilderBase.cs lines 130-145",
+        "reasoning": "Need to find where ResilienceTelemetrySource is created for per-strategy telemetry",
+        "result": "Found line 138: new ResilienceTelemetrySource(Name, InstanceName, entry.Options.Name)"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "class",
+      "name": "ResilienceTelemetrySource",
+      "path": "src/Polly.Core/Telemetry/ResilienceTelemetrySource.cs",
+      "reason": "edited: added StrategyType parameter and property",
+      "start_line": 10
+    },
+    {
+      "kind": "class",
+      "name": "ResilienceStrategyOptions",
+      "path": "src/Polly.Core/ResilienceStrategyOptions.cs",
+      "reason": "edited: added StrategyType property",
+      "start_line": 7
+    },
+    {
+      "kind": "method",
+      "name": "CreateComponent",
+      "path": "src/Polly.Core/ResiliencePipelineBuilderBase.cs",
+      "reason": "edited: passed entry.Options.StrategyType to ResilienceTelemetrySource constructor",
+      "start_line": 135
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: describes the telemetry gap in domain terms without symbol names: 'strategy type identifier lost', 'customized name', 'filter by implementation type'. Pre-implementation: developer observing telemetry events mixing different strategy types would search for this.",
+      "pins": [],
+      "query_text": "resilience telemetry events do not expose the strategy implementation type separately from the user-assigned name making it impossible to filter events by strategy type",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: quotes a literal string from ResilienceTelemetrySource XML doc. Pre-implementation: developer looking for the telemetry source class.",
+      "pins": [],
+      "query_text": "\"The source of resilience telemetry events\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 3 exact symbol names from changed code. Pre-implementation: developer knows these from task description.",
+      "pins": [],
+      "query_text": "ResilienceTelemetrySource, StrategyType, ResilienceStrategyOptions",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names symbol and uses relationship word. Pre-implementation: tracing where ResilienceTelemetrySource is constructed.",
+      "pins": [],
+      "query_text": "callers of ResilienceTelemetrySource constructor in ResiliencePipelineBuilderBase",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "ResilienceTelemetrySource"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 explicit file paths. Pre-implementation: task names both files directly.",
+      "pins": [
+        "src/Polly.Core/Telemetry/ResilienceTelemetrySource.cs",
+        "src/Polly.Core/ResilienceStrategyOptions.cs"
+      ],
+      "query_text": "src/Polly.Core/Telemetry/ResilienceTelemetrySource.cs strategy type field",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept 'immutable type identifier' with symbol names. Pre-implementation: developer would search for the symptom plus class names.",
+      "pins": [],
+      "query_text": "ResilienceTelemetrySource missing StrategyType separate from user-configurable Name in ResilienceStrategyOptions",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "ResilienceTelemetrySource",
+        "ResilienceStrategyOptions"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 2 file paths. Pre-implementation: starts from task-named classes.",
+      "pins": [
+        "src/Polly.Core/Telemetry/ResilienceTelemetrySource.cs",
+        "src/Polly.Core/ResilienceStrategyOptions.cs"
+      ],
+      "query_text": "ResilienceTelemetrySource StrategyType in src/Polly.Core/Telemetry/ and ResilienceStrategyOptions",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "ResilienceTelemetrySource",
+        "StrategyType"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbols and file paths. Pre-implementation: task description names both files and the property.",
+      "pins": [
+        "src/Polly.Core/Telemetry/ResilienceTelemetrySource.cs",
+        "src/Polly.Core/ResiliencePipelineBuilderBase.cs"
+      ],
+      "query_text": "add StrategyType property to ResilienceTelemetrySource and ResilienceStrategyOptions, populate in CreateComponent from built-in strategy constants",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "ResilienceTelemetrySource",
+        "ResilienceStrategyOptions",
+        "StrategyType"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `StrategyType` property to `ResilienceStrategyOptions` and `ResilienceTelemetrySource`. Updated `ResiliencePipelineBuilderBase.CreateComponent` to pass `entry.Options.StrategyType` as an optional 4th parameter to `ResilienceTelemetrySource`. Updated constructors of `RetryStrategyOptions`, `CircuitBreakerStrategyOptions`, `FallbackStrategyOptions`, `HedgingStrategyOptions`, and `TimeoutStrategyOptions` to set `StrategyType` to their respective `DefaultName` constants alongside `Name`.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-polly/N10",
+  "task_text": "Fix ResilienceTelemetrySource missing a dedicated StrategyType field\n\n`ResilienceTelemetrySource` exposes `StrategyName` (the\nuser-configurable `ResilienceStrategyOptions.Name`) but provides no\nseparate field for the immutable strategy type identifier (e.g.\n`\"Retry\"`, `\"CircuitBreaker\"`, `\"Timeout\"`). When users override the\ndefault `Name` with a custom value, the strategy type is lost from\ntelemetry events and listeners have no way to filter or aggregate\nevents by strategy type independently of the assigned name. Fix\n`ResilienceTelemetrySource.cs` to add a `StrategyType` property, and\nupdate `ResiliencePipelineBuilderBase.CreateComponent` to populate it\nfrom a new `ResilienceStrategyOptions.StrategyType` property that each\nbuilt-in strategy sets to its well-known type name constant (e.g.\n`RetryConstants.DefaultName`).",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "No baseline coverage report found in the repository root or any standard location.",
+    "diff_pins": [
+      "src/Polly.Core/Telemetry/ResilienceTelemetrySource.cs",
+      "src/Polly.Core/ResilienceStrategyOptions.cs",
+      "src/Polly.Core/ResiliencePipelineBuilderBase.cs"
+    ],
+    "diff_seeds": [
+      "ResilienceTelemetrySource",
+      "ResilienceStrategyOptions",
+      "StrategyType"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "RetryStrategyOptions",
+      "path": "src/Polly.Core/Retry/RetryStrategyOptions.TResult.cs",
+      "reason": "edited: set StrategyType = RetryConstants.DefaultName in constructor",
+      "start_line": 17
+    },
+    {
+      "kind": "method",
+      "name": "CircuitBreakerStrategyOptions",
+      "path": "src/Polly.Core/CircuitBreaker/CircuitBreakerStrategyOptions.TResult.cs",
+      "reason": "edited: set StrategyType = CircuitBreakerConstants.DefaultName in constructor",
+      "start_line": 30
+    },
+    {
+      "kind": "method",
+      "name": "FallbackStrategyOptions",
+      "path": "src/Polly.Core/Fallback/FallbackStrategyOptions.TResult.cs",
+      "reason": "edited: set StrategyType = FallbackConstants.DefaultName in constructor",
+      "start_line": 14
+    },
+    {
+      "kind": "method",
+      "name": "HedgingStrategyOptions",
+      "path": "src/Polly.Core/Hedging/HedgingStrategyOptions.TResult.cs",
+      "reason": "edited: set StrategyType = HedgingConstants.DefaultName in constructor",
+      "start_line": 14
+    },
+    {
+      "kind": "method",
+      "name": "TimeoutStrategyOptions",
+      "path": "src/Polly.Core/Timeout/TimeoutStrategyOptions.cs",
+      "reason": "edited: set StrategyType = TimeoutConstants.DefaultName in constructor",
+      "start_line": 14
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers the infrastructure changes. The thrash_preventing set adds the per-strategy options files that also need to be updated \u2014 without these, an AI agent would need to discover and update each built-in strategy's constructor separately, risking incomplete coverage."
+}

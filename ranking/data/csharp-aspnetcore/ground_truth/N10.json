@@ -1,0 +1,186 @@
+{
+  "confidence": "medium",
+  "diff": "diff --git a/src/Http/Http.Extensions/src/SendFileResponseExtensions.cs b/src/Http/Http.Extensions/src/SendFileResponseExtensions.cs\n@@ -85,6 +85 @@ private static async Task SendFileAsyncCore(HttpResponse response, IFileInfo file\n+        // Set Content-Length when the file length is known, the response has not yet started,\n+        // and no other Transfer-Encoding is configured.\n+        if (!response.HasStarted && string.IsNullOrEmpty(response.Headers.TransferEncoding))\n+        {\n+            response.ContentLength = count ?? (file.Length - offset);\n+        }\n@@ -112,6 +112 @@ private static async Task SendFileAsyncCore(HttpResponse response, string fileName\n+        if (!response.HasStarted && string.IsNullOrEmpty(response.Headers.TransferEncoding))\n+        {\n+            var contentLength = count ?? (new FileInfo(fileName).Length - offset);\n+            if (contentLength >= 0)\n+            {\n+                response.ContentLength = contentLength;\n+            }\n+        }",
+  "excluded_defs": [
+    {
+      "kind": "class",
+      "name": "SendFileFallback",
+      "path": "src/Http/Http/src/SendFileFallback.cs",
+      "reason": "read for context; the actual fix is applied in SendFileResponseExtensions because SendFileFallback only takes a Stream and has no access to response headers",
+      "start_line": 12
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "SendFileFallback.SendFileAsync only accepts a Stream \u2014 it can't set headers. The fix must go in SendFileResponseExtensions.SendFileAsyncCore which has access to HttpResponse, and which is the bridge between the public API and the fallback stream copy.",
+    "dead_ends": [
+      {
+        "explored": "SendFileFallback.SendFileAsync",
+        "why_irrelevant": "Only takes a Stream destination; cannot access response headers. Task description says 'fix SendFileFallback' but the implementation surface is in SendFileResponseExtensions."
+      }
+    ],
+    "hindsight": "Should have started with tracing callers of SendFileFallback before reading the file itself.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Add IHeaderDictionary parameter to SendFileFallback.SendFileAsync",
+          "Modify StreamResponseBodyFeature.SendFileAsync"
+        ],
+        "decision": "Set Content-Length in SendFileResponseExtensions.SendFileAsyncCore where HttpResponse is available",
+        "reasoning": "SendFileResponseExtensions has direct access to HttpResponse and is the entry point for both file path and IFileInfo send operations; modifying SendFileFallback's signature would be a breaking change"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read SendFileFallback.cs",
+        "reasoning": "Primary file per task description",
+        "result": "Only takes Stream; no access to response headers. Realized fix must be higher up."
+      },
+      {
+        "action": "Search for callers of SendFileFallback",
+        "reasoning": "Find where in the call stack we have access to HttpResponse",
+        "result": "StreamResponseBodyFeature.SendFileAsync calls SendFileFallback; SendFileResponseExtensions calls response.SendFileAsync"
+      },
+      {
+        "action": "Read SendFileResponseExtensions.cs",
+        "reasoning": "The only caller that has HttpResponse",
+        "result": "SendFileAsyncCore(HttpResponse, string) is where Content-Length must be set before the send"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "SendFileAsyncCore",
+      "path": "src/Http/Http.Extensions/src/SendFileResponseExtensions.cs",
+      "reason": "edited: added Content-Length header setting before the file send (string fileName overload)",
+      "start_line": 112
+    },
+    {
+      "kind": "method",
+      "name": "SendFileAsyncCore",
+      "path": "src/Http/Http.Extensions/src/SendFileResponseExtensions.cs",
+      "reason": "edited: added Content-Length header setting before the file send (IFileInfo overload)",
+      "start_line": 85
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: pure domain concepts \u2014 'file response', 'content length header', 'response not started', 'chunked encoding', 'streaming'. Pre-implementation: developer describes the bug.",
+      "pins": [],
+      "query_text": "Set the Content-Length header when sending a file response to avoid chunked transfer encoding for small files where the file length is known",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'Content-Length', 'SendFileAsync', 'HasStarted', 'TransferEncoding' are literal strings in the source. Pre-implementation: developer searching for file send and Content-Length.",
+      "pins": [],
+      "query_text": "\"Content-Length\" OR \"SendFileAsync\" OR \"HasStarted\" OR \"TransferEncoding\" OR \"SendFileFallback\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names. Pre-implementation: developer searching for the send file methods.",
+      "pins": [],
+      "query_text": "SendFileAsyncCore, SendFileFallback, ContentLength, SendFileResponseExtensions",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names SendFileFallback with relationship word 'callers'. Pre-implementation: tracing who calls SendFileFallback to find where headers can be set.",
+      "pins": [],
+      "query_text": "Callers of SendFileFallback.SendFileAsync and classes that implement IHttpResponseBodyFeature.SendFileAsync",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "SendFileFallback",
+        "SendFileAsyncCore"
+      ]
+    },
+    {
+      "justification": "Rule compliance: two file paths from the solution. Pre-implementation: developer navigates to these two files to understand the send file pipeline.",
+      "pins": [
+        "src/Http/Http/src/SendFileFallback.cs",
+        "src/Http/Http.Extensions/src/SendFileResponseExtensions.cs"
+      ],
+      "query_text": "src/Http/Http/src/SendFileFallback.cs and src/Http/Http.Extensions/src/SendFileResponseExtensions.cs Content-Length header",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain description with 3 exact symbols. Pre-implementation: natural query.",
+      "pins": [],
+      "query_text": "Fix SendFileFallback and SendFileResponseExtensions.SendFileAsyncCore to set ContentLength header on HttpResponse before sending file",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "SendFileFallback",
+        "SendFileAsyncCore",
+        "SendFileResponseExtensions"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 2 file paths. Pre-implementation: developer pinning both files.",
+      "pins": [
+        "src/Http/Http/src/SendFileFallback.cs",
+        "src/Http/Http.Extensions/src/SendFileResponseExtensions.cs"
+      ],
+      "query_text": "SendFileAsyncCore ContentLength in src/Http/Http/src/SendFileFallback.cs src/Http/Http.Extensions/src/SendFileResponseExtensions.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "SendFileAsyncCore",
+        "ContentLength"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names and file paths. Pre-implementation: complete task query.",
+      "pins": [
+        "src/Http/Http/src/SendFileFallback.cs",
+        "src/Http/Http.Extensions/src/SendFileResponseExtensions.cs"
+      ],
+      "query_text": "Fix SendFileFallback to set Content-Length header from file length when response has not started and no TransferEncoding is configured",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "SendFileFallback",
+        "SendFileAsyncCore",
+        "SendFileResponseExtensions"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "The `SendFileFallback.SendFileAsync` only accepts a `Stream` and has no access to response headers. The fix was applied to `SendFileResponseExtensions.SendFileAsyncCore` (both the `IFileInfo` and `string fileName` overloads), which do have access to `HttpResponse`. Before sending, the code checks `!response.HasStarted` and no `TransferEncoding` header is set, then sets `response.ContentLength` from the known file length minus offset (or uses the explicit `count` if provided).",
+  "task_complexity": "narrow",
+  "task_id": "csharp-aspnetcore/N10",
+  "task_text": "`SendFileFallback` in `src/Http/Http/src/SendFileFallback.cs` streams file content to the response but does not set the `Content-Length` header when the file length is known. This forces chunked transfer encoding even for small files. Set `Content-Length` from the file length when the response has not yet started and no other transfer encoding is configured.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/Http/Http.Extensions/src/SendFileResponseExtensions.cs"
+    ],
+    "diff_seeds": [
+      "SendFileAsyncCore",
+      "ContentLength"
+    ],
+    "import_graph_test_files": [
+      "src/Http/Http.Extensions/test/SendFileResponseExtensionsTests.cs"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "class",
+      "name": "SendFileFallback",
+      "path": "src/Http/Http/src/SendFileFallback.cs",
+      "reason": "read: must understand that SendFileFallback only accepts Stream (not HttpResponse) before knowing the fix must be in SendFileResponseExtensions",
+      "start_line": 12
+    },
+    {
+      "kind": "method",
+      "name": "SendFileAsync",
+      "path": "src/Http/Http/src/StreamResponseBodyFeature.cs",
+      "reason": "read: intermediate caller between SendFileResponseExtensions and SendFileFallback; confirms StreamResponseBodyFeature also has no access to response headers",
+      "start_line": 86
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers both edited methods. The thrash-preventing set adds SendFileFallback (to understand why the fix can't go there) and StreamResponseBodyFeature.SendFileAsync (the intermediate caller) \u2014 an AI agent would naturally check these to understand the call chain before deciding where to add the fix."
+}

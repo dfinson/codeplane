@@ -1,0 +1,178 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/FluentValidation/DefaultValidatorExtensions.cs (added IsUrl extension)\ndiff --git a/src/FluentValidation/Resources/Languages/EnglishLanguage.cs (added UrlValidator message)\ndiff --git a/src/FluentValidation/Validators/UrlValidator.cs (new file)",
+  "excluded_defs": [
+    {
+      "kind": "class",
+      "name": "EmailValidator",
+      "path": "src/FluentValidation/Validators/EmailValidator.cs",
+      "reason": "read as a reference pattern for string property validators; not changed",
+      "start_line": 41
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "EmailValidator and AspNetCoreCompatibleEmailValidator show the exact pattern - a PropertyValidator<T,string> with a Name, IsValid, and GetDefaultMessageTemplate - and the extension method just calls SetValidator. Uri.TryCreate is the standard .NET URL parsing API.",
+    "dead_ends": [],
+    "hindsight": "Could also have stored the AllowedSchemes as a HashSet for O(1) lookup, but for the small sets typically used (e.g., ['https']), an array with LINQ Contains is fine.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "use regex for URL validation",
+          "use HttpClient.GetAsync to probe"
+        ],
+        "decision": "Use Uri.TryCreate() for validation as specified in the task",
+        "reasoning": "Standard .NET URI parsing, handles edge cases correctly without regex complexity"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read EmailValidator.cs for the validator pattern",
+        "reasoning": "UrlValidator mirrors the email validator structure for string properties",
+        "result": "PropertyValidator<T,string> with Name, IsValid, GetDefaultMessageTemplate; extension method calls SetValidator"
+      },
+      {
+        "action": "Find EmailAddress extension method in DefaultValidatorExtensions.cs",
+        "reasoning": "Need to add IsUrl() nearby following the same pattern",
+        "result": "Found at line 75; simple one-liner SetValidator call"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "class",
+      "name": "UrlValidator",
+      "path": "src/FluentValidation/Validators/UrlValidator.cs",
+      "reason": "edited: new validator using Uri.TryCreate with AllowedSchemes and RequireHost parameters",
+      "start_line": 31
+    },
+    {
+      "kind": "method",
+      "name": "IsUrl",
+      "path": "src/FluentValidation/DefaultValidatorExtensions.cs",
+      "reason": "edited: new extension method wiring UrlValidator",
+      "start_line": 80
+    },
+    {
+      "kind": "method",
+      "name": "GetTranslation",
+      "path": "src/FluentValidation/Resources/Languages/EnglishLanguage.cs",
+      "reason": "edited: added UrlValidator default error message",
+      "start_line": 30
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts (URL validation, URI scheme, host requirement) without any code terms. Pre-implementation: a developer adding a URL validator would search this.",
+      "pins": [],
+      "query_text": "Add a built-in URL validator that checks if a string is a valid URI with optional allowed schemes and host requirements",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'is not a valid URL' appears literally in the new English message. Pre-implementation: a developer might search for similar error message patterns.",
+      "pins": [],
+      "query_text": "\"is not a valid URL\" \"UrlValidator\" \"AllowedSchemes\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 4 exact symbol names from the new code. Pre-implementation: a developer knows these from the task description.",
+      "pins": [],
+      "query_text": "UrlValidator, IsUrl, AllowedSchemes, RequireHost",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names UrlValidator with implementors/callers relationship. Pre-implementation: an agent would look at what PropertyValidator implementors look like.",
+      "pins": [],
+      "query_text": "Implementors of PropertyValidator<T,string> that validate URI format, and callers of IsUrl extension method",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "UrlValidator",
+        "IsUrl"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides 2 explicit file paths. Pre-implementation: task names both files.",
+      "pins": [
+        "src/FluentValidation/Validators/UrlValidator.cs",
+        "src/FluentValidation/DefaultValidatorExtensions.cs"
+      ],
+      "query_text": "src/FluentValidation/Validators/UrlValidator.cs and src/FluentValidation/DefaultValidatorExtensions.cs",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept (URL validation, scheme constraints) with 3 exact symbol names. Pre-implementation: natural query from the task description.",
+      "pins": [],
+      "query_text": "Add UrlValidator using Uri.TryCreate with AllowedSchemes constraint, wired via IsUrl extension method",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "UrlValidator",
+        "IsUrl",
+        "AllowedSchemes"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 symbol names plus 2 file paths. Pre-implementation: combines known files with expected symbols.",
+      "pins": [
+        "src/FluentValidation/Validators/UrlValidator.cs",
+        "src/FluentValidation/DefaultValidatorExtensions.cs"
+      ],
+      "query_text": "UrlValidator IsUrl AllowedSchemes in src/FluentValidation/Validators/UrlValidator.cs and src/FluentValidation/DefaultValidatorExtensions.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "UrlValidator",
+        "IsUrl",
+        "AllowedSchemes"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names and file paths. Pre-implementation: natural full query.",
+      "pins": [
+        "src/FluentValidation/Validators/UrlValidator.cs",
+        "src/FluentValidation/DefaultValidatorExtensions.cs",
+        "src/FluentValidation/Resources/Languages/EnglishLanguage.cs"
+      ],
+      "query_text": "Add UrlValidator.cs using Uri.TryCreate with AllowedSchemes and RequireHost, IsUrl() extension in DefaultValidatorExtensions.cs, and UrlValidator error message in EnglishLanguage.cs",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "UrlValidator",
+        "IsUrl",
+        "RequireHost"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Created `UrlValidator<T>` in `Validators/UrlValidator.cs` using `Uri.TryCreate()` with `AllowedSchemes` (list-based scheme whitelist) and `RequireHost` parameters. Added `IsUrl()` extension in `DefaultValidatorExtensions.cs` and registered the default error message in `EnglishLanguage.cs`.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-fluentvalidation/N8",
+  "task_text": "There is no built-in URL validator. Add a `UrlValidator` in\n`Validators/UrlValidator.cs` that validates string properties as\nwell-formed URIs using `Uri.TryCreate()`, with optional `AllowedSchemes`\n(e.g., `[\"https\"]`) and `RequireHost` parameters. Wire it with an\n`IsUrl()` extension method in `DefaultValidatorExtensions.cs` and\nregister a default error message in `LanguageManager`.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/FluentValidation/Validators/UrlValidator.cs",
+      "src/FluentValidation/DefaultValidatorExtensions.cs"
+    ],
+    "diff_seeds": [
+      "UrlValidator",
+      "IsUrl",
+      "AllowedSchemes"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "class",
+      "name": "AspNetCoreCompatibleEmailValidator",
+      "path": "src/FluentValidation/Validators/EmailValidator.cs",
+      "reason": "read: reference for the PropertyValidator<T,string> pattern - confirms class structure, Name property, IsValid signature, GetDefaultMessageTemplate",
+      "start_line": 77
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers all edited/created files. An AI agent would also inspect the existing email validator to confirm the exact structure before creating a new string property validator, preventing an incorrect class hierarchy or method signature."
+}

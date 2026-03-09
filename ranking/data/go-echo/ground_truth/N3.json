@@ -1,0 +1,259 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/binder.go b/binder.go\nindex 32029ec..0342c89 100644\n--- a/binder.go\n+++ b/binder.go\n@@ -72,6 +72,8 @@ type BindingError struct {\n \t*HTTPError\n \t// Values of parameter that failed to bind.\n \tValues []string `json:\"-\"`\n+\t// ExpectedType is the Go type name that the value was being converted to.\n+\tExpectedType string `json:\"expectedType,omitempty\"`\n }\n \n // NewBindingError creates new instance of binding error\n@@ -182,6 +184,14 @@ func (b *ValueBinder) setError(err error) {\n \tb.errors = append(b.errors, err)\n }\n \n+// setTypedError records a binding error and sets ExpectedType on the error if it is a *BindingError.\n+func (b *ValueBinder) setTypedError(err error, expectedType string) {\n+\tb.setError(err)\n+\tif be, ok := err.(*BindingError); ok {\n+\t\tbe.ExpectedType = expectedType\n+\t}\n+}\n+\n // BindError returns first seen bind error and resets/empties binder errors for further calls\n func (b *ValueBinder) BindError() error {\n \tif b.errors == nil {\n@@ -515,10 +525,13 @@ func (b *ValueBinder) intValue(sourceParam string, dest any, bitSize int, valueM\n func (b *ValueBinder) int(sourceParam string, value string, dest any, bitSize int) *ValueBinder {\n \tn, err := strconv.ParseInt(value, 10, bitSize)\n \tif err != nil {\n+\t\tvar typeName string\n \t\tif bitSize == 0 {\n-\t\t\tb.setError(b.ErrorFunc(sourceParam, []string{value}, \"failed to bind field value to int\", err))\n+\t\t\ttypeName = \"int\"\n+\t\t\tb.setTypedError(b.ErrorFunc(sourceParam, []string{value}, \"failed to bind field value to int\", err), typeName)\n \t\t} else {\n-\t\t\tb.setError(b.ErrorFunc(sourceParam, []string{value}, fmt.Sprintf(\"failed to bind field value to int%v\", bitSize), err))\n+\t\t\ttypeName = fmt.Sprintf(\"int%v\", bitSize)\n+\t\t\tb.setTypedError(b.ErrorFunc(sourceParam, []string{value}, fmt.Sprintf(\"failed to bind field value to int%v\", bitSize), err), typeName)\n \t\t}\n \t\treturn b\n \t}\n@@ -744,9 +757,9 @@ func (b *ValueBinder) uint(sourceParam string, value string, dest any, bitSize i\n \tn, err := strconv.ParseUint(value, 10, bitSize)\n \tif err != nil {\n \t\tif bitSize == 0 {\n-\t\t\tb.setError(b.ErrorFunc(sourceParam, []string{value}, \"failed to bind field value to uint\", err))\n+\t\t\tb.setTypedError(b.ErrorFunc(sourceParam, []string{value}, \"failed to bind field value to uint\", err), \"uint\")\n \t\t} else {\n-\t\t\tb.setError(b.ErrorFunc(sourceParam, []string{value}, fmt.Sprintf(\"failed to bind field value to uint%v\", bitSize), err))\n+\t\t\tb.setTypedError(b.ErrorFunc(sourceParam, []string{value}, fmt.Sprintf(\"failed to bind field value to uint%v\", bitSize), err), fmt.Sprintf(\"uint%v\", bitSize))\n \t\t}\n \t\treturn b\n \t}\n@@ -920,7 +933,7 @@ func (b *ValueBinder) boolValue(sourceParam string, dest *bool, valueMustExist b\n func (b *ValueBinder) bool(sourceParam string, value string, dest *bool) *ValueBinder {\n \tn, err := strconv.ParseBool(value)\n \tif err != nil {\n-\t\tb.setError(b.ErrorFunc(sourceParam, []string{value}, \"failed to bind field value to bool\", err))\n+\t\tb.setTypedError(b.ErrorFunc(sourceParam, []string{value}, \"failed to bind field value to bool\", err), \"bool\")\n \t\treturn b\n \t}\n \n@@ -1006,7 +1019,7 @@ func (b *ValueBinder) floatValue(sourceParam string, dest any, bitSize int, valu\n func (b *ValueBinder) float(sourceParam string, value string, dest any, bitSize int) *ValueBinder {\n \tn, err := strconv.ParseFloat(value, bitSize)\n \tif err != nil {\n-\t\tb.setError(b.ErrorFunc(sourceParam, []string{value}, fmt.Sprintf(\"failed to bind field value to float%v\", bitSize), err))\n+\t\tb.setTypedError(b.ErrorFunc(sourceParam, []string{value}, fmt.Sprintf(\"failed to bind field value to float%v\", bitSize), err), fmt.Sprintf(\"float%v\", bitSize))\n \t\treturn b\n \t}",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The `ErrorFunc` on ValueBinder already creates the error and the type name is embedded in the message \u2014 I just needed to also set it as a dedicated struct field via a wrapper helper, without changing the Error() string format to avoid breaking tests.",
+    "dead_ends": [
+      {
+        "explored": "Changing Error() method to include expectedType in message",
+        "why_irrelevant": "Would break all existing tests that check error message strings; the field should be for programmatic access, not changing the string format"
+      }
+    ],
+    "hindsight": "I would go straight to the setError helper approach and not try to modify Error() first.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Change ErrorFunc signature to accept expectedType",
+          "Add setTypedError helper wrapper",
+          "Modify Error() string format"
+        ],
+        "decision": "Add setTypedError helper that calls setError then sets ExpectedType on *BindingError",
+        "reasoning": "Doesn't require changing the ErrorFunc signature (which would be a breaking API change), doesn't break existing error string comparisons, and keeps the change minimal"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Searched for BindingError struct, setError, Int64, Float64 in binder.go",
+        "reasoning": "Need to find BindingError struct and the private conversion methods that generate errors",
+        "result": "Found BindingError struct at line 69, setError at line 177, intValue/int methods around line 515, uint around 743, bool around 920, float around 1006"
+      },
+      {
+        "action": "Read BindingError struct and NewBindingError and Error() method",
+        "reasoning": "Understanding current error structure before adding ExpectedType",
+        "result": "Clean struct with Field, HTTPError, Values; Error() just formats as string"
+      },
+      {
+        "action": "Read int(), uint(), bool(), float() private methods",
+        "reasoning": "Need to see exactly where errors are created and how to inject ExpectedType",
+        "result": "All call b.setError(b.ErrorFunc(...)) \u2014 need a wrapper that sets ExpectedType after error creation"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "struct",
+      "name": "BindingError",
+      "path": "binder.go",
+      "reason": "edited: added ExpectedType field",
+      "start_line": 68
+    },
+    {
+      "kind": "method",
+      "name": "setError",
+      "path": "binder.go",
+      "reason": "read: needed to understand the error storage pattern before adding setTypedError",
+      "start_line": 177
+    },
+    {
+      "kind": "method",
+      "name": "setTypedError",
+      "path": "binder.go",
+      "reason": "edited: new helper method added to set ExpectedType on BindingError",
+      "start_line": 184
+    },
+    {
+      "kind": "method",
+      "name": "int",
+      "path": "binder.go",
+      "reason": "edited: changed from setError to setTypedError for int type conversions",
+      "start_line": 525
+    },
+    {
+      "kind": "method",
+      "name": "uint",
+      "path": "binder.go",
+      "reason": "edited: changed from setError to setTypedError for uint type conversions",
+      "start_line": 757
+    },
+    {
+      "kind": "method",
+      "name": "bool",
+      "path": "binder.go",
+      "reason": "edited: changed from setError to setTypedError for bool conversion",
+      "start_line": 933
+    },
+    {
+      "kind": "method",
+      "name": "float",
+      "path": "binder.go",
+      "reason": "edited: changed from setError to setTypedError for float type conversions",
+      "start_line": 1019
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts \u2014 'binding error', 'expected data type', 'conversion'. Pre-implementation: a developer would phrase it this way before knowing symbol names.",
+      "pins": [],
+      "query_text": "Include the expected data type in parameter binding errors to help users understand what type their value should be",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'failed to bind field value to int' appears literally in binder.go. Pre-implementation: a developer would search for these strings to find where type conversion errors are created.",
+      "pins": [],
+      "query_text": "\"failed to bind field value to int\" \"ExpectedType\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists exact symbol names from code touched. Pre-implementation: a developer knowing the task would search for these identifiers.",
+      "pins": [],
+      "query_text": "BindingError, ExpectedType, setTypedError, setError, ValueBinder",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol 'setError' with relationship 'callers'. Pre-implementation: a developer would look for all callers of setError to find where to add type info.",
+      "pins": [],
+      "query_text": "callers of setError in ValueBinder and fields of BindingError",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "setError",
+        "BindingError"
+      ]
+    },
+    {
+      "justification": "Rule compliance: lists file paths from touched files. Pre-implementation: a developer knows binding code is in binder.go.",
+      "pins": [
+        "binder.go"
+      ],
+      "query_text": "binder.go BindingError ExpectedType field",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept 'add expected type to binding error' with symbol names 'BindingError', 'setError'. Pre-implementation: a developer familiar with the codebase would phrase it this way.",
+      "pins": [],
+      "query_text": "Add ExpectedType field to BindingError and populate it in ValueBinder type conversion methods like Int64 and Float64",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "BindingError",
+        "ExpectedType"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbols 'BindingError', 'setTypedError' and file path 'binder.go'. Pre-implementation: a developer knows where to look.",
+      "pins": [
+        "binder.go"
+      ],
+      "query_text": "BindingError ExpectedType setTypedError int uint bool float in binder.go",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "BindingError",
+        "setTypedError"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names 'BindingError', 'ExpectedType' and file path 'binder.go'. Pre-implementation: this is exactly what a developer would type.",
+      "pins": [
+        "binder.go"
+      ],
+      "query_text": "Add ExpectedType field to BindingError struct in binder.go and populate it in Int64, Float64 type conversion methods",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "BindingError",
+        "ExpectedType"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `ExpectedType string` field to `BindingError` struct. Added `setTypedError` helper on `ValueBinder` that calls `setError` then type-asserts the error to `*BindingError` to set the `ExpectedType` field. Updated the private `int()`, `uint()`, `bool()`, and `float()` conversion methods to use `setTypedError` instead of `setError`.",
+  "task_complexity": "narrow",
+  "task_id": "go-echo/N3",
+  "task_text": "The `BindingError` struct in `binder.go` includes `Field`, `Values`,\nand a generic message, but does not include the expected type that\nthe conversion targeted. When a user passes `\"abc\"` for an integer\nparameter, the error says \"invalid value\" without stating the expected\ntype. Add an `ExpectedType` field to `BindingError` and populate it in\nall `ValueBinder` type conversion methods (e.g., `Int64()`, `Float64()`).",
+  "test_selection": {
+    "coverage_available": true,
+    "coverage_skip_reason": null,
+    "diff_pins": [
+      "binder.go"
+    ],
+    "diff_seeds": [
+      "BindingError",
+      "ExpectedType",
+      "setTypedError"
+    ],
+    "import_graph_test_files": [
+      "binder_test.go",
+      "binder_external_test.go"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [
+      {
+        "covers_changed_lines": [
+          525,
+          529,
+          530,
+          531,
+          532
+        ],
+        "reason": "Exercises the int conversion path with invalid values, directly covering the int() method that was changed",
+        "start_line": 570,
+        "test_kind": "function",
+        "test_name": "TestValueBinder_Int64_intValue",
+        "test_path": "binder_test.go"
+      },
+      {
+        "covers_changed_lines": [
+          757,
+          758
+        ],
+        "reason": "Exercises uint conversion path with invalid values, covering the uint() method that was changed",
+        "start_line": 674,
+        "test_kind": "function",
+        "test_name": "TestValueBinder_Uint64_uintValue",
+        "test_path": "binder_test.go"
+      },
+      {
+        "covers_changed_lines": [
+          920,
+          922
+        ],
+        "reason": "Exercises bool conversion path with invalid values, covering the bool() method that was changed",
+        "start_line": 1226,
+        "test_kind": "function",
+        "test_name": "TestValueBinder_Bool",
+        "test_path": "binder_test.go"
+      },
+      {
+        "covers_changed_lines": [
+          1006,
+          1019
+        ],
+        "reason": "Exercises float64 conversion path with invalid values, covering the float() method that was changed",
+        "start_line": 1411,
+        "test_kind": "function",
+        "test_name": "TestValueBinder_Float64",
+        "test_path": "binder_test.go"
+      }
+    ],
+    "test_query": "Find tests that verify the behavior of BindingError, setTypedError, int, uint, bool, float conversion methods in binder.go"
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "NewBindingError",
+      "path": "binder.go",
+      "reason": "read: an AI agent would read this to understand how BindingError is constructed before deciding whether to change its constructor or use a post-creation setter",
+      "start_line": 78
+    },
+    {
+      "kind": "variable",
+      "name": "ErrorFunc",
+      "path": "binder.go",
+      "reason": "read: an AI agent would examine the ErrorFunc type signature to understand if it can be extended to pass the expected type directly",
+      "start_line": 98
+    }
+  ],
+  "tier_difference_reasoning": "NewBindingError and ErrorFunc are in thrash_preventing because an AI agent would likely investigate them to decide whether to change the constructor signature or the ErrorFunc type to pass ExpectedType. Seeing them upfront prevents the agent from modifying the function signature (which would be a breaking change) and leads directly to the post-creation setter approach."
+}

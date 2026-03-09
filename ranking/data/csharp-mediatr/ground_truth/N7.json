@@ -1,0 +1,159 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs b/src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs\nindex 2fc7acf..6d48fa5 100644\n--- a/src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs\n+++ b/src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs\n@@ -45,6 +45,12 @@ public class MediatRServiceConfiguration\n \n     internal List<Assembly> AssembliesToRegister { get; } = new();\n \n+    /// <summary>\n+    /// When true, also scans assemblies referenced by the explicitly registered assemblies.\n+    /// Default is false.\n+    /// </summary>\n+    public bool ScanReferencedAssemblies { get; set; }\n+\n     /// <summary>\n     /// List of behaviors to register in specific order\ndiff --git a/src/MediatR/Registration/ServiceRegistrar.cs b/src/MediatR/Registration/ServiceRegistrar.cs\nindex aebb101..3edab79 100644\n--- a/src/MediatR/Registration/ServiceRegistrar.cs\n+++ b/src/MediatR/Registration/ServiceRegistrar.cs\n@@ -46,6 +46,24 @@ public static void AddMediatRClasses(IServiceCollection services, MediatRService\n \n         var assembliesToScan = configuration.AssembliesToRegister.Distinct().ToArray();\n \n+        if (configuration.ScanReferencedAssemblies)\n+        {\n+            var referencedAssemblies = assembliesToScan\n+                .SelectMany(static a => a.GetReferencedAssemblies())\n+                .Select(static name =>\n+                {\n+                    try { return Assembly.Load(name); }\n+                    catch { return null; }\n+                })\n+                .Where(static a => a != null)\n+                .Cast<Assembly>();\n+\n+            assembliesToScan = assembliesToScan\n+                .Concat(referencedAssemblies)\n+                .Distinct()\n+                .ToArray();\n+        }\n+\n         ConnectImplementationsToTypesClosing(typeof(IRequestHandler<,>), services, assembliesToScan, false, configuration, cancellationToken);",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "AssembliesToRegister is already a list that drives all scanning. Adding ScanReferencedAssemblies as a bool flag and extending assembliesToScan before any ConnectImplementationsToTypesClosing calls is the minimal, clean approach.",
+    "dead_ends": [],
+    "hindsight": "Could have seen the full pattern immediately \u2014 both files were needed and both were identified from the task description.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Recursively scan all referenced assemblies transitively (deep)",
+          "Only scan direct references (one level deep)"
+        ],
+        "decision": "Scan one level of referenced assemblies via GetReferencedAssemblies()",
+        "reasoning": "The task says 'assemblies referenced by the provided assemblies' (singular level). Recursive scanning could include the entire .NET framework, which would be too broad. One level is safe and matches the described use case."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs",
+        "reasoning": "Need to add ScanReferencedAssemblies property here per task description",
+        "result": "Found AssembliesToRegister list and the existing configuration pattern"
+      },
+      {
+        "action": "Read src/MediatR/Registration/ServiceRegistrar.cs (top of AddMediatRClasses)",
+        "reasoning": "Need to see where assembliesToScan is built to insert the reference-scanning logic",
+        "result": "Found var assembliesToScan = configuration.AssembliesToRegister.Distinct().ToArray() as the right injection point"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "property",
+      "name": "ScanReferencedAssemblies",
+      "path": "src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs",
+      "reason": "edited: new bool property to configure transitive assembly scanning",
+      "start_line": 48
+    },
+    {
+      "kind": "method",
+      "name": "AddMediatRClasses",
+      "path": "src/MediatR/Registration/ServiceRegistrar.cs",
+      "reason": "edited: added conditional block to extend assembliesToScan with referenced assemblies when ScanReferencedAssemblies is true",
+      "start_line": 44
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: describes the feature (finding handlers in indirectly referenced libraries) using only domain/business concepts. Pre-implementation: a developer asking 'why are handlers in a library not found?' would phrase it this way.",
+      "pins": [],
+      "query_text": "assembly scanning misses handler implementations in libraries that are referenced by scanned assemblies but not explicitly registered",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'AssembliesToRegister' is the exact property name that appears literally in source and is the core of the feature. Pre-implementation: developer investigating the assembly list would grep for this.",
+      "pins": [],
+      "query_text": "AssembliesToRegister GetReferencedAssemblies",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names from the changed code. Pre-implementation: developer knows these from the task description and DI registration architecture.",
+      "pins": [],
+      "query_text": "ServiceRegistrar, MediatRServiceConfiguration, ScanReferencedAssemblies, AssembliesToRegister",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol (ServiceRegistrar) with relationship word (callers). Pre-implementation: understanding who calls AddMediatRClasses is needed to understand configuration flow.",
+      "pins": [],
+      "query_text": "callers of ServiceRegistrar.AddMediatRClasses and how MediatRServiceConfiguration.AssembliesToRegister is populated",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "ServiceRegistrar",
+        "MediatRServiceConfiguration"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes 2 explicit file paths from the diff. Pre-implementation: task description names both files.",
+      "pins": [
+        "src/MediatR/Registration/ServiceRegistrar.cs",
+        "src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs"
+      ],
+      "query_text": "src/MediatR/Registration/ServiceRegistrar.cs and src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs referenced assembly scanning",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept (transitive assembly discovery) with 2 exact symbol names. Pre-implementation: developer knows class names from task description.",
+      "pins": [],
+      "query_text": "add transitive assembly scanning to ServiceRegistrar.AddMediatRClasses using ScanReferencedAssemblies configuration option",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "ServiceRegistrar",
+        "MediatRServiceConfiguration"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 2 file paths. Pre-implementation: task explicitly names both.",
+      "pins": [
+        "src/MediatR/Registration/ServiceRegistrar.cs",
+        "src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs"
+      ],
+      "query_text": "ScanReferencedAssemblies AddMediatRClasses in src/MediatR/Registration/ServiceRegistrar.cs and src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "ScanReferencedAssemblies",
+        "AddMediatRClasses"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names, file paths, and full description. Pre-implementation: a developer who read the full feature request would write this.",
+      "pins": [
+        "src/MediatR/Registration/ServiceRegistrar.cs",
+        "src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs"
+      ],
+      "query_text": "add ScanReferencedAssemblies bool to MediatRServiceConfiguration and use GetReferencedAssemblies in ServiceRegistrar.AddMediatRClasses to scan transitively referenced assemblies",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "ScanReferencedAssemblies",
+        "ServiceRegistrar",
+        "AddMediatRClasses"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added a `ScanReferencedAssemblies` bool property to `MediatRServiceConfiguration`. In `ServiceRegistrar.AddMediatRClasses`, when this flag is true, the method loads each referenced assembly via `Assembly.Load` (guarding against load failures) and appends them to `assembliesToScan` before any handler registration takes place.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-mediatr/N7",
+  "task_text": "Fix ServiceRegistrar not scanning handlers from referenced assemblies transitively\n\nIn `src/MediatR/Registration/ServiceRegistrar.cs`, the assembly scanning\nonly processes explicitly provided assemblies. Handlers defined in\nassemblies referenced by the provided assemblies but not listed\nthemselves are silently missed. Fix `ServiceRegistrar` to optionally\nscan referenced assemblies when configured via\n`MediatrServiceConfiguration.ScanReferencedAssemblies`.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/MediatR/Registration/ServiceRegistrar.cs",
+      "src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs"
+    ],
+    "diff_seeds": [
+      "ScanReferencedAssemblies",
+      "AddMediatRClasses"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "RegisterServicesFromAssembly",
+      "path": "src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs",
+      "reason": "read: understanding how assemblies are added to AssembliesToRegister confirms the data flow and where the referenced-assembly expansion fits",
+      "start_line": 124
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers the two edited definitions. An AI agent would also read RegisterServicesFromAssembly to understand how AssembliesToRegister is populated (ensuring the new bool integrates cleanly with the existing pattern) \u2014 without this, the agent might redundantly add extra plumbing."
+}

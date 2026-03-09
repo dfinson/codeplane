@@ -1,0 +1,144 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/clients/src/main/java/org/apache/kafka/clients/consumer/ConsumerRecord.java b/clients/src/main/java/org/apache/kafka/clients/consumer/ConsumerRecord.java\nindex e25746c..74ad8b6 100644\n--- a/clients/src/main/java/org/apache/kafka/clients/consumer/ConsumerRecord.java\n+++ b/clients/src/main/java/org/apache/kafka/clients/consumer/ConsumerRecord.java\n@@ -194,6 +194,13 @@ public class ConsumerRecord<K, V> {\n         return key;\n     }\n \n+    /**\n+     * @return true if this record has a non-null key\n+     */\n+    public boolean hasKey() {\n+        return key != null;\n+    }\n+\n     /**\n      * The value\n      */\n@@ -201,6 +208,13 @@ public class ConsumerRecord<K, V> {\n         return value;\n     }\n \n+    /**\n+     * @return true if this record has a non-null value\n+     */\n+    public boolean hasValue() {\n+        return value != null;\n+    }\n+",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The `key` and `value` fields are plain nullable fields; `hasKey()` and `hasValue()` are trivially `field != null`.",
+    "dead_ends": [],
+    "hindsight": "Nothing to change.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "use Objects.nonNull()",
+          "inline in key() javadoc"
+        ],
+        "decision": "Separate hasKey() and hasValue() methods with @return javadoc",
+        "reasoning": "Matches the task specification exactly and is consistent with Kafka's existing accessor pattern."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read ConsumerRecord.java around key() and value() accessors",
+        "reasoning": "Understand existing accessor structure and field declarations",
+        "result": "Found nullable `key` and `value` fields; accessor methods at lines 193 and 200"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "key",
+      "path": "clients/src/main/java/org/apache/kafka/clients/consumer/ConsumerRecord.java",
+      "reason": "edited: added hasKey() immediately after this method",
+      "start_line": 193
+    },
+    {
+      "kind": "method",
+      "name": "value",
+      "path": "clients/src/main/java/org/apache/kafka/clients/consumer/ConsumerRecord.java",
+      "reason": "edited: added hasValue() immediately after this method",
+      "start_line": 200
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts ('consumer record', 'presence check', 'null-check boilerplate'). Pre-implementation: a developer would search for this feature idea this way.",
+      "pins": [],
+      "query_text": "Add convenience methods to a consumer record class to check for the presence of a key or value without writing null checks",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'The key (or null if no key is specified)' is a literal Javadoc comment in ConsumerRecord.java. Pre-implementation: searching for the key accessor by its documentation comment.",
+      "pins": [],
+      "query_text": "\"The key (or null if no key is specified)\" ConsumerRecord",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists exact symbol names from the changed code. Pre-implementation: a developer would search for these symbols.",
+      "pins": [],
+      "query_text": "ConsumerRecord, hasKey, hasValue, key, value",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names 'ConsumerRecord' and relationship 'callers of key'. Pre-implementation: a developer would check how null key is currently handled to understand the gap being filled.",
+      "pins": [],
+      "query_text": "Callers of key() and value() accessors in ConsumerRecord, code that checks for null key or null value",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "ConsumerRecord"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides 1 explicit file path. Pre-implementation: the task description names this exact file.",
+      "pins": [
+        "clients/src/main/java/org/apache/kafka/clients/consumer/ConsumerRecord.java"
+      ],
+      "query_text": "clients/src/main/java/org/apache/kafka/clients/consumer/ConsumerRecord.java",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('convenience null check') with exact symbol names 'ConsumerRecord', 'hasKey', 'hasValue'. Pre-implementation: a developer combines the feature name with the target class.",
+      "pins": [],
+      "query_text": "Add hasKey() and hasValue() convenience methods to ConsumerRecord for null-safe key and value presence checking",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "ConsumerRecord",
+        "hasKey",
+        "hasValue"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 symbol names and 1 file path. Pre-implementation: developer knows file and symbols from task.",
+      "pins": [
+        "clients/src/main/java/org/apache/kafka/clients/consumer/ConsumerRecord.java"
+      ],
+      "query_text": "hasKey hasValue ConsumerRecord in clients/src/main/java/org/apache/kafka/clients/consumer/ConsumerRecord.java",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "hasKey",
+        "hasValue",
+        "ConsumerRecord"
+      ]
+    },
+    {
+      "justification": "Rule compliance: symbol names and file path present. Pre-implementation: full task description.",
+      "pins": [
+        "clients/src/main/java/org/apache/kafka/clients/consumer/ConsumerRecord.java"
+      ],
+      "query_text": "Add hasKey() and hasValue() boolean methods to ConsumerRecord checking for non-null key and value",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "ConsumerRecord",
+        "hasKey",
+        "hasValue"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `hasKey()` returning `key != null` after the `key()` accessor, and `hasValue()` returning `value != null` after the `value()` accessor in `ConsumerRecord.java`.",
+  "task_complexity": "narrow",
+  "task_id": "java-kafka/N3",
+  "task_text": "Add `hasKey()` and `hasValue()` methods returning `boolean` that check for non-null key and value respectively, reducing null-check boilerplate in consumer loops.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "clients/src/main/java/org/apache/kafka/clients/consumer/ConsumerRecord.java"
+    ],
+    "diff_seeds": [
+      "ConsumerRecord",
+      "hasKey",
+      "hasValue"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [],
+  "tier_difference_reasoning": "Both edited methods (key() and value()) are in the minimum set. No additional context is needed for an AI agent since the methods are trivial null checks with no dependency on other classes."
+}

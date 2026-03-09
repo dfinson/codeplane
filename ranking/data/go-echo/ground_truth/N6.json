@@ -1,0 +1,174 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/API_CHANGES_V5.md b/API_CHANGES_V5.md\n--- a/API_CHANGES_V5.md\n+++ b/API_CHANGES_V5.md\n@@ adds StaticConfig section\n\ndiff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ adds Static Files section\n\ndiff --git a/middleware/static.go b/middleware/static.go\nindex 4526033..09a3078 100644\n--- a/middleware/static.go\n+++ b/middleware/static.go\n@@ -60,6 +60,16 @@ type StaticConfig struct {\n \t// DirectoryListTemplate is template to list directory contents\n \t// Optional. Default to `directoryListHTMLTemplate` constant below.\n \tDirectoryListTemplate string\n+\n+\t// CacheControl sets the Cache-Control header value for served static files.\n+\t// If empty and MaxAge > 0, \"public, max-age=<MaxAge>\" is used automatically.\n+\t// Optional.\n+\tCacheControl string\n+\n+\t// MaxAge sets the max-age value (in seconds) for the Cache-Control header.\n+\t// Used only when CacheControl is empty. If both are zero/empty, no Cache-Control header is set.\n+\t// Optional.\n+\tMaxAge int\n }\n@@ -294,19 +294,24 @@\n-\t\t\t\treturn serveFile(c, index, info)\n+\t\t\t\treturn serveFile(c, index, info, config.CacheControl, config.MaxAge)\n \t\t\t}\n-\t\t\treturn serveFile(c, file, info)\n+\t\t\treturn serveFile(c, file, info, config.CacheControl, config.MaxAge)\n \t\t}\n \t}, nil\n }\n-func serveFile(c *echo.Context, file fs.File, info os.FileInfo) error {\n+func serveFile(c *echo.Context, file fs.File, info os.FileInfo, cacheControl string, maxAge int) error {\n \tff, ok := file.(io.ReadSeeker)\n \tif !ok {\n \t\treturn errors.New(\"file does not implement io.ReadSeeker\")\n \t}\n+\tif cacheControl != \"\" {\n+\t\tc.Response().Header().Set(echo.HeaderCacheControl, cacheControl)\n+\t} else if maxAge > 0 {\n+\t\tc.Response().Header().Set(echo.HeaderCacheControl, \"public, max-age=\"+strconv.Itoa(maxAge))\n+\t}\n \thttp.ServeContent(c.Response(), c.Request(), info.Name(), info.ModTime(), ff)\n \treturn nil\n }",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The `serveFile` helper is a clean choke point for setting response headers; passing the config's cache options through was straightforward.",
+    "dead_ends": [],
+    "hindsight": "Straightforward. serveFile is the right place to set the Cache-Control header.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Set header in ToMiddleware before calling serveFile",
+          "Pass config fields through serveFile signature"
+        ],
+        "decision": "Pass CacheControl and MaxAge as parameters to serveFile",
+        "reasoning": "serveFile is already the single place that sets HTTP headers via http.ServeContent; keeping header setting there is cohesive and avoids duplicating the logic at two call sites"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Searched for StaticConfig, serveFile, Cache-Control in static.go",
+        "reasoning": "Need to understand where files are served and where to add cache headers",
+        "result": "Found StaticConfig struct, serveFile function that calls http.ServeContent, and two call sites to serveFile"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "struct",
+      "name": "StaticConfig",
+      "path": "middleware/static.go",
+      "reason": "edited: added CacheControl and MaxAge fields",
+      "start_line": 23
+    },
+    {
+      "kind": "function",
+      "name": "serveFile",
+      "path": "middleware/static.go",
+      "reason": "edited: updated signature and added Cache-Control header setting logic",
+      "start_line": 295
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses domain concepts 'static file server', 'browser cache', 'max age'. Pre-implementation: a developer would describe the feature this way.",
+      "pins": [],
+      "query_text": "Configure browser caching for static files by setting cache duration and Cache-Control headers",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'Cache-Control' and 'public, max-age=' appear literally in the added code. Pre-implementation: a developer would search for these strings.",
+      "pins": [],
+      "query_text": "\"Cache-Control\" \"MaxAge\" static middleware",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists exact symbol names. Pre-implementation: a developer knows these identifiers.",
+      "pins": [],
+      "query_text": "StaticConfig, CacheControl, MaxAge, serveFile, HeaderCacheControl",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol 'serveFile' with relationship 'callers'. Pre-implementation: a developer would look at what calls serveFile to understand where cache headers should be set.",
+      "pins": [],
+      "query_text": "callers of serveFile in static middleware and fields of StaticConfig",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "serveFile"
+      ]
+    },
+    {
+      "justification": "Rule compliance: names file paths 'middleware/static.go' and 'README.md'. Pre-implementation: a developer knows the static middleware file and that docs need updating.",
+      "pins": [
+        "middleware/static.go",
+        "README.md"
+      ],
+      "query_text": "middleware/static.go README.md cache headers static files",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept 'cache headers for static files' with symbols 'StaticConfig', 'CacheControl'. Pre-implementation.",
+      "pins": [],
+      "query_text": "Add CacheControl and MaxAge to StaticConfig to set Cache-Control headers when serving static files",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "StaticConfig",
+        "CacheControl"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbols 'CacheControl', 'serveFile' and file paths 'middleware/static.go'. Pre-implementation.",
+      "pins": [
+        "middleware/static.go"
+      ],
+      "query_text": "CacheControl MaxAge StaticConfig serveFile in middleware/static.go",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "CacheControl",
+        "serveFile"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbols 'StaticConfig', 'CacheControl' and file paths 'middleware/static.go', 'README.md'. Pre-implementation.",
+      "pins": [
+        "middleware/static.go",
+        "README.md"
+      ],
+      "query_text": "Add CacheControl and MaxAge fields to StaticConfig in static.go for cache header support, and document in README.md",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "StaticConfig",
+        "CacheControl"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `CacheControl string` and `MaxAge int` to `StaticConfig`. Updated `serveFile` function signature to accept these values and set `Cache-Control` header before serving. Added documentation to `README.md` and `API_CHANGES_V5.md`.",
+  "task_complexity": "narrow",
+  "task_id": "go-echo/N6",
+  "task_text": "The `StaticConfig.ToMiddleware()` in `middleware/static.go` serves\nstatic files but does not set `Cache-Control`, `ETag`, or\n`Last-Modified` headers for cache control. Browsers re-download files\non every request. Add `CacheControl` and `MaxAge` configuration options\nto `StaticConfig` that set appropriate cache headers based on the\nserved file's modification time. Document the new `CacheControl` and\n`MaxAge` configuration options in `README.md` under the Static Files\nsection and add a note to `API_CHANGES_V5.md` about the new fields.",
+  "test_selection": {
+    "coverage_available": true,
+    "coverage_skip_reason": null,
+    "diff_pins": [
+      "middleware/static.go"
+    ],
+    "diff_seeds": [
+      "StaticConfig",
+      "CacheControl",
+      "serveFile"
+    ],
+    "import_graph_test_files": [
+      "middleware/static_test.go"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [
+      {
+        "covers_changed_lines": [
+          295,
+          297,
+          300,
+          301
+        ],
+        "reason": "Exercises the static file serving path including the serveFile function call, covering the changed lines",
+        "start_line": 47,
+        "test_kind": "function",
+        "test_name": "TestStatic",
+        "test_path": "middleware/static_test.go"
+      }
+    ],
+    "test_query": "Find tests that verify the behavior of StaticConfig, serveFile, ToMiddleware in middleware/static.go"
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "function",
+      "name": "serveFile",
+      "path": "middleware/static.go",
+      "reason": "read: already in minimum_sufficient_defs",
+      "start_line": 295
+    },
+    {
+      "kind": "method",
+      "name": "ToMiddleware",
+      "path": "middleware/static.go",
+      "reason": "read: an AI agent would read the full ToMiddleware to understand where serveFile is called and whether to set headers before or inside serveFile",
+      "start_line": 155
+    }
+  ],
+  "tier_difference_reasoning": "ToMiddleware is in thrash_preventing because an AI agent would need to read the full method to understand the two serveFile call sites (for index files and regular files) and decide where to place the cache header logic. Without it, the agent might only find one call site and miss the other."
+}

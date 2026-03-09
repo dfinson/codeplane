@@ -1,0 +1,138 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/guava/src/com/google/common/util/concurrent/RateLimiter.java b/guava/src/com/google/common/util/concurrent/RateLimiter.java\nindex 9207fbc..e31c385 100644\n--- a/guava/src/com/google/common/util/concurrent/RateLimiter.java\n+++ b/guava/src/com/google/common/util/concurrent/RateLimiter.java\n@@ -194,6 +194,7 @@ public abstract class RateLimiter {\n   @SuppressWarnings(\"GoodTime\") // should accept a java.time.Duration\n   public static RateLimiter create(double permitsPerSecond, long warmupPeriod, TimeUnit unit) {\n     checkArgument(warmupPeriod >= 0, \"warmupPeriod must not be negative: %s\", warmupPeriod);\n+    checkNotNull(unit);\n     return create(\n         permitsPerSecond, warmupPeriod, unit, 3.0, SleepingStopwatch.createFromSystemTimer());\n   }\n",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The method only has one existing check (checkArgument for warmupPeriod). Adding checkNotNull(unit) after it is the minimal fix.",
+    "dead_ends": [],
+    "hindsight": "Nothing to do differently.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "checkNotNull(unit, \"unit\")",
+          "checkNotNull(unit)"
+        ],
+        "decision": "Use plain checkNotNull(unit) without a message",
+        "reasoning": "Task description says 'checkNotNull(unit)'; keeping it simple is consistent with similar patterns in the codebase"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "grep for create.*TimeUnit in RateLimiter.java",
+        "reasoning": "Task specifies the exact method",
+        "result": "Found at line 195"
+      },
+      {
+        "action": "Read the method body",
+        "reasoning": "Need to see existing checks before adding",
+        "result": "Method has checkArgument for warmupPeriod but no null check for unit before delegating"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "create",
+      "path": "guava/src/com/google/common/util/concurrent/RateLimiter.java",
+      "reason": "edited: added checkNotNull(unit) after the warmupPeriod check",
+      "start_line": 195
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses domain concepts ('rate limiter factory', 'time unit argument', 'null guard at call site') without symbols or paths. Pre-implementation: natural description of the bug.",
+      "pins": [],
+      "query_text": "add a null guard in a rate limiter factory method that takes a warmup period and time unit so that passing null for the time unit fails at the call site rather than inside the warmup implementation",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'warmupPeriod must not be negative' is a literal error message string in the source. Pre-implementation: developer searching for existing validation in the create method.",
+      "pins": [],
+      "query_text": "\"warmupPeriod must not be negative\" RateLimiter create TimeUnit",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 4 exact symbol names from the touched code. Pre-implementation: developer enumerating identifiers for the task.",
+      "pins": [],
+      "query_text": "create, checkNotNull, RateLimiter, TimeUnit",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names 'create' and uses relationship word 'delegates to' referencing the internal create overload. Pre-implementation: developer tracing delegation chain to understand where null manifests.",
+      "pins": [],
+      "query_text": "public create method in RateLimiter that delegates to the internal create with SleepingStopwatch parameter",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "create"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides explicit file path. Pre-implementation: task description identifies the file.",
+      "pins": [
+        "guava/src/com/google/common/util/concurrent/RateLimiter.java"
+      ],
+      "query_text": "guava/src/com/google/common/util/concurrent/RateLimiter.java create TimeUnit null check",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('validate TimeUnit is non-null') with 2 exact symbols 'create' and 'checkNotNull'. Pre-implementation: natural task description phrasing.",
+      "pins": [],
+      "query_text": "RateLimiter.create(double, long, TimeUnit) should call checkNotNull on the TimeUnit argument before delegating to the internal create method",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "create",
+        "checkNotNull"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 1 file path. Pre-implementation: developer navigating with method name and file.",
+      "pins": [
+        "guava/src/com/google/common/util/concurrent/RateLimiter.java"
+      ],
+      "query_text": "create checkNotNull in guava/src/com/google/common/util/concurrent/RateLimiter.java",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "create",
+        "checkNotNull"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names 'create', 'checkNotNull', 'TimeUnit' and the file path. Pre-implementation: how a developer phrases the search after reading the task.",
+      "pins": [
+        "guava/src/com/google/common/util/concurrent/RateLimiter.java"
+      ],
+      "query_text": "add checkNotNull(unit) to RateLimiter.create(double, long, TimeUnit) in RateLimiter.java to catch null TimeUnit at the call site",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "create",
+        "checkNotNull",
+        "TimeUnit"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `checkNotNull(unit)` after the existing `checkArgument` in `RateLimiter.create(double, long, TimeUnit)`. This ensures a null TimeUnit is caught at the public API boundary rather than inside `SmoothWarmingUp`'s constructor.",
+  "task_complexity": "narrow",
+  "task_id": "java-guava/N8",
+  "task_text": "Fix RateLimiter.create(double, long, TimeUnit) not validating null TimeUnit\n\n`RateLimiter.create(double permitsPerSecond, long warmupPeriod, TimeUnit\nunit)` does not validate that `unit` is non-null. Passing a `null`\n`TimeUnit` produces a `NullPointerException` inside\n`SmoothWarmingUp`'s constructor at `timeUnit.toMicros(warmupPeriod)`\nrather than at the caller's `create()` call site. Fix\n`RateLimiter.create(double, long, TimeUnit)` in `RateLimiter.java` to\nadd `checkNotNull(unit)` before delegating, so the error is\nreported at the call site with a clear message.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "guava/src/com/google/common/util/concurrent/RateLimiter.java"
+    ],
+    "diff_seeds": [
+      "create"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [],
+  "tier_difference_reasoning": "The minimum set (just the edited method) is fully sufficient for an AI agent. The method is self-contained and the fix is a single-line addition. There are no sibling patterns that require additional context; the existing checkArgument call in the same method already illustrates the style."
+}

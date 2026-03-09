@@ -1,0 +1,162 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/Dapper/Dapper.csproj b/Dapper/Dapper.csproj\nindex af5febf..2317eca 100644\n--- a/Dapper/Dapper.csproj\n+++ b/Dapper/Dapper.csproj\n@@ -5,7 +5,7 @@\n     <PackageTags>orm;sql;micro-orm</PackageTags>\n     <Description>A high performance Micro-ORM supporting SQL Server, MySQL, Sqlite, SqlCE, Firebird etc. Major Sponsor: Dapper Plus from ZZZ Projects.</Description>\n     <Authors>Sam Saffron;Marc Gravell;Nick Craver</Authors>\n-    <TargetFrameworks>net461;netstandard2.0;net8.0</TargetFrameworks>\n+    <TargetFrameworks>net461;netstandard2.0;net8.0;net9.0</TargetFrameworks>\n     <Nullable>enable</Nullable>\n     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>\n   </PropertyGroup>\ndiff --git a/Directory.Build.props b/Directory.Build.props\nindex cb8af4d..9a42a20 100644\n--- a/Directory.Build.props\n+++ b/Directory.Build.props\n@@ -7,7 +7,7 @@\n     <AssemblyOriginatorKeyFile>../Dapper.snk</AssemblyOriginatorKeyFile>\n \n     <PackageId>$(AssemblyName)</PackageId>\n-    <PackageReleaseNotes>https://dapperlib.github.io/Dapper/</PackageReleaseNotes>\n+    <PackageReleaseNotes>https://github.com/DapperLib/Dapper/releases/latest</PackageReleaseNotes>\n     <PackageProjectUrl>https://github.com/DapperLib/Dapper</PackageProjectUrl>\n     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>\n     <PackageIcon>Dapper.png</PackageIcon>\ndiff --git a/Directory.Packages.props b/Directory.Packages.props\nindex 8787a77..87399f4 100644\n--- a/Directory.Packages.props\n+++ b/Directory.Packages.props\n@@ -8,7 +8,7 @@\n     <PackageVersion Include=\"Microsoft.SourceLink.GitHub\" Version=\"8.0.0\" />\n     <PackageVersion Include=\"Microsoft.SqlServer.Types\" Version=\"14.0.1016.290\" />\n     <PackageVersion Include=\"Nerdbank.GitVersioning\" Version=\"3.7.115\" />\n-    <PackageVersion Include=\"Microsoft.Bcl.AsyncInterfaces\" Version=\"9.0.1\" />\n+    <PackageVersion Include=\"Microsoft.Bcl.AsyncInterfaces\" Version=\"9.0.2\" />\n     <PackageVersion Include=\"Microsoft.CodeAnalysis.PublicApiAnalyzers\" Version=\"3.3.4\" />\n     <PackageVersion Include=\"System.Reflection.Emit.Lightweight\" Version=\"4.7.0\" />\n     <!-- tests -->\ndiff --git a/global.json b/global.json\nindex 2cbaab1..d5bf446 100644\n--- a/global.json\n+++ b/global.json\n@@ -1,6 +1,6 @@\n {\n   \"sdk\": {\n-    \"version\": \"9.0.101\",\n-    \"rollForward\": \"latestMajor\"\n+    \"version\": \"9.0.100\",\n+    \"rollForward\": \"latestFeature\"\n   }\n }",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "Four separate configuration files need coordinated changes: the csproj for the target framework, Directory.Packages.props for the dependency version, Directory.Build.props for the release URL, and global.json for the SDK version.",
+    "dead_ends": [],
+    "hindsight": "Could also add a net9.0 PublicAPI directory scaffold, but the task didn't mention that explicitly.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Set version to 9.0.101 (current) in global.json",
+          "Set version to 9.0.100 (minimum)"
+        ],
+        "decision": "Set global.json version to 9.0.100 with rollForward: latestFeature as specified",
+        "reasoning": "Task explicitly specifies '9.0.100' as minimum SDK version and 'latestFeature' as rollForward policy"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read Dapper.csproj, Directory.Build.props, Directory.Packages.props, global.json simultaneously",
+        "reasoning": "Task description names all four files",
+        "result": "Current TargetFrameworks: net461;netstandard2.0;net8.0; PackageReleaseNotes: dapperlib.github.io; Microsoft.Bcl.AsyncInterfaces: 9.0.1; global.json rollForward: latestMajor"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "key",
+      "name": "TargetFrameworks",
+      "path": "Dapper/Dapper.csproj",
+      "reason": "edited: added net9.0 target framework",
+      "start_line": 8
+    },
+    {
+      "kind": "key",
+      "name": "PackageReleaseNotes",
+      "path": "Directory.Build.props",
+      "reason": "edited: updated URL to GitHub releases page",
+      "start_line": 10
+    },
+    {
+      "kind": "key",
+      "name": "Microsoft.Bcl.AsyncInterfaces",
+      "path": "Directory.Packages.props",
+      "reason": "edited: bumped version to 9.0.2 for netstandard2.0 pin",
+      "start_line": 11
+    },
+    {
+      "kind": "key",
+      "name": "sdk.version",
+      "path": "global.json",
+      "reason": "edited: changed to 9.0.100 with latestFeature rollForward",
+      "start_line": 3
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: only domain/business concepts ('support a new framework version', 'SDK requirements', 'package release information'). Pre-implementation: developer tasked with adding .NET 9 support.",
+      "pins": [],
+      "query_text": "add support for a new .NET framework version, update SDK minimum version requirements, and update package release metadata",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: contains literal strings 'TargetFrameworks' and 'rollForward' that appear literally in the files. Pre-implementation: developer searching for where framework targets and SDK settings are configured.",
+      "pins": [],
+      "query_text": "\"TargetFrameworks\" \"rollForward\" \"PackageReleaseNotes\" \"Microsoft.Bcl.AsyncInterfaces\" configuration",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact configuration key names. Pre-implementation: developer looking for project/SDK configuration properties.",
+      "pins": [],
+      "query_text": "TargetFrameworks, PackageReleaseNotes, rollForward, CheckEolTargetFramework",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names a concrete target 'Dapper.csproj' and uses relationship word 'imports'. Pre-implementation: tracing what Directory.Build.props is imported into.",
+      "pins": [],
+      "query_text": "files that import Directory.Build.props and define TargetFrameworks for project compilation",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "Dapper.csproj"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes multiple file paths. Pre-implementation: task description lists these exact files.",
+      "pins": [
+        "Dapper/Dapper.csproj",
+        "Directory.Build.props",
+        "Directory.Packages.props",
+        "global.json"
+      ],
+      "query_text": "Dapper/Dapper.csproj Directory.Build.props Directory.Packages.props global.json target framework SDK version",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('add net9.0 target') with exact keys 'TargetFrameworks' and 'PackageReleaseNotes'. Pre-implementation: developer knows these properties from the task.",
+      "pins": [],
+      "query_text": "add net9.0 to TargetFrameworks and update PackageReleaseNotes URL and SDK rollForward policy",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "TargetFrameworks",
+        "PackageReleaseNotes"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 2 file paths. Pre-implementation: developer identifies files and property names from the task.",
+      "pins": [
+        "Dapper/Dapper.csproj",
+        "Directory.Build.props"
+      ],
+      "query_text": "TargetFrameworks PackageReleaseNotes in Dapper/Dapper.csproj Directory.Build.props",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "TargetFrameworks",
+        "PackageReleaseNotes"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains property names and file paths. Most natural query for this change.",
+      "pins": [
+        "Dapper/Dapper.csproj",
+        "global.json"
+      ],
+      "query_text": "add net9.0 TargetFramework update SDK version to 9.0.100 rollForward latestFeature in Dapper/Dapper.csproj global.json",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "TargetFrameworks",
+        "rollForward"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `net9.0` to `TargetFrameworks` in `Dapper.csproj`, bumped `Microsoft.Bcl.AsyncInterfaces` to 9.0.2 in `Directory.Packages.props`, updated `PackageReleaseNotes` URL in `Directory.Build.props` to point to the GitHub releases page, and changed `global.json` to use SDK `9.0.100` with `rollForward: latestFeature`.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-dapper/N11",
+  "task_text": "Update Dapper.csproj target frameworks and Directory.Build.props packaging metadata\n\nThe `Dapper.csproj` still targets `net461` and `netstandard2.0`\nalongside `net8.0`, but the `Directory.Build.props` sets\n`CheckEolTargetFramework` to `false` to suppress end-of-life\nwarnings. Add `net9.0` to the `TargetFrameworks` list in\n`Dapper.csproj`, update `Directory.Packages.props` to pin the\nnew `Microsoft.Bcl.AsyncInterfaces` version for `netstandard2.0`,\nand update the `PackageReleaseNotes` URL in `Directory.Build.props`\nto point to the latest release page. Also update `global.json` to\nset the minimum SDK version to `9.0.100` with `rollForward` set\nto `latestFeature`.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "Dapper/Dapper.csproj",
+      "Directory.Build.props",
+      "Directory.Packages.props",
+      "global.json"
+    ],
+    "diff_seeds": [
+      "TargetFrameworks",
+      "rollForward"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [],
+  "tier_difference_reasoning": "The minimum set contains all four edited configuration keys. No additional context is needed beyond these four files because the task description fully specifies every change required (which files, which properties, which values). An AI agent has all the information it needs from the four edited files alone."
+}

@@ -1,0 +1,132 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/Dapper/DynamicParameters.cs b/Dapper/DynamicParameters.cs\nindex f6708b5..80522fc 100644\n--- a/Dapper/DynamicParameters.cs\n+++ b/Dapper/DynamicParameters.cs\n@@ -322,11 +322,24 @@ public T Get<T>(string name)\n             {\n                 if (default(T) is not null)\n                 {\n-                    throw new ApplicationException(\"Attempting to cast a DBNull to a non nullable type! Note that out/return parameters will not have updated values until the data stream completes (after the 'foreach' for Query(..., buffered: false), or after the GridReader has been disposed for QueryMultiple)\");\n+                    throw new InvalidCastException(\"Attempting to cast a DBNull to a non nullable type! Note that out/return parameters will not have updated values until the data stream completes (after the 'foreach' for Query(..., buffered: false), or after the GridReader has been disposed for QueryMultiple)\");\n                 }\n                 return default!;\n             }\n-            return (T)val!;\n+            if (val is T tVal) return tVal;\n+            var type = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);\n+            if (val is IConvertible && typeof(IConvertible).IsAssignableFrom(type))\n+            {\n+                return (T)Convert.ChangeType(val, type, System.Globalization.CultureInfo.InvariantCulture);\n+            }\n+            try\n+            {\n+                return (T)val!;\n+            }\n+            catch (InvalidCastException)\n+            {\n+                throw new InvalidCastException($\"Cannot convert value of type {val?.GetType().FullName ?? \"null\"} to {typeof(T).FullName}\");\n+            }",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The direct cast `(T)val!` cannot handle cross-numeric-type conversions (e.g., long to int). Using `Convert.ChangeType` when both the source and target implement `IConvertible` handles all CLR-supported numeric promotions/demotions safely.",
+    "dead_ends": [],
+    "hindsight": "The IConvertible check on the target type is redundant since all numeric types implement IConvertible\u2014just checking `typeof(IConvertible).IsAssignableFrom(type)` is enough. Could simplify.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Only change the exception type, leave the cast as-is",
+          "Use try-catch with Convert.ChangeType fallback for all types"
+        ],
+        "decision": "Check `val is T` first for fast path, then use Convert.ChangeType when both implement IConvertible, then fall back to cast with descriptive error",
+        "reasoning": "This handles the common case (exact type match) cheaply, the numeric conversion case (IConvertible) correctly, and provides a descriptive error for truly incompatible types."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Searched DynamicParameters.cs for 'Get<T>' and 'ApplicationException'",
+        "reasoning": "Task description specified these exact symbols and file",
+        "result": "Found Get<T> at line 316 with ApplicationException at line 325 and direct cast at line 329"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "Get",
+      "path": "Dapper/DynamicParameters.cs",
+      "reason": "edited: replaced ApplicationException with InvalidCastException and added IConvertible-based numeric conversion",
+      "start_line": 316
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses domain concepts only ('retrieve output parameter value', 'numeric type conversion'). Pre-implementation: a developer seeing InvalidCastException when reading long output as int would search for how output parameters are retrieved.",
+      "pins": [],
+      "query_text": "retrieve output parameter value with automatic numeric type conversion when types are compatible",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: contains literal string 'Attempting to cast a DBNull to a non nullable type' that appears in DynamicParameters.cs. Pre-implementation: developer searching the codebase for the existing error message to find where to change it.",
+      "pins": [],
+      "query_text": "\"Attempting to cast a DBNull to a non nullable type\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 4 exact symbol names from changed code. Pre-implementation: a developer looking for where output parameters are read would search these identifiers.",
+      "pins": [],
+      "query_text": "Get, DynamicParameters, ApplicationException, Convert.ChangeType",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol 'DynamicParameters.Get' and uses relationship word 'callers'. Pre-implementation: tracing callers of Get reveals usage patterns and expected exception types.",
+      "pins": [],
+      "query_text": "callers of DynamicParameters.Get and what exceptions they catch",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "DynamicParameters"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes file path 'Dapper/DynamicParameters.cs'. Pre-implementation: task description explicitly names DynamicParameters.cs.",
+      "pins": [
+        "Dapper/DynamicParameters.cs"
+      ],
+      "query_text": "Dapper/DynamicParameters.cs output parameter cast numeric conversion",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('convert output parameter', 'deprecated exception') with exact symbol names 'Get' and 'DynamicParameters'. Pre-implementation: developer knows they need to fix Get<T> in DynamicParameters.",
+      "pins": [],
+      "query_text": "fix DynamicParameters.Get to handle numeric type conversion and replace deprecated ApplicationException",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "Get",
+        "DynamicParameters"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names (Get, DynamicParameters) and 1 file path (Dapper/DynamicParameters.cs). Pre-implementation: the combination narrows to the exact file and method immediately.",
+      "pins": [
+        "Dapper/DynamicParameters.cs"
+      ],
+      "query_text": "Get DynamicParameters in Dapper/DynamicParameters.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "Get",
+        "DynamicParameters"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names (DynamicParameters.Get, Convert.ChangeType) and file path. Pre-implementation: this is the most natural query when trying to fix the numeric cast issue.",
+      "pins": [
+        "Dapper/DynamicParameters.cs"
+      ],
+      "query_text": "DynamicParameters.Get IConvertible Convert.ChangeType numeric cast fix in Dapper/DynamicParameters.cs",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "Get",
+        "DynamicParameters"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Replaced `ApplicationException` (deprecated) with `InvalidCastException` in the DBNull branch, and replaced the bare `(T)val!` cast with a fast-path `val is T` check followed by `Convert.ChangeType` for types that implement `IConvertible`, ensuring compatible numeric conversions (e.g., `long` to `int`) work correctly.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-dapper/N2",
+  "task_text": "Fix DynamicParameters.Get<T> throwing deprecated exception and failing numeric casts\n\n`DynamicParameters.Get<T>()` in `DynamicParameters.cs` throws\n`ApplicationException` (deprecated since .NET 2.0) when the output\nparameter value cannot be cast, and uses a direct `(T)val` cast that\nthrows `InvalidCastException` for compatible-but-different numeric\ntypes (e.g., retrieving a `long` output parameter as `int`). Fix\n`DynamicParameters.Get<T>()` to throw `InvalidCastException` with a\ndescriptive message, and use `Convert.ChangeType` when `T` implements\n`IConvertible` so compatible numeric conversions succeed.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "Dapper/DynamicParameters.cs"
+    ],
+    "diff_seeds": [
+      "Get"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [],
+  "tier_difference_reasoning": "The minimum set contains only `Get<T>` in DynamicParameters.cs, which is the sole edited method. No additional context is needed: the task description fully specifies the exception type to use and the IConvertible conversion approach, so an AI agent has everything it needs from reading that one method alone."
+}

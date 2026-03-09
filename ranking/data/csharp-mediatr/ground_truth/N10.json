@@ -1,0 +1,169 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/README.md b/README.md\nindex 4c8d2de..307e041 100644\n--- a/README.md\n+++ b/README.md\n@@ -86,6 +86,23 @@ services.AddMediatR(cfg => {\n     });\n ```\n \n+`AddOpenBehavior` validates that the type is an open generic type (has unbound generic parameters) and implements `IPipelineBehavior<TRequest, TResponse>`. Passing a non-generic type or a closed generic type throws an `ArgumentException` with a descriptive message. Example of a valid open generic pipeline behavior:\n+\n+```csharp\n+public class GenericBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>\n+    where TRequest : notnull\n+{\n+    public async Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken)\n+    {\n+        // pre-processing\n+        var response = await next(cancellationToken);\n+        // post-processing\n+        return response;\n+    }\n+}\n+```\n+\ndiff --git a/src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs b/src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs\n@@ -207,9 +207,17 @@ public MediatRServiceConfiguration AddBehavior(Type serviceType, Type implementa\n     public MediatRServiceConfiguration AddOpenBehavior(Type openBehaviorType, ServiceLifetime serviceLifetime = ServiceLifetime.Transient)\n     {\n-        if (!openBehaviorType.IsGenericType)\n+        if (openBehaviorType == null)\n         {\n-            throw new InvalidOperationException($\"{openBehaviorType.Name} must be generic\");\n+            throw new ArgumentNullException(nameof(openBehaviorType), \"Open behavior type cannot be null.\");\n+        }\n+\n+        if (!openBehaviorType.IsGenericType || !openBehaviorType.ContainsGenericParameters)\n+        {\n+            throw new ArgumentException(\n+                $\"The type \\\"{openBehaviorType.Name}\\\" must be an open generic type (e.g., MyBehavior<,>). \" +\n+                $\"Ensure the type has unbound generic parameters and is not a closed generic type.\",\n+                nameof(openBehaviorType));\n         }\n \n         var implementedGenericInterfaces = openBehaviorType.GetInterfaces().Where(i => i.IsGenericType).Select(i => i.GetGenericTypeDefinition());\n@@ -217,7 +225,10 @@ public MediatRServiceConfiguration AddOpenBehavior(Type openBehaviorType, Servic\n \n         if (implementedOpenBehaviorInterfaces.Count == 0)\n         {\n-            throw new InvalidOperationException($\"{openBehaviorType.Name} must implement {typeof(IPipelineBehavior<,>).FullName}\");\n+            throw new ArgumentException(\n+                $\"The type \\\"{openBehaviorType.Name}\\\" must implement {typeof(IPipelineBehavior<,>).FullName}. \" +\n+                $\"Ensure your open generic behavior type implements IPipelineBehavior<TRequest, TResponse>.\",\n+                nameof(openBehaviorType));\n         }",
+  "excluded_defs": [
+    {
+      "kind": "class",
+      "name": "OpenBehavior",
+      "path": "src/MediatR/Entities/OpenBehavior.cs",
+      "reason": "read: validates IPipelineBehavior implementation but doesn't validate IsGenericType/ContainsGenericParameters; task focuses on AddOpenBehavior which is the public API entry point. OpenBehavior constructor wasn't the fix target.",
+      "start_line": 1
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "The existing code uses InvalidOperationException but the task requires ArgumentException. Also, IsGenericType alone doesn't distinguish open from closed generics \u2014 ContainsGenericParameters is needed.",
+    "dead_ends": [
+      {
+        "explored": "src/MediatR/Entities/OpenBehavior.cs",
+        "why_irrelevant": "Validates IPipelineBehavior but uses InvalidOperationException and is the internal entity class, not the public AddOpenBehavior API that the task targets"
+      }
+    ],
+    "hindsight": "The fix in AddOpenBehavior was straightforward once the existing validation pattern was understood. The README update was minimal.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Also update OpenBehavior.cs constructor",
+          "Only update AddOpenBehavior"
+        ],
+        "decision": "Update only AddOpenBehavior since it is the public API entry point named in the task",
+        "reasoning": "The task explicitly says 'Fix AddOpenBehavior'. OpenBehavior is an internal entity used by AddOpenBehavior. Both use InvalidOperationException but the task focuses on the public method."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read src/MediatR/Entities/OpenBehavior.cs",
+        "reasoning": "Task says to look at both OpenBehavior.cs and MediatrServiceConfiguration.cs",
+        "result": "Found OpenBehavior validates IPipelineBehavior but doesn't check ContainsGenericParameters and uses InvalidOperationException"
+      },
+      {
+        "action": "Read AddOpenBehavior method in MediatrServiceConfiguration.cs",
+        "reasoning": "This is the main fix target per task description",
+        "result": "Found existing validation using IsGenericType but missing ContainsGenericParameters check, and using InvalidOperationException instead of ArgumentException"
+      },
+      {
+        "action": "Read README.md around AddOpenBehavior usage",
+        "reasoning": "Task requires updating README to document the validation behavior",
+        "result": "Found existing example code block to extend with documentation"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "AddOpenBehavior",
+      "path": "src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs",
+      "reason": "edited: added ContainsGenericParameters check, null check, changed to ArgumentException with descriptive messages",
+      "start_line": 208
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: domain description of the runtime failure from registering a non-open-generic behavior. Pre-implementation: developer debugging 'my behavior type fails silently at runtime' would describe it this way.",
+      "pins": [],
+      "query_text": "pipeline behavior registered with AddOpenBehavior fails silently at runtime because the type is not an open generic",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'ContainsGenericParameters' appears literally in the fixed source and is the key validation term. Pre-implementation: developer checking how to validate open generic types would search for this.",
+      "pins": [],
+      "query_text": "ContainsGenericParameters IsGenericType",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names from the changed code. Pre-implementation: developer working on behavior registration knows these types.",
+      "pins": [],
+      "query_text": "AddOpenBehavior, MediatRServiceConfiguration, IPipelineBehavior, OpenBehavior",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol with relationship word. Pre-implementation: understanding callers of AddOpenBehavior ensures the validation doesn't break existing usage.",
+      "pins": [],
+      "query_text": "callers of AddOpenBehavior and how OpenBehavior types are registered in MediatRServiceConfiguration",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "MediatRServiceConfiguration",
+        "AddOpenBehavior"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes 2 explicit file paths from the diff. Pre-implementation: task explicitly names both files.",
+      "pins": [
+        "src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs",
+        "README.md"
+      ],
+      "query_text": "src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs README.md AddOpenBehavior validation",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain description (early validation of open generic) with 2 exact symbol names. Pre-implementation: developer knows the class and method names from the task.",
+      "pins": [],
+      "query_text": "add ArgumentException validation to AddOpenBehavior in MediatRServiceConfiguration to reject non-open-generic types at registration time",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "MediatRServiceConfiguration",
+        "AddOpenBehavior"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 2 file paths. Pre-implementation: task explicitly names these.",
+      "pins": [
+        "src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs",
+        "README.md"
+      ],
+      "query_text": "AddOpenBehavior MediatRServiceConfiguration in src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs and README.md",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "AddOpenBehavior",
+        "MediatRServiceConfiguration"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names, file path, and full description of the fix. Pre-implementation: developer who read the task would write this query.",
+      "pins": [
+        "src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs",
+        "README.md"
+      ],
+      "query_text": "fix AddOpenBehavior to validate ContainsGenericParameters and throw ArgumentException; update README with open generic behavior example",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "AddOpenBehavior",
+        "MediatRServiceConfiguration"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Updated `AddOpenBehavior` in `MediatrServiceConfiguration` to add null check (throws `ArgumentNullException`), validate `ContainsGenericParameters` in addition to `IsGenericType` (to reject closed generics), and changed both error types from `InvalidOperationException` to `ArgumentException` with descriptive messages. Updated README.md to document the validation behavior and add an example of a valid open generic pipeline behavior.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-mediatr/N10",
+  "task_text": "Fix OpenBehavior registration allowing non-generic types to be registered as open behaviors\n\nIn `src/MediatR/Entities/OpenBehavior.cs` and\n`MicrosoftExtensionsDI/MediatrServiceConfiguration.cs`, `AddOpenBehavior`\naccepts any `Type` without validating it is an open generic type\nimplementing `IPipelineBehavior<,>`. Non-generic types silently fail at\nruntime during resolution. Fix `AddOpenBehavior` to validate that the\ntype has open generic parameters and implements the expected behavior\ninterface, throwing `ArgumentException` with a descriptive message.\nAlso update `README.md` to document the validation behavior and add\nan example showing the correct open generic type constraint for custom\npipeline behaviors.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/MediatR/MicrosoftExtensionsDI/MediatrServiceConfiguration.cs",
+      "README.md"
+    ],
+    "diff_seeds": [
+      "AddOpenBehavior",
+      "MediatRServiceConfiguration"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "class",
+      "name": "OpenBehavior",
+      "path": "src/MediatR/Entities/OpenBehavior.cs",
+      "reason": "read: the task mentions both OpenBehavior.cs and MediatrServiceConfiguration.cs; an AI agent would read OpenBehavior to understand the existing validation pattern and decide whether to also change it",
+      "start_line": 1
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set is just AddOpenBehavior. An AI agent would also read OpenBehavior.cs because the task explicitly names it, needing to decide whether to change both classes or only AddOpenBehavior. Without reading OpenBehavior upfront, the agent might redundantly update it too."
+}

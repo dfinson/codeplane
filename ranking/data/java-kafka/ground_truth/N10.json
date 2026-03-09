@@ -1,0 +1,164 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/streams/src/main/java/org/apache/kafka/streams/kstream/JoinWindows.java b/streams/src/main/java/org/apache/kafka/streams/kstream/JoinWindows.java\nindex 4690ffd..8ea85d1 100644\n--- a/streams/src/main/java/org/apache/kafka/streams/kstream/JoinWindows.java\n+++ b/streams/src/main/java/org/apache/kafka/streams/kstream/JoinWindows.java\n@@ -124,6 +124,10 @@ public class JoinWindows extends Windows<Window> {\n         final String timeDifferenceMsgPrefix = prepareMillisCheckFailMsgPrefix(timeDifference, \"timeDifference\");\n         final long timeDifferenceMs = validateMillisecondDuration(timeDifference, timeDifferenceMsgPrefix);\n \n+        if (timeDifferenceMs <= 0) {\n+            throw new IllegalArgumentException(\"timeDifference must be positive (greater than zero), but was \" + timeDifferenceMs + \" milliseconds.\");\n+        }\n+\n         final String afterWindowEndMsgPrefix = prepareMillisCheckFailMsgPrefix(afterWindowEnd, \"afterWindowEnd\");\n         final long afterWindowEndMs = validateMillisecondDuration(afterWindowEnd, afterWindowEndMsgPrefix);\n \n@@ -160,6 +164,9 @@ public class JoinWindows extends Windows<Window> {\n     public static JoinWindows of(final Duration timeDifference) throws IllegalArgumentException {\n         final String msgPrefix = prepareMillisCheckFailMsgPrefix(timeDifference, \"timeDifference\");\n         final long timeDifferenceMs = validateMillisecondDuration(timeDifference, msgPrefix);\n+        if (timeDifferenceMs <= 0) {\n+            throw new IllegalArgumentException(\"timeDifference must be positive (greater than zero), but was \" + timeDifferenceMs + \" milliseconds.\");\n+        }\n         return new JoinWindows(timeDifferenceMs, timeDifferenceMs, Math.max(DEPRECATED_DEFAULT_24_HR_GRACE_PERIOD - timeDifferenceMs * 2, 0), false);\n     }",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "`ofTimeDifferenceWithNoGrace()` just delegates to `ofTimeDifferenceAndGrace()`, so adding the check only in `ofTimeDifferenceAndGrace()` covers both non-deprecated methods. The deprecated `of()` must be fixed separately since it does not delegate.",
+    "dead_ends": [],
+    "hindsight": "Nothing to change.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Add check in the private constructor",
+          "Add check in each method separately"
+        ],
+        "decision": "Add check in ofTimeDifferenceAndGrace() and of(); since ofTimeDifferenceWithNoGrace() delegates to ofTimeDifferenceAndGrace, it gets the check for free",
+        "reasoning": "Avoids changing the constructor's semantics (which also accepts before/after independently) and keeps each public factory's contract clear."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read JoinWindows.java in full",
+        "reasoning": "Understand which factory methods exist and how they relate",
+        "result": "Found: ofTimeDifferenceAndGrace (non-deprecated), ofTimeDifferenceWithNoGrace (non-deprecated, delegates), of() (deprecated). Constructor checks beforeMs+afterMs < 0 but not == 0."
+      },
+      {
+        "action": "Checked validateMillisecondDuration()",
+        "reasoning": "Understand what the existing validation already rejects",
+        "result": "Rejects null and overflow, but not non-positive values."
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "ofTimeDifferenceAndGrace",
+      "path": "streams/src/main/java/org/apache/kafka/streams/kstream/JoinWindows.java",
+      "reason": "edited: added timeDifferenceMs <= 0 check with IllegalArgumentException",
+      "start_line": 123
+    },
+    {
+      "kind": "method",
+      "name": "of",
+      "path": "streams/src/main/java/org/apache/kafka/streams/kstream/JoinWindows.java",
+      "reason": "edited: added timeDifferenceMs <= 0 check with IllegalArgumentException",
+      "start_line": 160
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts ('join window', 'zero-width', 'time interval validation'). Pre-implementation: describes the bug.",
+      "pins": [],
+      "query_text": "Reject zero and negative time intervals when creating stream join windows to prevent windows that never match any records",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'timeDifference must be positive (greater than zero)' is the exact error message string added to the code. Pre-implementation: searching for existing validation error messages.",
+      "pins": [],
+      "query_text": "\"timeDifference must be positive\" JoinWindows IllegalArgumentException ofTimeDifferenceAndGrace",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 5 exact symbol names from the changed code. Pre-implementation: developer searches for these symbols.",
+      "pins": [],
+      "query_text": "JoinWindows, ofTimeDifferenceAndGrace, ofTimeDifferenceWithNoGrace, of, timeDifferenceMs",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names 'JoinWindows' and relationship 'callers'. Pre-implementation: understand how the factory methods are called to know how zero-duration windows cause problems.",
+      "pins": [],
+      "query_text": "Callers of JoinWindows.ofTimeDifferenceAndGrace and JoinWindows.of, how timeDifference is validated",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "JoinWindows",
+        "ofTimeDifferenceAndGrace"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides 1 file path. Pre-implementation: task description names this exact file.",
+      "pins": [
+        "streams/src/main/java/org/apache/kafka/streams/kstream/JoinWindows.java"
+      ],
+      "query_text": "streams/src/main/java/org/apache/kafka/streams/kstream/JoinWindows.java timeDifference validation zero",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('zero duration window rejection') with exact symbol names 'JoinWindows' and 'ofTimeDifferenceAndGrace'. Pre-implementation: combines feature with known symbols.",
+      "pins": [],
+      "query_text": "Add zero and negative timeDifference rejection to JoinWindows.ofTimeDifferenceAndGrace() and JoinWindows.of() factory methods",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "JoinWindows",
+        "ofTimeDifferenceAndGrace"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 symbol names and 1 file path. Pre-implementation: developer knows file and symbols.",
+      "pins": [
+        "streams/src/main/java/org/apache/kafka/streams/kstream/JoinWindows.java"
+      ],
+      "query_text": "ofTimeDifferenceAndGrace of timeDifferenceMs in JoinWindows.java zero check",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "ofTimeDifferenceAndGrace",
+        "of",
+        "timeDifferenceMs"
+      ]
+    },
+    {
+      "justification": "Rule compliance: symbol names and file path present. Pre-implementation: full task description.",
+      "pins": [
+        "streams/src/main/java/org/apache/kafka/streams/kstream/JoinWindows.java"
+      ],
+      "query_text": "Fix JoinWindows.ofTimeDifferenceAndGrace() and of() to throw IllegalArgumentException for zero or negative timeDifference",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "JoinWindows",
+        "ofTimeDifferenceAndGrace",
+        "of"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `if (timeDifferenceMs <= 0)` guards with `IllegalArgumentException` in `ofTimeDifferenceAndGrace()` (covering `ofTimeDifferenceWithNoGrace()` by delegation) and in the deprecated `of()` method. The check is placed after `validateMillisecondDuration()` so the existing null/overflow check still runs first.",
+  "task_complexity": "narrow",
+  "task_id": "java-kafka/N10",
+  "task_text": "Fix `JoinWindows.ofTimeDifferenceAndGrace()` and `ofTimeDifferenceWithNoGrace()` and the deprecated `of(Duration)` method to add an explicit `IllegalArgumentException` for `timeDifference` of zero or negative milliseconds.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "streams/src/main/java/org/apache/kafka/streams/kstream/JoinWindows.java"
+    ],
+    "diff_seeds": [
+      "JoinWindows",
+      "ofTimeDifferenceAndGrace",
+      "of"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "validateMillisecondDuration",
+      "path": "streams/src/main/java/org/apache/kafka/streams/internals/ApiUtils.java",
+      "reason": "read: an AI agent would check what validateMillisecondDuration already validates to avoid adding redundant checks and to understand what gap needs to be filled",
+      "start_line": 1
+    },
+    {
+      "kind": "method",
+      "name": "ofTimeDifferenceWithNoGrace",
+      "path": "streams/src/main/java/org/apache/kafka/streams/kstream/JoinWindows.java",
+      "reason": "read: verify that it delegates to ofTimeDifferenceAndGrace so the check does not need to be repeated there",
+      "start_line": 145
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set has only the two edited methods. The thrash-preventing set adds `validateMillisecondDuration` (to confirm what existing validation covers, preventing duplicate checks) and `ofTimeDifferenceWithNoGrace` (to confirm it delegates to `ofTimeDifferenceAndGrace`, so the agent doesn't redundantly edit it)."
+}

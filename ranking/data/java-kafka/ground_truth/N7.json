@@ -1,0 +1,135 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/clients/src/main/java/org/apache/kafka/common/serialization/Serdes.java b/clients/src/main/java/org/apache/kafka/common/serialization/Serdes.java\nindex 600d046..975d739 100644\n--- a/clients/src/main/java/org/apache/kafka/common/serialization/Serdes.java\n+++ b/clients/src/main/java/org/apache/kafka/common/serialization/Serdes.java\n@@ -159,23 +159,23 @@ public class Serdes {\n             return (Serde<T>) String();\n         }\n \n-        if (Short.class.isAssignableFrom(type)) {\n+        if (Short.class.isAssignableFrom(type) || short.class == type) {\n             return (Serde<T>) Short();\n         }\n \n-        if (Integer.class.isAssignableFrom(type)) {\n+        if (Integer.class.isAssignableFrom(type) || int.class == type) {\n             return (Serde<T>) Integer();\n         }\n \n-        if (Long.class.isAssignableFrom(type)) {\n+        if (Long.class.isAssignableFrom(type) || long.class == type) {\n             return (Serde<T>) Long();\n         }\n \n-        if (Float.class.isAssignableFrom(type)) {\n+        if (Float.class.isAssignableFrom(type) || float.class == type) {\n             return (Serde<T>) Float();\n         }\n \n-        if (Double.class.isAssignableFrom(type)) {\n+        if (Double.class.isAssignableFrom(type) || double.class == type) {\n             return (Serde<T>) Double();\n         }\n \n@@ -195,7 +195,7 @@ public class Serdes {\n         }\n \n-        if (Boolean.class.isAssignableFrom(type)) {\n+        if (Boolean.class.isAssignableFrom(type) || boolean.class == type) {\n             return (Serde<T>) Boolean();\n         }\n",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "Primitive class literals (int.class, long.class, etc.) are not assignable from their boxed wrappers via `isAssignableFrom`. The fix is simply to add `|| primitiveClass == type` checks alongside each existing boxed check.",
+    "dead_ends": [],
+    "hindsight": "Nothing to change.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Map primitive classes to boxed classes first, then check isAssignableFrom",
+          "Add a separate block for primitives before the existing checks"
+        ],
+        "decision": "Inline `|| primitive.class == type` in each existing condition",
+        "reasoning": "Minimal change, keeps the parallel structure of existing checks, easy to review."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read serdeFrom(Class<T>) method in Serdes.java (lines 157-205)",
+        "reasoning": "Understand the existing structure of isAssignableFrom checks to know where to add primitive mappings",
+        "result": "Found 6 wrapper type checks, each returning the corresponding Serde. Simple pattern: add parallel primitive check for each."
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "serdeFrom",
+      "path": "clients/src/main/java/org/apache/kafka/common/serialization/Serdes.java",
+      "reason": "edited: added primitive class checks (int.class, long.class, etc.) alongside boxed type checks",
+      "start_line": 157
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts ('serializer lookup', 'primitive types', 'reflection'). Pre-implementation: describes the bug to a non-programmer.",
+      "pins": [],
+      "query_text": "Fix serializer lookup to handle Java primitive type descriptors obtained through reflection, mapping them to the appropriate boxed type serializers",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'Unknown class for built-in serializer' is the exact error message thrown when the lookup fails. Pre-implementation: searching for the error thrown on unsupported types.",
+      "pins": [],
+      "query_text": "\"Unknown class for built-in serializer\" IllegalArgumentException serdeFrom",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists exact symbol names from the changed code. Pre-implementation: developer searches for these symbols.",
+      "pins": [],
+      "query_text": "Serdes, serdeFrom, Integer, Long, Double, Float, Short, Boolean, int.class, long.class",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names 'serdeFrom' and relationship 'callers'. Pre-implementation: understand how serdeFrom is called with primitive classes.",
+      "pins": [],
+      "query_text": "Callers of Serdes.serdeFrom that pass primitive class literals, how type is obtained for serializer lookup",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "Serdes",
+        "serdeFrom"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides 1 file path. Pre-implementation: task description names this exact file.",
+      "pins": [
+        "clients/src/main/java/org/apache/kafka/common/serialization/Serdes.java"
+      ],
+      "query_text": "clients/src/main/java/org/apache/kafka/common/serialization/Serdes.java serdeFrom primitive",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('primitive type serde mapping') with exact symbol names 'Serdes' and 'serdeFrom'. Pre-implementation: combines feature description with the known class.",
+      "pins": [],
+      "query_text": "Extend Serdes.serdeFrom() to map primitive class literals like int.class and long.class to their corresponding boxed type Serde",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "Serdes",
+        "serdeFrom"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 symbol names and 1 file path. Pre-implementation: developer knows file and symbols.",
+      "pins": [
+        "clients/src/main/java/org/apache/kafka/common/serialization/Serdes.java"
+      ],
+      "query_text": "serdeFrom Integer Long Double Float Short Boolean in Serdes.java primitive",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "serdeFrom",
+        "Integer",
+        "Long"
+      ]
+    },
+    {
+      "justification": "Rule compliance: symbol names and file path present. Pre-implementation: full task description.",
+      "pins": [
+        "clients/src/main/java/org/apache/kafka/common/serialization/Serdes.java"
+      ],
+      "query_text": "Fix Serdes.serdeFrom(Class) to handle primitive class literals int.class long.class double.class float.class short.class boolean.class by mapping to boxed Serde",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "Serdes",
+        "serdeFrom"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `|| primitiveClass == type` conditions to each existing `isAssignableFrom` check in `serdeFrom(Class<T>)` for all 6 primitive types (int, long, double, float, short, boolean), mapping them to their corresponding boxed Serde instances.",
+  "task_complexity": "narrow",
+  "task_id": "java-kafka/N7",
+  "task_text": "Fix `Serdes.serdeFrom(Class<T> type)` in `common/serialization/Serdes.java` to handle Java primitive type class literals (`int.class`, `long.class`, `double.class`, `float.class`, `short.class`, `boolean.class`). Extend to map each primitive class to its corresponding boxed-type serde.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "clients/src/main/java/org/apache/kafka/common/serialization/Serdes.java"
+    ],
+    "diff_seeds": [
+      "Serdes",
+      "serdeFrom"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [],
+  "tier_difference_reasoning": "The minimum set has only the edited `serdeFrom()` method. No additional context is needed since all the primitive-to-boxed mappings are trivially inferred from the existing boxed checks, and no other class needs to be read."
+}

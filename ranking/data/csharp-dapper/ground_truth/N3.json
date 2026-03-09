@@ -1,0 +1,147 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/Dapper/SqlMapper.cs b/Dapper/SqlMapper.cs\nindex d23e949..d22d57f 100644\n--- a/Dapper/SqlMapper.cs\n+++ b/Dapper/SqlMapper.cs\n@@ -637,8 +637,9 @@ private static int ExecuteImpl(this IDbConnection cnn, ref CommandDefinition com\n             {\n                 if ((command.Flags & CommandFlags.Pipelined) != 0)\n                 {\n-                    // this includes all the code for concurrent/overlapped query\n-                    return ExecuteMultiImplAsync(cnn, command, multiExec).Result;\n+                    // Calling .Result on an async method from a sync context with a single-threaded\n+                    // synchronization context (e.g. ASP.NET classic) causes a deadlock.\n+                    throw new InvalidOperationException(\"CommandFlags.Pipelined is not supported on the synchronous Execute path. Use ExecuteAsync() instead.\");\n                 }",
+  "excluded_defs": [
+    {
+      "kind": "method",
+      "name": "ExecuteMultiImplAsync",
+      "path": "Dapper/SqlMapper.Async.cs",
+      "reason": "No longer called; the fix replaces the .Result call with an early throw so the async method is no longer relevant to the sync path"
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "The fix is trivial once the deadlock mechanism is understood: `.Result` on a Task in a single-threaded sync context deadlocks because the continuation needs the same thread. The correct fix is to refuse the combination rather than try to make it work synchronously.",
+    "dead_ends": [],
+    "hindsight": "Could have also looked at ExecuteMultiImplAsync to understand if there's an alternative non-deadlocking synchronous path, but the task explicitly says to throw.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Use .GetAwaiter().GetResult() instead of .Result (same deadlock risk)",
+          "Call ExecuteMultiImplAsync with ConfigureAwait(false).GetAwaiter().GetResult()"
+        ],
+        "decision": "Throw InvalidOperationException directing callers to use ExecuteAsync()",
+        "reasoning": "The task specification is explicit. Any .Result-based approach can deadlock in single-threaded sync contexts; the correct fix is to prevent the misuse."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Searched SqlMapper.cs for 'ExecuteImpl' and 'Pipelined'",
+        "reasoning": "Task description named these exact symbols",
+        "result": "Found ExecuteImpl at line 630 with the Pipelined check at line 638 calling .Result on ExecuteMultiImplAsync at line 641"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "ExecuteImpl",
+      "path": "Dapper/SqlMapper.cs",
+      "reason": "edited: replaced .Result deadlock with InvalidOperationException",
+      "start_line": 630
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: only domain/business concepts ('synchronous database execution', 'pipelining', 'thread block'). Pre-implementation: developer encountering deadlock when using Execute with pipelining would describe the symptom.",
+      "pins": [],
+      "query_text": "synchronous database execution blocks the thread when pipelining is enabled causing a deadlock",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: contains literal string 'Pipelined' and comment phrase 'concurrent/overlapped query' from the source. Pre-implementation: developer searching for where pipelining is handled in sync code.",
+      "pins": [],
+      "query_text": "\"Pipelined\" \"concurrent/overlapped query\" .Result deadlock synchronization context",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names from changed code. Pre-implementation: developer looking for the pipelining path in Execute.",
+      "pins": [],
+      "query_text": "ExecuteImpl, ExecuteMultiImplAsync, CommandFlags, Pipelined",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names 'ExecuteImpl' and uses relationship word 'callees'. Pre-implementation: tracing callees of ExecuteImpl shows the .Result call on the async method.",
+      "pins": [],
+      "query_text": "callees of ExecuteImpl that call async methods with .Result causing potential deadlock",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "ExecuteImpl"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes file path 'Dapper/SqlMapper.cs'. Pre-implementation: task description explicitly mentions SqlMapper.cs.",
+      "pins": [
+        "Dapper/SqlMapper.cs"
+      ],
+      "query_text": "Dapper/SqlMapper.cs ExecuteImpl Pipelined sync deadlock",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('deadlock in synchronization context') with exact symbol names 'ExecuteImpl' and 'CommandFlags.Pipelined'. Pre-implementation: developer knows the method name and flag.",
+      "pins": [],
+      "query_text": "ExecuteImpl deadlock when CommandFlags.Pipelined is set on synchronous path",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "ExecuteImpl",
+        "CommandFlags"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 1 file path. Pre-implementation: developer can identify file and symbols from task description.",
+      "pins": [
+        "Dapper/SqlMapper.cs"
+      ],
+      "query_text": "ExecuteImpl CommandFlags.Pipelined in Dapper/SqlMapper.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "ExecuteImpl",
+        "CommandFlags"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names and file path. Pre-implementation: most natural query when fixing this specific bug.",
+      "pins": [
+        "Dapper/SqlMapper.cs"
+      ],
+      "query_text": "fix ExecuteImpl .Result deadlock when CommandFlags.Pipelined used on sync Execute path in Dapper/SqlMapper.cs",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "ExecuteImpl",
+        "ExecuteMultiImplAsync"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Replaced the `.Result` call on `ExecuteMultiImplAsync` (which can deadlock in a single-threaded synchronization context like ASP.NET classic) with an `InvalidOperationException` that directs the caller to use `ExecuteAsync()` instead, as specified by the task.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-dapper/N3",
+  "task_text": "Fix Execute deadlock when CommandFlags.Pipelined is used on sync path\n\n`ExecuteImpl` in `SqlMapper.cs` calls `.Result` on\n`ExecuteMultiImplAsync` when `CommandFlags.Pipelined` is set and the\ncall comes from the synchronous `Execute()` extension method. In\nASP.NET or any context with a single-threaded synchronization context,\nthis `.Result` call causes a deadlock because the async continuation\ncannot resume. Fix `SqlMapper.cs` to detect this unsupported\ncombination and throw `InvalidOperationException` directing callers to\nuse `ExecuteAsync()` instead.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "Dapper/SqlMapper.cs"
+    ],
+    "diff_seeds": [
+      "ExecuteImpl"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "ExecuteMultiImplAsync",
+      "path": "Dapper/SqlMapper.Async.cs",
+      "reason": "read: an AI agent would look at this method to understand whether a non-deadlocking synchronous path exists, confirming that throwing is the correct approach",
+      "start_line": 1
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set is just `ExecuteImpl` since that is the only edited method. `ExecuteMultiImplAsync` in `SqlMapper.Async.cs` is added to thrash_preventing because an AI agent would search for it to understand the async method being called via `.Result`, verify there's no safe sync-over-async alternative, and confirm the throw is the right fix. A skilled human can infer this from the task description alone."
+}

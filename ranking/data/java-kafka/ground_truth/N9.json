@@ -1,0 +1,172 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/streams/src/main/java/org/apache/kafka/streams/StreamsConfig.java b/streams/src/main/java/org/apache/kafka/streams/StreamsConfig.java\nindex bc715ca..79a612f 100644\n--- a/streams/src/main/java/org/apache/kafka/streams/StreamsConfig.java\n+++ b/streams/src/main/java/org/apache/kafka/streams/StreamsConfig.java\n@@ -63,6 +63,7 @@ import org.slf4j.LoggerFactory;\n \n import java.io.File;\n import java.time.Duration;\n+import java.util.ArrayList;\n import java.util.Arrays;\n ...\n+    public List<String> validate(final Topology topology) {\n+        Objects.requireNonNull(topology, \"topology must not be null\");\n+        final List<String> warnings = new ArrayList<>();\n+\n+        final int numStandbyReplicas = getInt(NUM_STANDBY_REPLICAS_CONFIG);\n+        if (numStandbyReplicas > 0) {\n+            final Set<String> stateStoreNames = topology.internalTopologyBuilder.allStateStoreNames();\n+            if (stateStoreNames.isEmpty()) {\n+                warnings.add(\"num.standby.replicas is set to \" + numStandbyReplicas +\n+                    \" but the topology has no state stores. Standby replicas have no effect without stateful processors.\");\n+            }\n+        }\n+\n+        final String processingGuarantee = getString(PROCESSING_GUARANTEE_CONFIG);\n+        if (EXACTLY_ONCE_V2.equals(processingGuarantee)) {\n+            warnings.add(\"processing.guarantee=\" + EXACTLY_ONCE_V2 + \" requires broker version 2.5 or higher. \" +\n+                \"Ensure all brokers in the cluster meet this requirement.\");\n+        }\n+\n+        return warnings;\n+    }",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The `Topology` class exposes `internalTopologyBuilder` as `protected final`, which is accessible from the same package or subclasses. Since `StreamsConfig` is in the same package (`org.apache.kafka.streams`), it can access `topology.internalTopologyBuilder.allStateStoreNames()` directly to check for state stores.",
+    "dead_ends": [],
+    "hindsight": "Could check more config combinations; the task asks for a representative sample.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Add validate() to Topology instead of StreamsConfig",
+          "Use reflection to access state store info"
+        ],
+        "decision": "Add validate(Topology) to StreamsConfig accessing internalTopologyBuilder directly",
+        "reasoning": "Task specifies the method belongs in StreamsConfig; same-package access makes internalTopologyBuilder directly available."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Grepped StreamsConfig.java for NUM_STANDBY_REPLICAS and EXACTLY_ONCE config keys",
+        "reasoning": "Identify the config constant names for the checks the task describes",
+        "result": "Found NUM_STANDBY_REPLICAS_CONFIG at line 647 and EXACTLY_ONCE_V2 at line 410"
+      },
+      {
+        "action": "Searched for state store accessor in InternalTopologyBuilder",
+        "reasoning": "Need to check if topology has state stores for the standby replicas check",
+        "result": "Found allStateStoreNames() at line 1171 in InternalTopologyBuilder"
+      },
+      {
+        "action": "Checked that Topology exposes internalTopologyBuilder as protected field",
+        "reasoning": "Need access to topology internals from StreamsConfig",
+        "result": "Found internalTopologyBuilder is protected final at line 62 in Topology.java; same-package access applies"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "validate",
+      "path": "streams/src/main/java/org/apache/kafka/streams/StreamsConfig.java",
+      "reason": "edited: added new validate(Topology) method",
+      "start_line": 2164
+    },
+    {
+      "kind": "method",
+      "name": "allStateStoreNames",
+      "path": "streams/src/main/java/org/apache/kafka/streams/processor/internals/InternalTopologyBuilder.java",
+      "reason": "read: used to check if topology has state stores for the num.standby.replicas validation",
+      "start_line": 1171
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts ('cross-validate configuration', 'topology requirements', 'state stores', 'standby replicas'). Pre-implementation: describes the feature request.",
+      "pins": [],
+      "query_text": "Cross-validate streaming configuration values against the topology structure, checking that standby replicas are not configured for topologies without stateful processors",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'num.standby.replicas is set to' is an exact string literal in the added code. Pre-implementation: searching for validation warning messages.",
+      "pins": [],
+      "query_text": "\"num.standby.replicas is set to\" topology stateStores validate",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 5 exact symbol names from the changed code. Pre-implementation: a developer would search for these symbols.",
+      "pins": [],
+      "query_text": "StreamsConfig, validate, Topology, NUM_STANDBY_REPLICAS_CONFIG, EXACTLY_ONCE_V2",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names 'StreamsConfig' and relationship 'callers'. Pre-implementation: understand what configs are available to build the cross-validation logic.",
+      "pins": [],
+      "query_text": "Callees of StreamsConfig.getInt and getString, what config constants are used for standby replicas and processing guarantee",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "StreamsConfig"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides 2 file paths. Pre-implementation: task description names both files.",
+      "pins": [
+        "streams/src/main/java/org/apache/kafka/streams/StreamsConfig.java",
+        "streams/src/main/java/org/apache/kafka/streams/Topology.java"
+      ],
+      "query_text": "streams/src/main/java/org/apache/kafka/streams/StreamsConfig.java streams/src/main/java/org/apache/kafka/streams/Topology.java validate topology config",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('topology-aware config validation') with exact symbol names 'StreamsConfig' and 'validate'. Pre-implementation: combines feature with known class.",
+      "pins": [],
+      "query_text": "Add StreamsConfig.validate(Topology) to check config values against topology structure and return warnings list",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "StreamsConfig",
+        "validate"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 symbol names and 2 file paths. Pre-implementation: developer knows files and symbols.",
+      "pins": [
+        "streams/src/main/java/org/apache/kafka/streams/StreamsConfig.java",
+        "streams/src/main/java/org/apache/kafka/streams/Topology.java"
+      ],
+      "query_text": "StreamsConfig validate Topology allStateStoreNames in StreamsConfig.java Topology.java",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "StreamsConfig",
+        "validate",
+        "allStateStoreNames"
+      ]
+    },
+    {
+      "justification": "Rule compliance: symbol names and file paths present. Pre-implementation: full task description.",
+      "pins": [
+        "streams/src/main/java/org/apache/kafka/streams/StreamsConfig.java",
+        "streams/src/main/java/org/apache/kafka/streams/Topology.java"
+      ],
+      "query_text": "Add StreamsConfig.validate(Topology) returning list of warnings for num.standby.replicas without state stores and processing.guarantee=exactly_once_v2 broker version check",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "StreamsConfig",
+        "validate",
+        "Topology",
+        "NUM_STANDBY_REPLICAS_CONFIG"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `validate(Topology)` to `StreamsConfig` that returns a `List<String>` of warnings. Checks: (1) if `num.standby.replicas > 0` but topology has no state stores; (2) if `processing.guarantee = exactly_once_v2`, adds a warning about required broker version. Accessed topology internals via `topology.internalTopologyBuilder.allStateStoreNames()` using same-package visibility.",
+  "task_complexity": "narrow",
+  "task_id": "java-kafka/N9",
+  "task_text": "Add a `validate(Topology)` method to `StreamsConfig` in `streams/StreamsConfig.java` that checks config values against topology requirements and returns a list of warnings.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "streams/src/main/java/org/apache/kafka/streams/StreamsConfig.java"
+    ],
+    "diff_seeds": [
+      "StreamsConfig",
+      "validate",
+      "Topology"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "variable",
+      "name": "internalTopologyBuilder",
+      "path": "streams/src/main/java/org/apache/kafka/streams/Topology.java",
+      "reason": "read: an AI agent needs to verify the field is accessible (protected, same package) before using it in StreamsConfig",
+      "start_line": 62
+    },
+    {
+      "kind": "method",
+      "name": "allStateStoreNames",
+      "path": "streams/src/main/java/org/apache/kafka/streams/processor/internals/InternalTopologyBuilder.java",
+      "reason": "read: need to find the correct method signature and name to check for state stores; agent would search for this",
+      "start_line": 1171
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set has only the edited `validate()` method. The thrash-preventing set adds the Topology field `internalTopologyBuilder` (to confirm accessibility) and `allStateStoreNames()` in InternalTopologyBuilder (to confirm the method exists and its return type). An AI agent would search for both before writing the implementation to avoid using wrong method names."
+}

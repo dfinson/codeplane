@@ -1,0 +1,129 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/middleware/maybe.go b/middleware/maybe.go\nindex eabca00..e0d1253 100644\n--- a/middleware/maybe.go\n+++ b/middleware/maybe.go\n@@ -7,9 +7,13 @@ import \"net/http\"\n func Maybe(mw func(http.Handler) http.Handler, maybeFn func(r *http.Request) bool) func(http.Handler) http.Handler {\n\treturn func(next http.Handler) http.Handler {\n+\t\twithMW := mw(next)\n\t\treturn http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\t\tif maybeFn(r) {\n-\t\t\t\tmw(next).ServeHTTP(w, r)\n+\t\t\t\twithMW.ServeHTTP(w, r)\n\t\t\t} else {\n\t\t\t\tnext.ServeHTTP(w, r)\n\t\t\t}",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The fix is a one-liner: capture mw(next) in withMW before the returned closure.",
+    "dead_ends": [],
+    "hindsight": "No dead ends; the code was tiny and the fix was obvious once read.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Keep mw(next) call per request",
+          "Pre-build only for certain middleware types"
+        ],
+        "decision": "Always eagerly evaluate mw(next) at handler construction time",
+        "reasoning": "The simplest correct fix; mw(next) is idempotent for any well-behaved middleware, so pre-building once is always safe."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read middleware/maybe.go",
+        "reasoning": "Task description pointed directly to this file.",
+        "result": "Confirmed: mw(next) is called inside the per-request closure. The fix is to move mw(next) to the outer closure."
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "function",
+      "name": "Maybe",
+      "path": "middleware/maybe.go",
+      "reason": "edited: moved mw(next) call from per-request closure to initialization closure",
+      "start_line": 8
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: pure domain description without symbols. Pre-implementation: a developer profiling unnecessary allocations in conditional middleware would write this.",
+      "pins": [],
+      "query_text": "conditional middleware rebuilds its handler chain on every request instead of once at startup",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: literal comment string from the source that grep would find. Pre-implementation: a developer searching for this optimization pattern would grep for it.",
+      "pins": [],
+      "query_text": "\"Eagerly build the wrapped handler once at initialization time\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: three exact symbol names from the changed code. Pre-implementation: a developer would search for these identifiers.",
+      "pins": [],
+      "query_text": "Maybe, maybeFn, withMW",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: concrete symbol Maybe with relationship word callers. Pre-implementation: a developer tracing middleware construction would follow this.",
+      "pins": [],
+      "query_text": "callers of Maybe and how the mw handler is constructed at initialization",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "Maybe"
+      ]
+    },
+    {
+      "justification": "Rule compliance: explicit file path middleware/maybe.go. Pre-implementation: a developer knows to look in this file.",
+      "pins": [
+        "middleware/maybe.go"
+      ],
+      "query_text": "middleware/maybe.go Maybe middleware handler construction",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept with symbol name Maybe. Pre-implementation: a developer debugging repeated setup overhead in Maybe would combine these terms.",
+      "pins": [],
+      "query_text": "lazy vs eager middleware chain construction in Maybe middleware",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "Maybe"
+      ]
+    },
+    {
+      "justification": "Rule compliance: symbol Maybe and file path. Pre-implementation: a developer who knows the file would search this way.",
+      "pins": [
+        "middleware/maybe.go"
+      ],
+      "query_text": "Maybe maybeFn in middleware/maybe.go",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "Maybe"
+      ]
+    },
+    {
+      "justification": "Rule compliance: names symbol and file. Pre-implementation: this is the query after reading the bug report.",
+      "pins": [
+        "middleware/maybe.go"
+      ],
+      "query_text": "Fix Maybe middleware in maybe.go to pre-build mw(next) handler once instead of rebuilding on every request",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "Maybe"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Moved the mw(next) call from inside the per-request handler closure to the outer initialization closure, storing the result in withMW. The inner closure now calls withMW.ServeHTTP when maybeFn(r) is true, eliminating the per-request middleware reconstruction.",
+  "task_complexity": "narrow",
+  "task_id": "go-chi/N6",
+  "task_text": "Fix Maybe middleware reconstructing middleware chain on every request\n\nThe `Maybe` middleware in `middleware/maybe.go` calls `mw(next)` inside\nthe per-request handler closure each time `maybeFn(r)` returns true.\nThis rebuilds the entire wrapped middleware chain on every qualifying\nrequest instead of once at initialization time.",
+  "test_selection": {
+    "coverage_available": true,
+    "coverage_skip_reason": null,
+    "diff_pins": [
+      "middleware/maybe.go"
+    ],
+    "diff_seeds": [
+      "Maybe"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [],
+  "tier_difference_reasoning": "The minimum set is just the edited function. No thrash-preventing defs are needed \u2014 the file is 18 lines, the function is self-contained, and no external context is needed."
+}

@@ -32,7 +32,8 @@
         "local_synced": true
       },
       "exec_n": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_m": {
         "status": "pending"
@@ -53,7 +54,8 @@
         "local_synced": true
       },
       "exec_n": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_m": {
         "status": "pending"
@@ -74,7 +76,8 @@
         "local_synced": true
       },
       "exec_n": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 11
       },
       "exec_m": {
         "status": "pending"
@@ -90,10 +93,11 @@
       "fork": "dfinson/spdlog",
       "fork_ready": true,
       "audit": {
-        "status": "done"
+        "status": "merged"
       },
       "exec_n": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_m": {
         "status": "pending"
@@ -109,10 +113,11 @@
       "fork": "dfinson/aspnetcore",
       "fork_ready": true,
       "audit": {
-        "status": "done"
+        "status": "merged"
       },
       "exec_n": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 11
       },
       "exec_m": {
         "status": "pending"
@@ -128,10 +133,11 @@
       "fork": "dfinson/Dapper",
       "fork_ready": true,
       "audit": {
-        "status": "done"
+        "status": "merged"
       },
       "exec_n": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 11
       },
       "exec_m": {
         "status": "pending"
@@ -147,10 +153,11 @@
       "fork": "dfinson/FluentValidation",
       "fork_ready": true,
       "audit": {
-        "status": "done"
+        "status": "merged"
       },
       "exec_n": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 11
       },
       "exec_m": {
         "status": "pending"
@@ -166,10 +173,11 @@
       "fork": "dfinson/MediatR",
       "fork_ready": true,
       "audit": {
-        "status": "done"
+        "status": "merged"
       },
       "exec_n": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 11
       },
       "exec_m": {
         "status": "pending"
@@ -189,7 +197,8 @@
         "local_synced": true
       },
       "exec_n": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 11
       },
       "exec_m": {
         "status": "pending"
@@ -205,10 +214,11 @@
       "fork": "dfinson/chi",
       "fork_ready": true,
       "audit": {
-        "status": "done"
+        "status": "merged"
       },
       "exec_n": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 11
       },
       "exec_m": {
         "status": "pending"
@@ -224,10 +234,11 @@
       "fork": "dfinson/cobra",
       "fork_ready": true,
       "audit": {
-        "status": "done"
+        "status": "merged"
       },
       "exec_n": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 11
       },
       "exec_m": {
         "status": "pending"
@@ -243,10 +254,11 @@
       "fork": "dfinson/echo",
       "fork_ready": true,
       "audit": {
-        "status": "done"
+        "status": "merged"
       },
       "exec_n": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 11
       },
       "exec_m": {
         "status": "pending"
@@ -262,10 +274,11 @@
       "fork": "dfinson/mux",
       "fork_ready": true,
       "audit": {
-        "status": "done"
+        "status": "merged"
       },
       "exec_n": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 11
       },
       "exec_m": {
         "status": "pending"
@@ -281,11 +294,12 @@
       "fork": "dfinson/assertj",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_m": {
         "status": "pending"
@@ -301,11 +315,12 @@
       "fork": "dfinson/guava",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
-        "status": "pending"
+        "status": "done",
+        "jsons": 11
       },
       "exec_m": {
         "status": "pending"
@@ -321,10 +336,11 @@
       "fork": "dfinson/jackson-databind",
       "fork_ready": true,
       "audit": {
-        "status": "done"
+        "status": "merged"
       },
       "exec_n": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_m": {
         "status": "pending"
@@ -340,11 +356,12 @@
       "fork": "dfinson/kafka",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_m": {
         "status": "pending"
@@ -360,10 +377,11 @@
       "fork": "dfinson/retrofit",
       "fork_ready": true,
       "audit": {
-        "status": "done"
+        "status": "merged"
       },
       "exec_n": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_m": {
         "status": "pending"
@@ -379,10 +397,11 @@
       "fork": "dfinson/Carbon",
       "fork_ready": true,
       "audit": {
-        "status": "done"
+        "status": "merged"
       },
       "exec_n": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_m": {
         "status": "pending"
@@ -398,11 +417,12 @@
       "fork": "dfinson/flysystem",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_m": {
         "status": "pending"
@@ -418,11 +438,12 @@
       "fork": "dfinson/monolog",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
-        "status": "pending"
+        "status": "active",
+        "attempts": 1
       },
       "exec_m": {
         "status": "pending"
@@ -438,7 +459,7 @@
       "fork": "dfinson/phpunit",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -458,7 +479,7 @@
       "fork": "dfinson/click",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -478,7 +499,7 @@
       "fork": "dfinson/flask",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -498,7 +519,7 @@
       "fork": "dfinson/jinja",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -518,7 +539,7 @@
       "fork": "dfinson/markupsafe",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -538,7 +559,7 @@
       "fork": "dfinson/marshmallow",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -558,7 +579,7 @@
       "fork": "dfinson/requests",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -578,7 +599,7 @@
       "fork": "dfinson/rich",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -598,7 +619,7 @@
       "fork": "dfinson/typer",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -618,7 +639,7 @@
       "fork": "dfinson/devise",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -638,7 +659,7 @@
       "fork": "dfinson/faraday",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -658,7 +679,7 @@
       "fork": "dfinson/puma",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -678,7 +699,7 @@
       "fork": "dfinson/sidekiq",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -698,7 +719,7 @@
       "fork": "dfinson/clap",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -718,7 +739,7 @@
       "fork": "dfinson/crossbeam",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -738,7 +759,7 @@
       "fork": "dfinson/hyper",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -758,7 +779,7 @@
       "fork": "dfinson/reqwest",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -778,7 +799,7 @@
       "fork": "dfinson/Kingfisher",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -798,7 +819,7 @@
       "fork": "dfinson/lottie-ios",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -818,7 +839,7 @@
       "fork": "dfinson/Moya",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -838,7 +859,7 @@
       "fork": "dfinson/SnapKit",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -858,7 +879,7 @@
       "fork": "dfinson/commander.js",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -878,7 +899,7 @@
       "fork": "dfinson/date-fns",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -898,7 +919,7 @@
       "fork": "dfinson/execa",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -918,7 +939,7 @@
       "fork": "dfinson/fastify",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -938,8 +959,8 @@
       "fork": "dfinson/trpc",
       "fork_ready": true,
       "audit": {
-        "status": "active",
-        "attempts": 2
+        "status": "merged",
+        "jsons": 0
       },
       "exec_n": {
         "status": "pending"
@@ -1000,7 +1021,7 @@
       "fork": "dfinson/opencv",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1103,7 +1124,7 @@
       "fork": "dfinson/caddy",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1123,7 +1144,7 @@
       "fork": "dfinson/gitea",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1143,7 +1164,7 @@
       "fork": "dfinson/gson",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1163,7 +1184,7 @@
       "fork": "dfinson/okhttp",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1183,7 +1204,7 @@
       "fork": "dfinson/spring-boot",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1203,7 +1224,7 @@
       "fork": "dfinson/composer",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1223,7 +1244,7 @@
       "fork": "dfinson/guzzle",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1243,7 +1264,7 @@
       "fork": "dfinson/framework",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1263,7 +1284,7 @@
       "fork": "dfinson/django",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1283,7 +1304,7 @@
       "fork": "dfinson/fastapi",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1303,7 +1324,7 @@
       "fork": "dfinson/httpx",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1323,7 +1344,7 @@
       "fork": "dfinson/jekyll",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1343,7 +1364,7 @@
       "fork": "dfinson/rack",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1363,7 +1384,7 @@
       "fork": "dfinson/rails",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1383,7 +1404,7 @@
       "fork": "dfinson/ripgrep",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1403,7 +1424,7 @@
       "fork": "dfinson/serde",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1423,7 +1444,7 @@
       "fork": "dfinson/tokio",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1443,7 +1464,7 @@
       "fork": "dfinson/Alamofire",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1463,7 +1484,7 @@
       "fork": "dfinson/swift-package-manager",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1483,7 +1504,7 @@
       "fork": "dfinson/vapor",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1503,7 +1524,7 @@
       "fork": "dfinson/mermaid",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1523,7 +1544,7 @@
       "fork": "dfinson/nest",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1543,7 +1564,7 @@
       "fork": "dfinson/zod",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1767,7 +1788,7 @@
       "fork": "dfinson/celery",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1787,7 +1808,7 @@
       "fork": "dfinson/pydantic",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1829,7 +1850,7 @@
       "fork": "dfinson/sinatra",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {
@@ -1930,7 +1951,7 @@
       "fork": "dfinson/esbuild",
       "fork_ready": true,
       "audit": {
-        "status": "done",
+        "status": "merged",
         "jsons": 0
       },
       "exec_n": {

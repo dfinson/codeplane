@@ -1,0 +1,133 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/Polly.Core/ResiliencePipelineBuilderBase.cs b/src/Polly.Core/ResiliencePipelineBuilderBase.cs\nindex 6e9fbb0..832e65f 100644\n--- a/src/Polly.Core/ResiliencePipelineBuilderBase.cs\n+++ b/src/Polly.Core/ResiliencePipelineBuilderBase.cs\n@@ -139,6 +139,11 @@ public abstract class ResiliencePipelineBuilderBase\n         var context = new StrategyBuilderContext(new ResilienceStrategyTelemetry(source, TelemetryListener), TimeProviderInternal);\n \n         var strategy = entry.Factory(context);\n+        if (strategy is null)\n+        {\n+            throw new InvalidOperationException($\"The factory method for '{entry.Options.Name}' returned null. The factory must return a non-null strategy instance.\");\n+        }\n+\n         strategy.Options = entry.Options;\n         return strategy;\n     }\n",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The factory call and assignment are adjacent lines; inserting the null check between them with a descriptive InvalidOperationException is the minimal surgical fix that makes the error actionable.",
+    "dead_ends": [],
+    "hindsight": "No dead ends; the fix location was exactly as described.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Throw ArgumentNullException",
+          "Throw NullReferenceException with better message",
+          "Throw InvalidOperationException with factory identification"
+        ],
+        "decision": "Throw InvalidOperationException with the options name in the message",
+        "reasoning": "InvalidOperationException is the appropriate exception when a programming contract is violated. Including entry.Options.Name in the message makes it actionable by identifying which factory returned null."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read ResiliencePipelineBuilderBase.cs CreateComponent method (lines 135-145)",
+        "reasoning": "Task names the file and method directly",
+        "result": "Found entry.Factory(context) call followed immediately by strategy.Options = entry.Options with no null check"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "CreateComponent",
+      "path": "src/Polly.Core/ResiliencePipelineBuilderBase.cs",
+      "reason": "edited: added null check with InvalidOperationException after factory call",
+      "start_line": 135
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: describes the problem in domain terms: 'user-supplied factory returns null', 'obscure error', 'no indication of which factory failed'. Pre-implementation: developer diagnosing a NullReferenceException deep in the pipeline would search for this.",
+      "pins": [],
+      "query_text": "pipeline builder strategy factory returning null causes obscure NullReferenceException with no indication of which factory is at fault",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: quotes a literal string from ResiliencePipelineBuilderBase (the entry type name). Pre-implementation: developer searching for the Entry record definition.",
+      "pins": [],
+      "query_text": "\"The factory method for\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 3 exact symbol names from changed code. Pre-implementation: developer knows these from task description.",
+      "pins": [],
+      "query_text": "CreateComponent, ResiliencePipelineBuilderBase, entry.Factory",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names symbol and uses relationship word. Pre-implementation: understanding how factories are registered and called.",
+      "pins": [],
+      "query_text": "callers of CreateComponent in ResiliencePipelineBuilderBase and where Entry factory is invoked",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "ResiliencePipelineBuilderBase"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 1 explicit file path. Pre-implementation: task names the file directly.",
+      "pins": [
+        "src/Polly.Core/ResiliencePipelineBuilderBase.cs"
+      ],
+      "query_text": "src/Polly.Core/ResiliencePipelineBuilderBase.cs factory null validation",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept 'factory return validation' with symbol names. Pre-implementation: developer would describe both.",
+      "pins": [],
+      "query_text": "ResiliencePipelineBuilderBase.CreateComponent not validating factory return value before strategy.Options assignment",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "ResiliencePipelineBuilderBase",
+        "CreateComponent"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 1 file path. Pre-implementation: starts from task-named class.",
+      "pins": [
+        "src/Polly.Core/ResiliencePipelineBuilderBase.cs"
+      ],
+      "query_text": "ResiliencePipelineBuilderBase CreateComponent null check in src/Polly.Core/ResiliencePipelineBuilderBase.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "ResiliencePipelineBuilderBase",
+        "CreateComponent"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbols and file path. Pre-implementation: task description names the method and file precisely.",
+      "pins": [
+        "src/Polly.Core/ResiliencePipelineBuilderBase.cs"
+      ],
+      "query_text": "fix ResiliencePipelineBuilderBase.CreateComponent to throw InvalidOperationException when strategy factory returns null",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "ResiliencePipelineBuilderBase",
+        "CreateComponent"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Located `CreateComponent` in `ResiliencePipelineBuilderBase`. Added a null check immediately after `entry.Factory(context)` that throws `InvalidOperationException` with a descriptive message including `entry.Options.Name` to identify which factory returned null.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-polly/N8",
+  "task_text": "Fix ResiliencePipelineBuilderBase.CreateComponent not validating factory return value\n\n`ResiliencePipelineBuilderBase.CreateComponent` calls the\nuser-supplied strategy factory (`entry.Factory(context)`) and\nimmediately assigns `strategy.Options = entry.Options` without\nchecking whether the factory returned `null`. If the factory returns\n`null`, the assignment throws a `NullReferenceException` deep inside\n`BuildPipelineComponent` with no indication of which factory is at\nfault. Fix `ResiliencePipelineBuilderBase.cs` to validate the factory\nreturn value immediately after the call and throw a descriptive\n`InvalidOperationException` if it is `null`, making the error\nactionable at the point of failure.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "No baseline coverage report found in the repository root or any standard location.",
+    "diff_pins": [
+      "src/Polly.Core/ResiliencePipelineBuilderBase.cs"
+    ],
+    "diff_seeds": [
+      "CreateComponent"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [],
+  "tier_difference_reasoning": "The minimum set is sufficient. The fix is a simple null check insertion with no other code patterns to look up."
+}

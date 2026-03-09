@@ -1,0 +1,258 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/main/java/tools/jackson/databind/ObjectReader.java b/src/main/java/tools/jackson/databind/ObjectReader.java\nindex befd7f8..f614c4f 100644\n--- a/src/main/java/tools/jackson/databind/ObjectReader.java\n+++ b/src/main/java/tools/jackson/databind/ObjectReader.java\n@@ -2100,12 +2100,20 @@ public class ObjectReader\n      * Internal helper method called to create an instance of {@link DeserializationContext}\n      * for deserializing a single root value.\n      * Can be overridden if a custom context is needed.\n+     *<p>\n+     * NOTE: {@link #_config} is the per-read {@link DeserializationConfig} that carries\n+     * any feature overrides applied via {@code ObjectReader.with()} /\n+     * {@code ObjectReader.without()} calls.  It must be forwarded as-is so that nested\n+     * object deserialization honours the same overrides instead of reverting to the\n+     * mapper-level defaults.\n      */\n     protected DeserializationContextExt _deserializationContext() {\n+        // Pass per-read _config (not mapper-level config) to propagate feature overrides\n         return _contexts.createContext(_config, _schema, _injectableValues);\n     }\n \n     protected DeserializationContextExt _deserializationContext(JsonParser p) {\n+        // Pass per-read _config (not mapper-level config) to propagate feature overrides\n         return _contexts.createContext(_config, _schema, _injectableValues)\n                 .assignParser(p);\n     }\ndiff --git a/src/main/java/tools/jackson/databind/cfg/DeserializationContexts.java b/src/main/java/tools/jackson/databind/cfg/DeserializationContexts.java\nindex 0e9c593..74bc960 100644\n--- a/src/main/java/tools/jackson/databind/cfg/DeserializationContexts.java\n+++ b/src/main/java/tools/jackson/databind/cfg/DeserializationContexts.java\n@@ -113,25 +113,64 @@ public abstract class DeserializationContexts\n     {\n         private static final long serialVersionUID = 3L;\n \n-        public DefaultImpl() { super(); }\n+        /**\n+         * Base mapper-level config retained so that {@link #createContext} can fall back\n+         * to it when no per-read override config is supplied.\n+         */\n+        final transient protected DeserializationConfig _mapperConfig;\n+\n+        public DefaultImpl() { super(); _mapperConfig = null; }\n         public DefaultImpl(TokenStreamFactory tsf,\n                 DeserializerFactory serializerFactory, DeserializerCache cache) {\n             super(tsf, serializerFactory, cache);\n+            _mapperConfig = null;\n+        }\n+        public DefaultImpl(TokenStreamFactory tsf,\n+                DeserializerFactory serializerFactory, DeserializerCache cache,\n+                DeserializationConfig mapperConfig) {\n+            super(tsf, serializerFactory, cache);\n+            _mapperConfig = mapperConfig;\n+        }\n+\n+        /**\n+         * Overridden to store the mapper-level {@link DeserializationConfig} so that\n+         * {@link #createContext} can correctly propagate per-read feature overrides\n+         * that arrive later via {@code ObjectReader.with()} / {@code ObjectReader.without()}.\n+         */\n+        @Override\n+        public DeserializationContexts forMapper(Object mapper,\n+                DeserializationConfig config,\n+                TokenStreamFactory tsf,\n+                DeserializerFactory deserializerFactory) {\n+            DeserializerCache cache = new DeserializerCache(\n+                    config.getCacheProvider().forDeserializerCache(config));\n+            return new DefaultImpl(tsf, deserializerFactory, cache, config);\n         }\n \n         @Override\n         public DeserializationContexts forMapper(Object mapper,\n                 TokenStreamFactory tsf, DeserializerFactory serializerFactory,\n                 DeserializerCache cache) {\n-            return new DefaultImpl(tsf, serializerFactory, cache);\n+            return new DefaultImpl(tsf, serializerFactory, cache, _mapperConfig);\n         }\n \n+        /**\n+         * Creates a new {@link DeserializationContext} for a single read operation.\n+         * The {@code config} parameter carries any per-read feature overrides applied\n+         * via {@code ObjectReader.with()} / {@code ObjectReader.without()}; it must\n+         * not be replaced by the stored mapper-level {@link #_mapperConfig}.\n+         */\n         @Override\n         public DeserializationContextExt createContext(DeserializationConfig config,\n                 FormatSchema schema, InjectableValues injectables) {\n+            // Use per-read config as-is so that feature overrides (e.g. from\n+            // ObjectReader.without(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES))\n+            // are carried forward into every nested deserialization step.\n+            final DeserializationConfig effectiveConfig =\n+                    (config != null) ? config : _mapperConfig;\n             return new DeserializationContextExt.Impl(_streamFactory,\n                     _deserializerFactory, _cache,\n-                    config, schema, injectables);\n+                    effectiveConfig, schema, injectables);\n         }\n \n         // As per name, just for testing",
+  "excluded_defs": [
+    {
+      "kind": "method",
+      "name": "_deserializationContext",
+      "path": "src/main/java/tools/jackson/databind/ObjectMapper.java",
+      "reason": "read: the ObjectMapper version of _deserializationContext passes mapper config directly; investigated to understand the design but not edited",
+      "start_line": 2700
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "The public forMapper() in the base class was called with the mapper config but immediately discarded it by not passing it to the abstract forMapper(). Overriding the public forMapper() in DefaultImpl to capture and store the config before constructing the cache was the key insight.",
+    "dead_ends": [
+      {
+        "explored": "DeserializationContext._config field and getConfig()",
+        "why_irrelevant": "Just stores the config - the fix is upstream in how the config is selected before being stored"
+      }
+    ],
+    "hindsight": "Would have gone straight to the forMapper() override instead of spending time investigating whether ObjectReader._config could become stale.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Change the abstract protected forMapper() signature",
+          "Store config in base class"
+        ],
+        "decision": "Override public forMapper(Object,DeserializationConfig,TokenStreamFactory,DeserializerFactory) in DefaultImpl to store the config",
+        "reasoning": "Overriding only in DefaultImpl is the least disruptive change; the base class signature stays stable for third-party subclasses"
+      },
+      {
+        "alternatives": [
+          "Always use passed config (no fallback)",
+          "Merge configs"
+        ],
+        "decision": "Use null-check (config != null) ? config : _mapperConfig in createContext()",
+        "reasoning": "Null-check makes the fallback path explicit and defends against cases where ObjectMapper.createContext() is called with mapper config directly"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Search for _deserializationContext in ObjectReader.java",
+        "reasoning": "Task mentions fixing ObjectReader._deserializationContext() as the primary site",
+        "result": "Found method at line 2104 which calls _contexts.createContext(_config, _schema, _injectableValues)"
+      },
+      {
+        "action": "Read DeserializationContexts.java fully",
+        "reasoning": "Task also mentions fixing the DeserializationContexts factory",
+        "result": "Found DefaultImpl.createContext() at line 130 which already accepts a config parameter and passes it to DeserializationContextExt.Impl"
+      },
+      {
+        "action": "Read ObjectReader constructors to understand _config lifecycle",
+        "reasoning": "Needed to confirm that _config in ObjectReader is the per-read config, not the mapper config",
+        "result": "_config is set from the passed DeserializationConfig in all constructors; ObjectReader.without() creates a new reader with _config.without(feature)"
+      },
+      {
+        "action": "Grep for forMapper calls in ObjectMapper.java",
+        "reasoning": "Identified the gap: DefaultImpl discards the mapper config during forMapper, so it had no fallback",
+        "result": "forMapper is called with _deserializationConfig (mapper-level config) during mapper initialization, but DefaultImpl doesn't store this config"
+      },
+      {
+        "action": "Read DeserializationContextExt.Impl constructor",
+        "reasoning": "Confirmed the path from createContext config param to the final context",
+        "result": "Simple pass-through constructor that stores config in parent DeserializationContext._config"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "_deserializationContext",
+      "path": "src/main/java/tools/jackson/databind/ObjectReader.java",
+      "reason": "edited: added clarifying Javadoc and inline comment documenting that _config is the per-read config",
+      "start_line": 2104
+    },
+    {
+      "kind": "class",
+      "name": "DefaultImpl",
+      "path": "src/main/java/tools/jackson/databind/cfg/DeserializationContexts.java",
+      "reason": "edited: added _mapperConfig field, new constructor, forMapper() override, and null-check in createContext()",
+      "start_line": 112
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: describes the bug in pure domain terms ('reader configured with custom settings', 'not applied to inner objects') without any symbol names or file paths. Pre-implementation: a developer encountering this bug would describe it this way before knowing which class to look at.",
+      "pins": [],
+      "query_text": "When a reader is configured with custom deserialization settings, those settings are not applied when processing inner objects during the read operation",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: contains the literal string 'Pass per-read _config (not mapper-level config) to propagate feature overrides' which appears verbatim in the added comments. Pre-implementation: a developer searching for the place where context creation happens might search for these comment strings after reading the commit message.",
+      "pins": [],
+      "query_text": "\"Pass per-read _config (not mapper-level config) to propagate feature overrides\" OR \"per-read override config\" OR \"carry forward per-read feature overrides\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists at least 3 exact symbol names from the changed code. Pre-implementation: a developer who knows the task touches context creation would naturally search for these identifiers.",
+      "pins": [],
+      "query_text": "_deserializationContext, createContext, DeserializationContexts, DefaultImpl, _mapperConfig",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbols (DeserializationContexts, createContext) and uses relationship words (callers, initializes). Pre-implementation: a developer investigating context creation would trace callers of createContext to find where config is passed.",
+      "pins": [],
+      "query_text": "callers of DeserializationContexts.createContext and the forMapper method that initializes DefaultImpl",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "DeserializationContexts",
+        "createContext"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains at least 2 file paths from the changed files. Pre-implementation: the task description explicitly names both files.",
+      "pins": [
+        "src/main/java/tools/jackson/databind/ObjectReader.java",
+        "src/main/java/tools/jackson/databind/cfg/DeserializationContexts.java"
+      ],
+      "query_text": "src/main/java/tools/jackson/databind/ObjectReader.java _deserializationContext method and src/main/java/tools/jackson/databind/cfg/DeserializationContexts.java DefaultImpl",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('per-read DeserializationConfig feature overrides not propagated') with exact symbol names (_deserializationContext, createContext, DeserializationContextExt). Pre-implementation: a developer who has identified the involved classes but is looking for the exact fix location would formulate this query.",
+      "pins": [],
+      "query_text": "Per-read DeserializationConfig feature overrides not propagated into DeserializationContextExt when ObjectReader._deserializationContext calls createContext",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "DeserializationContextExt",
+        "_deserializationContext",
+        "createContext"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains 4 symbol names and 2 file paths from the changed files. Pre-implementation: a developer would combine both symbol and path knowledge from reading the task description.",
+      "pins": [
+        "src/main/java/tools/jackson/databind/ObjectReader.java",
+        "src/main/java/tools/jackson/databind/cfg/DeserializationContexts.java"
+      ],
+      "query_text": "_deserializationContext createContext DefaultImpl forMapper in ObjectReader.java and DeserializationContexts.java",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "_deserializationContext",
+        "createContext",
+        "DefaultImpl",
+        "forMapper"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names (createContext, DefaultImpl, _deserializationContext) and file paths. Pre-implementation: this is the query a developer would type after reading the task description.",
+      "pins": [
+        "src/main/java/tools/jackson/databind/ObjectReader.java",
+        "src/main/java/tools/jackson/databind/cfg/DeserializationContexts.java"
+      ],
+      "query_text": "Fix ObjectReader._deserializationContext to pass per-read DeserializationConfig to DeserializationContexts.DefaultImpl.createContext so nested deserialization inherits feature overrides",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "_deserializationContext",
+        "createContext",
+        "DefaultImpl"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "The fix stores the mapper-level DeserializationConfig in DefaultImpl._mapperConfig by overriding the public forMapper() method, then makes createContext() use the passed per-read config (falling back to the stored mapper config only when null). ObjectReader._deserializationContext() already passes _config (the per-read config), so only comments were needed there to clarify intent.",
+  "task_complexity": "narrow",
+  "task_id": "java-jackson/N1",
+  "task_text": "When calling `ObjectReader.readValue()` with per-read feature overrides\n(e.g., `reader.without(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)`),\nthe `DeserializationConfig` carrying those overrides must be passed to\n`DeserializationContexts.DefaultImpl.createContext()`. If the wrong\nconfig is supplied, nested objects deserialized during the same read\nrevert to mapper-level defaults. Fix the context construction in\n`ObjectReader._deserializationContext()` and the `DeserializationContexts`\nfactory to carry forward per-read feature overrides into the created\n`DeserializationContextExt` instance.",
+  "test_selection": {
+    "coverage_available": true,
+    "coverage_skip_reason": null,
+    "diff_pins": [
+      "src/main/java/tools/jackson/databind/ObjectReader.java",
+      "src/main/java/tools/jackson/databind/cfg/DeserializationContexts.java"
+    ],
+    "diff_seeds": [
+      "_deserializationContext",
+      "createContext",
+      "forMapper",
+      "DefaultImpl"
+    ],
+    "import_graph_test_files": [
+      "src/test/java/tools/jackson/databind/ObjectReaderTest.java",
+      "src/test/java/tools/jackson/databind/DeserializationContextTest.java",
+      "src/test/java/tools/jackson/databind/ObjectMapperTest.java"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [
+      {
+        "covers_changed_lines": [
+          2109,
+          2110
+        ],
+        "reason": "directly calls MAPPER.readerFor(String.class)._deserializationContext(p) which exercises the changed _deserializationContext(JsonParser) method and the createContext() call in DefaultImpl",
+        "start_line": 25,
+        "test_kind": "function",
+        "test_name": "testTreeAsValueFromNulls",
+        "test_path": "src/test/java/tools/jackson/databind/DeserializationContextTest.java"
+      },
+      {
+        "covers_changed_lines": [
+          2109,
+          2110
+        ],
+        "reason": "directly calls MAPPER.readerFor(String.class)._deserializationContext(p) exercising the same path",
+        "start_line": 43,
+        "test_kind": "function",
+        "test_name": "testTreeAsValueFromMissing",
+        "test_path": "src/test/java/tools/jackson/databind/DeserializationContextTest.java"
+      },
+      {
+        "covers_changed_lines": [
+          2105
+        ],
+        "reason": "exercises ObjectReader feature toggle methods (with/without) that set _config, and readValue paths which call _deserializationContext() and createContext()",
+        "start_line": 190,
+        "test_kind": "function",
+        "test_name": "testDeserializationFeatures",
+        "test_path": "src/test/java/tools/jackson/databind/ObjectReaderTest.java"
+      }
+    ],
+    "test_query": "Find tests that verify the behavior of _deserializationContext, createContext in ObjectReader.java and DeserializationContexts.java"
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "forMapper",
+      "path": "src/main/java/tools/jackson/databind/cfg/DeserializationContexts.java",
+      "reason": "read: the public base-class forMapper() is what receives the mapper config and calls the abstract forMapper(); understanding this call chain prevents an agent from incorrectly modifying the abstract method signature instead of overriding the public method",
+      "start_line": 74
+    },
+    {
+      "kind": "variable",
+      "name": "_config",
+      "path": "src/main/java/tools/jackson/databind/DeserializationContext.java",
+      "reason": "read: confirms that _config in DeserializationContext is final and set from the constructor arg; this shows the config path ends here and must be correct at createContext() time",
+      "start_line": 76
+    },
+    {
+      "kind": "variable",
+      "name": "_config",
+      "path": "src/main/java/tools/jackson/databind/ObjectReader.java",
+      "reason": "read: shows _config is the per-read config set from the constructor param; an agent needs to verify this before deciding whether ObjectReader or DeserializationContexts is the bug site",
+      "start_line": 127
+    },
+    {
+      "kind": "class",
+      "name": "Impl",
+      "path": "src/main/java/tools/jackson/databind/deser/DeserializationContextExt.java",
+      "reason": "read: the concrete Impl class receiving the config from createContext(); checking its constructor confirms the config is forwarded to the parent without modification",
+      "start_line": 321
+    }
+  ],
+  "tier_difference_reasoning": "minimum_sufficient covers the two edited sites. thrash_preventing adds the base-class forMapper() method (an agent might otherwise modify the abstract method signature or the wrong overload), the DeserializationContext._config field (confirms the config is stored final and must be correct before reaching the context), ObjectReader._config field (confirms it IS the per-read config, preventing the agent from thinking the fix must be in ObjectReader), and DeserializationContextExt.Impl (confirms the createContext output is correct as-is once the right config arrives)."
+}

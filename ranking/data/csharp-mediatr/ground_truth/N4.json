@@ -1,0 +1,160 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/MediatR/Mediator.cs b/src/MediatR/Mediator.cs\nindex b7730dc..e09f680 100644\n--- a/src/MediatR/Mediator.cs\n+++ b/src/MediatR/Mediator.cs\n@@ -47,6 +47,17 @@ public Mediator(IServiceProvider serviceProvider, INotificationPublisher publish\n     /// </summary>\n     public static string? LicenseKey { get; set; }\n \n+    /// <summary>\n+    /// Clears the static handler wrapper caches. Call this when rebuilding the service provider\n+    /// (e.g., between tests) to prevent stale wrapper instances from being reused.\n+    /// </summary>\n+    public static void ClearCache()\n+    {\n+        _requestHandlers.Clear();\n+        _notificationHandlers.Clear();\n+        _streamRequestHandlers.Clear();\n+    }\n+\n     public Task<TResponse> Send<TResponse>(IRequest<TResponse> request, CancellationToken cancellationToken = default)\ndiff --git a/src/MediatR/MicrosoftExtensionsDI/MediatRServiceCollectionExtensions.cs b/src/MediatR/MicrosoftExtensionsDI/MediatRServiceCollectionExtensions.cs\nindex 30ddfd3..2d9a8d5 100644\n--- a/src/MediatR/MicrosoftExtensionsDI/MediatRServiceCollectionExtensions.cs\n+++ b/src/MediatR/MicrosoftExtensionsDI/MediatRServiceCollectionExtensions.cs\n@@ -55,6 +55,8 @@ public static class MediatRServiceCollectionExtensions\n \n         ServiceRegistrar.AddRequiredServices(services, configuration);\n \n+        Mediator.ClearCache();\n+\n         return services;\n     }",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The static dictionaries cache wrapper instances keyed by Type. When a new IServiceProvider is built in tests, the old cached wrappers still reference types from previous builds. Adding ClearCache() and calling it on AddMediatR is the minimal fix.",
+    "dead_ends": [],
+    "hindsight": "Could have jumped directly to the two edit sites without reading the full Mediator.cs first.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Make the dictionaries instance-level (larger change, potentially performance impact)",
+          "Add ClearCache() static method (minimal, backward-compatible)"
+        ],
+        "decision": "Add ClearCache() static method and call it in AddMediatR",
+        "reasoning": "The task explicitly offers both options and the static method approach is less disruptive. Making dictionaries instance-level would require threading through the Mediator instance everywhere, which is a larger refactor."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read src/MediatR/Mediator.cs",
+        "reasoning": "Need to see the static dictionary field declarations to understand what ClearCache() must clear",
+        "result": "Found _requestHandlers, _notificationHandlers, _streamRequestHandlers as static ConcurrentDictionary fields"
+      },
+      {
+        "action": "Read src/MediatR/MicrosoftExtensionsDI/MediatRServiceCollectionExtensions.cs",
+        "reasoning": "Task says to call ClearCache during AddMediatR registration",
+        "result": "Found AddMediatR(IServiceCollection, MediatRServiceConfiguration) as the place to add the call"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "ClearCache",
+      "path": "src/MediatR/Mediator.cs",
+      "reason": "edited: new static method that clears all three handler wrapper caches",
+      "start_line": 50
+    },
+    {
+      "kind": "method",
+      "name": "AddMediatR",
+      "path": "src/MediatR/MicrosoftExtensionsDI/MediatRServiceCollectionExtensions.cs",
+      "reason": "edited: added Mediator.ClearCache() call after service registration",
+      "start_line": 44
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: describes the problem (stale cache between test runs) without any code terms. Pre-implementation: a developer reporting 'handlers from a previous test run bleed into the next test' would describe it this way.",
+      "pins": [],
+      "query_text": "static handler cache prevents isolation between separate dependency injection container lifetimes in tests",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: '_requestHandlers' is the exact static field name that appears literally in the source. Pre-implementation: a developer investigating cache growth would grep for these dictionary field names.",
+      "pins": [],
+      "query_text": "_requestHandlers _notificationHandlers _streamRequestHandlers",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 4 exact symbol names. Pre-implementation: developer knows ConcurrentDictionary caches in Mediator and the AddMediatR extension.",
+      "pins": [],
+      "query_text": "Mediator, ClearCache, AddMediatR, ConcurrentDictionary",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol (Mediator) with relationship word (callers). Understanding who calls AddMediatR is needed to know the right place to inject ClearCache.",
+      "pins": [],
+      "query_text": "callers of AddMediatR and static cache fields in Mediator that persist across service provider rebuilds",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "Mediator",
+        "AddMediatR"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes 2 explicit file paths from the diff. Pre-implementation: task description names both files.",
+      "pins": [
+        "src/MediatR/Mediator.cs",
+        "src/MediatR/MicrosoftExtensionsDI/MediatRServiceCollectionExtensions.cs"
+      ],
+      "query_text": "src/MediatR/Mediator.cs src/MediatR/MicrosoftExtensionsDI/MediatRServiceCollectionExtensions.cs static cache clear",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept (memory leak test isolation) with 2 exact symbol names. Pre-implementation: developer knows Mediator and the DI extension class from the task description.",
+      "pins": [],
+      "query_text": "fix memory leak from static ConcurrentDictionary cache in Mediator by adding ClearCache method and calling it in MediatRServiceCollectionExtensions",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "Mediator",
+        "MediatRServiceCollectionExtensions"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 2 file paths. Pre-implementation: task explicitly names these.",
+      "pins": [
+        "src/MediatR/Mediator.cs",
+        "src/MediatR/MicrosoftExtensionsDI/MediatRServiceCollectionExtensions.cs"
+      ],
+      "query_text": "ClearCache AddMediatR in src/MediatR/Mediator.cs and src/MediatR/MicrosoftExtensionsDI/MediatRServiceCollectionExtensions.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "ClearCache",
+        "AddMediatR"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names, file paths, and full description. Pre-implementation: a developer who has read the full bug report would write exactly this.",
+      "pins": [
+        "src/MediatR/Mediator.cs",
+        "src/MediatR/MicrosoftExtensionsDI/MediatRServiceCollectionExtensions.cs"
+      ],
+      "query_text": "add static ClearCache method to Mediator clearing _requestHandlers _notificationHandlers _streamRequestHandlers and call it in AddMediatR to fix test isolation",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "Mediator",
+        "ClearCache",
+        "AddMediatR"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added a `ClearCache()` static method to `Mediator` that calls `.Clear()` on all three static `ConcurrentDictionary` caches. Called `Mediator.ClearCache()` at the end of `MediatRServiceCollectionExtensions.AddMediatR` so each DI container registration starts with a fresh cache, preventing stale wrapper references from prior test runs.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-mediatr/N4",
+  "task_text": "Fix static ConcurrentDictionary caches in Mediator causing memory leaks in test scenarios\n\nIn `src/MediatR/Mediator.cs`, `_requestHandlers`, `_notificationHandlers`,\nand `_streamRequestHandlers` are `static readonly ConcurrentDictionary`\nfields. In test scenarios where `IServiceProvider` is rebuilt per test,\nthe cached wrapper instances hold references to stale type metadata.\nFix by making the dictionaries instance-level or adding a `ClearCache()`\nstatic method, and update `MediatRServiceCollectionExtensions` to call\nit during registration.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/MediatR/Mediator.cs",
+      "src/MediatR/MicrosoftExtensionsDI/MediatRServiceCollectionExtensions.cs"
+    ],
+    "diff_seeds": [
+      "ClearCache",
+      "AddMediatR",
+      "Mediator"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "variable",
+      "name": "_requestHandlers",
+      "path": "src/MediatR/Mediator.cs",
+      "reason": "read: verifying the static ConcurrentDictionary field declarations confirms what ClearCache() must clear and that they are all in one class",
+      "start_line": 21
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set is the two edited methods. The thrash-preventing set adds the static field declarations so an AI agent can enumerate all three dictionary fields upfront without searching through the class. Without this, the agent might only clear one or two of the three dictionaries."
+}

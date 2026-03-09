@@ -1,0 +1,184 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/retrofit/src/main/java/retrofit2/OkHttpCall.java b/retrofit/src/main/java/retrofit2/OkHttpCall.java\nindex ff67612..0038d6a 100644\n--- a/retrofit/src/main/java/retrofit2/OkHttpCall.java\n+++ b/retrofit/src/main/java/retrofit2/OkHttpCall.java\n@@ -22,6 +22,7 @@ import java.util.Objects;\n import javax.annotation.Nullable;\n import javax.annotation.concurrent.GuardedBy;\n import okhttp3.MediaType;\n+import okhttp3.OkHttpClient;\n import okhttp3.Request;\n import okhttp3.ResponseBody;\n import okio.Buffer;\n@@ -208,7 +209,23 @@ final class OkHttpCall<T> implements Call<T> {\n   }\n \n   private okhttp3.Call createRawCall() throws IOException {\n-    okhttp3.Call call = callFactory.newCall(requestFactory.create(instance, args));\n+    okhttp3.Call.Factory factory = callFactory;\n+    retrofit2.http.Timeout timeoutAnnotation = requestFactory.timeout;\n+    if (timeoutAnnotation != null && factory instanceof OkHttpClient) {\n+      OkHttpClient client = (OkHttpClient) factory;\n+      OkHttpClient.Builder builder = client.newBuilder();\n+      if (timeoutAnnotation.connectMs() > 0) {\n+        builder.connectTimeout(timeoutAnnotation.connectMs(), timeoutAnnotation.unit());\n+      }\n+      if (timeoutAnnotation.readMs() > 0) {\n+        builder.readTimeout(timeoutAnnotation.readMs(), timeoutAnnotation.unit());\n+      }\n+      if (timeoutAnnotation.writeMs() > 0) {\n+        builder.writeTimeout(timeoutAnnotation.writeMs(), timeoutAnnotation.unit());\n+      }\n+      factory = builder.build();\n+    }\n+    okhttp3.Call call = factory.newCall(requestFactory.create(instance, args));\n     if (call == null) {\n       throw new NullPointerException(\"Call.Factory returned null.\");\n     }\ndiff --git a/retrofit/src/main/java/retrofit2/RequestFactory.java b/retrofit/src/main/java/retrofit2/RequestFactory.java\nindex 55444e7..ab8dc56 100644\n--- a/retrofit/src/main/java/retrofit2/RequestFactory.java\n+++ b/retrofit/src/main/java/retrofit2/RequestFactory.java\n@@ -60,6 +60,7 @@ import retrofit2.http.Query;\n import retrofit2.http.QueryMap;\n import retrofit2.http.QueryName;\n import retrofit2.http.Tag;\n+import retrofit2.http.Timeout;\n import retrofit2.http.Url;\n \n final class RequestFactory {\n@@ -79,6 +80,7 @@ final class RequestFactory {\n   private final boolean isMultipart;\n   private final ParameterHandler<?>[] parameterHandlers;\n   final boolean isKotlinSuspendFunction;\n+  final @Nullable Timeout timeout;\n \n   RequestFactory(Builder builder) {\n     service = builder.service;\n@@ -93,6 +95,7 @@ final class RequestFactory {\n     isMultipart = builder.isMultipart;\n     parameterHandlers = builder.parameterHandlers;\n     isKotlinSuspendFunction = builder.isKotlinSuspendFunction;\n+    timeout = builder.timeout;\n   }\n \n   okhttp3.Request create(@Nullable Object instance, Object[] args) throws IOException {\n@@ -173,6 +176,7 @@ final class RequestFactory {\n     @Nullable Set<String> relativeUrlParamNames;\n     @Nullable ParameterHandler<?>[] parameterHandlers;\n     boolean isKotlinSuspendFunction;\n+    @Nullable Timeout timeout;\n \n     Builder(Retrofit retrofit, Class<?> service, Method method) {\n       this.retrofit = retrofit;\n@@ -264,6 +268,8 @@ final class RequestFactory {\n           throw methodError(method, \"Only one encoding annotation is allowed.\");\n         }\n         isFormEncoded = true;\n+      } else if (annotation instanceof Timeout) {\n+        this.timeout = (Timeout) annotation;\n       }\n     }\ndiff --git a/retrofit/src/main/java/retrofit2/http/Timeout.java b/retrofit/src/main/java/retrofit2/http/Timeout.java\nnew file mode 100644\nindex 0000000..abc1234\n--- /dev/null\n+++ b/retrofit/src/main/java/retrofit2/http/Timeout.java\n@@ -0,0 +1,51 @@\n+package retrofit2.http;\n+\n+import static java.lang.annotation.ElementType.METHOD;\n+import static java.lang.annotation.RetentionPolicy.RUNTIME;\n+\n+import java.lang.annotation.Documented;\n+import java.lang.annotation.Retention;\n+import java.lang.annotation.Target;\n+import java.util.concurrent.TimeUnit;\n+\n+@Documented\n+@Target(METHOD)\n+@Retention(RUNTIME)\n+public @interface Timeout {\n+  int connectMs() default 0;\n+  int readMs() default 0;\n+  int writeMs() default 0;\n+  TimeUnit unit() default TimeUnit.MILLISECONDS;\n+}",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "OkHttpClient.newBuilder() creates a cloned client with inherited settings, which is exactly the right approach to apply per-method timeouts without mutating the shared client.",
+    "dead_ends": [],
+    "hindsight": "Could have also read OkHttpCall constructor to confirm the callFactory field type before deciding on the instanceof OkHttpClient check.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Add timeout to RequestBuilder instead of OkHttpCall",
+          "Apply timeout via a custom Call.Factory"
+        ],
+        "decision": "Parse @Timeout in RequestFactory.Builder, store it in RequestFactory, then apply in OkHttpCall.createRawCall() using OkHttpClient.newBuilder()",
+        "reasoning": "This matches the task description exactly and follows the pattern of other per-method features like headers"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "List http/ package annotations for structure reference",
+        "reasoning": "Need to understand annotation format to create @Timeout consistently",
+        "result": "Found GET.java as a clean template for a method-level annotation"
+      },
+      {
+        "action": "Read OkHttpCall.createRawCall() and constructor",
+        "reasoning": "Task says to apply timeout in OkHttpCall by cloning OkHttpClient",
+        "result": "callFactory is Call.Factory; createRawCall() calls callFactory.newCall() \u2014 clone via instanceof OkHttpClient"
+      },
+      {
+        "action": "Read RequestFactory fields and Builder",
+        "reasoning": "Need to add timeout field and wire it through",
+        "result": "Found Builder with isKotlinSuspendFunction as the last field; added timeout after it"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "class",
+      "name": "Timeout",
+      "path": "retrofit/src/main/java/retrofit2/http/Timeout.java",
+      "reason": "edited: new annotation class created",
+      "start_line": 1
+    },
+    {
+      "kind": "method",
+      "name": "parseMethodAnnotation",
+      "path": "retrofit/src/main/java/retrofit2/RequestFactory.java",
+      "reason": "edited: added Timeout branch to parse the annotation",
+      "start_line": 243
+    },
+    {
+      "kind": "method",
+      "name": "createRawCall",
+      "path": "retrofit/src/main/java/retrofit2/OkHttpCall.java",
+      "reason": "edited: applies timeout by cloning OkHttpClient when @Timeout is present",
+      "start_line": 211
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts ('per-method', 'timeout', 'HTTP connection', 'service interface'). Pre-implementation: a developer describes the feature before knowing the implementation.",
+      "pins": [],
+      "query_text": "configure per-method HTTP connection read and write timeouts on a service interface method",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'connectMs', 'readMs', 'writeMs' are literal strings in the @Timeout annotation source. Pre-implementation: searching for these literal field names finds the annotation definition.",
+      "pins": [],
+      "query_text": "\"connectMs\" \"readMs\" \"writeMs\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists exact symbol names from the diff. Pre-implementation: a developer would search for these class names.",
+      "pins": [],
+      "query_text": "Timeout, createRawCall, parseMethodAnnotation, OkHttpClient, callFactory",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol 'createRawCall' with relationship word 'callers'. Pre-implementation: a developer tracing where OkHttp calls are created to understand where to inject timeout cloning.",
+      "pins": [],
+      "query_text": "callers of createRawCall and how callFactory is used in OkHttpCall",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "createRawCall"
+      ]
+    },
+    {
+      "justification": "Rule compliance: uses three explicit file paths from the changed files. Pre-implementation: a developer reading the task would identify these files.",
+      "pins": [
+        "retrofit/src/main/java/retrofit2/http/Timeout.java",
+        "retrofit/src/main/java/retrofit2/RequestFactory.java",
+        "retrofit/src/main/java/retrofit2/OkHttpCall.java"
+      ],
+      "query_text": "retrofit/src/main/java/retrofit2/http/Timeout.java retrofit/src/main/java/retrofit2/RequestFactory.java retrofit/src/main/java/retrofit2/OkHttpCall.java",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('per-method timeout') with symbol names 'Timeout', 'OkHttpCall', 'createRawCall'. Pre-implementation: a developer describes what they're adding while referencing key classes.",
+      "pins": [],
+      "query_text": "add per-method timeout annotation to OkHttpCall by cloning OkHttpClient in createRawCall",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "Timeout",
+        "createRawCall"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 symbol names and 2 file paths. Pre-implementation: a developer combines the annotation name with the classes to modify.",
+      "pins": [
+        "retrofit/src/main/java/retrofit2/RequestFactory.java",
+        "retrofit/src/main/java/retrofit2/OkHttpCall.java"
+      ],
+      "query_text": "Timeout parseMethodAnnotation createRawCall in RequestFactory.java and OkHttpCall.java",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "Timeout",
+        "parseMethodAnnotation",
+        "createRawCall"
+      ]
+    },
+    {
+      "justification": "Rule compliance: symbol names plus file paths. Pre-implementation: this is the natural query when starting the task.",
+      "pins": [
+        "retrofit/src/main/java/retrofit2/http/Timeout.java",
+        "retrofit/src/main/java/retrofit2/OkHttpCall.java"
+      ],
+      "query_text": "implement @Timeout annotation for per-method OkHttpClient timeout configuration in OkHttpCall and RequestFactory",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "Timeout",
+        "createRawCall",
+        "parseMethodAnnotation"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Created a new `@Timeout` annotation with `connectMs`, `readMs`, `writeMs`, and `unit` fields. Added parsing in `RequestFactory.Builder.parseMethodAnnotation()` storing the annotation on the `RequestFactory`. In `OkHttpCall.createRawCall()`, when `@Timeout` is present and the `callFactory` is an `OkHttpClient`, a cloned client with the specified timeouts is used for that call.",
+  "task_complexity": "narrow",
+  "task_id": "java-retrofit/N3",
+  "task_text": "The `OkHttpCall` in `OkHttpCall.java` uses the `Call.Factory`'s\ndefault timeouts for all requests. Add a `@Timeout` annotation in the\n`http/` package that allows per-method timeout configuration\n(connect, read, write). Parse the annotation in `RequestFactory.Builder`\nand apply it in `OkHttpCall` by creating a cloned `OkHttpClient`\nwith the specified timeouts.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "retrofit/src/main/java/retrofit2/http/Timeout.java",
+      "retrofit/src/main/java/retrofit2/RequestFactory.java",
+      "retrofit/src/main/java/retrofit2/OkHttpCall.java"
+    ],
+    "diff_seeds": [
+      "Timeout",
+      "createRawCall",
+      "parseMethodAnnotation"
+    ],
+    "import_graph_test_files": [
+      "retrofit/java-test/src/test/java/retrofit2/RequestFactoryTest.java",
+      "retrofit/java-test/src/test/java/retrofit2/OkHttpCallTest.java"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "OkHttpCall",
+      "path": "retrofit/src/main/java/retrofit2/OkHttpCall.java",
+      "reason": "read: constructor shows callFactory is stored as Call.Factory (not OkHttpClient) \u2014 agent needs to see this to know instanceof check is needed in createRawCall()",
+      "start_line": 53
+    },
+    {
+      "kind": "class",
+      "name": "GET",
+      "path": "retrofit/src/main/java/retrofit2/http/GET.java",
+      "reason": "read: template for how http/ method annotations are structured, ensuring @Timeout follows the same pattern",
+      "start_line": 1
+    }
+  ],
+  "tier_difference_reasoning": "Minimum set covers the three edited definitions. Thrash_preventing adds the OkHttpCall constructor (so an agent knows callFactory is typed as Call.Factory, not OkHttpClient, preventing incorrect code) and GET.java (so the agent knows the annotation convention to follow when creating Timeout.java)."
+}

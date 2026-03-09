@@ -1,0 +1,166 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/mux.go b/mux.go\nindex eaff897..35a8040 100644\n--- a/mux.go\n+++ b/mux.go\n@@ -194,7 +194,14 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {\n \t\t// Clean path to canonical form and redirect.\n \t\tif p := cleanPath(path); p != path {\n \t\t\tw.Header().Set(\"Location\", replaceURLPath(req.URL, p))\n-\t\t\tw.WriteHeader(http.StatusMovedPermanently)\n+\t\t\t// Use 308 (Permanent Redirect) for non-idempotent methods so that\n+\t\t\t// HTTP clients preserve the original method and body on the redirect.\n+\t\t\t// GET and HEAD are safe to redirect with 301 (browsers follow it as GET).\n+\t\t\tif req.Method == http.MethodGet || req.Method == http.MethodHead {\n+\t\t\t\tw.WriteHeader(http.StatusMovedPermanently)\n+\t\t\t} else {\n+\t\t\t\tw.WriteHeader(http.StatusPermanentRedirect)\n+\t\t\t}\n \t\t\treturn\n \t\t}\n \t}",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "http.StatusPermanentRedirect (308) is already in Go's net/http package. The fix is just a conditional: use 301 for GET/HEAD, 308 for everything else.",
+    "dead_ends": [],
+    "hindsight": "Simple conditional; no supporting changes needed.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Use 307 (Temporary Redirect) instead of 308",
+          "Use 308 for all methods including GET/HEAD"
+        ],
+        "decision": "Use 308 for non-GET/HEAD methods; keep 301 for GET/HEAD",
+        "reasoning": "308 preserves the original method and body; 301 is acceptable for GET/HEAD since browsers already treat them as GET. 307 would be temporary which contradicts the semantic of cleaning a malformed path (which should be permanent)."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read ServeHTTP in mux.go to find the cleanPath redirect code",
+        "reasoning": "Task identifies ServeHTTP as the function to fix",
+        "result": "Found: `w.WriteHeader(http.StatusMovedPermanently)` is hardcoded regardless of request method"
+      },
+      {
+        "action": "Checked Go's net/http package for 308 constant",
+        "reasoning": "Needed to confirm http.StatusPermanentRedirect is available",
+        "result": "http.StatusPermanentRedirect = 308 is defined in net/http"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "ServeHTTP",
+      "path": "mux.go",
+      "reason": "edited: changed to use 308 instead of 301 for non-GET/HEAD methods in cleanPath redirect",
+      "start_line": 188
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: domain concepts only ('permanent redirect', 'HTTP method', 'request body', 'method preservation'). Pre-implementation: developer reporting the bug would phrase it this way.",
+      "pins": [],
+      "query_text": "When a request with a non-idempotent HTTP method is redirected to the canonical path, the redirect response uses a status code that causes clients to change the method to GET, losing the original request body",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'StatusMovedPermanently' and 'StatusPermanentRedirect' appear literally in the source. Pre-implementation: developer investigating redirect codes would search for these.",
+      "pins": [],
+      "query_text": "\"StatusMovedPermanently\" OR \"StatusPermanentRedirect\" OR \"cleanPath\" OR \"301\" OR \"308\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names from changed code. Pre-implementation: developer would search for these to understand the redirect logic.",
+      "pins": [],
+      "query_text": "ServeHTTP, cleanPath, StatusMovedPermanently, StatusPermanentRedirect",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names ServeHTTP with callees relationship. Pre-implementation: developer would look at what ServeHTTP calls for redirect logic.",
+      "pins": [],
+      "query_text": "callees of ServeHTTP that generate redirects and the cleanPath function they use",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "ServeHTTP",
+        "cleanPath"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 1 file path. Pre-implementation: developer would open mux.go to investigate the redirect behavior.",
+      "pins": [
+        "mux.go"
+      ],
+      "query_text": "Path redirect logic in mux.go",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept (method-preserving redirect) with 2 exact symbol names. Pre-implementation: developer would phrase it this way.",
+      "pins": [],
+      "query_text": "Fix ServeHTTP in mux.go to use StatusPermanentRedirect (308) instead of StatusMovedPermanently (301) for non-GET/HEAD methods in the cleanPath redirect",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "ServeHTTP",
+        "cleanPath"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 1 file path. Pre-implementation: developer would search for these in mux.go.",
+      "pins": [
+        "mux.go"
+      ],
+      "query_text": "ServeHTTP, cleanPath in mux.go",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "ServeHTTP",
+        "cleanPath"
+      ]
+    },
+    {
+      "justification": "Rule compliance: symbol names and file path included. Pre-implementation: natural query for starting this task.",
+      "pins": [
+        "mux.go"
+      ],
+      "query_text": "Fix Router.ServeHTTP in mux.go to use 308 Permanent Redirect instead of 301 for non-GET/HEAD methods when cleanPath redirects",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "ServeHTTP",
+        "cleanPath",
+        "StatusPermanentRedirect"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "In ServeHTTP's cleanPath redirect block, replaced the hardcoded `w.WriteHeader(http.StatusMovedPermanently)` with a conditional: 301 for GET and HEAD (safe since browsers follow these as GET), 308 for all other methods (preserves the original method and body on redirect).",
+  "task_complexity": "narrow",
+  "task_id": "go-mux/N10",
+  "task_text": "Fix Router.ServeHTTP clean path redirect using 301 for non-GET methods\n\nIn `mux.go`, when `cleanPath` produces a path different from the\nrequest, `ServeHTTP` always responds with `http.StatusMovedPermanently`\n(301). For POST, PUT, and DELETE requests, most HTTP clients convert\nthe redirected request to GET, losing the original method and body.\nFix the redirect to use 308 (Permanent Redirect) for methods other\nthan GET and HEAD so the original method is preserved.",
+  "test_selection": {
+    "coverage_available": true,
+    "coverage_skip_reason": null,
+    "diff_pins": [
+      "mux.go"
+    ],
+    "diff_seeds": [
+      "ServeHTTP",
+      "cleanPath"
+    ],
+    "import_graph_test_files": [
+      "mux_test.go",
+      "old_test.go",
+      "mux_httpserver_test.go"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [
+      {
+        "covers_changed_lines": [
+          195,
+          196,
+          197,
+          198
+        ],
+        "reason": "directly tests the 301 redirect behavior from cleanPath, exercising the code path that was changed",
+        "start_line": 2029,
+        "test_kind": "function",
+        "test_name": "Test301Redirect",
+        "test_path": "mux_test.go"
+      }
+    ],
+    "test_query": "Find tests that verify the behavior of Router.ServeHTTP and cleanPath redirect in mux.go"
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "function",
+      "name": "cleanPath",
+      "path": "mux.go",
+      "reason": "read: understanding what cleanPath does (canonicalizes path, e.g. removes double slashes) helps confirm the fix context and that this is a permanent redirect scenario",
+      "start_line": 522
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set is just ServeHTTP. The thrash_preventing set adds cleanPath so an agent understands why the redirect is permanent (canonical path normalization is a permanent operation) and confirms the fix context. Without it, an agent might wonder whether 307 (temporary) would be more appropriate."
+}

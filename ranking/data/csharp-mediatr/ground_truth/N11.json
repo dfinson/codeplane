@@ -1,0 +1,191 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml\nindex 42e9815..fe3ffe3 100644\n--- a/.github/workflows/ci.yml\n+++ b/.github/workflows/ci.yml\n@@ -34,6 +34,9 @@ jobs:\n     - name: Build and Test\n       run: ./Build.ps1\n       shell: pwsh\n+    - name: Verify code style\n+      run: dotnet format --verify-no-changes\n+      shell: pwsh\n     - name: Get package version\n       id: version\ndiff --git a/Directory.Build.props b/Directory.Build.props\nindex 52b5e0c..bfd6380 100644\n--- a/Directory.Build.props\n+++ b/Directory.Build.props\n@@ -3,8 +3,9 @@\n     <IsMac>...</IsMac>\n     <IsWindows>...</IsWindows>\n \n-    <LangVersion>13.0</LangVersion>\n+    <LangVersion>preview</LangVersion>\n     <NoWarn>$(NoWarn);CS1701;CS1702;CS1591;NU1900</NoWarn>\n     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>\n+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>\n   </PropertyGroup>\n </Project>\ndiff --git a/NuGet.Config b/NuGet.Config\nindex 3f0e003..4d00e7d 100644\n--- a/NuGet.Config\n+++ b/NuGet.Config\n@@ -2,5 +2,6 @@\n <configuration>\n   <packageSources>\n     <add key=\"nuget.org\" value=\"https://api.nuget.org/v3/index.json\" protocolVersion=\"3\" />\n+    <add key=\"dotnet-experimental\" value=\"https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-experimental/nuget/v3/index.json\" protocolVersion=\"3\" />\n   </packageSources>\n </configuration>\ndiff --git a/src/MediatR/MediatR.csproj b/src/MediatR/MediatR.csproj\nindex 439dfd2..bd12c7f 100644\n--- a/src/MediatR/MediatR.csproj\n+++ b/src/MediatR/MediatR.csproj\n@@ -30,11 +30,11 @@\n   <Target Name=\"EmbedBuildDate\" BeforeTargets=\"CoreCompile\">\n-    <Exec Command=\"git log -1 --format=%25cI\" ConsoleToMSBuild=\"true\" IgnoreExitCode=\"true\">\n+    <Exec Command=\"git log -1 --format=%25cI\" ConsoleToMSBuild=\"true\" IgnoreExitCode=\"true\" ContinueOnError=\"ErrorAndContinue\">\n       <Output TaskParameter=\"ConsoleOutput\" PropertyName=\"BuildDateUtc\" />\n     </Exec>\n     <PropertyGroup>\n-      <BuildDateUtc Condition=\"'$(BuildDateUtc)' == ''\">$([System.DateTime]::UtcNow.ToString(\"O\"))</BuildDateUtc>\n+      <BuildDateUtc Condition=\"'$(BuildDateUtc)' == '' Or !$([System.String]::Copy('$(BuildDateUtc)').StartsWith('20'))\">$([System.DateTime]::UtcNow.ToString(\"O\"))</BuildDateUtc>\n     </PropertyGroup>",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "Four separate changes in four separate files, each independent. The EmbedBuildDate fix adds ContinueOnError and validates the output starts with '20' (a year prefix) to detect non-date git output from shallow clones.",
+    "dead_ends": [],
+    "hindsight": "All four changes are mechanical and the task description was prescriptive. No deep investigation needed.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Check if git command succeeds via condition",
+          "Use Property function to parse date"
+        ],
+        "decision": "Add ContinueOnError and validate output with StartsWith('20') check",
+        "reasoning": "With filter:tree:0, git might return garbled output rather than failing entirely. Checking for date format prefix is a lightweight guard without requiring MSBuild property functions that may not be available in all SDK versions."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read src/MediatR/MediatR.csproj EmbedBuildDate target",
+        "reasoning": "Task says to fix this target",
+        "result": "Found existing fallback that handles empty output but not garbled non-date output from shallow clones"
+      },
+      {
+        "action": "Read Directory.Build.props",
+        "reasoning": "Task says to update LangVersion and add EnforceCodeStyleInBuild",
+        "result": "Found LangVersion 13.0, no EnforceCodeStyleInBuild"
+      },
+      {
+        "action": "Read NuGet.Config",
+        "reasoning": "Task says to add dotnet-experimental feed",
+        "result": "Found only nuget.org feed"
+      },
+      {
+        "action": "Read .github/workflows/ci.yml",
+        "reasoning": "Task says to add dotnet format --verify-no-changes step",
+        "result": "Found Build and Test step as insertion point"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "target",
+      "name": "EmbedBuildDate",
+      "path": "src/MediatR/MediatR.csproj",
+      "reason": "edited: added ContinueOnError and extended fallback condition to handle garbled git output from shallow clones",
+      "start_line": 32
+    },
+    {
+      "kind": "key",
+      "name": "LangVersion",
+      "path": "Directory.Build.props",
+      "reason": "edited: changed from 13.0 to preview",
+      "start_line": 6
+    },
+    {
+      "kind": "key",
+      "name": "EnforceCodeStyleInBuild",
+      "path": "Directory.Build.props",
+      "reason": "edited: new property set to true",
+      "start_line": 8
+    },
+    {
+      "kind": "key",
+      "name": "dotnet-experimental",
+      "path": "NuGet.Config",
+      "reason": "edited: new package source added",
+      "start_line": 4
+    },
+    {
+      "kind": "heading",
+      "name": "Verify code style",
+      "path": ".github/workflows/ci.yml",
+      "reason": "edited: new step added to run dotnet format --verify-no-changes",
+      "start_line": 37
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: describes the problem in domain terms (build failures in CI, language version consistency, feed configuration). Pre-implementation: a developer maintaining the build would describe these as build infrastructure improvements.",
+      "pins": [],
+      "query_text": "build infrastructure improvements to handle CI environments with shallow git clones, preview language features, code style enforcement, and experimental package feeds",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'dotnet format --verify-no-changes' is the exact literal command added in the CI step. Pre-implementation: developer tasked with adding code style enforcement would search for this command.",
+      "pins": [],
+      "query_text": "dotnet format --verify-no-changes",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names/keys from the changed configuration. Pre-implementation: developer knows these from the task requirements.",
+      "pins": [],
+      "query_text": "EmbedBuildDate, LangVersion, EnforceCodeStyleInBuild, dotnet-experimental",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names the concrete target with relationship word. Pre-implementation: understanding the build pipeline is needed before modifying it.",
+      "pins": [],
+      "query_text": "callers of EmbedBuildDate target and how BuildDateUtc is used in MediatR.csproj",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "EmbedBuildDate"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes 4 explicit file paths from the diff. Pre-implementation: task description names all four files.",
+      "pins": [
+        "src/MediatR/MediatR.csproj",
+        "Directory.Build.props",
+        "NuGet.Config",
+        ".github/workflows/ci.yml"
+      ],
+      "query_text": "src/MediatR/MediatR.csproj Directory.Build.props NuGet.Config .github/workflows/ci.yml build configuration changes",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept (CI build hardening) with exact symbol names. Pre-implementation: developer knows the file and target names from the task.",
+      "pins": [],
+      "query_text": "fix EmbedBuildDate git fallback and update LangVersion EnforceCodeStyleInBuild in Directory.Build.props",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "EmbedBuildDate",
+        "LangVersion",
+        "EnforceCodeStyleInBuild"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 symbol names and 4 file paths. Pre-implementation: task explicitly names all of these.",
+      "pins": [
+        "src/MediatR/MediatR.csproj",
+        "Directory.Build.props",
+        "NuGet.Config",
+        ".github/workflows/ci.yml"
+      ],
+      "query_text": "EmbedBuildDate LangVersion EnforceCodeStyleInBuild in src/MediatR/MediatR.csproj Directory.Build.props NuGet.Config .github/workflows/ci.yml",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "EmbedBuildDate",
+        "LangVersion",
+        "EnforceCodeStyleInBuild"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names, file paths, and full description. Pre-implementation: developer who read all task requirements would write this.",
+      "pins": [
+        "src/MediatR/MediatR.csproj",
+        "Directory.Build.props",
+        "NuGet.Config",
+        ".github/workflows/ci.yml"
+      ],
+      "query_text": "fix EmbedBuildDate shallow clone fallback, set LangVersion preview, add EnforceCodeStyleInBuild, add dotnet-experimental NuGet feed, add dotnet format CI step",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "EmbedBuildDate",
+        "LangVersion"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Made four changes across four files: (1) added `ContinueOnError=\"ErrorAndContinue\"` to the git Exec task and extended the fallback condition to detect non-date output (via `StartsWith('20')`) in `MediatR.csproj`; (2) changed `LangVersion` to `preview` and added `EnforceCodeStyleInBuild` to `Directory.Build.props`; (3) added the `dotnet-experimental` NuGet feed to `NuGet.Config`; (4) added a `dotnet format --verify-no-changes` step to `.github/workflows/ci.yml`.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-mediatr/N11",
+  "task_text": "Update MediatR.csproj packaging and Directory.Build.props build configuration\n\n`MediatR.csproj` embeds the build date via a custom MSBuild target\nthat shells out to `git log`, but this fails in CI environments where\nthe git history is shallow-cloned with `filter: tree:0`. Fix the\n`EmbedBuildDate` target to handle missing git gracefully by falling\nback to `$([System.DateTime]::UtcNow)`. Also update\n`Directory.Build.props` to set `LangVersion` to `preview` for all\nprojects, add `EnforceCodeStyleInBuild` set to `true`, and update\n`NuGet.Config` to add the `dotnet-experimental` feed for preview SDK\npackages. Update `.github/workflows/ci.yml` to add a `dotnet format\n--verify-no-changes` step that enforces code style consistency.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/MediatR/MediatR.csproj",
+      "Directory.Build.props",
+      "NuGet.Config",
+      ".github/workflows/ci.yml"
+    ],
+    "diff_seeds": [
+      "EmbedBuildDate",
+      "LangVersion",
+      "EnforceCodeStyleInBuild"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [],
+  "tier_difference_reasoning": "The minimum set covers all five edited definitions across four files. No thrash-preventing defs are needed \u2014 all changes are standalone configuration edits with no dependencies between them. An AI agent reading the four changed files upfront has everything needed without additional context."
+}

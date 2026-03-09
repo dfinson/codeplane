@@ -1,0 +1,213 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/main/java/tools/jackson/databind/node/ObjectNode.java b/src/main/java/tools/jackson/databind/node/ObjectNode.java\nindex a4623e6..df92f90 100644\n--- a/src/main/java/tools/jackson/databind/node/ObjectNode.java\n+++ b/src/main/java/tools/jackson/databind/node/ObjectNode.java\n@@ -1112,6 +1112,35 @@ child.getClass().getName(), propName, OverwriteMode.NULLS);\n \n     protected boolean _childrenEqual(ObjectNode other) {\n+        // Compare entries in iteration order so that two ObjectNodes with identical\n+        // keys and values but different field ordering are considered unequal.\n+        if (_children.size() != other._children.size()) {\n+            return false;\n+        }\n+        Iterator<Map.Entry<String, JsonNode>> it1 = _children.entrySet().iterator();\n+        Iterator<Map.Entry<String, JsonNode>> it2 = other._children.entrySet().iterator();\n+        while (it1.hasNext()) {\n+            Map.Entry<String, JsonNode> e1 = it1.next();\n+            Map.Entry<String, JsonNode> e2 = it2.next();\n+            if (!e1.getKey().equals(e2.getKey()) || !e1.getValue().equals(e2.getValue())) {\n+                return false;\n+            }\n+        }\n+        return true;\n+    }\n+\n+    /**\n+     * Equality check that ignores field ordering: returns true if both\n+     * nodes have the same set of properties with equal values, regardless of the\n+     * order in which properties were inserted. This is the pre-3.x semantics\n+     * of equals(Object).\n+     *\n+     * @param other ObjectNode to compare against (may be null)\n+     * @return true if both nodes have the same properties ignoring order\n+     */\n+    public boolean equalsIgnoreOrder(ObjectNode other) {\n+        if (other == this) return true;\n+        if (other == null) return false;\n         return _children.equals(other._children);\n     }",
+  "excluded_defs": [
+    {
+      "kind": "field",
+      "name": "_children",
+      "path": "src/main/java/tools/jackson/databind/node/ObjectNode.java",
+      "reason": "read: confirmed that _children is a LinkedHashMap, which maintains insertion order \u2014 essential to know before implementing the iterator-based comparison",
+      "start_line": 29
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "_children is declared as LinkedHashMap so its entrySet() iterator yields entries in insertion order. Iterating both maps and comparing positionally gives the order-sensitive comparison cheaply without sorting.",
+    "dead_ends": [],
+    "hindsight": "Could have checked immediately whether _children was already a LinkedHashMap rather than spending time confirming the map type.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Compare sorted entry lists",
+          "Add a flag in ObjectNode to toggle order-sensitivity"
+        ],
+        "decision": "Iterate entrySet() of both maps in lock-step using iterators",
+        "reasoning": "LinkedHashMap preserves insertion order; lock-step iteration is O(n) and requires no sorting or flag state"
+      },
+      {
+        "alternatives": [
+          "Override equals() directly",
+          "No separate method"
+        ],
+        "decision": "Change _childrenEqual() which is the protected hook called by equals(), and add equalsIgnoreOrder() as a public unordered helper",
+        "reasoning": "Overriding _childrenEqual() keeps the equals() contract clean and allows subclasses to override; equalsIgnoreOrder() provides backward-compatible semantics for existing callers"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Find equals() and _childrenEqual() in ObjectNode.java",
+        "reasoning": "Task says to fix ObjectNode.equals and _childrenEqual helper",
+        "result": "equals() delegates to _childrenEqual(other) which just calls _children.equals(other._children) (unordered map comparison)"
+      },
+      {
+        "action": "Check _children field type declaration",
+        "reasoning": "Need to confirm insertion order is preserved",
+        "result": "_children is LinkedHashMap, so iteration order matches insertion order"
+      },
+      {
+        "action": "Check imports",
+        "reasoning": "Need java.util.Iterator for lock-step iteration",
+        "result": "java.util.* is already imported"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "_childrenEqual",
+      "path": "src/main/java/tools/jackson/databind/node/ObjectNode.java",
+      "reason": "edited: changed from simple map equality to order-sensitive iterator comparison",
+      "start_line": 1112
+    },
+    {
+      "kind": "method",
+      "name": "equalsIgnoreOrder",
+      "path": "src/main/java/tools/jackson/databind/node/ObjectNode.java",
+      "reason": "edited: new method added to preserve old unordered semantics",
+      "start_line": 1139
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: describes the bug in domain terms ('two JSON objects', 'same fields in different order', 'considered equal') without any code terms. Pre-implementation: a developer noticing wrong equality results would describe it this way.",
+      "pins": [],
+      "query_text": "Two JSON object nodes with the same fields but in different order should be considered unequal but are incorrectly treated as equal",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: contains the literal comment string 'Compare entries in iteration order' that appears verbatim in the added code. Pre-implementation: a developer searching for the equality implementation after reading the task description might search for this phrase.",
+      "pins": [],
+      "query_text": "\"Compare entries in iteration order\" OR \"equalsIgnoreOrder\" OR \"_childrenEqual\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists exact symbol names from the changed code. Pre-implementation: these are the identifiers a developer would naturally look up.",
+      "pins": [],
+      "query_text": "_childrenEqual, equalsIgnoreOrder, equals, ObjectNode, _children",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbols (ObjectNode.equals, _childrenEqual) and uses relationship word (callers). Pre-implementation: a developer would trace callers of _childrenEqual to understand the equals contract.",
+      "pins": [],
+      "query_text": "callers of ObjectNode._childrenEqual and relationship to ObjectNode.equals",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "ObjectNode",
+        "_childrenEqual"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains 2 file paths (the changed file and related test). Pre-implementation: a developer would navigate directly to ObjectNode.java for the implementation fix.",
+      "pins": [
+        "src/main/java/tools/jackson/databind/node/ObjectNode.java",
+        "src/test/java/tools/jackson/databind/node/ObjectNodeTest.java"
+      ],
+      "query_text": "src/main/java/tools/jackson/databind/node/ObjectNode.java equals and _childrenEqual",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept (field order in JSON object equality) with symbol names (ObjectNode, _childrenEqual, equalsIgnoreOrder). Pre-implementation: a developer investigating the equality bug would combine domain description with known class names.",
+      "pins": [],
+      "query_text": "ObjectNode field insertion order not compared in equals(); fix _childrenEqual and add equalsIgnoreOrder for backward-compatible unordered check",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "ObjectNode",
+        "_childrenEqual",
+        "equalsIgnoreOrder"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains 3 symbol names and 1 file path. Pre-implementation: a developer would combine the key symbols with the file path from the task description.",
+      "pins": [
+        "src/main/java/tools/jackson/databind/node/ObjectNode.java"
+      ],
+      "query_text": "_childrenEqual equalsIgnoreOrder equals in ObjectNode.java",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "_childrenEqual",
+        "equalsIgnoreOrder",
+        "equals"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes file path and symbol names. Pre-implementation: this is the query a developer would type when implementing the fix.",
+      "pins": [
+        "src/main/java/tools/jackson/databind/node/ObjectNode.java"
+      ],
+      "query_text": "Fix ObjectNode.equals to compare field insertion order via _childrenEqual iterator; add equalsIgnoreOrder for unordered comparison",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "_childrenEqual",
+        "equalsIgnoreOrder",
+        "ObjectNode"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Changed _childrenEqual() from a single-line map equality delegate to an iterator-based lock-step comparison that detects order differences. Added equalsIgnoreOrder(ObjectNode) that restores the original map equality semantics for callers that don't care about insertion order. The existing test testEqualityWrtOrder would need to be updated to use equalsIgnoreOrder() since it expects old unordered behavior.",
+  "task_complexity": "narrow",
+  "task_id": "java-jackson/N3",
+  "task_text": "`ObjectNode.equals()` delegates entirely to the underlying `_children`\nmap's `equals()`, which treats two maps with the same entries as equal\nregardless of insertion order. When nodes have been constructed or\nsorted intentionally (e.g., after `SORT_PROPERTIES_ALPHABETICALLY`\nserialization round-trips), users cannot detect order differences via\n`equals()`. Fix `ObjectNode.equals()` and the protected\n`_childrenEqual()` helper to compare entries in iteration order so\nthat two `ObjectNode` instances with the same keys and values but\ndifferent field ordering are considered unequal. Provide a separate\n`equalsIgnoreOrder(ObjectNode)` helper that preserves the old\nunordered semantics.",
+  "test_selection": {
+    "coverage_available": true,
+    "coverage_skip_reason": null,
+    "diff_pins": [
+      "src/main/java/tools/jackson/databind/node/ObjectNode.java"
+    ],
+    "diff_seeds": [
+      "_childrenEqual",
+      "equalsIgnoreOrder",
+      "equals"
+    ],
+    "import_graph_test_files": [
+      "src/test/java/tools/jackson/databind/node/ObjectNodeTest.java",
+      "src/test/java/tools/jackson/databind/node/JsonNodeBasicTest.java"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [
+      {
+        "covers_changed_lines": [
+          1112,
+          1113
+        ],
+        "reason": "tests ObjectNode equals with same contents and different insertion order; directly exercises _childrenEqual via equals()",
+        "start_line": 477,
+        "test_kind": "function",
+        "test_name": "testEqualityWrtOrder",
+        "test_path": "src/test/java/tools/jackson/databind/node/ObjectNodeTest.java"
+      },
+      {
+        "covers_changed_lines": [
+          1107,
+          1109
+        ],
+        "reason": "calls assertFalse(n.equals(n2)) with different-content ObjectNodes, exercising equals() \u2192 _childrenEqual() path",
+        "start_line": 144,
+        "test_kind": "function",
+        "test_name": "testBasics",
+        "test_path": "src/test/java/tools/jackson/databind/node/ObjectNodeTest.java"
+      }
+    ],
+    "test_query": "Find tests that verify the behavior of _childrenEqual, equals in ObjectNode.java"
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "field",
+      "name": "_children",
+      "path": "src/main/java/tools/jackson/databind/node/ObjectNode.java",
+      "reason": "read: confirms _children is LinkedHashMap, which preserves insertion order; an agent must verify this before implementing the iterator-based comparison, otherwise it would incorrectly assume any Map and add sorting logic",
+      "start_line": 29
+    },
+    {
+      "kind": "method",
+      "name": "equals",
+      "path": "src/main/java/tools/jackson/databind/node/ObjectNode.java",
+      "reason": "read: the public equals() method delegates to _childrenEqual(); confirms that changing _childrenEqual() is sufficient and no changes are needed to equals() itself",
+      "start_line": 1102
+    }
+  ],
+  "tier_difference_reasoning": "minimum_sufficient covers the two edited/added method sites. thrash_preventing adds the _children field declaration (an agent must verify it is LinkedHashMap before choosing iterators over sorting) and the public equals() method (confirms it delegates to _childrenEqual() so no direct change is needed to equals()). Without these, an agent might implement sorting or unnecessarily modify equals() directly."
+}

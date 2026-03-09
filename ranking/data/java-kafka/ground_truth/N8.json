@@ -1,0 +1,158 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/clients/src/main/java/org/apache/kafka/common/internals/KafkaFutureImpl.java b/clients/src/main/java/org/apache/kafka/common/internals/KafkaFutureImpl.java\nindex 803ec9e..e14061e 100644\n--- a/clients/src/main/java/org/apache/kafka/common/internals/KafkaFutureImpl.java\n+++ b/clients/src/main/java/org/apache/kafka/common/internals/KafkaFutureImpl.java\n@@ -67,7 +67,9 @@ public class KafkaFutureImpl<T> extends KafkaFuture<T> {\n                     // maintain the KafkaFuture behaviour.\n                     throw new CompletionException(t);\n                 } else {\n-                    throw t;\n+                    // Wrap in CompletionException to preserve the original exception as the cause,\n+                    // so callers see ExecutionException -> CompletionException -> original exception.\n+                    throw new CompletionException(t.getMessage(), t);\n                 }\n             }\n         });",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "In `thenApply`, when the function throws a non-`CompletionException`, the code just did `throw t`. CompletableFuture's `thenApply` then wraps it, but the original exception is set as the cause only if it was wrapped in a `CompletionException` by us. Without wrapping, `CompletableFuture.thenApply` wraps the raw throwable, losing the cause chain. Wrapping with `new CompletionException(t.getMessage(), t)` explicitly preserves the original as cause.",
+    "dead_ends": [],
+    "hindsight": "Reading the detailed comments in `completeExceptionally` and `get()` to understand the CompletableFuture vs KafkaFuture exception wrapping semantics was important.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Wrap in ExecutionException directly",
+          "Use initCause() instead"
+        ],
+        "decision": "Wrap in new CompletionException(t.getMessage(), t)",
+        "reasoning": "Consistent with how CompletionException is already used in the if-branch, and with how CompletableFuture internally handles exceptional completion."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read thenApply() in KafkaFutureImpl.java (lines 57-75)",
+        "reasoning": "Understand the existing function wrapping pattern",
+        "result": "Found the if/else for CompletionException vs other throwables; the else just rethrows without preserving cause chain"
+      },
+      {
+        "action": "Read comments in completeExceptionally and get() methods",
+        "reasoning": "Understand KafkaFuture's exception wrapping semantics relative to CompletableFuture",
+        "result": "Confirmed: KafkaFuture wraps via CompletionException chain; CompletableFuture.get() unwraps CompletionException to get the cause for ExecutionException"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "thenApply",
+      "path": "clients/src/main/java/org/apache/kafka/common/internals/KafkaFutureImpl.java",
+      "reason": "edited: changed throw t to throw new CompletionException(t.getMessage(), t) to preserve exception context",
+      "start_line": 57
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts ('exception context', 'cause chain', 'asynchronous operation mapping'). Pre-implementation: describes the bug's symptom.",
+      "pins": [],
+      "query_text": "Preserve the original exception cause when a mapping function applied to an asynchronous operation result throws an error",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'ExecutionException -> CompletionException -> original exception' is an exact comment string added to the code. Pre-implementation: searching for exception chain documentation.",
+      "pins": [],
+      "query_text": "\"ExecutionException\" \"CompletionException\" thenApply cause chain KafkaFuture",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists exact symbol names from the changed code. Pre-implementation: developer searches for these symbols.",
+      "pins": [],
+      "query_text": "KafkaFutureImpl, thenApply, CompletionException, ExecutionException, BaseFunction",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names 'thenApply' and relationship 'callers'. Pre-implementation: understand how thenApply's exceptions propagate to callers via get().",
+      "pins": [],
+      "query_text": "Callers of thenApply in KafkaFuture, what happens to exceptions thrown by the function when get() is called",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "KafkaFutureImpl",
+        "thenApply"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides 2 file paths (interface and implementation). Pre-implementation: task description names both files.",
+      "pins": [
+        "clients/src/main/java/org/apache/kafka/common/KafkaFuture.java",
+        "clients/src/main/java/org/apache/kafka/common/internals/KafkaFutureImpl.java"
+      ],
+      "query_text": "clients/src/main/java/org/apache/kafka/common/KafkaFuture.java clients/src/main/java/org/apache/kafka/common/internals/KafkaFutureImpl.java thenApply exception",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('exception preservation in thenApply') with exact symbol names 'KafkaFuture' and 'thenApply'. Pre-implementation: combines feature description with the known class.",
+      "pins": [],
+      "query_text": "Fix KafkaFuture.thenApply() to wrap function exceptions in CompletionException to preserve cause chain in ExecutionException",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "KafkaFuture",
+        "thenApply"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 symbol names and 2 file paths. Pre-implementation: developer knows files and symbols.",
+      "pins": [
+        "clients/src/main/java/org/apache/kafka/common/internals/KafkaFutureImpl.java",
+        "clients/src/main/java/org/apache/kafka/common/KafkaFuture.java"
+      ],
+      "query_text": "thenApply CompletionException ExecutionException in KafkaFutureImpl.java KafkaFuture.java",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "thenApply",
+        "CompletionException",
+        "ExecutionException"
+      ]
+    },
+    {
+      "justification": "Rule compliance: symbol names and file path present. Pre-implementation: full task description.",
+      "pins": [
+        "clients/src/main/java/org/apache/kafka/common/internals/KafkaFutureImpl.java"
+      ],
+      "query_text": "Fix KafkaFutureImpl.thenApply to preserve function exception stack trace by wrapping in CompletionException instead of rethrowing directly",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "KafkaFutureImpl",
+        "thenApply",
+        "CompletionException"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "In `KafkaFutureImpl.thenApply()`, changed the `else` branch from `throw t` to `throw new CompletionException(t.getMessage(), t)`. This ensures that when the mapping function throws a non-`CompletionException`, the original exception is preserved as the cause in the exception chain, so callers see `ExecutionException -> CompletionException -> original exception`.",
+  "task_complexity": "narrow",
+  "task_id": "java-kafka/N8",
+  "task_text": "Fix `KafkaFuture.thenApply()` to preserve the original exception's stack trace when the mapping function throws. Wrap function exceptions in a new exception that preserves both the mapping failure and any original cause.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "clients/src/main/java/org/apache/kafka/common/internals/KafkaFutureImpl.java"
+    ],
+    "diff_seeds": [
+      "KafkaFutureImpl",
+      "thenApply"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "thenApply",
+      "path": "clients/src/main/java/org/apache/kafka/common/KafkaFuture.java",
+      "reason": "read: the abstract thenApply declaration and surrounding Javadoc explains the expected exception wrapping contract relative to CompletableFuture.thenApply, preventing wrong implementation",
+      "start_line": 119
+    },
+    {
+      "kind": "method",
+      "name": "completeExceptionally",
+      "path": "clients/src/main/java/org/apache/kafka/common/internals/KafkaFutureImpl.java",
+      "reason": "read: explains the CompletionException wrapping semantics for KafkaFuture; an AI agent would read this to understand the cause-chain conventions before implementing the fix",
+      "start_line": 116
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set has only the edited `thenApply()` in KafkaFutureImpl. The thrash-preventing set adds the abstract `thenApply()` declaration in KafkaFuture (for the Javadoc explaining exception semantics) and `completeExceptionally` (which explains the cause-chain wrapping pattern). An AI agent would search for both to understand the exception model before modifying the implementation, preventing a wrong fix like wrapping in ExecutionException directly."
+}

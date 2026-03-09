@@ -1,0 +1,164 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/include/spdlog/pattern_formatter.h b/include/spdlog/pattern_formatter.h\nindex 42a7509..741c077 100644\n--- a/include/spdlog/pattern_formatter.h\n+++ b/include/spdlog/pattern_formatter.h\n@@ -84,6 +84,9 @@ public:\n     template <typename T, typename... Args>\n     pattern_formatter &add_flag(char flag, Args &&...args) {\n         custom_handlers_[flag] = details::make_unique<T>(std::forward<Args>(args)...);\n+        if (!pattern_.empty()) {\n+            compile_pattern_(pattern_);\n+        }\n         return *this;\n     }\n     void set_pattern(std::string pattern);",
+  "excluded_defs": [
+    {
+      "kind": "method",
+      "name": "set_pattern",
+      "path": "include/spdlog/pattern_formatter-inl.h",
+      "reason": "opened to understand when pattern_ is set; confirmed it sets pattern_ then calls compile_pattern_, but set_pattern itself doesn't need to change",
+      "start_line": 1006
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "add_flag stores the handler in custom_handlers_ but doesn't rebuild formatters_. The fix is: if pattern_ is already set, re-run compile_pattern_(pattern_) to rebuild formatters_ with the new handler.",
+    "dead_ends": [],
+    "hindsight": "Could look up whether there's a need to clear formatters_ before calling compile_pattern_ again, but compile_pattern_ already resets formatters_ internally.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Clear and rebuild formatters_ manually",
+          "Add a 'dirty' flag that triggers recompile on next format()"
+        ],
+        "decision": "Call compile_pattern_(pattern_) immediately in add_flag() if pattern_ is non-empty",
+        "reasoning": "Direct and consistent with existing set_pattern() implementation which calls compile_pattern_ immediately after setting pattern_"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read pattern_formatter.h add_flag method and class members",
+        "reasoning": "Task directly named the function and described the problem",
+        "result": "Found add_flag only updates custom_handlers_ but does NOT recompile formatters_"
+      },
+      {
+        "action": "Read compile_pattern_ and set_pattern in pattern_formatter-inl.h",
+        "reasoning": "Needed to confirm compile_pattern_ rebuilds formatters_ from custom_handlers_",
+        "result": "Confirmed: set_pattern calls compile_pattern_ which rebuilds formatters_; pattern_ is stored as member"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "add_flag",
+      "path": "include/spdlog/pattern_formatter.h",
+      "reason": "edited: added compile_pattern_ call when pattern_ is already set",
+      "start_line": 84
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts ('custom format flag handler', 'log pattern', 'recompile'). Pre-implementation: a developer unfamiliar with the codebase would search for the pattern formatter's flag extension mechanism.",
+      "pins": [],
+      "query_text": "After registering a custom log format flag handler, ensure the active log pattern is recompiled so the new handler takes effect immediately",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: uses literal strings that appear in source: 'custom_handlers_' and 'compile_pattern_' appear literally in the code. Pre-implementation: a developer would search for where custom_handlers_ is updated relative to where formatters_ is compiled.",
+      "pins": [],
+      "query_text": "\"custom_handlers_\" \"compile_pattern_\" \"formatters_\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 4 exact symbol names from the changed code. Pre-implementation: developer would search for these symbols to locate the formatter registration/compilation logic.",
+      "pins": [],
+      "query_text": "add_flag, compile_pattern_, custom_handlers_, formatters_",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol 'add_flag' with relationship word 'callees'. Pre-implementation: a developer would trace what add_flag calls (or should call) to understand the fix.",
+      "pins": [],
+      "query_text": "callees of add_flag in pattern_formatter that rebuild the compiled formatter list",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "add_flag"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides 2 explicit file paths from the changed files. Pre-implementation: the task description names pattern_formatter.h explicitly.",
+      "pins": [
+        "include/spdlog/pattern_formatter.h",
+        "include/spdlog/pattern_formatter-inl.h"
+      ],
+      "query_text": "include/spdlog/pattern_formatter.h include/spdlog/pattern_formatter-inl.h",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('stale formatters', 'recompile after adding custom flag') with symbol names 'add_flag' and 'compile_pattern_'. Pre-implementation: natural query after reading the task description.",
+      "pins": [],
+      "query_text": "Fix stale formatters_ in add_flag by calling compile_pattern_ after updating custom_handlers_",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "add_flag",
+        "compile_pattern_"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides 2 symbol names and 2 file paths. Pre-implementation: the task description names both the function and the file.",
+      "pins": [
+        "include/spdlog/pattern_formatter.h",
+        "include/spdlog/pattern_formatter-inl.h"
+      ],
+      "query_text": "add_flag compile_pattern_ in include/spdlog/pattern_formatter.h pattern_formatter-inl.h",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "add_flag",
+        "compile_pattern_"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol name 'add_flag' and file path 'pattern_formatter.h'. Pre-implementation: natural query after reading the task description.",
+      "pins": [
+        "include/spdlog/pattern_formatter.h"
+      ],
+      "query_text": "pattern_formatter add_flag stale formatters recompile compile_pattern_ after set_pattern in pattern_formatter.h",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "add_flag",
+        "compile_pattern_"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added a check in `add_flag()` in `pattern_formatter.h`: if `pattern_` is already set (non-empty), immediately call `compile_pattern_(pattern_)` to rebuild `formatters_` with the newly registered handler. This mirrors the existing behavior of `set_pattern()` which always calls `compile_pattern_` after updating the pattern.",
+  "task_complexity": "narrow",
+  "task_id": "cpp-spdlog/N2",
+  "task_text": "Fix pattern_formatter not refreshing compiled formatters after add_flag()\n\n`pattern_formatter` in `pattern_formatter.h` maintains two parallel\ndata structures: `custom_handlers_` (a map from flag char to handler\nused as the source during pattern compilation) and `formatters_` (the\ncompiled vector of flag formatters used at format time). When\n`add_flag()` is called after `set_pattern()` has already compiled the\npattern, it updates `custom_handlers_` but leaves `formatters_` stale.\nAny flag character already present in the compiled pattern continues to\nuse the old handler clone stored in `formatters_` instead of the new\none. Fix `add_flag()` in `pattern_formatter.h` to call\n`compile_pattern_(pattern_)` after updating `custom_handlers_` whenever\na pattern has already been set, so that `formatters_` is rebuilt to\nreflect the new handler.",
+  "test_selection": {
+    "coverage_available": true,
+    "coverage_skip_reason": null,
+    "diff_pins": [
+      "include/spdlog/pattern_formatter.h"
+    ],
+    "diff_seeds": [
+      "add_flag"
+    ],
+    "import_graph_test_files": [
+      "tests/test_pattern_formatter.cpp"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "set_pattern",
+      "path": "include/spdlog/pattern_formatter-inl.h",
+      "reason": "read: confirms that pattern_ is stored as member string and compile_pattern_ is called after; prevents agent from wondering whether to store pattern differently or whether compile_pattern_ clears formatters_ first",
+      "start_line": 1006
+    },
+    {
+      "kind": "method",
+      "name": "compile_pattern_",
+      "path": "include/spdlog/pattern_formatter-inl.h",
+      "reason": "read: confirms compile_pattern_ rebuilds formatters_ from custom_handlers_, so calling it again is idempotent and correct",
+      "start_line": 1315
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set is just the add_flag method in pattern_formatter.h where the edit goes. The thrash_preventing set adds set_pattern and compile_pattern_ from pattern_formatter-inl.h. An AI agent would need to read set_pattern to confirm that pattern_ is stored as a std::string member (and thus !pattern_.empty() is the right guard), and compile_pattern_ to verify it correctly rebuilds formatters_ using custom_handlers_ (and won't crash if called again). Without these, the agent would make extra search calls to find these definitions."
+}

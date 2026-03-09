@@ -172,8 +172,12 @@ When a WebSocket subscription is ended (client disconnects or calls
 `unsubscribe()`), the server-side subscription teardown function
 returned from the subscription handler is called but not awaited. If
 the teardown is async (e.g., closing a database cursor), it may not
-complete before the connection is closed. Fix the subscription lifecycle
-in `subscription.ts` to properly await async teardown functions.
+complete before the connection is closed. The `TeardownLogic` type in
+`observable/types.ts` currently only supports synchronous teardown
+(`UnsubscribeFn = () => void`). Fix the subscription lifecycle in
+`observable/observable.ts` to extend `TeardownLogic` to include
+`() => Promise<void>` and properly await async teardown functions in
+the `unsubscribe` function.
 
 ### N7: Fix dataLoader not deduplicating identical concurrent requests
 
@@ -187,22 +191,30 @@ key and fan out the result to all callers.
 ### N8: Add content type validation for procedure input in resolveResponse
 
 The server's `contentType.ts` module parses request bodies based on
-detected content types but does not validate that the parsed input
-conforms to the procedure's expected input schema before dispatching.
-When a request arrives with a valid `Content-Type` but malformed body
-(e.g., truncated JSON), the error surfaces as a generic parse failure
-rather than a typed `TRPCError`. Add early schema pre-validation in
-`resolveResponse.ts` that catches malformed inputs and returns a
-`BAD_REQUEST` error with the specific parsing failure details.
+detected content types but does not eagerly validate that the parsed
+input conforms to the procedure's expected schema before dispatching.
+When a request body is syntactically valid JSON but structurally
+invalid (e.g., an object where a string is expected), the error is
+surfaced deep inside the procedure invocation rather than as an early
+request-level check. Add early schema pre-validation in
+`resolveResponse.ts` that calls the procedure's input parser before
+dispatching and returns a `BAD_REQUEST` `TRPCError` with specific
+parsing failure details when the input does not match the declared
+schema.
 
-### N9: Fix createTRPCReact proxy not supporting Symbol.iterator access
+### N9: Fix createTRPCReact proxy not guarding against intrinsic method access
 
-When user code accidentally spreads a tRPC proxy object
-(`{ ...trpc.user }`) or passes it to a function expecting an iterable,
-the proxy throws an opaque error because `Symbol.iterator` access is
-not handled by the decoration proxy. Fix `decorationProxy.ts` to return
-`undefined` for well-known Symbol accesses instead of constructing
-a procedure path.
+When user code accidentally coerces a tRPC proxy to a string or
+number (e.g., template literal `` `prefix-${trpc.user}` `` or a
+`console.log` that triggers `toString()`), the `createRecursiveProxy`
+in `createProxy.ts` treats `'valueOf'` and `'toString'` as procedure
+path segments (since they are strings) and dispatches the callback.
+Inside `decorationProxy.ts`, the callback tries to call
+`hooks['valueOf']` or `hooks['toString']` as a tRPC hook, leading to a
+confusing `TypeError`. Fix `decorationProxy.ts` to explicitly return
+`undefined` for well-known intrinsic method names (`'valueOf'`,
+`'toString'`, `'toJSON'`) before attempting to dispatch to hooks,
+matching the existing special-case handling of `'_def'`.
 
 ### N10: Add static props merging to withTRPC for custom App properties
 
@@ -275,9 +287,9 @@ Requires changes to the procedure builder, the error serialization in
 Currently `wsLink` sends each subscription as an individual WebSocket
 message. Implement message batching that groups multiple subscription
 start/stop messages sent within the same tick into a single WebSocket
-frame. Requires changes to `wsLink.ts` for message buffering, the
-server-side `ws.ts` adapter for batch message parsing, and the
-`batchStreamFormatter.ts` for WebSocket batch envelope formatting.
+frame. Requires changes to `wsLink/wsLink.ts` for message buffering,
+the server-side `ws.ts` adapter for batch message parsing, and
+`wsEncoder.ts` for WebSocket batch envelope encoding and formatting.
 
 ### M7: Add request timeout support to httpLink and httpBatchLink
 
@@ -364,9 +376,9 @@ Add a collaboration layer built on tRPC subscriptions: presence tracking
 (who is online), cursors (where users are), and conflict-free document
 operations via CRDTs. Requires a new `@trpc/collab` package with
 presence pub/sub, a CRDT library integration for state synchronization,
-server-side session management in the WebSocket adapter, React hooks for
-presence and document state in `react-query/`, and cleanup on
-disconnection in `subscription.ts`.
+server-side session management in the WebSocket adapter (`adapters/ws.ts`),
+React hooks for presence and document state in `react-query/`, and cleanup
+on disconnection via the observable teardown in `observable/observable.ts`.
 
 ### W5: Add multi-framework client support (Vue, Svelte, Solid)
 
@@ -394,9 +406,9 @@ Add a channel abstraction to tRPC subscriptions that allows multiple
 logical subscription channels over a single WebSocket connection. Support
 channel groups with shared authentication, per-channel backpressure,
 message ordering guarantees, and automatic reconnection with state
-recovery. Requires changes to `ws.ts` for channel framing, `wsLink.ts`
-for client-side channel management, `subscription.ts` for channel
-lifecycle, `observable.ts` for channel-scoped observables, and a new
+recovery. Requires changes to `ws.ts` for channel framing, `wsLink/wsLink.ts`
+for client-side channel management, `observable/observable.ts` for
+channel-scoped observables and channel lifecycle, and a new
 channel registry on the server.
 
 ### W8: Add edge runtime support across all packages
@@ -445,31 +457,29 @@ flag labels matching each package directory.
 
 ### M11: Add comprehensive monorepo developer documentation
 
-Create a `CONTRIBUTING.md` at the repo root documenting the monorepo
-development workflow: how to use `turbo.json` task pipelines for
-building and testing, the relationship between `pnpm-workspace.yaml`
-packages, `tsconfig.build.json` vs `tsconfig.json` usage for build vs
-editor type checking, and the release process configured in
-`lerna.json`. Add a `docs/architecture.md` describing the package
-dependency graph (server → core, client → core, react-query → client,
-next → react-query + server). Update `README.md` to link to the new
-developer documentation. Update `.github/pull_request_template.md` to
+Expand the existing `CONTRIBUTING.md` at the repo root to document the
+monorepo development workflow more fully: how to use `turbo.json` task
+pipelines for building and testing, the relationship between
+`pnpm-workspace.yaml` packages, `tsconfig.build.json` vs `tsconfig.json`
+usage for build vs editor type checking, and the release process
+configured in `lerna.json`. Add a `docs/architecture.md` describing the
+package dependency graph (server → core, client → core, react-query →
+client, next → react-query + server). Update `README.md` to link to the
+new developer documentation. Update `.github/pull_request_template.md` to
 include a contribution checklist referencing the new guide.
 
 ### W11: Overhaul CI/CD pipeline and developer tooling configuration
 
 Restructure `.github/workflows/` by consolidating overlapping workflows:
-merge `dependabot-approve.yml` and `lock-issues.yml` into maintenance
-automation, and split `main.yml` into separate `test.yml`, `lint.yml`,
-and `release.yml` workflows with proper job dependencies. Add a
-`turbo.json` pipeline entry for `typecheck` tasks that are currently
-missing from the task graph. Create a `.github/renovate.json`
-configuration to replace the existing `.kodiak.toml` for automated
-dependency updates with auto-merge for patch versions. Update
-`prettier.config.js` and `.prettierignore` to include consistent
-formatting for all `.yml`, `.yaml`, and `.json` configuration files
-across the monorepo. Add a `.github/workflows/docs.yml` that builds
-and deploys documentation from the `www/` directory on pushes to main.
-Update `.vscode/settings.json` with recommended editor settings and
-extensions for the monorepo. Update `vitest.config.ts` to add coverage
-thresholds matching the `codecov.yml` per-package targets.
+merge `dependabot-approve.yml` and `lock-issues.yml` into a single
+`maintenance.yml` workflow, and split `main.yml` into separate `test.yml`
+and `release.yml` workflows (a `lint.yml` already exists) with proper job
+dependencies between them. Add a `.github/workflows/docs.yml` that builds
+and deploys documentation from the `www/` directory on pushes to `main`.
+Update `.github/renovate.json` (already present) to enable auto-merge for
+patch version updates across all packages. Update `prettier.config.js` and
+`.prettierignore` to include consistent formatting for all `.yml`, `.yaml`,
+and `.json` configuration files across the monorepo. Update
+`.vscode/settings.json` with recommended extensions and editor settings for
+the monorepo. Update `vitest.config.ts` to add coverage thresholds matching
+the `codecov.yml` per-package targets.

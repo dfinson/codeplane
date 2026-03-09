@@ -1,0 +1,181 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/middleware/body_dump.go b/middleware/body_dump.go\nindex d5c823c..b53c292 100644\n--- a/middleware/body_dump.go\n+++ b/middleware/body_dump.go\n@@ -6,6 +6,8 @@ package middleware\n import (\n \t\"bufio\"\n \t\"bytes\"\n+\t\"crypto/sha256\"\n+\t\"encoding/hex\"\n \t\"errors\"\n \t\"io\"\n \t\"net\"\n@@ -37,8 +39,17 @@ type BodyDumpConfig struct {\n \t// Default: 5 * MB (5,242,880 bytes)\n \t// Set to -1 to disable limits (not recommended in production).\n \tMaxResponseBytes int64\n+\n+\t// ComputeHash, when true, computes a SHA-256 hash of the request body and stores it\n+\t// in the request context under the key BodyDumpContextKeyRequestBodyHash.\n+\t// The handler can retrieve it via c.Get(middleware.BodyDumpContextKeyRequestBodyHash).(string).\n+\tComputeHash bool\n }\n+\n+// BodyDumpContextKeyRequestBodyHash is the context key under which the SHA-256 hex digest of the\n+// request body is stored when BodyDumpConfig.ComputeHash is true.\n+const BodyDumpContextKeyRequestBodyHash = \"echo_body_dump_request_body_hash\"\n+\n // BodyDumpHandler receives the request and response payload.\n type BodyDumpHandler func(c *echo.Context, reqBody []byte, resBody []byte, err error)\n@@ -112,6 +123,11 @@ func (config BodyDumpConfig) ToMiddleware() (echo.MiddlewareFunc, error) {\n \t\t\tcopy(reqBody, reqBuf.Bytes())\n \t\t\tc.Request().Body = io.NopCloser(bytes.NewReader(reqBody))\n+\t\t\tif config.ComputeHash {\n+\t\t\t\th := sha256.Sum256(reqBody)\n+\t\t\t\tc.Set(BodyDumpContextKeyRequestBodyHash, hex.EncodeToString(h[:]))\n+\t\t\t}\n+\n \t\t\t// response part",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "Context keys like ContextKeyHeaderAllow in context.go showed the pattern for storing computed values in the request context without changing function signatures.",
+    "dead_ends": [
+      {
+        "explored": "Changing BodyDumpHandler signature to pass the hash directly",
+        "why_irrelevant": "Would be a breaking API change; context storage is the idiomatic approach in Echo"
+      }
+    ],
+    "hindsight": "Straightforward once I found the ContextKeyHeaderAllow pattern. I'd go straight to adding the constant and computing in ToMiddleware.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Change BodyDumpHandler to accept hash parameter",
+          "Store hash in context under a known key",
+          "Add separate HashHandler callback"
+        ],
+        "decision": "Store hash in context under BodyDumpContextKeyRequestBodyHash",
+        "reasoning": "Doesn't break existing BodyDumpHandler signature; consistent with how Echo stores values in context (like ContextKeyHeaderAllow); handler can access it when needed"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read BodyDumpConfig and ToMiddleware in body_dump.go",
+        "reasoning": "Need to understand how the middleware captures request body and calls handler",
+        "result": "reqBody is captured at line 111-113, handler called at line 139. Need to compute hash after reqBody is available."
+      },
+      {
+        "action": "Searched for ContextKey patterns in context.go",
+        "reasoning": "Need to understand how to pass the hash to the handler without changing its signature",
+        "result": "ContextKeyHeaderAllow = 'echo_header_allow' is stored in context with c.Set() and retrieved with c.Get()"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "struct",
+      "name": "BodyDumpConfig",
+      "path": "middleware/body_dump.go",
+      "reason": "edited: added ComputeHash field",
+      "start_line": 18
+    },
+    {
+      "kind": "method",
+      "name": "ToMiddleware",
+      "path": "middleware/body_dump.go",
+      "reason": "edited: added SHA-256 hash computation and context storage",
+      "start_line": 72
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts 'request body', 'integrity verification', 'SHA-256 hash'. Pre-implementation: a developer would describe the feature this way.",
+      "pins": [],
+      "query_text": "Compute SHA-256 hash of request body in middleware for integrity verification and pass it to the handler",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'BodyDumpContextKeyRequestBodyHash' appears literally in the added code. Pre-implementation: a developer would search for hash-related keys.",
+      "pins": [],
+      "query_text": "\"BodyDumpContextKeyRequestBodyHash\" \"ComputeHash\" body dump",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: exact symbol names from code. Pre-implementation: a developer knows these identifiers.",
+      "pins": [],
+      "query_text": "BodyDumpConfig, ComputeHash, BodyDumpContextKeyRequestBodyHash, ToMiddleware, sha256",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol 'ToMiddleware' with relationship 'callers' and field 'reqBody'. Pre-implementation: a developer would trace how reqBody is used after capture.",
+      "pins": [],
+      "query_text": "callers of ToMiddleware in BodyDumpConfig and where reqBody is computed",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "BodyDumpConfig"
+      ]
+    },
+    {
+      "justification": "Rule compliance: names file path 'middleware/body_dump.go'. Pre-implementation: a developer knows the body dump code is in this file.",
+      "pins": [
+        "middleware/body_dump.go"
+      ],
+      "query_text": "middleware/body_dump.go SHA-256 hash request body",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept with symbols 'BodyDumpConfig', 'ComputeHash'. Pre-implementation: a developer familiar with Echo.",
+      "pins": [],
+      "query_text": "Add ComputeHash option to BodyDumpConfig to compute SHA-256 of request body and store it in context",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "BodyDumpConfig",
+        "ComputeHash"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbols and file path. Pre-implementation: a developer knows where to look.",
+      "pins": [
+        "middleware/body_dump.go"
+      ],
+      "query_text": "ComputeHash BodyDumpConfig BodyDumpContextKeyRequestBodyHash in middleware/body_dump.go",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "ComputeHash",
+        "BodyDumpConfig"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names and file path. Pre-implementation: what a developer would type.",
+      "pins": [
+        "middleware/body_dump.go"
+      ],
+      "query_text": "Add ComputeHash field to BodyDumpConfig in body_dump.go to compute SHA-256 hash of request body",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "BodyDumpConfig",
+        "ComputeHash"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `ComputeHash bool` field to `BodyDumpConfig` and a `BodyDumpContextKeyRequestBodyHash` constant. In `ToMiddleware()`, after capturing the request body, if `ComputeHash` is true the SHA-256 hash is computed and stored in the request context under that key.",
+  "task_complexity": "narrow",
+  "task_id": "go-echo/N7",
+  "task_text": "The `BodyDump` middleware in `middleware/body_dump.go` captures the\nrequest and response bodies for inspection but does not compute a\ncontent hash. Add an optional `ComputeHash` field to `BodyDumpConfig`\nthat, when enabled, computes a SHA-256 hash of the request body and\npasses it to the handler function for integrity verification or\nlogging purposes.",
+  "test_selection": {
+    "coverage_available": true,
+    "coverage_skip_reason": null,
+    "diff_pins": [
+      "middleware/body_dump.go"
+    ],
+    "diff_seeds": [
+      "BodyDumpConfig",
+      "ComputeHash",
+      "ToMiddleware"
+    ],
+    "import_graph_test_files": [
+      "middleware/body_dump_test.go"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [
+      {
+        "covers_changed_lines": [
+          123,
+          127
+        ],
+        "reason": "Exercises the request body capture path in ToMiddleware where hash computation was added",
+        "start_line": 18,
+        "test_kind": "function",
+        "test_name": "TestBodyDump",
+        "test_path": "middleware/body_dump_test.go"
+      }
+    ],
+    "test_query": "Find tests that verify the behavior of BodyDumpConfig, ToMiddleware, ComputeHash in middleware/body_dump.go"
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "type",
+      "name": "BodyDumpHandler",
+      "path": "middleware/body_dump.go",
+      "reason": "read: an AI agent would examine the handler function signature to determine if it could be extended to accept the hash directly",
+      "start_line": 56
+    },
+    {
+      "kind": "variable",
+      "name": "ContextKeyHeaderAllow",
+      "path": "context.go",
+      "reason": "read: an AI agent would look at existing patterns for storing values in context to learn the convention",
+      "start_line": 28
+    }
+  ],
+  "tier_difference_reasoning": "BodyDumpHandler type and ContextKeyHeaderAllow are in thrash_preventing because an AI agent would check: (1) the handler signature to decide whether to change it vs use context storage, and (2) existing context key conventions to name the new key consistently. Without these, the agent might attempt to change the handler signature (breaking change) or name the key inconsistently."
+}

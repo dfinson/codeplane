@@ -1,0 +1,140 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/MediatR/Wrappers/NotificationHandlerWrapper.cs b/src/MediatR/Wrappers/NotificationHandlerWrapper.cs\nindex 404fe3f..be59387 100644\n--- a/src/MediatR/Wrappers/NotificationHandlerWrapper.cs\n+++ b/src/MediatR/Wrappers/NotificationHandlerWrapper.cs\n@@ -23,8 +23,7 @@ public class NotificationHandlerWrapperImpl<TNotification> : NotificationHandler\n     {\n         var handlers = serviceFactory\n             .GetServices<INotificationHandler<TNotification>>()\n-            .GroupBy(static x => x.GetType())\n-            .Select(static g => g.First())\n+            .Distinct(ReferenceEqualityComparer.Instance)\n             .Select(static x => new NotificationHandlerExecutor(x, (theNotification, theToken) => x.Handle((TNotification)theNotification, theToken)));\n \n         return publish(handlers, notification, cancellationToken);\n",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The only true duplicate that should be removed is when DI resolves the exact same object instance twice (e.g., a singleton registered multiple times). By definition, two different instances of the same type with different config are not duplicates.",
+    "dead_ends": [],
+    "hindsight": "The fix is a direct translation of the task description \u2014 no investigation of callers needed.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Use `.Distinct()` with a custom IEqualityComparer<INotificationHandler<T>>",
+          "Keep GroupBy but only deduplicate same reference"
+        ],
+        "decision": "Use `Distinct(ReferenceEqualityComparer.Instance)` as a one-liner replacement",
+        "reasoning": "ReferenceEqualityComparer.Instance is built into .NET 5+ and is the idiomatic way to compare by object identity. It's a drop-in replacement that exactly matches the fix described in the task."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read src/MediatR/Wrappers/NotificationHandlerWrapper.cs",
+        "reasoning": "Task description points directly to this file and the GroupBy dedup logic",
+        "result": "Found the exact buggy pattern: .GroupBy(x => x.GetType()).Select(g => g.First())"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "NotificationHandlerWrapperImpl.Handle",
+      "path": "src/MediatR/Wrappers/NotificationHandlerWrapper.cs",
+      "reason": "edited: replaced GroupBy-based type dedup with ReferenceEqualityComparer.Instance Distinct",
+      "start_line": 20
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: describes the business problem (duplicate subscriber collapsing) using domain language with no code terms. Pre-implementation: a developer reporting 'my handlers are being deduplicated incorrectly' would describe it this way.",
+      "pins": [],
+      "query_text": "notification event subscribers of the same type registered multiple times are incorrectly collapsed into one, losing intentional duplicates",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: this is the exact literal string in the source code that represents the bug. Pre-implementation: a developer investigating unwanted deduplication would grep for this pattern.",
+      "pins": [],
+      "query_text": "GroupBy(static x => x.GetType())",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 4 exact symbol names from the changed code. Pre-implementation: a developer aware of the notification handler subsystem would know these central types.",
+      "pins": [],
+      "query_text": "NotificationHandlerWrapperImpl, INotificationHandler, NotificationHandlerExecutor, ReferenceEqualityComparer",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol (NotificationHandlerWrapperImpl) with relationship word (callers). Pre-implementation: understanding the dispatch path is essential before modifying dedup logic.",
+      "pins": [],
+      "query_text": "callers of NotificationHandlerWrapperImpl.Handle and usages of INotificationHandler in the notification dispatch path",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "NotificationHandlerWrapperImpl"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes the exact file path from the diff. Pre-implementation: the task description names this exact file.",
+      "pins": [
+        "src/MediatR/Wrappers/NotificationHandlerWrapper.cs"
+      ],
+      "query_text": "src/MediatR/Wrappers/NotificationHandlerWrapper.cs notification handler deduplication",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain description (deduplication discarding registrations) with 2 exact symbol names. Pre-implementation: developer knows the class name from task description.",
+      "pins": [],
+      "query_text": "fix incorrect notification handler deduplication in NotificationHandlerWrapperImpl that discards multiple registrations of same type",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "NotificationHandlerWrapperImpl",
+        "INotificationHandler"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 1 file path from the diff. Pre-implementation: task names the file and method explicitly.",
+      "pins": [
+        "src/MediatR/Wrappers/NotificationHandlerWrapper.cs"
+      ],
+      "query_text": "NotificationHandlerWrapperImpl Handle in src/MediatR/Wrappers/NotificationHandlerWrapper.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "NotificationHandlerWrapperImpl",
+        "Handle"
+      ]
+    },
+    {
+      "justification": "Rule compliance: names symbols and file path alongside full description of the fix. Pre-implementation: a developer who has read the bug report would write exactly this.",
+      "pins": [
+        "src/MediatR/Wrappers/NotificationHandlerWrapper.cs"
+      ],
+      "query_text": "replace GroupBy dedup with Distinct ReferenceEqualityComparer in NotificationHandlerWrapperImpl to allow multiple same-type handler registrations",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "NotificationHandlerWrapperImpl",
+        "ReferenceEqualityComparer"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Replaced the `GroupBy(GetType()).Select(g => g.First())` deduplication with `Distinct(ReferenceEqualityComparer.Instance)`. The old code collapsed all instances of the same type down to one, discarding intentional multi-registrations with different state. The new code only removes exact same-reference duplicates.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-mediatr/N2",
+  "task_text": "Fix NotificationHandlerWrapperImpl dedup logic removing legitimate multiple registrations\n\nIn `src/MediatR/Wrappers/NotificationHandlerWrapper.cs`,\n`NotificationHandlerWrapperImpl<TNotification>.Handle` groups handlers\nby `GetType()` and takes `First()` from each group. This deduplication\nremoves intentional multiple registrations of the same handler type\nwith different constructor parameters (e.g., via factory registrations\nwith different configuration). Fix the dedup to only remove exact\nreference duplicates using `Distinct()` with `ReferenceEqualityComparer`\ninstead of grouping by type.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/MediatR/Wrappers/NotificationHandlerWrapper.cs"
+    ],
+    "diff_seeds": [
+      "NotificationHandlerWrapperImpl"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "class",
+      "name": "NotificationHandlerExecutor",
+      "path": "src/MediatR/NotificationHandlerExecutor.cs",
+      "reason": "read: verifying the structure of NotificationHandlerExecutor confirms it wraps a handler instance, and that the dedup happens before wrapping \u2014 no changes needed there",
+      "start_line": 1
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set is just the one edited method. An AI agent might inspect NotificationHandlerExecutor to understand whether dedup should happen before or after wrapping, and to confirm the executor holds per-instance state (which would confirm the reference-equality approach). Without seeing it upfront, the agent might waste a search verifying this assumption."
+}

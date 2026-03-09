@@ -1,0 +1,220 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/include/spdlog/details/log_msg_buffer-inl.h b/include/spdlog/details/log_msg_buffer-inl.h\nindex 45c3383..f7d02aa 100644\n--- a/include/spdlog/details/log_msg_buffer-inl.h\n+++ b/include/spdlog/details/log_msg_buffer-inl.h\n@@ -11,7 +11,8 @@ namespace spdlog {\n namespace details {\n \n SPDLOG_INLINE log_msg_buffer::log_msg_buffer(const log_msg &orig_msg)\n-    : log_msg{orig_msg} {\n+    : log_msg{orig_msg},\n+      mdc_ctx{mdc::get_context()} {\n     buffer.append(logger_name.begin(), logger_name.end());\n     buffer.append(payload.begin(), payload.end());\n     update_string_views();\n diff --git a/include/spdlog/details/log_msg_buffer.h b/include/spdlog/details/log_msg_buffer.h\nindex c926cfa..97a08bf 100644\n--- a/include/spdlog/details/log_msg_buffer.h\n+++ b/include/spdlog/details/log_msg_buffer.h\n@@ -4,6 +4,7 @@\n #pragma once\n \n #include <spdlog/details/log_msg.h>\n+#include <spdlog/mdc.h>\n \n namespace spdlog {\n namespace details {\n@@ -16,6 +17,8 @@ class SPDLOG_API log_msg_buffer : public log_msg {\n     void update_string_views();\n \n public:\n+    mdc::mdc_map_t mdc_ctx;\n+\n     log_msg_buffer() = default;\n     explicit log_msg_buffer(const log_msg &orig_msg);\n     log_msg_buffer(const log_msg_buffer &other);",
+  "excluded_defs": [
+    {
+      "kind": "method",
+      "name": "get_context",
+      "path": "include/spdlog/mdc.h",
+      "reason": "read to understand MDC API; confirmed get_context() returns thread_local mdc_map_t& which can be copy-initialized directly",
+      "start_line": 46
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "mdc::get_context() returns a reference to the thread-local mdc_map_t. Simply copy-constructing mdc_ctx from it in the log_msg_buffer constructor snapshots the originating thread's MDC data before the buffer is handed to the async thread pool.",
+    "dead_ends": [],
+    "hindsight": "Could have added a getter method instead of public member, but public member is simpler and consistent with the struct-like log_msg design.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Modify pattern_formatter to accept optional mdc map",
+          "Store snapshot in log_msg base struct instead"
+        ],
+        "decision": "Add public mdc_map_t mdc_ctx member to log_msg_buffer and snapshot in constructor",
+        "reasoning": "log_msg_buffer is the right place since it's the owning, serialized form used for cross-thread transfer; log_msg base is intentionally lightweight with string_views only"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read log_msg_buffer.h and log_msg_buffer-inl.h",
+        "reasoning": "Task directly names these files",
+        "result": "Found buffer only owns logger_name and payload strings; no MDC data"
+      },
+      {
+        "action": "Read mdc.h",
+        "reasoning": "Needed to understand MDC API: type name, how to get current thread's data",
+        "result": "mdc::mdc_map_t is std::map<string,string>; mdc::get_context() returns thread_local reference"
+      },
+      {
+        "action": "Read log_msg.h",
+        "reasoning": "Needed to verify base log_msg struct doesn't already carry MDC",
+        "result": "Confirmed: log_msg has no MDC field; mdc is thread-local only"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "class",
+      "name": "log_msg_buffer",
+      "path": "include/spdlog/details/log_msg_buffer.h",
+      "reason": "edited: added mdc::mdc_map_t mdc_ctx member and #include <spdlog/mdc.h>",
+      "start_line": 14
+    },
+    {
+      "kind": "method",
+      "name": "log_msg_buffer",
+      "path": "include/spdlog/details/log_msg_buffer-inl.h",
+      "reason": "edited: added mdc_ctx{mdc::get_context()} to constructor initializer list",
+      "start_line": 13
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts ('thread-local diagnostic context', 'cross-thread async logging'). Pre-implementation: a developer would search for how async logging handles per-thread context before finding the buffer.",
+      "pins": [],
+      "query_text": "Capture the current thread's mapped diagnostic context when creating a log message buffer so it is available when the buffer is processed asynchronously on a different thread",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: uses literal strings from source: 'mdc::get_context()' and 'log_msg_buffer' appear literally in the code. Pre-implementation: developer searching for MDC usage in the async path.",
+      "pins": [],
+      "query_text": "\"mdc::get_context\" \"log_msg_buffer\" \"thread local storage\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 4 exact symbol names from the changed code. Pre-implementation: developer would search these to find the buffer and MDC types.",
+      "pins": [],
+      "query_text": "log_msg_buffer, mdc_ctx, mdc_map_t, get_context",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol 'log_msg_buffer' with relationship word 'inherits'. Pre-implementation: developer would check what log_msg_buffer inherits and what it adds.",
+      "pins": [],
+      "query_text": "subclasses of log_msg that add owned storage for cross-thread message buffering",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "log_msg_buffer"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides 2 explicit file paths from changed files. Pre-implementation: task description names both files.",
+      "pins": [
+        "include/spdlog/details/log_msg_buffer.h",
+        "include/spdlog/details/log_msg_buffer-inl.h"
+      ],
+      "query_text": "include/spdlog/details/log_msg_buffer.h include/spdlog/details/log_msg_buffer-inl.h",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('snapshot MDC', 'async logging buffer') with symbol names 'log_msg_buffer' and 'mdc_ctx'. Pre-implementation: natural combination after reading the task.",
+      "pins": [],
+      "query_text": "Snapshot MDC context into log_msg_buffer mdc_ctx field at construction time for async cross-thread logging",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "log_msg_buffer",
+        "mdc_ctx"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides 2 symbol names and 2 file paths. Pre-implementation: developer knows the class and file from the task description.",
+      "pins": [
+        "include/spdlog/details/log_msg_buffer.h",
+        "include/spdlog/details/log_msg_buffer-inl.h"
+      ],
+      "query_text": "log_msg_buffer mdc_map_t in include/spdlog/details/log_msg_buffer.h log_msg_buffer-inl.h",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "log_msg_buffer",
+        "mdc_map_t"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names and file paths. Pre-implementation: natural query after reading the task.",
+      "pins": [
+        "include/spdlog/details/log_msg_buffer.h",
+        "include/spdlog/details/log_msg_buffer-inl.h"
+      ],
+      "query_text": "log_msg_buffer snapshot MDC mdc::get_context thread-local in log_msg_buffer.h log_msg_buffer-inl.h",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "log_msg_buffer",
+        "mdc_map_t"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added a public `mdc::mdc_map_t mdc_ctx` member to `log_msg_buffer` and snapshot the current thread's MDC via `mdc::get_context()` in the `log_msg_buffer(const log_msg &)` constructor. Also added `#include <spdlog/mdc.h>` to the header. This makes the originating thread's MDC available to any thread that processes the buffer later (e.g., the async thread pool worker).",
+  "task_complexity": "narrow",
+  "task_id": "cpp-spdlog/N4",
+  "task_text": "Fix log_msg_buffer not capturing MDC context for cross-thread consumption\n\n`log_msg_buffer` in `details/log_msg_buffer-inl.h` copies the\n`logger_name` and `payload` string_views into an owned buffer, and\ncopies value-type fields (`level`, `time`, `thread_id`) via the base\n`log_msg` copy. However, it does not capture mapped diagnostic context\n(MDC) data from `mdc.h`, which is stored in thread-local storage.\nWhen `log_msg_buffer` is consumed on the async logging thread pool\n(via `details/thread_pool.h`), the MDC entries from the originating\nthread are inaccessible because the worker thread has its own\nthread-local storage. Fix `log_msg_buffer` to snapshot the current\nthread's MDC data at construction time and make it available when\nthe buffer is processed on a different thread.",
+  "test_selection": {
+    "coverage_available": true,
+    "coverage_skip_reason": null,
+    "diff_pins": [
+      "include/spdlog/details/log_msg_buffer.h",
+      "include/spdlog/details/log_msg_buffer-inl.h"
+    ],
+    "diff_seeds": [
+      "log_msg_buffer",
+      "mdc_ctx"
+    ],
+    "import_graph_test_files": [
+      "tests/test_async.cpp",
+      "tests/test_backtrace.cpp"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [
+      {
+        "covers_changed_lines": [
+          13,
+          14,
+          15,
+          16
+        ],
+        "reason": "Creates async logger and logs messages, causing log_msg_buffer constructor to be called on the calling thread before the buffer is enqueued to the async thread pool",
+        "start_line": 8,
+        "test_kind": "function",
+        "test_name": "basic async test",
+        "test_path": "tests/test_async.cpp"
+      },
+      {
+        "covers_changed_lines": [
+          13,
+          14,
+          15,
+          16
+        ],
+        "reason": "Tests async logging to file, exercises log_msg_buffer constructor 17000+ times per coverage baseline",
+        "start_line": 154,
+        "test_kind": "function",
+        "test_name": "to_file",
+        "test_path": "tests/test_async.cpp"
+      },
+      {
+        "covers_changed_lines": [
+          13,
+          14,
+          15,
+          16
+        ],
+        "reason": "Tests multi-thread async logging, exercises log_msg_buffer constructor with concurrent calls from multiple threads",
+        "start_line": 125,
+        "test_kind": "function",
+        "test_name": "multi threads",
+        "test_path": "tests/test_async.cpp"
+      }
+    ],
+    "test_query": "Find tests that verify the behavior of log_msg_buffer constructor in include/spdlog/details/log_msg_buffer-inl.h"
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "class",
+      "name": "mdc",
+      "path": "include/spdlog/mdc.h",
+      "reason": "read: confirms mdc::mdc_map_t type alias, mdc::get_context() returns thread_local reference to copy from; prevents agent from guessing the type name or API",
+      "start_line": 24
+    },
+    {
+      "kind": "struct",
+      "name": "log_msg",
+      "path": "include/spdlog/details/log_msg.h",
+      "reason": "read: confirms log_msg base struct has no MDC field, so log_msg_buffer is the right place to add the snapshot",
+      "start_line": 11
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers the two edited definitions. The thrash_preventing set adds the mdc class (to get the type name mdc_map_t and the get_context() API) and the log_msg struct (to confirm it has no MDC field and understand what the base copy covers). An AI agent would proactively search for mdc's type before writing mdc::mdc_map_t, and would check log_msg to avoid duplicating any already-captured data."
+}

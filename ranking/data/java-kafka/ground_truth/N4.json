@@ -1,0 +1,159 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/clients/src/main/java/org/apache/kafka/common/config/ConfigDef.java b/clients/src/main/java/org/apache/kafka/common/config/ConfigDef.java\nindex dd1e489..7632652 100644\n--- a/clients/src/main/java/org/apache/kafka/common/config/ConfigDef.java\n+++ b/clients/src/main/java/org/apache/kafka/common/config/ConfigDef.java\n@@ -577,10 +577,44 @@ public class ConfigDef {\n             configValues.put(undefinedConfigKey, undefinedConfigValue);\n         }\n \n+        checkForDependentCycles();\n+\n         Map<String, Object> parsed = parseForValidate(props, configValues);\n         return validate(parsed, configValues);\n     }\n \n+    private void checkForDependentCycles() {\n+        Set<String> visited = new HashSet<>();\n+        Set<String> inProgress = new HashSet<>();\n+        for (String name : configKeys.keySet()) {\n+            if (!visited.contains(name)) {\n+                detectCycle(name, visited, inProgress, new ArrayList<>());\n+            }\n+        }\n+    }\n+\n+    private void detectCycle(String name, Set<String> visited, Set<String> inProgress, List<String> path) {\n+        if (inProgress.contains(name)) {\n+            List<String> cyclePath = new ArrayList<>(path);\n+            cyclePath.add(name);\n+            throw new ConfigException(\"Circular dependency detected in config dependents: \" + String.join(\" -> \", cyclePath));\n+        }\n+        if (visited.contains(name)) {\n+            return;\n+        }\n+        inProgress.add(name);\n+        path.add(name);\n+        ConfigKey key = configKeys.get(name);\n+        if (key != null) {\n+            for (String dependent : key.dependents) {\n+                detectCycle(dependent, visited, inProgress, path);\n+            }\n+        }\n+        path.remove(path.size() - 1);\n+        inProgress.remove(name);\n+        visited.add(name);\n+    }\n+",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The recursive `parseForValidate(String,...)` and `validate(String,...)` methods follow the dependents graph. A standard DFS with a visited+inProgress set detects cycles before any recursion starts, preventing the StackOverflowError.",
+    "dead_ends": [],
+    "hindsight": "Could pass `path` as a `Deque` rather than a `List` for cleaner add/remove, but List works fine.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Add visited set inline inside parseForValidate()",
+          "Detect cycle during define() when dependents are added"
+        ],
+        "decision": "Pre-scan in validateAll() via checkForDependentCycles() before processing",
+        "reasoning": "Keeps the existing recursive helpers unchanged; throws ConfigException early with clear message before any parsing occurs."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read validateAll(), parseForValidate(), and validate() methods in ConfigDef.java (lines 566-692)",
+        "reasoning": "Understand the existing recursive flow and where to inject cycle detection",
+        "result": "Found that validateAll() calls parseForValidate() then validate(), both of which recurse through key.dependents without any visited tracking."
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "validateAll",
+      "path": "clients/src/main/java/org/apache/kafka/common/config/ConfigDef.java",
+      "reason": "edited: added checkForDependentCycles() call",
+      "start_line": 566
+    },
+    {
+      "kind": "method",
+      "name": "parseForValidate",
+      "path": "clients/src/main/java/org/apache/kafka/common/config/ConfigDef.java",
+      "reason": "read: understand the recursive dependent traversal pattern that can cause StackOverflowError",
+      "start_line": 633
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain/business language ('configuration dependency graph', 'circular references', 'infinite loop'). Pre-implementation: a developer would describe the bug this way.",
+      "pins": [],
+      "query_text": "Prevent infinite loops when configuration definitions have circular dependency references between each other",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'Circular dependency detected in config dependents' is the exact error message string added to the code. Pre-implementation: searching for similar cycle detection error messages.",
+      "pins": [],
+      "query_text": "\"Circular dependency detected\" dependents ConfigException validateAll",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 6 exact symbol names from the changed code. Pre-implementation: a developer would search for these symbols.",
+      "pins": [],
+      "query_text": "ConfigDef, validateAll, checkForDependentCycles, detectCycle, ConfigException, dependents",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names 'validateAll' and relationship 'callees'. Pre-implementation: understand what validateAll calls to know where to inject cycle detection.",
+      "pins": [],
+      "query_text": "Callees of validateAll in ConfigDef, methods called from validate and parseForValidate that traverse dependents",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "validateAll",
+        "ConfigDef"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides 1 file path. Pre-implementation: the task description names this exact file.",
+      "pins": [
+        "clients/src/main/java/org/apache/kafka/common/config/ConfigDef.java"
+      ],
+      "query_text": "clients/src/main/java/org/apache/kafka/common/config/ConfigDef.java cycle detection dependents",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('circular dependency detection') with exact symbol names 'ConfigDef' and 'validateAll'. Pre-implementation: a developer combines the feature with the known class.",
+      "pins": [],
+      "query_text": "Detect circular config dependencies in ConfigDef.validateAll() and throw ConfigException when a cycle is found in the dependents graph",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "ConfigDef",
+        "validateAll"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 3 symbol names and 1 file path. Pre-implementation: developer knows the file and symbols from task description.",
+      "pins": [
+        "clients/src/main/java/org/apache/kafka/common/config/ConfigDef.java"
+      ],
+      "query_text": "validateAll checkForDependentCycles detectCycle in ConfigDef.java",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "validateAll",
+        "checkForDependentCycles",
+        "detectCycle"
+      ]
+    },
+    {
+      "justification": "Rule compliance: symbol names and file path present. Pre-implementation: full task description.",
+      "pins": [
+        "clients/src/main/java/org/apache/kafka/common/config/ConfigDef.java"
+      ],
+      "query_text": "Add cycle detection to ConfigDef.validateAll() using visited set, throw ConfigException with cycle path for circular dependent config chains",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "ConfigDef",
+        "validateAll",
+        "detectCycle"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `checkForDependentCycles()` called from `validateAll()` that performs a DFS over the dependents graph using a `visited` and `inProgress` set. When a back-edge is detected (cycle), throws `ConfigException` listing the cycle path. Added `detectCycle()` as the recursive DFS helper.",
+  "task_complexity": "narrow",
+  "task_id": "java-kafka/N4",
+  "task_text": "Fix the `ConfigDef` framework in `common/config/ConfigDef.java` to detect cycles. When config A lists B as a dependent and B lists A as a dependent, calling `validate(props)` causes infinite recursion ending in `StackOverflowError`. Add cycle detection in `validateAll()` using a `Set<String>` of in-progress keys, throwing `ConfigException` with a descriptive message (listing the cycle path) when a cycle is detected.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "clients/src/main/java/org/apache/kafka/common/config/ConfigDef.java"
+    ],
+    "diff_seeds": [
+      "validateAll",
+      "checkForDependentCycles",
+      "detectCycle"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "parseForValidate",
+      "path": "clients/src/main/java/org/apache/kafka/common/config/ConfigDef.java",
+      "reason": "read: seeing how dependents are recursively iterated prevents writing the cycle check incorrectly (e.g., inside the recursion instead of as a pre-scan)",
+      "start_line": 633
+    },
+    {
+      "kind": "method",
+      "name": "validate",
+      "path": "clients/src/main/java/org/apache/kafka/common/config/ConfigDef.java",
+      "reason": "read: same recursive pattern - an AI agent would check both recursive methods before deciding where to add cycle detection",
+      "start_line": 667
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set includes only `validateAll` (edited) and the primary `parseForValidate` (the most obvious source of recursion). The thrash-preventing set additionally includes the private `validate(String,...)` method because an AI agent, seeing two recursive helpers in `validateAll`, would search for the second one to confirm both follow the same pattern before deciding on the pre-scan approach."
+}

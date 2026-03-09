@@ -1,0 +1,145 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/guava/src/com/google/common/base/Joiner.java b/guava/src/com/google/common/base/Joiner.java\nindex 24e24df..7ca72b6 100644\n--- a/guava/src/com/google/common/base/Joiner.java\n+++ b/guava/src/com/google/common/base/Joiner.java\n@@ -103,6 +103,7 @@ public class Joiner {\n   @CanIgnoreReturnValue\n   public <A extends Appendable> A appendTo(A appendable, Iterator<?> parts) throws IOException {\n     checkNotNull(appendable);\n+    checkNotNull(parts);\n     if (parts.hasNext()) {\n       appendable.append(toString(parts.next()));\n       while (parts.hasNext()) {\n",
+  "excluded_defs": [],
+  "exploration_log": {
+    "aha_moment": "The skipNulls() override at line 309 already calls checkNotNull(parts, \"parts\"), confirming the exact pattern to use in the base method.",
+    "dead_ends": [],
+    "hindsight": "Nothing to do differently, one-liner fix.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "checkNotNull(parts, \"parts\")",
+          "checkNotNull(parts)"
+        ],
+        "decision": "Use plain checkNotNull(parts) without message to be consistent with the checkNotNull(appendable) already above it in the same method",
+        "reasoning": "The existing checkNotNull(appendable) in the base method does not use a message, so checkNotNull(parts) is consistent"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "grep for appendTo.*Iterator in Joiner.java",
+        "reasoning": "Task specifies the exact method",
+        "result": "Found at line 104 and the skipNulls override at line 309"
+      },
+      {
+        "action": "Read both appendTo(Appendable, Iterator) overloads",
+        "reasoning": "Needed to see existing null checks and the reference pattern",
+        "result": "Base method at 104 checks appendable but not parts; skipNulls override at 309 checks both"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "appendTo",
+      "path": "guava/src/com/google/common/base/Joiner.java",
+      "reason": "edited: added checkNotNull(parts) as second statement",
+      "start_line": 104
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses domain concepts ('separator joining', 'null guard', 'iterator source') without any symbols or paths. Pre-implementation: natural way to describe the bug before reading code.",
+      "pins": [],
+      "query_text": "add a null guard to a separator-joining utility method that concatenates elements from a lazy source so that passing null fails immediately at the call site",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'checkNotNull(parts, \"parts\")' is a literal string that appears in the skipNulls override. Pre-implementation: developer searching for how null checks are done for the parts argument.",
+      "pins": [],
+      "query_text": "\"checkNotNull(parts\" Joiner appendTo",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 4 exact symbol names from the changed code. Pre-implementation: developer would list these identifiers to find the relevant methods.",
+      "pins": [],
+      "query_text": "appendTo, checkNotNull, Joiner, Iterator",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names 'appendTo' and uses relationship word 'overrides' pointing to the skipNulls override. Pre-implementation: developer examining overrides of appendTo to understand null-check patterns.",
+      "pins": [],
+      "query_text": "overrides of appendTo in Joiner including skipNulls variant that already calls checkNotNull",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "appendTo"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides explicit file path. Pre-implementation: task description identifies the file.",
+      "pins": [
+        "guava/src/com/google/common/base/Joiner.java"
+      ],
+      "query_text": "guava/src/com/google/common/base/Joiner.java appendTo Iterator null check",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('validate the parts iterator') with 2 exact symbols 'appendTo' and 'checkNotNull'. Pre-implementation: a developer who read the task would phrase it this way.",
+      "pins": [],
+      "query_text": "Joiner.appendTo should validate the parts Iterator with checkNotNull before iterating, consistent with the skipNulls override",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "appendTo",
+        "checkNotNull"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 1 file path. Pre-implementation: developer who knows the method name and file uses this to navigate.",
+      "pins": [
+        "guava/src/com/google/common/base/Joiner.java"
+      ],
+      "query_text": "appendTo checkNotNull in guava/src/com/google/common/base/Joiner.java",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "appendTo",
+        "checkNotNull"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names 'appendTo', 'checkNotNull' and the file path. Pre-implementation: this is how a developer would phrase the search after reading the task.",
+      "pins": [
+        "guava/src/com/google/common/base/Joiner.java"
+      ],
+      "query_text": "add checkNotNull(parts) to Joiner.appendTo(Appendable, Iterator) base method in Joiner.java to match skipNulls override",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "appendTo",
+        "checkNotNull"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `checkNotNull(parts)` as the second statement of the base `Joiner.appendTo(A appendable, Iterator<?> parts)` method at line 104 in Joiner.java. The skipNulls() override at line 309 already checks both appendable and parts; the base method was only checking appendable.",
+  "task_complexity": "narrow",
+  "task_id": "java-guava/N2",
+  "task_text": "Fix Joiner.appendTo(Appendable, Iterator) missing null-check for the parts iterator\n\nThe base `Joiner.appendTo(A appendable, Iterator<?> parts)` method does\nnot call `checkNotNull(parts)` before iterating. Passing a `null`\niterator throws `NullPointerException` at `parts.hasNext()` deep inside\nthe method with a confusing stack trace. The inner class returned by\n`skipNulls()` already overrides this method and does call\n`checkNotNull(parts, \"parts\")`. Fix the base `Joiner.appendTo(A,\nIterator)` method in `Joiner.java` to add `checkNotNull(parts)` as its\nfirst statement, consistent with the `skipNulls()` variant.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "guava/src/com/google/common/base/Joiner.java"
+    ],
+    "diff_seeds": [
+      "appendTo"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "appendTo",
+      "path": "guava/src/com/google/common/base/Joiner.java",
+      "reason": "read: the skipNulls override at line 309 shows the exact null-check pattern (checkNotNull(parts, \"parts\")) that an agent needs to reference to stay consistent",
+      "start_line": 309
+    }
+  ],
+  "tier_difference_reasoning": "The minimum is only the method edited. The skipNulls override is added to thrash_preventing because an AI agent would search for the reference implementation to understand the expected style (message argument or not, order of checks) and without it might choose a slightly different form and then revise."
+}

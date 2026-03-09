@@ -1,0 +1,178 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/MediatR/IPipelineBehavior.cs b/src/MediatR/IPipelineBehavior.cs\nindex 142ec70..f714a68 100644\n--- a/src/MediatR/IPipelineBehavior.cs\n+++ b/src/MediatR/IPipelineBehavior.cs\n@@ -9,7 +9,7 @@ namespace MediatR;\n /// </summary>\n /// <typeparam name=\"TResponse\">Response type</typeparam>\n /// <returns>Awaitable task returning a <typeparamref name=\"TResponse\"/></returns>\n-public delegate Task<TResponse> RequestHandlerDelegate<TResponse>(CancellationToken t = default);\n+public delegate Task<TResponse> RequestHandlerDelegate<TResponse>(CancellationToken? t = null);\n \n /// <summary>\n /// Pipeline behavior to surround the inner handler.\ndiff --git a/src/MediatR/Wrappers/RequestHandlerWrapper.cs b/src/MediatR/Wrappers/RequestHandlerWrapper.cs\nindex dc21356..90fc317 100644\n--- a/src/MediatR/Wrappers/RequestHandlerWrapper.cs\n+++ b/src/MediatR/Wrappers/RequestHandlerWrapper.cs\n@@ -34,14 +34,14 @@ public class RequestHandlerWrapperImpl<TRequest, TResponse> : RequestHandlerWrap\n     public override Task<TResponse> Handle(IRequest<TResponse> request, IServiceProvider serviceProvider,\n         CancellationToken cancellationToken)\n     {\n-        Task<TResponse> Handler(CancellationToken t = default) => serviceProvider.GetRequiredService<IRequestHandler<TRequest, TResponse>>()\n-            .Handle((TRequest) request, t == default ? cancellationToken : t);\n+        Task<TResponse> Handler(CancellationToken? t = null) => serviceProvider.GetRequiredService<IRequestHandler<TRequest, TResponse>>()\n+            .Handle((TRequest) request, t ?? cancellationToken);\n \n         return serviceProvider\n             .GetServices<IPipelineBehavior<TRequest, TResponse>>()\n             .Reverse()\n             .Aggregate((RequestHandlerDelegate<TResponse>) Handler,\n-                (next, pipeline) => (t) => pipeline.Handle((TRequest) request, next, t == default ? cancellationToken : t))();\n+                (next, pipeline) => (t) => pipeline.Handle((TRequest) request, next, t ?? cancellationToken))();\n     }\n }\n \n@@ -55,10 +55,10 @@ public class RequestHandlerWrapperImpl<TRequest> : RequestHandlerWrapper\n     public override Task<Unit> Handle(IRequest request, IServiceProvider serviceProvider,\n         CancellationToken cancellationToken)\n     {\n-        async Task<Unit> Handler(CancellationToken t = default)\n+        async Task<Unit> Handler(CancellationToken? t = null)\n         {\n             await serviceProvider.GetRequiredService<IRequestHandler<TRequest>>()\n-                .Handle((TRequest) request, t == default ? cancellationToken : t);\n+                .Handle((TRequest) request, t ?? cancellationToken);\n \n             return Unit.Value;\n         }\n@@ -67,6 +67,6 @@ await serviceProvider.GetRequiredService<IRequestHandler<TRequest>>()\n             .GetServices<IPipelineBehavior<TRequest, Unit>>()\n             .Reverse()\n             .Aggregate((RequestHandlerDelegate<Unit>) Handler,\n-                (next, pipeline) => (t) => pipeline.Handle((TRequest) request, next, t == default ? cancellationToken : t))();\n+                (next, pipeline) => (t) => pipeline.Handle((TRequest) request, next, t ?? cancellationToken))();\n     }\n }",
+  "excluded_defs": [
+    {
+      "kind": "method",
+      "name": "Handle",
+      "path": "src/MediatR/Pipeline/RequestPreProcessorBehavior.cs",
+      "reason": "verified it calls next(cancellationToken) but no changes needed \u2014 just confirming compatibility",
+      "start_line": 1
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "CancellationToken.None == default(CancellationToken), so the old `== default` check is inherently ambiguous. Nullable types provide the exact distinction needed.",
+    "dead_ends": [],
+    "hindsight": "Could have immediately jumped to the delegate definition to understand the full scope; the fix in IPipelineBehavior.cs is the root change that enables the fix in RequestHandlerWrapper.cs.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Use a private wrapper struct to encode 'not set'",
+          "Use a bool flag alongside CancellationToken"
+        ],
+        "decision": "Change delegate signature to CancellationToken? (nullable) instead of using a sentinel value",
+        "reasoning": "CancellationToken? cleanly distinguishes null (not provided) from CancellationToken.None (explicit). It's idiomatic C#, backward-compatible since CancellationToken implicitly converts to CancellationToken?, and is the simplest approach."
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read src/MediatR/Wrappers/RequestHandlerWrapper.cs",
+        "reasoning": "Task description pointed directly to this file as the location of the bug",
+        "result": "Found Handler local functions using `t == default ? cancellationToken : t` pattern and aggregate lambdas with same pattern"
+      },
+      {
+        "action": "Read src/MediatR/IPipelineBehavior.cs",
+        "reasoning": "Need to understand the delegate signature to change it to nullable",
+        "result": "Found `RequestHandlerDelegate<TResponse>` declared as `delegate Task<TResponse> RequestHandlerDelegate<TResponse>(CancellationToken t = default)`"
+      },
+      {
+        "action": "Grep for `next(` calls in Pipeline/*.cs",
+        "reasoning": "Needed to confirm changing to nullable wouldn't break callers; CancellationToken implicitly converts to CancellationToken?",
+        "result": "All four pipeline behaviors call `next(cancellationToken)` \u2014 passing explicit non-null tokens"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "variable",
+      "name": "RequestHandlerDelegate",
+      "path": "src/MediatR/IPipelineBehavior.cs",
+      "reason": "edited: changed delegate parameter from CancellationToken to CancellationToken?",
+      "start_line": 12
+    },
+    {
+      "kind": "method",
+      "name": "RequestHandlerWrapperImpl<TRequest, TResponse>.Handle",
+      "path": "src/MediatR/Wrappers/RequestHandlerWrapper.cs",
+      "reason": "edited: changed Handler local function and aggregate lambda to use nullable token with ?? operator",
+      "start_line": 34
+    },
+    {
+      "kind": "method",
+      "name": "RequestHandlerWrapperImpl<TRequest>.Handle",
+      "path": "src/MediatR/Wrappers/RequestHandlerWrapper.cs",
+      "reason": "edited: changed Handler local function and aggregate lambda to use nullable token with ?? operator",
+      "start_line": 55
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses domain concepts ('pipeline middleware', 'cancellation signal', 'unset') with no code terms or symbol names. Pre-implementation: a developer encountering the bug would describe it as a cancellation disambiguation problem before knowing the specific files.",
+      "pins": [],
+      "query_text": "pipeline middleware delegate that cannot distinguish between an intentionally empty cancellation signal and an unset one",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: the exact source code expression `t == default ? cancellationToken : t` appears literally in RequestHandlerWrapper.cs as the buggy pattern. Pre-implementation: a developer reproducing the bug would grep for this exact ternary pattern.",
+      "pins": [],
+      "query_text": "t == default ? cancellationToken : t",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists 4 exact symbol names from the changed code. Pre-implementation: a developer familiar with the MediatR pipeline architecture would start with these central symbols before reading code.",
+      "pins": [],
+      "query_text": "RequestHandlerDelegate, RequestHandlerWrapperImpl, IPipelineBehavior, Handler",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbols (RequestHandlerDelegate, IPipelineBehavior) with relationship words (callers, implementors, pass). Pre-implementation: the fix requires understanding how the delegate is used throughout the pipeline graph.",
+      "pins": [],
+      "query_text": "callers of RequestHandlerDelegate and implementors of IPipelineBehavior that pass CancellationToken to the next delegate",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "RequestHandlerDelegate",
+        "IPipelineBehavior"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes 2 explicit file paths from the diff. Pre-implementation: the task description names these exact files, so a developer would navigate directly to them.",
+      "pins": [
+        "src/MediatR/Wrappers/RequestHandlerWrapper.cs",
+        "src/MediatR/IPipelineBehavior.cs"
+      ],
+      "query_text": "src/MediatR/Wrappers/RequestHandlerWrapper.cs and src/MediatR/IPipelineBehavior.cs pipeline delegate token handling",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept ('cancellation token not properly propagated') with 2 exact symbol names (RequestHandlerDelegate, RequestHandlerWrapperImpl). Pre-implementation: developer would know the token propagation concept and the key symbol names from task description.",
+      "pins": [],
+      "query_text": "fix cancellation token not properly propagated through the handler delegate chain, affecting RequestHandlerDelegate and RequestHandlerWrapperImpl",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "RequestHandlerDelegate",
+        "RequestHandlerWrapperImpl"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes 2 symbol names and 2 file paths. Pre-implementation: task description points to both files and names these symbols.",
+      "pins": [
+        "src/MediatR/IPipelineBehavior.cs",
+        "src/MediatR/Wrappers/RequestHandlerWrapper.cs"
+      ],
+      "query_text": "RequestHandlerDelegate RequestHandlerWrapperImpl in src/MediatR/IPipelineBehavior.cs and src/MediatR/Wrappers/RequestHandlerWrapper.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "RequestHandlerDelegate",
+        "RequestHandlerWrapperImpl"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol names and file paths alongside domain description. Pre-implementation: captures the full context a developer would type knowing the bug description and approximate location.",
+      "pins": [
+        "src/MediatR/Wrappers/RequestHandlerWrapper.cs",
+        "src/MediatR/IPipelineBehavior.cs"
+      ],
+      "query_text": "fix CancellationToken.None not distinguished from default in RequestHandlerDelegate delegate in RequestHandlerWrapper pipeline",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "RequestHandlerDelegate",
+        "RequestHandlerWrapperImpl"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Changed the `RequestHandlerDelegate<TResponse>` delegate signature from `CancellationToken t = default` to `CancellationToken? t = null`. Updated all `Handler` local functions and aggregate lambdas to use `t ?? cancellationToken` instead of `t == default ? cancellationToken : t`. This correctly distinguishes 'not provided' (null) from 'explicitly passed CancellationToken.None' (a non-null value equal to default).",
+  "task_complexity": "narrow",
+  "task_id": "csharp-mediatr/N1",
+  "task_text": "Fix Mediator.Send(object) not propagating CancellationToken to the pipeline\n\nIn `src/MediatR/Mediator.cs`, the `Send(object request, CancellationToken)`\nmethod resolves the wrapper via `_requestHandlers.GetOrAdd` and calls\n`handler.Handle(request, _serviceProvider, cancellationToken)`. However,\nin `Wrappers/RequestHandlerWrapper.cs`, the `RequestHandlerWrapperImpl<TRequest, TResponse>.Handle(object, ...)`\noverload calls `Handle((IRequest<TResponse>)request, serviceProvider, cancellationToken)`\nwhich constructs a `Handler` delegate. The inner `Handler` delegate uses\n`t == default ? cancellationToken : t` comparison, but when `t` is\n`CancellationToken.None` (the default parameter value from the delegate\nsignature), it incorrectly falls back to the outer token even when the\ncaller explicitly passed `CancellationToken.None`. Fix the delegate\nparameter handling to distinguish between \"not provided\" and \"explicitly\nNone\".",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/MediatR/IPipelineBehavior.cs",
+      "src/MediatR/Wrappers/RequestHandlerWrapper.cs"
+    ],
+    "diff_seeds": [
+      "RequestHandlerDelegate",
+      "RequestHandlerWrapperImpl"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "interface",
+      "name": "IPipelineBehavior",
+      "path": "src/MediatR/IPipelineBehavior.cs",
+      "reason": "read: understanding IPipelineBehavior.Handle signature confirms pipeline behaviors pass explicit CancellationToken to next, ensuring nullable change is backward-compatible",
+      "start_line": 20
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers exactly what was edited. The thrash-preventing set adds IPipelineBehavior because an AI agent would want to verify that changing the delegate parameter type doesn't break the contract that pipeline behaviors depend on \u2014 specifically, that calling `next(cancellationToken)` still compiles when the parameter is CancellationToken?. Without seeing this upfront, the agent might search all pipeline behavior files one-by-one checking compatibility."
+}

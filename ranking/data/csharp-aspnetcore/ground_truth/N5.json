@@ -1,0 +1,175 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/docs/EventSourceAndCounters.md b/docs/EventSourceAndCounters.md\n+## HttpLogging structured logging fields\n+RequestMethod, RequestPath, StatusCode, Duration fields documented with Splunk/ELK/KQL examples\ndiff --git a/src/Middleware/HttpLogging/src/HttpLoggingExtensions.cs b/src/Middleware/HttpLogging/src/HttpLoggingExtensions.cs\n+    [LoggerMessage(10, LogLevel.Information,\n+        \"{RequestMethod} {RequestPath} responded {StatusCode} in {Duration}ms\",\n+        EventName = \"RequestResponseSummary\")]\n+    public static partial void RequestResponseSummary(\n+        this ILogger logger,\n+        string requestMethod,\n+        string requestPath,\n+        int statusCode,\n+        double duration);\ndiff --git a/src/Middleware/HttpLogging/src/HttpLoggingMiddleware.cs b/src/Middleware/HttpLogging/src/HttpLoggingMiddleware.cs\n+            // Always emit the structured summary log with indexed fields for log aggregators.\n+            _logger.RequestResponseSummary(\n+                context.Request.Method,\n+                context.Request.Path.Value ?? string.Empty,\n+                context.Response.StatusCode,\n+                logContext.GetDuration());",
+  "excluded_defs": [
+    {
+      "kind": "method",
+      "name": "Duration",
+      "path": "src/Middleware/HttpLogging/src/HttpLoggingExtensions.cs",
+      "reason": "read as adjacent context but not modified",
+      "start_line": 39
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "The `[LoggerMessage]` attribute pattern in `HttpLoggingExtensions.cs` is the cleanest way to add named structured fields \u2014 it auto-generates a `LogDefine`-style method with proper named parameter binding.",
+    "dead_ends": [],
+    "hindsight": "Could have checked whether Event ID 10 was already used before picking it.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Modify existing Duration/RequestLog calls to include extra fields",
+          "Add the summary log only in non-CombineLogs path"
+        ],
+        "decision": "Add a single RequestResponseSummary log entry unconditionally at the end of the try block, after all existing logging",
+        "reasoning": "The summary should always be emitted for log aggregators regardless of the detailed CombineLogs mode; keeping it separate avoids coupling with the detailed logging paths"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read HttpLoggingExtensions.cs",
+        "reasoning": "Find the existing [LoggerMessage] patterns and Event IDs",
+        "result": "Found IDs 1-9 in use; [LoggerMessage] attribute generates source-generated structured log methods; ID 10 is free"
+      },
+      {
+        "action": "Read HttpLoggingMiddleware.cs InvokeInternal",
+        "reasoning": "Find where to add the structured summary call",
+        "result": "End of inner try block before the outer finally is where Duration is logged; that's where the summary should go"
+      },
+      {
+        "action": "Check docs/EventSourceAndCounters.md",
+        "reasoning": "Task requires updating this doc file",
+        "result": "File exists with EventSource/EventCounter guidance; appended a new HttpLogging section at the end"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "RequestResponseSummary",
+      "path": "src/Middleware/HttpLogging/src/HttpLoggingExtensions.cs",
+      "reason": "edited: new [LoggerMessage] structured log method with RequestMethod, RequestPath, StatusCode, Duration fields",
+      "start_line": 44
+    },
+    {
+      "kind": "method",
+      "name": "InvokeInternal",
+      "path": "src/Middleware/HttpLogging/src/HttpLoggingMiddleware.cs",
+      "reason": "edited: added _logger.RequestResponseSummary(...) call at end of try block",
+      "start_line": 76
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: pure domain concepts \u2014 'HTTP request summary', 'structured logging fields', 'log aggregators', 'method path status duration'. Pre-implementation: a developer describes the feature request without knowing the classes.",
+      "pins": [],
+      "query_text": "Add structured logging with named HTTP request summary fields so log aggregators can filter and query by method, path, status code, and duration without parsing log strings",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'RequestResponseSummary', 'RequestMethod', 'RequestPath' are literal strings in the source code. Pre-implementation: searching for existing structured log events in the HttpLogging middleware.",
+      "pins": [],
+      "query_text": "\"RequestResponseSummary\" OR \"RequestMethod\" OR \"RequestPath\" OR \"LoggerMessage\" OR \"HttpLoggingMiddleware\"",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 4 exact symbol names from the changed code. Pre-implementation: developer searching for the logger extension methods and the middleware entry point.",
+      "pins": [],
+      "query_text": "RequestResponseSummary, HttpLoggingExtensions, HttpLoggingMiddleware, InvokeInternal",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names HttpLoggingMiddleware with relationship word 'callers' and 'extension methods'. Pre-implementation: tracing what extension methods HttpLoggingMiddleware calls on the logger.",
+      "pins": [],
+      "query_text": "Extension methods on ILogger called by HttpLoggingMiddleware, and callers of HttpLoggingExtensions log methods",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "HttpLoggingMiddleware",
+        "HttpLoggingExtensions"
+      ]
+    },
+    {
+      "justification": "Rule compliance: two file paths from the solution. Pre-implementation: developer navigates directly to the middleware and its logger extensions.",
+      "pins": [
+        "src/Middleware/HttpLogging/src/HttpLoggingMiddleware.cs",
+        "src/Middleware/HttpLogging/src/HttpLoggingExtensions.cs"
+      ],
+      "query_text": "src/Middleware/HttpLogging/src/ structured logging RequestMethod RequestPath StatusCode Duration",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain description with 3 exact symbols. Pre-implementation: developer writing the task as a natural query.",
+      "pins": [],
+      "query_text": "Add structured LoggerMessage logging to HttpLoggingMiddleware with named fields RequestMethod, RequestPath, StatusCode, Duration for log aggregators",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "HttpLoggingMiddleware",
+        "RequestResponseSummary",
+        "HttpLoggingExtensions"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names and 2 file paths. Pre-implementation: pinning both the middleware and the extensions file.",
+      "pins": [
+        "src/Middleware/HttpLogging/src/HttpLoggingMiddleware.cs",
+        "src/Middleware/HttpLogging/src/HttpLoggingExtensions.cs"
+      ],
+      "query_text": "RequestResponseSummary InvokeInternal in src/Middleware/HttpLogging/src/",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "RequestResponseSummary",
+        "InvokeInternal"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol names and file paths. Pre-implementation: the full task description as a query.",
+      "pins": [
+        "src/Middleware/HttpLogging/src/HttpLoggingMiddleware.cs",
+        "src/Middleware/HttpLogging/src/HttpLoggingExtensions.cs"
+      ],
+      "query_text": "Add structured LoggerMessage.Define logging to HttpLoggingMiddleware with RequestMethod, RequestPath, StatusCode, Duration named fields and update docs/EventSourceAndCounters.md",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "HttpLoggingMiddleware",
+        "RequestResponseSummary",
+        "HttpLoggingExtensions"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added a `[LoggerMessage]` partial method `RequestResponseSummary` (Event ID 10) to `HttpLoggingExtensions` with named structured fields: `RequestMethod`, `RequestPath`, `StatusCode`, `Duration`. Called it unconditionally at the end of `InvokeInternal`'s try block after all existing logging. Updated `docs/EventSourceAndCounters.md` with a documentation section for the new fields including usage examples for Splunk, ELK, and Azure Monitor.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-aspnetcore/N5",
+  "task_text": "`HttpLoggingMiddleware` in `src/Middleware/HttpLogging/src/HttpLoggingMiddleware.cs` logs request/response details as formatted strings. Add structured logging using `LoggerMessage.Define` with named fields (`RequestMethod`, `RequestPath`, `StatusCode`, `Duration`) so log aggregators can index and query individual fields without parsing. Also update `docs/EventSourceAndCounters.md` to document the new structured logging fields, their names, types, and usage examples for common log aggregation tools.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/Middleware/HttpLogging/src/HttpLoggingExtensions.cs",
+      "src/Middleware/HttpLogging/src/HttpLoggingMiddleware.cs"
+    ],
+    "diff_seeds": [
+      "RequestResponseSummary",
+      "InvokeInternal"
+    ],
+    "import_graph_test_files": [
+      "src/Middleware/HttpLogging/test/HttpLoggingMiddlewareTests.cs"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "class",
+      "name": "HttpLoggingExtensions",
+      "path": "src/Middleware/HttpLogging/src/HttpLoggingExtensions.cs",
+      "reason": "read: must understand the existing [LoggerMessage] patterns and next available Event ID before adding the new method",
+      "start_line": 9
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set covers the two methods that were edited. The thrash-preventing set adds HttpLoggingExtensions as a class-level read \u2014 an AI agent needs to see the full class to know what Event IDs are already used and confirm the partial keyword pattern before adding the new method."
+}

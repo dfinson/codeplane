@@ -1,0 +1,142 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/src/FluentValidation/Validators/PrecisionScaleValidator.cs b/src/FluentValidation/Validators/PrecisionScaleValidator.cs\nindex 9db24f0..7952e95 100644\n--- a/src/FluentValidation/Validators/PrecisionScaleValidator.cs\n+++ b/src/FluentValidation/Validators/PrecisionScaleValidator.cs\n@@ -96,6 +96,8 @@ private record struct Info (int Scale, int Precision) {\n \t\tpublic int IntegerDigits => Precision - Scale;\n \n \t\tpublic static Info Get(decimal value, bool ignoreTrailingZeros) {\n+\t\t\t// Strip the sign so negative values are measured symmetrically.\n+\t\t\tvalue = Math.Abs(value);\n \t\t\tvar scale = value.Scale;\n \t\t\tvar precision = 0;\n \t\t\tvar tmp = GetMantissa(value);",
+  "excluded_defs": [
+    {
+      "kind": "method",
+      "name": "IsValid",
+      "path": "src/FluentValidation/Validators/PrecisionScaleValidator.cs",
+      "reason": "read for context but the actual bug is in Info.Get; IsValid is unchanged",
+      "start_line": 67
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "Info.Get receives the raw decimal value and immediately reads value.Scale - adding Math.Abs(value) at the top of Info.Get ensures the sign metadata doesn't influence any downstream code path.",
+    "dead_ends": [],
+    "hindsight": "The existing GetMantissa already stripped the sign from the mantissa bits; the fix is at the Info.Get entry point to be explicitly symmetric for both scale reading and mantissa calculation.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "strip sign in IsValid before calling Info.Get",
+          "use Math.Abs inside GetMantissa"
+        ],
+        "decision": "Add Math.Abs at the top of Info.Get",
+        "reasoning": "Info.Get is the self-contained calculation helper; patching it at the entry ensures all paths within it (scale, precision, trailing-zero trim) work on the unsigned value"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read PrecisionScaleValidator.cs in full",
+        "reasoning": "Task explicitly names this file as the only target",
+        "result": "Found Info.Get() nested record struct that computes scale and precision; GetMantissa strips sign from mantissa bits but value.Scale is read before GetMantissa is called"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "Get",
+      "path": "src/FluentValidation/Validators/PrecisionScaleValidator.cs",
+      "reason": "edited: added Math.Abs(value) to strip sign before scale/precision measurement",
+      "start_line": 98
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts (negative decimal, precision, scale, sign, measurement) with no symbol names or code terms. Pre-implementation: a developer fixing a decimal sign-stripping bug would search for this before knowing the file.",
+      "pins": [],
+      "query_text": "Fix precision and scale calculation for negative decimal values to strip the sign before counting digits",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'minus sign is included in the digit count' is the description in the task comments and relevant to source context. Pre-implementation: a developer might grep for existing comments about negative decimal handling.",
+      "pins": [],
+      "query_text": "\"minus sign\" OR \"strip the sign\" OR \"negative decimal\" precision scale",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: lists exact symbol names from the touched code. Pre-implementation: a developer knows these names from the task description.",
+      "pins": [],
+      "query_text": "PrecisionScaleValidator, Info, Get, GetMantissa, Math.Abs",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol Info.Get with a relationship word (callers). Pre-implementation: an agent would look at callers of the calculation helper to understand scope of change.",
+      "pins": [],
+      "query_text": "Callers of Info.Get inside PrecisionScaleValidator and methods that call GetMantissa",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "PrecisionScaleValidator",
+        "Info"
+      ]
+    },
+    {
+      "justification": "Rule compliance: provides the explicit file path from the changed file. Pre-implementation: task description names this file directly.",
+      "pins": [
+        "src/FluentValidation/Validators/PrecisionScaleValidator.cs"
+      ],
+      "query_text": "src/FluentValidation/Validators/PrecisionScaleValidator.cs precision scale calculation",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain concept (negative decimal symmetry) with 2 exact symbol names. Pre-implementation: natural starting query from the task description.",
+      "pins": [],
+      "query_text": "Fix PrecisionScaleValidator.Info.Get to handle negative decimals symmetrically by stripping the sign",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "PrecisionScaleValidator",
+        "Info"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes 2 symbol names and 1 file path. Pre-implementation: a developer with the task description would combine the known file and symbols.",
+      "pins": [
+        "src/FluentValidation/Validators/PrecisionScaleValidator.cs"
+      ],
+      "query_text": "PrecisionScaleValidator Info.Get GetMantissa in src/FluentValidation/Validators/PrecisionScaleValidator.cs",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "PrecisionScaleValidator",
+        "GetMantissa"
+      ]
+    },
+    {
+      "justification": "Rule compliance: contains symbol name and file path. Pre-implementation: natural query combining the known file with the described fix.",
+      "pins": [
+        "src/FluentValidation/Validators/PrecisionScaleValidator.cs"
+      ],
+      "query_text": "Strip sign from negative decimal before computing precision and scale in PrecisionScaleValidator.cs Info.Get",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "PrecisionScaleValidator",
+        "Get"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "Added `value = Math.Abs(value)` at the top of `Info.Get` so that negative decimals are processed as their absolute value before scale is read from `value.Scale` and before the mantissa is extracted. This ensures symmetrical behavior for negative values like `-0.001m`.",
+  "task_complexity": "narrow",
+  "task_id": "csharp-fluentvalidation/N2",
+  "task_text": "The `PrecisionScaleValidator` in `Validators/PrecisionScaleValidator.cs`\ncalculates precision and scale using `Math.Truncate` and string-length\narithmetic. For negative decimals very close to zero (e.g., `-0.001`),\nthe truncation logic can produce an off-by-one scale count because the\nminus sign is included in the digit count. Fix the precision/scale\ncalculation to strip the sign before measuring digits.",
+  "test_selection": {
+    "coverage_available": false,
+    "coverage_skip_reason": "Auditor could not generate baseline coverage \u2014 see auditor report",
+    "diff_pins": [
+      "src/FluentValidation/Validators/PrecisionScaleValidator.cs"
+    ],
+    "diff_seeds": [
+      "Get",
+      "Info"
+    ],
+    "import_graph_test_files": [],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [],
+    "test_query": null
+  },
+  "thrash_preventing_defs": [],
+  "tier_difference_reasoning": "The minimum set already covers everything \u2014 the fix is a one-liner inside a self-contained helper method. An AI agent would not need any additional context beyond reading Info.Get to implement the correct fix."
+}

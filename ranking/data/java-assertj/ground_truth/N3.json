@@ -1,0 +1,187 @@
+{
+  "confidence": "high",
+  "diff": "diff --git a/assertj-core/src/main/java/org/assertj/core/util/Strings.java b/assertj-core/src/main/java/org/assertj/core/util/Strings.java\nindex e718df5..969a63f 100644\n--- a/assertj-core/src/main/java/org/assertj/core/util/Strings.java\n+++ b/assertj-core/src/main/java/org/assertj/core/util/Strings.java\n@@ -85,7 +85,7 @@ public final class Strings {\n         // here we need to format %n but not other % since we do not have arguments.\n         // => we replace all % to %% except if they are followed by a 'n'.\n         ? escapePercentExceptWhenFollowedBy_n(message).formatted()\n-        : message.formatted(args);\n+        : escapePercentNotFollowedByFormatSpecifier(message).formatted(args);\n   }\n \n@@ -235,6 +235,18 @@ public final class Strings {\n     return revertEscapingPercent_n(escapePercent(message));\n   }\n \n+  private static String escapePercentNotFollowedByFormatSpecifier(String message) {\n+    if (message == null) return null;\n+    return message.replaceAll(\"%(?![bBhHsScCdoOxXeEfaAgGtTnB%<(+\\\\-\\\\s0-9.$])\", \"%%\");\n+  }\n+\n   private static String revertEscapingPercent_n(String value) {",
+  "excluded_defs": [
+    {
+      "kind": "method",
+      "name": "value",
+      "path": "assertj-core/src/main/java/org/assertj/core/description/TextDescription.java",
+      "reason": "read to understand how formatIfArgs is called; not needed to implement the fix itself",
+      "start_line": 52
+    }
+  ],
+  "exploration_log": {
+    "aha_moment": "The no-args branch already uses `escapePercentExceptWhenFollowedBy_n` to handle literal `%` signs. The with-args branch needs a similar approach but must preserve valid format specifiers like `%s`, `%d`.",
+    "dead_ends": [],
+    "hindsight": "I would read the Java Formatter documentation first to identify all valid format conversion characters before writing the regex.",
+    "key_decisions": [
+      {
+        "alternatives": [
+          "Use escapePercentExceptWhenFollowedBy_n for args branch too (breaks %s, %d)",
+          "Escape only %% at end of string"
+        ],
+        "decision": "Add escapePercentNotFollowedByFormatSpecifier that uses regex to preserve valid conversion chars",
+        "reasoning": "Preserves intended format specifiers like %s and %d while escaping bare % signs that would cause UnknownFormatConversionException"
+      }
+    ],
+    "search_sequence": [
+      {
+        "action": "Read Strings.formatIfArgs and escapePercentExceptWhenFollowedBy_n",
+        "reasoning": "Task points directly to formatIfArgs in Strings.java",
+        "result": "Found the bug: when args present, message.formatted(args) is called directly; bare % throws UnknownFormatConversionException"
+      },
+      {
+        "action": "Read TextDescription.value to understand call chain",
+        "reasoning": "Task mentions TextDescription as the caller context",
+        "result": "TextDescription.value() calls formatIfArgs(value, args)"
+      }
+    ]
+  },
+  "minimum_sufficient_defs": [
+    {
+      "kind": "method",
+      "name": "formatIfArgs",
+      "path": "assertj-core/src/main/java/org/assertj/core/util/Strings.java",
+      "reason": "edited: changed args branch to call escapePercentNotFollowedByFormatSpecifier before formatting",
+      "start_line": 83
+    },
+    {
+      "kind": "method",
+      "name": "escapePercentNotFollowedByFormatSpecifier",
+      "path": "assertj-core/src/main/java/org/assertj/core/util/Strings.java",
+      "reason": "edited: new method added to escape bare percent signs not followed by format conversion chars",
+      "start_line": 238
+    }
+  ],
+  "queries": [
+    {
+      "justification": "Rule compliance: uses only domain concepts (percent sign in assertion description, format exception). Pre-implementation: a developer would describe the bug in user-facing terms.",
+      "pins": [],
+      "query_text": "assertion description containing a percent sign causes an exception when extra context arguments are provided",
+      "query_type": "Q_SEMANTIC",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 'UnknownFormatConversionException' is a literal class name that would appear as a literal string or in comments. Pre-implementation: developer searching for the exception would use this.",
+      "pins": [],
+      "query_text": "\"UnknownFormatConversionException\" percent format string args",
+      "query_type": "Q_LEXICAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: 3 exact symbol names from the changed code. Pre-implementation: a developer would search for these when investigating the format issue.",
+      "pins": [],
+      "query_text": "formatIfArgs, escapePercentExceptWhenFollowedBy_n, escapePercent",
+      "query_type": "Q_IDENTIFIER",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: names concrete symbol 'formatIfArgs' with relationship word 'callers'. Pre-implementation: developer would trace calls to understand the impact.",
+      "pins": [],
+      "query_text": "callers of formatIfArgs in Strings, callers of TextDescription.value",
+      "query_type": "Q_STRUCTURAL",
+      "seeds": [
+        "formatIfArgs"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes 2 file paths. Pre-implementation: a developer would navigate to these from the task description.",
+      "pins": [
+        "assertj-core/src/main/java/org/assertj/core/util/Strings.java",
+        "assertj-core/src/main/java/org/assertj/core/description/TextDescription.java"
+      ],
+      "query_text": "assertj-core/src/main/java/org/assertj/core/util/Strings.java formatIfArgs percent escape, assertj-core/src/main/java/org/assertj/core/description/TextDescription.java value",
+      "query_type": "Q_NAVIGATIONAL",
+      "seeds": []
+    },
+    {
+      "justification": "Rule compliance: mixes domain description with symbol names. Pre-implementation: developer writing the fix would combine context.",
+      "pins": [],
+      "query_text": "fix percent sign in description string causing format exception when args present, formatIfArgs escaping logic",
+      "query_type": "Q_SEM_IDENT",
+      "seeds": [
+        "formatIfArgs",
+        "escapePercentExceptWhenFollowedBy_n"
+      ]
+    },
+    {
+      "justification": "Rule compliance: 2 symbol names + 2 file paths. Pre-implementation: developer would pair the method with its file.",
+      "pins": [
+        "assertj-core/src/main/java/org/assertj/core/util/Strings.java",
+        "assertj-core/src/main/java/org/assertj/core/description/TextDescription.java"
+      ],
+      "query_text": "formatIfArgs escapePercent in assertj-core/src/main/java/org/assertj/core/util/Strings.java TextDescription.java",
+      "query_type": "Q_IDENT_NAV",
+      "seeds": [
+        "formatIfArgs",
+        "escapePercent"
+      ]
+    },
+    {
+      "justification": "Rule compliance: includes symbol and file path. Pre-implementation: this is the natural search for the reported bug.",
+      "pins": [
+        "assertj-core/src/main/java/org/assertj/core/util/Strings.java"
+      ],
+      "query_text": "Strings.java formatIfArgs percent sign in message with args throws UnknownFormatConversionException, fix by escaping bare percent",
+      "query_type": "Q_FULL",
+      "seeds": [
+        "formatIfArgs",
+        "escapePercentExceptWhenFollowedBy_n"
+      ]
+    }
+  ],
+  "reviewer_corrections": "",
+  "solve_notes": "The bug is in `Strings.formatIfArgs`: when `args` is non-empty, it calls `message.formatted(args)` directly. If the message contains a `%` not followed by a valid format conversion character (e.g., `'100% done'`), this throws `UnknownFormatConversionException`. The fix adds a new private method `escapePercentNotFollowedByFormatSpecifier` that uses a regex to escape `%` signs not followed by valid Java format specifier characters, and uses it in the with-args branch of `formatIfArgs`.",
+  "task_complexity": "narrow",
+  "task_id": "java-assertj/N3",
+  "task_text": "Fix TextDescription.value throwing on percent signs when extra args are provided\n\nIn `assertj-core/src/main/java/org/assertj/core/description/TextDescription.java`,\nthe `value()` method calls `org.assertj.core.util.Strings.formatIfArgs(value, args)`.\nWhen `args` is non-null and non-empty, `formatIfArgs` calls\n`value.formatted(args)` directly. If the user's description string contains\na literal `%` character not intended as a format specifier (for example\n`describedAs(\"100% done\", extraContext)`), the `%` is interpreted as the\nstart of a format conversion, throwing `java.util.UnknownFormatConversionException`.\nFix `Strings.formatIfArgs` in `assertj-core/src/main/java/org/assertj/core/util/Strings.java`\nso that when args are present it escapes `%` signs not followed by valid\nformat-conversion characters before calling `.formatted(args)`, consistent\nwith the no-args branch that already calls `escapePercentExceptWhenFollowedBy_n`.",
+  "test_selection": {
+    "coverage_available": true,
+    "coverage_skip_reason": null,
+    "diff_pins": [
+      "assertj-core/src/main/java/org/assertj/core/util/Strings.java"
+    ],
+    "diff_seeds": [
+      "formatIfArgs"
+    ],
+    "import_graph_test_files": [
+      "assertj-tests/assertj-integration-tests/assertj-core-tests/src/test/java/org/assertj/tests/core/description/TextDescription_value_Test.java"
+    ],
+    "new_tests_excluded": [],
+    "relevant_preexisting_tests": [
+      {
+        "covers_changed_lines": [
+          84,
+          88
+        ],
+        "reason": "calls TextDescription.value() which invokes formatIfArgs with args present, covering the changed line 88",
+        "start_line": 36,
+        "test_kind": "function",
+        "test_name": "should_return_formatted_value",
+        "test_path": "assertj-tests/assertj-integration-tests/assertj-core-tests/src/test/java/org/assertj/tests/core/description/TextDescription_value_Test.java"
+      },
+      {
+        "covers_changed_lines": [
+          84,
+          87
+        ],
+        "reason": "calls TextDescription.value() with no args, covering the no-args branch of formatIfArgs",
+        "start_line": 30,
+        "test_kind": "function",
+        "test_name": "should_return_value",
+        "test_path": "assertj-tests/assertj-integration-tests/assertj-core-tests/src/test/java/org/assertj/tests/core/description/TextDescription_value_Test.java"
+      }
+    ],
+    "test_query": "Find tests that verify the behavior of formatIfArgs in assertj-core/src/main/java/org/assertj/core/util/Strings.java"
+  },
+  "thrash_preventing_defs": [
+    {
+      "kind": "method",
+      "name": "escapePercentExceptWhenFollowedBy_n",
+      "path": "assertj-core/src/main/java/org/assertj/core/util/Strings.java",
+      "reason": "read: the pattern used in the no-args branch is the model for the new method; prevents searching for how the existing escape logic works",
+      "start_line": 234
+    }
+  ],
+  "tier_difference_reasoning": "The minimum set has the two edited/created methods. An AI agent would additionally want to read escapePercentExceptWhenFollowedBy_n upfront to understand the existing pattern for escaping percent signs, ensuring the new method follows the same conventions. Without it, the agent might invent a different approach."
+}
