@@ -52,8 +52,11 @@ def merge_repo(repo_dir: Path) -> Path:
         obj = json.loads(f.read_text(encoding="utf-8"))
         lines.append(json.dumps(obj, ensure_ascii=False, sort_keys=False))
 
-    # Append non_ok_queries.json if present
+    # Append non_ok_queries.json as the last line if present
+    # Check both inside ground_truth/ and alongside it
     non_ok = gt_dir / "non_ok_queries.json"
+    if not non_ok.exists():
+        non_ok = repo_dir / "non_ok_queries.json"
     if non_ok.exists():
         obj = json.loads(non_ok.read_text(encoding="utf-8"))
         lines.append(json.dumps(obj, ensure_ascii=False, sort_keys=False))
